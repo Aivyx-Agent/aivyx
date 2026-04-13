@@ -524,9 +524,8 @@ pub enum AivyxError {
     #[error("invalid scope: {0}")]
     InvalidScope(String),
 
-    // TODO(phase-llm): wrap LlmError from aivyx-llm
     #[error("LLM provider error: {0}")]
-    Llm(String),
+    Llm(#[from] aivyx_llm::LlmError),
 
     #[error("tool error in {tool}: {detail}")]
     Tool { tool: ToolId, detail: String },

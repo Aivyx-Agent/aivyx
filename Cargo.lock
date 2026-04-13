@@ -51,6 +51,7 @@ name = "aivyx-core"
 version = "0.1.0"
 dependencies = [
  "aivyx-capability",
+ "aivyx-llm",
  "async-trait",
  "serde",
  "serde_json",
@@ -68,6 +69,14 @@ version = "0.1.0"
 [[package]]
 name = "aivyx-llm"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "aivyx-memory"

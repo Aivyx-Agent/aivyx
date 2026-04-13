@@ -11,6 +11,7 @@ readme.workspace = true
 
 [dependencies]
 aivyx-capability = { path = "../aivyx-capability" }
+aivyx-llm = { path = "../aivyx-llm" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

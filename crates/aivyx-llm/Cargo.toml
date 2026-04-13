@@ -10,4 +10,15 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+# Protocol-only crate — no dependency on aivyx-core. The LlmProvider
+# trait and its associated types use `serde_json::Value` for tool
+# inputs/outputs and `tokio_util::sync::CancellationToken` for mid-
+# stream cancellation; neither requires core types.
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

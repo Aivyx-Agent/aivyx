@@ -1,17 +1,659 @@
 //! # aivyx-llm
 //!
-//! The `LlmProvider` trait and reference implementations (Anthropic and
-//! — optionally — Ollama) for Aivyx. The turn loop in `aivyx-core`
-//! holds a provider and drives its chat/chat_stream methods during
-//! each turn's tool-calling loop.
+//! The `LlmProvider` trait and supporting types. This is the protocol
+//! crate that sits between `aivyx-core`'s turn loop and any concrete
+//! model backend (Anthropic, Ollama, etc.).
 //!
-//! See DESIGN.md Deliverable 1 (the paragraph mentions "its LlmProvider")
-//! and Deliverable 6 (`AivyxError::Llm(LlmError)` wraps provider errors).
+//! `aivyx-llm` depends on no other Aivyx crate — it is at the bottom of
+//! the dependency graph, and `aivyx-core` depends on *it* to declare
+//! `AivyxError::Llm(#[from] LlmError)`. Providers implement the trait
+//! in their own crates (or, for the reference Anthropic impl, later in
+//! this same crate).
 //!
-//! ## Status: Phase 0 stub only
+//! See DESIGN.md D1 (the north-star paragraph mentions "its LlmProvider"
+//! and `llm.chat_stream(...)`) and D6 (`AivyxError::Llm`).
 //!
-//! Nothing implemented yet. The `LlmProvider` trait shape is carried
-//! over from the archived codebase with no design changes — Phase 1
-//! will re-derive it.
+//! ## The shape in one paragraph
+//!
+//! A consumer builds an [`LlmRequest`] — model name, system prompt,
+//! conversation history as `&[LlmMessage]`, available tools as
+//! `&[LlmToolDescriptor]`, and generation knobs. It calls
+//! [`LlmProvider::chat_stream`] with a `CancellationToken`, which yields
+//! a boxed [`LlmStream`]. The consumer pulls mid-stream events
+//! ([`LlmStreamEvent::TextChunk`] / [`LlmStreamEvent::Usage`]) via
+//! [`LlmStream::next_event`] until it returns `None`, then calls
+//! [`LlmStream::finish`] to obtain the terminal [`LlmStepEnd`] — either
+//! `FinalMessage` (the turn ends) or `ToolCall` (the turn loop dispatches
+//! the tool and loops back with a new `LlmMessage::ToolResult` appended
+//! to the history).
+//!
+//! ## Why a two-method LlmStream instead of a `futures::Stream`
+//!
+//! Because the stream yields small event values (`String` text chunks,
+//! `LlmUsage` deltas) but terminates with a *different* larger value
+//! ([`LlmStepEnd`]), and because `LlmProvider` has to be dyn-compatible
+//! (held behind `Arc<dyn LlmProvider>` by the turn planner), the
+//! idiomatic `impl Stream<Item = ...>` shape does not fit. The
+//! two-method pattern — `next_event` until `None`, then `finish` once —
+//! separates the mid-stream and terminal concerns cleanly and stays
+//! boxable.
 
 #![allow(dead_code)]
+
+use std::fmt;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+
+// ---------------------------------------------------------------------------
+// Conversation messages
+// ---------------------------------------------------------------------------
+
+/// A single entry in a conversation passed to [`LlmProvider::chat_stream`].
+///
+/// The caller owns the conversation as a `Vec<LlmMessage>` and replays
+/// the whole history on every step. Providers are stateless from the
+/// trait's perspective — a provider that wants to cache prompt prefixes
+/// (e.g. Anthropic prompt caching) does so internally by hashing the
+/// request, not by holding a conversation handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+pub enum LlmMessage {
+    /// A user turn. For Phase 2 this is always plain text; richer content
+    /// (images, attachments) lands when a channel starts forwarding them.
+    User { content: String },
+
+    /// A prior assistant response. Carries both the text the model
+    /// emitted and any tool calls it made, so the history can be replayed
+    /// to the provider faithfully. `text` may be empty if the assistant's
+    /// only output was a tool call.
+    Assistant {
+        text: String,
+        tool_calls: Vec<LlmToolCallRecord>,
+    },
+
+    /// The result of a tool call the agent executed in response to an
+    /// `Assistant { tool_calls: .. }` message. Referenced by `call_id`
+    /// so providers (like Anthropic) that correlate on opaque IDs can
+    /// resume cleanly.
+    ToolResult {
+        call_id: String,
+        /// Serialized tool output. The planner turns a `ToolOutcome` into
+        /// this string — probably the output JSON for `Completed`, a
+        /// short error message for `Denied` / `Failed` / `TimedOut`.
+        content: String,
+        /// If the tool failed or was denied, set so the provider can
+        /// render the result as an error (Anthropic's `is_error: true`).
+        is_error: bool,
+    },
+}
+
+/// A record of a tool call the LLM emitted on a prior step, stored on
+/// [`LlmMessage::Assistant`] so the history round-trips exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmToolCallRecord {
+    /// Opaque ID assigned by the provider — needed to correlate an
+    /// [`LlmMessage::ToolResult`] back to the call that produced it.
+    pub call_id: String,
+    pub tool_name: String,
+    pub input: Value,
+}
+
+/// A tool the LLM is allowed to call this turn. Pre-built by the LLM
+/// planner from the agent's tool registry; `aivyx-llm` never sees
+/// `aivyx-core::Tool` directly, which keeps the dependency direction
+/// clean (llm sits below core).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmToolDescriptor {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema for the tool's input. Anthropic and OpenAI both
+    /// accept raw JSON Schema here; providers that need a different
+    /// shape translate internally.
+    pub input_schema: Value,
+}
+
+// ---------------------------------------------------------------------------
+// Request
+// ---------------------------------------------------------------------------
+
+/// One step's worth of input to [`LlmProvider::chat_stream`].
+///
+/// Borrowed from the caller — the caller owns the conversation history
+/// and tool list for the whole turn and lends them for each step. This
+/// avoids O(n²) cloning as the conversation grows.
+#[derive(Debug, Clone)]
+pub struct LlmRequest<'a> {
+    /// Provider-specific model identifier, e.g.
+    /// `"claude-3-5-sonnet-20241022"`. Providers validate against their
+    /// own known-model lists and return [`LlmError::UnknownModel`] if
+    /// they don't recognize the string.
+    pub model: &'a str,
+
+    /// System prompt / agent persona. `None` is valid for providers
+    /// that default to their own empty system prompt.
+    pub system: Option<&'a str>,
+
+    /// Conversation so far, oldest first. The provider sees the whole
+    /// history on every step; the caller is responsible for appending
+    /// `ToolResult` entries between steps.
+    pub messages: &'a [LlmMessage],
+
+    /// Tools the LLM may call this step. Empty slice means "text-only,
+    /// no tool use."
+    pub tools: &'a [LlmToolDescriptor],
+
+    /// Maximum tokens to generate. Required — providers differ on
+    /// defaults, so the caller always declares one.
+    pub max_tokens: u32,
+
+    /// Optional sampling temperature. `None` means "provider default."
+    pub temperature: Option<f32>,
+}
+
+// ---------------------------------------------------------------------------
+// Stream events + terminal value
+// ---------------------------------------------------------------------------
+
+/// A mid-stream event yielded by [`LlmStream::next_event`]. The stream
+/// yields zero or more of these, then returns `None`, then the caller
+/// calls [`LlmStream::finish`] to obtain the terminal [`LlmStepEnd`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum LlmStreamEvent {
+    /// A chunk of assistant text. The planner relays this straight
+    /// through `channel.stream_event(StreamEvent::Text(chunk))` so the
+    /// user sees output as it's generated.
+    TextChunk(String),
+
+    /// Optional mid-stream usage delta. Providers that emit incremental
+    /// token counts (Anthropic's `message_delta` events) surface them
+    /// here; providers that only emit usage at the end just put it on
+    /// the [`LlmStepEnd`] instead.
+    Usage(LlmUsage),
+}
+
+/// Terminal value of an [`LlmStream`]. Returned by [`LlmStream::finish`]
+/// after the event stream has been fully drained. Exactly one variant
+/// is produced per step.
+#[derive(Debug, Clone)]
+pub enum LlmStepEnd {
+    /// The LLM finished with a plain assistant message — no tool call.
+    /// The planner returns `NextStep::FinalMessage(text)` to the turn
+    /// loop and the turn terminates with `TurnOutcome::Completed`.
+    FinalMessage { text: String, usage: LlmUsage },
+
+    /// The LLM wants to invoke a tool. The planner looks up the tool
+    /// by `tool_name` in its registry, returns a `NextStep::ToolCall`
+    /// to the loop, and on the next step appends an
+    /// [`LlmMessage::ToolResult`] keyed by `call_id` to the history.
+    ///
+    /// Tool-call argument deltas are reassembled by the provider before
+    /// this variant is produced — the planner sees the complete `input`
+    /// once, not a stream of argument chunks. Providers that stream
+    /// `input_json_delta` events (Anthropic) buffer them internally.
+    ToolCall {
+        call_id: String,
+        tool_name: String,
+        input: Value,
+        /// Any text the LLM emitted in the same step *before* the tool
+        /// call. Often empty, but models can narrate their reasoning
+        /// before calling a tool. The planner should still relay it to
+        /// the channel so the user sees it.
+        text_so_far: String,
+        usage: LlmUsage,
+    },
+}
+
+/// Token usage accounting for one step. All fields are optional in
+/// practice — a provider that doesn't expose breakdowns just returns
+/// zeros for the fields it doesn't track.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// Anthropic prompt-caching write count. Zero for providers that
+    /// don't cache — cheap enough to always carry, expensive enough
+    /// (in $) to want visible in the audit trail.
+    pub cache_creation_input_tokens: u32,
+    /// Anthropic prompt-caching read count (the cost saver).
+    pub cache_read_input_tokens: u32,
+}
+
+// ---------------------------------------------------------------------------
+// LlmProvider + LlmStream traits
+// ---------------------------------------------------------------------------
+
+/// The protocol boundary between Aivyx's turn loop and a concrete LLM
+/// backend. Dyn-compatible — the turn planner holds an
+/// `Arc<dyn LlmProvider>` and the implementation is swapped at
+/// construction time.
+///
+/// D1 commitment: every step of the tool-calling loop goes through this
+/// trait's `chat_stream` method. There is no non-streaming `chat` call.
+/// A provider that only supports non-streaming responses can still
+/// implement this trait by buffering the full response and yielding it
+/// as a single `TextChunk` before the terminal — Phase 2's focus on
+/// streaming is about the *shape*, not a requirement that every
+/// provider transport be genuinely incremental.
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    /// Begin one LLM step. Returns a boxed [`LlmStream`] the caller
+    /// drains event-by-event, then calls `finish` on.
+    ///
+    /// The `CancellationToken` is borrowed for the lifetime of the
+    /// request; providers are expected to poll it between HTTP reads
+    /// (or to race their I/O against `token.cancelled()`) so a cancelled
+    /// turn doesn't wait for the LLM to finish. On cancellation the
+    /// returned stream is allowed to error with [`LlmError::Cancelled`]
+    /// on the next `next_event` call, or to end cleanly — both are
+    /// valid; the planner handles either.
+    async fn chat_stream(
+        &self,
+        request: LlmRequest<'_>,
+        cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError>;
+}
+
+/// A live LLM response stream. Yields [`LlmStreamEvent`]s via
+/// `next_event` until it returns `None`, then produces one terminal
+/// [`LlmStepEnd`] via `finish`.
+///
+/// Not `Sync` — a stream is owned by one driver (the planner task) for
+/// its whole lifetime. `Send` is required so providers can use async
+/// runtimes that move futures across threads.
+#[async_trait]
+pub trait LlmStream: Send {
+    /// Pull the next mid-stream event. Returns `None` when no more
+    /// events will arrive — at that point the caller must call
+    /// [`LlmStream::finish`] to obtain the terminal value.
+    ///
+    /// Calling `next_event` after it has already returned `None` is
+    /// a logic bug; implementations may return `None` again or may
+    /// return [`LlmError::StreamEnded`] — callers should not rely on
+    /// either.
+    async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError>;
+
+    /// Consume the stream and return its terminal value. Must be
+    /// called exactly once, after `next_event` has returned `None`.
+    /// Consumes `Box<Self>` (not `&mut self`) so the implementation
+    /// can move owned state out of the boxed stream cleanly.
+    async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError>;
+}
+
+// ---------------------------------------------------------------------------
+// LlmError
+// ---------------------------------------------------------------------------
+
+/// Errors producible by an [`LlmProvider`]. Wrapped by `AivyxError::Llm`
+/// in `aivyx-core`, so each variant corresponds to a kind of failure a
+/// caller might handle differently:
+///
+/// - `Transport` — retryable network failure
+/// - `Api` — provider returned an error response (rate limit, invalid
+///   request, etc.); inspect `status` to decide what to do
+/// - `Parse` — response didn't match the expected schema; always a bug
+/// - `Cancelled` — request aborted via the `CancellationToken`
+/// - `StreamEnded` — stream terminated before a [`LlmStepEnd`] could be
+///   produced (truncated response, disconnected mid-stream)
+/// - `UnknownModel` — the `model` field in the request isn't recognized
+/// - `Config` — provider misconfiguration (missing API key, bad URL)
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum LlmError {
+    #[error("http transport error: {0}")]
+    Transport(String),
+
+    #[error("provider API error (status {status}): {message}")]
+    Api { status: u16, message: String },
+
+    #[error("response parsing failed: {0}")]
+    Parse(String),
+
+    #[error("request cancelled")]
+    Cancelled,
+
+    #[error("stream ended unexpectedly: {0}")]
+    StreamEnded(String),
+
+    #[error("unknown model: {0}")]
+    UnknownModel(String),
+
+    #[error("configuration error: {0}")]
+    Config(String),
+}
+
+// ---------------------------------------------------------------------------
+// Debug helper — LlmRequest's `messages` and `tools` are slices, so the
+// derived Debug is fine, but we want a compact Display for logging.
+// ---------------------------------------------------------------------------
+
+impl fmt::Display for LlmRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "LlmRequest(model={}, msgs={}, tools={}, max_tokens={})",
+            self.model,
+            self.messages.len(),
+            self.tools.len(),
+            self.max_tokens,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    // -----------------------------------------------------------------------
+    // Fake provider — used by every dyn-compat test in this module.
+    //
+    // Scripts both the mid-stream events and the terminal value at
+    // construction time. Mirrors `VecPlanner`'s "walk a pre-recorded
+    // script" shape so the test fixture is obvious.
+    // -----------------------------------------------------------------------
+
+    struct FakeProvider {
+        script: Mutex<Option<FakeScript>>,
+    }
+
+    struct FakeScript {
+        events: Vec<LlmStreamEvent>,
+        terminal: LlmStepEnd,
+    }
+
+    impl FakeProvider {
+        fn new(events: Vec<LlmStreamEvent>, terminal: LlmStepEnd) -> Self {
+            FakeProvider {
+                script: Mutex::new(Some(FakeScript { events, terminal })),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for FakeProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            let script = self
+                .script
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| LlmError::Config("FakeProvider exhausted".to_string()))?;
+            Ok(Box::new(FakeStream {
+                events: script.events.into_iter(),
+                terminal: Some(script.terminal),
+            }))
+        }
+    }
+
+    struct FakeStream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+
+    #[async_trait]
+    impl LlmStream for FakeStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal
+                .ok_or_else(|| LlmError::StreamEnded("finish called twice".to_string()))
+        }
+    }
+
+    fn sample_request<'a>(
+        messages: &'a [LlmMessage],
+        tools: &'a [LlmToolDescriptor],
+    ) -> LlmRequest<'a> {
+        LlmRequest {
+            model: "claude-3-5-sonnet-20241022",
+            system: Some("You are a test fixture."),
+            messages,
+            tools,
+            max_tokens: 256,
+            temperature: Some(0.2),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1 — dyn compatibility proof.
+    //
+    // If any method on LlmProvider or LlmStream accidentally used
+    // `impl Trait` or a generic parameter, this test wouldn't compile.
+    // That's the whole point — the ability to construct `Box<dyn _>` is
+    // the trait's most important structural property.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn llm_provider_is_dyn_compatible() {
+        let provider: Box<dyn LlmProvider> = Box::new(FakeProvider::new(
+            vec![],
+            LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: LlmUsage::default(),
+            },
+        ));
+
+        let messages: Vec<LlmMessage> = vec![LlmMessage::User {
+            content: "hi".to_string(),
+        }];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let token = CancellationToken::new();
+
+        let stream = provider
+            .chat_stream(sample_request(&messages, &tools), &token)
+            .await
+            .expect("fake provider must accept a request");
+
+        // stream is Box<dyn LlmStream> — the dyn compatibility we care
+        // about. Drain and finish.
+        let mut stream: Box<dyn LlmStream> = stream;
+        assert!(stream.next_event().await.unwrap().is_none());
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "ok"),
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2 — text chunks reassemble into a full message.
+    //
+    // The most common shape: the provider streams three text deltas and
+    // terminates with a FinalMessage. The caller concatenates the chunks
+    // it saw and cross-checks against the terminal's `text` field.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn text_chunks_reassemble_into_final_message() {
+        let provider = FakeProvider::new(
+            vec![
+                LlmStreamEvent::TextChunk("Hello, ".to_string()),
+                LlmStreamEvent::TextChunk("how can I ".to_string()),
+                LlmStreamEvent::TextChunk("help?".to_string()),
+            ],
+            LlmStepEnd::FinalMessage {
+                text: "Hello, how can I help?".to_string(),
+                usage: LlmUsage {
+                    input_tokens: 10,
+                    output_tokens: 7,
+                    ..LlmUsage::default()
+                },
+            },
+        );
+
+        let messages = vec![LlmMessage::User {
+            content: "hi".to_string(),
+        }];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let token = CancellationToken::new();
+
+        let mut stream = provider
+            .chat_stream(sample_request(&messages, &tools), &token)
+            .await
+            .unwrap();
+
+        let mut reassembled = String::new();
+        while let Some(event) = stream.next_event().await.unwrap() {
+            match event {
+                LlmStreamEvent::TextChunk(chunk) => reassembled.push_str(&chunk),
+                LlmStreamEvent::Usage(_) => {}
+            }
+        }
+
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, usage } => {
+                assert_eq!(reassembled, text);
+                assert_eq!(reassembled, "Hello, how can I help?");
+                assert_eq!(usage.output_tokens, 7);
+            }
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3 — terminal ToolCall carries reassembled input.
+    //
+    // The provider emits zero text and terminates with a ToolCall. The
+    // planner's job on this path is to look up the tool by name and
+    // dispatch it; this test just verifies the shape arrives intact.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn terminal_tool_call_carries_full_input() {
+        let input = json!({"query": "yesterday", "limit": 10});
+        let provider = FakeProvider::new(
+            vec![],
+            LlmStepEnd::ToolCall {
+                call_id: "toolu_01".to_string(),
+                tool_name: "memory.read".to_string(),
+                input: input.clone(),
+                text_so_far: String::new(),
+                usage: LlmUsage::default(),
+            },
+        );
+
+        let messages = vec![LlmMessage::User {
+            content: "what did I work on yesterday?".to_string(),
+        }];
+        let tools = vec![LlmToolDescriptor {
+            name: "memory.read".to_string(),
+            description: "recall prior sessions".to_string(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let token = CancellationToken::new();
+
+        let mut stream = provider
+            .chat_stream(sample_request(&messages, &tools), &token)
+            .await
+            .unwrap();
+
+        // Zero mid-stream events — the first next_event returns None.
+        assert!(stream.next_event().await.unwrap().is_none());
+
+        match stream.finish().await.unwrap() {
+            LlmStepEnd::ToolCall {
+                call_id,
+                tool_name,
+                input: got_input,
+                text_so_far,
+                ..
+            } => {
+                assert_eq!(call_id, "toolu_01");
+                assert_eq!(tool_name, "memory.read");
+                assert_eq!(got_input, input);
+                assert!(text_so_far.is_empty());
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4 — LlmMessage round-trips through serde_json.
+    //
+    // Task 3's Anthropic impl will serialize `&[LlmMessage]` into the
+    // provider's request body, so the serde shape has to be stable now.
+    // Covers all three variants and LlmToolCallRecord / LlmUsage.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn llm_message_round_trips_through_serde() {
+        let original = vec![
+            LlmMessage::User {
+                content: "hi".to_string(),
+            },
+            LlmMessage::Assistant {
+                text: "Looking that up.".to_string(),
+                tool_calls: vec![LlmToolCallRecord {
+                    call_id: "toolu_42".to_string(),
+                    tool_name: "memory.read".to_string(),
+                    input: json!({"query": "yesterday"}),
+                }],
+            },
+            LlmMessage::ToolResult {
+                call_id: "toolu_42".to_string(),
+                content: r#"{"results":["wrote DESIGN.md"]}"#.to_string(),
+                is_error: false,
+            },
+        ];
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let back: Vec<LlmMessage> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(original, back);
+
+        // Tag discriminator was chosen deliberately: the JSON must have a
+        // `role` field so Anthropic's API shape (which also uses `role`)
+        // maps cleanly. Don't rely on exact output — just verify the tag.
+        assert!(json.contains(r#""role":"user""#));
+        assert!(json.contains(r#""role":"assistant""#));
+        assert!(json.contains(r#""role":"tool_result""#));
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5 — LlmError Display strings match the declared format.
+    //
+    // AivyxError::Llm(#[from] LlmError) in core will use these as its
+    // display output, so pinning them here lets core's tests rely on
+    // stable strings.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn llm_error_display_strings_are_stable() {
+        assert_eq!(
+            LlmError::Transport("tls handshake".to_string()).to_string(),
+            "http transport error: tls handshake"
+        );
+        assert_eq!(
+            LlmError::Api {
+                status: 429,
+                message: "rate limited".to_string()
+            }
+            .to_string(),
+            "provider API error (status 429): rate limited"
+        );
+        assert_eq!(LlmError::Cancelled.to_string(), "request cancelled");
+        assert_eq!(
+            LlmError::UnknownModel("gpt-9".to_string()).to_string(),
+            "unknown model: gpt-9"
+        );
+    }
+
+    // Suppress the "Arc is imported but unused" lint if we ever drop
+    // Arc-using test helpers — this is here only so the import survives
+    // a refactor that briefly removes then restores it. It's a no-op.
+    #[allow(dead_code)]
+    fn _keep_arc_import_alive(_: Arc<u8>) {}
+}
