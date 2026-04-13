@@ -31,10 +31,12 @@
 #![allow(dead_code)]
 
 pub mod agent;
+pub mod llm_planner;
 pub mod planner;
 
-pub use agent::ConcreteAgent;
-pub use planner::{NextStep, StepObservation, TurnPlanner, VecPlanner};
+pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
+pub use llm_planner::{LlmPlanner, LlmPlannerConfig};
+pub use planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner, VecPlanner};
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

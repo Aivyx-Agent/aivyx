@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::{Tool, ToolId, ToolOutcomeSummary};
+use crate::{ChannelContext, Message, Tool, ToolId, ToolOutcome, ToolOutcomeSummary};
 
 /// What the loop should do next. Mirrors the shapes a real LLM step can
 /// produce — a tool call, a final message, or a stop — but with none of
@@ -42,11 +42,42 @@ pub struct StepObservation {
 }
 
 /// The seam between the loop and its step source.
+///
+/// Phase 2 added three methods to this trait — `begin_turn`,
+/// `observe_tool_outcome`, and the `channel` parameter on `next_step` —
+/// so the LLM-backed planner can see the user message, stream text to
+/// the channel as tokens arrive, and read the full `ToolOutcome` after
+/// each dispatched call. All three additions have defaults where
+/// possible so pre-Phase-2 planners (like [`VecPlanner`]) require
+/// minimal updates.
 #[async_trait]
 pub trait TurnPlanner: Send + Sync {
-    /// Return the next step given everything observed so far. May return
-    /// `Stop` at any time to terminate.
-    async fn next_step(&mut self, observed: &[StepObservation]) -> NextStep;
+    /// Called once, at the start of a turn, with the triggering user
+    /// message. Deterministic planners can ignore it; LLM-backed
+    /// planners seed their conversation history here.
+    async fn begin_turn(&mut self, _message: &Message) {}
+
+    /// Return the next step given everything observed so far. The
+    /// `channel` handle is available for planners that want to relay
+    /// mid-step output (LLM token streaming); planners that don't
+    /// stream just ignore it.
+    async fn next_step(
+        &mut self,
+        observed: &[StepObservation],
+        channel: &dyn ChannelContext,
+    ) -> NextStep;
+
+    /// Called by the turn loop immediately after a [`NextStep::ToolCall`]
+    /// has been dispatched and its outcome is known, *before* the loop
+    /// asks for the next step. LLM planners use this to append a
+    /// `tool_result` message to their conversation history; other
+    /// planners default to ignoring it.
+    async fn observe_tool_outcome(
+        &mut self,
+        _tool_id: ToolId,
+        _outcome: &ToolOutcome,
+    ) {
+    }
 }
 
 /// Deterministic planner that walks a fixed script of steps. Used for
@@ -67,7 +98,11 @@ impl VecPlanner {
 
 #[async_trait]
 impl TurnPlanner for VecPlanner {
-    async fn next_step(&mut self, _observed: &[StepObservation]) -> NextStep {
+    async fn next_step(
+        &mut self,
+        _observed: &[StepObservation],
+        _channel: &dyn ChannelContext,
+    ) -> NextStep {
         self.steps.pop_front().unwrap_or(NextStep::Stop)
     }
 }
@@ -90,5 +125,18 @@ impl ToolRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Iterate over every registered tool. Used by the LLM planner to
+    /// build the `LlmToolDescriptor` list at construction time.
+    pub fn iter_tools(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
+        self.tools.iter()
+    }
+
+    /// Look up a tool by its human name. Linear scan — the registry
+    /// holds at most a few dozen tools in realistic use, and the LLM
+    /// planner only calls this once per LLM step.
+    pub fn find_by_name(&self, name: &str) -> Option<ToolId> {
+        self.tools.iter().find(|t| t.name() == name).map(|t| t.id())
     }
 }

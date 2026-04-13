@@ -36,10 +36,18 @@ use sha2::{Digest, Sha256};
 use aivyx_capability::{CapabilitySet, Scope};
 
 use crate::{
-    Agent, AgentId, AuditHook, AuditTag, CancellationToken, ChannelContext, Message, ToolContext,
-    ToolId, ToolOutcomeSummary, TurnId, TurnOutcome, TurnOutcomeSummary,
+    Agent, AgentId, AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, Message,
+    ToolContext, ToolId, ToolOutcome, ToolOutcomeSummary, TurnId, TurnOutcome, TurnOutcomeSummary,
 };
 use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
+
+/// Hard upper bound on steps per turn. The LLM-backed planner added in
+/// Phase 2 is the first planner that *can* loop indefinitely
+/// (`VecPlanner` is bounded by its script length), so the loop now
+/// guards against a runaway agent with a fixed budget. 32 is high
+/// enough for realistic tool chains and low enough that a misbehaving
+/// planner fails loudly rather than burning the host.
+pub const MAX_STEPS_PER_TURN: usize = 32;
 
 /// The reference `Agent` implementation.
 ///
@@ -108,16 +116,13 @@ impl Agent for ConcreteAgent {
             effective_capabilities: effective.clone(),
         });
 
-        // Silence the unused-message warning: we don't inspect the message
-        // contents in Phase 1, but the type is part of the D3 signature and
-        // Phase 2's LLM planner will read it. Drop it explicitly so the
-        // name is visible in the loop body's scope for future use.
-        let _ = message;
-
         let mut planner = (self.planner_factory)();
+        planner.begin_turn(&message).await;
+
         let mut observed: Vec<StepObservation> = Vec::new();
         let mut tool_calls_made: usize = 0;
         let mut final_message: String = String::new();
+        let mut steps: usize = 0;
         let loop_outcome: LoopOutcome;
 
         loop {
@@ -125,8 +130,13 @@ impl Agent for ConcreteAgent {
                 loop_outcome = LoopOutcome::Cancelled;
                 break;
             }
+            if steps >= MAX_STEPS_PER_TURN {
+                loop_outcome = LoopOutcome::MaxStepsExceeded;
+                break;
+            }
+            steps += 1;
 
-            let step = planner.next_step(&observed).await;
+            let step = planner.next_step(&observed, channel).await;
             match step {
                 NextStep::FinalMessage(msg) => {
                     final_message = msg;
@@ -139,7 +149,7 @@ impl Agent for ConcreteAgent {
                 }
                 NextStep::ToolCall { tool_id, input } => {
                     tool_calls_made += 1;
-                    let observation = self
+                    let (observation, outcome) = self
                         .run_tool_call(
                             turn_id,
                             tool_id,
@@ -150,6 +160,7 @@ impl Agent for ConcreteAgent {
                         )
                         .await;
                     observed.push(observation);
+                    planner.observe_tool_outcome(tool_id, &outcome).await;
                 }
             }
         }
@@ -162,6 +173,9 @@ impl Agent for ConcreteAgent {
                 duration,
             },
             LoopOutcome::Cancelled => TurnOutcome::Cancelled { tool_calls_made },
+            LoopOutcome::MaxStepsExceeded => TurnOutcome::Failed(AivyxError::Internal(
+                format!("planner exceeded {MAX_STEPS_PER_TURN} steps per turn"),
+            )),
         };
 
         self.audit.on_event(AuditTag::TurnEnded {
@@ -184,18 +198,23 @@ impl Agent for ConcreteAgent {
 }
 
 /// Internal loop termination reason before it's translated into a public
-/// `TurnOutcome`. Phase 1 only produces `Completed` and `Cancelled`;
-/// `TimedOut`, `Escalated`, and `Failed` will join this enum as the loop
-/// grows in later tasks.
+/// `TurnOutcome`. Phase 2 adds `MaxStepsExceeded` alongside
+/// `Completed` and `Cancelled`; `TimedOut` and `Escalated` will join
+/// this enum as the loop grows in later tasks.
 enum LoopOutcome {
     Completed,
     Cancelled,
+    MaxStepsExceeded,
 }
 
 impl ConcreteAgent {
     /// Execute one tool call: resolve the tool, compute its required
     /// scope via R1, scope-check, execute-or-deny, emit the matching
-    /// audit event, return what the planner will observe.
+    /// audit event, and return both the observation (for the
+    /// `StepObservation` trail) and the full `ToolOutcome` (for the
+    /// planner's `observe_tool_outcome` callback). The observation is
+    /// what the audit sees; the full outcome is what a smart planner
+    /// (e.g. the LLM planner) needs to reason about next.
     async fn run_tool_call(
         &self,
         turn_id: TurnId,
@@ -204,32 +223,48 @@ impl ConcreteAgent {
         channel: &dyn ChannelContext,
         cancellation: &CancellationToken,
         effective: &CapabilitySet,
-    ) -> StepObservation {
+    ) -> (StepObservation, ToolOutcome) {
         let Some(tool) = self.tools.get(tool_id) else {
             // Unknown tool — no scope check possible. This shouldn't happen
             // with a well-behaved planner; treat it as a failed step and
-            // let the planner observe a Failed summary.
-            return StepObservation {
-                tool_id,
-                summary: ToolOutcomeSummary::Failed,
-            };
+            // synthesize a Failed outcome so the planner sees it too.
+            let outcome = ToolOutcome::Failed(AivyxError::NotFound {
+                kind: "tool",
+                id: tool_id.to_string(),
+            });
+            return (
+                StepObservation {
+                    tool_id,
+                    summary: ToolOutcomeSummary::Failed,
+                },
+                outcome,
+            );
         };
 
         let needed: Scope = tool.required_scope(&input);
 
         if !effective.grants(&needed) {
             // D4: scope denial emits a `ScopeDenied` audit event carrying
-            // the held snapshot. The planner observes a `Denied` summary.
+            // the held snapshot. The planner observes a `Denied` summary
+            // via the observation trail and a full `Denied { scope, held }`
+            // outcome via `observe_tool_outcome`.
             self.audit.on_event(AuditTag::ScopeDenied {
                 turn_id,
                 tool_attempted: tool_id,
-                scope_requested: needed,
+                scope_requested: needed.clone(),
                 held_capabilities: effective.clone(),
             });
-            return StepObservation {
-                tool_id,
-                summary: ToolOutcomeSummary::Denied,
+            let outcome = ToolOutcome::Denied {
+                scope: needed,
+                held: effective.clone(),
             };
+            return (
+                StepObservation {
+                    tool_id,
+                    summary: ToolOutcomeSummary::Denied,
+                },
+                outcome,
+            );
         }
 
         let ctx = ToolContext {
@@ -259,11 +294,7 @@ impl ConcreteAgent {
             duration: step_duration,
         });
 
-        // Consume the full outcome to avoid unused-variable warnings on
-        // the `output` field; Phase 2's LLM planner will read it.
-        let _ = outcome;
-
-        StepObservation { tool_id, summary }
+        (StepObservation { tool_id, summary }, outcome)
     }
 }
 
@@ -753,6 +784,75 @@ mod tests {
                 tool_calls_made, ..
             } => assert_eq!(tool_calls_made, 1),
             other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    // ---- Max-steps guard: a runaway planner is terminated with Failed ----
+    //
+    // Phase 2 introduced MAX_STEPS_PER_TURN = 32 so an LLM-backed planner
+    // that never emits FinalMessage cannot loop forever. This test proves
+    // the guard fires by feeding the loop a script that's longer than the
+    // budget — 64 ToolCalls, no FinalMessage — and asserting the loop
+    // terminates with Failed(Internal) rather than running to completion.
+
+    #[tokio::test]
+    async fn runaway_planner_terminates_with_max_steps_exceeded() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+
+        // Build a script of 64 ToolCalls with no FinalMessage. The
+        // budget is MAX_STEPS_PER_TURN; anything past the budget should
+        // never run.
+        let plan: Vec<NextStep> = (0..64)
+            .map(|_| NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+            })
+            .collect();
+
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "spam"), &channel)
+            .await;
+
+        match outcome {
+            TurnOutcome::Failed(AivyxError::Internal(msg)) => {
+                assert!(
+                    msg.contains("exceeded"),
+                    "expected 'exceeded' in error, got {msg:?}"
+                );
+            }
+            other => panic!("expected Failed(Internal), got {other:?}"),
+        }
+
+        // The loop should have called exactly MAX_STEPS_PER_TURN tools
+        // before bailing — one tool per step, no shortcut.
+        let tool_calls: Vec<_> = audit
+            .snapshot()
+            .into_iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .collect();
+        assert_eq!(tool_calls.len(), MAX_STEPS_PER_TURN);
+
+        // TurnEnded should record the Failed summary.
+        let events = audit.snapshot();
+        let ended = events
+            .iter()
+            .find(|e| matches!(e, AuditTag::TurnEnded { .. }))
+            .expect("TurnEnded should still be emitted");
+        match ended {
+            AuditTag::TurnEnded { outcome, .. } => {
+                assert_eq!(*outcome, TurnOutcomeSummary::Failed);
+            }
+            _ => unreachable!(),
         }
     }
 }
