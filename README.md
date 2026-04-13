@@ -3,8 +3,9 @@
 Agent-first Rust framework for building AI agents with capability-based
 security, auditable tool execution, and trust-tiered channel support.
 
-See [DESIGN.md](DESIGN.md) for the Phase 0 design document — the north
-star for this rebuild.
+See [DESIGN.md](DESIGN.md) for the locked design contract — the north
+star for this rebuild. Per-phase working records and the amendment
+process live under [`docs/`](docs/README.md).
 
 ## Status
 

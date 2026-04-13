@@ -1046,19 +1046,12 @@ Known Phase 1 refinements already flagged:
 
 ---
 
-## Phase 0 — Exit Note
+## Status
 
-All 8 deliverables are LOCKED. This document can be read end-to-end as
-a coherent design: the turn loop contract (D1) is the north star, the
-open-core line (D2) fixes the MIT/commercial boundary, the core traits
-(D3) give the turn loop its shape, the capability system (D4) gives
-every tool call a scope check, the trust tiers (D5) put a ceiling on
-what any agent can ever hold, the error taxonomy (D6) makes failure
-modes enumerable, and the storage stack (D7) gives the whole thing a
-place to persist. D8 proves the shape compiles.
-
-**No runtime code was written in Phase 0.** That was the point: every
-decision here is cheap to change now and expensive to change later.
-The next session opens Phase 1 and starts turning these contracts into
-running code — beginning with the turn loop itself, not with any tool,
-channel, or storage backend.
+Phase 0 is closed. This document is the **locked contract** — edits
+require an amendment under `docs/amendments/`. For the Phase 0 exit
+record and the lessons carried forward, see
+[`docs/PHASE_0.md`](docs/PHASE_0.md). For the current phase and its
+open tasks, see [`docs/PHASE_1.md`](docs/PHASE_1.md). The split
+between this contract document and the per-phase journals is
+explained in [`docs/README.md`](docs/README.md).
