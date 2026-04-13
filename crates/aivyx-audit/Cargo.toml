@@ -27,3 +27,14 @@ thiserror = { workspace = true }
 # fake ChannelContext / Tool impls), and serde_json (already a prod dep).
 tokio = { workspace = true, features = ["macros", "rt"] }
 async-trait = { workspace = true }
+# Phase 2 task 5 E2E integration test pulls in the Anthropic reference
+# provider + its fake-transport seam so the test can drive the whole
+# stack (agent → LlmPlanner → AnthropicProvider → FakeTransport → SSE
+# parser → audit bridge → HmacChainLog) without touching the network.
+aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
+# SecretString for the fake API key the provider config expects.
+secrecy = { workspace = true }
+# Fake transport builds canned SSE byte streams via futures::stream::iter.
+futures-util = { workspace = true }
+bytes = { workspace = true }
+tokio-util = { workspace = true }
