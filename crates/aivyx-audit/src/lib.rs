@@ -394,6 +394,162 @@ impl AuditLog for NullAuditLog {
 }
 
 // ---------------------------------------------------------------------------
+// Bridge: aivyx_core::AuditHook → aivyx_audit::AuditWriter
+// ---------------------------------------------------------------------------
+//
+// `aivyx-core` declares a forward `AuditHook` trait with an `AuditTag` enum
+// so the turn loop can emit audit events without depending on this crate.
+// The bridge below closes the loop: any `AuditWriter` (e.g. `HmacChainLog`)
+// can be wrapped in an `AuditBridge` and handed to `ConcreteAgent::new` as
+// an `Arc<dyn AuditHook>`.
+//
+// Why an explicit adapter and not a blanket `impl<W: AuditWriter> AuditHook
+// for W`? D4 commits to audit failures being *visible* — not swallowed. A
+// blanket impl has nowhere to route an `AuditError`, so the bridge forces
+// callers to declare their error-handling strategy at construction time.
+// The default (`AuditBridge::new`) panics, matching D4's "audit must
+// complete before the call returns" spirit: a broken chain is a
+// configuration bug, not an operational condition.
+
+/// Translates `aivyx_core::MemoryOperation` into the audit-owned copy. The
+/// two enums are kept separate so core does not depend on audit's serde
+/// machinery; this impl is the single translation point.
+impl From<aivyx_core::MemoryOperation> for MemoryOperation {
+    fn from(op: aivyx_core::MemoryOperation) -> Self {
+        match op {
+            aivyx_core::MemoryOperation::Read => MemoryOperation::Read,
+            aivyx_core::MemoryOperation::Write => MemoryOperation::Write,
+            aivyx_core::MemoryOperation::Forget => MemoryOperation::Forget,
+        }
+    }
+}
+
+/// Translates a forward-declared `AuditTag` from the turn loop into the
+/// `AuditEvent` shape the HMAC chain appends. The translation is mostly
+/// field-for-field — only `trust_tier` and `operation` need conversion
+/// through their respective `From` impls.
+impl From<aivyx_core::AuditTag> for AuditEvent {
+    fn from(tag: aivyx_core::AuditTag) -> Self {
+        use aivyx_core::AuditTag;
+        match tag {
+            AuditTag::TurnStarted {
+                turn_id,
+                session_id,
+                channel,
+                trust_tier,
+                effective_capabilities,
+            } => AuditEvent::TurnStarted {
+                turn_id,
+                session_id,
+                channel,
+                trust_tier: trust_tier.into(),
+                effective_capabilities,
+            },
+            AuditTag::TurnEnded {
+                turn_id,
+                outcome,
+                tool_calls_made,
+                duration,
+            } => AuditEvent::TurnEnded {
+                turn_id,
+                outcome,
+                tool_calls_made,
+                duration,
+            },
+            AuditTag::ToolCall {
+                turn_id,
+                tool_id,
+                scope_used,
+                input_hash,
+                outcome,
+                duration,
+            } => AuditEvent::ToolCall {
+                turn_id,
+                tool_id,
+                scope_used,
+                input_hash,
+                outcome,
+                duration,
+            },
+            AuditTag::ScopeDenied {
+                turn_id,
+                tool_attempted,
+                scope_requested,
+                held_capabilities,
+            } => AuditEvent::ScopeDenied {
+                turn_id,
+                tool_attempted,
+                scope_requested,
+                held_capabilities,
+            },
+            AuditTag::MemoryAccess {
+                turn_id,
+                operation,
+                scope,
+                query_or_key,
+            } => AuditEvent::MemoryAccess {
+                turn_id,
+                operation: operation.into(),
+                scope,
+                query_or_key,
+            },
+        }
+    }
+}
+
+/// Adapter that lets any `AuditWriter` satisfy `aivyx_core::AuditHook`.
+///
+/// Construct with [`AuditBridge::new`] for the D4-aligned panic-on-error
+/// default, or with [`AuditBridge::with_error_handler`] to supply a custom
+/// strategy (log, metric, soft-fail, etc.).
+pub struct AuditBridge<W: AuditWriter> {
+    writer: W,
+    on_error: Box<dyn Fn(AuditError) + Send + Sync>,
+}
+
+impl<W: AuditWriter> AuditBridge<W> {
+    /// Default bridge: panics on any `AuditError`. This matches D4's
+    /// commitment that audit failures must be visible — a broken chain in
+    /// a running agent is a misconfiguration, not something to log away.
+    pub fn new(writer: W) -> Self {
+        AuditBridge {
+            writer,
+            on_error: Box::new(|e| panic!("audit bridge: append failed: {e}")),
+        }
+    }
+
+    /// Escape hatch for callers that need a non-panic strategy (e.g. an
+    /// ops dashboard where logging the error and keeping the process up is
+    /// preferable to crashing mid-turn). Use sparingly — every error that
+    /// this handler swallows is an invariant from D4 that no longer holds.
+    pub fn with_error_handler(
+        writer: W,
+        on_error: impl Fn(AuditError) + Send + Sync + 'static,
+    ) -> Self {
+        AuditBridge {
+            writer,
+            on_error: Box::new(on_error),
+        }
+    }
+
+    /// Access the wrapped writer for verification / read-only queries.
+    /// Used by tests that want to assert chain length or replay entries
+    /// after a turn has run through the bridge.
+    pub fn writer(&self) -> &W {
+        &self.writer
+    }
+}
+
+impl<W: AuditWriter + 'static> aivyx_core::AuditHook for AuditBridge<W> {
+    fn on_event(&self, tag: aivyx_core::AuditTag) {
+        let event: AuditEvent = tag.into();
+        if let Err(e) = self.writer.append(event) {
+            (self.on_error)(e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Utility: input_hash helper for ToolCall events.
 // ---------------------------------------------------------------------------
 
@@ -721,5 +877,156 @@ mod tests {
             }
             other => panic!("expected ScopeDenied, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Bridge tests: aivyx_core::AuditHook <-> aivyx_audit::AuditWriter
+    // -----------------------------------------------------------------------
+
+    /// An `AuditWriter` that always fails. Used by the with_error_handler
+    /// test to verify the handler path runs instead of panicking.
+    struct AlwaysBroken;
+
+    impl AuditWriter for AlwaysBroken {
+        fn append(&self, _event: AuditEvent) -> Result<u64, AuditError> {
+            Err(AuditError::ChainBroken {
+                seq: 0,
+                reason: "synthetic test failure".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn bridge_writes_tool_call_to_chain() {
+        use aivyx_core::{AuditHook, AuditTag, ToolId};
+        use std::time::Duration;
+
+        let log = HmacChainLog::new(test_key());
+        let bridge = AuditBridge::new(log);
+
+        // Feed one ToolCall through the AuditHook surface.
+        bridge.on_event(AuditTag::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: [7u8; 32],
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(3),
+        });
+
+        // Chain length went up, verification still holds.
+        assert_eq!(bridge.writer().len(), 1);
+        bridge.writer().verify().unwrap();
+
+        // And the entry is actually a ToolCall with the right input_hash.
+        match bridge.writer().get(0).unwrap().event {
+            AuditEvent::ToolCall { input_hash, .. } => {
+                assert_eq!(input_hash, [7u8; 32]);
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bridge_translates_all_five_variants() {
+        use aivyx_core::{AuditHook, AuditTag, ToolId};
+        use std::time::Duration;
+
+        let bridge = AuditBridge::new(HmacChainLog::new(test_key()));
+        let turn_id = TurnId::new();
+        let session_id = SessionId::new();
+
+        // One of each D4 variant — the bridge must translate every shape.
+        bridge.on_event(AuditTag::TurnStarted {
+            turn_id,
+            session_id,
+            channel: ChannelPlatform::Local,
+            trust_tier: TrustTier::Trusted,
+            effective_capabilities: sample_capset(),
+        });
+        bridge.on_event(AuditTag::ToolCall {
+            turn_id,
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: [1u8; 32],
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(1),
+        });
+        bridge.on_event(AuditTag::ScopeDenied {
+            turn_id,
+            tool_attempted: ToolId::new(),
+            scope_requested: Scope::parse("shell.exec:rm").unwrap(),
+            held_capabilities: sample_capset(),
+        });
+        bridge.on_event(AuditTag::MemoryAccess {
+            turn_id,
+            operation: aivyx_core::MemoryOperation::Read,
+            scope: sample_scope(),
+            query_or_key: "yesterday".to_string(),
+        });
+        bridge.on_event(AuditTag::TurnEnded {
+            turn_id,
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 1,
+            duration: Duration::from_millis(5),
+        });
+
+        // All five entries present, chain still verifies.
+        assert_eq!(bridge.writer().len(), 5);
+        bridge.writer().verify().unwrap();
+
+        // Spot-check the TurnStarted translation picked the right tier
+        // and the MemoryAccess translation picked the right op kind.
+        match bridge.writer().get(0).unwrap().event {
+            AuditEvent::TurnStarted { trust_tier, .. } => {
+                assert_eq!(trust_tier, TrustTierSummary::Trusted);
+            }
+            other => panic!("expected TurnStarted at seq 0, got {other:?}"),
+        }
+        match bridge.writer().get(3).unwrap().event {
+            AuditEvent::MemoryAccess { operation, .. } => {
+                assert_eq!(operation, MemoryOperation::Read);
+            }
+            other => panic!("expected MemoryAccess at seq 3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bridge_with_handler_captures_error_instead_of_panicking() {
+        use aivyx_core::{AuditHook, AuditTag, ToolId};
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+
+        let bridge = AuditBridge::with_error_handler(AlwaysBroken, move |e| {
+            captured_clone.lock().unwrap().push(e.to_string());
+        });
+
+        // This would panic under the default bridge — with a handler it
+        // routes to the closure instead.
+        bridge.on_event(AuditTag::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: [0u8; 32],
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(1),
+        });
+
+        let errors = captured.lock().unwrap();
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("chain verification failed"),
+            "expected AuditError::ChainBroken message, got {:?}",
+            errors[0]
+        );
     }
 }

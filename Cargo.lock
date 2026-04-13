@@ -17,12 +17,14 @@ version = "0.1.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "async-trait",
  "hmac",
  "serde",
  "serde_jcs",
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

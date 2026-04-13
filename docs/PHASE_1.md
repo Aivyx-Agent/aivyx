@@ -1,7 +1,7 @@
 # Phase 1 — First Turn Loop (FROZEN)
 
 **Status:** Closed 2026-04-13
-**Exit commit:** *(recorded in commit message when Phase 1 is tagged)*
+**Exit commit:** `33012be` — *"Phase 1: first turn-loop skeleton — D1 executable, 57 tests green"*
 **Predecessor:** [PHASE_0.md](PHASE_0.md) (exit commit `1b4f271`)
 **Successor:** [PHASE_2.md](PHASE_2.md)
 **Contract:** [`../DESIGN.md`](../DESIGN.md) (Deliverables 1–8, all LOCKED — unchanged)
