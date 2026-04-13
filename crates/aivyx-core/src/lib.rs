@@ -1,32 +1,806 @@
 //! # aivyx-core
 //!
 //! The heart of the Aivyx agent framework. Defines the `Agent` trait,
-//! the turn loop, and the core types that every other crate depends on.
+//! the `Tool` trait, the `ChannelContext` trait, the turn loop, and all
+//! the vocabulary types every other crate depends on.
 //!
-//! See `DESIGN.md` in the workspace root — Deliverables 1 and 3 — for
-//! the locked design this crate will implement in Phase 1.
+//! See `DESIGN.md` in the workspace root — Deliverables 1, 3, and 6 —
+//! for the locked design this crate implements.
 //!
-//! ## Status: Phase 0 stubs only
+//! ## Phase 1 task 3 status
 //!
-//! Nothing in this crate is implemented. The types below are placeholders
-//! so that Phase 1 implementations land in a known location.
+//! Landed:
+//! - ID newtypes (`AgentId`, `ToolId`, `TurnId`, `SessionId`, `MessageId`)
+//! - `ChannelPlatform` enum and the full `ChannelContext` trait (moved
+//!   from `aivyx-channel` so that `ToolContext` can reference it without
+//!   creating a cycle with `aivyx-core → aivyx-channel → aivyx-core`)
+//! - `StreamEvent<'a>` + `AttachmentKind`
+//! - `Message` + `MessageContent`
+//! - `Verification` / `ToolOutcome` / `TurnOutcome` — full enums with all
+//!   D3 variants, plus `*Summary` reductions for embedding in audit
+//! - `Tool` trait **with R1 signature** (`required_scope(&self, input)`)
+//! - `ToolContext<'a>` struct
+//! - `Agent` trait
+//! - `AivyxError` — the 14-variant surface from D6, with downstream-crate
+//!   error types stubbed as strings until those crates are built
+//!
+//! Deferred to task 4: the actual turn-loop impl on a concrete agent, the
+//! fake `ChannelContext` used by the end-to-end test, and the fake `Tool`
+//! impls that exercise the scope-check + audit wiring.
 
 #![allow(dead_code)]
 
-/// Placeholder for the `Agent` trait. See DESIGN.md Deliverable 3.
-pub struct Agent;
+pub mod agent;
+pub mod planner;
 
-/// Placeholder for the `Tool` trait. See DESIGN.md Deliverable 3.
-pub struct Tool;
+pub use agent::ConcreteAgent;
+pub use planner::{NextStep, StepObservation, TurnPlanner, VecPlanner};
 
-/// Placeholder for the `Message` type. See DESIGN.md Deliverable 3.
-pub struct Message;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-/// Placeholder for the `TurnOutcome` enum. See DESIGN.md Deliverable 3.
-pub struct TurnOutcome;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use uuid::Uuid;
 
-/// Placeholder for the `ToolOutcome` enum. See DESIGN.md Deliverable 3.
-pub struct ToolOutcome;
+use aivyx_capability::{CapabilitySet, Scope};
 
-/// Placeholder for the `Verification` enum. See DESIGN.md Deliverable 3.
-pub struct Verification;
+// Re-export the cancellation token so downstream crates don't need to
+// pick up `tokio-util` just to reference the type in function signatures.
+pub use tokio_util::sync::CancellationToken;
+
+// ---------------------------------------------------------------------------
+// ID newtypes
+// ---------------------------------------------------------------------------
+
+macro_rules! id_newtype {
+    ($name:ident, $doc:expr) => {
+        #[doc = $doc]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
+        pub struct $name(pub Uuid);
+
+        impl $name {
+            pub fn new() -> Self {
+                $name(Uuid::new_v4())
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
+id_newtype!(AgentId, "Stable identity of an `Agent` instance.");
+id_newtype!(ToolId, "Stable identity of a `Tool` impl at registration time.");
+id_newtype!(TurnId, "Unique per turn. Correlates `TurnStarted` / `TurnEnded` audit events.");
+id_newtype!(SessionId, "The conversation-session the message belongs to.");
+id_newtype!(MessageId, "Unique per inbound `Message`.");
+
+// ---------------------------------------------------------------------------
+// Message
+// ---------------------------------------------------------------------------
+
+/// The inbound unit delivered by a channel to an agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Message {
+    pub id: MessageId,
+    pub session_id: SessionId,
+    pub content: MessageContent,
+    pub received_at: SystemTime,
+}
+
+impl Message {
+    /// Convenience constructor for a text message.
+    pub fn text(session_id: SessionId, text: impl Into<String>) -> Self {
+        Message {
+            id: MessageId::new(),
+            session_id,
+            content: MessageContent::Text(text.into()),
+            received_at: SystemTime::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MessageContent {
+    Text(String),
+    // Phase 2: Image, Audio, File, StructuredData
+}
+
+// ---------------------------------------------------------------------------
+// ChannelPlatform
+// ---------------------------------------------------------------------------
+
+/// Which kind of channel delivered the turn. Referenced by
+/// `ChannelContext::platform()` and by `AuditEvent::TurnStarted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChannelPlatform {
+    /// CLI, desktop app, local REST on 127.0.0.1
+    Local,
+    Telegram,
+    Discord,
+    Slack,
+    Matrix,
+    Email,
+    /// HTTP API, not bound locally
+    Rest,
+}
+
+// ---------------------------------------------------------------------------
+// ChannelContext
+// ---------------------------------------------------------------------------
+
+/// A channel's view onto an agent turn. Defined here rather than in
+/// `aivyx-channel` because `ToolContext` holds `&dyn ChannelContext` and
+/// moving `Tool` out of core would violate D1's "turn loop is core."
+///
+/// Channels implement this trait to:
+/// - advertise which platform and trust tier they represent
+/// - accept streamed events (text chunks, status pings, tool call
+///   notifications, attachments) during a turn
+/// - accept the final `TurnOutcome` at turn end
+/// - expose a `CancellationToken` so the loop can check cancellation
+///   between LLM steps
+#[async_trait]
+pub trait ChannelContext: Send + Sync {
+    fn channel_name(&self) -> &str;
+    fn platform(&self) -> ChannelPlatform;
+    fn trust_tier(&self) -> aivyx_capability::TrustTier;
+    fn session_id(&self) -> SessionId;
+
+    async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError>;
+    async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError>;
+
+    fn cancellation_token(&self) -> CancellationToken;
+}
+
+/// Events the agent pushes to the channel during a turn. Borrowed so the
+/// agent can build events over its own buffers without allocating.
+/// Channels are free to ignore any variant they don't care about.
+#[derive(Debug)]
+pub enum StreamEvent<'a> {
+    /// LLM token stream — the 95% case.
+    Text(&'a str),
+
+    /// Status signal for long-running tools.
+    Status(&'a str),
+
+    /// A tool call is about to execute.
+    ToolCallStarted {
+        tool: ToolId,
+        input: &'a serde_json::Value,
+    },
+
+    /// A tool call finished. Summary is a human-readable one-liner.
+    ToolCallFinished {
+        tool: ToolId,
+        outcome_summary: &'a str,
+    },
+
+    /// File, image, or audio attachment.
+    Attachment {
+        kind: AttachmentKind,
+        data: &'a [u8],
+        filename: Option<&'a str>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttachmentKind {
+    Image { mime: &'static str },
+    Audio { mime: &'static str },
+    File { mime: &'static str },
+}
+
+#[derive(Debug, Error)]
+pub enum ChannelError {
+    #[error("channel closed")]
+    Closed,
+    #[error("channel send failed: {0}")]
+    Send(String),
+    #[error("channel platform error: {0}")]
+    Platform(String),
+}
+
+// ---------------------------------------------------------------------------
+// Verification / ToolOutcome / TurnOutcome — the real enums from D3
+// ---------------------------------------------------------------------------
+
+/// Whether a tool verified its effect. Encodes the "tool success ≠ intent
+/// completed" rule from D1 at the type level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Verification {
+    /// Tool queried the system and confirmed its effect happened.
+    Verified,
+    /// Tool returned Ok but did not verify.
+    Unverified,
+    /// Verification not meaningful (e.g., pure read-only query).
+    NotApplicable,
+}
+
+/// Return value of `Tool::execute`.
+#[derive(Debug, Clone)]
+pub enum ToolOutcome {
+    Completed {
+        output: serde_json::Value,
+        verified: Verification,
+    },
+    Denied {
+        scope: Scope,
+        held: CapabilitySet,
+    },
+    RequiresEscalation {
+        reason: String,
+    },
+    Failed(AivyxError),
+}
+
+/// Return value of `Agent::turn`. Five variants — the four D1 termination
+/// conditions plus a `Failed` catch-all so `turn` can return `TurnOutcome`
+/// directly rather than `Result<TurnOutcome, _>` (the D3 contrarian choice:
+/// errors are part of what happened, not a wrapping failure).
+#[derive(Debug, Clone)]
+pub enum TurnOutcome {
+    Completed {
+        final_message: String,
+        tool_calls_made: usize,
+        duration: Duration,
+    },
+    Escalated {
+        reason: String,
+        pending_tool: ToolId,
+        tool_calls_made: usize,
+    },
+    TimedOut {
+        tool_calls_made: usize,
+        elapsed: Duration,
+    },
+    Cancelled {
+        tool_calls_made: usize,
+    },
+    Failed(AivyxError),
+}
+
+// --- Summary reductions (for audit embedding) ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolOutcomeSummary {
+    Completed { verified: VerificationSummary },
+    Denied,
+    RequiresEscalation,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerificationSummary {
+    Verified,
+    Unverified,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnOutcomeSummary {
+    Completed,
+    Escalated,
+    TimedOut,
+    Cancelled,
+    Failed,
+}
+
+impl From<&Verification> for VerificationSummary {
+    fn from(v: &Verification) -> Self {
+        match v {
+            Verification::Verified => VerificationSummary::Verified,
+            Verification::Unverified => VerificationSummary::Unverified,
+            Verification::NotApplicable => VerificationSummary::NotApplicable,
+        }
+    }
+}
+
+impl From<&ToolOutcome> for ToolOutcomeSummary {
+    fn from(o: &ToolOutcome) -> Self {
+        match o {
+            ToolOutcome::Completed { verified, .. } => ToolOutcomeSummary::Completed {
+                verified: VerificationSummary::from(verified),
+            },
+            ToolOutcome::Denied { .. } => ToolOutcomeSummary::Denied,
+            ToolOutcome::RequiresEscalation { .. } => ToolOutcomeSummary::RequiresEscalation,
+            ToolOutcome::Failed(_) => ToolOutcomeSummary::Failed,
+        }
+    }
+}
+
+impl From<&TurnOutcome> for TurnOutcomeSummary {
+    fn from(o: &TurnOutcome) -> Self {
+        match o {
+            TurnOutcome::Completed { .. } => TurnOutcomeSummary::Completed,
+            TurnOutcome::Escalated { .. } => TurnOutcomeSummary::Escalated,
+            TurnOutcome::TimedOut { .. } => TurnOutcomeSummary::TimedOut,
+            TurnOutcome::Cancelled { .. } => TurnOutcomeSummary::Cancelled,
+            TurnOutcome::Failed(_) => TurnOutcomeSummary::Failed,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AuditWriter — forward-declared trait
+//
+// `ToolContext` holds `&dyn AuditWriter`, but the concrete `AuditEvent` /
+// `HmacChainLog` live in `aivyx-audit`, which depends on `aivyx-core`. We
+// cannot reference `aivyx_audit::AuditWriter` from here without a cycle.
+//
+// The fix: declare a marker trait here (`AuditHook`) that's purely a
+// forward declaration. `aivyx-audit` provides a blanket impl so that
+// anything implementing `aivyx_audit::AuditWriter` automatically
+// implements `AuditHook`. Core code only touches `AuditHook`; real audit
+// types get down-cast at construction time.
+//
+// For task 3, the "hook" is a no-op surface: the turn loop needs a place
+// to stash an auditor reference so task 4's wiring has a hole to plug
+// into. The actual audit-writing happens when task 4 wires the loop.
+// ---------------------------------------------------------------------------
+
+/// Forward-declared audit-writer trait. The real `AuditWriter` in
+/// `aivyx-audit` implements this via a blanket impl (task 4), letting
+/// core code pass around `&dyn AuditHook` without depending on audit.
+pub trait AuditHook: Send + Sync {
+    /// Opaque append — returns nothing. Concrete implementations convert
+    /// this back to a real audit append via the blanket impl in
+    /// `aivyx-audit`.
+    fn on_event(&self, tag: AuditTag);
+}
+
+/// Enum of audit events the core turn loop emits. Mirrors the 5 variants
+/// from D4 but carries only what core can construct without importing
+/// `aivyx_audit`. The bridge `impl<T: AuditWriter> AuditHook for T` in
+/// `aivyx-audit` converts each variant into the corresponding `AuditEvent`.
+#[derive(Debug, Clone)]
+pub enum AuditTag {
+    TurnStarted {
+        turn_id: TurnId,
+        session_id: SessionId,
+        channel: ChannelPlatform,
+        trust_tier: aivyx_capability::TrustTier,
+        effective_capabilities: CapabilitySet,
+    },
+    TurnEnded {
+        turn_id: TurnId,
+        outcome: TurnOutcomeSummary,
+        tool_calls_made: usize,
+        duration: Duration,
+    },
+    ToolCall {
+        turn_id: TurnId,
+        tool_id: ToolId,
+        scope_used: Scope,
+        input_hash: [u8; 32],
+        outcome: ToolOutcomeSummary,
+        duration: Duration,
+    },
+    ScopeDenied {
+        turn_id: TurnId,
+        tool_attempted: ToolId,
+        scope_requested: Scope,
+        held_capabilities: CapabilitySet,
+    },
+    MemoryAccess {
+        turn_id: TurnId,
+        operation: MemoryOperation,
+        scope: Scope,
+        query_or_key: String,
+    },
+}
+
+/// Dedicated memory-operation kind, duplicated from `aivyx_audit` to keep
+/// the core → audit dependency direction clean. The bridge in `aivyx-audit`
+/// converts between the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryOperation {
+    Read,
+    Write,
+    Forget,
+}
+
+/// No-op auditor for tests that don't care about audit state. Mirrors
+/// `aivyx_audit::NullAuditLog` but has no dependency on that crate.
+pub struct NullAuditHook;
+
+impl AuditHook for NullAuditHook {
+    fn on_event(&self, _tag: AuditTag) {}
+}
+
+// ---------------------------------------------------------------------------
+// Tool trait — with R1 signature
+// ---------------------------------------------------------------------------
+
+/// A callable capability available to the agent. The central Phase 1
+/// refinement (R1) is that `required_scope` takes the tool's input so the
+/// scope check can fire on *derived* scopes, not just nominal ones:
+///
+/// - `fs.read` needs `fs.read:<path>` where `<path>` comes from the input
+/// - `memory.read` needs `memory.read:session:<id>` from the input's
+///   session filter
+/// - bare-scope tools return the same bare `Scope` regardless of input
+///
+/// Every tool is scope-checked against the agent's effective capability
+/// set before `execute` runs. A tool that cannot be satisfied by any
+/// scope in the set short-circuits to `ToolOutcome::Denied`.
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn id(&self) -> ToolId;
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn input_schema(&self) -> &serde_json::Value;
+
+    /// **R1**: compute the scope this tool call needs, given its input.
+    /// Pure — must not perform side effects.
+    fn required_scope(&self, input: &serde_json::Value) -> Scope;
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext<'_>,
+    ) -> ToolOutcome;
+}
+
+/// Context passed to `Tool::execute`. Gives tools access to the channel
+/// (for progress streaming), the audit hook (for structured entries), the
+/// cancellation token, and the identifying fields of the turn.
+pub struct ToolContext<'a> {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub turn_id: TurnId,
+    pub channel: &'a dyn ChannelContext,
+    pub audit: &'a dyn AuditHook,
+    pub cancellation: &'a CancellationToken,
+}
+
+// ---------------------------------------------------------------------------
+// Agent trait
+// ---------------------------------------------------------------------------
+
+/// The four-line `Agent` trait from D3. Returns `TurnOutcome` directly —
+/// not `Result<TurnOutcome, _>` — because every turn *completes in some
+/// way*, and errors are part of what happened.
+#[async_trait]
+pub trait Agent: Send + Sync {
+    fn id(&self) -> AgentId;
+    fn capabilities(&self) -> &CapabilitySet;
+
+    async fn turn(
+        &self,
+        message: Message,
+        channel: &dyn ChannelContext,
+    ) -> TurnOutcome;
+}
+
+/// Shared-ownership agent handle. The turn loop's idiomatic "one agent,
+/// many concurrent channels" pattern uses `Arc<dyn Agent>`.
+pub type AgentHandle = Arc<dyn Agent>;
+
+// ---------------------------------------------------------------------------
+// AivyxError — the D6 14-variant surface
+//
+// Nested error types that live in downstream crates (`StorageError`,
+// `CryptoError`, `LlmError`) are stubbed as string details for now. When
+// those crates get built, the `String` fields become typed `#[from]`
+// wrappers without changing the top-level variant names. `ChannelError`
+// is already real (defined above) because ChannelContext moved into core.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Error)]
+pub enum AivyxError {
+    // Configuration & Startup
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    // TODO(phase-storage): wrap StorageError from aivyx-storage
+    #[error("storage error: {0}")]
+    Storage(String),
+
+    // TODO(phase-crypto): wrap CryptoError from aivyx-crypto
+    #[error("crypto error: {0}")]
+    Crypto(String),
+
+    // Capability & Trust
+    #[error("capability denied: scope {scope} not held")]
+    CapabilityDenied {
+        scope: Scope,
+        held: CapabilitySet,
+    },
+
+    #[error("invalid scope: {0}")]
+    InvalidScope(String),
+
+    // TODO(phase-llm): wrap LlmError from aivyx-llm
+    #[error("LLM provider error: {0}")]
+    Llm(String),
+
+    #[error("tool error in {tool}: {detail}")]
+    Tool { tool: ToolId, detail: String },
+
+    #[error("tool {tool} requires escalation: {reason}")]
+    ToolEscalation { tool: ToolId, reason: String },
+
+    #[error("channel error: {0}")]
+    Channel(String),
+
+    #[error("audit integrity error: {0}")]
+    Audit(String),
+
+    #[error("operation timed out after {0:?}")]
+    Timeout(Duration),
+
+    #[error("operation cancelled")]
+    Cancelled,
+
+    #[error("not found: {kind} {id}")]
+    NotFound {
+        kind: &'static str,
+        id: String,
+    },
+
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+impl From<ChannelError> for AivyxError {
+    fn from(e: ChannelError) -> Self {
+        AivyxError::Channel(e.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aivyx_capability::{CapabilitySet, TrustTier};
+
+    // ---- IDs ----
+
+    #[test]
+    fn ids_are_unique() {
+        let a = ToolId::new();
+        let b = ToolId::new();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ids_round_trip_through_json() {
+        let id = TurnId::new();
+        let json = serde_json::to_string(&id).unwrap();
+        let back: TurnId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    // ---- ChannelPlatform ----
+
+    #[test]
+    fn channel_platform_round_trips() {
+        let p = ChannelPlatform::Telegram;
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#""Telegram""#);
+    }
+
+    // ---- Outcome summaries ----
+
+    #[test]
+    fn tool_outcome_summary_from_completed() {
+        let full = ToolOutcome::Completed {
+            output: serde_json::json!({"ok": true}),
+            verified: Verification::Verified,
+        };
+        let s = ToolOutcomeSummary::from(&full);
+        assert_eq!(
+            s,
+            ToolOutcomeSummary::Completed {
+                verified: VerificationSummary::Verified
+            }
+        );
+    }
+
+    #[test]
+    fn tool_outcome_summary_from_denied() {
+        let full = ToolOutcome::Denied {
+            scope: Scope::parse("shell.exec:rm").unwrap(),
+            held: CapabilitySet::empty(),
+        };
+        assert_eq!(ToolOutcomeSummary::from(&full), ToolOutcomeSummary::Denied);
+    }
+
+    #[test]
+    fn turn_outcome_summary_from_all_variants() {
+        let cases = vec![
+            (
+                TurnOutcome::Completed {
+                    final_message: "ok".into(),
+                    tool_calls_made: 0,
+                    duration: Duration::from_millis(1),
+                },
+                TurnOutcomeSummary::Completed,
+            ),
+            (
+                TurnOutcome::Cancelled {
+                    tool_calls_made: 2,
+                },
+                TurnOutcomeSummary::Cancelled,
+            ),
+            (
+                TurnOutcome::TimedOut {
+                    tool_calls_made: 1,
+                    elapsed: Duration::from_secs(30),
+                },
+                TurnOutcomeSummary::TimedOut,
+            ),
+            (
+                TurnOutcome::Failed(AivyxError::Internal("boom".into())),
+                TurnOutcomeSummary::Failed,
+            ),
+        ];
+        for (full, expected) in cases {
+            assert_eq!(TurnOutcomeSummary::from(&full), expected);
+        }
+    }
+
+    // ---- Tool trait: R1 signature compiles against a fake impl ----
+
+    struct FakeMemoryRead;
+
+    #[async_trait]
+    impl Tool for FakeMemoryRead {
+        fn id(&self) -> ToolId {
+            ToolId(Uuid::nil())
+        }
+        fn name(&self) -> &str {
+            "memory.read"
+        }
+        fn description(&self) -> &str {
+            "Recall memory entries"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+            SCHEMA.get_or_init(|| serde_json::json!({"type": "object"}))
+        }
+
+        fn required_scope(&self, input: &serde_json::Value) -> Scope {
+            // The R1 magic: derive a narrower scope from the input's
+            // `session` filter, or fall back to bare `memory.read` if
+            // the input has no filter.
+            match input.get("session").and_then(|v| v.as_str()) {
+                Some(sid) => Scope::parse(&format!("memory.read:session:{sid}")).unwrap(),
+                None => Scope::parse("memory.read").unwrap(),
+            }
+        }
+
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> ToolOutcome {
+            ToolOutcome::Completed {
+                output: serde_json::json!([]),
+                verified: Verification::NotApplicable,
+            }
+        }
+    }
+
+    #[test]
+    fn r1_tool_derives_scope_from_input() {
+        let t = FakeMemoryRead;
+
+        let bare = t.required_scope(&serde_json::json!({}));
+        assert_eq!(bare.base(), "memory.read");
+        assert_eq!(bare.qualifier(), None);
+
+        let narrow = t.required_scope(&serde_json::json!({"session": "abc"}));
+        assert_eq!(narrow.base(), "memory.read");
+        assert_eq!(narrow.qualifier(), Some("session:abc"));
+    }
+
+    #[test]
+    fn r1_narrow_scope_is_granted_by_broad_capability() {
+        // An agent holding bare `memory.read` should satisfy a tool that
+        // derives `memory.read:session:abc` from its input.
+        let agent = CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]);
+        let effective = agent.intersect(TrustTier::Trusted.default_ceiling());
+
+        let t = FakeMemoryRead;
+        let needed = t.required_scope(&serde_json::json!({"session": "abc"}));
+        assert!(effective.grants(&needed));
+    }
+
+    // ---- Agent trait compiles against a minimal fake ----
+
+    struct FakeAgent {
+        id: AgentId,
+        caps: CapabilitySet,
+    }
+
+    #[async_trait]
+    impl Agent for FakeAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+        async fn turn(
+            &self,
+            _message: Message,
+            _channel: &dyn ChannelContext,
+        ) -> TurnOutcome {
+            // Task 4 writes the real loop; this fake just lets us prove
+            // the trait shape compiles.
+            TurnOutcome::Completed {
+                final_message: "stub".into(),
+                tool_calls_made: 0,
+                duration: Duration::ZERO,
+            }
+        }
+    }
+
+    #[test]
+    fn fake_agent_compiles_as_dyn_agent() {
+        let a: Arc<dyn Agent> = Arc::new(FakeAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        assert_eq!(a.capabilities().iter().count(), 0);
+    }
+
+    // ---- AivyxError ----
+
+    #[test]
+    fn aivyx_error_display_includes_detail() {
+        let e = AivyxError::Internal("boom".into());
+        assert_eq!(format!("{e}"), "internal error: boom");
+    }
+
+    #[test]
+    fn channel_error_converts_into_aivyx_error() {
+        let ce = ChannelError::Closed;
+        let ae: AivyxError = ce.into();
+        assert!(matches!(ae, AivyxError::Channel(_)));
+    }
+
+    // ---- Message constructor ----
+
+    #[test]
+    fn message_text_constructor_builds_text_variant() {
+        let session = SessionId::new();
+        let m = Message::text(session, "hello");
+        assert_eq!(m.session_id, session);
+        match m.content {
+            MessageContent::Text(t) => assert_eq!(t, "hello"),
+        }
+    }
+
+    // ---- AuditHook is usable as a trait object ----
+
+    #[test]
+    fn null_audit_hook_is_dyn_compatible() {
+        let h: &dyn AuditHook = &NullAuditHook;
+        h.on_event(AuditTag::TurnStarted {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            channel: ChannelPlatform::Local,
+            trust_tier: TrustTier::Trusted,
+            effective_capabilities: CapabilitySet::empty(),
+        });
+    }
+}

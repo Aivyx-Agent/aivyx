@@ -24,6 +24,7 @@ readme = "README.md"
 [workspace.dependencies]
 # Core async runtime — shared so all crates use the same version
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # Serialization
@@ -35,3 +36,11 @@ thiserror = "2"
 
 # UUIDs for newtype IDs
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# Glob matching for scope attenuation (simple-glob + path-glob qualifier kinds)
+globset = "0.4"
+
+# Audit log: HMAC-SHA256 over canonical JSON per RFC 8785 (per D1 + D4)
+hmac = "0.13"
+sha2 = "0.11"
+serde_jcs = "0.2"

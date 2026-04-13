@@ -25,21 +25,9 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 1 — First Turn Loop
-
-**Status:** Active — see [`PHASE_1.md`](PHASE_1.md).
-
 ## Phase 2 — First Real LLM Provider
 
-Implement the `LlmProvider` trait (D3 / D6) with an Anthropic
-reference impl. Replace Phase 1's fake LLM with a real one so that a
-turn actually consults a model and the tool-calling loop runs against
-real completions. Stays entirely inside `aivyx-llm` and `aivyx-core`
-— no new channels, no new tools, no storage.
-
-Open question for Phase 2 entry: whether Ollama gets a reference impl
-alongside Anthropic now, or waits until Phase 3+ when local-model
-workflows become relevant. Deferred until Phase 1 exit.
+**Status:** Active — see [`PHASE_2.md`](PHASE_2.md).
 
 ## Phase 3 — First Real Channel
 

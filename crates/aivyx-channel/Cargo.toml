@@ -10,4 +10,4 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+aivyx-core = { path = "../aivyx-core" }

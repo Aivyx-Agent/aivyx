@@ -10,4 +10,12 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_jcs = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

@@ -2,18 +2,724 @@
 //!
 //! HMAC-chained append-only audit log for Aivyx agents.
 //!
-//! Every tool call, scope check, and turn outcome is appended to this
-//! log synchronously as it happens — not batched at turn end. If the
-//! process crashes mid-turn, the audit log still tells the truth about
-//! what got executed.
+//! Every tool call, scope check, and turn outcome is appended to this log
+//! synchronously as it happens — not batched at turn end. If the process
+//! crashes mid-turn, the audit log still tells the truth about what got
+//! executed.
 //!
-//! See DESIGN.md Deliverable 1 (audit is synchronous inline) and
-//! Deliverable 4 (the `AuditEvent` enum — per-tool for grants, per-scope
-//! for denials, with a dedicated `MemoryAccess` view).
+//! See DESIGN.md Deliverable 1 (audit is synchronous, inline, HMAC-chained)
+//! and Deliverable 4 (the 5-variant `AuditEvent` enum — per-tool for
+//! grants, per-scope for denials, with a dedicated `MemoryAccess` view).
 //!
-//! ## Status: Phase 0 stub only
+//! ## The chain property
 //!
-//! Nothing implemented yet. Phase 1 will add the `AuditWriter` trait,
-//! the HMAC chain mechanics, and the `AuditEvent` enum.
+//! Each entry's MAC is computed over `prev_mac || canonical_bytes(event)`.
+//! Tampering with any entry invalidates every subsequent MAC, so the chain
+//! itself is the integrity proof — no per-entry signature required.
+//!
+//! The canonical bytes come from `serde_jcs` (RFC 8785 JSON
+//! Canonicalization Scheme), so byte-identical output is guaranteed across
+//! runs regardless of struct field declaration order.
+//!
+//! ## Phase 1 scope
+//!
+//! In-memory `HmacChainLog` only. Disk persistence will come when
+//! `aivyx-storage`'s `KeyDomain::Audit` is wired in a later phase.
 
-#![allow(dead_code)]
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
+
+use hmac::{Hmac, KeyInit, Mac};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use thiserror::Error;
+
+use aivyx_capability::{CapabilitySet, Scope};
+use aivyx_core::{
+    ChannelPlatform, SessionId, ToolId, ToolOutcomeSummary, TurnId, TurnOutcomeSummary,
+};
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Versioned seed for the genesis (pre-entry-0) MAC. Mirrors D7's versioned
+/// HKDF salt — bumping to `"aivyx-audit-v2-genesis"` produces a different
+/// chain lineage, enabling clean format rotation without in-place migration.
+const GENESIS_SEED: &[u8] = b"aivyx-audit-v1-genesis";
+
+// ---------------------------------------------------------------------------
+// AuditEvent — the 5 variants from D4
+// ---------------------------------------------------------------------------
+
+/// The set of events appended to the audit log. Per D4:
+///
+/// - `ToolCall` — primary key `tool_id`; covers every tool execution
+/// - `ScopeDenied` — primary key `scope`; every denied capability check
+/// - `TurnStarted` / `TurnEnded` — paired via `turn_id` for correlation
+/// - `MemoryAccess` — redundant with `ToolCall` but indexed for fast
+///   memory-specific queries (D4's one deliberate deviation from strict
+///   mixed naming)
+///
+/// Every variant is *self-contained* — readable without cross-referencing
+/// other entries — so a single entry can be displayed in a UI or printed to
+/// a log without joining against siblings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum AuditEvent {
+    /// A tool executed.
+    ToolCall {
+        turn_id: TurnId,
+        tool_id: ToolId,
+        scope_used: Scope,
+        /// SHA-256 of the raw input. D4: "hash, not raw input — secrets safety."
+        input_hash: [u8; 32],
+        outcome: ToolOutcomeSummary,
+        duration: Duration,
+    },
+
+    /// A scope check denied a tool call.
+    ScopeDenied {
+        turn_id: TurnId,
+        tool_attempted: ToolId,
+        scope_requested: Scope,
+        /// Snapshot of capabilities at denial time — not a reference, so the
+        /// set is preserved even if the agent's caps change later.
+        held_capabilities: CapabilitySet,
+    },
+
+    /// Turn started. Correlates with `TurnEnded` via `turn_id`.
+    TurnStarted {
+        turn_id: TurnId,
+        session_id: SessionId,
+        channel: ChannelPlatform,
+        trust_tier: TrustTierSummary,
+        /// The `agent_caps.intersect(tier_ceiling)` snapshot — authoritative
+        /// for the whole turn, per D5.
+        effective_capabilities: CapabilitySet,
+    },
+
+    /// Turn ended. Paired with `TurnStarted`.
+    TurnEnded {
+        turn_id: TurnId,
+        outcome: TurnOutcomeSummary,
+        tool_calls_made: usize,
+        duration: Duration,
+    },
+
+    /// Dedicated view of a memory operation. Redundant with `ToolCall`
+    /// (every memory op *is* also a tool call), but indexed for fast
+    /// memory-specific queries. D4 justifies this as the one deviation
+    /// from strict mixed-model naming.
+    MemoryAccess {
+        turn_id: TurnId,
+        operation: MemoryOperation,
+        scope: Scope,
+        /// Free-form filter or key — for a recall this is the query string,
+        /// for a write it's the storage key. Not hashed: memory queries /
+        /// keys are already audit-safe (no raw secrets pass through them
+        /// by convention).
+        query_or_key: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryOperation {
+    Read,
+    Write,
+    Forget,
+}
+
+/// Mirror of `aivyx_capability::TrustTier` — duplicated here to avoid a
+/// dependency from audit on capability's concrete enum, and because the
+/// audit record only needs the tier *name*, not its behavior. The conversion
+/// is one-way: `TrustTierSummary::from(tier)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrustTierSummary {
+    Kernel,
+    Trusted,
+    SemiTrusted,
+    Untrusted,
+}
+
+impl From<aivyx_capability::TrustTier> for TrustTierSummary {
+    fn from(t: aivyx_capability::TrustTier) -> Self {
+        use aivyx_capability::TrustTier;
+        match t {
+            TrustTier::Kernel => TrustTierSummary::Kernel,
+            TrustTier::Trusted => TrustTierSummary::Trusted,
+            TrustTier::SemiTrusted => TrustTierSummary::SemiTrusted,
+            TrustTier::Untrusted => TrustTierSummary::Untrusted,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Signed entries and the chain
+// ---------------------------------------------------------------------------
+
+/// One signed entry in the chain. The MAC binds the entry to everything
+/// preceding it via `prev_mac`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedEntry {
+    /// Monotonic sequence number, 0-based. Not derived from the MAC — kept
+    /// explicit so tools can reference entries by seq without computing the
+    /// full chain.
+    pub seq: u64,
+    /// Wall-clock time of append, for human display. NOT part of the MAC
+    /// input — clock skew must not break integrity.
+    pub appended_at: SystemTime,
+    pub event: AuditEvent,
+    /// 32-byte HMAC-SHA256 tag over `prev_mac || canonical_bytes(event)`.
+    pub mac: [u8; 32],
+    /// The previous entry's MAC (or the genesis seed for entry 0).
+    pub prev_mac: [u8; 32],
+}
+
+// ---------------------------------------------------------------------------
+// AuditError
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Error)]
+pub enum AuditError {
+    #[error("canonical serialization failed: {0}")]
+    Serialize(String),
+
+    #[error("chain verification failed at seq {seq}: {reason}")]
+    ChainBroken { seq: u64, reason: String },
+
+    #[error("lock poisoned")]
+    LockPoisoned,
+}
+
+// ---------------------------------------------------------------------------
+// AuditWriter / AuditLog traits
+// ---------------------------------------------------------------------------
+
+/// Minimal append surface — what a `ToolContext` will hold a reference to.
+/// Returned by `HmacChainLog` and by `NullAuditLog`.
+pub trait AuditWriter: Send + Sync {
+    /// Append an event. Synchronous per D1: "blocking, microseconds per
+    /// call." Returns the sequence number assigned, or an error on failure.
+    fn append(&self, event: AuditEvent) -> Result<u64, AuditError>;
+}
+
+/// Full audit surface — extends `AuditWriter` with read/verify. The turn
+/// loop holds an `AuditWriter` reference; test code and admin tools hold
+/// an `AuditLog` reference for inspection.
+pub trait AuditLog: AuditWriter {
+    /// Read the entry at `seq`, or `None` if past the end.
+    fn get(&self, seq: u64) -> Option<SignedEntry>;
+
+    /// Number of entries so far.
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Walk the chain from entry 0 and recompute every MAC. Returns
+    /// `Ok(())` if all MACs match and every `prev_mac` refers to the
+    /// previous entry's MAC; `Err(ChainBroken)` at the first discrepancy.
+    fn verify(&self) -> Result<(), AuditError>;
+}
+
+// ---------------------------------------------------------------------------
+// HmacChainLog — the concrete in-memory HMAC-chained implementation.
+// ---------------------------------------------------------------------------
+
+/// In-memory HMAC-chained audit log.
+///
+/// The secret key is held by value; in a real deployment it's derived via
+/// HKDF from the master key (D7 `KeyDomain::Audit`). For Phase 1, callers
+/// pass in a key directly — storage wiring comes later.
+pub struct HmacChainLog {
+    key: Vec<u8>,
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
+    entries: Vec<SignedEntry>,
+}
+
+impl HmacChainLog {
+    pub fn new(key: impl Into<Vec<u8>>) -> Self {
+        HmacChainLog {
+            key: key.into(),
+            inner: Mutex::new(Inner {
+                entries: Vec::new(),
+            }),
+        }
+    }
+
+    /// Snapshot of all entries — cloned. Intended for tests and admin
+    /// tools, not for hot paths.
+    pub fn entries(&self) -> Result<Vec<SignedEntry>, AuditError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| AuditError::LockPoisoned)?
+            .entries
+            .clone())
+    }
+
+    fn compute_mac(&self, prev_mac: &[u8; 32], event_bytes: &[u8]) -> [u8; 32] {
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&self.key)
+            .expect("HMAC accepts any key length");
+        mac.update(prev_mac);
+        mac.update(event_bytes);
+        let out = mac.finalize().into_bytes();
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&out);
+        arr
+    }
+}
+
+impl AuditWriter for HmacChainLog {
+    fn append(&self, event: AuditEvent) -> Result<u64, AuditError> {
+        let event_bytes =
+            serde_jcs::to_vec(&event).map_err(|e| AuditError::Serialize(e.to_string()))?;
+
+        let mut inner = self.inner.lock().map_err(|_| AuditError::LockPoisoned)?;
+
+        let seq = inner.entries.len() as u64;
+        let prev_mac = match inner.entries.last() {
+            Some(prev) => prev.mac,
+            None => {
+                let mut seed = [0u8; 32];
+                let src = GENESIS_SEED;
+                // Left-pad: copy the seed into the *end* of the array; leading
+                // zeros fill the rest. Deterministic and future-proof against
+                // lengthening the seed string.
+                let start = seed.len() - src.len();
+                seed[start..].copy_from_slice(src);
+                seed
+            }
+        };
+        let mac = self.compute_mac(&prev_mac, &event_bytes);
+
+        let entry = SignedEntry {
+            seq,
+            appended_at: SystemTime::now(),
+            event,
+            mac,
+            prev_mac,
+        };
+        inner.entries.push(entry);
+        Ok(seq)
+    }
+}
+
+impl AuditLog for HmacChainLog {
+    fn get(&self, seq: u64) -> Option<SignedEntry> {
+        self.inner.lock().ok()?.entries.get(seq as usize).cloned()
+    }
+
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .map(|i| i.entries.len())
+            .unwrap_or(0)
+    }
+
+    fn verify(&self) -> Result<(), AuditError> {
+        let entries = self
+            .inner
+            .lock()
+            .map_err(|_| AuditError::LockPoisoned)?
+            .entries
+            .clone();
+
+        let mut expected_prev = {
+            let mut seed = [0u8; 32];
+            let src = GENESIS_SEED;
+            let start = seed.len() - src.len();
+            seed[start..].copy_from_slice(src);
+            seed
+        };
+
+        for (idx, entry) in entries.iter().enumerate() {
+            if entry.seq != idx as u64 {
+                return Err(AuditError::ChainBroken {
+                    seq: idx as u64,
+                    reason: format!("seq field = {}, expected {}", entry.seq, idx),
+                });
+            }
+            if entry.prev_mac != expected_prev {
+                return Err(AuditError::ChainBroken {
+                    seq: entry.seq,
+                    reason: "prev_mac does not match previous entry's mac".into(),
+                });
+            }
+            let bytes = serde_jcs::to_vec(&entry.event)
+                .map_err(|e| AuditError::Serialize(e.to_string()))?;
+            let expected_mac = self.compute_mac(&expected_prev, &bytes);
+            if expected_mac != entry.mac {
+                return Err(AuditError::ChainBroken {
+                    seq: entry.seq,
+                    reason: "MAC does not match recomputation over canonical event bytes".into(),
+                });
+            }
+            expected_prev = entry.mac;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NullAuditLog — no-op writer for tests that don't need integrity.
+// ---------------------------------------------------------------------------
+
+/// Appends are accepted and dropped. `len()` always reports 0; `verify()`
+/// always succeeds. Intended for fake `ToolContext` wiring in Phase 1
+/// task 4 where the test cares about control flow, not audit.
+pub struct NullAuditLog;
+
+impl AuditWriter for NullAuditLog {
+    fn append(&self, _event: AuditEvent) -> Result<u64, AuditError> {
+        Ok(0)
+    }
+}
+
+impl AuditLog for NullAuditLog {
+    fn get(&self, _seq: u64) -> Option<SignedEntry> {
+        None
+    }
+
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn verify(&self) -> Result<(), AuditError> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility: input_hash helper for ToolCall events.
+// ---------------------------------------------------------------------------
+
+/// Hash a raw tool input (as bytes) into the 32-byte digest stored in
+/// `AuditEvent::ToolCall::input_hash`. Provided here so every call site
+/// uses the same hash family; the output is SHA-256.
+pub fn hash_tool_input(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let out = h.finalize();
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&out);
+    arr
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aivyx_capability::{CapabilitySet, Scope, TrustTier};
+
+    fn test_key() -> Vec<u8> {
+        b"phase1-test-key-do-not-ship".to_vec()
+    }
+
+    fn sample_scope() -> Scope {
+        Scope::parse("memory.read:session:abc").unwrap()
+    }
+
+    fn sample_capset() -> CapabilitySet {
+        CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("llm.call").unwrap(),
+        ])
+    }
+
+    fn sample_turn_started() -> AuditEvent {
+        AuditEvent::TurnStarted {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            channel: ChannelPlatform::Local,
+            trust_tier: TrustTierSummary::from(TrustTier::Trusted),
+            effective_capabilities: sample_capset(),
+        }
+    }
+
+    fn sample_tool_call() -> AuditEvent {
+        AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{\"query\":\"yesterday\"}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(37),
+        }
+    }
+
+    // ---- Chain basics ----
+
+    #[test]
+    fn empty_chain_verifies() {
+        let log = HmacChainLog::new(test_key());
+        assert!(log.verify().is_ok());
+        assert_eq!(AuditLog::len(&log), 0);
+    }
+
+    #[test]
+    fn single_append_produces_seq_zero() {
+        let log = HmacChainLog::new(test_key());
+        let seq = log.append(sample_turn_started()).unwrap();
+        assert_eq!(seq, 0);
+        assert_eq!(AuditLog::len(&log), 1);
+        log.verify().unwrap();
+    }
+
+    #[test]
+    fn multi_append_produces_valid_chain() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_turn_started()).unwrap();
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::TurnEnded {
+            turn_id: TurnId::new(),
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 1,
+            duration: Duration::from_secs(2),
+        })
+        .unwrap();
+        assert_eq!(AuditLog::len(&log), 3);
+        log.verify().unwrap();
+    }
+
+    #[test]
+    fn prev_mac_of_entry_n_matches_mac_of_entry_n_minus_1() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_turn_started()).unwrap();
+        log.append(sample_tool_call()).unwrap();
+        let entries = log.entries().unwrap();
+        assert_eq!(entries[1].prev_mac, entries[0].mac);
+    }
+
+    // ---- Tamper detection ----
+
+    #[test]
+    fn tampering_with_an_entry_breaks_chain() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_turn_started()).unwrap();
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::TurnEnded {
+            turn_id: TurnId::new(),
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 1,
+            duration: Duration::from_secs(2),
+        })
+        .unwrap();
+        log.verify().unwrap();
+
+        // Mutate entry 1's event in place. We reach into the Mutex for this
+        // test only — real callers cannot do this because `entries()`
+        // returns a clone.
+        {
+            let mut inner = log.inner.lock().unwrap();
+            if let AuditEvent::ToolCall {
+                ref mut duration, ..
+            } = inner.entries[1].event
+            {
+                *duration = Duration::from_secs(999);
+            } else {
+                panic!("expected ToolCall at index 1");
+            }
+        }
+
+        let err = log.verify().unwrap_err();
+        match err {
+            AuditError::ChainBroken { seq, .. } => {
+                assert_eq!(seq, 1, "tamper on entry 1 must be detected at seq 1");
+            }
+            _ => panic!("expected ChainBroken, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn tampering_with_prev_mac_breaks_chain() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_turn_started()).unwrap();
+        log.append(sample_tool_call()).unwrap();
+
+        {
+            let mut inner = log.inner.lock().unwrap();
+            inner.entries[1].prev_mac[0] ^= 0xFF;
+        }
+
+        let err = log.verify().unwrap_err();
+        match err {
+            AuditError::ChainBroken { seq, .. } => assert_eq!(seq, 1),
+            _ => panic!("expected ChainBroken"),
+        }
+    }
+
+    // ---- Canonical-bytes determinism across logs with the same key ----
+
+    #[test]
+    fn two_logs_same_key_same_events_produce_identical_macs() {
+        // The "determinism that makes HMAC-chained audit useful" test:
+        // build two separate logs from the same key, append the same
+        // sequence of logically-equal events, and confirm the MAC chain
+        // is identical byte-for-byte.
+        let event_a = sample_turn_started();
+        let event_b = match &event_a {
+            AuditEvent::TurnStarted {
+                turn_id,
+                session_id,
+                channel,
+                trust_tier,
+                effective_capabilities,
+            } => AuditEvent::TurnStarted {
+                turn_id: *turn_id,
+                session_id: *session_id,
+                channel: *channel,
+                trust_tier: *trust_tier,
+                effective_capabilities: effective_capabilities.clone(),
+            },
+            _ => unreachable!(),
+        };
+
+        let log1 = HmacChainLog::new(test_key());
+        let log2 = HmacChainLog::new(test_key());
+        log1.append(event_a).unwrap();
+        log2.append(event_b).unwrap();
+
+        let e1 = log1.entries().unwrap();
+        let e2 = log2.entries().unwrap();
+        assert_eq!(e1[0].mac, e2[0].mac, "same event + same key → same MAC");
+        assert_eq!(e1[0].prev_mac, e2[0].prev_mac);
+    }
+
+    #[test]
+    fn different_keys_produce_different_macs() {
+        let log1 = HmacChainLog::new(b"key-one".to_vec());
+        let log2 = HmacChainLog::new(b"key-two".to_vec());
+        let ev = sample_turn_started();
+        let ev2 = match &ev {
+            AuditEvent::TurnStarted {
+                turn_id,
+                session_id,
+                channel,
+                trust_tier,
+                effective_capabilities,
+            } => AuditEvent::TurnStarted {
+                turn_id: *turn_id,
+                session_id: *session_id,
+                channel: *channel,
+                trust_tier: *trust_tier,
+                effective_capabilities: effective_capabilities.clone(),
+            },
+            _ => unreachable!(),
+        };
+        log1.append(ev).unwrap();
+        log2.append(ev2).unwrap();
+        assert_ne!(
+            log1.entries().unwrap()[0].mac,
+            log2.entries().unwrap()[0].mac
+        );
+    }
+
+    // ---- Round-trip all 5 variants ----
+
+    #[test]
+    fn all_five_variants_round_trip_through_canonical_json() {
+        let turn_id = TurnId::new();
+
+        let events = vec![
+            sample_tool_call(),
+            AuditEvent::ScopeDenied {
+                turn_id,
+                tool_attempted: ToolId::new(),
+                scope_requested: Scope::parse("shell.exec:rm").unwrap(),
+                held_capabilities: sample_capset(),
+            },
+            sample_turn_started(),
+            AuditEvent::TurnEnded {
+                turn_id,
+                outcome: TurnOutcomeSummary::Cancelled,
+                tool_calls_made: 2,
+                duration: Duration::from_millis(500),
+            },
+            AuditEvent::MemoryAccess {
+                turn_id,
+                operation: MemoryOperation::Read,
+                scope: Scope::parse("memory.read:session:abc").unwrap(),
+                query_or_key: "yesterday".to_string(),
+            },
+        ];
+
+        for ev in events {
+            let bytes = serde_jcs::to_vec(&ev).expect("jcs must accept");
+            let back: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+            assert_eq!(ev, back);
+        }
+    }
+
+    // ---- NullAuditLog ----
+
+    #[test]
+    fn null_audit_log_accepts_and_verifies() {
+        let null = NullAuditLog;
+        null.append(sample_tool_call()).unwrap();
+        assert_eq!(AuditLog::len(&null), 0);
+        null.verify().unwrap();
+    }
+
+    // ---- D1 Scenario 3 audit trail: rm -rf denied on Tier 2 ----
+
+    #[test]
+    fn d1_scenario3_produces_denied_audit_trail() {
+        // Walks the audit trail a denied Telegram rm -rf would emit:
+        // TurnStarted → ScopeDenied → TurnEnded, all MAC-chained.
+        let log = HmacChainLog::new(test_key());
+        let turn_id = TurnId::new();
+        let session_id = SessionId::new();
+
+        let agent = CapabilitySet::from_scopes([Scope::parse("shell.exec").unwrap()]);
+        let effective = agent.intersect(TrustTier::SemiTrusted.default_ceiling());
+
+        log.append(AuditEvent::TurnStarted {
+            turn_id,
+            session_id,
+            channel: ChannelPlatform::Telegram,
+            trust_tier: TrustTierSummary::SemiTrusted,
+            effective_capabilities: effective.clone(),
+        })
+        .unwrap();
+
+        log.append(AuditEvent::ScopeDenied {
+            turn_id,
+            tool_attempted: ToolId::new(),
+            scope_requested: Scope::parse("shell.exec:rm").unwrap(),
+            held_capabilities: effective,
+        })
+        .unwrap();
+
+        log.append(AuditEvent::TurnEnded {
+            turn_id,
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 0,
+            duration: Duration::from_millis(42),
+        })
+        .unwrap();
+
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 3);
+
+        // Spot-check the denial was captured with the right scope.
+        match log.get(1).unwrap().event {
+            AuditEvent::ScopeDenied {
+                scope_requested, ..
+            } => {
+                assert_eq!(scope_requested.base(), "shell.exec");
+                assert_eq!(scope_requested.qualifier(), Some("rm"));
+            }
+            other => panic!("expected ScopeDenied, got {other:?}"),
+        }
+    }
+}
