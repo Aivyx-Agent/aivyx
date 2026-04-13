@@ -44,3 +44,11 @@ globset = "0.4"
 hmac = "0.13"
 sha2 = "0.11"
 serde_jcs = "0.2"
+
+# LLM provider HTTP transport (feature-gated in aivyx-llm via provider-anthropic)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+# Bearer token wrapper — prevents accidental Debug/logging of API keys
+secrecy = { version = "0.10", features = ["serde"] }
+# Byte stream utilities used by the SSE parser
+futures-util = "0.3"
+bytes = "1"

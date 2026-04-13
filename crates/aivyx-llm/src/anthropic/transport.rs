@@ -1,0 +1,114 @@
+//! HTTP transport seam for the Anthropic provider.
+//!
+//! The provider does not own a `reqwest::Client` directly — it owns a
+//! `Box<dyn HttpTransport>`. The real implementation (`ReqwestTransport`)
+//! wraps `reqwest`; a test fake (`FakeTransport`, in the test module of
+//! `provider.rs`) replays canned bytes.
+//!
+//! This split is what lets the SSE parser and the `LlmProvider` impl be
+//! tested exhaustively with zero network. It also makes a second vendor
+//! (OpenAI, Ollama, ...) trivially reuse the same transport.
+
+use std::pin::Pin;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures_util::Stream;
+use tokio_util::sync::CancellationToken;
+
+use crate::LlmError;
+
+/// A byte stream returned by [`HttpTransport::post_sse`]. Wraps
+/// `reqwest::Response::bytes_stream()` in the real path; in tests it wraps
+/// an `IntoIter` over pre-canned `Bytes` chunks.
+///
+/// The SSE parser reads from this stream and splits it into events — it
+/// does *not* assume each `Bytes` chunk contains one complete event.
+pub type ByteStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, LlmError>> + Send + 'static>>;
+
+/// The transport seam. One method, because that's all the Anthropic
+/// Messages streaming endpoint needs: POST a JSON body, read back an SSE
+/// stream.
+#[async_trait]
+pub trait HttpTransport: Send + Sync {
+    async fn post_sse(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<ByteStream, LlmError>;
+}
+
+// ---------------------------------------------------------------------------
+// Real implementation: reqwest
+// ---------------------------------------------------------------------------
+
+/// Production transport: a `reqwest::Client` with rustls.
+pub struct ReqwestTransport {
+    client: reqwest::Client,
+}
+
+impl ReqwestTransport {
+    pub fn new() -> Result<Self, LlmError> {
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("aivyx-llm/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| LlmError::Config(format!("reqwest client build failed: {e}")))?;
+        Ok(ReqwestTransport { client })
+    }
+
+    pub fn from_client(client: reqwest::Client) -> Self {
+        ReqwestTransport { client }
+    }
+}
+
+#[async_trait]
+impl HttpTransport for ReqwestTransport {
+    async fn post_sse(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<ByteStream, LlmError> {
+        use futures_util::StreamExt;
+
+        if cancellation.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+
+        let mut request = self.client.post(url).body(body);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let message: String = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
+            return Err(LlmError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        // `bytes_stream` yields `Result<Bytes, reqwest::Error>`; map the
+        // error into our `LlmError::Transport` variant.
+        let stream = response.bytes_stream().map(
+            |res: Result<Bytes, reqwest::Error>| -> Result<Bytes, LlmError> {
+                res.map_err(|e| LlmError::Transport(e.to_string()))
+            },
+        );
+
+        Ok(Box::pin(stream))
+    }
+}

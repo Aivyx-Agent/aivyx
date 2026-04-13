@@ -48,6 +48,9 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "provider-anthropic")]
+pub mod anthropic;
+
 // ---------------------------------------------------------------------------
 // Conversation messages
 // ---------------------------------------------------------------------------

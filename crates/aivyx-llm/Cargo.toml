@@ -9,8 +9,20 @@ authors.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+default = []
+# Opt-in: pulls in reqwest + rustls + secrecy and compiles the Anthropic
+# reference provider. Downstream crates (e.g. aivyx-core) that only need
+# the LlmProvider trait and LlmError must NOT enable this feature.
+provider-anthropic = [
+    "dep:reqwest",
+    "dep:secrecy",
+    "dep:futures-util",
+    "dep:bytes",
+]
+
 [dependencies]
-# Protocol-only crate — no dependency on aivyx-core. The LlmProvider
+# Protocol-only core — no dependency on aivyx-core. The LlmProvider
 # trait and its associated types use `serde_json::Value` for tool
 # inputs/outputs and `tokio_util::sync::CancellationToken` for mid-
 # stream cancellation; neither requires core types.
@@ -20,5 +32,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 
+# Feature-gated: only compiled when `provider-anthropic` is on. Keeping
+# these optional means `aivyx-core` (which depends on this crate purely
+# for LlmError) never links reqwest/rustls/secrecy.
+reqwest = { workspace = true, optional = true }
+secrecy = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
