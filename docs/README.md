@@ -32,11 +32,16 @@ doc.
 |---------|---------|--------------------------------|-----------|
 | Phase 0 | Frozen  | [PHASE_0.md](PHASE_0.md)       | `1b4f271` |
 | Phase 1 | Active  | [PHASE_1.md](PHASE_1.md)       | —         |
-| Phase 2 | Pending | —                              | —         |
+| Phase 2+ | Planned | [ROADMAP.md](ROADMAP.md)      | —         |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
 enforcement, but it makes drift visible in `git log`.
+
+**Planned phases** (2 and beyond) live in [`ROADMAP.md`](ROADMAP.md)
+as one-paragraph intents rather than as separate PHASE_N.md files.
+A phase gets its own doc only when it opens — that way there are no
+stale task lists sitting in files for phases we haven't started yet.
 
 ## Amendment process (not yet used)
 
