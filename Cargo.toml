@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aivyx-core",
+    "crates/aivyx-crypto",
+    "crates/aivyx-capability",
+    "crates/aivyx-audit",
+    "crates/aivyx-config",
+    "crates/aivyx-storage",
+    "crates/aivyx-llm",
+    "crates/aivyx-memory",
+    "crates/aivyx-channel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Julian <julian@aivyx-studio.com>"]
+repository = "https://github.com/AivyxDev/aivyx"
+readme = "README.md"
+
+[workspace.dependencies]
+# Core async runtime — shared so all crates use the same version
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling — per D6
+thiserror = "2"
+
+# UUIDs for newtype IDs
+uuid = { version = "1", features = ["v4", "serde"] }

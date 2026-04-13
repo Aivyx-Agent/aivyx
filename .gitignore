@@ -1,0 +1,18 @@
+# Rust
+/target/
+Cargo.lock.bak
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+*.local
