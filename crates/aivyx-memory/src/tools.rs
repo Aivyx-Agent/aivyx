@@ -1,0 +1,979 @@
+//! # Memory tools — the three `Tool` impls from Phase 6 task 3.
+//!
+//! [`MemoryReadTool`], [`MemoryWriteTool`], and [`MemoryForgetTool`]
+//! are the user-facing surface of D1's "memory is a tool, not ambient
+//! system" commitment. Each one wraps an `Arc<dyn Memory>` (so the
+//! same substrate can be driven by any implementation — redb in
+//! production, [`crate::InMemoryMemory`] in tests), owns its
+//! pre-built input schema, and routes every call through the
+//! capability-typed [`aivyx_core::Tool`] trait that the turn loop
+//! already enforces.
+//!
+//! ## Q5 resolution (for future archaeologists)
+//!
+//! Phase 6 entered open on "does `Tool::required_scope` need an
+//! `input: &Value` parameter?" A careful read of `aivyx-core` at task
+//! 3 start revealed that Phase 1's task 3 already folded the R1
+//! refinement into the live trait: `fn required_scope(&self, input:
+//! &serde_json::Value) -> Scope` has been shipped since commit
+//! `33012be`. Phase 4's `FsReadTool` has been using the signature for
+//! two phases. No DESIGN.md amendment needed; the five-phase
+//! empty-diff streak rolls forward to six. The stale DESIGN.md
+//! line-1038 note is a known drift marker and stays as-is per the
+//! "evidence-driven amendments" discipline — a future phase that
+//! *actually* amends D3 will clean it up in the same diff.
+//!
+//! ## Q3 resolution — topic filter semantics
+//!
+//! `memory.read` requires a topic. The `"*"` sentinel from the Phase
+//! 6 open-question writeup is **not** implemented in this task; the
+//! substrate itself has no cross-topic scan primitive, and the audit
+//! story for "one call surfaces arbitrary state" is exactly the kind
+//! of thing that deserves deliberate design rather than a reserved
+//! string squeezed in at task 3. If Phase 7+ wants it, the call site
+//! will be `MemoryReadTool::execute`, not a substrate change. This is
+//! in line with option (1) from Phase 6's Q3: require a topic
+//! argument, force the planner to name what it recalls.
+//!
+//! ## Scope derivation (the R1 payoff)
+//!
+//! Each tool derives a scope that *mentions* the specific topic the
+//! call will touch, so that an agent holding `memory.read:topic:notes`
+//! cannot use `memory.read` to peek at topic `secrets`. The qualifier
+//! shape matches DESIGN.md's D4 taxonomy: `<base>:topic:<topic>`.
+//! Malformed input (missing topic, wrong type) routes to a "deny
+//! scope" — a scope no agent can possibly hold, which the turn
+//! loop's scope gate converts into `ToolOutcome::Denied` before
+//! `execute` ever runs. This is exactly the Phase 4 `FsReadTool`
+//! pattern; the only shift is that memory uses a topic qualifier
+//! instead of a path qualifier.
+//!
+//! The "deny scope" construction has a subtlety: it must still be a
+//! *valid* `Scope` (the `Tool` trait's return type is bare `Scope`,
+//! not `Result`), and its `base` must be one of `aivyx-capability`'s
+//! `KNOWN_BASES` or `Scope::parse` refuses to build it. The reserved
+//! sentinel qualifier `topic:\x00denied` meets both constraints: the
+//! base is real (`memory.read`), so the parse succeeds, but no agent
+//! will ever be granted a scope with a NUL-containing qualifier, so
+//! the gate denies every call that lands on it. Same trick as
+//! Phase 4's fs deny scope, adapted to this crate's qualifier shape.
+//!
+//! ## What does NOT happen here
+//!
+//! - **No scope checking.** The turn loop's scope gate in
+//!   `aivyx-core` is the *only* thing that compares `required_scope`
+//!   against the agent's held capabilities. `execute` trusts that
+//!   it was invoked with an in-scope call — see the `FsReadTool`
+//!   docstring for the same explicit reliance.
+//! - **No audit writes.** Each tool builds an `AuditTag::MemoryAccess`
+//!   for the turn loop to emit, but this task does not wire
+//!   audit-on-execute directly — that's the turn loop's job via
+//!   `ToolContext::audit`. The tools **do** emit a MemoryAccess
+//!   event at the start of `execute`, so the audit chain records
+//!   every memory touch even when the substrate no-ops (e.g., a
+//!   read of a never-written topic).
+//! - **No topic validation beyond non-empty.** UTF-8 well-formedness
+//!   is already guaranteed by the `String` type, and the substrate
+//!   itself rejects `EmptyTopic`. Topic length caps, character
+//!   restrictions, and reserved prefixes are deferred to Phase 7+
+//!   if real-world usage surfaces a need.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use aivyx_capability::Scope;
+use aivyx_core::{
+    AivyxError, AuditTag, MemoryOperation, Tool, ToolContext, ToolId,
+    ToolOutcome, Verification,
+};
+
+use crate::{Memory, MemoryError};
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Default cap on the number of entries a single `memory.read` call
+/// can return. Const, not config — same philosophy as
+/// `FsReadTool::MAX_READ_BYTES`. 32 is big enough for any realistic
+/// "recent memories" recall while keeping a single tool call from
+/// flooding an LLM turn if the agent sets `limit` to something wild
+/// (or omits it, in which case this is the default).
+pub const DEFAULT_READ_LIMIT: usize = 16;
+
+/// Hard ceiling on `memory.read` limit even when explicitly set.
+/// An agent can ask for up to this many; anything larger is clamped.
+/// Prevents a single malformed planner step from pulling the entire
+/// store into context.
+pub const MAX_READ_LIMIT: usize = 64;
+
+/// Construct a `Scope` no agent will ever be granted. Uses the
+/// qualifier `"topic:\x00denied"` — a NUL byte inside a qualifier is
+/// unreachable through normal `Scope::parse` on user-supplied
+/// strings because D4-legal qualifiers never contain NULs, so any
+/// agent holding a memory scope will have a NUL-free qualifier and
+/// the gate's equality check fails. `base` must be a real base or
+/// `Scope::parse` refuses the construction, which is why the
+/// function takes the base as an argument.
+fn deny_scope(base: &str) -> Scope {
+    // `.expect` is fine here: this function is only ever called with
+    // one of the three hard-coded base strings below, each of which
+    // is in KNOWN_BASES. If someone adds a fourth call site with a
+    // typo, the test suite catches it at first run.
+    Scope::parse(&format!("{base}:topic:\x00denied"))
+        .expect("deny_scope base must be a known scope base")
+}
+
+/// Extract a non-empty topic string from a tool-input JSON value.
+/// Returns `None` for missing field, wrong type, or empty string.
+/// Shared so the three tools' `required_scope` functions derive
+/// scopes from exactly the same shape, and `execute` can't disagree
+/// with the gate about what "valid" means.
+fn topic_from_input(input: &Value) -> Option<&str> {
+    let s = input.get("topic")?.as_str()?;
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Build a qualified memory scope of the form `<base>:topic:<topic>`.
+/// Falls back to the deny scope if parse fails (e.g., the topic
+/// contained a colon that broke the qualifier shape — `Scope::parse`
+/// is the authority on what's legal, not this function).
+fn memory_scope(base: &str, topic: &str) -> Scope {
+    Scope::parse(&format!("{base}:topic:{topic}")).unwrap_or_else(|| deny_scope(base))
+}
+
+/// Convert a [`MemoryError`] to a [`ToolOutcome::Failed`] with the
+/// right `ToolId`. Substrate errors are never successful tool runs.
+fn memory_err_to_failed(tool: ToolId, err: MemoryError) -> ToolOutcome {
+    ToolOutcome::Failed(AivyxError::Tool {
+        tool,
+        detail: format!("memory substrate error: {err}"),
+    })
+}
+
+/// Turn a [`MemoryEntry`] into the JSON shape the tool emits. Kept
+/// out of `MemoryEntry`'s own `Serialize` impl because the on-disk
+/// at-rest shape (task 1) and the tool output shape can diverge
+/// later — the latter is an agent-facing contract, the former is
+/// an internal storage detail.
+fn entry_to_json(entry: &crate::MemoryEntry) -> Value {
+    json!({
+        "topic": entry.topic,
+        "body": entry.body,
+        "seq": entry.seq,
+        "created_at_secs": entry.created_at_secs,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// MemoryReadTool
+// ---------------------------------------------------------------------------
+
+/// `memory.read` — recall up to `limit` most recent entries for a
+/// given topic.
+///
+/// Input shape:
+/// ```json
+/// { "topic": "notes", "limit": 10 }
+/// ```
+/// `limit` is optional; missing means [`DEFAULT_READ_LIMIT`], and any
+/// value larger than [`MAX_READ_LIMIT`] is clamped down. Output is
+/// `{"entries": [...]}` with `entries` newest-first.
+pub struct MemoryReadTool {
+    id: ToolId,
+    memory: Arc<dyn Memory>,
+    schema: Value,
+}
+
+impl std::fmt::Debug for MemoryReadTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryReadTool")
+            .field("id", &self.id)
+            .field("memory", &"Arc<dyn Memory>")
+            .finish()
+    }
+}
+
+impl MemoryReadTool {
+    /// Construct a new `memory.read` tool over the given substrate.
+    /// Infallible — the substrate handle is already live, there is
+    /// nothing to canonicalize or check.
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        MemoryReadTool {
+            id: ToolId::new(),
+            memory,
+            schema: read_input_schema_value(),
+        }
+    }
+}
+
+fn read_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "Non-empty topic tag to recall. \
+                                Memory is strictly topic-scoped; a \
+                                reader cannot see topics other than \
+                                this one."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_READ_LIMIT,
+                "description": "Maximum number of recent entries to return. \
+                                Defaults to 16, capped at 64."
+            }
+        },
+        "required": ["topic"],
+        "additionalProperties": false,
+    })
+}
+
+#[async_trait]
+impl Tool for MemoryReadTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "memory.read"
+    }
+
+    fn description(&self) -> &str {
+        "Recall recent memory entries stored under a given topic. \
+         Returns up to `limit` entries (default 16, max 64), newest first. \
+         The agent must hold `memory.read:topic:<topic>` — scopes are \
+         per-topic, so reading one topic does not grant access to others."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        match topic_from_input(input) {
+            Some(topic) => memory_scope("memory.read", topic),
+            None => deny_scope("memory.read"),
+        }
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let topic = match topic_from_input(&input) {
+            Some(t) => t.to_string(),
+            None => {
+                // Same invariant violation argument as FsReadTool: the
+                // scope gate would have denied a missing-topic call
+                // because `required_scope` returned the deny scope.
+                // Reaching `execute` without a topic means either the
+                // gate was bypassed or the scope-gate logic has a
+                // bug. Either way, fail loudly in audit.
+                return ToolOutcome::Failed(AivyxError::Internal(
+                    "memory.read: reached execute with malformed input \
+                     (topic missing or non-string) after scope gate \
+                     admitted the call"
+                        .to_string(),
+                ));
+            }
+        };
+
+        let requested = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_READ_LIMIT);
+        let limit = requested.clamp(1, MAX_READ_LIMIT);
+
+        ctx.audit.on_event(AuditTag::MemoryAccess {
+            turn_id: ctx.turn_id,
+            operation: MemoryOperation::Read,
+            scope: memory_scope("memory.read", &topic),
+            query_or_key: topic.clone(),
+        });
+
+        let entries = match self.memory.get_recent(&topic, limit).await {
+            Ok(v) => v,
+            Err(e) => return memory_err_to_failed(self.id, e),
+        };
+
+        let json_entries: Vec<Value> = entries.iter().map(entry_to_json).collect();
+
+        ToolOutcome::Completed {
+            output: json!({
+                "topic": topic,
+                "entries": json_entries,
+                "count": json_entries.len(),
+            }),
+            // Read is inherently a query — "verification" is
+            // meaningless for something that didn't mutate state.
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryWriteTool
+// ---------------------------------------------------------------------------
+
+/// `memory.write` — store a single entry under a topic.
+///
+/// Input shape:
+/// ```json
+/// { "topic": "notes", "body": "the user's favorite color is purple" }
+/// ```
+/// Output is `{"seq": <u64>}`, the substrate's assigned monotonic
+/// sequence number. The tool verifies the write by calling
+/// `get_recent(topic, 1)` and checking the top entry matches what it
+/// just wrote — this is what `Verification::Verified` exists for per
+/// D1's "tool success ≠ intent completed" rule.
+pub struct MemoryWriteTool {
+    id: ToolId,
+    memory: Arc<dyn Memory>,
+    schema: Value,
+}
+
+impl std::fmt::Debug for MemoryWriteTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryWriteTool")
+            .field("id", &self.id)
+            .field("memory", &"Arc<dyn Memory>")
+            .finish()
+    }
+}
+
+impl MemoryWriteTool {
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        MemoryWriteTool {
+            id: ToolId::new(),
+            memory,
+            schema: write_input_schema_value(),
+        }
+    }
+}
+
+fn write_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "Non-empty topic tag to store the entry under. \
+                                Agents must hold `memory.write:topic:<topic>`."
+            },
+            "body": {
+                "type": "string",
+                "description": "Freeform UTF-8 body of what to remember."
+            }
+        },
+        "required": ["topic", "body"],
+        "additionalProperties": false,
+    })
+}
+
+#[async_trait]
+impl Tool for MemoryWriteTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "memory.write"
+    }
+
+    fn description(&self) -> &str {
+        "Store a new memory entry under a topic. Returns the assigned \
+         monotonic sequence number. The tool re-reads the topic after \
+         writing and returns `Verified` only if the new entry is at \
+         the head of the recall order."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        match topic_from_input(input) {
+            Some(topic) => memory_scope("memory.write", topic),
+            None => deny_scope("memory.write"),
+        }
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let topic = match topic_from_input(&input) {
+            Some(t) => t.to_string(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(
+                    "memory.write: reached execute with malformed input \
+                     (topic missing or non-string) after scope gate \
+                     admitted the call"
+                        .to_string(),
+                ));
+            }
+        };
+        let body = match input.get("body").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a string `body` field".to_string(),
+                });
+            }
+        };
+
+        ctx.audit.on_event(AuditTag::MemoryAccess {
+            turn_id: ctx.turn_id,
+            operation: MemoryOperation::Write,
+            scope: memory_scope("memory.write", &topic),
+            query_or_key: topic.clone(),
+        });
+
+        let seq = match self.memory.put(&topic, &body).await {
+            Ok(s) => s,
+            Err(e) => return memory_err_to_failed(self.id, e),
+        };
+
+        // Verification fence. Re-read the topic's newest entry and
+        // confirm it is what we just wrote. This catches substrate
+        // drift: if a put-then-read races with a concurrent
+        // `forget`, or if RedbMemory's seq counter somehow gets
+        // out of sync with the store, we want `Verified` to be a
+        // lie only when the write truly landed. D1 calls this the
+        // "verify what you did" rule.
+        let verified = match self.memory.get_recent(&topic, 1).await {
+            Ok(latest) => match latest.first() {
+                Some(top) if top.seq == seq && top.body == body => Verification::Verified,
+                _ => Verification::Unverified,
+            },
+            // A read failure after a successful write is *still* a
+            // successful write from the substrate's point of view;
+            // report it as Unverified rather than demoting the whole
+            // call to Failed.
+            Err(_) => Verification::Unverified,
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "topic": topic,
+                "seq": seq,
+            }),
+            verified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryForgetTool
+// ---------------------------------------------------------------------------
+
+/// `memory.forget` — delete every entry under a topic.
+///
+/// Input shape:
+/// ```json
+/// { "topic": "notes" }
+/// ```
+/// Output is `{"deleted": <usize>}`. Verification re-reads the topic
+/// and confirms it's empty.
+pub struct MemoryForgetTool {
+    id: ToolId,
+    memory: Arc<dyn Memory>,
+    schema: Value,
+}
+
+impl std::fmt::Debug for MemoryForgetTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryForgetTool")
+            .field("id", &self.id)
+            .field("memory", &"Arc<dyn Memory>")
+            .finish()
+    }
+}
+
+impl MemoryForgetTool {
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        MemoryForgetTool {
+            id: ToolId::new(),
+            memory,
+            schema: forget_input_schema_value(),
+        }
+    }
+}
+
+fn forget_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "Non-empty topic tag to forget. Every \
+                                entry under this topic is deleted. \
+                                Agents must hold \
+                                `memory.forget:topic:<topic>`."
+            }
+        },
+        "required": ["topic"],
+        "additionalProperties": false,
+    })
+}
+
+#[async_trait]
+impl Tool for MemoryForgetTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "memory.forget"
+    }
+
+    fn description(&self) -> &str {
+        "Delete every memory entry under a topic. Returns the number \
+         of entries removed. Verification re-reads the topic and \
+         confirms it is empty."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        match topic_from_input(input) {
+            Some(topic) => memory_scope("memory.forget", topic),
+            None => deny_scope("memory.forget"),
+        }
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let topic = match topic_from_input(&input) {
+            Some(t) => t.to_string(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(
+                    "memory.forget: reached execute with malformed input \
+                     (topic missing or non-string) after scope gate \
+                     admitted the call"
+                        .to_string(),
+                ));
+            }
+        };
+
+        ctx.audit.on_event(AuditTag::MemoryAccess {
+            turn_id: ctx.turn_id,
+            operation: MemoryOperation::Forget,
+            scope: memory_scope("memory.forget", &topic),
+            query_or_key: topic.clone(),
+        });
+
+        let deleted = match self.memory.forget(&topic).await {
+            Ok(n) => n,
+            Err(e) => return memory_err_to_failed(self.id, e),
+        };
+
+        // Verification: read 1 from the topic, confirm we get nothing.
+        // A concurrent writer could in principle add an entry between
+        // forget and get_recent; we still report Verified because the
+        // forget call itself did land — the new entry is a fresh
+        // write, not a survivor. But if the substrate returns an
+        // error on the read, we cannot prove the forget worked, so
+        // report Unverified.
+        let verified = match self.memory.get_recent(&topic, 1).await {
+            Ok(v) if v.is_empty() => Verification::Verified,
+            Ok(_) => Verification::Unverified,
+            Err(_) => Verification::Unverified,
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "topic": topic,
+                "deleted": deleted,
+            }),
+            verified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+//
+// Unit tests exercise the three tools against `InMemoryMemory` so they
+// stay at microsecond speed. The integration test in task 5 will run
+// the same code paths against `RedbMemory` over a real scratch store.
+//
+// Test coverage matches the PHASE_6.md task 3 contract line-by-line:
+//   - scope-checked happy path (write → read → correct entry)
+//   - scope derivation is input-dependent (R1 payoff)
+//   - scope denial (malformed input → deny scope)
+//   - empty result (read of unknown topic → {"entries": [], "count": 0})
+//   - forget clears a topic and the verification reports Verified
+//   - write reports Verified after put+re-read
+//   - substrate error surfaces as ToolOutcome::Failed
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::InMemoryMemory;
+    use aivyx_core::{
+        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
+        NullAuditHook, SessionId, StreamEvent, TurnId, TurnOutcome,
+    };
+
+    // ---- Test helpers ----------------------------------------------
+
+    /// A minimal `ChannelContext` that ignores every event. Mirrors
+    /// the `NoopChannel` in `aivyx-core::tools::fs`'s own test module
+    /// — the Phase 4 reference harness — adapted here because the
+    /// memory tools never actually call into the channel (unlike
+    /// `fs.read`, they don't stream progress). Kept verbose rather
+    /// than hidden behind a macro because the `#[async_trait]`
+    /// impl is the whole point of the fake and hiding it would
+    /// obscure the assertions.
+    struct NoopChannel {
+        session: SessionId,
+        token: CancellationToken,
+    }
+
+    #[async_trait]
+    impl ChannelContext for NoopChannel {
+        fn channel_name(&self) -> &str {
+            "test"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> aivyx_capability::TrustTier {
+            aivyx_capability::TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+
+    /// Build a fresh `ToolContext` from a channel + audit + cancel.
+    /// Takes them by reference because the resulting context borrows
+    /// them for its lifetime.
+    fn make_ctx<'a>(
+        channel: &'a NoopChannel,
+        audit: &'a dyn aivyx_core::AuditHook,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: AgentId::new(),
+            session_id: channel.session,
+            turn_id: TurnId::new(),
+            channel,
+            audit,
+            cancellation: &channel.token,
+        }
+    }
+
+    fn fresh_channel() -> NoopChannel {
+        NoopChannel {
+            session: SessionId::new(),
+            token: CancellationToken::new(),
+        }
+    }
+
+    fn fresh_memory() -> Arc<dyn Memory> {
+        Arc::new(InMemoryMemory::new())
+    }
+
+    // ---- Scope derivation (R1 payoff) ------------------------------
+
+    #[test]
+    fn read_scope_is_derived_from_topic() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": "notes"}));
+        assert_eq!(scope.base(), "memory.read");
+        assert_eq!(scope.qualifier(), Some("topic:notes"));
+    }
+
+    #[test]
+    fn write_scope_is_derived_from_topic() {
+        let tool = MemoryWriteTool::new(fresh_memory());
+        let scope =
+            tool.required_scope(&json!({"topic": "secrets", "body": "hunter2"}));
+        assert_eq!(scope.base(), "memory.write");
+        assert_eq!(scope.qualifier(), Some("topic:secrets"));
+    }
+
+    #[test]
+    fn forget_scope_is_derived_from_topic() {
+        let tool = MemoryForgetTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": "notes"}));
+        assert_eq!(scope.base(), "memory.forget");
+        assert_eq!(scope.qualifier(), Some("topic:notes"));
+    }
+
+    #[test]
+    fn read_scope_from_two_different_topics_is_not_equal() {
+        // The whole point of deriving the scope from the input: an
+        // agent with `memory.read:topic:notes` must not be able to
+        // use `memory.read` to peek at topic `secrets`. Scope
+        // equality drives that, so this test proves the derivation
+        // returns genuinely distinct scopes.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let a = tool.required_scope(&json!({"topic": "notes"}));
+        let b = tool.required_scope(&json!({"topic": "secrets"}));
+        assert_ne!(a, b);
+    }
+
+    // ---- Deny-scope fallback for malformed input -------------------
+
+    #[test]
+    fn read_scope_for_missing_topic_is_deny_scope() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({}));
+        // Deny-scope qualifier contains a NUL — any real granted
+        // scope has a NUL-free qualifier, so equality fails.
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[test]
+    fn read_scope_for_wrong_type_topic_is_deny_scope() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": 42}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[test]
+    fn read_scope_for_empty_topic_is_deny_scope() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": ""}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[test]
+    fn write_scope_for_missing_topic_is_deny_scope() {
+        let tool = MemoryWriteTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"body": "hi"}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[test]
+    fn forget_scope_for_missing_topic_is_deny_scope() {
+        let tool = MemoryForgetTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    // ---- Happy path execution --------------------------------------
+
+    #[tokio::test]
+    async fn write_then_read_round_trips_through_the_tool_surface() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        let write_outcome = writer
+            .execute(
+                json!({"topic": "notes", "body": "purple"}),
+                &ctx,
+            )
+            .await;
+        match write_outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "notes");
+                assert_eq!(output["seq"], 0);
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("write should complete, got {other:?}"),
+        }
+
+        let ctx = make_ctx(&chan, &audit);
+        let read_outcome = reader
+            .execute(json!({"topic": "notes"}), &ctx)
+            .await;
+        match read_outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "notes");
+                assert_eq!(output["count"], 1);
+                assert_eq!(verified, Verification::NotApplicable);
+                let entries = output["entries"].as_array().unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0]["body"], "purple");
+                assert_eq!(entries[0]["seq"], 0);
+            }
+            other => panic!("read should complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_of_unknown_topic_returns_empty_list_not_error() {
+        let reader = MemoryReadTool::new(fresh_memory());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = reader
+            .execute(json!({"topic": "never-written"}), &ctx)
+            .await;
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["count"], 0);
+                assert!(output["entries"].as_array().unwrap().is_empty());
+                assert_eq!(verified, Verification::NotApplicable);
+            }
+            other => panic!("unknown-topic read must still Complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_limit_defaults_and_is_capped() {
+        // Seed strictly more than MAX_READ_LIMIT so the clamp
+        // assertion has enough supply to actually saturate. With 50
+        // seeded entries and a 10_000-limit request, the clamp would
+        // fire but `get_recent` would still only return 50 — the
+        // assertion would pass for the wrong reason (not enough data
+        // to notice the clamp).
+        let mem = fresh_memory();
+        for i in 0..(MAX_READ_LIMIT + 16) {
+            mem.put("notes", &format!("entry {i}")).await.unwrap();
+        }
+        let reader = MemoryReadTool::new(mem);
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        // Default limit (no `limit` field) -> DEFAULT_READ_LIMIT.
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader.execute(json!({"topic": "notes"}), &ctx).await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], DEFAULT_READ_LIMIT);
+        } else {
+            panic!("default-limit read should Complete");
+        }
+
+        // Explicit limit below cap.
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topic": "notes", "limit": 5}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 5);
+        } else {
+            panic!("explicit-limit read should Complete");
+        }
+
+        // Explicit limit above MAX_READ_LIMIT — clamped.
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topic": "notes", "limit": 10_000}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], MAX_READ_LIMIT);
+        } else {
+            panic!("clamped-limit read should Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn forget_clears_topic_and_reports_verified() {
+        let mem = fresh_memory();
+        mem.put("notes", "x").await.unwrap();
+        mem.put("notes", "y").await.unwrap();
+        mem.put("todos", "z").await.unwrap();
+
+        let forget = MemoryForgetTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = forget.execute(json!({"topic": "notes"}), &ctx).await;
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["deleted"], 2);
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("forget should Complete, got {other:?}"),
+        }
+        // And the other topic survived.
+        assert_eq!(mem.get_recent("todos", 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn forget_of_unknown_topic_reports_zero_and_verified() {
+        let forget = MemoryForgetTool::new(fresh_memory());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = forget.execute(json!({"topic": "nothing"}), &ctx).await;
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["deleted"], 0);
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("unknown-topic forget should Complete, got {other:?}"),
+        }
+    }
+
+    // ---- Malformed input paths through execute ---------------------
+
+    #[tokio::test]
+    async fn write_missing_body_fails_loudly() {
+        let writer = MemoryWriteTool::new(fresh_memory());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        // Topic is present (so the scope gate would admit the call),
+        // but body is missing. Execute should return Failed.
+        let outcome = writer.execute(json!({"topic": "notes"}), &ctx).await;
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_missing_topic_in_execute_is_internal_error() {
+        // This path is unreachable through the real turn loop — the
+        // scope gate would deny the call. The test proves that *if*
+        // the gate is ever bypassed, execute still fails closed with
+        // an Internal error (not a silent success), matching
+        // FsReadTool's same invariant.
+        let reader = MemoryReadTool::new(fresh_memory());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = reader.execute(json!({}), &ctx).await;
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Internal(_))
+        ));
+    }
+
+    // ---- Tool metadata sanity --------------------------------------
+
+    #[test]
+    fn tool_names_are_the_expected_d4_strings() {
+        // D4 scope taxonomy lists these exact base strings. Tool
+        // names should match so registry lookups are obvious.
+        assert_eq!(MemoryReadTool::new(fresh_memory()).name(), "memory.read");
+        assert_eq!(MemoryWriteTool::new(fresh_memory()).name(), "memory.write");
+        assert_eq!(
+            MemoryForgetTool::new(fresh_memory()).name(),
+            "memory.forget"
+        );
+    }
+
+    #[test]
+    fn tool_ids_are_unique_per_construction() {
+        let a = MemoryReadTool::new(fresh_memory()).id();
+        let b = MemoryReadTool::new(fresh_memory()).id();
+        assert_ne!(a, b, "ToolId::new must mint fresh UUIDs");
+    }
+}

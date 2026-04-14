@@ -121,6 +121,8 @@ dependencies = [
 name = "aivyx-memory"
 version = "0.1.0"
 dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
  "aivyx-crypto",
  "aivyx-storage",
  "async-trait",

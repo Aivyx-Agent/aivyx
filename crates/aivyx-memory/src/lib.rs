@@ -85,6 +85,9 @@ use thiserror::Error;
 mod redb;
 pub use crate::redb::RedbMemory;
 
+mod tools;
+pub use crate::tools::{MemoryForgetTool, MemoryReadTool, MemoryWriteTool};
+
 /// A single memory record.
 ///
 /// This is what `Memory::put` stores and what `Memory::get_recent`

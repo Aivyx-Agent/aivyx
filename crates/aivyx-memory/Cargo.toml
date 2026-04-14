@@ -35,6 +35,18 @@ aivyx-storage = { path = "../aivyx-storage" }
 # DomainHandle::put .await without fighting lifetimes.
 tokio = { workspace = true, features = ["sync"] }
 
+# Task 3: the three Memory tools implement `aivyx_core::Tool`, which
+# brings in ToolId / ToolContext / ToolOutcome / Verification /
+# AivyxError / AuditHook / AuditTag / MemoryOperation. The
+# dependency direction is fine — aivyx-core has no reverse edge to
+# this crate (D8 order: core ← memory, never the other way).
+aivyx-core = { path = "../aivyx-core" }
+
+# Task 3: Scope parsing / construction for required_scope. Already
+# transitively present via aivyx-core but named here for clarity
+# because `tools.rs` imports `Scope` directly.
+aivyx-capability = { path = "../aivyx-capability" }
+
 [dev-dependencies]
 # #[tokio::test] for the async unit tests — same split as aivyx-storage.
 tokio = { workspace = true, features = ["rt", "macros"] }
