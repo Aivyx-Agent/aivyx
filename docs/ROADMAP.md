@@ -81,45 +81,4 @@ setup cost, which is a judgement call to be made at the time.
 
 ## Phase 11 — Role system + shell execution (first product phase)
 
-**Status:** Planned. Opens directly after Phase 10 freezes
-(Phase 10 Q5 resolved "no dogfood gap" — Phase 10 shipped no
-user-visible behavior, so there is nothing for an operator pass
-to verify between phases).
-
-The pivot from foundation to product. Introduces a `Role`
-concept — a named bundle of `(system_prompt, tool_allowlist,
-memory_topic_prefix)` — so users can "employ" Aivyx as a coder,
-PA, researcher, writer, etc. First concrete role: `coder`. Ships
-a `shell.exec` tool at `TrustTier::Trusted` only (never offered
-to Telegram or any `SemiTrusted` adapter), scoped as
-`shell.exec:cwd:<path>` with path-prefix attenuation. Role
-definitions live in `aivyx-config` (already provenance-tracked).
-`memory.*` tools auto-prefix topics with the active role name
-so personas don't bleed memory into each other.
-
-**What Phase 10 taught us that changes Phase 11's shape:**
-
-- `Tool::input_schema()` has existed since Phase 6 and every
-  shipped tool already returns a real schema — Phase 10 Task 2
-  discovered this mid-implementation. Phase 11's `shell.exec`
-  therefore does **not** need a "first tool with a schema"
-  framing; it just inherits the same schema obligation every
-  existing tool already satisfies, and the hand-rolled validator
-  from Phase 10 will gate its input on day one.
-- Validation ordering: `shell.exec`'s schema must not declare
-  the `session` key, because the turn loop injects `session`
-  **after** validation runs. Phase 10 Task 2's second mid-phase
-  correction documented this ordering and locked it with an
-  integration test.
-- If `shell.exec`'s inputs need nested-object shapes
-  (`{args: {cwd, env}}`) the Phase 10 validator will need to
-  grow nested-object support. The validator was "narrow by
-  design" in Phase 10 — extend it in the first Phase 11 task
-  that needs nesting, not speculatively.
-- The `Tool` trait was **not** refined in Phase 10 (despite the
-  draft sketch saying it would be). Phase 11 should not assume
-  that Phase 10 expanded the trait surface — work from the Phase
-  9 trait shape plus the `input_schema()` method that has been
-  there since Phase 6.
-- The foundation backlog is empty. Phase 11 opens with zero
-  rolling deferrals — the first phase to do so since Phase 6.
+*Active — see [PHASE_11.md](PHASE_11.md).*
