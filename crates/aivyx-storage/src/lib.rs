@@ -3,21 +3,831 @@
 //! Encrypted redb-based storage for Aivyx, with HKDF-derived subkeys
 //! per data domain (Sessions, Memory, Audit, Secrets, ChannelState).
 //!
-//! See DESIGN.md Deliverable 7 for the storage stack and trait sketch.
+//! See DESIGN.md Deliverable 7 for the storage stack commitment:
 //!
-//! ## Key commitments
+//! - **redb** for the embedded ACID KV substrate (single-file, pure
+//!   Rust, cross-platform, single-writer enforced by file lock).
+//! - **Argon2id + HKDF + ChaCha20-Poly1305** from `aivyx-crypto` for
+//!   the passphrase → master → subkey → AEAD chain. This crate never
+//!   sees a raw passphrase — the channel adapter (Phase 5 task 3)
+//!   derives the master key and hands it to [`RedbStorage::open`].
+//! - **One handle per process.** The returned `Arc<dyn Storage>` is
+//!   shared across every concurrent turn. `redb::Database` enforces
+//!   the single-writer invariant at the file-lock layer.
 //!
-//! - Single-writer, single-process (redb file lock enforces this)
-//! - One storage handle per process — not per request
-//! - Passphrase is obtained by the channel adapter, not storage
-//! - Versioned HKDF salt (`"aivyx-v1-storage"`) allows clean key rotation
+//! ## API shape
 //!
-//! ## Status: Phase 0 stubs only
+//! - [`Storage`] — the trait agents hold behind `Arc<dyn Storage>`.
+//!   Exposes [`Storage::domain`] (cheap — precomputed subkeys) and
+//!   [`Storage::flush`] (no-op for redb, present for trait symmetry
+//!   with future backends).
+//! - [`RedbStorage`] — the one and only concrete impl. `open` is an
+//!   inherent associated function rather than a trait method because
+//!   a trait method with `Self: Sized` can't be called through
+//!   `Arc<dyn Storage>`, which is the only handle type callers see.
+//! - [`DomainHandle`] — owned handle to a single [`KeyDomain`]. Holds
+//!   the per-domain subkey (cheap to clone) and a `redb::Database`
+//!   `Arc`. Lookups and writes go through this type so callers can't
+//!   accidentally cross domains (putting a `KeyDomain::Sessions` key
+//!   into the `KeyDomain::Memory` table is structurally impossible).
+//!
+//! ## Key isolation
+//!
+//! The test suite's `open_wrong_key_fails_to_decrypt` test makes the
+//! AEAD isolation explicit: opening a store with the right path but
+//! the wrong master key produces a handle whose `get` calls fail with
+//! [`StorageError::DecryptFailed`]. The AEAD open error is not
+//! distinguished from a tampered-ciphertext error — that's the
+//! correct behavior for a ChaCha20-Poly1305 AEAD, and it's what
+//! prevents an adversary from learning which of (key, nonce, aad,
+//! ciphertext) is "wrong" in a compromise scenario.
+//!
+//! ## Nonce discipline
+//!
+//! Every `put` generates a fresh 12-byte nonce via `uuid::Uuid::
+//! new_v4()` truncated to 12 bytes and stores `nonce || ciphertext`
+//! as the value. The nonce is read back at `get` time. This means
+//! the same logical key can be `put` many times across its lifetime
+//! without nonce reuse — the AEAD uniqueness requirement is
+//! satisfied by write-time randomness, not by key identity.
+//!
+//! ## Why "async trait" for a sync-backed KV store
+//!
+//! redb is synchronous. D7 commits to wrapping all redb calls in
+//! `tokio::task::spawn_blocking` so the agent's async loop never
+//! stalls on a disk read. That's what this crate does internally —
+//! every public async method dispatches via `spawn_blocking`. A
+//! future non-redb backend (e.g., SQLite-over-tokio-rusqlite) would
+//! implement the same trait natively.
 
-#![allow(dead_code)]
+#![forbid(unsafe_code)]
 
-/// Placeholder for the `KeyDomain` enum. See DESIGN.md Deliverable 7.
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use redb::{Database, TableDefinition};
+
+use aivyx_crypto::{CryptoError, MasterKey, SubKey, NONCE_LEN};
+
+// --------------------------------------------------------------------
+// KeyDomain
+// --------------------------------------------------------------------
+
+/// Domain separator for HKDF subkey derivation. D7 line 907 locks
+/// this taxonomy at five variants. Adding a sixth is a DESIGN.md
+/// amendment.
 ///
-/// Real variants (Phase 1):
-/// `Sessions | Memory | Audit | Secrets | ChannelState`
-pub struct KeyDomain;
+/// Each variant maps to:
+/// - a stable `info` byte string for HKDF (via [`KeyDomain::as_bytes`]),
+/// - a dedicated redb [`TableDefinition`] (via [`KeyDomain::table_name`]),
+/// - its own AEAD `SubKey` cached in the storage handle at open time.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum KeyDomain {
+    /// Session metadata and turn history.
+    Sessions,
+    /// `memory.read` / `memory.write` substrate (Phase 6).
+    Memory,
+    /// HMAC-chained audit log entries (future phase).
+    Audit,
+    /// Encrypted config values (API keys, tokens).
+    Secrets,
+    /// Per-channel persistent state (Matrix sync tokens, etc.).
+    ChannelState,
+}
+
+impl KeyDomain {
+    /// Stable byte string for HKDF's `info` parameter. These values
+    /// are the schema-versioning contract: changing any of them is a
+    /// cold-start operation (subkeys change, existing ciphertexts
+    /// are unreadable). They're lowercase-ASCII so a future
+    /// `HKDF_SALT` rotation is the *only* way to invalidate the
+    /// whole keyspace.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        match self {
+            KeyDomain::Sessions => b"sessions",
+            KeyDomain::Memory => b"memory",
+            KeyDomain::Audit => b"audit",
+            KeyDomain::Secrets => b"secrets",
+            KeyDomain::ChannelState => b"channel-state",
+        }
+    }
+
+    /// redb table name for this domain. The `_v1` suffix pairs with
+    /// the `aivyx-v1-storage` HKDF salt in `aivyx-crypto`: a future
+    /// `v2` salt rotation means a `v2` table name, and the old table
+    /// is left in place (dead but intact) to simplify incident
+    /// recovery.
+    pub const fn table_name(self) -> &'static str {
+        match self {
+            KeyDomain::Sessions => "aivyx_sessions_v1",
+            KeyDomain::Memory => "aivyx_memory_v1",
+            KeyDomain::Audit => "aivyx_audit_v1",
+            KeyDomain::Secrets => "aivyx_secrets_v1",
+            KeyDomain::ChannelState => "aivyx_channel_state_v1",
+        }
+    }
+
+    /// All variants, iteration order stable. Used at `open` time to
+    /// precompute every subkey and to create the redb tables.
+    pub const ALL: [KeyDomain; 5] = [
+        KeyDomain::Sessions,
+        KeyDomain::Memory,
+        KeyDomain::Audit,
+        KeyDomain::Secrets,
+        KeyDomain::ChannelState,
+    ];
+}
+
+// --------------------------------------------------------------------
+// Errors
+// --------------------------------------------------------------------
+
+/// Errors this crate produces. All collapse to `AivyxError::Storage`
+/// at the `aivyx-core` boundary — the top-level `AivyxError` enum
+/// already reserves a `Storage(String)` slot for exactly this
+/// purpose (D6 12-variant cap).
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    /// The redb backend refused to open, create, or commit. Wraps
+    /// the upstream string because redb's error enum is larger than
+    /// any caller cares to match against.
+    #[error("redb error: {0}")]
+    Redb(String),
+
+    /// Failed to derive a domain subkey via HKDF. Surfaced unchanged
+    /// from `aivyx-crypto::CryptoError`.
+    #[error("crypto error: {0}")]
+    Crypto(#[from] CryptoError),
+
+    /// Decryption failed for a value read from disk. Either the
+    /// master key is wrong (cold open against a store written with
+    /// a different passphrase), the file has been tampered with, or
+    /// the table was written by a future storage schema this binary
+    /// doesn't understand. The three cases are indistinguishable by
+    /// construction — that's the AEAD guarantee.
+    #[error("decrypt failed for {domain:?} key (wrong master key or tampered data)")]
+    DecryptFailed { domain: KeyDomain },
+
+    /// A value on disk is shorter than the nonce length. This means
+    /// the table was corrupted or written by a non-Aivyx writer.
+    #[error("corrupt value for {domain:?}: length {len} < nonce length {NONCE_LEN}")]
+    CorruptValue { domain: KeyDomain, len: usize },
+
+    /// `tokio::task::spawn_blocking` panicked or was cancelled. Should
+    /// not happen in practice — redb calls do not panic for any
+    /// reason the storage layer would handle differently from any
+    /// other runtime failure.
+    #[error("blocking task join failed: {0}")]
+    JoinFailed(String),
+}
+
+// Small adapters to lift upstream error kinds into `StorageError::Redb`.
+// Each `impl From<…> for StorageError` is one line, so the storage code
+// below can use `?` freely without a tower of `.map_err(…)` calls.
+
+impl From<redb::Error> for StorageError {
+    fn from(e: redb::Error) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+impl From<redb::DatabaseError> for StorageError {
+    fn from(e: redb::DatabaseError) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+impl From<redb::TransactionError> for StorageError {
+    fn from(e: redb::TransactionError) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+impl From<redb::TableError> for StorageError {
+    fn from(e: redb::TableError) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+impl From<redb::StorageError> for StorageError {
+    fn from(e: redb::StorageError) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+impl From<redb::CommitError> for StorageError {
+    fn from(e: redb::CommitError) -> Self {
+        Self::Redb(e.to_string())
+    }
+}
+
+// --------------------------------------------------------------------
+// StorageConfig — inputs to RedbStorage::open
+// --------------------------------------------------------------------
+
+/// Open-time configuration. Mirrors the Phase 4 `FsReadToolConfig`
+/// pattern: a plain struct whose fallible `open` produces an
+/// `Arc`-wrapped handle, so the binary owns composition and
+/// surfaces startup errors at the boundary where the user can see
+/// them.
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    /// Absolute path to the redb file. The parent directory must
+    /// exist; `open` will not create parents. Pick a path under
+    /// `$XDG_DATA_HOME/aivyx/` or similar.
+    pub path: PathBuf,
+}
+
+impl StorageConfig {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+// --------------------------------------------------------------------
+// Storage trait
+// --------------------------------------------------------------------
+
+/// Trait agents hold behind `Arc<dyn Storage>`. D7 locks this as the
+/// single storage surface in the workspace; adding a second method
+/// requires a contract update.
+///
+/// Note that `open` is not a trait method — see [`RedbStorage::open`].
+/// A trait method returning `Self: Sized` would not be callable
+/// through `Arc<dyn Storage>`, which is the only handle type the
+/// session layer accepts.
+#[async_trait]
+pub trait Storage: Send + Sync {
+    /// Return an owned handle to the named domain. Cheap: the subkey
+    /// is precomputed at open time and cloned into the handle (32
+    /// bytes); the underlying `redb::Database` is an `Arc`.
+    fn domain(&self, domain: KeyDomain) -> DomainHandle;
+
+    /// Flush pending writes. No-op on redb (commits are explicit and
+    /// durable at transaction close), present on the trait for
+    /// symmetry with future backends that buffer.
+    async fn flush(&self) -> Result<(), StorageError>;
+}
+
+// --------------------------------------------------------------------
+// RedbStorage — the one concrete impl
+// --------------------------------------------------------------------
+
+/// Single redb-backed [`Storage`] implementation. Holds one
+/// `Arc<Database>` handle, the master key (zeroize-on-drop), and
+/// one precomputed [`SubKey`] per [`KeyDomain`] variant.
+///
+/// The master key is kept around so that a future `rotate_passphrase`
+/// operation can re-seal every value without requiring a reopen.
+/// No such method exists in Phase 5 — kept deliberately simple.
+#[derive(Debug)]
+pub struct RedbStorage {
+    db: Arc<Database>,
+    subkeys: [SubKey; 5],
+    // _master held to make the zeroize-on-drop behavior load-bearing:
+    // as long as RedbStorage is alive, the master is alive; when the
+    // last Arc drops, so does the master.
+    _master: MasterKey,
+}
+
+impl RedbStorage {
+    /// Open (or create) an encrypted store at the given path using
+    /// the provided master key. All tables are created on first open
+    /// and all five [`KeyDomain`] subkeys are derived up front, so
+    /// the hot path never calls HKDF.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StorageError::Redb` if the file cannot be opened
+    /// or created, or a `StorageError::Crypto` if HKDF refuses one
+    /// of the subkey derivations (extremely unlikely — see
+    /// `aivyx-crypto::CryptoError::HkdfExpandFailed`).
+    pub async fn open(
+        config: StorageConfig,
+        master: MasterKey,
+    ) -> Result<Arc<dyn Storage>, StorageError> {
+        // Derive every subkey first. This is pure-memory and fast
+        // enough that doing it on the async side (no spawn_blocking)
+        // is fine — HKDF is a couple of microseconds.
+        let subkeys = Self::derive_all_subkeys(&master)?;
+
+        // Open the redb file on a blocking worker so the reactor
+        // thread doesn't stall on disk I/O. `redb::Database::create`
+        // opens an existing file or creates a new one; a failed open
+        // produces a `DatabaseError` which flows through our
+        // `From<DatabaseError>` impl.
+        let path = config.path.clone();
+        let db = tokio::task::spawn_blocking(move || -> Result<Database, StorageError> {
+            let db = Database::create(&path)?;
+            // Create every domain's table during the first write
+            // transaction so a cold store has the full schema
+            // before any read hits it.
+            let write = db.begin_write()?;
+            for domain in KeyDomain::ALL {
+                let table_def: TableDefinition<&[u8], &[u8]> =
+                    TableDefinition::new(domain.table_name());
+                let _ = write.open_table(table_def)?;
+            }
+            write.commit()?;
+            Ok(db)
+        })
+        .await
+        .map_err(|e| StorageError::JoinFailed(e.to_string()))??;
+
+        Ok(Arc::new(Self {
+            db: Arc::new(db),
+            subkeys,
+            _master: master,
+        }))
+    }
+
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 5], StorageError> {
+        // `KeyDomain::ALL` is indexed in declaration order; we rely
+        // on that to slot each derived subkey into a fixed-size
+        // array so `domain()` is an O(1) index-by-discriminant.
+        Ok([
+            master.derive_subkey(KeyDomain::Sessions.as_bytes())?,
+            master.derive_subkey(KeyDomain::Memory.as_bytes())?,
+            master.derive_subkey(KeyDomain::Audit.as_bytes())?,
+            master.derive_subkey(KeyDomain::Secrets.as_bytes())?,
+            master.derive_subkey(KeyDomain::ChannelState.as_bytes())?,
+        ])
+    }
+
+    fn subkey_for(&self, domain: KeyDomain) -> &SubKey {
+        // Hard-coded match keyed off the discriminant. If a future
+        // amendment adds a variant, the compiler forces this match
+        // to update — safer than `as usize` indexing.
+        match domain {
+            KeyDomain::Sessions => &self.subkeys[0],
+            KeyDomain::Memory => &self.subkeys[1],
+            KeyDomain::Audit => &self.subkeys[2],
+            KeyDomain::Secrets => &self.subkeys[3],
+            KeyDomain::ChannelState => &self.subkeys[4],
+        }
+    }
+}
+
+#[async_trait]
+impl Storage for RedbStorage {
+    fn domain(&self, domain: KeyDomain) -> DomainHandle {
+        DomainHandle {
+            db: Arc::clone(&self.db),
+            subkey: self.subkey_for(domain).clone(),
+            domain,
+        }
+    }
+
+    async fn flush(&self) -> Result<(), StorageError> {
+        // redb commits are explicit (every `put`/`delete` ends with
+        // `commit()`), so there is nothing to flush. The trait
+        // method exists so a future buffered backend can override.
+        Ok(())
+    }
+}
+
+// --------------------------------------------------------------------
+// DomainHandle — per-domain KV API
+// --------------------------------------------------------------------
+
+/// Owned handle to a single storage domain. Returned by
+/// [`Storage::domain`]. Caller holds as many of these per session as
+/// it likes — each is cheap (one `Arc::clone` + one `SubKey::clone`,
+/// which is 32 bytes).
+#[derive(Debug, Clone)]
+pub struct DomainHandle {
+    db: Arc<Database>,
+    subkey: SubKey,
+    domain: KeyDomain,
+}
+
+impl DomainHandle {
+    /// Which domain this handle speaks to. Useful for error reporting
+    /// at the caller so "storage error for Sessions" distinguishes
+    /// from "storage error for Memory."
+    pub fn domain(&self) -> KeyDomain {
+        self.domain
+    }
+
+    /// Fetch `key`, returning `Ok(None)` if not present or
+    /// `Ok(Some(plaintext))` on a successful AEAD open.
+    ///
+    /// Decrypt failures surface as
+    /// [`StorageError::DecryptFailed`] — which means the wrong
+    /// master key was used to open this store, the file was
+    /// tampered with, or the table was written by a schema this
+    /// binary cannot read. All three are indistinguishable and all
+    /// three are fatal to the operation.
+    pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+        let db = Arc::clone(&self.db);
+        let domain = self.domain;
+        let subkey = self.subkey.clone();
+        let key = key.to_vec();
+        let aad = self.aad(&key);
+
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>, StorageError> {
+            let read = db.begin_read()?;
+            let table_def: TableDefinition<&[u8], &[u8]> =
+                TableDefinition::new(domain.table_name());
+            let table = match read.open_table(table_def) {
+                Ok(t) => t,
+                // `TableDoesNotExist` is indistinguishable from
+                // "no key present" for our purposes — the table is
+                // always created at `open` time but the bound
+                // variant gives us a future-proof no-op.
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let Some(stored) = table.get(key.as_slice())? else {
+                return Ok(None);
+            };
+            let value_bytes = stored.value().to_vec();
+            if value_bytes.len() < NONCE_LEN {
+                return Err(StorageError::CorruptValue {
+                    domain,
+                    len: value_bytes.len(),
+                });
+            }
+            let (nonce, ciphertext) = value_bytes.split_at(NONCE_LEN);
+            let plaintext = subkey
+                .open(nonce, &aad, ciphertext)
+                .map_err(|_| StorageError::DecryptFailed { domain })?;
+            Ok(Some(plaintext))
+        })
+        .await
+        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+    }
+
+    /// Write `value` under `key`, sealing with the domain subkey and
+    /// a fresh 12-byte nonce. Overwrites any previous value.
+    pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
+        // Fresh random nonce per write. `Uuid::new_v4` is uniform-
+        // random via getrandom; we truncate to 12 bytes. The same
+        // logical key can be `put` many times without nonce reuse
+        // because the nonce is resampled on every call — the AEAD
+        // uniqueness requirement is satisfied by write-time
+        // randomness, not by key identity.
+        let nonce_bytes: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
+        let mut nonce = [0u8; NONCE_LEN];
+        nonce.copy_from_slice(&nonce_bytes[..NONCE_LEN]);
+
+        let aad = self.aad(key);
+        let ciphertext = self.subkey.seal(&nonce, &aad, value)?;
+
+        // Prepend the nonce to the ciphertext for on-disk storage.
+        // The `get` path splits it back out. This is the standard
+        // "nonce || ct" wire format for unauthenticated-nonce
+        // AEAD schemes.
+        let mut stored = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        stored.extend_from_slice(&nonce);
+        stored.extend_from_slice(&ciphertext);
+
+        let db = Arc::clone(&self.db);
+        let domain = self.domain;
+        let key = key.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<(), StorageError> {
+            let write = db.begin_write()?;
+            {
+                let table_def: TableDefinition<&[u8], &[u8]> =
+                    TableDefinition::new(domain.table_name());
+                let mut table = write.open_table(table_def)?;
+                table.insert(key.as_slice(), stored.as_slice())?;
+            }
+            write.commit()?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+    }
+
+    /// Delete `key`. Returns `Ok(())` whether or not the key was
+    /// present — the KV semantics are set-like, not reference-counted.
+    pub async fn delete(&self, key: &[u8]) -> Result<(), StorageError> {
+        let db = Arc::clone(&self.db);
+        let domain = self.domain;
+        let key = key.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<(), StorageError> {
+            let write = db.begin_write()?;
+            {
+                let table_def: TableDefinition<&[u8], &[u8]> =
+                    TableDefinition::new(domain.table_name());
+                let mut table = write.open_table(table_def)?;
+                let _ = table.remove(key.as_slice())?;
+            }
+            write.commit()?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+    }
+
+    /// Build the AEAD associated-data for a `(domain, user_key)`
+    /// pair. Binding the AAD to both prevents a value from being
+    /// copy-pasted across domains or across keys within the same
+    /// domain — a renamed key will fail to decrypt, as will a value
+    /// moved from `Sessions` into `Memory`.
+    ///
+    /// Format: `b"aivyx-v1" || domain_bytes || 0x00 || user_key`
+    /// The `0x00` separator prevents ambiguity between domains
+    /// whose names could otherwise form a prefix (none today, but
+    /// a future addition like `"session"` vs `"sessions"` would
+    /// otherwise collide).
+    fn aad(&self, user_key: &[u8]) -> Vec<u8> {
+        let domain_bytes = self.domain.as_bytes();
+        let mut aad = Vec::with_capacity(8 + domain_bytes.len() + 1 + user_key.len());
+        aad.extend_from_slice(b"aivyx-v1");
+        aad.extend_from_slice(domain_bytes);
+        aad.push(0x00);
+        aad.extend_from_slice(user_key);
+        aad
+    }
+}
+
+// --------------------------------------------------------------------
+// Tests
+// --------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// RAII temp directory — creates `$TMPDIR/aivyx-storage-test-<uuid>`
+    /// on construction, removes the whole tree on drop. Rolled here
+    /// to match `aivyx-core::tools::fs`'s `SandboxDir` convention and
+    /// avoid a `tempfile` dep for ~20 lines of hygiene.
+    struct StoreDir {
+        dir: PathBuf,
+    }
+
+    impl StoreDir {
+        fn new() -> Self {
+            let tmp = std::env::var("TMPDIR")
+                .or_else(|_| std::env::var("TEMP"))
+                .unwrap_or_else(|_| "/tmp".to_string());
+            let dir = PathBuf::from(tmp)
+                .join(format!("aivyx-storage-test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&dir).expect("test store dir must be creatable");
+            StoreDir { dir }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.dir.join("store.redb")
+        }
+    }
+
+    impl Drop for StoreDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn test_master(seed: u8) -> MasterKey {
+        MasterKey::from_raw([seed; 32])
+    }
+
+    async fn open_store(dir: &StoreDir, master: MasterKey) -> Arc<dyn Storage> {
+        RedbStorage::open(StorageConfig::new(dir.path()), master)
+            .await
+            .expect("open store")
+    }
+
+    // ---- KeyDomain --------------------------------------------------
+
+    #[test]
+    fn key_domain_info_strings_are_distinct() {
+        // Regression lock for D7 — any change here is a subkey
+        // rotation for the affected domain and must be deliberate.
+        let all: Vec<_> = KeyDomain::ALL.iter().map(|d| d.as_bytes()).collect();
+        let mut uniq = all.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), all.len(), "info strings must be unique");
+    }
+
+    #[test]
+    fn key_domain_table_names_are_distinct_and_versioned() {
+        let all: Vec<_> = KeyDomain::ALL.iter().map(|d| d.table_name()).collect();
+        let mut uniq = all.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), all.len(), "table names must be unique");
+        for name in &all {
+            assert!(
+                name.ends_with("_v1"),
+                "table {name} must be schema-versioned"
+            );
+            assert!(
+                name.starts_with("aivyx_"),
+                "table {name} must be aivyx-namespaced"
+            );
+        }
+    }
+
+    #[test]
+    fn key_domain_all_covers_every_variant() {
+        // If a future phase adds a sixth `KeyDomain` variant, this
+        // test fails because `ALL` is a fixed-size array and the
+        // match below forces an update. Tripwire for "adding a
+        // variant without updating ALL."
+        for d in KeyDomain::ALL {
+            match d {
+                KeyDomain::Sessions
+                | KeyDomain::Memory
+                | KeyDomain::Audit
+                | KeyDomain::Secrets
+                | KeyDomain::ChannelState => {}
+            }
+        }
+    }
+
+    // ---- Happy path -------------------------------------------------
+
+    #[tokio::test]
+    async fn put_then_get_round_trips() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(1)).await;
+
+        let handle = store.domain(KeyDomain::Sessions);
+        handle.put(b"session-1", b"turn-17").await.unwrap();
+
+        let got = handle.get(b"session-1").await.unwrap();
+        assert_eq!(got, Some(b"turn-17".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn get_missing_key_returns_none() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(1)).await;
+        let got = store.domain(KeyDomain::Memory).get(b"never-written").await.unwrap();
+        assert_eq!(got, None);
+    }
+
+    #[tokio::test]
+    async fn put_overwrites_previous_value() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(2)).await;
+        let handle = store.domain(KeyDomain::Secrets);
+
+        handle.put(b"api-key", b"sk-v1").await.unwrap();
+        handle.put(b"api-key", b"sk-v2").await.unwrap();
+
+        let got = handle.get(b"api-key").await.unwrap();
+        assert_eq!(got, Some(b"sk-v2".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_key() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(3)).await;
+        let handle = store.domain(KeyDomain::Audit);
+
+        handle.put(b"entry-1", b"hmac-chain").await.unwrap();
+        handle.delete(b"entry-1").await.unwrap();
+        assert_eq!(handle.get(b"entry-1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn delete_is_idempotent() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(3)).await;
+        let handle = store.domain(KeyDomain::Audit);
+
+        // Delete a never-written key — should not error.
+        handle.delete(b"never-existed").await.unwrap();
+        handle.delete(b"never-existed").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn flush_is_a_no_op_but_succeeds() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(4)).await;
+        store.flush().await.unwrap();
+    }
+
+    // ---- Domain isolation --------------------------------------------
+
+    #[tokio::test]
+    async fn put_in_one_domain_does_not_leak_to_another() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(5)).await;
+
+        store
+            .domain(KeyDomain::Sessions)
+            .put(b"key", b"sessions-value")
+            .await
+            .unwrap();
+
+        // Same key in a different domain must be a miss, even though
+        // the underlying redb database is the same file — the tables
+        // are named per domain so this is structurally impossible to
+        // confuse.
+        let memory_miss = store.domain(KeyDomain::Memory).get(b"key").await.unwrap();
+        assert_eq!(memory_miss, None);
+    }
+
+    #[tokio::test]
+    async fn every_domain_round_trips_independently() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(6)).await;
+
+        for domain in KeyDomain::ALL {
+            let handle = store.domain(domain);
+            let key = format!("k-{:?}", domain).into_bytes();
+            let value = format!("v-{:?}", domain).into_bytes();
+            handle.put(&key, &value).await.unwrap();
+            let got = handle.get(&key).await.unwrap();
+            assert_eq!(got, Some(value));
+        }
+    }
+
+    // ---- Persistence across reopen -----------------------------------
+
+    #[tokio::test]
+    async fn values_persist_across_reopen_with_same_master() {
+        let dir = StoreDir::new();
+
+        // Session A: write, drop the handle.
+        {
+            let store = open_store(&dir, test_master(7)).await;
+            store
+                .domain(KeyDomain::Sessions)
+                .put(b"resume-me", b"turn-42")
+                .await
+                .unwrap();
+            // Explicit drop so the redb file lock is released
+            // before session B opens the same path.
+            drop(store);
+        }
+
+        // Session B: reopen same path + same master, read back.
+        let store = open_store(&dir, test_master(7)).await;
+        let got = store.domain(KeyDomain::Sessions).get(b"resume-me").await.unwrap();
+        assert_eq!(got, Some(b"turn-42".to_vec()));
+    }
+
+    // ---- Wrong-key negatives -----------------------------------------
+
+    #[tokio::test]
+    async fn open_wrong_key_fails_to_decrypt() {
+        let dir = StoreDir::new();
+
+        // Session A: write with master(1).
+        {
+            let store = open_store(&dir, test_master(1)).await;
+            store
+                .domain(KeyDomain::Secrets)
+                .put(b"api-key", b"sk-plaintext")
+                .await
+                .unwrap();
+            drop(store);
+        }
+
+        // Session B: reopen with master(2). The file opens fine
+        // (redb doesn't know anything about our encryption layer);
+        // the failure surfaces at `get` time when AEAD open fails.
+        let store = open_store(&dir, test_master(2)).await;
+        let err = store
+            .domain(KeyDomain::Secrets)
+            .get(b"api-key")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StorageError::DecryptFailed { domain: KeyDomain::Secrets }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn aad_binding_detects_key_rename() {
+        // Write under key "a", then try to rewrite the stored bytes
+        // under key "b" and read them back. The "read b" path will
+        // build AAD containing "b", AEAD-open against ciphertext
+        // bound to "a"'s AAD, and fail. We can't easily inject
+        // forged bytes through the public API, so this test verifies
+        // the AAD *function* itself encodes the key — a hand-compute.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(8)).await;
+        let handle = store.domain(KeyDomain::Sessions);
+
+        let aad_a = handle.aad(b"key-a");
+        let aad_b = handle.aad(b"key-b");
+        assert_ne!(aad_a, aad_b);
+        assert!(aad_a.starts_with(b"aivyx-v1"));
+        assert!(aad_a.ends_with(b"key-a"));
+    }
+
+    // ---- Smoke: large-ish values go through -------------------------
+
+    #[tokio::test]
+    async fn large_value_round_trips() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(9)).await;
+        let handle = store.domain(KeyDomain::Memory);
+
+        // 64 KiB — big enough to exercise the "ChaCha20 streams many
+        // blocks" path, small enough to keep the test fast.
+        let big = vec![0xAB; 64 * 1024];
+        handle.put(b"big", &big).await.unwrap();
+        let got = handle.get(b"big").await.unwrap();
+        assert_eq!(got, Some(big));
+    }
+}

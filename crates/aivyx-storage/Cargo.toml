@@ -10,4 +10,31 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+aivyx-crypto = { path = "../aivyx-crypto" }
+
+# Embedded ACID KV store, single file, pure Rust. D7 substrate.
+redb = "2"
+
+# Async trait methods — same `async_trait` idiom used by aivyx-core
+# for ChannelContext, LlmProvider, and Tool.
+async-trait = { workspace = true }
+
+# tokio::task::spawn_blocking wraps redb's sync API per D7 commitment
+# ("all methods async; redb sync calls wrapped in spawn_blocking").
+tokio = { workspace = true, features = ["rt"] }
+
+thiserror = { workspace = true }
+
+# Nonce generation. 12 random bytes per seal; uuid::Uuid::new_v4() gives
+# us 16 uniform-random bytes from getrandom and we truncate to 12. Not
+# adding `getrandom` or `rand` directly — the whole workspace standardizes
+# on `uuid` as the random-bytes source for this kind of micro-need.
+uuid = { workspace = true }
+
+[dev-dependencies]
+# Test helpers hand-roll a `$TMPDIR`-based RAII dir the same way
+# aivyx-core::tools::fs does — same rationale ("avoid adding
+# `tempfile` as a dep for ~50 lines of test hygiene"), same shape,
+# so a future reader grepping for temp-dir patterns finds one
+# convention across the workspace.
+tokio = { workspace = true, features = ["rt", "macros"] }
