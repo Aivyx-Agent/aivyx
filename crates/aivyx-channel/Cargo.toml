@@ -11,3 +11,12 @@ readme.workspace = true
 
 [dependencies]
 aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+# LocalChannel unit tests exercise the async ChannelContext surface
+# against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and
+# serde_json builds the tool-call inputs the tests feed in.
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_json = { workspace = true }

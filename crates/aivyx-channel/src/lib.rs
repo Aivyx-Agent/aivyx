@@ -18,14 +18,15 @@
 //! See DESIGN.md Deliverable 1 (the "no bypass" commitment) and
 //! Deliverable 3 (the `ChannelContext` trait sketch).
 //!
-//! ## Phase 1 status
+//! ## Status
 //!
-//! Re-exports only. Phase 1 task 4 will add `LocalChannel` — the CLI
-//! reference implementation that the first end-to-end turn-loop test
-//! runs through.
-
-#![allow(dead_code)]
+//! Phase 1 shipped re-exports only. Phase 3 task 1 adds [`LocalChannel`]
+//! — the CLI reference implementation that streams tokens to stdout
+//! (or any `std::io::Write` sink, for tests).
 
 pub use aivyx_core::{
     AttachmentKind, ChannelContext, ChannelError, ChannelPlatform, StreamEvent,
 };
+
+mod local;
+pub use local::LocalChannel;

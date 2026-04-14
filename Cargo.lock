@@ -44,7 +44,11 @@ dependencies = [
 name = "aivyx-channel"
 version = "0.1.0"
 dependencies = [
+ "aivyx-capability",
  "aivyx-core",
+ "async-trait",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
