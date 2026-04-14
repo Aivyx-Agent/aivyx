@@ -90,17 +90,21 @@ fn render_stream_event_human(w: &mut dyn Write, event: &StreamEvent<'_>) -> io::
     match *event {
         StreamEvent::Text(chunk) => w.write_all(chunk.as_bytes()),
         StreamEvent::Status(msg) => writeln!(w, "\n  · {msg}"),
-        StreamEvent::ToolCallStarted { tool, input } => {
-            writeln!(w, "\n  → tool[{}] {input}", short_id(tool.to_string()))
+        // Phase 10 task 3: render the human `tool_name` that the
+        // loop now threads through the event, not the short-UUID
+        // fallback we used before Task 3. `tool` (the ToolId) is
+        // still on the event for audit bridges, but isn't shown to
+        // the human.
+        StreamEvent::ToolCallStarted {
+            tool_name, input, ..
+        } => {
+            writeln!(w, "\n  → {tool_name} {input}")
         }
         StreamEvent::ToolCallFinished {
-            tool,
+            tool_name,
             outcome_summary,
-        } => writeln!(
-            w,
-            "  ← tool[{}] {outcome_summary}",
-            short_id(tool.to_string())
-        ),
+            ..
+        } => writeln!(w, "  ← {tool_name} {outcome_summary}"),
         StreamEvent::Attachment {
             kind,
             data,
@@ -126,15 +130,6 @@ fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result
         TurnOutcomeSummary::Failed => "failed",
     };
     writeln!(w, "\n[turn {marker}]")
-}
-
-/// Take the first eight characters of a UUID string. The full UUID is
-/// 36 characters and extremely noisy in a terminal; the first 8 hex
-/// chars are enough to disambiguate at human scale. If anyone ever
-/// hands us a non-UUID ID, this still behaves — we're just slicing a
-/// string by char count.
-fn short_id(id: String) -> String {
-    id.chars().take(8).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -185,18 +180,23 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_started_uses_short_id_and_arrow() {
+    fn tool_call_started_renders_tool_name_and_arrow() {
+        // Phase 10 task 3: renderer shows the human name
+        // (`memory.read`), not a UUID short id. The ToolId is still
+        // on the event for audit bridges but must NOT leak into the
+        // rendered human output — a UUID in a terminal is noise
+        // against a plain tool name.
         let tool = ToolId::new();
         let input = json!({"topic": "todos"});
         let out = render_one(StreamEvent::ToolCallStarted {
             tool,
+            tool_name: "memory.read",
             input: &input,
         });
 
-        let expected_prefix: String = tool.to_string().chars().take(8).collect();
         assert!(
-            out.contains(&format!("→ tool[{expected_prefix}]")),
-            "should contain short-id marker with arrow, got {out:?}"
+            out.contains("→ memory.read"),
+            "should contain name-prefixed arrow, got {out:?}"
         );
         assert!(
             out.contains("\"topic\":\"todos\""),
@@ -204,19 +204,24 @@ mod tests {
         );
         assert!(
             !out.contains(&tool.to_string()),
-            "full UUID should NOT appear — short id only: {out:?}"
+            "ToolId UUID must not appear in human render: {out:?}"
         );
     }
 
     #[test]
-    fn tool_call_finished_uses_reverse_arrow() {
+    fn tool_call_finished_renders_tool_name_and_summary() {
         let tool = ToolId::new();
         let out = render_one(StreamEvent::ToolCallFinished {
             tool,
-            outcome_summary: "completed (2 items)",
+            tool_name: "memory.write",
+            outcome_summary: "completed (verified)",
         });
-        assert!(out.contains("← tool["), "got {out:?}");
-        assert!(out.contains("completed (2 items)"), "got {out:?}");
+        assert!(out.contains("← memory.write"), "got {out:?}");
+        assert!(out.contains("completed (verified)"), "got {out:?}");
+        assert!(
+            !out.contains(&tool.to_string()),
+            "ToolId UUID must not appear in human render: {out:?}"
+        );
     }
 
     #[test]
@@ -287,19 +292,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn short_id_truncates_full_uuid_to_eight_chars() {
-        let tool = ToolId::new();
-        let full = tool.to_string();
-        assert_eq!(full.len(), 36, "UUIDs should be 36 chars");
-        let short = short_id(full.clone());
-        assert_eq!(short.len(), 8);
-        assert_eq!(short, full[..8]);
-    }
-
-    #[test]
-    fn short_id_handles_string_shorter_than_eight_chars() {
-        assert_eq!(short_id("abc".to_string()), "abc");
-        assert_eq!(short_id(String::new()), "");
-    }
 }

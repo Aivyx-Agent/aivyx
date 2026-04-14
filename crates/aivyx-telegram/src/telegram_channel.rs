@@ -145,27 +145,26 @@ fn append_event(buffer: &mut String, event: &StreamEvent<'_>) {
             buffer.push_str(s);
             buffer.push('\n');
         }
-        StreamEvent::ToolCallStarted { tool, .. } => {
+        StreamEvent::ToolCallStarted { tool_name, .. } => {
             if !buffer.is_empty() && !buffer.ends_with('\n') {
                 buffer.push('\n');
             }
-            // `ToolId` is a UUID newtype — `render.rs` in aivyx-channel
-            // truncates via a `short_id` helper; we just use the first
-            // 8 hex chars inline. Full UUID in a chat message is noise.
-            let tool_id = tool.to_string();
-            let short = tool_id.get(..8).unwrap_or(tool_id.as_str());
-            let _ = writeln!(buffer, "→ tool[{short}]");
+            // Phase 10 task 3: render the human tool name instead
+            // of a truncated UUID. The `tool` ToolId is still on
+            // the event for audit use, but a chat user reading
+            // `→ memory.read` understands it immediately where
+            // `→ tool[a1b2c3d4]` meant nothing.
+            let _ = writeln!(buffer, "→ {tool_name}");
         }
         StreamEvent::ToolCallFinished {
-            tool,
+            tool_name,
             outcome_summary,
+            ..
         } => {
             if !buffer.is_empty() && !buffer.ends_with('\n') {
                 buffer.push('\n');
             }
-            let tool_id = tool.to_string();
-            let short = tool_id.get(..8).unwrap_or(tool_id.as_str());
-            let _ = writeln!(buffer, "← tool[{short}] {outcome_summary}");
+            let _ = writeln!(buffer, "← {tool_name} {outcome_summary}");
         }
         StreamEvent::Attachment { .. } => {
             // Phase 8's non-goals list defers rich media. Silently

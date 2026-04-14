@@ -246,6 +246,7 @@ async fn tool_markers_and_status_append_to_buffer() {
     channel
         .stream_event(StreamEvent::ToolCallStarted {
             tool,
+            tool_name: "fs.read",
             input: &input,
         })
         .await
@@ -253,6 +254,7 @@ async fn tool_markers_and_status_append_to_buffer() {
     channel
         .stream_event(StreamEvent::ToolCallFinished {
             tool,
+            tool_name: "fs.read",
             outcome_summary: "ok",
         })
         .await
@@ -265,10 +267,17 @@ async fn tool_markers_and_status_append_to_buffer() {
     assert_eq!(sent.len(), 1);
     let text = &sent[0].text;
     assert!(text.starts_with("thinking\n… still thinking\n"), "{text:?}");
-    assert!(text.contains("→ tool["), "tool-started marker: {text:?}");
+    // Phase 10 task 3: Telegram renderer now emits `→ fs.read`
+    // rather than `→ tool[<short-uuid>]`. The ToolId stays on the
+    // event for audit bridges but must not appear in chat output.
+    assert!(text.contains("→ fs.read"), "tool-started marker: {text:?}");
     assert!(
-        text.contains("← tool[") && text.contains("ok"),
+        text.contains("← fs.read") && text.contains("ok"),
         "tool-finished marker: {text:?}"
+    );
+    assert!(
+        !text.contains(&tool.to_string()),
+        "ToolId UUID must not leak into Telegram output: {text:?}"
     );
     assert!(text.ends_with("done"), "trailing text joined: {text:?}");
 }

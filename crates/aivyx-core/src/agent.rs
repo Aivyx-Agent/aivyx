@@ -38,7 +38,8 @@ use aivyx_capability::{CapabilitySet, Scope};
 
 use crate::{
     Agent, AgentId, AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, Message,
-    ToolContext, ToolId, ToolOutcome, ToolOutcomeSummary, TurnId, TurnOutcome, TurnOutcomeSummary,
+    StreamEvent, ToolContext, ToolId, ToolOutcome, ToolOutcomeSummary, TurnId, TurnOutcome,
+    TurnOutcomeSummary, VerificationSummary,
 };
 use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
 
@@ -399,11 +400,41 @@ impl ConcreteAgent {
         let input_bytes = serde_json::to_vec(&input).unwrap_or_default();
         let input_hash = sha256_array(&input_bytes);
 
+        // Phase 10 task 3: `ToolCallStarted` was defined in Phase 5
+        // but never actually emitted — renderers had a placeholder
+        // arm since then. This is the real emission site. Channel
+        // errors from the stream are intentionally swallowed: a
+        // renderer refusing an event is not a reason to abort the
+        // tool call (same rule `llm_planner.rs` applies to
+        // streamed text chunks).
+        let tool_name = tool.name();
+        let _ = channel
+            .stream_event(StreamEvent::ToolCallStarted {
+                tool: tool_id,
+                tool_name,
+                input: &input,
+            })
+            .await;
+
         let step_start = Instant::now();
         let outcome = tool.execute(input, &ctx).await;
         let step_duration = step_start.elapsed();
 
         let summary = ToolOutcomeSummary::from(&outcome);
+
+        // Phase 10 task 3: matched `ToolCallFinished` emission. The
+        // summary string is a short static label per variant — no
+        // allocation, safe to borrow into the event's `&'a str`
+        // lifetime. Renderers that want more detail can keep their
+        // own state keyed on `tool` across the start/finish pair.
+        let outcome_summary_str = tool_outcome_summary_str(&summary);
+        let _ = channel
+            .stream_event(StreamEvent::ToolCallFinished {
+                tool: tool_id,
+                tool_name,
+                outcome_summary: outcome_summary_str,
+            })
+            .await;
 
         self.audit.on_event(AuditTag::ToolCall {
             turn_id,
@@ -415,6 +446,27 @@ impl ConcreteAgent {
         });
 
         (StepObservation { tool_id, summary }, outcome)
+    }
+}
+
+/// Short static label for a `ToolOutcomeSummary`, used as the
+/// `outcome_summary` field of `StreamEvent::ToolCallFinished`.
+/// Static strings so the event can borrow them for its `&'a str`
+/// slot without taking a lifetime on the local function frame.
+fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
+    match s {
+        ToolOutcomeSummary::Completed {
+            verified: VerificationSummary::Verified,
+        } => "completed (verified)",
+        ToolOutcomeSummary::Completed {
+            verified: VerificationSummary::Unverified,
+        } => "completed (unverified)",
+        ToolOutcomeSummary::Completed {
+            verified: VerificationSummary::NotApplicable,
+        } => "completed",
+        ToolOutcomeSummary::Denied => "denied",
+        ToolOutcomeSummary::RequiresEscalation => "requires escalation",
+        ToolOutcomeSummary::Failed => "failed",
     }
 }
 
@@ -515,6 +567,83 @@ mod tests {
         }
         async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError> {
             *self.finalized.lock().unwrap() = Some(TurnOutcomeSummary::from(outcome));
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+
+    /// Phase 10 task 3: a channel that records the structured
+    /// shape of every StreamEvent it sees. FakeChannel just counts,
+    /// which is enough for existing tests; the tool-name emission
+    /// tests need to assert on the actual event contents. Keep
+    /// it minimal — only the fields the tests actually inspect.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RecordedEvent {
+        Text(String),
+        Status(String),
+        ToolCallStarted { tool_name: String },
+        ToolCallFinished { tool_name: String, summary: String },
+        Attachment,
+    }
+
+    struct RecordingChannel {
+        session: SessionId,
+        token: CancellationToken,
+        events: Mutex<Vec<RecordedEvent>>,
+    }
+
+    impl RecordingChannel {
+        fn new() -> Self {
+            RecordingChannel {
+                session: SessionId::new(),
+                token: CancellationToken::new(),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+        fn snapshot(&self) -> Vec<RecordedEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ChannelContext for RecordingChannel {
+        fn channel_name(&self) -> &str {
+            "recording"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> TrustTier {
+            TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            let rec = match event {
+                StreamEvent::Text(s) => RecordedEvent::Text(s.to_string()),
+                StreamEvent::Status(s) => RecordedEvent::Status(s.to_string()),
+                StreamEvent::ToolCallStarted { tool_name, .. } => {
+                    RecordedEvent::ToolCallStarted {
+                        tool_name: tool_name.to_string(),
+                    }
+                }
+                StreamEvent::ToolCallFinished {
+                    tool_name,
+                    outcome_summary,
+                    ..
+                } => RecordedEvent::ToolCallFinished {
+                    tool_name: tool_name.to_string(),
+                    summary: outcome_summary.to_string(),
+                },
+                StreamEvent::Attachment { .. } => RecordedEvent::Attachment,
+            };
+            self.events.lock().unwrap().push(rec);
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
             Ok(())
         }
         fn cancellation_token(&self) -> CancellationToken {
@@ -1211,6 +1340,126 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AuditTag::ToolCall { .. })),
             "valid input must reach ToolCall"
+        );
+    }
+
+    // ---- Phase 10 task 3: StreamEvent tool-name emission ----------
+    //
+    // Before Phase 10 `ToolCallStarted` / `ToolCallFinished` existed
+    // in the enum and in the renderers but were never actually
+    // emitted by the turn loop — a latent wiring gap since Phase 5.
+    // Task 3 closes it and adds `tool_name` so renderers show the
+    // human name instead of a short UUID. These tests lock the
+    // whole chain in: the loop emits both events around `execute`,
+    // in order, carrying the same `tool_name` as `Tool::name()`.
+
+    #[tokio::test]
+    async fn tool_call_emits_started_and_finished_events_with_tool_name() {
+        let audit = RecordingAudit::new();
+
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+        let agent_caps =
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]);
+
+        let plan = vec![NextStep::ToolCall {
+            tool_id,
+            input: json!({"topic": "notes"}),
+        }];
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = RecordingChannel::new();
+        let message = Message::text(channel.session, "check my notes");
+        let outcome = agent.turn(message, &channel).await;
+
+        // Turn completes cleanly — this is a golden-path test for
+        // the emission, not an error case.
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+
+        // Exactly one pair of tool events, ordered started → finished,
+        // both carrying the Tool::name() string.
+        let events = channel.snapshot();
+        let starts: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, RecordedEvent::ToolCallStarted { .. }))
+            .collect();
+        let finishes: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, RecordedEvent::ToolCallFinished { .. }))
+            .collect();
+        assert_eq!(starts.len(), 1, "exactly one ToolCallStarted");
+        assert_eq!(finishes.len(), 1, "exactly one ToolCallFinished");
+
+        match starts[0] {
+            RecordedEvent::ToolCallStarted { tool_name } => {
+                assert_eq!(tool_name, "memory.read");
+            }
+            _ => unreachable!(),
+        }
+        match finishes[0] {
+            RecordedEvent::ToolCallFinished {
+                tool_name,
+                summary,
+            } => {
+                assert_eq!(tool_name, "memory.read");
+                // FakeTool's execute returns a NotApplicable-verified
+                // Completed outcome, which maps to "completed".
+                assert_eq!(summary, "completed");
+            }
+            _ => unreachable!(),
+        }
+
+        // Started must precede Finished in the overall event sequence.
+        let start_idx = events
+            .iter()
+            .position(|e| matches!(e, RecordedEvent::ToolCallStarted { .. }))
+            .unwrap();
+        let finish_idx = events
+            .iter()
+            .position(|e| matches!(e, RecordedEvent::ToolCallFinished { .. }))
+            .unwrap();
+        assert!(
+            start_idx < finish_idx,
+            "ToolCallStarted must precede ToolCallFinished"
+        );
+    }
+
+    #[tokio::test]
+    async fn denied_tool_call_emits_no_stream_events() {
+        // Phase 8 Task 2 already guarantees a denied call never
+        // reaches `execute`; with Task 3 we now also must NOT emit
+        // ToolCallStarted/Finished for a denial, because those
+        // events announce to the renderer "the tool is running
+        // right now." A denial is a *suppressed* tool call — the
+        // human should see nothing, and the scope-denial audit
+        // event is what gets recorded.
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let tool_id = tool.id();
+
+        // No caps → denial.
+        let agent_caps = CapabilitySet::from_scopes([]);
+
+        let plan = vec![NextStep::ToolCall {
+            tool_id,
+            input: json!({}),
+        }];
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = RecordingChannel::new();
+        let message = Message::text(channel.session, "run");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = channel.snapshot();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    RecordedEvent::ToolCallStarted { .. }
+                        | RecordedEvent::ToolCallFinished { .. }
+                )),
+            "denied tool calls must not emit tool-call stream events: {events:?}"
         );
     }
 }

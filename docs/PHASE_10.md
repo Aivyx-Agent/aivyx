@@ -477,6 +477,91 @@ The two integration tests in `agent.rs::tests` lock this in:
   validator that rejected everything would still pass the negative
   test alone).
 
+## Task 3 — mid-phase scope expansion: close the emission gap
+
+The draft breakdown framed Task 3 as "add a `tool_name: &'a str`
+field to `StreamEvent::ToolCallStarted` / `ToolCallFinished` and
+update consumers." During implementation a grep for
+`ToolCallStarted` / `ToolCallFinished` revealed a larger truth:
+**the turn loop never emitted these events.** The variants have
+existed on the enum since Phase 5. The channel renderers
+(`aivyx-channel/src/render.rs`, `aivyx-telegram/src/telegram_channel.rs`)
+have had match arms for them since Phase 5 / Phase 8. The audit
+bridge in `aivyx-audit` has extracted tool IDs from them. But
+nothing in `agent.rs` ever called `ctx.stream_event(...)` with a
+`ToolCallStarted` or `ToolCallFinished`. All the render paths and
+all the existing tests were exercising dead code.
+
+This is a latent emission gap, silently carried for five phases,
+that only a grep during a seemingly-unrelated field refinement
+surfaced.
+
+Options presented to the user:
+
+- **Option A — minimum viable:** add the field, update consumers
+  and tests, leave the emission gap untouched. Preserves the
+  exact scope of the Phase 10 draft. Leaves the gap for a later
+  phase to close.
+- **Option B — fully close the gap:** add the field **and** wire
+  emission from the turn loop, so every tool call produces a
+  `ToolCallStarted` before `tool.execute` and a
+  `ToolCallFinished` after. Expands Task 3 by one integration
+  point but closes a dead-code wiring debt with known-correct
+  consumers already in place.
+- **Option C — emit now, name later:** wire the emission first
+  with the `tool_name` field deferred to a separate follow-up.
+  Splits Task 3 into two commits. Not materially cheaper than B.
+
+User resolution: **Option B.** The rationale is that the consumers
+are already written, tested, and reviewed — the only thing missing
+is the four lines that actually call `stream_event` with the
+variant. Closing the gap in Task 3 retires the wiring debt for
+free rather than letting it rot for another phase.
+
+### Denied calls suppress stream events
+
+A consequence of emitting from the turn loop: the emission point
+must sit **after** the capability gate, not before. Denied calls
+must not emit a `ToolCallStarted`, because the channel's user-
+visible text would then see a `→ tool_name` line for a call that
+never ran, which is worse than seeing nothing. The
+`denied_tool_call_emits_no_stream_events` integration test locks
+this in: a FakeTool configured to require an absent scope runs,
+and the `RecordingChannel` must see zero `ToolCallStarted` /
+`ToolCallFinished` events.
+
+### Tests added in Task 3
+
+- `tool_call_emits_started_and_finished_events_with_tool_name` —
+  happy path. Records that the turn loop emits both events, that
+  `tool_name` matches the `Tool::name()` the registry returned,
+  and that `ToolCallFinished.outcome_summary` is a non-empty
+  static label.
+- `denied_tool_call_emits_no_stream_events` — the suppression
+  invariant above.
+- `aivyx-channel/src/render.rs` — two rewritten renderer unit
+  tests (`tool_call_started_renders_tool_name_and_arrow`,
+  `tool_call_finished_renders_tool_name_and_summary`) that assert
+  the human tool name appears (`→ memory.read`, `← memory.write`)
+  and that the `ToolId` UUID does **not** leak into human
+  terminal output.
+- `aivyx-telegram/src/tests.rs` — updated event construction and
+  assertions for the same rendering contract.
+
+### Streak accounting
+
+Task 3 is **the sole source** of the production-core byte-
+identity streak break in Phase 10. Task 1 did not touch
+`aivyx-core/src/lib.rs`. Task 2's mid-phase correction turned
+out not to touch it either — validation lives in
+`aivyx-core/src/schema.rs` (new module) and the turn-loop call
+lives in `agent.rs`. Only Task 3's `tool_name: &'a str` field
+addition to `StreamEvent::ToolCallStarted` and `ToolCallFinished`
+modifies `lib.rs`. The Phase 10 exit ship record should attribute
+the break to Task 3 alone, with the reason "additive
+`StreamEvent` field refinement within D3's contract, closing the
+Phase 5-era emission gap."
+
 ## Open questions
 
 Numbered so resolutions can be cited in ship records. Each question

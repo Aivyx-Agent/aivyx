@@ -211,14 +211,30 @@ pub enum StreamEvent<'a> {
     Status(&'a str),
 
     /// A tool call is about to execute.
+    ///
+    /// Phase 10 task 3: carries the human-readable `tool_name`
+    /// alongside the opaque `tool` id. `tool_name` is the same
+    /// string the tool's `Tool::name()` returns (e.g. `"fs.read"`,
+    /// `"memory.write"`) — renderers prefer it over the UUID-
+    /// derived short id so a trace reader can tell at a glance
+    /// which tool fired. The id stays on the event so audit
+    /// bridges that key by stable identity (rather than name)
+    /// continue to work unchanged.
     ToolCallStarted {
         tool: ToolId,
+        tool_name: &'a str,
         input: &'a serde_json::Value,
     },
 
     /// A tool call finished. Summary is a human-readable one-liner.
+    ///
+    /// Phase 10 task 3: `tool_name` added for the same reason as
+    /// `ToolCallStarted`. Keeps the start/finish pair symmetric so
+    /// renderers can emit a matched pair without needing a name
+    /// lookup table keyed on `tool` across event boundaries.
     ToolCallFinished {
         tool: ToolId,
+        tool_name: &'a str,
         outcome_summary: &'a str,
     },
 
