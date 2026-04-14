@@ -27,8 +27,9 @@
 //! - LLM-backed planning (covered by Phase 2's `LlmProvider` + its own
 //!   `TurnPlanner` impl)
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -48,6 +49,21 @@ use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
 /// enough for realistic tool chains and low enough that a misbehaving
 /// planner fails loudly rather than burning the host.
 pub const MAX_STEPS_PER_TURN: usize = 32;
+
+/// Wall-clock deadline for a single turn. Phase 3 task 4 adds the first
+/// code path that emits `TurnOutcome::TimedOut`. A background task
+/// spawned by the turn loop cancels the channel's cancellation token
+/// when the deadline fires; the planner's mid-stream cancel check then
+/// propagates the cancel and the loop translates it into `TimedOut`
+/// rather than `Cancelled`.
+///
+/// 120 seconds is deliberately generous — a multi-step tool chain with
+/// several large LLM completions can legitimately take most of a
+/// minute, and the point of the budget is to catch *stuck* turns, not
+/// to police slow ones. Follows the same "const, not config knob"
+/// philosophy as [`MAX_STEPS_PER_TURN`]: a caller who needs a custom
+/// budget is almost certainly papering over a real bug.
+pub const TURN_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The reference `Agent` implementation.
 ///
@@ -119,6 +135,25 @@ impl Agent for ConcreteAgent {
         let mut planner = (self.planner_factory)();
         planner.begin_turn(&message).await;
 
+        // Wall-clock deadline task. Spawns in the background, sleeps
+        // for TURN_TIMEOUT, and then (a) sets the deadline_fired flag
+        // so the loop's outcome translation can distinguish TimedOut
+        // from Cancelled, and (b) cancels the channel's token so the
+        // planner's in-flight stream (if any) gets interrupted. We
+        // hold a handle so the task is aborted cleanly when the turn
+        // ends normally — otherwise a fleet of long-running agents
+        // would leak timeout tasks until they eventually fired.
+        let deadline_fired = Arc::new(AtomicBool::new(false));
+        let deadline_task = {
+            let deadline_fired = Arc::clone(&deadline_fired);
+            let token = cancellation.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(TURN_TIMEOUT).await;
+                deadline_fired.store(true, Ordering::SeqCst);
+                token.cancel();
+            })
+        };
+
         let mut observed: Vec<StepObservation> = Vec::new();
         let mut tool_calls_made: usize = 0;
         let mut final_message: String = String::new();
@@ -127,7 +162,11 @@ impl Agent for ConcreteAgent {
 
         loop {
             if cancellation.is_cancelled() {
-                loop_outcome = LoopOutcome::Cancelled;
+                loop_outcome = if deadline_fired.load(Ordering::SeqCst) {
+                    LoopOutcome::TimedOut
+                } else {
+                    LoopOutcome::Cancelled
+                };
                 break;
             }
             if steps >= MAX_STEPS_PER_TURN {
@@ -137,6 +176,24 @@ impl Agent for ConcreteAgent {
             steps += 1;
 
             let step = planner.next_step(&observed, channel).await;
+
+            // Post-next_step cancellation re-check. The planner may
+            // have returned because it detected cancellation inside
+            // its own stream consumer (mid-LLM-completion) — in that
+            // case we must NOT process its return value as a
+            // FinalMessage / Stop, because doing so would emit a
+            // Completed outcome when the turn was actually
+            // interrupted. We let the next loop iteration's top-of-
+            // loop check handle the termination uniformly.
+            if cancellation.is_cancelled() {
+                loop_outcome = if deadline_fired.load(Ordering::SeqCst) {
+                    LoopOutcome::TimedOut
+                } else {
+                    LoopOutcome::Cancelled
+                };
+                break;
+            }
+
             match step {
                 NextStep::FinalMessage(msg) => {
                     final_message = msg;
@@ -165,6 +222,13 @@ impl Agent for ConcreteAgent {
             }
         }
 
+        // Abort the deadline task — it's either (a) already fired and
+        // cancelled the token, in which case the abort is a no-op, or
+        // (b) still sleeping, in which case we want it gone so it
+        // doesn't leak. Either way, explicit abort is cheap and
+        // intentional.
+        deadline_task.abort();
+
         let duration = start.elapsed();
         let outcome = match loop_outcome {
             LoopOutcome::Completed => TurnOutcome::Completed {
@@ -173,6 +237,10 @@ impl Agent for ConcreteAgent {
                 duration,
             },
             LoopOutcome::Cancelled => TurnOutcome::Cancelled { tool_calls_made },
+            LoopOutcome::TimedOut => TurnOutcome::TimedOut {
+                tool_calls_made,
+                elapsed: duration,
+            },
             LoopOutcome::MaxStepsExceeded => TurnOutcome::Failed(AivyxError::Internal(
                 format!("planner exceeded {MAX_STEPS_PER_TURN} steps per turn"),
             )),
@@ -198,12 +266,14 @@ impl Agent for ConcreteAgent {
 }
 
 /// Internal loop termination reason before it's translated into a public
-/// `TurnOutcome`. Phase 2 adds `MaxStepsExceeded` alongside
-/// `Completed` and `Cancelled`; `TimedOut` and `Escalated` will join
-/// this enum as the loop grows in later tasks.
+/// `TurnOutcome`. Phase 2 added `MaxStepsExceeded`; Phase 3 task 4
+/// adds `TimedOut` (the first code path that emits the long-
+/// advertised `TurnOutcome::TimedOut`). `Escalated` will join this
+/// enum if and when a real tool emits it.
 enum LoopOutcome {
     Completed,
     Cancelled,
+    TimedOut,
     MaxStepsExceeded,
 }
 
@@ -785,6 +855,100 @@ mod tests {
             } => assert_eq!(tool_calls_made, 1),
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    // ---- Wall-clock timeout: deadline task fires → TimedOut outcome ----
+    //
+    // Phase 3 task 4 introduced `TURN_TIMEOUT` and the deadline task.
+    // This test proves the loop actually emits `TurnOutcome::TimedOut`
+    // (the first code path in the project to do so) when the planner
+    // hangs past the deadline. Uses tokio's virtual-time test-util so
+    // the test doesn't actually wait 120s wall-clock.
+
+    /// Planner whose `next_step` awaits forever. The only way a turn
+    /// using it can terminate is the loop's own cancellation re-check
+    /// after the deadline task fires.
+    struct HangingPlanner;
+
+    #[async_trait]
+    impl TurnPlanner for HangingPlanner {
+        async fn begin_turn(&mut self, _message: &Message) {}
+
+        async fn next_step(
+            &mut self,
+            _observed: &[StepObservation],
+            channel: &dyn ChannelContext,
+        ) -> NextStep {
+            // Mirror the real LLM planner's one_step: race the
+            // channel's cancellation against a future that never
+            // completes. When the deadline task cancels the token,
+            // this branch wins and we surface `Stop` — which the
+            // loop then translates to `TimedOut` via its post-
+            // next_step cancellation re-check + `deadline_fired` flag.
+            let cancel = channel.cancellation_token();
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => NextStep::Stop,
+                _ = std::future::pending::<()>() => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wall_clock_timeout_emits_timed_out_outcome() {
+        let audit = RecordingAudit::new();
+        let registry = Arc::new(ToolRegistry::new(Vec::new()));
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::from_scopes([]),
+            registry,
+            audit.clone(),
+            || Box::new(HangingPlanner),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hang forever");
+
+        // Race the turn against a virtual-time advance that walks past
+        // the deadline. `start_paused = true` pauses the tokio clock
+        // at t=0; the advance hops directly to t > TURN_TIMEOUT so the
+        // deadline task wakes up immediately in wall-clock terms.
+        let turn_fut = agent.turn(message, &channel);
+        let advance_fut = async {
+            // Yield so the turn task actually starts and spawns the
+            // deadline task before we advance time past its sleep.
+            tokio::task::yield_now().await;
+            tokio::time::advance(TURN_TIMEOUT + Duration::from_secs(1)).await;
+        };
+        let (outcome, _) = tokio::join!(turn_fut, advance_fut);
+
+        match outcome {
+            TurnOutcome::TimedOut {
+                tool_calls_made,
+                elapsed: _,
+            } => {
+                // We don't assert on `elapsed` because the loop
+                // measures it with `std::time::Instant`, which is not
+                // virtualized by `tokio::time::pause()`. In production
+                // the field is meaningful; in this test it will be
+                // ~microseconds. Asserting outcome variant + no tools
+                // called is sufficient to prove the deadline path.
+                assert_eq!(tool_calls_made, 0);
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+
+        // Audit: TurnStarted → TurnEnded(TimedOut), nothing in between.
+        let events = audit.snapshot();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], AuditTag::TurnStarted { .. }));
+        assert!(matches!(
+            events[1],
+            AuditTag::TurnEnded {
+                outcome: TurnOutcomeSummary::TimedOut,
+                ..
+            }
+        ));
     }
 
     // ---- Max-steps guard: a runaway planner is terminated with Failed ----

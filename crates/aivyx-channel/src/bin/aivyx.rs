@@ -172,27 +172,27 @@ async fn run_async(
     // conversation context across turns (which the planner keys on
     // SessionId-derived history).
     let channel = LocalChannel::new("aivyx-cli", io::stdout());
-    let turn_cancel = channel.cancel_handle();
+    let token_slot = channel.token_slot();
 
     // Signal task: first ctrl-C during a turn cancels the turn; a
-    // second ctrl-C — whether during the same turn or outside one —
-    // exits the process. The state is carried by the shared
-    // CancellationToken: once it's cancelled, the next ctrl-C sees
-    // it cancelled and aborts the process.
+    // second ctrl-C exits the process. We re-read the current token
+    // from the slot on every ctrl-C so that turn-N+1 sees a fresh
+    // token after turn-N's reset_cancellation() call below.
     tokio::spawn(async move {
         loop {
             if tokio::signal::ctrl_c().await.is_err() {
                 // Signal listener broke — bail rather than hanging.
                 std::process::exit(130);
             }
-            if turn_cancel.is_cancelled() {
-                // Second ctrl-C (either re-arrived during the same
-                // turn or arrived outside a turn). Exit.
+            let current = token_slot.lock().expect("token slot poisoned").clone();
+            if current.is_cancelled() {
+                // Second ctrl-C on the *same* token (the first cancel
+                // already set it). Exit.
                 eprintln!("\naivyx: interrupted, exiting.");
                 std::process::exit(130);
             }
             eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
-            turn_cancel.cancel();
+            current.cancel();
         }
     });
 
@@ -229,21 +229,12 @@ async fn run_async(
             continue;
         }
 
-        // If the user hits ctrl-C *between* turns the token will be
-        // pre-cancelled. The signal handler uses this as the "second
-        // ctrl-C exits" signal, so we only reach here if the token is
-        // still unset. No reset needed for the first-turn-cancel case
-        // because a new channel would lose history — but we DO need
-        // to arm a fresh cancellation scope for each turn so that a
-        // cancel from turn N doesn't pre-cancel turn N+1.
-        //
-        // The simplest route: if the token is somehow already
-        // cancelled by the time we're reading a new line, exit. The
-        // signal task's own `exit(130)` normally wins this race, but
-        // we defend belt-and-braces.
-        if channel.cancellation_token().is_cancelled() {
-            return Ok(());
-        }
+        // Rotate the cancellation token so a ctrl-C from turn N does
+        // not pre-cancel turn N+1. `tokio_util`'s CancellationToken is
+        // monotonic, so we cannot reset in place — we swap a fresh
+        // token into the channel's slot. The signal task reads the
+        // slot on every ctrl-C, so it picks up the new token.
+        channel.reset_cancellation();
 
         let message = Message::text(channel.session_id(), input);
         let _outcome = agent.turn(message, &channel).await;

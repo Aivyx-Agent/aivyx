@@ -56,7 +56,14 @@ use crate::render::{render_finalize, render_stream_event, RenderMode};
 pub struct LocalChannel<W: Write + Send + 'static> {
     name: String,
     session: SessionId,
-    token: CancellationToken,
+    /// Wrapped in `Mutex` so [`reset_cancellation`](Self::reset_cancellation)
+    /// can swap in a fresh token between turns. `tokio_util`'s
+    /// `CancellationToken` is monotonic — once cancelled, it stays
+    /// cancelled — so a single token across turns would have every
+    /// turn after the first ctrl-C see a pre-cancelled token. Rotating
+    /// per turn is the minimum fix that keeps the `ChannelContext`
+    /// trait surface untouched.
+    token: Arc<Mutex<CancellationToken>>,
     writer: Arc<Mutex<W>>,
 }
 
@@ -69,7 +76,7 @@ impl<W: Write + Send + 'static> LocalChannel<W> {
         LocalChannel {
             name: name.into(),
             session: SessionId::new(),
-            token: CancellationToken::new(),
+            token: Arc::new(Mutex::new(CancellationToken::new())),
             writer: Arc::new(Mutex::new(writer)),
         }
     }
@@ -80,10 +87,29 @@ impl<W: Write + Send + 'static> LocalChannel<W> {
         Arc::clone(&self.writer)
     }
 
-    /// Access the channel's cancellation token without cloning. Used by
-    /// the binary's signal handler to trigger a mid-turn cancel.
+    /// Obtain a shared handle to the token slot itself. The binary's
+    /// signal handler uses this so it can re-read the *current* token
+    /// on every ctrl-C (rather than capturing a single long-lived
+    /// clone before any rotation happens).
+    pub fn token_slot(&self) -> Arc<Mutex<CancellationToken>> {
+        Arc::clone(&self.token)
+    }
+
+    /// Snapshot the current cancellation token. Non-rotating callers
+    /// (the turn loop inside `agent.rs`) see this value for the life
+    /// of a single turn.
     pub fn cancel_handle(&self) -> CancellationToken {
-        self.token.clone()
+        self.token.lock().expect("token mutex poisoned").clone()
+    }
+
+    /// Rotate the cancellation token. Called by the CLI binary between
+    /// turns: once `reset_cancellation()` returns, the next
+    /// `cancellation_token()` call yields a fresh token that has never
+    /// been cancelled. Any previously-cloned handle is orphaned and
+    /// ignored by the new turn.
+    pub fn reset_cancellation(&self) {
+        let mut slot = self.token.lock().expect("token mutex poisoned");
+        *slot = CancellationToken::new();
     }
 }
 
@@ -139,7 +165,7 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
     }
 
     fn cancellation_token(&self) -> CancellationToken {
-        self.token.clone()
+        self.token.lock().expect("token mutex poisoned").clone()
     }
 }
 
@@ -228,6 +254,51 @@ mod tests {
         assert!(
             channel.cancellation_token().is_cancelled(),
             "cancelling via cancel_handle should be visible through cancellation_token()"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_cancellation_swaps_in_a_fresh_token() {
+        // After cancelling and then calling reset_cancellation, the
+        // channel's cancellation_token() must report *not* cancelled.
+        // This is the fix for the Phase 3 task 3 monotonic-token bug:
+        // a ctrl-C during turn N must not poison turn N+1.
+        let (channel, _) = mem_channel();
+        let old = channel.cancel_handle();
+        old.cancel();
+        assert!(channel.cancellation_token().is_cancelled());
+
+        channel.reset_cancellation();
+        assert!(
+            !channel.cancellation_token().is_cancelled(),
+            "after reset_cancellation the new token must be un-cancelled"
+        );
+        // The previously-captured clone still reports cancelled — it's
+        // the *old* token, which is monotonic and stays cancelled.
+        // Orphaned handles being stuck in the cancelled state is the
+        // whole reason we rotate instead of reset-in-place.
+        assert!(
+            old.is_cancelled(),
+            "orphaned handle retains its old cancelled state"
+        );
+    }
+
+    #[tokio::test]
+    async fn token_slot_sees_rotation() {
+        // The signal handler in the binary reads the *current* token
+        // through `token_slot()` on every ctrl-C, not through a single
+        // clone. Verify the slot handle actually observes rotation.
+        let (channel, _) = mem_channel();
+        let slot = channel.token_slot();
+
+        let before = slot.lock().unwrap().clone();
+        before.cancel();
+        channel.reset_cancellation();
+
+        let after = slot.lock().unwrap().clone();
+        assert!(
+            !after.is_cancelled(),
+            "slot should expose the post-rotation token, not the cancelled one"
         );
     }
 

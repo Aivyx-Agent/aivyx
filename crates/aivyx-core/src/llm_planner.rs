@@ -163,7 +163,27 @@ impl LlmPlanner {
         let mut stream: Box<dyn LlmStream> =
             self.provider.chat_stream(request, &cancellation).await?;
 
-        while let Some(event) = stream.next_event().await? {
+        // Race the stream's next event against cancellation. When the
+        // cancel future wins, we drop the stream immediately (dropping
+        // a Box<dyn LlmStream> propagates through the provider's
+        // internal body stream and aborts the underlying connection)
+        // and return `LlmError::Cancelled`. The turn loop's own
+        // post-next_step cancellation check then takes over and emits
+        // `LoopOutcome::Cancelled` / `LoopOutcome::TimedOut` as
+        // appropriate. Phase 3 task 4 added this path so wall-clock
+        // timeouts actually interrupt a completion mid-token.
+        loop {
+            let next = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    drop(stream);
+                    return Err(LlmError::Cancelled);
+                }
+                event = stream.next_event() => event?,
+            };
+
+            let Some(event) = next else { break };
+
             if let LlmStreamEvent::TextChunk(ref chunk) = event {
                 // Best-effort relay: if the channel rejects the event,
                 // we log it in the sense of "drop it on the floor" —
@@ -211,13 +231,25 @@ impl TurnPlanner for LlmPlanner {
         loop {
             let terminal = match self.one_step(channel).await {
                 Ok(t) => t,
+                Err(LlmError::Cancelled) => {
+                    // Mid-stream cancellation (either an external
+                    // signal or a wall-clock timeout firing on the
+                    // channel's token). Return `NextStep::Stop` so the
+                    // turn loop's own post-next_step cancellation
+                    // re-check takes over and translates to
+                    // `LoopOutcome::Cancelled` / `TimedOut`. Returning
+                    // a FinalMessage here would misleadingly show up
+                    // as a completed turn.
+                    return NextStep::Stop;
+                }
                 Err(e) => {
-                    // A provider error terminates the turn cleanly from
-                    // the loop's perspective. We surface it as a
-                    // FinalMessage carrying the error text so audit
-                    // still sees a Completed turn. A future enhancement
-                    // could plumb `AivyxError::Llm` through a new
-                    // NextStep variant, but that's a bigger change.
+                    // Any other provider error terminates the turn
+                    // cleanly from the loop's perspective. We surface
+                    // it as a FinalMessage carrying the error text so
+                    // audit still sees a Completed turn. A future
+                    // enhancement could plumb `AivyxError::Llm`
+                    // through a new NextStep variant, but that's a
+                    // bigger change.
                     return NextStep::FinalMessage(format!("LLM error: {e}"));
                 }
             };
@@ -813,6 +845,81 @@ mod tests {
             NextStep::FinalMessage(m) => assert!(m.starts_with("LLM error:")),
             other => panic!("expected FinalMessage, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Mid-stream cancellation — Phase 3 task 4. The planner's one_step
+    // loop races stream events against `cancellation.cancelled()`. When
+    // the channel's token flips to cancelled while the stream is still
+    // yielding, the planner must drop the stream, surface
+    // `LlmError::Cancelled`, and `next_step` must translate that into
+    // `NextStep::Stop` (not a FinalMessage — doing so would misleadingly
+    // complete the turn).
+    // -----------------------------------------------------------------------
+
+    /// Provider whose stream blocks forever on `next_event`. The only
+    /// way a turn that uses it can terminate is via cancellation of the
+    /// channel's token.
+    struct BlockingProvider;
+
+    #[async_trait]
+    impl LlmProvider for BlockingProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &crate::CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            Ok(Box::new(BlockingStream))
+        }
+    }
+
+    struct BlockingStream;
+
+    #[async_trait]
+    impl LlmStream for BlockingStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            // Never resolves. The `tokio::select!` in `one_step` must
+            // always pick the cancellation branch to let the caller
+            // make progress.
+            std::future::pending::<()>().await;
+            unreachable!()
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            // finish() shouldn't be reached on the cancel path, but if
+            // it is, report it loudly so the test catches the misroute.
+            Err(LlmError::StreamEnded("BlockingStream::finish reached".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn mid_stream_cancel_returns_next_step_stop() {
+        let provider = Arc::new(BlockingProvider);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+
+        let channel = RecChannel::new();
+        // Spawn a task that cancels the channel's token shortly after
+        // the planner starts draining the stream. Yielding once
+        // guarantees we enter `one_step` before the cancel fires.
+        let token = channel.token.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            token.cancel();
+        });
+
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+
+        assert!(
+            matches!(step, NextStep::Stop),
+            "mid-stream cancel must surface as NextStep::Stop, got {step:?}"
+        );
     }
 
     #[tokio::test]
