@@ -32,8 +32,9 @@ doc.
 |----------|---------|----------------------------|-----------|
 | Phase 0  | Frozen  | [PHASE_0.md](PHASE_0.md)   | `1b4f271` |
 | Phase 1  | Frozen  | [PHASE_1.md](PHASE_1.md)   | `33012be` |
-| Phase 2  | Active  | [PHASE_2.md](PHASE_2.md)   | —         |
-| Phase 3+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
+| Phase 2  | Frozen  | [PHASE_2.md](PHASE_2.md)   | `2b6f876` |
+| Phase 3  | Active  | [PHASE_3.md](PHASE_3.md)   | —         |
+| Phase 4+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

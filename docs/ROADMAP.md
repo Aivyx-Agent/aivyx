@@ -25,21 +25,9 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 2 — First Real LLM Provider
-
-**Status:** Active — see [`PHASE_2.md`](PHASE_2.md).
-
 ## Phase 3 — First Real Channel
 
-Implement `LocalChannel` (the CLI `ChannelContext` referenced in D1
-and D3 of the contract). First human-driven turn from a terminal,
-streaming `StreamEvent`s back to stdout, capability-checked end-to-end.
-This is the first phase where a *person* can interact with an Aivyx
-agent without writing test code.
-
-Validates D1's "no bypass path" commitment: the CLI is forced through
-the same `ChannelContext` trait that every remote channel will later
-implement. If the CLI is easy to wire, remote channels will be.
+**Status:** Active — see [`PHASE_3.md`](PHASE_3.md).
 
 ## Phase 4 — First Real Tool
 
