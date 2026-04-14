@@ -59,6 +59,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-crypto",
  "aivyx-llm",
+ "aivyx-memory",
  "aivyx-storage",
  "async-trait",
  "secrecy",

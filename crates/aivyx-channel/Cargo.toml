@@ -34,6 +34,15 @@ zeroize = "1.8"
 # `cargo run --bin aivyx` launches the full agent stack.
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
+
+# Phase 6 task 4 — the binary constructs a `RedbMemory` from the
+# same `Arc<dyn Storage>` it already opens for the session marker,
+# wraps it in `Arc<dyn Memory>`, and registers the three
+# MemoryRead/Write/ForgetTool impls alongside the fs tools. The
+# library target does not pull this in (the Phase 3 chat-only
+# regression test still passes an empty registry and constructs
+# SessionConfig without a Memory handle).
+aivyx-memory = { path = "../aivyx-memory" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal"] }
 secrecy = { workspace = true }
 # Salt bytes for the passphrase module — uuid::Uuid::new_v4() is the

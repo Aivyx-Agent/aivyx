@@ -62,12 +62,18 @@
 //!
 //! - It does not persist the audit chain. The `HmacChainLog` still
 //!   uses an ephemeral per-process key. Phase 5 task 4 added the
-//!   encrypted store for *session metadata* (`KeyDomain::Sessions`),
-//!   which proves the storage round-trip end-to-end; Phase 6 (memory
-//!   as tool) will extend the persistence surface.
+//!   encrypted store for *session metadata* (`KeyDomain::Sessions`);
+//!   Phase 6 task 4 added memory (`KeyDomain::Memory`). Audit
+//!   persistence (`KeyDomain::Audit`) is the remaining hardening
+//!   item on the ROADMAP for Phase 7+.
 //! - It does not persist conversation history. The planner's
 //!   `LlmHistory` lives in RAM for the lifetime of one
-//!   `ConcreteAgent`. Same Phase 6 boundary.
+//!   `ConcreteAgent`. Cross-turn *recall* now works through the
+//!   three `memory.*` tools — the agent chooses to call
+//!   `memory.write` to remember something and `memory.read` to pull
+//!   it back in a later turn. This is D1's "memory is a tool, not
+//!   ambient context" contract in live code: there is no hidden
+//!   injection at turn start.
 //! - It does not do line editing or history. Plain `stdin().read_line`.
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
@@ -87,6 +93,7 @@ use aivyx_core::{
     AuditHook, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
 };
 use aivyx_crypto::Argon2Params;
+use aivyx_memory::{Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory};
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
@@ -291,21 +298,47 @@ async fn run_async(
         format!("canonical fs.write sandbox scope not parseable from {canonical_root:?}")
     })?;
 
+    // Build the Phase 6 memory tools. `RedbMemory::open` clones an
+    // `Arc<dyn Storage>` handle so the binary's already-open store
+    // and the memory substrate share the same redb database and the
+    // same master key — no second passphrase, no second sidecar. The
+    // open call seeds the monotonic sequence counter from any
+    // pre-existing entries, so a restart against a populated store
+    // keeps the invariant that no two entries ever share a `seq`
+    // (see PHASE_6.md task 2 for the crash-recovery rationale).
+    let memory: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
+        .await
+        .map_err(|e| format!("failed to open memory substrate: {e}"))?;
+    let memory_read = MemoryReadTool::new(Arc::clone(&memory));
+    let memory_write = MemoryWriteTool::new(Arc::clone(&memory));
+    let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
+
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
         Arc::new(fs_read) as Arc<dyn Tool>,
         Arc::new(fs_write) as Arc<dyn Tool>,
+        Arc::new(memory_read) as Arc<dyn Tool>,
+        Arc::new(memory_write) as Arc<dyn Tool>,
+        Arc::new(memory_forget) as Arc<dyn Tool>,
     ]));
 
     // ---- Capabilities -------------------------------------------------
     // The CLI is the most-trusted channel on the box; the agent gets
     // a broad capability set so chat-only turns don't get denied for
-    // scopes they never actually request. The two `fs.*` scopes are
+    // scopes they never actually request. The `fs.*` scopes are
     // rooted at the canonicalized sandbox path so the scope-derivation
     // path in `FsReadTool::required_scope` lines up exactly with a
-    // held capability.
+    // held capability. The three `memory.*` scopes are granted
+    // **unqualified**: by D4 Rule 2 an unqualified held scope grants
+    // any qualified needed scope with the same base, so the per-topic
+    // scopes each `Memory*Tool::required_scope` returns
+    // (`memory.read:topic:<topic>`, etc.) are all covered. Per-topic
+    // attenuation becomes interesting the moment Phase 7+ introduces
+    // a non-Trusted channel for the memory tools; Trusted CLI gets
+    // the full family by default per D4's tier table.
     let capabilities = CapabilitySet::from_scopes([
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
+        Scope::parse("memory.forget").unwrap(),
         fs_read_scope,
         fs_write_scope,
     ]);
@@ -350,7 +383,8 @@ async fn run_async(
         prompt: PROMPT.to_string(),
         banner: Some(format!(
             "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
-             fs sandbox: {}",
+             fs sandbox: {}\n\
+             memory: live (recall persists across restarts)",
             env!("CARGO_PKG_VERSION"),
             canonical_root.display(),
         )),
