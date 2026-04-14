@@ -10,4 +10,19 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+# RustCrypto primitives. sha2 is pinned at 0.10 here (not the workspace
+# 0.11) because hkdf 0.12 binds to sha2 0.10 and mixing majors would cause
+# Hkdf::<Sha256>::new to see two incompatible Sha256 types. This crate does
+# not expose sha2 in its public API, so the duplicate copy is isolated —
+# aivyx-audit / aivyx-core keep the 0.11 generation they already use.
+argon2 = "0.5"
+hkdf = "0.12"
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+
+# Memory hygiene for key material. Every key type in this crate is
+# zeroize-on-drop so a leaked Vec<u8> or a panic path can't leave raw bytes
+# on the heap.
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+thiserror = { workspace = true }
