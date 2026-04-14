@@ -355,8 +355,22 @@ impl RedbStorage {
         // opens an existing file or creates a new one; a failed open
         // produces a `DatabaseError` which flows through our
         // `From<DatabaseError>` impl.
+        //
+        // Phase 7 task 6 — on cold-start (file did not exist before
+        // `Database::create`), we follow up with `chmod 0600` on the
+        // freshly-created file. The `try_exists` check runs *before*
+        // `Database::create` so a pre-existing file (possibly
+        // deliberately re-permed by the operator) is not silently
+        // forced back to 0600 on every reopen. Failure to chmod is
+        // a hard error: a 0600 assertion is load-bearing for D5's
+        // local-trust model, and silently continuing with an
+        // inherited-umask file would hand the operator a false
+        // sense of security.
         let path = config.path.clone();
         let db = tokio::task::spawn_blocking(move || -> Result<Database, StorageError> {
+            let was_cold = !path
+                .try_exists()
+                .map_err(|e| StorageError::Redb(format!("failed to probe store path {path:?}: {e}")))?;
             let db = Database::create(&path)?;
             // Create every domain's table during the first write
             // transaction so a cold store has the full schema
@@ -368,6 +382,11 @@ impl RedbStorage {
                 let _ = write.open_table(table_def)?;
             }
             write.commit()?;
+            if was_cold {
+                chmod_user_only(&path).map_err(|e| {
+                    StorageError::Redb(format!("failed to chmod 0600 on {path:?}: {e}"))
+                })?;
+            }
             Ok(db)
         })
         .await
@@ -405,6 +424,30 @@ impl RedbStorage {
             KeyDomain::ChannelState => &self.subkeys[4],
         }
     }
+}
+
+/// Phase 7 task 6 — `chmod 0600` the given path on Unix (owner
+/// read+write, nothing else). No-op on non-Unix: D5 declares Linux as
+/// the supported platform, but keeping the non-unix arm a clean no-op
+/// lets macOS dev machines `cargo check` the workspace without a
+/// platform cfg elsewhere. Returns any `io::Error` from
+/// `fs::set_permissions` so callers can wrap it in their own error
+/// type — this helper does not pick a policy, it just flips the bits.
+///
+/// Intentionally duplicated between this crate and
+/// `aivyx-channel::passphrase`: two ~5-line helpers are cheaper than
+/// a new `aivyx-core` public surface for a Unix-perms utility, and
+/// the logic is stable enough that divergence between copies is a
+/// non-problem.
+#[cfg(unix)]
+fn chmod_user_only(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn chmod_user_only(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[async_trait]
@@ -1102,6 +1145,57 @@ mod tests {
 
         let rows = handle.scan_prefix(b"ghost-prefix").await.unwrap();
         assert!(rows.is_empty());
+    }
+
+    // ---- Phase 7 task 6: filesystem permission hardening ----------
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cold_open_chmods_store_file_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Cold-start path: the store file does not exist before
+        // `open`, so the `was_cold` probe returns true and the chmod
+        // step runs. Asserting on `& 0o777` masks off the file-type
+        // bits — on stat-back the `mode()` bits include S_IFREG, and
+        // we only care about the permission-bit portion.
+        let dir = StoreDir::new();
+        assert!(
+            !dir.path().exists(),
+            "precondition: store path must not exist before open"
+        );
+
+        let _store = open_store(&dir, test_master(30)).await;
+
+        let meta = fs::metadata(dir.path()).expect("store file must exist after open");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "cold-opened store file must be chmod 0600, got 0o{mode:o}"
+        );
+
+        // A second open against the *same* path is a warm reopen.
+        // `was_cold` returns false because the file now exists, so
+        // the chmod path is skipped. We assert this by pre-mutating
+        // the perms to 0o640 and confirming a reopen does NOT fight
+        // the operator back to 0o600 — the cold-only policy from
+        // Q6d in action.
+        std::fs::set_permissions(
+            dir.path(),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .expect("chmod pre-mutation must succeed");
+
+        // The existing store is still open; drop it to release the
+        // file lock before reopening.
+        drop(_store);
+        let _store2 = open_store(&dir, test_master(30)).await;
+
+        let mode2 = fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode2, 0o640,
+            "warm reopen must not force perms back to 0600, got 0o{mode2:o}"
+        );
     }
 
     #[tokio::test]

@@ -188,9 +188,15 @@ impl std::fmt::Debug for PassphraseSource {
 /// leaves no file at all on every filesystem this binary supports.
 /// No temp-and-rename ritual is needed at this size.
 ///
-/// Salts are **not secret**, so the file permissions are not
-/// constrained — the defense is that a salt is unique per store, not
-/// that it's hidden from an attacker.
+/// **Phase 7 task 6 — permissions.** On first-run (the `NotFound`
+/// arm), the freshly-created salt file is `chmod 0600`'d before the
+/// function returns. The earlier doc claim "salts are not secret" is
+/// still true in the cryptographic sense — knowledge of the salt
+/// does not shortcut Argon2id — but the uniform "every file aivyx
+/// writes looks the same to an auditor" discipline from Task 6
+/// applies anyway. The chmod only runs on the create path: if a
+/// caller has deliberately re-permed an existing salt file, a warm
+/// reopen does not silently fight them back to 0600.
 pub fn load_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], PassphraseError> {
     match fs::read(salt_path) {
         Ok(bytes) => {
@@ -213,6 +219,14 @@ pub fn load_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], Passphras
                 path: salt_path.to_path_buf(),
                 reason: e.to_string(),
             })?;
+            // Phase 7 task 6 — chmod 0600 the freshly-created salt.
+            // Failure is a hard error (policy: if we can't prove
+            // 0600, we must not pretend we did). See `chmod_user_only`
+            // for the cross-platform shape.
+            chmod_user_only(salt_path).map_err(|e| PassphraseError::SaltIo {
+                path: salt_path.to_path_buf(),
+                reason: format!("failed to chmod 0600: {e}"),
+            })?;
             Ok(uuid_bytes)
         }
         Err(e) => Err(PassphraseError::SaltIo {
@@ -220,6 +234,23 @@ pub fn load_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], Passphras
             reason: e.to_string(),
         }),
     }
+}
+
+/// Phase 7 task 6 — `chmod 0600` the given path on Unix, no-op on
+/// other platforms. Intentionally duplicated with the sibling in
+/// `aivyx-storage::lib` per Q6a: two ~5-line helpers are cheaper than
+/// a new `aivyx-core` public surface, and the logic is stable. Both
+/// copies should stay byte-identical in shape; if they diverge, that's
+/// a bug, not a feature.
+#[cfg(unix)]
+fn chmod_user_only(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn chmod_user_only(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 // --------------------------------------------------------------------
@@ -404,6 +435,41 @@ mod tests {
             err,
             PassphraseError::SaltMalformed { len: 8, .. }
         ));
+    }
+
+    // ---- Phase 7 task 6: filesystem permission hardening -----------
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_salt_is_chmod_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TestDir::new();
+        let salt_path = dir.salt();
+        assert!(
+            !salt_path.exists(),
+            "precondition: salt path must not exist"
+        );
+
+        let _salt = load_or_create_salt(&salt_path).unwrap();
+
+        let meta = fs::metadata(&salt_path).expect("salt file must exist");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "freshly-created salt must be chmod 0600, got 0o{mode:o}"
+        );
+
+        // Warm reopen must not fight a deliberately re-permed file.
+        // Same cold-only policy as the storage side of Task 6 (Q6d).
+        fs::set_permissions(&salt_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod pre-mutation must succeed");
+        let _salt2 = load_or_create_salt(&salt_path).unwrap();
+        let mode2 = fs::metadata(&salt_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode2, 0o640,
+            "warm reopen must not force perms back to 0600, got 0o{mode2:o}"
+        );
     }
 
     // ---- Env var source ---------------------------------------------

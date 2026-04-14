@@ -503,12 +503,83 @@ tasks are allowed to reorder and re-scope as we learn.
    by reusing `get_recent` as described in the cost-analysis
    block above, keeping the trait surface frozen.
 
-6. **Filesystem permission hardening.** On Linux (the only
-   supported platform per D5), `chmod 0600` the store file, the
-   salt sidecar, and any audit-chain state file at create time.
-   A ~20-line change in `aivyx-channel::passphrase::load_or_
-   create_salt` and `aivyx-storage::RedbStorage::open`. Unit
-   tests assert `metadata().permissions().mode() & 0o777 == 0o600`.
+6. **Filesystem permission hardening.** (Shipped 2026-04-14.)
+   `chmod 0600` now lands on the two files aivyx creates at
+   startup: the redb store file (`store.redb`) and the passphrase
+   salt sidecar (`store.redb.salt`). The draft also mentioned
+   "any audit-chain state file" — that branch is **empty by
+   construction** because Task 1 folded the audit chain *into*
+   the redb store under `KeyDomain::Audit`, so `aivyx-audit`
+   writes nothing directly to disk. Store + salt is the full
+   surface.
+
+   **Cold-start detection pattern.** Both call sites implement
+   the chmod as a cold-start-only operation via a `was_cold`
+   probe: `Path::try_exists()` before the create call, and the
+   chmod only fires when the file did not exist prior. A
+   deliberately re-permed existing file (e.g., an operator who
+   set `0o640` for a local-admin-readable audit posture) is
+   **not** silently fought back to `0o600` on every reopen. This
+   is the Q6d resolution — cold-only, not always-chmod. Both
+   tests assert this invariant: pre-mutate to `0o640`, reopen,
+   assert perms survived unchanged.
+
+   **Helper duplication, not shared.** Q6a resolved to duplicate
+   a ~5-line `chmod_user_only` helper into `aivyx-storage::lib`
+   and `aivyx-channel::passphrase`. Both copies are
+   `#[cfg(unix)]`-gated with a non-unix no-op fallback: D5
+   declares Linux as the supported platform, but keeping the
+   non-unix arm clean lets macOS dev machines `cargo check` the
+   workspace without extra platform cfg bleeding into unrelated
+   code. The helpers use
+   `std::os::unix::fs::PermissionsExt::from_mode(0o600)` —
+   setting the full mode directly rather than OR-masking over
+   the existing mode, so the result is exact.
+
+   **Hard error on chmod failure.** Q6b resolved to policy:
+   "hard error, not log-and-continue." Failure maps to the
+   existing error type at each site (`StorageError::Redb(String)`
+   on the storage side, `PassphraseError::SaltIo { path, reason }`
+   on the salt side). The rationale: a `0600` assertion is
+   load-bearing for D5's local-trust model; if we can't prove
+   it, silently continuing with an inherited-umask file would
+   hand the operator a false sense of security. A chmod failure
+   on a normal filesystem is vanishingly unlikely; on an exotic
+   filesystem (9p, certain FUSE mounts) the user needs to know.
+
+   **Q6c — salt chmod even though salts "aren't secret."**
+   Shipped: yes, chmod the salt. The earlier doc claim "salts
+   are not secret" is still true cryptographically — knowing the
+   salt does not shortcut Argon2id — but the uniform "every
+   file aivyx writes looks the same to an auditor" discipline
+   wins. A future reader who finds one file at `0o600` and
+   another at `0o644` has to reconstruct the "oh, that one
+   wasn't secret" argument from the doc comment. Uniform perms
+   remove that footgun. Pre-existing doc comment on
+   `load_or_create_salt` updated to reflect the new stance.
+
+   **Tests.** Two new tests (workspace 280 → 282), one per
+   crate, both `#[cfg(unix)]`-gated:
+
+   - `aivyx_storage::tests::cold_open_chmods_store_file_to_0600`
+     — cold `RedbStorage::open` asserts `mode & 0o777 == 0o600`,
+     then pre-mutates the file to `0o640` and reopens (warm
+     path), asserting the perms survived unchanged.
+   - `aivyx_channel::passphrase::tests::fresh_salt_is_chmod_0600`
+     — first `load_or_create_salt` asserts `0o600`, second call
+     on a pre-mutated `0o640` asserts it survived unchanged.
+
+   Both assertions mask with `& 0o777` to strip the file-type
+   bits that show up in `stat(2)` mode — the permission bits
+   are the only portion we actually set.
+
+   **Six-phase DESIGN.md empty-diff streak survives a sixth
+   task-level decision.** Task 6 had one potential streak-ender:
+   if the chmod helper needed to live as a public surface in
+   `aivyx-core` for any reason (e.g., tool-owned file creation),
+   the helper would have been a new D3 contract point. Resolved
+   instead by duplicating the ~5-line helper at each call site
+   — no shared API, no contract surface, no D3 amendment.
 
 7. **Scripted audit persistence integration test.** New file
    `crates/aivyx-channel/tests/audit_persistence_e2e.rs`. Same
@@ -810,8 +881,24 @@ wiring; defer to Phase 8+ otherwise.
       row — `Memory` trait did not grow a `count` method, and
       `ToolOutcome::Failed(AivyxError::Tool {...})` absorbed the
       refusal without a new variant.)*
-- [ ] The store file, its salt sidecar, and any audit-chain
+- [x] The store file, its salt sidecar, and any audit-chain
       state files are `chmod 0600` at create time on Linux.
+      *(Task 6, 2026-04-14. "Any audit-chain state files" is
+      empty by construction — Task 1 folded the audit chain into
+      `KeyDomain::Audit` rows inside the redb store, so the full
+      surface is the store file + salt sidecar. Both sites use a
+      duplicated `#[cfg(unix)]`-gated `chmod_user_only` helper
+      with a non-unix no-op fallback; chmod runs only on cold-
+      start via a `Path::try_exists` probe, so a deliberately
+      re-permed file is not silently fought back on reopen.
+      Failure is a hard error mapping to the existing
+      `StorageError::Redb` / `PassphraseError::SaltIo` variants.
+      The salt is chmod'd even though "salts are not secret":
+      uniform perms across every aivyx-created file are a
+      better auditability story than per-file rationales.
+      +2 tests; workspace 280 → 282. DESIGN.md empty-diff streak
+      preserved a sixth task in a row — no shared helper in
+      `aivyx-core`, so D3 is untouched.)*
 - [ ] A scripted integration test
       (`crates/aivyx-channel/tests/audit_persistence_e2e.rs`)
       drives a two-session audit round-trip *and* reopens a
