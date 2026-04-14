@@ -25,10 +25,6 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 5 — Encrypted Storage
-
-**Status:** Active — see [`PHASE_5.md`](PHASE_5.md).
-
 ## Phase 6 — Memory as Tool
 
 Implement `aivyx-memory` with `memory.read`, `memory.write`, and
@@ -46,6 +42,19 @@ will hold filesystem tools *and* memory tools, and the choice
 between "keep piling into `aivyx-core::tools`" and "spin up an
 `aivyx-tools` umbrella crate" can be made against two concrete
 data points instead of one.
+
+**What Phase 5 leaves on the table for this phase.** The
+encrypted store already reaches `KeyDomain::Memory` —
+`storage.domain(KeyDomain::Memory)` is a working handle the
+moment `aivyx-memory` wants one. The `Arc<dyn Storage>` resource
+pattern (one handle per process, cloned into each turn) and the
+composition-vs-execution split (binary owns wiring, `run_session`
+owns the loop) are the templates Phase 6 should copy rather than
+re-invent. If the memory schema ever needs a breaking change, the
+migration path is already in hand: bump the HKDF salt from
+`"aivyx-v1-storage"` to `"aivyx-v2-storage"` and the old stores
+become cleanly unreadable — no schema-version field needed
+inside the ciphertext.
 
 ## Phase 7+ — Ecosystem
 
