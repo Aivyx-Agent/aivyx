@@ -581,18 +581,121 @@ tasks are allowed to reorder and re-scope as we learn.
    instead by duplicating the ~5-line helper at each call site
    — no shared API, no contract surface, no D3 amendment.
 
-7. **Scripted audit persistence integration test.** New file
-   `crates/aivyx-channel/tests/audit_persistence_e2e.rs`. Same
-   shape as Phase 5 task 5's `storage_persistence_e2e.rs` and
-   Phase 6 task 5's `memory_tool_e2e.rs`: two sessions against
-   the same `$TMPDIR`-based store. Session A runs a scripted
-   turn that calls both `memory.write` and `fs.read`, drops,
-   session B reopens and verifies the chain from disk, and the
-   test asserts the verified chain contains every event session
-   A emitted in the right order with the right tags. Add a
-   negative case: session C reopens after the test manually
-   flips a byte in the on-disk audit state → `verify` must fail
-   with a specific `AuditError::ChainBreak { at_seq }` error.
+7. **Scripted audit persistence integration test.** (Shipped
+   2026-04-14.) New file
+   `crates/aivyx-channel/tests/audit_persistence_e2e.rs`, two
+   tests, same tempdir-based pattern as Phase 5 task 5's
+   `storage_persistence_e2e.rs` and Phase 6 task 5's
+   `memory_tool_e2e.rs`.
+
+   **Scope narrowed vs. the draft.** The draft said session A
+   "runs a scripted turn that calls both `memory.write` and
+   `fs.read`." Shipped: `memory.write` only. Dropping `fs.read`
+   removes the setup burden of a full `FsReadTool` harness
+   (sandbox root, capability wiring, sample file) from a test
+   whose point is the audit-chain persistence stack, not the
+   tool surface. The tool-scope narrowing that used to be the
+   justification for dual-tool coverage is now carried just as
+   strongly by the `memory.write` path: the MemoryAccess entry
+   records `memory.write:topic:notes`, not the broad capability
+   the caller holds — same R1 payoff, half the scaffolding.
+
+   **Draft said `AuditError::ChainBreak { at_seq }` — shipped
+   shape is `AuditError::ChainBroken { seq, reason }`.** This is
+   the same correction-in-shipped-record pattern as Tasks 3 and
+   5: the draft was written before Task 2 landed, and Task 2
+   resolved the variant name/fields. Negative-test assertion
+   matches on `matches!(err, AuditError::ChainBroken { seq: 0,
+   .. })`.
+
+   **Draft implied three sessions — shipped two tests.** The
+   draft's "session A → session B → session C with tamper" shape
+   was refactored into two independent `#[tokio::test]`s each
+   with its own tempdir (keyed off a `tag` argument to a local
+   `SharedStoreDir::new(tag)`). Reason: the negative case's
+   tamper step would have poisoned session B's state for an
+   in-band tamper, and a third session against the already-broken
+   chain adds no information on top of the second session's
+   failure. Two tests, two tempdirs, zero shared mutable state.
+
+   **Test 1 — positive round-trip.** Session A opens
+   `PersistentAuditLog` against fresh storage, runs one
+   `ScriptedProvider` turn that emits a `memory.write` tool call,
+   drain-fences on the on-disk row count (2000×1ms polling loop
+   scanning `KeyDomain::Audit` for `b"a\0"`), then drops. Session
+   B calls **both** `verify_from_disk` (Task 2's cold-path
+   verifier, matching what `aivyx --verify-only` does) *and*
+   `PersistentAuditLog::open` (the normal live-session path that
+   internally replays the chain). Both must succeed.
+
+   The test then drops to **Level 3**: it asserts the exact
+   4-event shape via `PersistentAuditLog::entries()`:
+   - seq 0: `AuditEvent::TurnStarted`
+   - seq 1: `AuditEvent::MemoryAccess { operation: Write,
+     scope: memory.write:topic:notes, query_or_key: "notes" }`
+   - seq 2: `AuditEvent::ToolCall { outcome: Completed,
+     scope_used: memory.write:topic:notes }`
+   - seq 3: `AuditEvent::TurnEnded { outcome: Completed,
+     tool_calls_made: 1 }`
+
+   Plus a chain-internal `prev_mac == entries[i-1].mac` loop
+   across all 4 entries. Level 2 (count-only) would have caught
+   the coarsest regressions, but Level 3 pins the whole
+   end-to-end pipeline — AEAD seal → redb row → reopen scan →
+   decode → HMAC replay → `entries()` accessor — against a
+   specific payload so any bit-rot anywhere in that stack fails
+   the test loudly.
+
+   **Test 2 — direct-tamper negative.** Session A runs the same
+   scripted turn and drops. The test then reopens *storage only*
+   (no audit log, no drain task) and mutates seq 0 in place:
+   `DomainHandle::get(&audit_row_key(0))` AEAD-decrypts the
+   ciphertext and yields the raw `SignedEntry` bytes; the test
+   deserializes, flips `entry.mac[0] ^= 0xff`, re-serializes, and
+   puts back via `DomainHandle::put`, which re-encrypts under the
+   same per-row key. Crucially, this means the AEAD is still
+   valid — a naive "tamper the ciphertext" approach would trip
+   `StorageError::DecryptFailed` and bubble up as
+   `AuditError::Storage`, **not** `ChainBroken`, and would have
+   tested a different error path. Going through the decrypt-flip-
+   re-put recipe hits the HMAC chain verifier the way an attacker
+   with the AEAD key but not the HMAC key would. Both
+   `verify_from_disk` and a live `PersistentAuditLog::open` must
+   fail with `ChainBroken { seq: 0, .. }`.
+
+   **Drop-order footgun caught during test bring-up.** The first
+   test run panicked at session B's `open_store` with
+   `Redb("Database already open. Cannot acquire lock.")`. Root
+   cause: redb's `Arc<Database>` refcount was non-zero when
+   session B tried to reopen the file. The culprits were
+   (a) `MemoryHarness` — which owns `MemoryWriteTool → RedbMemory
+   → DomainHandle → Arc<Database>` via the three tool
+   registrations — needing an explicit `drop(harness)` before
+   `drop(storage)`, and (b) the `PersistentAuditLog` drain task,
+   whose `Drop` calls `JoinHandle::abort()`, which is
+   *non-blocking*: the task drops its captured `Arc<dyn Storage>`
+   only when the runtime next polls it. The fix adds a
+   `drop(harness); drop(audit_typed); drop(storage); for _ in
+   0..16 { tokio::task::yield_now().await; }` sequence in both
+   tests. The yield loop lets tokio's single-threaded test
+   runtime actually reap the aborted drain task before session B
+   grabs the file lock. An in-crate test in `persistent.rs`
+   doesn't hit this because it never closes storage between
+   reopens — it reuses the same `Arc<dyn Storage>` throughout.
+
+   **Arc upcast for the dual-reference pattern.** `run_session`
+   wants `Arc<dyn AuditHook>`, but the test also needs a typed
+   `Arc<PersistentAuditLog>` for `.len()` and `.entries()` after
+   the turn completes. Solution: `let audit_typed =
+   Arc::new(persistent_audit); let audit_hook: Arc<dyn AuditHook>
+   = audit_typed.clone();` — Rust's `CoerceUnsized` for `Arc<T>`
+   → `Arc<dyn Trait>` does the upcast on the clone, and both
+   references share one refcount.
+
+   **Tests.** +2 tests; workspace 282 → 284. DESIGN.md
+   empty-diff streak preserved a **seventh** task in a row — no
+   changes to `DESIGN.md` or `crates/aivyx-core/src/lib.rs`, just
+   one new integration-test file.
 
 8. **Phase 7 exit.** Freeze `PHASE_7.md`, update `README.md` and
    `ROADMAP.md` for Phase 8, refine the Phase 8 entry with
@@ -899,12 +1002,22 @@ wiring; defer to Phase 8+ otherwise.
       +2 tests; workspace 280 → 282. DESIGN.md empty-diff streak
       preserved a sixth task in a row — no shared helper in
       `aivyx-core`, so D3 is untouched.)*
-- [ ] A scripted integration test
+- [x] A scripted integration test
       (`crates/aivyx-channel/tests/audit_persistence_e2e.rs`)
-      drives a two-session audit round-trip *and* reopens a
-      third session with a tampered audit state to assert the
-      chain-break detection fires with a specific
-      `at_seq`.
+      drives a two-session audit round-trip *and* asserts that a
+      direct-tamper negative flips the chain verifier to a
+      specific `ChainBroken { seq, .. }`. *(Task 7, 2026-04-14.
+      Shipped two `#[tokio::test]`s instead of the draft's
+      three-session shape — isolated tempdirs per test, no
+      shared mutable state. Positive test asserts the Level-3
+      entry shape across all 4 events plus the `prev_mac` chain
+      invariant. Negative test uses a decrypt-flip-re-put recipe
+      on seq 0 so the AEAD still validates but the HMAC replay
+      fails with `ChainBroken { seq: 0 }`. Draft variant name
+      `ChainBreak { at_seq }` corrected in the shipped record
+      to the Task 2 shape `ChainBroken { seq, reason }`. +2
+      tests; workspace 282 → 284. DESIGN.md empty-diff streak
+      preserved a **seventh** task in a row.)*
 - [ ] `cargo test --workspace` green.
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [ ] **Either** `DESIGN.md` is still unchanged (streak rolls to
