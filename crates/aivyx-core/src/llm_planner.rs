@@ -751,7 +751,7 @@ mod tests {
 
         let outcome = ToolOutcome::Denied {
             scope: Scope::parse("shell.exec:rm").unwrap(),
-            held: aivyx_capability::CapabilitySet::from_scopes([]),
+            held: aivyx_capability::CapabilitySet::empty(),
         };
         planner.observe_tool_outcome(tool_id, &outcome).await;
 

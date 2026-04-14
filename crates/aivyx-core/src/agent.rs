@@ -918,7 +918,7 @@ mod tests {
         let registry = Arc::new(ToolRegistry::new(Vec::new()));
         let agent = ConcreteAgent::new(
             AgentId::new(),
-            CapabilitySet::from_scopes([]),
+            CapabilitySet::empty(),
             registry,
             audit.clone(),
             || Box::new(HangingPlanner),
