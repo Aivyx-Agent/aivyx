@@ -25,83 +25,160 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 8 — Ecosystem: Telegram adapter
+## Phase 9 — refinements on the second-adapter pattern
 
-**Status:** Active — see [`PHASE_8.md`](PHASE_8.md).
+**Status:** Planned — Phase 8 closed 2026-04-14. Entry doc will
+scaffold at Phase 9 open from this roadmap entry.
 
-Telegram as the first non-local channel, on the back of Phase 7's
-hardening work.
+Phase 8 shipped `aivyx-telegram` as the second concrete
+`ChannelContext`, proving that the D2 trait and the D4 trust-tier
+ladder generalize beyond `LocalChannel`. Phase 9's job is to
+consolidate what Phase 8 learned about the **adapter seam** — the
+set of design choices Phase 8 made under time pressure that are
+worth revisiting now that there's a second data point — and to
+exercise the pattern on at least one additional axis. The goal is
+**not** "ship a third adapter" as a headline feature; the goal is
+"make sure the second-adapter pattern is the *right* pattern
+before a third one commits to it."
 
-Phase 7 shipped exactly the core surface a network-facing adapter
-needs: **persistent audit** (a bad message over an untrusted
-channel is still in the log tomorrow — `verify_from_disk` can
-reconstruct the full history across any restart), **memory size
-caps** (an attacker who floods the bot with "remember X" hits the
-per-topic tripwire instead of unbounded-allocating),
-**`chmod 0600` on the store file** (a shared Unix host can't read
-another aivyx user's session state), and **interactive passphrase
-prompting** (so the adapter process itself can't be the one that
-decides how to get the master key — it has to route through a
-human or env var at startup, not a network handler). All four of
-those are things "the core had to get right before the adapter
-could exist," and Phase 7 is the phase that finished fixing them.
+**What Phase 8 taught us about the adapter seam** (refined here
+rather than in PHASE_8.md to keep the phase doc frozen):
 
-The D2 `ChannelContext` trait and the trust-tier ladder
-(`Local` → `Trusted` → `Untrusted`) have been waiting for their
-second concrete adapter since Phase 3 shipped `LocalChannel`.
-Phase 8 is where that second adapter finally lands, and where the
-trust-tier ladder's second rung gets exercised end-to-end.
+- **Sibling `run_*_session` functions, not a shared trait.** Phase 8
+  Task 4 considered generalizing `aivyx_channel::run_session` to
+  take `&dyn ChannelContext` + an abstract input-source trait so
+  local + Telegram could share one function. We rejected that for
+  Phase 8 — the local and Telegram lifecycles differ enough
+  (pulled line-by-line vs. pushed long-poll batches) that
+  shoehorning them into one trait would invent an abstraction with
+  two implementations. The sibling pattern ships ~100 lines of
+  "duplicated" wiring per adapter and stays legible. **Phase 9
+  question:** does the pattern still hold with a third adapter,
+  or does the extraction finally earn its keep?
+- **Per-channel transport ownership.** `TelegramChannel` owns its
+  `Arc<dyn TelegramTransport>` and the session driver reaches
+  through the channel to get it, rather than the transport living
+  at the binary level. This lets the scripted-transport unit tests
+  in `src/tests.rs` drive the full session function without any
+  HTTP stack, which was the single most valuable test-architecture
+  decision of Phase 8. **Phase 9 question:** bake this pattern
+  into documentation / `cargo generate`-style scaffolding for a
+  third adapter, or let the next adapter re-derive it?
+- **`session_partition()` as the per-channel identity hook.** The
+  new `ChannelContext::session_partition() -> Option<String>`
+  method (Phase 8 Task 2, non-breaking default impl returning
+  `None`) threads per-chat identity through the tool layer via
+  `aivyx_memory::tools::namespaced_topic`. The partition boundary
+  is at the *tool*, not the *channel* or the *turn loop* —
+  `aivyx-core` stayed untouched through the whole change, which
+  is the signal that Option B was the right choice. **Phase 9
+  question:** does any other tool family (beyond memory) need
+  partition-awareness, and if so, is `namespaced_topic` the right
+  reusable primitive?
+- **Trust tier: `SemiTrusted`, not `Untrusted`.** The original
+  ROADMAP / PHASE_8 draft said Telegram was `Untrusted`. The
+  Phase 8 Task 1 correction — a Telegram chat is an authenticated
+  human on a remote channel, not an anonymous internet source —
+  is worth promoting to a D4 clarification in Phase 9 if the
+  distinction matters for a future adapter. **Phase 9 question:**
+  does the D4 trust-tier ladder need a fourth rung, or does
+  `SemiTrusted` cover the full "authenticated remote human"
+  space?
+- **Two open deferrals from Phase 8 that are implicitly Phase 9's
+  inheritance:** (a) `/cancel` in-band over Telegram, with a full
+  task sketch in PHASE_8.md Task 5's "Phase 9 task sketch"
+  subsection, and (b) multi-chat pumping (one aivyx process
+  serving multiple Telegram chats concurrently, instead of Phase
+  8's one-chat-per-channel simplification). Both need to be
+  weighed against any new third-adapter work at Phase 9 entry.
 
-**Why Telegram first over Matrix / Discord / Slack:** Telegram is
-the simplest credible non-local channel (long-poll or webhook, one
-auth token, small message model) and its trust-tier story is
-unambiguous — a Telegram bot is `TrustTier::Untrusted` by
-default and D4's capability attenuation falls naturally out of the
-existing tier table. Matrix is a more principled choice but has a
-larger protocol surface (federation, device verification, encrypted
-rooms) that would pull focus from the adapter pattern work.
-Discord and Slack have better UX but need OAuth flows that Phase 8
-shouldn't be the one to invent. Matrix / Discord / Slack adapters
-are explicit **Phase 9+** candidates, built on whatever shape
-Phase 8 hammers out for the *first* real `ChannelContext` impl.
+**Candidate Phase 9 deliverables** (weighed at Phase 9 entry, not
+committed here):
 
-What Phase 8 specifically has to figure out (these are the open
-questions that will become PHASE_8.md's entry-time Q list):
+1. **`/cancel` mid-turn over Telegram** (Phase 8 Q8 deferral) —
+   scan-poll `get_updates` alongside `agent.turn` with
+   `tokio::select!`, full task sketch in PHASE_8.md Task 5.
+2. **Multi-chat pumping** for `aivyx --channel telegram` — one
+   process, N chats, N channels, shared store and audit chain.
+3. **Matrix adapter** as the third `ChannelContext` — the
+   federation / encrypted-rooms story, with deliberate pressure
+   on the sibling `run_*_session` pattern to see whether a
+   third data point justifies extraction. Matrix was
+   explicitly Phase 9+ in the original Phase 8 non-goals.
+4. **Desktop GUI** — the other end of the trust-tier ladder
+   (`TrustTier::Trusted` via local IPC / socket, no network).
+   A different shape entirely from Telegram, which is why it's
+   the interesting stress test for the adapter pattern.
+5. **`aivyx-config`** — a unified config-source layer (env vars,
+   TOML file, `KeyDomain::Secrets`) that Phase 8's env-var
+   sprawl (`ANTHROPIC_API_KEY`, `AIVYX_PASSPHRASE`,
+   `AIVYX_TELEGRAM_TOKEN`, `AIVYX_TELEGRAM_CHAT_ID`,
+   `AIVYX_STORAGE_PATH`, `AIVYX_MEMORY_MAX_PER_TOPIC`) implicitly
+   argues for.
 
-1. **Where does the Telegram bot token live?** Env var
-   (`AIVYX_TELEGRAM_TOKEN`), a row under `KeyDomain::Secrets`, or
-   a flag passed at startup? Each has a different recovery story
-   if the token leaks.
-2. **Per-chat session identity.** One aivyx store per bot, or one
-   store shared across all chats with `session:<chat_id>`
-   qualifiers on memory/audit events? This is the first phase
-   where "multi-user, one process" is a real shape, and it
-   determines whether the Phase 7 "session-scoped memory
-   qualifiers" deferral lands in Phase 8 or slips again.
-3. **Scope attenuation at the channel boundary.** An `Untrusted`
-   channel must narrow the capability set before the turn loop
-   sees the request. Where does the narrowing live — at the
-   adapter, at the `ChannelContext` trait, or at a new
-   `TrustTierPolicy` helper? D4's tier table specifies the
-   *ratios* but not the *mechanism*.
-4. **Long-poll vs webhook.** Long-poll is simpler for dev boxes
-   and CI; webhook is the real-world deployment shape. Start
-   with long-poll, or design for webhook from day one?
-5. **Turn cancellation across the network.** Phase 3's wall-clock
-   cancellation assumes `stdin` as the cancel signal. A Telegram
-   turn doesn't have `stdin`; what maps to `ctrl-C`?
+Phase 9 entry will pick which of these to commit to. The pattern
+from Phases 5 → 6 → 7 → 8 is that each phase's exit reveals the
+sharp edges on the *next* phase's placeholder, and Phase 9's
+entry scaffold will refine this list based on whatever we notice
+in the ~week between Phase 8 close and Phase 9 open.
 
-Full task breakdown, entry criteria, and open-question resolutions
-live in PHASE_8.md when that scaffolds at Phase 8 open.
+## Channel Activation Milestone — operator verification across all channels
 
-## Phase 9+ — second-adapter surface + whatever Phase 8 uncovers
+**Status:** Scheduled after the Phase sequence closes. Not a
+numbered phase.
 
-Deliberately ambiguous until Phase 8 closes. Candidates:
-**Matrix adapter** (the federation story, encrypted rooms),
-**desktop GUI** (the other end of the trust-tier ladder —
-`Trusted` instead of `Untrusted`), and any **`aivyx-config`**
-work that Phase 8's multi-source secrets pulls forward. The
-pattern from Phases 5 → 6 → 7 is that each phase's exit reveals
-the sharp edges on the *next* phase's placeholder; Phase 9's
-entry will refine this list based on what the Telegram adapter
-taught us about the trust-tier and channel-context contracts.
+The Channel Activation Milestone is a dedicated operator-
+verification pass that runs **after** the architectural phase
+sequence is complete. Its job is to take every channel adapter
+that has shipped by that point (`aivyx-telegram` from Phase 8,
+and whatever other adapters land in Phase 9+) and run each one
+end-to-end against its **real** protocol, credentials, and
+network — as a single coherent batch rather than as a per-phase
+manual smoke test at each adapter's ship time.
+
+**Why batched rather than per-phase:** manual operator smoke
+tests each carry their own credential-juggling tax (BotFather
+setup, chat_id discovery, env-var hygiene, real-network latency,
+flaky CI hooks). Running them once at the end against a full
+adapter matrix is cheaper than running them N times during the
+phase sequence, and it catches **cross-adapter interaction**
+bugs (e.g., a single audit chain written to by both a local turn
+and a Telegram turn, `--verify-only` reporting the combined
+count) that per-phase tests structurally can't.
+
+**What the milestone contains:**
+
+1. **Phase 8 Task 7** (deferred): real-bot Telegram smoke test —
+   BotFather setup, `--channel telegram` launch, two-message
+   persistent-memory round trip across a process restart,
+   `--verify-only` forensic walk confirming the cross-restart
+   audit chain is intact. The six-step runbook was drafted
+   during the Phase 8 working session and will be re-scaffolded
+   into the milestone doc when it opens.
+2. **Any real-protocol smoke test** for channel adapters that
+   ship during Phase 9 and later. Each future adapter brings
+   its own scripted-transport unit test suite (like Phase 8
+   `aivyx-telegram`'s `run_telegram_session_two_chats_persistent
+   _e2e`) and **defers** its real-protocol verification to this
+   milestone.
+3. **Cross-channel regression sweep:** one local turn + one
+   Telegram turn + one-of-each-other-adapter turn against the
+   **same** persistent audit chain, then `aivyx --verify-only`
+   reporting a combined event count. This is the Phase 8 exit
+   criterion rewritten to be N-channel rather than Telegram-
+   specific.
+
+The milestone is **not** a phase because it ships no code and
+revises no architecture — it's a scheduled operator pass that
+either passes (all channels live, cross-channel sweep green)
+or produces a list of regressions that open as tickets against
+the individual adapter crates. It runs when the Phase sequence
+is complete enough that operator verification is worth the
+setup cost, which is a judgement call to be made at the time.
+
+## Phase 10+ — open
+
+Deliberately ambiguous until Phase 9 closes. The pattern of
+one-paragraph placeholders refined at each phase exit holds
+here: whatever Phase 9 teaches us about the adapter pattern
+(or fails to teach us) will shape the Phase 10 entry.

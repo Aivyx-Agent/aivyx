@@ -38,7 +38,7 @@ doc.
 | Phase 5  | Frozen  | [PHASE_5.md](PHASE_5.md)   | `6dab2a7` |
 | Phase 6  | Frozen  | [PHASE_6.md](PHASE_6.md)   | `912f022` |
 | Phase 7  | Frozen  | [PHASE_7.md](PHASE_7.md)   | `8164317` |
-| Phase 8  | Active  | [PHASE_8.md](PHASE_8.md)   | —         |
+| Phase 8  | Frozen  | [PHASE_8.md](PHASE_8.md)   | `0484606` |
 | Phase 9+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
 Frozen means the phase doc is no longer edited except through commits

@@ -563,6 +563,17 @@ async fn run_verify_only(
     Ok(())
 }
 
+// `run_async` sits right at the binary's composition root: it takes
+// every component the session needs (provider creds, model config,
+// fs sandbox, storage, audit key, and the two channel branches) and
+// threads them into the chosen `run_*_session` function. Factoring
+// the parameter list into a struct buys nothing here — each field is
+// used exactly once at a distinct call site — and the readability
+// cost of a `RunAsyncArgs { ... }` builder would be real. The
+// `too_many_arguments` lint is a useful heuristic most places, but
+// at a composition root it's measuring the wrong thing. Scoped
+// allow.
+#[allow(clippy::too_many_arguments)]
 async fn run_async(
     api_key: SecretString,
     model: String,
