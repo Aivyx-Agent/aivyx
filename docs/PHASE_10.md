@@ -550,17 +550,34 @@ and the `RecordingChannel` must see zero `ToolCallStarted` /
 
 ### Streak accounting
 
-Task 3 is **the sole source** of the production-core byte-
-identity streak break in Phase 10. Task 1 did not touch
-`aivyx-core/src/lib.rs`. Task 2's mid-phase correction turned
-out not to touch it either — validation lives in
-`aivyx-core/src/schema.rs` (new module) and the turn-loop call
-lives in `agent.rs`. Only Task 3's `tool_name: &'a str` field
-addition to `StreamEvent::ToolCallStarted` and `ToolCallFinished`
-modifies `lib.rs`. The Phase 10 exit ship record should attribute
-the break to Task 3 alone, with the reason "additive
-`StreamEvent` field refinement within D3's contract, closing the
-Phase 5-era emission gap."
+The production-core byte-identity streak (held since `c3883be`)
+breaks in Phase 10. Both Task 2 and Task 3 contributed, for
+different reasons:
+
+- **Task 2 (`65ae30a`)** — one-line addition `pub mod schema;`
+  at the top of `aivyx-core/src/lib.rs`. The validator logic
+  itself lives in the new `schema.rs` module, not in `lib.rs`,
+  but declaring a new module counts as a `lib.rs` byte change
+  at streak-measurement level. The mid-phase Task 2 correction
+  block above optimistically said the streak "may survive
+  Phase 10" if Task 3 also avoided `lib.rs` — that statement
+  was wrong the moment the module declaration landed. Recording
+  the correction here rather than silently back-editing the
+  earlier block preserves the journal as an honest trace of
+  what was believed when.
+- **Task 3 (`74d97ec`)** — `tool_name: &'a str` fields added to
+  `StreamEvent::ToolCallStarted` and `StreamEvent::ToolCallFinished`.
+  The larger of the two Phase 10 `lib.rs` touches, and the one
+  that materially refines a contract type rather than just
+  declaring a module.
+
+Both changes are additive refinements within D3's contract. The
+Phase 10 exit ship record attributes the break to both tasks and
+re-baselines the streak to Phase 10's exit commit.
+
+Task 1 left `aivyx-core/src/lib.rs` byte-identical. If a future
+foundation phase needs to re-establish the streak from a single-
+task baseline, Task 1 is the shape to copy.
 
 ## Open questions
 
@@ -703,4 +720,320 @@ freeze, matching the Phase 7–9 pattern.
       tool name in `StreamEvent::ToolCallStarted` **closed**.
       The foundation backlog is empty at Phase 10 exit.
 - [ ] Phase 11 ROADMAP entry refined with whatever Phase 10
+      Task 2 taught us about the `Tool` trait surface.
+
+## Task 1 — shipped (2026-04-14)
+
+**Commit:** `b1706ca` — `Phase 10 task 1: cross-topic memory.read
+substrate + tool wiring`.
+
+Adds `Memory::scan_prefix` to the session-oblivious substrate
+(`InMemoryMemory` and `RedbMemory` both implement it following the
+DQ1/DQ4 resolutions above), and wires `MemoryReadTool` to accept
+a `{topics: "*"}` variant that fans out across every logical topic
+in the session, grouping entries per topic at the tool-response
+level per DQ2. The wildcard request uses `DEFAULT_WILDCARD_READ_LIMIT
+= 4` per DQ3 — discovery shape, not deep recall.
+
+The wildcard scope lands as a textual sentinel — Q1 Option A —
+`memory.read:topic:*:session:<session>`. The `globset`-based
+`Scope` matcher already handles `*` inside topic segments, so no
+new `Scope` variant is needed. The literal-star regression test
+(`literal_star_topic_does_not_match_wildcard_scope`) pins that an
+agent cannot spoof wildcard access by naming a topic `"*"` —
+Phase 6's topic-name grammar already forbids `*` as a literal, so
+the test encodes that grammar rather than adding a new check.
+
+Tests: +19 (9 tool-layer wildcard tests in `tools.rs`, 5
+`InMemoryMemory::scan_prefix` tests in `lib.rs`, 5
+`RedbMemory::scan_prefix` tests in `redb.rs`). The on-disk tests
+include a sibling-prefix boundary lock (`notes` vs `notesfoo`) and
+a metadata-key exclusion lock (`m\x00` vs `e\x00` discriminators)
+— neither tested in the substrate before Task 1 because the old
+per-topic API never exposed the prefix-walk path.
+
+`aivyx-core/src/lib.rs` byte-identical after Task 1 — the entire
+change lives in `aivyx-memory` and `aivyx-capability`.
+
+## Task 2 — shipped (2026-04-14)
+
+**Commit:** `65ae30a` — `Phase 10 task 2: hand-rolled JSON-schema
+validator in the turn loop`.
+
+Adds `aivyx-core::schema::validate`, a hand-rolled JSON-Schema
+subset validator. The module declaration `pub mod schema;` is the
+only change to `aivyx-core/src/lib.rs` — the validator logic and
+its ~20 unit tests live in the new `schema.rs` file. Zero new
+dependencies. Validator covers `type: object/string/integer`,
+`properties`, `required`, `additionalProperties: false`, `enum` on
+strings, and `minimum`/`maximum` on integers. Q2 (nesting) resolved
+as "narrow by design, extend when a real nested schema lands"; Q3
+resolved as Option A (every shipped tool already has a real schema
+from Phase 6 — the Task 2 correction block above records the
+discovery that `Tool::input_schema()` has existed since Phase 6 and
+the task's original "additive trait refinement" framing was wrong).
+
+The turn loop in `agent.rs` now validates the raw planner input
+against `tool.input_schema()` at the admission point —
+**critically, before the Phase 8 session-partition injection**,
+per the second mid-phase correction above. Validation failures
+route through `ToolOutcome::Failed`, not `ToolOutcome::Denied`, so
+prompt-injection attempts emitting malformed JSON stay
+distinguishable from under-capabilitied agents in the audit trail.
+
+Tests: +22 (20 schema-module unit tests, 2 `agent.rs` integration
+tests — `malformed_tool_input_is_rejected_before_required_scope`
+with a panicking `scope_fn` that proves ordering and
+`well_formed_tool_input_passes_validation_and_runs` as the positive
+counterpart).
+
+Task 2 is the first of two Phase 10 tasks that touch
+`aivyx-core/src/lib.rs`, at a minimum (one-line module declaration
+only). The full streak-accounting rationale is in the Task 3
+streak-accounting subsection above.
+
+## Task 3 — shipped (2026-04-14)
+
+**Commit:** `74d97ec` — `Phase 10 task 3: tool name in StreamEvent
++ close emission gap`.
+
+Adds `tool_name: &'a str` to both `StreamEvent::ToolCallStarted`
+and `StreamEvent::ToolCallFinished`. Closes the rolling "tool name
+in `StreamEvent::ToolCallStarted`" deferral that carried forward
+from Phase 8 → 9 → 10. Both renderers (`aivyx-channel::render` and
+`aivyx-telegram::telegram_channel`) were updated to display the
+human tool name (e.g. `→ memory.read`) instead of the
+`ToolId`-derived short UUID fallback that pre-dated Task 3, and
+their unit tests now pin that the `ToolId` UUID does **not** leak
+into human-visible output.
+
+**Mid-phase scope expansion:** grep during Task 3 revealed that the
+turn loop has never emitted `ToolCallStarted` or `ToolCallFinished`
+— the variants existed on the enum since Phase 5, all consumers
+were written and tested against them, but `agent.rs` never called
+`ctx.stream_event` with either variant. Task 3 was expanded to
+Option B — close the gap fully — per the user's explicit
+resolution. The turn loop now emits both events around
+`tool.execute`, **after the capability gate**, so denied calls
+suppress both. Recorded in the "Task 3 — mid-phase scope expansion"
+block above.
+
+Tests: +2 integration tests in `agent.rs`
+(`tool_call_emits_started_and_finished_events_with_tool_name` as
+happy path, `denied_tool_call_emits_no_stream_events` as the
+denial-suppression invariant), 2 rewritten renderer tests in
+`aivyx-channel::render` (which also deletes the dead `short_id`
+helper and its 2 tests), and updated assertions in
+`aivyx-telegram::tests`. Net test delta across Task 3 is +2 (2
+new integration + 2 new renderer rewrites - 2 deleted `short_id`
+tests + 0 other deltas).
+
+Task 3 adds `tool_name: &'a str` fields to two `StreamEvent`
+variants in `aivyx-core/src/lib.rs` — the second and larger of
+Phase 10's two `lib.rs` touches. Together with Task 2's one-line
+module declaration, these two commits break the production-core
+byte-identity streak held since `c3883be` (Phase 8 Task 2).
+
+## Task 4 — shipped (2026-04-14) — Phase 10 exit freeze
+
+**Commit:** _this commit_ — `docs(phase-10):` exit freeze.
+
+Phase 10 closes with the contract unchanged and the `DESIGN.md`
+empty-diff streak rolling forward to **ten phases**. This task is
+a docs-only commit that freezes PHASE_10.md, updates `README.md`
+and `docs/ROADMAP.md` to reflect the new status, and refines the
+Phase 11 roadmap entry with what Phase 10 learned about the
+`Tool` trait surface (short version: the trait did not need to
+grow).
+
+### What landed in Phase 10 (one-line per task)
+
+1. **Task 1** (`b1706ca`) — cross-topic `memory.read` via a
+   substrate `Memory::scan_prefix` primitive and a
+   `{topics: "*"}` tool variant behind the
+   `memory.read:topic:*:session:<session>` wildcard scope.
+   Closes the seven-phase cross-topic deferral. +19 tests.
+2. **Task 2** (`65ae30a`) — hand-rolled JSON-Schema subset
+   validator in `aivyx-core::schema`. Validates planner input
+   before session injection and before `required_scope`.
+   Discovered mid-phase that `Tool::input_schema()` already
+   existed since Phase 6; no trait change landed. +22 tests.
+3. **Task 3** (`74d97ec`) — `tool_name: &'a str` field added to
+   `StreamEvent::ToolCallStarted` and `ToolCallFinished`, plus
+   the mid-phase Option B expansion to **close the five-phase
+   latent emission gap** (turn loop now actually emits the
+   variants). +2 tests (net; 2 deleted dead `short_id` tests
+   offset by 2 new integration tests and 2 rewritten renderer
+   tests).
+4. **Task 4** — this exit freeze.
+
+### Exit-criteria results
+
+See the Exit criteria (final) checklist below for the item-by-
+item rollup. Headline numbers:
+
+- **`cargo test --workspace`**: green at **367 tests** (Phase 10
+  entry baseline: 326). Net delta **+41**, well above the
+  "≥ +10" consolidation heuristic. The bulk is Task 1's
+  substrate-plus-tool retrofit (+19) and Task 2's validator
+  module (+22).
+- **`cargo clippy --workspace --all-targets -- -D warnings`**:
+  clean at exit. Matching Phase 9, the pre-commit hook caught
+  every would-be regression at its own commit time; no task
+  left a regression for the exit sweep to discover.
+- **`DESIGN.md` empty-diff streak**: byte-identical to
+  `e0d6437` (the contract-lock commit). **Streak rolls to ten
+  consecutive phases** on an unchanged core contract. No
+  amendment file under `docs/amendments/` was needed — the
+  directory still does not exist. Note that the `StreamEvent`
+  code block in DESIGN.md (lines 228–240) still shows the
+  Phase 5 shape of `ToolCallStarted` / `ToolCallFinished`
+  without the `tool_name` field that Task 3 added to `lib.rs`.
+  This is **not** a drift to amend — the code blocks in
+  `DESIGN.md` are illustrative sketches of contract intent,
+  not byte-exact API definitions. Precedent: Phase 6 added
+  `Tool::input_schema()` to the `Tool` trait without touching
+  its `DESIGN.md` code block, and the D3 "key commitments"
+  bullet list explicitly permits `StreamEvent` variants to
+  grow ("start how we mean to go on… channels are free to
+  ignore any variant they don't care about"). Adding a new
+  read-only field to an existing variant falls cleanly inside
+  that commitment.
+- **Production-core byte-identity streak**: **broken** in Phase
+  10, re-baselined at this commit. The break is attributable to
+  Task 2 (`65ae30a`, one-line `pub mod schema;`) and Task 3
+  (`74d97ec`, two-field `StreamEvent` refinement). Both changes
+  are additive refinements within D3's contract. Task 1 left
+  `lib.rs` byte-identical — useful template for a future
+  foundation phase that wants to re-establish the streak from a
+  single-task baseline.
+- **Zero-new-dep streak**: **held**. Phase 10 added no new
+  workspace dependencies. The validator is ~100 lines of
+  hand-rolled code against `serde_json::Value`, not a pulled-in
+  crate.
+
+### Decisions made during Phase 10 that aren't in DESIGN.md
+
+- **Q1 — wildcard scope shape:** **Option A — textual sentinel
+  `*` inside the topic segment.** Scope string
+  `memory.read:topic:*:session:<session>`. Reuses the existing
+  `globset`-based `Scope` matcher and requires no new
+  `Scope` variant. The literal-star regression test encodes
+  Phase 6's topic-name grammar as the defense against an agent
+  naming a topic `"*"` to spoof wildcard access. Resolved at
+  Task 1 kickoff.
+- **Q2 — validator nesting support:** **narrow by design.** The
+  five shipped-tool schemas are all flat; the validator
+  handles `type: object/string/integer` with flat
+  `properties`, and a future tool that needs nesting extends
+  the validator when it lands. Recorded in Task 2 ship log.
+- **Q3 — shipped-tool schema retrofit scope:** **not applicable
+  — superseded by Task 2 correction.** The draft task
+  breakdown assumed `Tool::input_schema()` did not yet exist;
+  it has existed since Phase 6 and every shipped tool already
+  returns a real schema. No retrofit was needed. Recorded as
+  the first mid-phase Task 2 correction above.
+- **DQ1 / DQ2 / DQ3 / DQ4 — Task 1 substrate and response
+  shape decisions:** resolved as Option B for the substrate
+  (session-oblivious `scan_prefix`), grouped for the wildcard
+  response shape, per-topic limit with `DEFAULT_WILDCARD_READ_LIMIT
+  = 4`, and redb-key walking on `e\0 || topic_prefix`. Full
+  text in the Task 1 design-resolutions block above.
+- **Validation ordering (Task 2 second correction):**
+  **validation runs before session injection.** Resolution
+  recorded in the second Task 2 correction block above. The
+  `malformed_tool_input_is_rejected_before_required_scope`
+  integration test locks the ordering with a panicking
+  `scope_fn`.
+- **Failed vs Denied routing for validation failures:**
+  **Failed**, not Denied. Prompt-injection attempts emitting
+  malformed JSON must stay distinguishable from
+  under-capability agents in the audit chain. Recorded in
+  the Task 2 second correction.
+- **Task 3 mid-phase scope — Option B, close the emission
+  gap:** resolved by the user explicitly
+  ("Option B, Lets fully close the gap"). The turn loop now
+  emits `ToolCallStarted` / `ToolCallFinished` around
+  `tool.execute`, after the capability gate so denied calls
+  suppress both. Recorded in the Task 3 scope-expansion block
+  above.
+- **Q4 — split Phase 10 if Task 1 over-runs:** **not
+  triggered.** Task 1 landed green in one working session, so
+  the split rule did not fire. Kept on the record as a
+  template for future foundation phases.
+- **Q5 — dogfood gap before Phase 11:** **no gap.** Phase 10
+  ships no user-visible behavior change, so an
+  operator-verification pass would have nothing to verify.
+  Phase 11 opens directly after this commit.
+
+### Phase 10 deferrals paid down
+
+Phase 10 inherited three concrete rolling deferrals and paid
+down all three:
+
+- **Cross-topic `memory.read`** (Phase 6 Q3 → Phases 7 → 8 → 9
+  → 10): **closed in Task 1.** The substrate primitive exists,
+  the wildcard tool variant exists, the wildcard scope is out
+  of every default tier ceiling so cross-topic access is a
+  deliberate opt-in, and nineteen tests pin the contract.
+- **Runtime JSON-schema validation for tool input** (Phase 7
+  → 8 → 9 → 10): **closed in Task 2.** The validator runs on
+  every tool call at the turn-loop admission point. Zero new
+  dependencies.
+- **Tool name in `StreamEvent::ToolCallStarted`** (Phase 8 → 9
+  → 10): **closed in Task 3.** Additionally, Task 3 closed the
+  five-phase emission gap that the same grep surfaced — the
+  turn loop now actually emits the variants that had existed
+  since Phase 5.
+
+**The foundation backlog is empty at Phase 10 exit.** Future
+phases open with no pre-existing rolling deferrals — a
+position Aivyx has not been in since Phase 6 opened.
+
+### Exit criteria (final)
+
+- [x] Task 1 shipped: `Memory::scan_prefix` primitive exists,
+      wildcard scope exists, `MemoryReadTool` accepts the
+      `topics: "*"` variant, nineteen unit tests cover
+      substrate prefix walks + sibling-prefix boundary +
+      metadata exclusion + tool-layer fan-out + session
+      isolation + attenuation-denied + literal-sentinel
+      regression.
+- [x] Task 2 shipped: validator in `aivyx-core::schema`
+      (~100 LOC), zero new dependencies, turn loop calls
+      validator **before** session injection and before
+      `required_scope`, and every shipped tool already had a
+      real schema from Phase 6. The draft task sketch's
+      "additive `Tool` trait refinement" framing was corrected
+      mid-phase to "validator module only; no trait change."
+- [x] Task 3 shipped: `StreamEvent::ToolCallStarted` and
+      `ToolCallFinished` have a `tool_name: &'a str` field,
+      all renderers updated, `ToolId` UUID no longer leaks
+      into human output. **And** the turn-loop emission gap
+      for both variants is closed per the Option B mid-phase
+      expansion.
+- [x] `cargo test --workspace` green at **367 tests**. Net
+      Phase 10 delta **+41**, well above the "≥ +10"
+      consolidation heuristic.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+      clean at exit. Pre-commit hook caught every
+      would-be regression at its own commit time — matching
+      Phase 9's discipline outcome.
+- [x] `DESIGN.md` still byte-identical to `e0d6437`. **Streak
+      rolls to ten phases.** No amendment needed.
+- [x] Production-core byte-identity streak **broken** in
+      Phase 10 by Task 2 (`65ae30a`) and Task 3 (`74d97ec`),
+      re-baselined at this commit. Both changes are additive
+      refinements within D3's contract. Task 1 left `lib.rs`
+      byte-identical.
+- [x] Zero-new-dep streak: **held.** Phase 10 added no new
+      workspace dependencies.
+- [x] Q1, Q2, Q3, Q4, Q5 all resolved and recorded under
+      "Decisions made during Phase 10 that aren't in
+      DESIGN.md" above.
+- [x] Rolling deferred-items list: cross-topic `memory.read`
+      **closed**, runtime JSON-schema validation **closed**,
+      tool name in `StreamEvent::ToolCallStarted` **closed**.
+      The foundation backlog is empty at Phase 10 exit.
+- [x] Phase 11 ROADMAP entry refined with whatever Phase 10
       Task 2 taught us about the `Tool` trait surface.

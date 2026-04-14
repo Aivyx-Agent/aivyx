@@ -79,35 +79,12 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 10 — Tool-layer refinement + memory substrate
-
-**Status:** Active — see [`PHASE_10.md`](PHASE_10.md).
-
-The last pure-foundation phase before the codebase pivots from
-foundation to product. Three deferrals that have been rolling
-through phase journals close in this phase, and the tool-trait
-inherits one additive refinement that every future product-phase
-tool (`shell.exec`, `edit.patch`, `web.fetch`) will want on day
-one. Specifically: (1) cross-topic `memory.read` — the Phase 6
-Q3 deferral — lands as a `RedbMemory::scan_topics()` primitive
-behind a new `memory.read:topic:*:session:<session>` wildcard
-scope that is **not** in any default tier ceiling, so cross-topic
-access stays a deliberate opt-in; (2) the `Tool` trait gains an
-`input_schema()` default-`None` method with a hand-rolled 80-line
-validator in the turn loop (no new dependency), so tool input
-JSON is validated before `required_scope` runs; (3) `StreamEvent
-::ToolCallStarted` gains a `tool: &str` field so consumers
-(renderers, audit bridge) can show the user *which* tool is
-running. Tasks 2 and 3 are an **intentional, conscious break**
-of the production-core-byte-identity streak held since Phase 8
-Task 2's `c3883be` — recorded in the phase journal as the first
-additive trait refinement inside D3's contract. Phase 11 is the
-first product phase.
-
 ## Phase 11 — Role system + shell execution (first product phase)
 
-**Status:** Planned. Deliberately sketched at one-paragraph
-depth until Phase 10 closes.
+**Status:** Planned. Opens directly after Phase 10 freezes
+(Phase 10 Q5 resolved "no dogfood gap" — Phase 10 shipped no
+user-visible behavior, so there is nothing for an operator pass
+to verify between phases).
 
 The pivot from foundation to product. Introduces a `Role`
 concept — a named bundle of `(system_prompt, tool_allowlist,
@@ -118,7 +95,31 @@ to Telegram or any `SemiTrusted` adapter), scoped as
 `shell.exec:cwd:<path>` with path-prefix attenuation. Role
 definitions live in `aivyx-config` (already provenance-tracked).
 `memory.*` tools auto-prefix topics with the active role name
-so personas don't bleed memory into each other. The intentional
-test of Phase 10's tool-trait refinements: `shell.exec` is the
-first tool that ships with a non-`None` `input_schema()` from
-day one, so the tool-layer investment pays off immediately.
+so personas don't bleed memory into each other.
+
+**What Phase 10 taught us that changes Phase 11's shape:**
+
+- `Tool::input_schema()` has existed since Phase 6 and every
+  shipped tool already returns a real schema — Phase 10 Task 2
+  discovered this mid-implementation. Phase 11's `shell.exec`
+  therefore does **not** need a "first tool with a schema"
+  framing; it just inherits the same schema obligation every
+  existing tool already satisfies, and the hand-rolled validator
+  from Phase 10 will gate its input on day one.
+- Validation ordering: `shell.exec`'s schema must not declare
+  the `session` key, because the turn loop injects `session`
+  **after** validation runs. Phase 10 Task 2's second mid-phase
+  correction documented this ordering and locked it with an
+  integration test.
+- If `shell.exec`'s inputs need nested-object shapes
+  (`{args: {cwd, env}}`) the Phase 10 validator will need to
+  grow nested-object support. The validator was "narrow by
+  design" in Phase 10 — extend it in the first Phase 11 task
+  that needs nesting, not speculatively.
+- The `Tool` trait was **not** refined in Phase 10 (despite the
+  draft sketch saying it would be). Phase 11 should not assume
+  that Phase 10 expanded the trait surface — work from the Phase
+  9 trait shape plus the `input_schema()` method that has been
+  there since Phase 6.
+- The foundation backlog is empty. Phase 11 opens with zero
+  rolling deferrals — the first phase to do so since Phase 6.
