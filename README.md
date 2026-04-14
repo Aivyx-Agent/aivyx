@@ -58,6 +58,19 @@ records, see [`docs/`](docs/README.md). The Channel Activation
 Milestone (operator verification of all channel adapters shipped
 by Phase 8 and later) runs after the Phase sequence closes.
 
+## Contributing
+
+After cloning, run the pre-commit hook installer once:
+
+```
+./scripts/install-hooks.sh
+```
+
+This copies `scripts/pre-commit.sh` into `.git/hooks/pre-commit`. The
+hook runs `cargo clippy --workspace --all-targets -- -D warnings`
+before every commit, enforcing the per-task `-D warnings` policy
+Phase 8 Task 8 established. See `docs/PHASE_9.md` Q4 for the rationale.
+
 ## License
 
 Code is MIT-licensed. See [LICENSE](LICENSE). The "Aivyx" name and

@@ -54,6 +54,13 @@ aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
 # history stays readable.
 aivyx-telegram = { path = "../aivyx-telegram" }
 
+# Phase 9 Task 3 — unified config loader. The binary's ten
+# `std::env::var` call sites collapse into a single
+# `AivyxConfig::load_from_env_and_toml` + `hydrate_secrets_from_store`
+# pair. Binary-only: `aivyx-channel`'s library target has nothing
+# to configure, so this dep does not leak to library consumers.
+aivyx-config = { path = "../aivyx-config" }
+
 # Phase 6 task 4 — the binary constructs a `RedbMemory` from the
 # same `Arc<dyn Storage>` it already opens for the session marker,
 # wraps it in `Arc<dyn Memory>`, and registers the three

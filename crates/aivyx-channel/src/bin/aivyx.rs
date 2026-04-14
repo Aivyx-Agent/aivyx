@@ -99,30 +99,38 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use secrecy::SecretString;
+// Phase 9 Task 3 — `SecretString` no longer lives on the binary's
+// surface: all secrets are owned by `aivyx_config::SourcedSecret`
+// now, and the one production site that needed `.expose_secret()`
+// (the Telegram token handoff) still imports the trait inline at
+// the call site.
 
 use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
+use aivyx_config::{AivyxConfig, FieldSource, LoadOptions};
 use aivyx_core::{
     AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
     Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory,
-    DEFAULT_MAX_PER_TOPIC,
 };
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 use aivyx_telegram::{run_telegram_multi_session, TelegramSessionConfig};
 
-const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
-const DEFAULT_SYSTEM_PROMPT: &str =
-    "You are Aivyx, a terse and thoughtful assistant running in a local terminal.";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
+
+/// Default path the binary looks at for the TOML config file.
+/// `./aivyx.toml` relative to the current working directory — present
+/// if the operator has written one, silently ignored if not. Absolute
+/// or elsewhere paths belong in `$AIVYX_CONFIG_PATH` (future amendment)
+/// or just be driven via env vars.
+const DEFAULT_TOML_PATH: &str = "aivyx.toml";
 
 fn main() -> ExitCode {
     match run() {
@@ -144,87 +152,46 @@ fn run() -> Result<(), String> {
         channel: channel_kind,
     } = parse_cli_args()?;
 
-    // ---- Telegram config (if selected) --------------------------------
-    // Resolve Telegram env vars at startup so a missing token fails
-    // before we touch the storage layer or derive a master key. Same
-    // failure-fast principle as the `ANTHROPIC_API_KEY` check below.
-    //
-    // Q1 (PHASE_8.md) resolved: the token lives in the environment as
-    // `AIVYX_TELEGRAM_TOKEN`. The alternative of storing it under
-    // `KeyDomain::Secrets` was considered and deferred to Phase 9, at
-    // which point the binary will grow a `aivyx secrets set` surface.
-    //
-    // `AIVYX_TELEGRAM_CHAT_ID` was required in Phase 8 (one-channel-
-    // per-chat). Phase 9 Task 2 makes it **optional**: when set, the
-    // multi-chat multiplexer filters inbound updates to that single
-    // chat (Phase 8 compatibility — the bot only responds to the one
-    // allowed chat); when unset, the multiplexer accepts every chat
-    // the bot is in and lazy-spawns a per-chat session task for each.
-    let telegram_cfg: Option<(SecretString, Option<i64>)> =
-        if matches!(channel_kind, ChannelKind::Telegram) {
-            let token_raw = std::env::var("AIVYX_TELEGRAM_TOKEN").map_err(|_| {
-                "AIVYX_TELEGRAM_TOKEN is not set. Export it and retry: \
-                 `export AIVYX_TELEGRAM_TOKEN=<bot-token-from-@BotFather>`"
-                    .to_string()
-            })?;
-            let chat_filter: Option<i64> = match std::env::var("AIVYX_TELEGRAM_CHAT_ID") {
-                Ok(raw) => {
-                    let chat_id: i64 = raw.parse().map_err(|e| {
-                        format!(
-                            "AIVYX_TELEGRAM_CHAT_ID is set to {raw:?} which is not a valid i64: {e}"
-                        )
-                    })?;
-                    Some(chat_id)
-                }
-                Err(_) => None,
-            };
-            Some((SecretString::from(token_raw), chat_filter))
-        } else {
-            None
-        };
-
     // ---- Config -------------------------------------------------------
-    // `ANTHROPIC_API_KEY` is only required for the normal session path.
-    // Verify-only mode is a read-only forensic surface and must not
-    // depend on the cloud key being present.
-    let api_key_for_session: Option<SecretString> = if verify_only {
-        None
-    } else {
-        let raw = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-            "ANTHROPIC_API_KEY is not set. Export it and retry: \
-             `export ANTHROPIC_API_KEY=sk-ant-...`"
-                .to_string()
-        })?;
-        Some(SecretString::from(raw))
+    // Phase 9 Task 3 — the whole "read ten env vars by hand" block that
+    // Phases 3 through 8 accreted is now a single call into
+    // `aivyx_config::AivyxConfig::load_from_env_and_toml`. Env vars
+    // keep their Phase 8 names (operators re-exporting them need no
+    // change), and a new optional `./aivyx.toml` file lives between
+    // env and the encrypted store in the fall-through chain.
+    //
+    // `require_*` flags are derived from the CLI-arg decisions so the
+    // validator's error messages land at the right point: verify-only
+    // does not need `ANTHROPIC_API_KEY`, so the loader does not demand
+    // it; `--channel telegram` does need `AIVYX_TELEGRAM_TOKEN`, so a
+    // missing token surfaces as a clean `ConfigError::Missing` instead
+    // of a Frankenstein "invalid request" on the first HTTP call.
+    let load_opts = LoadOptions {
+        toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
+        require_api_key: !verify_only,
+        require_telegram_token: matches!(channel_kind, ChannelKind::Telegram),
     };
+    let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
 
-    let model = std::env::var("AIVYX_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    let system_prompt = std::env::var("AIVYX_SYSTEM_PROMPT")
-        .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string());
-
-    // Sandbox root for the filesystem tools. `AIVYX_FS_ROOT` overrides;
-    // otherwise default to `$HOME/aivyx-sandbox`. Create the directory
-    // at startup if missing — a fresh install should "just work" without
-    // the user having to mkdir a magic path. `FsReadToolConfig::build()`
-    // will canonicalize and reject non-directories, so we don't need a
-    // second layer of validation here.
+    // Sandbox root: create the directory if it does not exist so a
+    // fresh install "just works" the same way Phase 4 promised. The
+    // config layer returns a `PathBuf` with source provenance; we do
+    // not mkdir inside the config layer because "create side effects
+    // on load" is exactly the ambient-behavior trap the
+    // AGENTS.md-equivalent hygiene rules in this repo try to avoid.
     //
     // Verify-only mode skips this — no session, no tools, no sandbox.
-    let fs_root = if verify_only {
-        PathBuf::new()
-    } else {
-        let root = resolve_fs_root()?;
-        std::fs::create_dir_all(&root)
+    if !verify_only {
+        let root = &config.fs_root.value;
+        std::fs::create_dir_all(root)
             .map_err(|e| format!("failed to create fs sandbox root {root:?}: {e}"))?;
-        root
-    };
+    }
 
-    // Resolve the encrypted store path + its sidecar salt file. Both
-    // live under `$XDG_DATA_HOME/aivyx/` by default; the binary mkdirs
-    // the parent so a fresh install "just works" the same way
-    // `fs_root` does above. Canonicalization happens inside
-    // `RedbStorage::open` — we only need the raw path here.
-    let storage_path = resolve_storage_path()?;
+    // Resolve the encrypted store path + its sidecar salt file. The
+    // config layer handled path *resolution* (env → toml → XDG → HOME
+    // default); we only need to mkdir the parent directory and build
+    // the sidecar path here.
+    let storage_path = config.storage_path.value.clone();
     if let Some(parent) = storage_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             format!("failed to create storage parent directory {parent:?}: {e}")
@@ -241,19 +208,22 @@ fn run() -> Result<(), String> {
     // Source selection policy — binary decides, module just honors
     // the enum:
     //
-    // 1. `AIVYX_PASSPHRASE` is set and non-empty → `Env`. This is
-    //    the systemd / launchd / scripted path and must stay the
-    //    first-checked branch so deployments don't accidentally
-    //    trip the interactive prompt.
-    // 2. stdin is a terminal → `InteractivePrompt`. The user gets
-    //    a one-line `aivyx passphrase: ` echo-off prompt read from
-    //    `/dev/tty`. This covers the "human runs `aivyx` at a
-    //    shell without exporting the env var" ergonomic case.
-    // 3. Otherwise → bail with a clear message. Neither env nor
+    // 1. `aivyx-config` already supplied a passphrase (env or TOML)
+    //    → `Env`. This is the systemd / launchd / scripted path and
+    //    must stay the first-checked branch so deployments don't
+    //    accidentally trip the interactive prompt. Phase 9 Task 3
+    //    routes this through `config.passphrase` instead of re-
+    //    reading `AIVYX_PASSPHRASE` — the config layer has already
+    //    checked env and TOML in precedence order and the result
+    //    is the single source of truth at this point in bring-up.
+    // 2. Config has `None` and stdin is a terminal →
+    //    `InteractivePrompt`. The user gets a one-line
+    //    `aivyx passphrase: ` echo-off prompt read from `/dev/tty`.
+    // 3. Otherwise → bail with a clear message. Neither config nor
     //    tty means we have no interactive user *and* no configured
     //    source — continuing would either hang on a tty read that
     //    never comes, or crash with an opaque Argon2 error.
-    let passphrase_source = select_passphrase_source()?;
+    let passphrase_source = select_passphrase_source(config.passphrase.is_some())?;
     let master_key = derive_master_key(
         passphrase_source,
         &salt_path,
@@ -298,105 +268,129 @@ fn run() -> Result<(), String> {
             return run_verify_only(storage, audit_chain_key).await;
         }
 
-        // Unwrap is safe: `api_key_for_session` is `Some` on every
-        // path where `verify_only == false`, enforced by the early
-        // branch at the top of `run()`.
-        let api_key = api_key_for_session
-            .expect("api_key_for_session is Some whenever verify_only is false");
+        // Phase 9 Task 3 — Phase 2 of the two-phase config load.
+        // Now that the encrypted store is open, fill any still-`None`
+        // secret-bearing fields (api_key, telegram.token) from
+        // `KeyDomain::Secrets`. Fields already populated by env or
+        // TOML are left alone per fall-through precedence.
+        //
+        // `validate` runs **after** hydrate: the encrypted store is
+        // the last source in the fall-through, so a secret can still
+        // be populated between `load_from_env_and_toml` and
+        // `validate`. Moving the validation call earlier would mean
+        // a store-sourced api key never gets a chance.
+        config
+            .hydrate_secrets_from_store(&storage)
+            .await
+            .map_err(String::from)?;
+        config.validate(&load_opts).map_err(String::from)?;
+
+        // Print the config-provenance banner to stderr before any
+        // session traffic lands. Operators debugging a surprising
+        // value ("why is my model wrong?") can read this once and
+        // see which source each field came from.
+        print_config_banner(&config);
+
         run_async(
-            api_key,
-            model,
-            system_prompt,
-            fs_root,
+            config,
             storage,
             audit_chain_key,
             channel_kind,
-            telegram_cfg,
         )
         .await
     })
 }
 
-/// Resolve the filesystem sandbox root.
+/// Print a one-block summary of every [`AivyxConfig`] field plus its
+/// [`FieldSource`] tag. Secrets are redacted; paths and scalars are
+/// shown verbatim because that's the useful debugging signal.
 ///
-/// Priority:
-/// 1. `AIVYX_FS_ROOT` env var, if set and non-empty.
-/// 2. `$HOME/aivyx-sandbox` otherwise.
-///
-/// Returns an error if neither is available (no `HOME` and no override).
-fn resolve_fs_root() -> Result<PathBuf, String> {
-    if let Ok(explicit) = std::env::var("AIVYX_FS_ROOT") {
-        if !explicit.is_empty() {
-            return Ok(PathBuf::from(explicit));
+/// Prints to stderr, not stdout, so the banner does not interleave
+/// with the local REPL's first turn output or a Telegram channel's
+/// outbound messages.
+fn print_config_banner(config: &AivyxConfig) {
+    eprintln!("aivyx config sources:");
+    eprintln!(
+        "  anthropic_api_key = {}",
+        match &config.anthropic_api_key {
+            Some(s) => format!("<redacted> ({})", source_label(s.source)),
+            None => "<unset>".to_string(),
         }
+    );
+    eprintln!(
+        "  model             = {:?} ({})",
+        config.model.value,
+        source_label(config.model.source),
+    );
+    eprintln!(
+        "  system_prompt     = {:?} ({})",
+        truncate_for_log(&config.system_prompt.value, 60),
+        source_label(config.system_prompt.source),
+    );
+    eprintln!(
+        "  fs_root           = {:?} ({})",
+        config.fs_root.value,
+        source_label(config.fs_root.source),
+    );
+    eprintln!(
+        "  storage_path      = {:?} ({})",
+        config.storage_path.value,
+        source_label(config.storage_path.source),
+    );
+    eprintln!(
+        "  memory_max_per_topic = {} ({})",
+        config.memory_max_per_topic.value,
+        source_label(config.memory_max_per_topic.source),
+    );
+    eprintln!(
+        "  passphrase        = {}",
+        match &config.passphrase {
+            Some(s) => format!("<redacted> ({})", source_label(s.source)),
+            None => "<interactive or absent>".to_string(),
+        }
+    );
+    if let Some(tg) = &config.telegram {
+        eprintln!(
+            "  telegram.token    = {}",
+            match &tg.token {
+                Some(s) => format!("<redacted> ({})", source_label(s.source)),
+                None => "<unset>".to_string(),
+            }
+        );
+        eprintln!(
+            "  telegram.chat_id  = {}",
+            match &tg.chat_filter {
+                Some(c) => format!("{} ({})", c.value, source_label(c.source)),
+                None => "<any>".to_string(),
+            }
+        );
     }
-    let home = std::env::var("HOME").map_err(|_| {
-        "HOME is not set and AIVYX_FS_ROOT is not set — cannot locate a sandbox root. \
-         Export one of them and retry."
-            .to_string()
-    })?;
-    Ok(PathBuf::from(home).join("aivyx-sandbox"))
 }
 
-/// Resolve the encrypted store path (Phase 5 task 4).
-///
-/// Priority:
-/// 1. `AIVYX_STORAGE_PATH` env var, if set and non-empty.
-/// 2. `$XDG_DATA_HOME/aivyx/store.redb` if `XDG_DATA_HOME` is set.
-/// 3. `$HOME/.local/share/aivyx/store.redb` otherwise.
-///
-/// Returns an error if none of the above yield a path (i.e. no `HOME`
-/// and no explicit override).
-fn resolve_storage_path() -> Result<PathBuf, String> {
-    if let Ok(explicit) = std::env::var("AIVYX_STORAGE_PATH") {
-        if !explicit.is_empty() {
-            return Ok(PathBuf::from(explicit));
-        }
+fn source_label(src: FieldSource) -> &'static str {
+    match src {
+        FieldSource::Env => "env",
+        FieldSource::Toml => "toml",
+        FieldSource::EncryptedStore => "encrypted-store",
+        FieldSource::Default => "default",
     }
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return Ok(PathBuf::from(xdg).join("aivyx").join("store.redb"));
-        }
-    }
-    let home = std::env::var("HOME").map_err(|_| {
-        "HOME is not set and neither AIVYX_STORAGE_PATH nor XDG_DATA_HOME is set — \
-         cannot locate a default storage path. Export one of them and retry."
-            .to_string()
-    })?;
-    Ok(PathBuf::from(home)
-        .join(".local")
-        .join("share")
-        .join("aivyx")
-        .join("store.redb"))
 }
 
-/// Resolve the per-topic memory write cap (Phase 7 task 5).
-///
-/// Priority:
-/// 1. `AIVYX_MEMORY_MAX_PER_TOPIC` set and non-empty → parse as
-///    `usize`. An unparseable value is a **hard error** rather than
-///    a silent fallback to the default: a mis-set cap would mask
-///    runaway-write bugs, which is exactly the failure mode the
-///    tripwire exists to catch.
-/// 2. Unset or empty → [`DEFAULT_MAX_PER_TOPIC`].
-///
-/// Parsing happens once at startup, before any session work, so a
-/// typo in the env var fails fast with a clean error instead of
-/// surfacing as a mysterious "topic full" at the first
-/// `memory.write` call of a live session.
-fn resolve_memory_max_per_topic() -> Result<usize, String> {
-    match std::env::var("AIVYX_MEMORY_MAX_PER_TOPIC") {
-        Ok(s) if !s.is_empty() => s.parse::<usize>().map_err(|e| {
-            format!(
-                "AIVYX_MEMORY_MAX_PER_TOPIC is set to {s:?} which is not a \
-                 valid usize: {e}. Unset the variable to accept the default \
-                 ({DEFAULT_MAX_PER_TOPIC}), or set it to a non-negative \
-                 integer."
-            )
-        }),
-        _ => Ok(DEFAULT_MAX_PER_TOPIC),
+fn truncate_for_log(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
     }
 }
+
+// Phase 9 Task 3 — the three `resolve_*` helpers that Phases 4, 5,
+// and 7 accreted (`resolve_fs_root`, `resolve_storage_path`,
+// `resolve_memory_max_per_topic`) moved into
+// `aivyx_config::AivyxConfig::load_from_env_and_toml`. Default
+// resolution logic (env → toml → XDG → HOME fallback, with NoHome as
+// a typed error and unparseable values as typed `Invalid`) lives in
+// the config crate now, which is the one place it needs to live.
 
 /// Build the sidecar salt file path for a given store path.
 ///
@@ -506,35 +500,37 @@ fn parse_cli_args() -> Result<CliArgs, String> {
 
 /// Decide which `PassphraseSource` to hand to `derive_master_key`.
 ///
-/// Policy (see the `run()` comment for the rationale):
-/// 1. `AIVYX_PASSPHRASE` set and non-empty → `Env`.
-/// 2. `AIVYX_PASSPHRASE` unset or empty, and stdin is a tty →
+/// Phase 9 Task 3 change: the "did a source supply a passphrase"
+/// check moved out of this helper into `aivyx-config`. This helper
+/// now receives a boolean `config_has_passphrase` — `true` means the
+/// config layer already resolved env / TOML and found a value, so we
+/// can use `PassphraseSource::Env` (the `passphrase` module still
+/// re-reads `AIVYX_PASSPHRASE` when honored, which is fine: if
+/// `aivyx-config` saw it, the env var is still set). `false` means
+/// config found nothing, so we decide between the interactive prompt
+/// (tty) and a hard error (non-tty).
+///
+/// Policy:
+/// 1. `config_has_passphrase == true` → `Env`.
+/// 2. `config_has_passphrase == false` and stdin is a tty →
 ///    `InteractivePrompt`.
 /// 3. Otherwise → `Err` with a clear operator-facing message.
-///
-/// "Set but empty" is treated as "unset" at this layer because a
-/// stray `export AIVYX_PASSPHRASE=` in a shell rc file should not
-/// crash the binary in a non-interactive context — we fall through
-/// to the tty branch (which fails cleanly if there's no tty) rather
-/// than immediately bailing. The `passphrase` module itself still
-/// rejects a truly empty env var with `EnvEmpty`, so if the user
-/// explicitly asked for `Env` they still get the clean error.
-fn select_passphrase_source() -> Result<PassphraseSource, String> {
-    match std::env::var(DEFAULT_ENV_VAR) {
-        Ok(ref s) if !s.is_empty() => Ok(PassphraseSource::Env {
+fn select_passphrase_source(
+    config_has_passphrase: bool,
+) -> Result<PassphraseSource, String> {
+    if config_has_passphrase {
+        return Ok(PassphraseSource::Env {
             var_name: DEFAULT_ENV_VAR.to_string(),
-        }),
-        _ => {
-            if io::stdin().is_terminal() {
-                Ok(PassphraseSource::InteractivePrompt)
-            } else {
-                Err(format!(
-                    "no passphrase available: `{DEFAULT_ENV_VAR}` is not set and \
-                     stdin is not a terminal. Export the env var or run aivyx \
-                     from an interactive shell."
-                ))
-            }
-        }
+        });
+    }
+    if io::stdin().is_terminal() {
+        Ok(PassphraseSource::InteractivePrompt)
+    } else {
+        Err(format!(
+            "no passphrase available: `{DEFAULT_ENV_VAR}` is not set and \
+             stdin is not a terminal. Export the env var or run aivyx \
+             from an interactive shell."
+        ))
     }
 }
 
@@ -567,26 +563,51 @@ async fn run_verify_only(
 }
 
 // `run_async` sits right at the binary's composition root: it takes
-// every component the session needs (provider creds, model config,
-// fs sandbox, storage, audit key, and the two channel branches) and
-// threads them into the chosen `run_*_session` function. Factoring
-// the parameter list into a struct buys nothing here — each field is
-// used exactly once at a distinct call site — and the readability
-// cost of a `RunAsyncArgs { ... }` builder would be real. The
-// `too_many_arguments` lint is a useful heuristic most places, but
-// at a composition root it's measuring the wrong thing. Scoped
-// allow.
-#[allow(clippy::too_many_arguments)]
+// the validated `AivyxConfig`, the open storage handle, the audit
+// chain key, and the CLI-derived `ChannelKind`, and threads
+// everything into the chosen `run_*_session` function.
+//
+// Phase 9 Task 3 changed the signature from a flat list of ten
+// fields to `config: AivyxConfig` + three siblings. The earlier
+// comment that argued against struct bundling was written when no
+// consolidated type existed yet — the Task 3 argument is that
+// `AivyxConfig` **is** the consolidated shape, so passing it whole
+// lets every downstream consumer pull its exact field without the
+// binary playing field-forwarder.
 async fn run_async(
-    api_key: SecretString,
-    model: String,
-    system_prompt: String,
-    fs_root: PathBuf,
+    config: AivyxConfig,
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
     channel_kind: ChannelKind,
-    telegram_cfg: Option<(SecretString, Option<i64>)>,
 ) -> Result<(), String> {
+    // Destructure the config at the top so each downstream block
+    // reaches for the local binding rather than the nested path
+    // `config.field.value`. The `SourcedSecret` fields are already
+    // validated to be `Some` by the time `run_async` is called, so
+    // `.expect` here encodes the Phase-9 invariant: `run_async`
+    // only runs past `validate()`, and `validate()` checks
+    // `require_api_key` unconditionally when `channel_kind != Local`
+    // is irrelevant — api key is required whenever this function is
+    // called, because `--verify-only` takes a separate branch in
+    // `run()`.
+    let AivyxConfig {
+        anthropic_api_key,
+        model,
+        system_prompt,
+        fs_root,
+        storage_path: _,
+        memory_max_per_topic,
+        passphrase: _,
+        telegram,
+    } = config;
+    let api_key = anthropic_api_key
+        .expect("anthropic_api_key validated non-None before run_async")
+        .value;
+    let model = model.value;
+    let system_prompt = system_prompt.value;
+    let fs_root = fs_root.value;
+    let memory_cap = memory_max_per_topic.value;
+
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
         .map_err(|e| format!("failed to build Anthropic provider: {e}"))?;
@@ -643,11 +664,11 @@ async fn run_async(
         .await
         .map_err(|e| format!("failed to open memory substrate: {e}"))?;
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
-    // Phase 7 task 5 — resolve the per-topic GC tripwire from
-    // `AIVYX_MEMORY_MAX_PER_TOPIC` once at startup. Unset → default.
-    // Set-but-unparseable is a hard error: a misconfigured cap would
-    // silently mask runaway-write bugs if we fell back quietly.
-    let memory_cap = resolve_memory_max_per_topic()?;
+    // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
+    // resolution into `aivyx-config`; the cap arrives pre-parsed
+    // from env / TOML / default with typed `Invalid` errors if a
+    // source supplied a non-usize value. Destructured above as
+    // `memory_cap` from `config.memory_max_per_topic.value`.
     let memory_write =
         MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
@@ -750,10 +771,18 @@ async fn run_async(
         }
 
         ChannelKind::Telegram => {
-            // Unwrap is safe: `run()` populates `telegram_cfg` on
-            // exactly the `ChannelKind::Telegram` path.
-            let (token_secret, chat_filter) = telegram_cfg
-                .expect("telegram_cfg is Some whenever channel_kind is Telegram");
+            // Unwrap chain is safe: `run()` set `require_telegram_token
+            // = true` for this channel, so `validate()` already
+            // rejected a `None` token, and the `telegram` field is
+            // `Some` because the loader constructs it whenever any
+            // telegram source fires.
+            let tg = telegram
+                .expect("telegram config validated for ChannelKind::Telegram");
+            let token_secret = tg
+                .token
+                .expect("telegram.token validated non-None before run_async")
+                .value;
+            let chat_filter: Option<i64> = tg.chat_filter.map(|c| c.value);
 
             // Signal handler (telegram): a single `shutdown`
             // CancellationToken the signal task cancels on first

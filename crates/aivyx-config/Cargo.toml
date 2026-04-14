@@ -10,4 +10,43 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+# Error types for typed ConfigError variants. Matches the workspace's
+# "every crate uses thiserror for its own error type" convention.
+thiserror = { workspace = true }
+
+# SecretString wrappers for api_key / telegram_token / passphrase.
+# Secrets never land in a plain `String` field inside AivyxConfig; the
+# whole crate's purpose is to hold them in `SecretString` so a stray
+# `Debug` derive cannot leak them into a log.
+secrecy = { workspace = true }
+
+# Serde derive for the TOML schema (`RawConfigFile` mirror struct).
+serde = { workspace = true }
+
+# TOML parser. Pinned here because this is the only crate in the
+# workspace that parses TOML — `toml = "0.8"` is the de-facto Rust
+# TOML parser and uses `toml_edit` under the hood. Phase 9 Task 3 is
+# the first task to introduce this dep; see the Task 3 ship record in
+# PHASE_9.md for the "zero-new-dep streak broken, deliberately"
+# rationale.
+toml = "0.8"
+
+# Storage access for the encrypted-store fall-through. Phase 9 Task 3
+# reads `KeyDomain::Secrets` to hydrate secret fields that env+TOML
+# did not populate. The loader owns a shared `Arc<dyn Storage>` rather
+# than a `&mut` reference so tests can hand in a mock cheaply.
+aivyx-storage = { path = "../aivyx-storage" }
+
+# `async_trait` is not strictly required (the one async method lives
+# directly on `AivyxConfig`, not on a trait), but keeping it aligned
+# with the rest of the workspace avoids an odd-crate-out flag later.
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+
+# Tests that round-trip through a real encrypted store need crypto +
+# storage to cold-open a redb file. We hand-roll the `$TMPDIR` RAII
+# shim in `src/tests.rs` to match the workspace convention (see
+# `aivyx-storage/Cargo.toml` dev-deps comment — no `tempfile` crate).
+aivyx-crypto = { path = "../aivyx-crypto" }
