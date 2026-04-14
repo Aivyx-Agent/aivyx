@@ -10,6 +10,7 @@ members = [
     "crates/aivyx-llm",
     "crates/aivyx-memory",
     "crates/aivyx-channel",
+    "crates/aivyx-telegram",
 ]
 
 [workspace.package]

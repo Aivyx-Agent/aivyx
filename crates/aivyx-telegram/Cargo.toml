@@ -1,0 +1,33 @@
+[package]
+name = "aivyx-telegram"
+description = "Telegram ChannelContext adapter — Phase 8's second concrete channel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+# Phase 8 task 1 — `frankenstein` is the thin Bot API wrapper we use
+# for Telegram. Chosen over `teloxide` because aivyx's turn loop IS
+# the dispatcher; we want a library that exposes raw `get_updates` /
+# `send_message` calls, not one that owns its own event loop. The
+# `client-reqwest` feature pulls in the async HTTP transport the
+# `ReqwestTransport` impl needs in production. Unit tests never
+# touch this — they run against `ScriptedTransport`, a test double
+# that the private `TelegramTransport` trait makes swappable.
+frankenstein = { version = "0.49", features = ["client-reqwest"] }
+
+[dev-dependencies]
+# Unit tests drive the async ChannelContext surface + the scripted
+# transport. No network, no filesystem.
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_json = { workspace = true }

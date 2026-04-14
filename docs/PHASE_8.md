@@ -207,6 +207,117 @@ reorder and re-scope as we learn.
    Phase 8 taught us about the trait-level seams a second adapter
    will need.
 
+## Task 1 — shipped
+
+**Landed:** 2026-04-14. Commit: _pending_.
+
+New crate `crates/aivyx-telegram` is in the workspace. Ships:
+
+- **`TelegramChannel<T: TelegramTransport>`** (crate-private so the
+  private `TelegramTransport` bound doesn't leak) implementing
+  `ChannelContext`. `platform() == ChannelPlatform::Telegram`,
+  `trust_tier() == TrustTier::SemiTrusted` — **not** `Untrusted` as
+  the ROADMAP and this doc's Goal section originally said. See the
+  correction below.
+- **Private `TelegramTransport` trait** with exactly two async
+  methods (`get_updates` + `send_message`) adapted to narrow
+  `IncomingMessage` / `OutgoingMessage` types. Production impl is a
+  `ReqwestTransport` wrapper around `frankenstein::client_reqwest::Bot`
+  — wired but not exercised by Task 1 tests on purpose; the whole
+  point of the seam is that unit tests run against a `ScriptedTransport`
+  test double that never touches HTTP.
+- **Buffered streaming model**: `stream_event(Text)` copies the
+  `&str` chunk into an owned `String` behind a `Mutex`, and
+  `finalize()` drains-and-sends **once**. One turn = one Telegram
+  message, unlike `LocalChannel` which flushes per token. Tool-call
+  markers and status lines render into the same buffer so the user
+  sees a single in-chat message rather than one bubble per tool call.
+- **8 unit tests, 0 network**: metadata, session stability,
+  cancellation rotation, buffered-send contract, tool-marker
+  rendering, empty-turn `"(no reply)"` placeholder, finalize footer
+  for each non-Completed outcome, and transport-error propagation
+  via a `ScriptedTransport::inject_send_error` knob.
+
+**Validation:** `cargo test --workspace` = 292 passed, 0 failed, 1
+ignored (284 → 292, exactly the 8 new telegram tests, no regressions).
+`cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+### Trust tier correction: SemiTrusted, not Untrusted
+
+The ROADMAP and this doc's "Goal" section both said Telegram would be
+`TrustTier::Untrusted`. That was wrong, and Task 1 is where the
+correction lands — per the Phase 7 convention of "fix in the task
+ship record, don't retro-edit entry-time doc sections."
+
+The concrete problem: `aivyx-capability::CEILING_UNTRUSTED` grants
+exactly `memory.read:scope:public:*` and `audit.read:public`. That is
+an anonymous-webhook tier, and it is insufficient for *any* useful
+Telegram bot — the bot can't write memory, can't call the LLM, can't
+make a network request. `CEILING_SEMITRUSTED` grants `memory.read`,
+`memory.write`, `llm.call`, `llm.embed`, `net.fetch`, `net.dns`,
+`fs.metadata`, and `config.read`, which is the right minimum for a
+bot that can answer questions, persist memory, and do web lookups but
+can't write local files. And D4's own text for `SemiTrusted` reads
+**"Tier 2 — Authenticated user on a remote channel"**, which is a
+literal description of a Telegram chat: the Bot API gives us a stable
+`chat_id` + `user_id`, authenticated by Telegram's backend before we
+ever see the update.
+
+`Untrusted` stays reserved for its real use cases: unauthenticated
+webhook ingest, email with no verified sender, and any adapter where
+the channel can't prove *who* is speaking. A Telegram bot can.
+
+This means Q3 (scope attenuation at the channel boundary) now has a
+concrete target: attenuate to `CEILING_SEMITRUSTED`, not
+`CEILING_UNTRUSTED`. Q3 itself is unchanged — "where does the
+attenuation live" is still the same question — but "attenuate to
+*what*" now has an answer.
+
+### Other Task 1 sub-decisions
+
+- **Library choice (Q7 resolved):** `frankenstein 0.49` with the
+  `client-reqwest` feature. Chosen over `teloxide` because aivyx's
+  turn loop IS the dispatcher — a framework that owns its own event
+  loop would fight the agent's control flow. Frankenstein exposes
+  plain `get_updates` / `send_message` async calls, which is exactly
+  the shape the private transport trait wants to adapt.
+- **Transport indirection shape:** a *private* trait with two
+  methods, not a generic over `frankenstein::AsyncTelegramApi` (the
+  ~90-method trait). The narrow surface collapses HTTP + Bot API
+  errors to a single `TransportError::Platform(String)` at the seam,
+  so the channel's error handling is uniform, and keeps the test
+  double trivially small.
+- **Buffer model:** `std::sync::Mutex<String>`, not
+  `tokio::sync::Mutex<String>`. Every critical section is a
+  synchronous `push_str` that never holds the lock across an await.
+  `std::sync::Mutex` is the right choice under contention-free
+  workloads and matches the `LocalChannel::writer` pattern.
+- **`frankenstein 0.49` migration gotcha**: the library flattened
+  `Update.message` into a `UpdateContent::Message(Box<Message>)`
+  enum variant at some version between 0.30 and 0.49. The
+  `ReqwestTransport::get_updates` match arm absorbs this; because
+  the private transport trait sits between `frankenstein` and the
+  channel, no downstream code in `telegram_channel.rs` had to know.
+  This is the first concrete payoff of the transport seam, before
+  any "swap transports for tests" motivation.
+- **One-chat-per-channel (Task 1 only):** a `TelegramChannel` is
+  bound to a single `chat_id` for Task 1. Multi-chat is Q2's
+  problem — "one store, many channel instances keyed by chat_id"
+  versus "one channel instance with a chat-id qualifier on every
+  event" is a Task 2 decision that Task 1 intentionally doesn't
+  foreclose.
+- **Empty-turn placeholder:** a turn the LLM ended without speaking
+  any `Text` chunk (pure-tool turn) produces `"(no reply)"`. The
+  Bot API rejects empty `sendMessage` and we don't want the first
+  silent tool turn to fail the whole session; dropping "(no reply)"
+  into chat is visible graceful degradation.
+- **DESIGN.md + aivyx-core empty diff preserved.** Eighth
+  consecutive phase deliverable that touches zero bytes of the
+  contract documents or the core trait file. `ChannelContext` and
+  `ChannelPlatform::Telegram` shipped in Phase 0/3 in exactly the
+  shape a second adapter needed, which is the D2 contract earning
+  its keep.
+
 ## Open questions
 
 ### Q1. Where does the Telegram bot token live?
