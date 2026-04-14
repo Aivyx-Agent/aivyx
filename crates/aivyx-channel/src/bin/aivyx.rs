@@ -27,7 +27,7 @@
 //!   will add a config-file path; for Phase 3, env var is the one
 //!   and only secret source.
 //!
-//! Three optional variables:
+//! Five optional variables:
 //!
 //! - `AIVYX_MODEL` — override the default model id (default:
 //!   `claude-haiku-4-5-20251001`). Sent verbatim to the API.
@@ -38,6 +38,15 @@
 //!   The binary's capability set grants `fs.read:<root>/**` and
 //!   `fs.write:<root>/**` so the LLM can exercise both tools without
 //!   further wiring.
+//! - `AIVYX_STORAGE_PATH` — path to the encrypted redb store (Phase 5
+//!   task 4). Defaults to `$XDG_DATA_HOME/aivyx/store.redb` or
+//!   `$HOME/.local/share/aivyx/store.redb` otherwise. The sidecar
+//!   salt file is the same path with a `.salt` suffix appended.
+//!   Parent directories are created at startup if missing.
+//! - `AIVYX_PASSPHRASE` — the passphrase the Argon2id master-key
+//!   derivation feeds on. Phase 5 Q2 resolved to env-var-only for
+//!   this phase; an interactive prompt is a follow-up. Required
+//!   whenever storage is enabled (i.e., always in the binary path).
 //!
 //! ## Cancellation
 //!
@@ -51,8 +60,14 @@
 //!
 //! ## What this binary is not
 //!
-//! - It does not persist session history. The audit chain is
-//!   in-memory per process. Phase 5 adds the redb-backed store.
+//! - It does not persist the audit chain. The `HmacChainLog` still
+//!   uses an ephemeral per-process key. Phase 5 task 4 added the
+//!   encrypted store for *session metadata* (`KeyDomain::Sessions`),
+//!   which proves the storage round-trip end-to-end; Phase 6 (memory
+//!   as tool) will extend the persistence surface.
+//! - It does not persist conversation history. The planner's
+//!   `LlmHistory` lives in RAM for the lifetime of one
+//!   `ConcreteAgent`. Same Phase 6 boundary.
 //! - It does not do line editing or history. Plain `stdin().read_line`.
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
@@ -66,12 +81,15 @@ use secrecy::SecretString;
 
 use aivyx_audit::{AuditBridge, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
+use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
 use aivyx_core::{
     AuditHook, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
 };
+use aivyx_crypto::Argon2Params;
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
+use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 
 const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -112,6 +130,33 @@ fn run() -> Result<(), String> {
     std::fs::create_dir_all(&fs_root)
         .map_err(|e| format!("failed to create fs sandbox root {fs_root:?}: {e}"))?;
 
+    // Resolve the encrypted store path + its sidecar salt file. Both
+    // live under `$XDG_DATA_HOME/aivyx/` by default; the binary mkdirs
+    // the parent so a fresh install "just works" the same way
+    // `fs_root` does above. Canonicalization happens inside
+    // `RedbStorage::open` — we only need the raw path here.
+    let storage_path = resolve_storage_path()?;
+    if let Some(parent) = storage_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!("failed to create storage parent directory {parent:?}: {e}")
+        })?;
+    }
+    let salt_path = salt_path_for(&storage_path);
+
+    // ---- Master key ---------------------------------------------------
+    // Argon2id over the `AIVYX_PASSPHRASE` env var, using the sidecar
+    // salt file (generated on first run, persisted plaintext — salts
+    // are not secret per Argon2id design). Raw passphrase bytes never
+    // leave `derive_master_key`; we get back a zero-on-drop `MasterKey`.
+    let master_key = derive_master_key(
+        PassphraseSource::Env {
+            var_name: DEFAULT_ENV_VAR.to_string(),
+        },
+        &salt_path,
+        Argon2Params::d7_default(),
+    )
+    .map_err(|e| format!("failed to derive master key: {e}"))?;
+
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
     // the workspace tokio feature set already enables it and the cost
@@ -121,7 +166,16 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
 
-    runtime.block_on(async move { run_async(api_key, model, system_prompt, fs_root).await })
+    runtime.block_on(async move {
+        // Open the store *inside* the runtime so `RedbStorage::open`'s
+        // `spawn_blocking` call lands on a live tokio pool. Opening
+        // outside the runtime would panic the moment `open` tried to
+        // reach for the current handle.
+        let storage = RedbStorage::open(StorageConfig::new(storage_path.clone()), master_key)
+            .await
+            .map_err(|e| format!("failed to open encrypted store at {storage_path:?}: {e}"))?;
+        run_async(api_key, model, system_prompt, fs_root, storage).await
+    })
 }
 
 /// Resolve the filesystem sandbox root.
@@ -145,11 +199,58 @@ fn resolve_fs_root() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join("aivyx-sandbox"))
 }
 
+/// Resolve the encrypted store path (Phase 5 task 4).
+///
+/// Priority:
+/// 1. `AIVYX_STORAGE_PATH` env var, if set and non-empty.
+/// 2. `$XDG_DATA_HOME/aivyx/store.redb` if `XDG_DATA_HOME` is set.
+/// 3. `$HOME/.local/share/aivyx/store.redb` otherwise.
+///
+/// Returns an error if none of the above yield a path (i.e. no `HOME`
+/// and no explicit override).
+fn resolve_storage_path() -> Result<PathBuf, String> {
+    if let Ok(explicit) = std::env::var("AIVYX_STORAGE_PATH") {
+        if !explicit.is_empty() {
+            return Ok(PathBuf::from(explicit));
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        if !xdg.is_empty() {
+            return Ok(PathBuf::from(xdg).join("aivyx").join("store.redb"));
+        }
+    }
+    let home = std::env::var("HOME").map_err(|_| {
+        "HOME is not set and neither AIVYX_STORAGE_PATH nor XDG_DATA_HOME is set — \
+         cannot locate a default storage path. Export one of them and retry."
+            .to_string()
+    })?;
+    Ok(PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("aivyx")
+        .join("store.redb"))
+}
+
+/// Build the sidecar salt file path for a given store path.
+///
+/// Convention: append a literal `.salt` to the store path's OS string.
+/// This gives `store.redb` → `store.redb.salt`, which is what the
+/// passphrase module's `load_or_create_salt` reads from and, on first
+/// run, writes to. We deliberately do *not* use `Path::with_extension`
+/// here: `with_extension("salt")` would turn `store.redb` into
+/// `store.salt`, losing the "this belongs to the redb store" signal.
+fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
+    let mut os = store_path.as_os_str().to_owned();
+    os.push(".salt");
+    PathBuf::from(os)
+}
+
 async fn run_async(
     api_key: SecretString,
     model: String,
     system_prompt: String,
     fs_root: PathBuf,
+    storage: Arc<dyn Storage>,
 ) -> Result<(), String> {
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -245,6 +346,7 @@ async fn run_async(
         max_tokens: DEFAULT_MAX_TOKENS,
         capabilities,
         tools,
+        storage,
         prompt: PROMPT.to_string(),
         banner: Some(format!(
             "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\

@@ -51,6 +51,7 @@
 
 use std::io::{BufRead, Write};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aivyx_capability::CapabilitySet;
 use aivyx_core::{
@@ -58,8 +59,29 @@ use aivyx_core::{
     AuditHook, ChannelContext, LlmPlannerConfig, Message, TurnOutcome,
 };
 use aivyx_llm::LlmProvider;
+use aivyx_storage::{KeyDomain, Storage};
 
 use crate::LocalChannel;
+
+/// Fixed redb key used for the single-row "current session" marker.
+///
+/// Phase 5 task 4 persistence scope (Q1 option 1): session metadata only.
+/// A second process start reads this key under `KeyDomain::Sessions` to
+/// detect "I've been here before." The value layout is 40 bytes:
+///
+/// ```text
+///   [0..16]   session_id  (Uuid bytes — *current* process's session)
+///   [16..24]  opened_at_secs   u64 big-endian, seconds since UNIX_EPOCH
+///   [24..32]  last_turn_index  u64 big-endian, REPL turn counter (0 at open)
+///   [32..40]  last_turn_at_secs u64 big-endian, 0 before the first turn
+/// ```
+///
+/// Not serde: this record has exactly four fields and will never grow
+/// within Phase 5 (Q4: schema bumps happen by HKDF salt rotation, not by
+/// in-place migration), so a hand-rolled fixed layout avoids pulling
+/// `serde_json` into the channel crate's prod deps.
+const SESSION_MARKER_KEY: &[u8] = b"current";
+const SESSION_MARKER_LEN: usize = 40;
 
 /// Knobs the REPL needs to construct one session's planner + agent.
 pub struct SessionConfig {
@@ -77,6 +99,15 @@ pub struct SessionConfig {
     /// one. Shared as `Arc` because the planner factory closure
     /// clones it per-turn and `ConcreteAgent` holds its own handle.
     pub tools: Arc<ToolRegistry>,
+    /// The encrypted storage handle for this session. Phase 5 task 4
+    /// added the field; `run_session` writes a small session-metadata
+    /// record under `KeyDomain::Sessions` at open and after each turn
+    /// (see [`SESSION_MARKER_KEY`]). Shared as `Arc<dyn Storage>` to
+    /// match the `AuditHook` pattern from Phase 2 — the binary owns
+    /// the one-per-process `RedbStorage` handle, tests inject a
+    /// throwaway `RedbStorage` against a tempdir, and both flow
+    /// through the same trait object.
+    pub storage: Arc<dyn Storage>,
     /// Prompt string written before each `read_line`. The binary
     /// passes `"> "`; tests usually pass `""` so captured output is
     /// easier to assert on.
@@ -137,6 +168,7 @@ where
     // filesystem tools here; the Phase 3 chat-only regression test
     // passes an empty registry so its assertions stay stable.
     let registry = config.tools;
+    let storage = config.storage;
 
     // Planner factory — fresh planner per turn. Captures the provider
     // Arc, the registry Arc, and a planner config by value (cloned
@@ -160,6 +192,60 @@ where
             ))
         },
     );
+
+    // ---- Session marker (Phase 5 task 4) -----------------------------
+    //
+    // Ask the store whether a previous process already wrote a marker
+    // under `KeyDomain::Sessions` / `SESSION_MARKER_KEY`. If one exists,
+    // surface a one-line "resuming" message to stderr — the point of
+    // the phase is proving the round-trip works across process
+    // boundaries, and this is the smallest observable that demonstrates
+    // it without touching the planner's conversation state (which is
+    // Phase 6 memory territory).
+    //
+    // Storage errors are *not* fatal: if the store rejects the read or
+    // the value decodes funny, we log and keep going. The REPL is the
+    // user's primary surface; a degraded persistence layer should
+    // never cost them the ability to talk to the agent.
+    let session_id = channel.session_id();
+    let sessions = storage.domain(KeyDomain::Sessions);
+    match sessions.get(SESSION_MARKER_KEY).await {
+        Ok(Some(bytes)) => match decode_session_marker(&bytes) {
+            Some(prior) => {
+                eprintln!(
+                    "aivyx: resuming — prior session {} opened {}s ago, last turn index {}",
+                    prior.session_uuid_hex(),
+                    now_secs().saturating_sub(prior.opened_at_secs),
+                    prior.last_turn_index,
+                );
+            }
+            None => {
+                eprintln!(
+                    "aivyx: session marker present but unparseable ({} bytes); starting fresh",
+                    bytes.len()
+                );
+            }
+        },
+        Ok(None) => {
+            // First run against this store. Silent — the banner is
+            // enough UX for "new session starting."
+        }
+        Err(e) => {
+            eprintln!("aivyx: session marker read failed ({e}); starting fresh");
+        }
+    }
+
+    let opened_at_secs = now_secs();
+    write_session_marker(
+        &sessions,
+        &SessionMarker {
+            session_uuid: *session_id.0.as_bytes(),
+            opened_at_secs,
+            last_turn_index: 0,
+            last_turn_at_secs: 0,
+        },
+    )
+    .await;
 
     // ---- Banner ------------------------------------------------------
     //
@@ -228,5 +314,149 @@ where
         let outcome = agent.turn(message, &channel).await;
         turns_run += 1;
         last_outcome = Some(outcome);
+
+        // Update the session marker with the fresh turn count and the
+        // current wall-clock timestamp. Same non-fatal-on-error shape
+        // as the open-time write above: a storage hiccup should not
+        // take down the REPL between the user's turns.
+        write_session_marker(
+            &sessions,
+            &SessionMarker {
+                session_uuid: *session_id.0.as_bytes(),
+                opened_at_secs,
+                last_turn_index: turns_run as u64,
+                last_turn_at_secs: now_secs(),
+            },
+        )
+        .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session marker — hand-rolled fixed-layout encode/decode for the
+// 40-byte metadata record at `KeyDomain::Sessions` / `SESSION_MARKER_KEY`.
+//
+// Kept private to this module because the encoding is an internal
+// detail of how `run_session` uses storage, not part of the public API
+// of the channel crate. A future phase (probably Phase 6 memory) will
+// replace this with a richer schema keyed on `SessionId` bytes; at that
+// point we'll bump the HKDF salt and start the "aivyx-v2-storage" era
+// rather than try to migrate in place.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+struct SessionMarker {
+    session_uuid: [u8; 16],
+    opened_at_secs: u64,
+    last_turn_index: u64,
+    last_turn_at_secs: u64,
+}
+
+impl SessionMarker {
+    fn encode(&self) -> [u8; SESSION_MARKER_LEN] {
+        let mut out = [0u8; SESSION_MARKER_LEN];
+        out[0..16].copy_from_slice(&self.session_uuid);
+        out[16..24].copy_from_slice(&self.opened_at_secs.to_be_bytes());
+        out[24..32].copy_from_slice(&self.last_turn_index.to_be_bytes());
+        out[32..40].copy_from_slice(&self.last_turn_at_secs.to_be_bytes());
+        out
+    }
+
+    fn session_uuid_hex(&self) -> String {
+        let mut s = String::with_capacity(32);
+        for byte in self.session_uuid.iter() {
+            s.push_str(&format!("{byte:02x}"));
+        }
+        s
+    }
+}
+
+fn decode_session_marker(bytes: &[u8]) -> Option<SessionMarker> {
+    if bytes.len() != SESSION_MARKER_LEN {
+        return None;
+    }
+    let mut session_uuid = [0u8; 16];
+    session_uuid.copy_from_slice(&bytes[0..16]);
+    let opened_at_secs = u64::from_be_bytes(bytes[16..24].try_into().ok()?);
+    let last_turn_index = u64::from_be_bytes(bytes[24..32].try_into().ok()?);
+    let last_turn_at_secs = u64::from_be_bytes(bytes[32..40].try_into().ok()?);
+    Some(SessionMarker {
+        session_uuid,
+        opened_at_secs,
+        last_turn_index,
+        last_turn_at_secs,
+    })
+}
+
+async fn write_session_marker(sessions: &aivyx_storage::DomainHandle, marker: &SessionMarker) {
+    let encoded = marker.encode();
+    if let Err(e) = sessions.put(SESSION_MARKER_KEY, &encoded).await {
+        eprintln!("aivyx: session marker write failed ({e}); continuing");
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_marker() -> SessionMarker {
+        SessionMarker {
+            session_uuid: [
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
+                0x32, 0x10,
+            ],
+            opened_at_secs: 0x1122_3344_5566_7788,
+            last_turn_index: 42,
+            last_turn_at_secs: 0x0011_2233_4455_6677,
+        }
+    }
+
+    #[test]
+    fn session_marker_round_trips_through_encode_decode() {
+        let marker = sample_marker();
+        let bytes = marker.encode();
+        assert_eq!(bytes.len(), SESSION_MARKER_LEN);
+
+        let decoded = decode_session_marker(&bytes).expect("well-formed bytes must decode");
+        assert_eq!(decoded.session_uuid, marker.session_uuid);
+        assert_eq!(decoded.opened_at_secs, marker.opened_at_secs);
+        assert_eq!(decoded.last_turn_index, marker.last_turn_index);
+        assert_eq!(decoded.last_turn_at_secs, marker.last_turn_at_secs);
+    }
+
+    #[test]
+    fn session_marker_encode_uses_big_endian_layout() {
+        // Pin the exact byte layout: a future refactor that flips
+        // endian-ness would silently corrupt existing stores on disk
+        // if this test didn't anchor the layout explicitly.
+        let marker = sample_marker();
+        let bytes = marker.encode();
+
+        assert_eq!(&bytes[0..16], &marker.session_uuid);
+        assert_eq!(&bytes[16..24], &marker.opened_at_secs.to_be_bytes());
+        assert_eq!(&bytes[24..32], &marker.last_turn_index.to_be_bytes());
+        assert_eq!(&bytes[32..40], &marker.last_turn_at_secs.to_be_bytes());
+    }
+
+    #[test]
+    fn decode_session_marker_rejects_wrong_length() {
+        assert!(decode_session_marker(&[]).is_none());
+        assert!(decode_session_marker(&[0u8; SESSION_MARKER_LEN - 1]).is_none());
+        assert!(decode_session_marker(&[0u8; SESSION_MARKER_LEN + 1]).is_none());
+    }
+
+    #[test]
+    fn session_uuid_hex_is_lowercase_zero_padded_32_chars() {
+        let marker = sample_marker();
+        let hex = marker.session_uuid_hex();
+        assert_eq!(hex.len(), 32);
+        assert_eq!(hex, "0123456789abcdeffedcba9876543210");
     }
 }

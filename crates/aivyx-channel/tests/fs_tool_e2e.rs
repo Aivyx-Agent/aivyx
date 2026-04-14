@@ -58,9 +58,11 @@ use aivyx_core::{
     AuditHook, CancellationToken, Tool, ToolOutcomeSummary, ToolRegistry, TurnOutcome,
     TurnOutcomeSummary,
 };
+use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
 };
+use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 
 // ---------------------------------------------------------------------------
 // Scripted provider. Identical in shape to the one in cli_e2e.rs, but
@@ -172,6 +174,13 @@ impl TestSandbox {
         &self.root
     }
 
+    /// Phase 5 task 4: give each sandbox a sibling `store.redb` path
+    /// so the scratch `RedbStorage` lives inside the same `parent`
+    /// tempdir and gets cleaned up by the same `Drop` impl.
+    fn store_path(&self) -> PathBuf {
+        self.parent.join("store.redb")
+    }
+
     fn write(&self, rel: &str, contents: &[u8]) {
         let path = self.root.join(rel);
         if let Some(parent) = path.parent() {
@@ -235,13 +244,28 @@ fn build_harness(sandbox: &TestSandbox) -> Harness {
     }
 }
 
-fn base_session_config(harness: &Harness) -> SessionConfig {
+/// Open a throwaway `RedbStorage` at the sandbox's `store.redb` path.
+///
+/// Phase 5 task 4 made `SessionConfig.storage` a required field, so
+/// every integration test that builds a config via `base_session_config`
+/// now needs a real `Arc<dyn Storage>` threaded in alongside. The
+/// deterministic `[7u8; 32]` master key matches the one the chat-only
+/// cli_e2e test uses so future debugging can cross-reference them.
+async fn open_scratch_storage(sandbox: &TestSandbox) -> Arc<dyn Storage> {
+    let master = MasterKey::from_raw([7u8; 32]);
+    RedbStorage::open(StorageConfig::new(sandbox.store_path()), master)
+        .await
+        .expect("scratch storage must open")
+}
+
+fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionConfig {
     SessionConfig {
         model: "claude-haiku-4-5-20251001".to_string(),
         system_prompt: "test".to_string(),
         max_tokens: 256,
         capabilities: harness.capabilities.clone(),
         tools: Arc::clone(&harness.tools),
+        storage,
         prompt: String::new(),
         banner: None,
     }
@@ -301,7 +325,8 @@ async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
     let channel = LocalChannel::<Vec<u8>>::new("fs-e2e", Vec::new());
     let sink = channel.writer_handle();
 
-    let config = base_session_config(&harness);
+    let storage = open_scratch_storage(&sandbox).await;
+    let config = base_session_config(&harness, storage);
 
     let report = run_session(
         Arc::clone(&provider) as Arc<dyn LlmProvider>,
@@ -503,7 +528,8 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
     let reader = Cursor::new(&stdin_script[..]);
     let channel = LocalChannel::<Vec<u8>>::new("fs-e2e-deny", Vec::new());
 
-    let config = base_session_config(&harness);
+    let storage = open_scratch_storage(&sandbox).await;
+    let config = base_session_config(&harness, storage);
 
     let report = run_session(
         Arc::clone(&provider) as Arc<dyn LlmProvider>,

@@ -31,7 +31,9 @@
 //! the provider-to-planner conversion path).
 
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 
@@ -39,9 +41,60 @@ use aivyx_audit::{AuditBridge, AuditEvent, AuditLog, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
 use aivyx_core::{AuditHook, CancellationToken, ToolRegistry, TurnOutcome, TurnOutcomeSummary};
+use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
 };
+use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+// ---------------------------------------------------------------------------
+// Scratch storage — Phase 5 task 4 added `SessionConfig.storage`, so every
+// integration test now needs a real `Arc<dyn Storage>` to feed the field.
+// We hand-roll a `$TMPDIR`-based directory (same convention aivyx-core's
+// fs.rs and fs_tool_e2e.rs both use — "avoid adding tempfile as a dep for
+// 50 lines of test hygiene"), seed it with a deterministic master key
+// (`[7u8; 32]` here, same shape aivyx-audit uses for its fixture keys),
+// and drop it on test exit.
+// ---------------------------------------------------------------------------
+
+struct ScratchStoreDir {
+    parent: PathBuf,
+    store: PathBuf,
+}
+
+impl ScratchStoreDir {
+    fn new() -> Self {
+        let tmp = std::env::var("TMPDIR")
+            .or_else(|_| std::env::var("TEMP"))
+            .unwrap_or_else(|_| "/tmp".to_string());
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let parent = PathBuf::from(tmp).join(format!("aivyx-cli-e2e-store-{pid}-{nanos}"));
+        std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+        let store = parent.join("store.redb");
+        ScratchStoreDir { parent, store }
+    }
+}
+
+impl Drop for ScratchStoreDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.parent);
+    }
+}
+
+async fn open_scratch_storage(dir: &ScratchStoreDir) -> Arc<dyn Storage> {
+    // `MasterKey::from_raw` bypasses Argon2id and takes a literal 32
+    // bytes — exactly what we want in a test, since Argon2id at
+    // `d7_default()` takes ~500ms per call and this test is going
+    // through `run_session`, not through the passphrase flow itself.
+    let master = MasterKey::from_raw([7u8; 32]);
+    RedbStorage::open(StorageConfig::new(dir.store.clone()), master)
+        .await
+        .expect("scratch storage must open")
+}
 
 // ---------------------------------------------------------------------------
 // ScriptedProvider — yields one scripted step per `chat_stream` call.
@@ -168,6 +221,16 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
     let sink = channel.writer_handle();
 
+    // -- Scratch storage. Phase 5 task 4 made `SessionConfig.storage`
+    //    a required field; `run_session` writes a session-metadata
+    //    record to `KeyDomain::Sessions` at open + after each turn.
+    //    Nothing in the test asserts on storage contents (that's the
+    //    job of Phase 5 task 5's `storage_persistence_e2e.rs`); the
+    //    handle exists just so the chat-only regression compiles and
+    //    exercises the write path once per turn.
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+
     // -- Session config. Empty prompt keeps captured output easy to
     //    assert on; no banner for the same reason. Empty tool registry:
     //    this test is the Phase 3 chat-only regression. Phase 4 task 5
@@ -178,6 +241,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         max_tokens: 256,
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
         tools: Arc::new(ToolRegistry::new(Vec::new())),
+        storage,
         prompt: String::new(),
         banner: None,
     };
