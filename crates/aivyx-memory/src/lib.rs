@@ -198,6 +198,41 @@ pub trait Memory: Send + Sync {
     ///
     /// Fails fast on empty topic.
     async fn forget(&self, topic: &str) -> Result<usize, MemoryError>;
+
+    /// Walk every topic whose literal-byte name starts with
+    /// `topic_prefix`, returning one `(topic, entries)` pair per
+    /// matching topic. `entries` is sorted newest-first per topic
+    /// (matching `get_recent`'s ordering), capped at `per_topic_limit`
+    /// entries per topic.
+    ///
+    /// The substrate is **session-oblivious**: it walks raw topic
+    /// strings and has no concept of what any particular prefix
+    /// "means." Callers that want session-scoped cross-topic reads
+    /// (Phase 10 Task 1's wildcard `memory.read`) pass the
+    /// `\x01s\x01<session>\x01` namespace prefix from the tool
+    /// layer, which guarantees every returned topic belongs to
+    /// exactly that session.
+    ///
+    /// An empty `topic_prefix` is legal and means "every topic in
+    /// the substrate" — but the capability layer (`aivyx-capability`)
+    /// does not grant any wildcard scope whose prefix resolves to
+    /// empty, so this is a substrate-level permissive behavior, not
+    /// a tool-level one. Callers that care must enforce minimum
+    /// prefix discipline themselves.
+    ///
+    /// `per_topic_limit == 0` is an error (same as
+    /// `get_recent(_, 0)`), because a zero limit is almost always a
+    /// caller bug.
+    ///
+    /// The iteration order of topics within the returned vector is
+    /// **byte-lexicographic ascending**, which matches redb's
+    /// underlying `scan_prefix` order. Callers that want a specific
+    /// sort order must resort in the tool layer.
+    async fn scan_prefix(
+        &self,
+        topic_prefix: &str,
+        per_topic_limit: usize,
+    ) -> Result<Vec<(String, Vec<MemoryEntry>)>, MemoryError>;
 }
 
 /// Deterministic in-process `Memory` implementation.
@@ -306,6 +341,27 @@ impl Memory for InMemoryMemory {
         }
         let mut state = self.state.lock().unwrap();
         Ok(state.topics.remove(topic).map(|v| v.len()).unwrap_or(0))
+    }
+
+    async fn scan_prefix(
+        &self,
+        topic_prefix: &str,
+        per_topic_limit: usize,
+    ) -> Result<Vec<(String, Vec<MemoryEntry>)>, MemoryError> {
+        if per_topic_limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        let state = self.state.lock().unwrap();
+        let mut out: Vec<(String, Vec<MemoryEntry>)> = Vec::new();
+        for (topic, entries) in state.topics.iter() {
+            if !topic.starts_with(topic_prefix) {
+                continue;
+            }
+            let newest_first: Vec<MemoryEntry> =
+                entries.iter().rev().take(per_topic_limit).cloned().collect();
+            out.push((topic.clone(), newest_first));
+        }
+        Ok(out)
     }
 }
 
@@ -486,6 +542,87 @@ mod tests {
         let bytes = InMemoryMemory::encode_entry(&entry).unwrap();
         let decoded = InMemoryMemory::decode_entry(&bytes).unwrap();
         assert_eq!(entry, decoded);
+    }
+
+    // ---- Phase 10 task 1: scan_prefix substrate primitive ---------
+
+    #[tokio::test]
+    async fn scan_prefix_groups_entries_by_topic_in_byte_order() {
+        // Seed three topics in non-alphabetical order to prove the
+        // output is byte-lex ascending, not insertion order. The
+        // BTreeMap-backed fake gets this for free, but locking it in
+        // with an assertion protects the contract if the impl is ever
+        // swapped for a hashmap-based one.
+        let mem = InMemoryMemory::new();
+        mem.put("zeta", "z").await.unwrap();
+        mem.put("alpha", "a").await.unwrap();
+        mem.put("mu", "m").await.unwrap();
+
+        let out = mem.scan_prefix("", 10).await.unwrap();
+        let topics: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(topics, vec!["alpha", "mu", "zeta"]);
+        // Each group carries its own entry.
+        for (topic, entries) in &out {
+            assert_eq!(entries.len(), 1);
+            match topic.as_str() {
+                "alpha" => assert_eq!(entries[0].body, "a"),
+                "mu" => assert_eq!(entries[0].body, "m"),
+                "zeta" => assert_eq!(entries[0].body, "z"),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_filters_by_prefix() {
+        let mem = InMemoryMemory::new();
+        mem.put("logs-2026", "L1").await.unwrap();
+        mem.put("logs-2027", "L2").await.unwrap();
+        mem.put("notes", "n").await.unwrap();
+
+        let out = mem.scan_prefix("logs-", 10).await.unwrap();
+        let topics: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(topics, vec!["logs-2026", "logs-2027"]);
+        // "notes" is excluded.
+        assert!(!topics.contains(&"notes"));
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_caps_per_topic_and_returns_newest_first() {
+        let mem = InMemoryMemory::new();
+        for i in 0..5 {
+            mem.put("notes", &format!("n{i}")).await.unwrap();
+        }
+        let out = mem.scan_prefix("notes", 2).await.unwrap();
+        assert_eq!(out.len(), 1);
+        let (_, entries) = &out[0];
+        assert_eq!(entries.len(), 2, "per_topic_limit must cap the slice");
+        // Newest first: seq 4 then seq 3.
+        assert_eq!(entries[0].seq, 4);
+        assert_eq!(entries[1].seq, 3);
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_zero_limit_is_rejected() {
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "x").await.unwrap();
+        assert!(matches!(
+            mem.scan_prefix("notes", 0).await,
+            Err(MemoryError::ZeroLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_with_empty_prefix_sees_every_topic() {
+        // The trait contract is clear that an empty prefix is legal
+        // and means "every topic." The tool layer (`memory.read`
+        // wildcard with no session) relies on this for single-
+        // partition channels.
+        let mem = InMemoryMemory::new();
+        mem.put("a", "1").await.unwrap();
+        mem.put("b", "2").await.unwrap();
+        let out = mem.scan_prefix("", 10).await.unwrap();
+        assert_eq!(out.len(), 2);
     }
 
     #[test]

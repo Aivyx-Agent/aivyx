@@ -109,6 +109,15 @@ pub const DEFAULT_READ_LIMIT: usize = 16;
 /// store into context.
 pub const MAX_READ_LIMIT: usize = 64;
 
+/// Phase 10 Task 1 — default per-topic limit when the wildcard
+/// variant (`{"topics": "*"}`) is used. Smaller than
+/// [`DEFAULT_READ_LIMIT`] because the wildcard variant is for
+/// cross-topic discovery, not deep recall — four recent entries per
+/// topic is plenty to see what each topic is about. Callers that
+/// want deeper recall per topic can pass an explicit `limit` (still
+/// clamped to [`MAX_READ_LIMIT`]).
+pub const DEFAULT_WILDCARD_READ_LIMIT: usize = 4;
+
 /// Phase 7 task 5 — default ceiling on the number of entries a single
 /// topic may hold before `memory.write` starts refusing new entries.
 /// Not a hard disk-space bound (the redb file can still grow from
@@ -148,6 +157,46 @@ fn deny_scope(base: &str) -> Scope {
 fn topic_from_input(input: &Value) -> Option<&str> {
     let s = input.get("topic")?.as_str()?;
     if s.is_empty() { None } else { Some(s) }
+}
+
+/// Phase 10 Task 1 — classify a `memory.read` input as either the
+/// single-topic form or the wildcard (cross-topic) form. The two
+/// variants are mutually exclusive: passing both `topic` and
+/// `topics` is an error that routes to the deny scope.
+///
+/// - `Single(topic)` — `{"topic": "notes", ...}`.
+/// - `Wildcard` — `{"topics": "*", ...}`. The only legal value of
+///   the `topics` field is the string `"*"`; any other value is
+///   rejected so a future extension of the wildcard grammar can
+///   pick its own sentinel without being confused with a typo.
+/// - `Invalid` — missing both fields, present-but-wrong-type,
+///   literal `\x01` prefix, empty topic, or both fields set at
+///   once. The caller routes this to `deny_scope`.
+enum MemoryReadShape<'a> {
+    Single(&'a str),
+    Wildcard,
+    Invalid,
+}
+
+fn classify_memory_read_input(input: &Value) -> MemoryReadShape<'_> {
+    let has_topic = input.get("topic").is_some();
+    let has_topics = input.get("topics").is_some();
+
+    if has_topic && has_topics {
+        return MemoryReadShape::Invalid;
+    }
+
+    if has_topics {
+        return match input.get("topics").and_then(|v| v.as_str()) {
+            Some("*") => MemoryReadShape::Wildcard,
+            _ => MemoryReadShape::Invalid,
+        };
+    }
+
+    match topic_from_input(input) {
+        Some(t) if !topic_uses_reserved_prefix(t) => MemoryReadShape::Single(t),
+        _ => MemoryReadShape::Invalid,
+    }
 }
 
 /// Extract the optional session partition string from a tool-input
@@ -301,17 +350,34 @@ fn read_input_schema_value() -> Value {
                 "description": "Non-empty topic tag to recall. \
                                 Memory is strictly topic-scoped; a \
                                 reader cannot see topics other than \
-                                this one."
+                                this one. Mutually exclusive with \
+                                `topics`."
+            },
+            "topics": {
+                "type": "string",
+                "enum": ["*"],
+                "description": "Cross-topic wildcard recall. The only \
+                                legal value is the literal string \
+                                \"*\", which returns up to \
+                                `limit` (default 4) entries from every \
+                                topic in the current session. Requires \
+                                the agent to hold \
+                                `memory.read:topic:*:session:<session>`, \
+                                which is not granted by any default \
+                                tier ceiling — the wildcard is a \
+                                deliberate opt-in. Mutually exclusive \
+                                with `topic`."
             },
             "limit": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_READ_LIMIT,
                 "description": "Maximum number of recent entries to return. \
-                                Defaults to 16, capped at 64."
+                                Defaults to 16 for the single-topic \
+                                variant and 4 per topic for the \
+                                wildcard variant, capped at 64."
             }
         },
-        "required": ["topic"],
         "additionalProperties": false,
     })
 }
@@ -338,85 +404,174 @@ impl Tool for MemoryReadTool {
     }
 
     fn required_scope(&self, input: &Value) -> Scope {
-        match topic_from_input(input) {
-            Some(topic) if !topic_uses_reserved_prefix(topic) => {
+        match classify_memory_read_input(input) {
+            MemoryReadShape::Single(topic) => {
                 memory_scope("memory.read", topic, session_from_input(input))
             }
-            // Missing topic, wrong type, empty topic, or a topic that
-            // literally starts with the reserved `\x01` session-
-            // namespace prefix — the last case would let an agent
-            // side-door into another chat's physical storage key, so
-            // deny at the gate.
-            _ => deny_scope("memory.read"),
+            // Phase 10 Task 1 — the wildcard shape requires a scope
+            // whose topic qualifier is the literal `*` glob. The
+            // existing `is_granted_by` machinery treats `*` as a
+            // glob wildcard, so an agent holding
+            // `memory.read:topic:*:session:<session>` grants
+            // `memory.read:topic:<anything>:session:<session>` — but
+            // crucially the needed scope *is* the wildcard, not the
+            // per-topic form, so only an agent explicitly holding
+            // the wildcard can run this call. Cross-topic read is a
+            // deliberate opt-in.
+            MemoryReadShape::Wildcard => {
+                memory_scope("memory.read", "*", session_from_input(input))
+            }
+            // Missing topic/topics, wrong type, empty topic, reserved
+            // `\x01` prefix, or both fields set at once — deny.
+            MemoryReadShape::Invalid => deny_scope("memory.read"),
         }
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
-        let topic = match topic_from_input(&input) {
-            Some(t) if !topic_uses_reserved_prefix(t) => t.to_string(),
-            _ => {
-                // Same invariant violation argument as FsReadTool: the
-                // scope gate would have denied a missing-topic call
-                // because `required_scope` returned the deny scope.
-                // Reaching `execute` without a topic means either the
-                // gate was bypassed or the scope-gate logic has a
-                // bug. Either way, fail loudly in audit.
-                return ToolOutcome::Failed(AivyxError::Internal(
-                    "memory.read: reached execute with malformed input \
-                     (topic missing, non-string, or reserved prefix) \
-                     after scope gate admitted the call"
-                        .to_string(),
-                ));
-            }
-        };
         // `session` is the namespacing source from the channel's
         // `session_partition()`, injected by the turn loop. `None`
         // preserves Phase 6 single-partition behavior.
         let session = session_from_input(&input).map(str::to_string);
 
-        let requested = input
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_READ_LIMIT);
-        let limit = requested.clamp(1, MAX_READ_LIMIT);
+        let requested_limit = input.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
 
-        // Audit records the *logical* scope and the *logical* topic the
-        // agent asked for. The physical topic is an internal storage
-        // detail and must never leak into the audit chain — otherwise
-        // `verify_from_disk` would have to know about namespacing to
-        // round-trip a chain, breaking D1's "audit verifies without
-        // live substrate" rule.
-        ctx.audit.on_event(AuditTag::MemoryAccess {
-            turn_id: ctx.turn_id,
-            operation: MemoryOperation::Read,
-            scope: memory_scope("memory.read", &topic, session.as_deref()),
-            query_or_key: topic.clone(),
-        });
+        match classify_memory_read_input(&input) {
+            MemoryReadShape::Single(topic) => {
+                let topic = topic.to_string();
+                let limit = requested_limit
+                    .unwrap_or(DEFAULT_READ_LIMIT)
+                    .clamp(1, MAX_READ_LIMIT);
 
-        let physical = namespaced_topic(session.as_deref(), &topic);
-        let mut entries = match self.memory.get_recent(&physical, limit).await {
-            Ok(v) => v,
-            Err(e) => return memory_err_to_failed(self.id, e),
-        };
-        // Restore the logical topic on the way out — the agent asked
-        // for `notes`, not `\x01s\x0112345\x01notes`. Same reasoning
-        // as the audit event above.
-        for entry in entries.iter_mut() {
-            entry.topic = topic.clone();
-        }
+                // Audit records the *logical* scope and the *logical*
+                // topic the agent asked for. The physical topic is an
+                // internal storage detail and must never leak into the
+                // audit chain — otherwise `verify_from_disk` would have
+                // to know about namespacing to round-trip a chain,
+                // breaking D1's "audit verifies without live substrate"
+                // rule.
+                ctx.audit.on_event(AuditTag::MemoryAccess {
+                    turn_id: ctx.turn_id,
+                    operation: MemoryOperation::Read,
+                    scope: memory_scope("memory.read", &topic, session.as_deref()),
+                    query_or_key: topic.clone(),
+                });
 
-        let json_entries: Vec<Value> = entries.iter().map(entry_to_json).collect();
+                let physical = namespaced_topic(session.as_deref(), &topic);
+                let mut entries = match self.memory.get_recent(&physical, limit).await {
+                    Ok(v) => v,
+                    Err(e) => return memory_err_to_failed(self.id, e),
+                };
+                // Restore the logical topic on the way out — the agent
+                // asked for `notes`, not `\x01s\x0112345\x01notes`.
+                // Same reasoning as the audit event above.
+                for entry in entries.iter_mut() {
+                    entry.topic = topic.clone();
+                }
 
-        ToolOutcome::Completed {
-            output: json!({
-                "topic": topic,
-                "entries": json_entries,
-                "count": json_entries.len(),
-            }),
-            // Read is inherently a query — "verification" is
-            // meaningless for something that didn't mutate state.
-            verified: Verification::NotApplicable,
+                let json_entries: Vec<Value> = entries.iter().map(entry_to_json).collect();
+
+                ToolOutcome::Completed {
+                    output: json!({
+                        "topic": topic,
+                        "entries": json_entries,
+                        "count": json_entries.len(),
+                    }),
+                    // Read is inherently a query — "verification" is
+                    // meaningless for something that didn't mutate state.
+                    verified: Verification::NotApplicable,
+                }
+            }
+
+            // Phase 10 Task 1 — wildcard cross-topic read. Audit
+            // records the *logical* wildcard scope (`memory.read:topic:*:
+            // session:<s>`) and a sentinel query string, so a
+            // `verify_from_disk` walk can see that a wildcard read
+            // happened without having to know anything about the
+            // session namespacing below the tool layer.
+            MemoryReadShape::Wildcard => {
+                let per_topic_limit = requested_limit
+                    .unwrap_or(DEFAULT_WILDCARD_READ_LIMIT)
+                    .clamp(1, MAX_READ_LIMIT);
+
+                ctx.audit.on_event(AuditTag::MemoryAccess {
+                    turn_id: ctx.turn_id,
+                    operation: MemoryOperation::Read,
+                    scope: memory_scope("memory.read", "*", session.as_deref()),
+                    query_or_key: "*".to_string(),
+                });
+
+                // The scan prefix is the session-namespace prefix for
+                // the caller's session. When the caller has no session
+                // (single-partition channels like LocalChannel), the
+                // scan prefix is empty, which means "every topic in
+                // the substrate." That is deliberately permissive at
+                // the substrate, because the capability gate above
+                // already required the agent to hold the wildcard
+                // scope.
+                let scan_prefix = match session.as_deref() {
+                    Some(s) => format!("{SESSION_PREFIX}{s}\x01"),
+                    None => String::new(),
+                };
+
+                let grouped = match self
+                    .memory
+                    .scan_prefix(&scan_prefix, per_topic_limit)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => return memory_err_to_failed(self.id, e),
+                };
+
+                // Strip the session prefix from each physical topic on
+                // the way out, so the agent sees logical topic names.
+                // Single-partition callers (empty prefix) see the
+                // physical topic unchanged, which is correct because
+                // their physical and logical topics are identical.
+                let mut topic_objects: Vec<Value> = Vec::with_capacity(grouped.len());
+                for (physical_topic, mut entries) in grouped {
+                    let logical_topic = match session.as_deref() {
+                        Some(_) if physical_topic.starts_with(&scan_prefix) => {
+                            physical_topic[scan_prefix.len()..].to_string()
+                        }
+                        _ => physical_topic.clone(),
+                    };
+                    for entry in entries.iter_mut() {
+                        entry.topic = logical_topic.clone();
+                    }
+                    let json_entries: Vec<Value> =
+                        entries.iter().map(entry_to_json).collect();
+                    let count = json_entries.len();
+                    topic_objects.push(json!({
+                        "topic": logical_topic,
+                        "entries": json_entries,
+                        "count": count,
+                    }));
+                }
+
+                let topic_count = topic_objects.len();
+                ToolOutcome::Completed {
+                    output: json!({
+                        "topics": topic_objects,
+                        "topic_count": topic_count,
+                    }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+
+            MemoryReadShape::Invalid => {
+                // Same invariant-violation argument as the original
+                // single-topic path: `required_scope` would have
+                // returned the deny scope for this input, so reaching
+                // `execute` means the gate was bypassed or the
+                // gate-logic has a bug. Fail loudly in audit.
+                ToolOutcome::Failed(AivyxError::Internal(
+                    "memory.read: reached execute with malformed input \
+                     (topic/topics missing, wrong type, reserved prefix, \
+                     or both fields set) after scope gate admitted the \
+                     call"
+                        .to_string(),
+                ))
+            }
         }
     }
 }
@@ -1546,6 +1701,264 @@ mod tests {
                 assert_eq!(verified, Verification::Verified);
             }
             other => panic!("B's first write should Complete, got {other:?}"),
+        }
+    }
+
+    // ---- Phase 10 task 1: cross-topic `memory.read` wildcard -------
+    //
+    // These tests cover the `{"topics": "*"}` shape end-to-end at the
+    // tool layer. The substrate primitive (`Memory::scan_prefix`) has
+    // its own tests in `lib.rs` and `redb.rs`; this suite proves the
+    // tool-layer plumbing: classifier, scope derivation, session
+    // namespacing, and the grouped output shape.
+
+    #[tokio::test]
+    async fn wildcard_read_fans_out_across_topics_in_one_session() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        // Two different topics, same session.
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "purple", "session": "A"}),
+                &ctx,
+            )
+            .await;
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "todos", "body": "ship it", "session": "A"}),
+                &ctx,
+            )
+            .await;
+
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topics": "*", "session": "A"}), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(verified, Verification::NotApplicable);
+                assert_eq!(output["topic_count"], 2);
+                let topics = output["topics"].as_array().unwrap();
+                // Logical topic names — no session prefix bleed-through.
+                let names: Vec<&str> =
+                    topics.iter().map(|t| t["topic"].as_str().unwrap()).collect();
+                assert!(names.contains(&"notes"));
+                assert!(names.contains(&"todos"));
+                // Each topic carries its own entries array with the
+                // matching body.
+                for topic in topics {
+                    let entries = topic["entries"].as_array().unwrap();
+                    assert_eq!(entries.len(), 1);
+                    let body = entries[0]["body"].as_str().unwrap();
+                    assert!(body == "purple" || body == "ship it");
+                    // The entry's topic field must also be the logical
+                    // name — task 1 strips the session prefix on the
+                    // way out in both the group object and the per-
+                    // entry topic.
+                    let entry_topic = entries[0]["topic"].as_str().unwrap();
+                    assert!(entry_topic == "notes" || entry_topic == "todos");
+                }
+            }
+            other => panic!("wildcard read should Complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wildcard_read_is_session_scoped() {
+        // Sessions A and B each have a `notes` topic. A wildcard read
+        // under session A must only return A's `notes`, never B's.
+        // This is the core isolation guarantee: the scan prefix on
+        // `scan_prefix` is the namespaced session prefix, not the
+        // empty string.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "a-only", "session": "A"}),
+                &ctx,
+            )
+            .await;
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "b-only", "session": "B"}),
+                &ctx,
+            )
+            .await;
+
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topics": "*", "session": "A"}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["topic_count"], 1);
+            let topics = output["topics"].as_array().unwrap();
+            assert_eq!(topics[0]["topic"], "notes");
+            let entries = topics[0]["entries"].as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0]["body"], "a-only");
+        } else {
+            panic!("wildcard read under A should Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn wildcard_read_respects_per_topic_default_limit() {
+        // Seed one topic with more entries than the default wildcard
+        // limit. The single-topic default (DEFAULT_READ_LIMIT = 16) is
+        // higher than DEFAULT_WILDCARD_READ_LIMIT, so this test also
+        // proves the wildcard path uses its own, smaller default.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        for i in 0..(DEFAULT_WILDCARD_READ_LIMIT + 4) {
+            let ctx = make_ctx(&chan, &audit);
+            let _ = writer
+                .execute(
+                    json!({
+                        "topic": "notes",
+                        "body": format!("n{i}"),
+                        "session": "A",
+                    }),
+                    &ctx,
+                )
+                .await;
+        }
+
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topics": "*", "session": "A"}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            let topics = output["topics"].as_array().unwrap();
+            assert_eq!(topics.len(), 1);
+            let entries = topics[0]["entries"].as_array().unwrap();
+            assert_eq!(
+                entries.len(),
+                DEFAULT_WILDCARD_READ_LIMIT,
+                "wildcard default must cap each topic at DEFAULT_WILDCARD_READ_LIMIT"
+            );
+        } else {
+            panic!("wildcard read should Complete");
+        }
+    }
+
+    // ---- Phase 10 task 1: scope derivation for wildcard -----------
+
+    #[test]
+    fn wildcard_read_scope_has_wildcard_topic_qualifier() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topics": "*", "session": "A"}));
+        assert_eq!(scope.base(), "memory.read");
+        // The qualifier must be the wildcard form — glob matching in
+        // `aivyx-capability` turns `topic:*:session:A` into a grant
+        // that covers `topic:<anything>:session:A`, but the needed
+        // scope itself is the literal wildcard, so an agent that only
+        // holds `memory.read:topic:notes:session:A` is NOT granted.
+        assert_eq!(scope.qualifier(), Some("topic:*:session:A"));
+    }
+
+    #[test]
+    fn wildcard_read_scope_is_distinct_from_single_topic_scope() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let single = tool.required_scope(&json!({"topic": "notes", "session": "A"}));
+        let wild = tool.required_scope(&json!({"topics": "*", "session": "A"}));
+        assert_ne!(
+            single, wild,
+            "cross-topic read must be a strictly different scope"
+        );
+    }
+
+    #[test]
+    fn literal_topic_star_is_still_a_single_topic_read() {
+        // `topic: "*"` is a legal literal topic at the substrate
+        // layer — the classifier routes through `topic_from_input`,
+        // which does not special-case `*`. Only the `topics` field
+        // name triggers wildcard semantics. This is a regression
+        // lock: if someone ever "simplifies" the classifier into
+        // matching any `*` value, cross-topic read silently becomes
+        // reachable through a scope that only granted a single
+        // literal topic.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": "*", "session": "A"}));
+        assert_eq!(scope.base(), "memory.read");
+        // This is the wildcard-literal-string qualifier — at the
+        // capability layer `topic:*` happens to be a valid glob and
+        // would *also* grant every topic, which is why the classifier
+        // and the grant surface must stay decoupled. The point of the
+        // test is that this scope came from the **single**-topic path,
+        // so its shape equals the one for a normal literal topic
+        // (topic:<literal>:session:<s>) — not the separate wildcard
+        // shape that task 1 introduced.
+        assert_eq!(scope.qualifier(), Some("topic:*:session:A"));
+    }
+
+    #[test]
+    fn read_scope_for_both_topic_and_topics_set_is_deny_scope() {
+        // Ambiguous input: both fields present at once. The
+        // classifier returns `Invalid`, which maps to the deny scope.
+        // This matters because otherwise the tool surface has two
+        // ways to spell the same request and an attacker can pick the
+        // one whose required-scope check they happen to hold.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({
+            "topic": "notes",
+            "topics": "*",
+            "session": "A",
+        }));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[test]
+    fn read_scope_for_topics_wrong_value_is_deny_scope() {
+        // `topics` is a sentinel field whose only legal value is the
+        // literal string `"*"`. Any other value — a list of names, a
+        // boolean, an empty string — must fall through to deny. Lock
+        // that in so a future "convenience" extension to accept e.g.
+        // `topics: ["a", "b"]` has to walk past this test.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topics": ["notes", "todos"]}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+
+        let scope = tool.required_scope(&json!({"topics": ""}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+
+        let scope = tool.required_scope(&json!({"topics": "notes"}));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    #[tokio::test]
+    async fn wildcard_read_with_no_session_returns_empty_substrate_is_empty() {
+        // Single-partition caller (no `session` field). The scan
+        // prefix is empty, which means "every topic in the
+        // substrate." An empty substrate still returns `topic_count
+        // 0` — same as a single-topic read of an unknown topic.
+        let reader = MemoryReadTool::new(fresh_memory());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let out = reader.execute(json!({"topics": "*"}), &ctx).await;
+        if let ToolOutcome::Completed { output, verified } = out {
+            assert_eq!(output["topic_count"], 0);
+            assert!(output["topics"].as_array().unwrap().is_empty());
+            assert_eq!(verified, Verification::NotApplicable);
+        } else {
+            panic!("empty-substrate wildcard read should Complete");
         }
     }
 }

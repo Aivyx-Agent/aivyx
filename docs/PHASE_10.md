@@ -306,6 +306,121 @@ follow-up `docs(phase-10): backfill Phase 10 exit commit hash in
 docs/README.md table` to fill in the self-referential hash. Same
 pattern as Phase 9 exit (`7052ecc` + `1853673`).
 
+## Task 1 — design resolutions recorded mid-implementation
+
+Before writing code, a close reading of `aivyx-memory/src/tools.rs`,
+`aivyx-memory/src/redb.rs`, and `aivyx-core/src/lib.rs` surfaced
+architectural facts that revise the draft task breakdown above.
+Recording them here so the ship record can cite the resolution IDs.
+
+### DQ1 — `scan_topics` substrate shape: **resolved as Option B**
+
+Task 1 adds one new method to the `Memory` trait:
+
+```rust
+async fn scan_prefix(&self, topic_prefix: &str)
+    -> Result<Vec<(String, Vec<MemoryEntry>)>, MemoryError>;
+```
+
+Returns `(physical_topic, entries)` pairs for every topic whose
+physical form starts with `topic_prefix`, with `entries` sorted
+newest-first per topic (matching `get_recent`'s ordering). The
+substrate stays session-oblivious — it walks raw topic-string
+prefixes. The tool layer (not the substrate) is responsible for
+knowing that the `\x01s\x01<session>\x01` prefix structure means
+"everything in this session."
+
+This preserves the two-layer architecture `aivyx-memory` already
+has: `Memory` trait speaks in topic strings, tool wrappers
+(`MemoryReadTool`) speak in logical topics + optional sessions.
+
+### DQ2 — Wildcard response shape: **resolved as grouped**
+
+`MemoryReadTool::execute` with `topics: "*"` returns:
+
+```json
+{
+  "topics": [
+    {"topic": "notes", "entries": [...], "count": 3},
+    {"topic": "todos", "entries": [...], "count": 5}
+  ],
+  "topic_count": 2
+}
+```
+
+One object per logical topic found in the session. Logical topic
+names are extracted from the physical topic on the way out (strip
+the `\x01s\x01<session>\x01` prefix). This matches the intent of
+the wildcard variant — cross-topic discovery rather than flat
+concatenation — and the response shape is distinguishable from
+the single-topic `{"topic": ..., "entries": [...]}` shape at the
+top-level field name, so a consumer can dispatch on either.
+
+### DQ3 — Wildcard limit semantics: **resolved as per-topic with lower default**
+
+The wildcard variant reuses the existing `limit` parameter but:
+
+- **Default** drops from `DEFAULT_READ_LIMIT` (16) to a new
+  `DEFAULT_WILDCARD_READ_LIMIT` (4). Rationale: the wildcard
+  variant is for discovery, not deep recall — showing 4 recent
+  entries per topic is plenty to see what each topic is about.
+- **Max** stays at `MAX_READ_LIMIT` (64) — reusing the same hard
+  cap means there is still one number to reason about.
+- Per-topic semantics. A session with 20 topics and `limit: 4`
+  returns up to 80 entries. Worst case is `64 × number_of_topics`,
+  which is bounded by how many topics a session actually has.
+
+### DQ4 — redb-key walking: **informational heads-up, no surprise**
+
+`RedbMemory::scan_prefix` walks `e\0 || topic_prefix` at the redb
+level. The `\0` separator between physical_topic and seq_be is
+distinct from `\x01` bytes inside the physical topic, so the key
+decoder can locate the seq tail unambiguously. Implementation is
+~40 lines following the existing `seed_counter_from_storage`
+pattern (same `scan_prefix` helper on `DomainHandle`, same
+`seq_from_entry_key` decoder).
+
+## Task 2 — correction recorded mid-implementation
+
+The draft task breakdown above says Task 2 adds `input_schema()`
+to the `Tool` trait as an additive refinement. **This is wrong.**
+
+A close reading of `aivyx-core/src/lib.rs:477` revealed that
+`Tool::input_schema(&self) -> &serde_json::Value` has existed on
+the trait since Phase 6. Every shipped tool already returns a real
+schema (not `None`), and `llm_planner.rs:125` forwards it into the
+Anthropic `tool_input_schema` field. The schema is **declarative
+advice to the LLM**, not a runtime-enforced gate.
+
+Task 2 therefore becomes **narrower and does not touch the `Tool`
+trait at all**:
+
+1. Add a hand-rolled validator in `aivyx-core/src/schema.rs` (new
+   module, under 100 lines) covering the JSON Schema subset the
+   shipped tools actually emit — `type: object`, `properties`,
+   `required`, `additionalProperties: false`, `type: string`,
+   `type: integer` with `minimum`/`maximum`.
+2. Wire the validator into `agent.rs` at the admission point
+   (between the session-partition injection at `agent.rs:326–330`
+   and the `required_scope` call at `agent.rs:332`). On mismatch,
+   return `ToolOutcome::Failed` with a detail describing which
+   field failed.
+3. No `Tool` trait change. No shipped-tool schema retrofits (the
+   five shipped tools already have real schemas). No intentional
+   streak break on `aivyx-core/src/lib.rs` — **the production-
+   core byte-identity streak held since `c3883be` may survive
+   Phase 10** if Task 3 can also be done without touching
+   `lib.rs`. Task 3's `StreamEvent::ToolCallStarted` refinement
+   does still touch `lib.rs`, so the streak *does* break in
+   Task 3 alone, but for a smaller reason than originally
+   documented.
+
+**Rationale for recording the correction here:** discovering an
+incorrect task sketch mid-phase is exactly what the "draft task
+breakdown — revised as work lands" framing exists to handle. The
+draft stays in place above as historical context; the resolutions
+below are the definitive Phase 10 plan.
+
 ## Open questions
 
 Numbered so resolutions can be cited in ship records. Each question

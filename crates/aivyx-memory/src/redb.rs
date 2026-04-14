@@ -290,6 +290,79 @@ impl Memory for RedbMemory {
         }
         Ok(deleted)
     }
+
+    async fn scan_prefix(
+        &self,
+        topic_prefix: &str,
+        per_topic_limit: usize,
+    ) -> Result<Vec<(String, Vec<MemoryEntry>)>, MemoryError> {
+        if per_topic_limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+
+        // Build the full redb key prefix: ENTRY_PREFIX || topic_prefix.
+        // This selects every entry whose physical topic begins with
+        // `topic_prefix`. Metadata keys (`m\x00...`) are excluded
+        // because they start with a different discriminator byte.
+        let mut key_prefix =
+            Vec::with_capacity(ENTRY_PREFIX.len() + topic_prefix.len());
+        key_prefix.extend_from_slice(ENTRY_PREFIX);
+        key_prefix.extend_from_slice(topic_prefix.as_bytes());
+
+        let rows = self
+            .handle
+            .scan_prefix(&key_prefix)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+
+        // Group rows by physical topic. `scan_prefix` returns rows
+        // byte-lexicographically ascending, which means all entries
+        // for one topic are contiguous — we can group in one pass
+        // without a hash map, but using a BTreeMap gives us the
+        // same contract with less fiddly accumulation logic. The
+        // BTreeMap also guarantees the returned vector is in
+        // byte-lexicographic topic order, matching the trait
+        // contract's documented order.
+        use std::collections::BTreeMap;
+        let mut grouped: BTreeMap<String, Vec<MemoryEntry>> = BTreeMap::new();
+        for (key, value) in &rows {
+            // Extract the physical topic from the key layout:
+            // `e\x00 || topic_bytes || \x00 || seq_be(8)`.
+            // Skip the leading `e\x00`, then find the `\x00`
+            // separator immediately before the 8-byte seq tail.
+            // The seq tail is always the last 8 bytes, so the
+            // separator index is `key.len() - 9`.
+            if key.len() < ENTRY_PREFIX.len() + 1 + 8 {
+                continue;
+            }
+            let sep_idx = key.len() - 9;
+            if key[sep_idx] != 0x00 {
+                continue;
+            }
+            let topic_bytes = &key[ENTRY_PREFIX.len()..sep_idx];
+            let Ok(topic_str) = std::str::from_utf8(topic_bytes) else {
+                continue;
+            };
+
+            let entry = InMemoryMemory::decode_entry(value)?;
+            grouped
+                .entry(topic_str.to_string())
+                .or_default()
+                .push(entry);
+        }
+
+        // Within each topic, rows came back seq-ascending (because
+        // seq is big-endian in the key, and lexicographic order
+        // over big-endian u64 is numeric order). We want newest-
+        // first and at most `per_topic_limit` entries.
+        let mut out: Vec<(String, Vec<MemoryEntry>)> = Vec::with_capacity(grouped.len());
+        for (topic, mut entries) in grouped {
+            entries.reverse();
+            entries.truncate(per_topic_limit);
+            out.push((topic, entries));
+        }
+        Ok(out)
+    }
 }
 
 /// Extract the trailing `seq_be` from an entry key, or `None` if the
@@ -677,5 +750,111 @@ mod tests {
         assert_eq!(decode_u64_be(&[0; 8]), Some(0));
         assert_eq!(decode_u64_be(&[0; 7]), None);
         assert_eq!(decode_u64_be(&[0; 9]), None);
+    }
+
+    // ---- Phase 10 task 1: scan_prefix on disk ---------------------
+    //
+    // The fake in `lib.rs` covers the ordering and limit contracts;
+    // these tests prove the disk impl gets the *key decoding* right,
+    // because that's the only place the two impls can drift. The
+    // redb impl has to locate the `\0` separator at `key.len() - 9`
+    // and parse UTF-8 topic bytes out of the middle of the key —
+    // none of which the BTreeMap fake exercises.
+
+    #[tokio::test]
+    async fn scan_prefix_on_disk_groups_and_orders_by_topic() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 10).await;
+
+        mem.put("zeta", "z").await.unwrap();
+        mem.put("alpha", "a").await.unwrap();
+        mem.put("mu", "m").await.unwrap();
+
+        let out = mem.scan_prefix("", 10).await.unwrap();
+        let topics: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(topics, vec!["alpha", "mu", "zeta"]);
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_on_disk_filters_by_prefix_and_respects_sibling_boundary() {
+        // Regression lock for the "notes vs notesfoo" case at the
+        // scan_prefix layer. A prefix of "notes" must match both —
+        // that's the wildcard semantic — but a prefix of "notes\0"
+        // must match ONLY "notes" because the key layout ends the
+        // topic with a 0x00 separator. This is load-bearing for the
+        // session-namespace layout where the prefix is
+        // `\x01s\x01<session>\x01`, and two sessions whose ids share
+        // a textual prefix must not leak into each other.
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 11).await;
+
+        mem.put("notes", "real").await.unwrap();
+        mem.put("notesfoo", "sibling").await.unwrap();
+
+        // `notes` prefix matches both (this is the permissive path).
+        let out = mem.scan_prefix("notes", 10).await.unwrap();
+        let topics: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(topics, vec!["notes", "notesfoo"]);
+
+        // A more specific prefix filters out the sibling.
+        let out = mem.scan_prefix("notesf", 10).await.unwrap();
+        let topics: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(topics, vec!["notesfoo"]);
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_on_disk_caps_each_topic_independently() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 12).await;
+
+        for i in 0..5 {
+            mem.put("a", &format!("a{i}")).await.unwrap();
+        }
+        for i in 0..3 {
+            mem.put("b", &format!("b{i}")).await.unwrap();
+        }
+
+        let out = mem.scan_prefix("", 2).await.unwrap();
+        assert_eq!(out.len(), 2);
+        let a_entries = &out.iter().find(|(t, _)| t == "a").unwrap().1;
+        let b_entries = &out.iter().find(|(t, _)| t == "b").unwrap().1;
+        assert_eq!(a_entries.len(), 2, "a must be capped at per_topic_limit");
+        assert_eq!(b_entries.len(), 2, "b must be capped at per_topic_limit");
+        // And newest-first within each group.
+        assert!(a_entries[0].seq > a_entries[1].seq);
+        assert!(b_entries[0].seq > b_entries[1].seq);
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_on_disk_excludes_metadata_keys() {
+        // Metadata is stored under `m\x00...`; entries under `e\x00...`.
+        // A scan_prefix with an empty topic prefix (→ key_prefix
+        // `e\x00`) must only see entry rows. If the key-prefix
+        // construction ever drops the ENTRY_PREFIX byte, metadata
+        // would start appearing in results — this test catches that.
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 13).await;
+
+        // Triggering at least one put ensures the metadata key
+        // (`m\x00next_seq`) gets written — the counter is persisted
+        // on every put.
+        mem.put("notes", "x").await.unwrap();
+
+        let out = mem.scan_prefix("", 10).await.unwrap();
+        // Exactly one topic — "notes" — and no spurious metadata
+        // topic from a miss-decoded `m\x00next_seq` key.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "notes");
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_on_disk_rejects_zero_limit() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 14).await;
+        mem.put("notes", "x").await.unwrap();
+        assert!(matches!(
+            mem.scan_prefix("", 0).await,
+            Err(MemoryError::ZeroLimit)
+        ));
     }
 }
