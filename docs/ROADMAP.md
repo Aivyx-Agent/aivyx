@@ -27,8 +27,10 @@ comes after the current phase?"* — nothing more.
 
 ## Phase 8 — Ecosystem: Telegram adapter
 
-**Leaning:** Telegram as the first non-local channel, on the back
-of Phase 7's hardening work.
+**Status:** Active — see [`PHASE_8.md`](PHASE_8.md).
+
+Telegram as the first non-local channel, on the back of Phase 7's
+hardening work.
 
 Phase 7 shipped exactly the core surface a network-facing adapter
 needs: **persistent audit** (a bad message over an untrusted
@@ -53,7 +55,7 @@ trust-tier ladder's second rung gets exercised end-to-end.
 **Why Telegram first over Matrix / Discord / Slack:** Telegram is
 the simplest credible non-local channel (long-poll or webhook, one
 auth token, small message model) and its trust-tier story is
-unambiguous — a Telegram bot is `ChannelTrustTier::Untrusted` by
+unambiguous — a Telegram bot is `TrustTier::Untrusted` by
 default and D4's capability attenuation falls naturally out of the
 existing tier table. Matrix is a more principled choice but has a
 larger protocol surface (federation, device verification, encrypted
