@@ -48,10 +48,8 @@
 //! debugging. The trade is ~30% storage overhead vs. postcard, which
 //! we pay gladly.
 //!
-//! ## What task 1 deliberately does not do
+//! ## Deliberately out of scope for this crate
 //!
-//! - **No `RedbMemory`.** That lands in task 2 as a separate wrapper
-//!   over `aivyx_storage::DomainHandle` for `KeyDomain::Memory`.
 //! - **No `Tool` impls.** Those land in task 3 in a new `tools`
 //!   sub-module and depend on this trait.
 //! - **No scope checks.** Scope enforcement is the tool wrapper's
@@ -63,6 +61,18 @@
 //!   Phase 6 Q3 will resolve whether `"*"` means "all topics" in the
 //!   tool-level API; the substrate itself is topic-scoped so this
 //!   decision lives one layer up).
+//!
+//! ## Implementations
+//!
+//! - [`InMemoryMemory`] — deterministic in-process fake, no
+//!   persistence. Used by this crate's unit tests and by task 3's
+//!   tool-wrapper tests so they can stay at microsecond speed.
+//! - [`RedbMemory`] — redb-backed, AEAD-encrypted, persistent.
+//!   Task 2's deliverable. Wraps a
+//!   `aivyx_storage::DomainHandle` for `KeyDomain::Memory` and
+//!   seeds its monotonic sequence counter from any existing
+//!   entries at construction time, so a restart preserves the
+//!   invariant that no two entries ever share a `seq`.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -71,6 +81,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+mod redb;
+pub use crate::redb::RedbMemory;
 
 /// A single memory record.
 ///

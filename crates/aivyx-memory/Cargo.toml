@@ -25,6 +25,25 @@ serde_json = { workspace = true }
 # Typed errors, consistent with aivyx-storage and aivyx-crypto.
 thiserror = { workspace = true }
 
+# Task 2: RedbMemory wraps a DomainHandle for KeyDomain::Memory.
+# Only the redb-backed impl touches this — the Memory trait and
+# InMemoryMemory fake are substrate-agnostic and compile without it.
+aivyx-storage = { path = "../aivyx-storage" }
+
+# tokio::sync::Mutex inside RedbMemory — the seq counter is behind
+# an async Mutex so `put` can hold it across the underlying
+# DomainHandle::put .await without fighting lifetimes.
+tokio = { workspace = true, features = ["sync"] }
+
 [dev-dependencies]
 # #[tokio::test] for the async unit tests — same split as aivyx-storage.
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+# RedbMemory tests open a real RedbStorage under $TMPDIR and seed it
+# with a test MasterKey. aivyx-storage is already a runtime dep, so
+# we only need the crypto crate to construct the master key.
+aivyx-crypto = { path = "../aivyx-crypto" }
+
+# Scratch directory names include a v4 UUID to avoid collisions
+# across concurrent test workers.
+uuid = { workspace = true }

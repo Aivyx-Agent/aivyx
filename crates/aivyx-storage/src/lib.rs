@@ -62,6 +62,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::ops::Bound;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -137,6 +138,48 @@ impl KeyDomain {
         KeyDomain::Secrets,
         KeyDomain::ChannelState,
     ];
+}
+
+// --------------------------------------------------------------------
+// Type aliases
+// --------------------------------------------------------------------
+
+/// One row returned by [`DomainHandle::scan_prefix`] — an owned
+/// `(key, plaintext)` pair. Named so the `scan_prefix` signature
+/// stays readable and downstream crates can refer to it without
+/// repeating the inner tuple shape.
+pub type ScanRow = (Vec<u8>, Vec<u8>);
+
+// --------------------------------------------------------------------
+// next_lex — exclusive upper bound for a lexicographic prefix scan
+// --------------------------------------------------------------------
+
+/// Compute the smallest byte string strictly greater than every byte
+/// string that begins with `prefix`. Used as the exclusive upper
+/// bound of a lexicographic prefix-scan range.
+///
+/// Algorithm: find the **last byte** of `prefix` that is not `0xFF`,
+/// increment it, and truncate everything after. If no such byte
+/// exists (empty prefix, or all `0xFF`s), return `None` — the caller
+/// should translate that into `Bound::Unbounded`, meaning "scan to
+/// end of domain."
+///
+/// Examples:
+///
+/// - `next_lex(b"notes\0")` → `Some(b"notes\x01")`
+/// - `next_lex(b"a")` → `Some(b"b")`
+/// - `next_lex(b"")` → `None` (empty prefix matches everything)
+/// - `next_lex(&[0xFF, 0xFF])` → `None` (no valid successor)
+/// - `next_lex(&[0x01, 0xFF])` → `Some(&[0x02])` (carry-and-truncate)
+fn next_lex(prefix: &[u8]) -> Option<Vec<u8>> {
+    for i in (0..prefix.len()).rev() {
+        if prefix[i] != 0xFF {
+            let mut out = prefix[..=i].to_vec();
+            out[i] += 1;
+            return Some(out);
+        }
+    }
+    None
 }
 
 // --------------------------------------------------------------------
@@ -497,6 +540,110 @@ impl DomainHandle {
         .map_err(|e| StorageError::JoinFailed(e.to_string()))?
     }
 
+    /// Scan every key in this domain whose byte representation begins
+    /// with `prefix`, returning `(key, plaintext)` pairs **sorted by
+    /// key ascending**. Each value goes through the same AEAD-open
+    /// path as [`get`], so a wrong master key or tampered ciphertext
+    /// surfaces as [`StorageError::DecryptFailed`] on the first bad
+    /// value and aborts the scan.
+    ///
+    /// ## Semantics
+    ///
+    /// - An **empty prefix** matches every key in the domain. Useful
+    ///   for admin/debug scans; Phase 6's `RedbMemory` uses it exactly
+    ///   once at construction time to find the max existing sequence
+    ///   number across all topics.
+    /// - A **missing table** (possible in theory; the open path
+    ///   creates all five at startup) returns an empty `Vec`, not an
+    ///   error — matches `get`'s handling of the same condition.
+    /// - **Lexicographic ordering** is byte-ordering, not UTF-8
+    ///   collation. Callers that want newest-first get it by building
+    ///   their keys as `prefix || seq_be` and reversing the returned
+    ///   iterator, which is what `RedbMemory::get_recent` does.
+    /// - The full result set is materialized into a `Vec` before the
+    ///   blocking task returns. That's fine for memory-domain values
+    ///   (small entries, bounded by agent write rate) but would need
+    ///   revisiting if a future domain stores large blobs and wants
+    ///   streaming — at which point we'd add a second method rather
+    ///   than retrofit this one.
+    ///
+    /// ## Prefix-scan mechanics
+    ///
+    /// redb's range API takes a Rust `RangeBounds`. The lexicographic
+    /// "all keys starting with `prefix`" idiom is
+    /// `[prefix, next_lex(prefix))` — inclusive on the lower bound,
+    /// exclusive on the first key that sorts strictly above every
+    /// valid continuation. [`next_lex`] computes that upper bound by
+    /// incrementing the last non-`0xFF` byte of the prefix and
+    /// truncating everything after; if the prefix is all `0xFF`s
+    /// (or empty), there is no upper bound and we use `Bound::Unbounded`.
+    pub async fn scan_prefix(
+        &self,
+        prefix: &[u8],
+    ) -> Result<Vec<ScanRow>, StorageError> {
+        let db = Arc::clone(&self.db);
+        let domain = self.domain;
+        let subkey = self.subkey.clone();
+        let prefix = prefix.to_vec();
+        let domain_bytes = domain.as_bytes();
+        // Capture `domain_bytes` now; AAD builds inside the blocking
+        // closure walk the same bytes per row.
+        let domain_bytes_owned: Vec<u8> = domain_bytes.to_vec();
+
+        tokio::task::spawn_blocking(
+            move || -> Result<Vec<ScanRow>, StorageError> {
+                let read = db.begin_read()?;
+                let table_def: TableDefinition<&[u8], &[u8]> =
+                    TableDefinition::new(domain.table_name());
+                let table = match read.open_table(table_def) {
+                    Ok(t) => t,
+                    Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+                    Err(e) => return Err(e.into()),
+                };
+
+                let upper = next_lex(&prefix);
+                let lower_bound: Bound<&[u8]> = Bound::Included(prefix.as_slice());
+                let upper_bound: Bound<&[u8]> = match upper.as_deref() {
+                    Some(u) => Bound::Excluded(u),
+                    None => Bound::Unbounded,
+                };
+
+                let iter = table.range::<&[u8]>((lower_bound, upper_bound))?;
+
+                let mut out: Vec<ScanRow> = Vec::new();
+                for row in iter {
+                    let (k, v) = row?;
+                    let key_bytes = k.value().to_vec();
+                    let stored = v.value().to_vec();
+                    if stored.len() < NONCE_LEN {
+                        return Err(StorageError::CorruptValue {
+                            domain,
+                            len: stored.len(),
+                        });
+                    }
+                    let (nonce, ciphertext) = stored.split_at(NONCE_LEN);
+                    // Rebuild AAD per-row because AAD is
+                    // `b"aivyx-v1" || domain_bytes || 0x00 || user_key`
+                    // and the user_key portion is this row's key.
+                    let mut aad =
+                        Vec::with_capacity(8 + domain_bytes_owned.len() + 1 + key_bytes.len());
+                    aad.extend_from_slice(b"aivyx-v1");
+                    aad.extend_from_slice(&domain_bytes_owned);
+                    aad.push(0x00);
+                    aad.extend_from_slice(&key_bytes);
+                    let plaintext = subkey
+                        .open(nonce, &aad, ciphertext)
+                        .map_err(|_| StorageError::DecryptFailed { domain })?;
+                    out.push((key_bytes, plaintext));
+                }
+
+                Ok(out)
+            },
+        )
+        .await
+        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+    }
+
     /// Delete `key`. Returns `Ok(())` whether or not the key was
     /// present — the KV semantics are set-like, not reference-counted.
     pub async fn delete(&self, key: &[u8]) -> Result<(), StorageError> {
@@ -524,6 +671,14 @@ impl DomainHandle {
     /// copy-pasted across domains or across keys within the same
     /// domain — a renamed key will fail to decrypt, as will a value
     /// moved from `Sessions` into `Memory`.
+    ///
+    /// The per-row AAD rebuild inside `scan_prefix` is intentionally
+    /// not delegated to this method — `scan_prefix` runs inside a
+    /// `spawn_blocking` closure that cannot hold a `&self` borrow
+    /// across the `.await`, so it clones `domain.as_bytes()` into an
+    /// owned `Vec<u8>` before entering the blocking context and
+    /// rebuilds AAD manually. If AAD format ever changes, both this
+    /// function and the scan_prefix row loop must stay in sync.
     ///
     /// Format: `b"aivyx-v1" || domain_bytes || 0x00 || user_key`
     /// The `0x00` separator prevents ambiguity between domains
@@ -829,5 +984,153 @@ mod tests {
         handle.put(b"big", &big).await.unwrap();
         let got = handle.get(b"big").await.unwrap();
         assert_eq!(got, Some(big));
+    }
+
+    // ---- next_lex — pure helper --------------------------------------
+
+    #[test]
+    fn next_lex_increments_last_non_ff_byte() {
+        assert_eq!(next_lex(b"notes\0").as_deref(), Some(&b"notes\x01"[..]));
+        assert_eq!(next_lex(b"a").as_deref(), Some(&b"b"[..]));
+        // Truncate: the carry-and-truncate case. Input [0x01, 0xFF]
+        // → output [0x02] (the 0xFF is dropped because we increment
+        // the first non-FF byte and drop everything after).
+        assert_eq!(next_lex(&[0x01, 0xFF]).as_deref(), Some(&[0x02][..]));
+    }
+
+    #[test]
+    fn next_lex_returns_none_for_unbounded_cases() {
+        // Empty prefix: matches everything, no finite upper bound.
+        assert_eq!(next_lex(b""), None);
+        // All 0xFFs: no byte can be incremented without overflowing,
+        // so there's no valid successor within the same length.
+        assert_eq!(next_lex(&[0xFF, 0xFF, 0xFF]), None);
+    }
+
+    // ---- scan_prefix --------------------------------------------------
+
+    #[tokio::test]
+    async fn scan_prefix_returns_matching_keys_sorted_ascending() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(10)).await;
+        let handle = store.domain(KeyDomain::Memory);
+
+        // Put three keys under the "notes\0" prefix (Phase 6 Memory
+        // layout: topic || 0x00 || seq_be). The scan must return all
+        // three, sorted by key ascending — which corresponds to seq
+        // ascending because of big-endian encoding.
+        for seq in 0u64..3 {
+            let mut key = b"notes\0".to_vec();
+            key.extend_from_slice(&seq.to_be_bytes());
+            handle
+                .put(&key, format!("body-{seq}").as_bytes())
+                .await
+                .unwrap();
+        }
+
+        let rows = handle.scan_prefix(b"notes\0").await.unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].1, b"body-0");
+        assert_eq!(rows[1].1, b"body-1");
+        assert_eq!(rows[2].1, b"body-2");
+        // Verify ordering is by key ascending by checking the final
+        // 8 bytes of each returned key are monotonically increasing.
+        let seqs: Vec<u64> = rows
+            .iter()
+            .map(|(k, _)| {
+                let tail = &k[k.len() - 8..];
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(tail);
+                u64::from_be_bytes(buf)
+            })
+            .collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_isolates_sibling_topics() {
+        // Regression lock: prefix "notes\0" must not pick up keys
+        // under "notesfoo\0" even though "notesfoo" starts with
+        // "notes". The 0x00 separator is what makes these disjoint.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(11)).await;
+        let handle = store.domain(KeyDomain::Memory);
+
+        let mut notes_key = b"notes\0".to_vec();
+        notes_key.extend_from_slice(&0u64.to_be_bytes());
+        handle.put(&notes_key, b"real-notes").await.unwrap();
+
+        let mut notesfoo_key = b"notesfoo\0".to_vec();
+        notesfoo_key.extend_from_slice(&0u64.to_be_bytes());
+        handle.put(&notesfoo_key, b"sibling").await.unwrap();
+
+        let notes_rows = handle.scan_prefix(b"notes\0").await.unwrap();
+        assert_eq!(notes_rows.len(), 1);
+        assert_eq!(notes_rows[0].1, b"real-notes");
+
+        let notesfoo_rows = handle.scan_prefix(b"notesfoo\0").await.unwrap();
+        assert_eq!(notesfoo_rows.len(), 1);
+        assert_eq!(notesfoo_rows[0].1, b"sibling");
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_empty_prefix_returns_every_key_in_domain() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(12)).await;
+        let handle = store.domain(KeyDomain::Memory);
+
+        handle.put(b"a", b"av").await.unwrap();
+        handle.put(b"b", b"bv").await.unwrap();
+        handle.put(b"c", b"cv").await.unwrap();
+
+        let rows = handle.scan_prefix(b"").await.unwrap();
+        assert_eq!(rows.len(), 3);
+        // Confirm every row decrypted successfully and the domain is
+        // exhaustively covered.
+        let vals: Vec<Vec<u8>> = rows.into_iter().map(|(_, v)| v).collect();
+        assert!(vals.contains(&b"av".to_vec()));
+        assert!(vals.contains(&b"bv".to_vec()));
+        assert!(vals.contains(&b"cv".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_nonexistent_prefix_returns_empty_vec() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(13)).await;
+        let handle = store.domain(KeyDomain::Memory);
+        handle.put(b"real-key", b"real-value").await.unwrap();
+
+        let rows = handle.scan_prefix(b"ghost-prefix").await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scan_prefix_on_wrong_master_fails_on_first_row() {
+        // Same shape as `open_wrong_key_fails_to_decrypt` but for the
+        // scan path: write with master(20), reopen with master(21),
+        // first row the scan tries to decrypt fails with
+        // DecryptFailed, and the scan aborts with that error (doesn't
+        // skip the bad row and return the rest).
+        let dir = StoreDir::new();
+        {
+            let store = open_store(&dir, test_master(20)).await;
+            store
+                .domain(KeyDomain::Memory)
+                .put(b"topic\0\x00\x00\x00\x00\x00\x00\x00\x00", b"hello")
+                .await
+                .unwrap();
+            drop(store);
+        }
+
+        let store = open_store(&dir, test_master(21)).await;
+        let err = store
+            .domain(KeyDomain::Memory)
+            .scan_prefix(b"topic\0")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StorageError::DecryptFailed { domain: KeyDomain::Memory }),
+            "unexpected error: {err:?}"
+        );
     }
 }

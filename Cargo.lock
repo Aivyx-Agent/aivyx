@@ -121,11 +121,14 @@ dependencies = [
 name = "aivyx-memory"
 version = "0.1.0"
 dependencies = [
+ "aivyx-crypto",
+ "aivyx-storage",
  "async-trait",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
