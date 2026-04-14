@@ -10,4 +10,21 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# intentionally empty — deps land when implementation begins
+# Async trait methods — same `async_trait` idiom used across the
+# workspace for ChannelContext, LlmProvider, Tool, Storage.
+async-trait = { workspace = true }
+
+# MemoryEntry round-trips through serde_json for at-rest serialization.
+# Phase 6 Q1 resolved in favor of JSON over bincode/postcard: zero new
+# deps, human-readable inside redb when debugging, and the on-disk
+# layer is already encrypted so "compact" isn't the load-bearing
+# constraint.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Typed errors, consistent with aivyx-storage and aivyx-crypto.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# #[tokio::test] for the async unit tests — same split as aivyx-storage.
+tokio = { workspace = true, features = ["rt", "macros"] }
