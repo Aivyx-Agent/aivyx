@@ -25,33 +25,55 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 6 — Memory as Tool
+## Phase 7 — Hardening (audit persistence first)
 
-**Status:** Active — see [`PHASE_6.md`](PHASE_6.md).
+**Leaning:** Hardening over Ecosystem, based on what Phase 6 uncovered.
 
-## Phase 7 — (undecided: Hardening vs. Ecosystem)
+Phase 6 shipped memory-as-tool cleanly (`serde_json` encoding,
+per-topic monotonic sequence numbers, a `RedbMemory` substrate that
+seeds its counter from on-disk state at reopen, three `Tool` impls
+that derive `memory.<op>:topic:<topic>` scopes from their input, and
+a `memory_tool_e2e.rs` integration test that proves recall crosses a
+process boundary). The asymmetry it surfaced is the one that decides
+Phase 7: **memory now survives restarts, but the audit of how memory
+was written does not**. `HmacChainLog` still resets on every process
+start, so every `AuditEvent::MemoryAccess` tag Phase 6 just made
+load-bearing for D1's "memory is a tool" commitment is ephemeral —
+an attacker who can crash the process once can truncate the chain.
+That's the strongest hardening case the project has had so far, and
+it's the thing to fix first in Phase 7.
 
-Deliberately ambiguous until Phase 6 closes. Phase 5 left a short
-hardening list that will be load-bearing the first time Aivyx is
-used somewhere other than a developer laptop: **audit persistence**
-(wire `HmacChainLog` into `KeyDomain::Audit` so the chain survives a
-restart — right now a crash erases every audit entry), **interactive
-passphrase prompting** (the binary still only reads
-`AIVYX_PASSPHRASE`, which is fine for CI and painful for humans),
-**memory GC** (size caps / TTL on `KeyDomain::Memory`, once Phase 6
-proves the substrate), and **filesystem permission hardening** on
-the store sidecar files (no explicit `chmod 600` today). None of
-these are hard, but together they're the difference between "works"
-and "safe to hand to a non-author."
+Concrete Phase 7 candidates, ordered by Phase 6's evidence:
 
-The alternative framing is **Ecosystem** — remote channels
-(Telegram, Discord, Slack, Matrix, Email), desktop GUI, federation,
-multi-agent. That was the original Phase 7+ placeholder. The lesson
-from the archived codebase is that ecosystem work started too early
-and shaped the core in ways that later became drift markers, so
-this time we want the core to be *stable* before we go there. The
-Phase 6 exit is the moment we decide which direction Phase 7 takes,
-based on concrete evidence: if Phase 6 surfaced a painful gap in
-audit/GC/passphrase UX, hardening comes first; if Phase 6 runs
-cleanly and the obvious next question is "how do I talk to this
-agent from my phone," ecosystem comes first.
+1. **Audit persistence via `KeyDomain::Audit`.** Load-bearing.
+   Requires deciding where the HMAC chain key comes from (derive
+   from passphrase? separate key in `KeyDomain::Secrets`?), what
+   "chain start" means across restarts (one chain forever? one
+   chain per session? merkle-linked session chains?), and how to
+   verify the chain from a cold start. This is real design work,
+   not just plumbing — the right shape is its own PHASE_7.md with
+   open questions at entry.
+2. **Interactive passphrase prompting.** ~20 lines of `rpassword`
+   once audit persistence decides how the chain key is sourced
+   (the two decisions touch the same surface). Still env-var-only
+   today.
+3. **Memory GC / TTL / size caps.** Phase 6 shipped an unbounded
+   substrate and explicitly deferred eviction. If Phase 7 is doing
+   hardening work, this is the right place for `memory.forget`-
+   driven compaction and a size-cap tripwire.
+4. **Filesystem permission hardening (`chmod 0600` on the store
+   and its salt sidecar).** Small, mechanical, but a real
+   disclosure hazard on a shared Unix box. Half an hour of work.
+
+The **Ecosystem** framing (remote channels — Telegram, Discord,
+Slack, Matrix, Email; desktop GUI; federation; multi-agent) remains
+the longer-term destination. The lesson from the archived codebase
+is that ecosystem work started too early and shaped the core in
+ways that later became drift markers, so this time we want the core
+to be *stable* before we go there. Phase 6 leaves the core in
+exactly the shape Phase 7 hardening needs — session-level
+persistence, memory-level persistence, and an audit surface that is
+*almost* persistent — and Phase 7 is the phase that closes the gap.
+
+Ecosystem is likely Phase 8 or 9, not Phase 7. The decision lands
+firmly at Phase 7 entry.

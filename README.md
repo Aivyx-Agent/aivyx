@@ -9,8 +9,8 @@ process live under [`docs/`](docs/README.md).
 
 ## Status
 
-**Phases 0–5 complete.** The design contract (D1–D8) has been locked
-since commit `1b4f271` and held unchanged across five implementation
+**Phases 0–6 complete.** The design contract (D1–D8) has been locked
+since commit `1b4f271` and held unchanged across **six** implementation
 phases. The working agent ships with:
 
 - a capability-typed tool registry and turn loop (`aivyx-core`),
@@ -20,11 +20,16 @@ phases. The working agent ships with:
 - `fs.read` / `fs.write` as first concrete, scope-checked tools,
 - an encrypted per-domain KV store over redb with Argon2id-derived
   keys and ChaCha20-Poly1305 AEAD (`aivyx-storage` + `aivyx-crypto`),
+- **`memory.read` / `memory.write` / `memory.forget` as D1-faithful
+  memory tools** (`aivyx-memory`) — the agent recalls across
+  restarts because it *chose to call* the tool, not because a prompt
+  hook silently injected history, and the audit chain carries
+  per-topic `memory.<op>:topic:<topic>` scopes to prove it,
 - a CLI binary (`aivyx`) that composes all of the above, reads its
-  passphrase from `AIVYX_PASSPHRASE`, and persists session state
-  under `$XDG_DATA_HOME/aivyx/store.redb`.
+  passphrase from `AIVYX_PASSPHRASE`, and persists session state and
+  memory under `$XDG_DATA_HOME/aivyx/store.redb`.
 
-Phase 6 (Memory as Tool) is next — see
+Phase 7 (Hardening — audit persistence first) is next — see
 [`docs/ROADMAP.md`](docs/ROADMAP.md). For the frozen per-phase
 records, see [`docs/`](docs/README.md).
 
