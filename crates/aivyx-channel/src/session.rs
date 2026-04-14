@@ -70,6 +70,13 @@ pub struct SessionConfig {
     /// (`memory.read`, `memory.write`) because the local CLI is the
     /// most-trusted channel on the box; tests may pick their own.
     pub capabilities: CapabilitySet,
+    /// The tool registry for this session. Phase 4 task 4 moved this
+    /// out of `run_session` (where it was hardcoded to an empty
+    /// registry) so the binary can register real tools at startup
+    /// while the chat-only integration test keeps passing an empty
+    /// one. Shared as `Arc` because the planner factory closure
+    /// clones it per-turn and `ConcreteAgent` holds its own handle.
+    pub tools: Arc<ToolRegistry>,
     /// Prompt string written before each `read_line`. The binary
     /// passes `"> "`; tests usually pass `""` so captured output is
     /// easier to assert on.
@@ -126,10 +133,10 @@ where
     W: Write + Send + 'static,
 {
     // ---- Agent stack --------------------------------------------------
-    // An empty ToolRegistry — Phase 3 is "first real channel," not
-    // "first real tool." The planner's tool descriptor list is empty
-    // and any FinalMessage-only chat works end-to-end.
-    let registry = Arc::new(ToolRegistry::new(Vec::new()));
+    // Registry comes from the caller. The binary registers the Phase 4
+    // filesystem tools here; the Phase 3 chat-only regression test
+    // passes an empty registry so its assertions stay stable.
+    let registry = config.tools;
 
     // Planner factory — fresh planner per turn. Captures the provider
     // Arc, the registry Arc, and a planner config by value (cloned

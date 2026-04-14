@@ -38,7 +38,7 @@ use async_trait::async_trait;
 use aivyx_audit::{AuditBridge, AuditEvent, AuditLog, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
-use aivyx_core::{AuditHook, CancellationToken, TurnOutcome, TurnOutcomeSummary};
+use aivyx_core::{AuditHook, CancellationToken, ToolRegistry, TurnOutcome, TurnOutcomeSummary};
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
 };
@@ -169,12 +169,15 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     let sink = channel.writer_handle();
 
     // -- Session config. Empty prompt keeps captured output easy to
-    //    assert on; no banner for the same reason.
+    //    assert on; no banner for the same reason. Empty tool registry:
+    //    this test is the Phase 3 chat-only regression. Phase 4 task 5
+    //    will add a separate `fs_tool_e2e.rs` that drives real tools.
     let config = SessionConfig {
         model: "claude-haiku-4-5-20251001".to_string(),
         system_prompt: "test".to_string(),
         max_tokens: 256,
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(Vec::new())),
         prompt: String::new(),
         banner: None,
     };

@@ -27,11 +27,17 @@
 //!   will add a config-file path; for Phase 3, env var is the one
 //!   and only secret source.
 //!
-//! Two optional variables:
+//! Three optional variables:
 //!
 //! - `AIVYX_MODEL` — override the default model id (default:
 //!   `claude-haiku-4-5-20251001`). Sent verbatim to the API.
 //! - `AIVYX_SYSTEM_PROMPT` — override the default system prompt.
+//! - `AIVYX_FS_ROOT` — directory under which the filesystem tools
+//!   (`fs.read`, `fs.write`) are allowed to operate. Defaults to
+//!   `$HOME/aivyx-sandbox`. Created at startup if it does not exist.
+//!   The binary's capability set grants `fs.read:<root>/**` and
+//!   `fs.write:<root>/**` so the LLM can exercise both tools without
+//!   further wiring.
 //!
 //! ## Cancellation
 //!
@@ -45,9 +51,6 @@
 //!
 //! ## What this binary is not
 //!
-//! - It does not register any real `Tool`s. Chat-only turns still
-//!   exercise the full planner/provider/audit/channel stack — which
-//!   is the whole point of Phase 3. Real tools land in Phase 4.
 //! - It does not persist session history. The audit chain is
 //!   in-memory per process. Phase 5 adds the redb-backed store.
 //! - It does not do line editing or history. Plain `stdin().read_line`.
@@ -55,6 +58,7 @@
 //!   gap becomes painful.
 
 use std::io::{self};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -63,7 +67,9 @@ use secrecy::SecretString;
 use aivyx_audit::{AuditBridge, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
-use aivyx_core::AuditHook;
+use aivyx_core::{
+    AuditHook, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
+};
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 
@@ -96,6 +102,16 @@ fn run() -> Result<(), String> {
     let system_prompt = std::env::var("AIVYX_SYSTEM_PROMPT")
         .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string());
 
+    // Sandbox root for the filesystem tools. `AIVYX_FS_ROOT` overrides;
+    // otherwise default to `$HOME/aivyx-sandbox`. Create the directory
+    // at startup if missing — a fresh install should "just work" without
+    // the user having to mkdir a magic path. `FsReadToolConfig::build()`
+    // will canonicalize and reject non-directories, so we don't need a
+    // second layer of validation here.
+    let fs_root = resolve_fs_root()?;
+    std::fs::create_dir_all(&fs_root)
+        .map_err(|e| format!("failed to create fs sandbox root {fs_root:?}: {e}"))?;
+
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
     // the workspace tokio feature set already enables it and the cost
@@ -105,13 +121,35 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
 
-    runtime.block_on(async move { run_async(api_key, model, system_prompt).await })
+    runtime.block_on(async move { run_async(api_key, model, system_prompt, fs_root).await })
+}
+
+/// Resolve the filesystem sandbox root.
+///
+/// Priority:
+/// 1. `AIVYX_FS_ROOT` env var, if set and non-empty.
+/// 2. `$HOME/aivyx-sandbox` otherwise.
+///
+/// Returns an error if neither is available (no `HOME` and no override).
+fn resolve_fs_root() -> Result<PathBuf, String> {
+    if let Ok(explicit) = std::env::var("AIVYX_FS_ROOT") {
+        if !explicit.is_empty() {
+            return Ok(PathBuf::from(explicit));
+        }
+    }
+    let home = std::env::var("HOME").map_err(|_| {
+        "HOME is not set and AIVYX_FS_ROOT is not set — cannot locate a sandbox root. \
+         Export one of them and retry."
+            .to_string()
+    })?;
+    Ok(PathBuf::from(home).join("aivyx-sandbox"))
 }
 
 async fn run_async(
     api_key: SecretString,
     model: String,
     system_prompt: String,
+    fs_root: PathBuf,
 ) -> Result<(), String> {
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -127,14 +165,48 @@ async fn run_async(
     let audit: Arc<dyn AuditHook> =
         Arc::new(AuditBridge::new(HmacChainLog::new(audit_key.to_vec())));
 
+    // ---- Tools --------------------------------------------------------
+    // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`
+    // canonicalizes the sandbox root once, so the pre-canonicalized
+    // form is what flows into the scope check later — that's the
+    // anchor for the `fs.read:<canonical>/**` capability below.
+    let fs_read = FsReadToolConfig::new(fs_root.clone())
+        .build()
+        .map_err(|e| format!("failed to build fs.read tool: {e}"))?;
+    let fs_write = FsWriteToolConfig::new(fs_root.clone())
+        .build()
+        .map_err(|e| format!("failed to build fs.write tool: {e}"))?;
+
+    // Pull the canonicalized sandbox root back out of `fs_read` so the
+    // capability scopes reference the exact same string the tools use
+    // at execute time. Using the un-canonicalized `fs_root` here would
+    // let a symlink in the user's `$HOME` silently widen the scope.
+    let canonical_root = fs_read.sandbox_root().to_path_buf();
+    let root_display = canonical_root.display();
+    let fs_read_scope = Scope::parse(&format!("fs.read:{root_display}/**")).ok_or_else(|| {
+        format!("canonical fs.read sandbox scope not parseable from {canonical_root:?}")
+    })?;
+    let fs_write_scope = Scope::parse(&format!("fs.write:{root_display}/**")).ok_or_else(|| {
+        format!("canonical fs.write sandbox scope not parseable from {canonical_root:?}")
+    })?;
+
+    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+        Arc::new(fs_read) as Arc<dyn Tool>,
+        Arc::new(fs_write) as Arc<dyn Tool>,
+    ]));
+
     // ---- Capabilities -------------------------------------------------
     // The CLI is the most-trusted channel on the box; the agent gets
     // a broad capability set so chat-only turns don't get denied for
-    // scopes they never actually request. Real tools in Phase 4 will
-    // constrain this per-session.
+    // scopes they never actually request. The two `fs.*` scopes are
+    // rooted at the canonicalized sandbox path so the scope-derivation
+    // path in `FsReadTool::required_scope` lines up exactly with a
+    // held capability.
     let capabilities = CapabilitySet::from_scopes([
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
+        fs_read_scope,
+        fs_write_scope,
     ]);
 
     // ---- Channel + signal handler ------------------------------------
@@ -172,10 +244,13 @@ async fn run_async(
         system_prompt,
         max_tokens: DEFAULT_MAX_TOKENS,
         capabilities,
+        tools,
         prompt: PROMPT.to_string(),
         banner: Some(format!(
-            "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.",
-            env!("CARGO_PKG_VERSION")
+            "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
+             fs sandbox: {}",
+            env!("CARGO_PKG_VERSION"),
+            canonical_root.display(),
         )),
     };
 
