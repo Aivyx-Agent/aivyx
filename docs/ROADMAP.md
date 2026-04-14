@@ -25,22 +25,9 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 3 — First Real Channel
-
-**Status:** Active — see [`PHASE_3.md`](PHASE_3.md).
-
 ## Phase 4 — First Real Tool
 
-Implement the first concrete `Tool` — likely a filesystem tool
-(`fs.read` / `fs.write`) since it's the cleanest exercise of D4's
-prefix-attenuated scopes. Validates the scope system against real
-input: can an agent with `fs.read:/home/julian/notes/**` read a file
-under that prefix and be denied a file outside it?
-
-Decision point at Phase 4 entry: whether the tool lives in
-`aivyx-core` (collapsed, per D8's current layout) or gets split into
-a new `aivyx-tool-fs` crate. That's a Phase 4 decision driven by the
-actual shape the Tool impl takes.
+**Status:** Active — see [`PHASE_4.md`](PHASE_4.md).
 
 ## Phase 5 — Encrypted Storage
 
