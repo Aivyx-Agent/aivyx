@@ -8,8 +8,7 @@
 //! of that contract for the `LocalChannel` / CLI binary. It:
 //!
 //! 1. Sources a passphrase from one of several places (env var, test
-//!    fixture, or — in a later follow-up task — an interactive TTY
-//!    prompt via `rpassword`).
+//!    fixture, or an interactive TTY prompt via `rpassword`).
 //! 2. Loads (or on first run, generates + persists) a 16-byte salt
 //!    from a sidecar file next to the redb store.
 //! 3. Runs Argon2id through [`aivyx_crypto::derive_master_key`] to
@@ -35,15 +34,20 @@
 //! the salt file is `store.redb.salt`. The binary in task 4 will
 //! adopt this convention; tests construct both paths explicitly.
 //!
-//! ## Phase 5 scope — env var only
+//! ## Source selection — binary decides
 //!
-//! Per PHASE_5.md Q2 (leaning: option 3), the core task 3 commit
-//! wires `PassphraseSource::Env` as the only production source and
-//! leaves `PassphraseSource::InteractivePrompt` as a stub returning
-//! [`PassphraseError::InteractiveNotImplemented`]. A follow-up task
-//! inside Phase 5 (or Phase 6 if time runs out) pulls in `rpassword`
-//! and implements the interactive path. Tests exercise the env-var
-//! path without a tty.
+//! Phase 7 task 4 lit up `PassphraseSource::InteractivePrompt` with a
+//! real `rpassword::prompt_password` call, but the *policy* for
+//! which source to pick lives in the `aivyx` binary, not in this
+//! module. The binary checks `AIVYX_PASSPHRASE` first (non-empty →
+//! `Env`), then `stdin().is_terminal()` as a hint (true →
+//! `InteractivePrompt`), then bails. Keeping the decision outside
+//! the library means `fetch_passphrase_bytes` is still a pure
+//! function of its input enum and stays unit-testable in isolation —
+//! the `Env` tests never have to fake a tty, and the
+//! `InteractivePrompt` tests inject a `BufRead` via
+//! `rpassword::prompt_password_from_bufread` rather than trying to
+//! intercept `/dev/tty`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,12 +103,20 @@ pub enum PassphraseError {
     #[error("crypto derivation failed: {0}")]
     Crypto(#[from] aivyx_crypto::CryptoError),
 
-    /// Placeholder for the interactive TTY prompt path. Returned by
-    /// [`PassphraseSource::InteractivePrompt`] in Phase 5 task 3.
-    /// A follow-up task inside Phase 5 wires `rpassword::prompt_password`
-    /// here and removes this variant.
-    #[error("interactive passphrase prompt not implemented yet (Phase 5 follow-up task)")]
-    InteractiveNotImplemented,
+    /// The interactive TTY prompt failed — `/dev/tty` was not
+    /// available, the read was interrupted, or the underlying
+    /// terminal I/O errored. Wraps `std::io::Error::to_string()`
+    /// to avoid dragging the whole `io::Error` type across the
+    /// module boundary.
+    #[error("interactive passphrase prompt failed: {reason}")]
+    InteractiveIo { reason: String },
+
+    /// The interactive prompt read a zero-length password. Rejected
+    /// explicitly for the same reason [`PassphraseError::EnvEmpty`]
+    /// is rejected: Argon2id happily hashes an empty input and the
+    /// resulting key would be trivially brute-forceable.
+    #[error("interactive passphrase prompt returned an empty password")]
+    InteractiveEmpty,
 }
 
 // --------------------------------------------------------------------
@@ -113,11 +125,13 @@ pub enum PassphraseError {
 
 /// Where to source the passphrase bytes.
 ///
-/// The production binary uses [`PassphraseSource::Env`]; tests use
-/// [`PassphraseSource::Fixture`] to inject known bytes without
-/// touching the environment or a tty. The [`PassphraseSource::
-/// InteractivePrompt`] variant is a placeholder that currently
-/// errors — see [`PassphraseError::InteractiveNotImplemented`].
+/// The production binary picks between [`PassphraseSource::Env`]
+/// and [`PassphraseSource::InteractivePrompt`] based on whether
+/// `AIVYX_PASSPHRASE` is set and whether stdin is a terminal; tests
+/// use [`PassphraseSource::Fixture`] to inject known bytes without
+/// touching the environment or a tty, or drive `InteractivePrompt`
+/// via the `rpassword::prompt_password_from_bufread` seam under the
+/// hood.
 pub enum PassphraseSource {
     /// Read from a named environment variable. Fails with
     /// [`PassphraseError::EnvNotSet`] if unset or
@@ -132,10 +146,15 @@ pub enum PassphraseSource {
     /// it, but the idiomatic binary wiring is `Env`.
     Fixture(Box<dyn FnOnce() -> Vec<u8> + Send>),
 
-    /// Interactive TTY prompt. Currently unimplemented — returns
-    /// [`PassphraseError::InteractiveNotImplemented`]. A Phase 5
-    /// follow-up task wires `rpassword::prompt_password("aivyx
-    /// passphrase: ")` here.
+    /// Interactive TTY prompt via `rpassword::prompt_password`.
+    /// Opens `/dev/tty` directly on Unix (so it works even when
+    /// stdin is piped, as long as a controlling terminal exists),
+    /// prints `aivyx passphrase: `, reads a single line with echo
+    /// disabled, strips the trailing newline, and zeroizes the
+    /// internal buffer on the way out. Returns
+    /// [`PassphraseError::InteractiveIo`] if `/dev/tty` is not
+    /// reachable, or [`PassphraseError::InteractiveEmpty`] if the
+    /// user pressed enter on an empty line.
     InteractivePrompt,
 }
 
@@ -253,8 +272,46 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             Err(_) => Err(PassphraseError::EnvNotSet(var_name)),
         },
         PassphraseSource::Fixture(f) => Ok(f()),
-        PassphraseSource::InteractivePrompt => Err(PassphraseError::InteractiveNotImplemented),
+        PassphraseSource::InteractivePrompt => {
+            // `rpassword::prompt_password` opens `/dev/tty` on Unix,
+            // echoes the prompt, reads one line with echo disabled,
+            // and returns a `String`. Under `cargo test` there's no
+            // controlling tty, so the unit test path routes through
+            // `read_interactive_password_inner` with a `BufRead` +
+            // `Write` seam instead (see
+            // `interactive_source_reads_password_from_bufread`).
+            read_interactive_password_inner(|| {
+                rpassword::prompt_password("aivyx passphrase: ")
+            })
+        }
     }
+}
+
+/// Shared plumbing for the interactive path. Takes a `read`
+/// closure that produces the passphrase `String` (or an I/O error),
+/// applies the empty-check + error-mapping discipline, and returns
+/// a `Vec<u8>` the outer `derive_master_key` zeroize path can take
+/// ownership of.
+///
+/// In production `read` wraps `rpassword::prompt_password` (real
+/// `/dev/tty`). In unit tests it wraps
+/// `rpassword::prompt_password_from_bufread` against an in-memory
+/// `&[u8]` reader and a sink writer, so the test can assert the
+/// full InteractivePrompt → Argon2id → MasterKey round-trip without
+/// needing a tty.
+fn read_interactive_password_inner<F>(read: F) -> Result<Vec<u8>, PassphraseError>
+where
+    F: FnOnce() -> std::io::Result<String>,
+{
+    let pass = read()
+        .map_err(|e| PassphraseError::InteractiveIo { reason: e.to_string() })?;
+    if pass.is_empty() {
+        return Err(PassphraseError::InteractiveEmpty);
+    }
+    // `String::into_bytes` hands over the existing heap allocation
+    // — no copy — so the outer zeroize path owns the one-and-only
+    // persistent copy of the passphrase bytes.
+    Ok(pass.into_bytes())
 }
 
 // --------------------------------------------------------------------
@@ -484,18 +541,168 @@ mod tests {
         sub.seal(&nonce, b"fingerprint", b"probe").unwrap()
     }
 
-    // ---- Interactive stub --------------------------------------------
+    // ---- Interactive path (Phase 7 task 4) ---------------------------
+    //
+    // Production `fetch_passphrase_bytes` calls
+    // `rpassword::prompt_password`, which opens `/dev/tty` directly —
+    // unavailable under `cargo test`. These tests drive the shared
+    // `read_interactive_password_inner` seam with closures that wrap
+    // `rpassword::prompt_password_from_bufread` (pure BufRead + Write,
+    // no tty), exercising the same empty-check, error-mapping, and
+    // zeroize discipline the production path owns.
 
+    /// Drive the interactive helper end-to-end by wrapping
+    /// `prompt_password_from_bufread` against an in-memory `&[u8]`.
+    /// This proves the bytes flowing out of `rpassword` round-trip
+    /// cleanly into `Vec<u8>` with the right trimming.
     #[test]
-    fn interactive_source_returns_not_implemented_stub() {
+    fn interactive_source_reads_password_from_bufread() {
+        let mut reader = &b"pipe-passphrase\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let bytes = read_interactive_password_inner(|| {
+            rpassword::prompt_password_from_bufread(
+                &mut reader,
+                &mut sink,
+                "aivyx passphrase: ",
+            )
+        })
+        .expect("bufread-backed interactive prompt must succeed");
+        // The trailing newline must not survive the read — Argon2id
+        // would happily hash it, and a user pasting a passphrase into
+        // a pipe vs. typing it at a tty should produce the same key.
+        assert_eq!(bytes, b"pipe-passphrase");
+        // The prompt itself must have been written to the sink, so a
+        // real tty would see it. We assert it's non-empty rather than
+        // an exact match to avoid coupling to rpassword's trailing
+        // flush behavior.
+        assert!(!sink.is_empty(), "prompt string must be written to the writer");
+    }
+
+    /// An empty line (user pressed enter without typing anything)
+    /// must surface as `InteractiveEmpty`, mirroring how the env-var
+    /// path rejects an empty `AIVYX_PASSPHRASE`. An empty passphrase
+    /// would derive a deterministic master key and defeat the whole
+    /// Argon2id layer.
+    #[test]
+    fn interactive_source_rejects_empty_password() {
+        let mut reader = &b"\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let err = read_interactive_password_inner(|| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, "p: ")
+        })
+        .unwrap_err();
+        assert!(matches!(err, PassphraseError::InteractiveEmpty));
+    }
+
+    /// An I/O error from the read closure (e.g., a truncated pipe)
+    /// must be wrapped in `InteractiveIo`, not silently treated as
+    /// an empty password.
+    #[test]
+    fn interactive_source_wraps_read_errors_as_interactive_io() {
+        let err = read_interactive_password_inner(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "simulated eof",
+            ))
+        })
+        .unwrap_err();
+        match err {
+            PassphraseError::InteractiveIo { reason } => {
+                assert!(
+                    reason.contains("simulated eof"),
+                    "InteractiveIo must surface the underlying reason, got {reason:?}"
+                );
+            }
+            other => panic!("expected InteractiveIo, got {other:?}"),
+        }
+    }
+
+    /// Prove the full `derive_master_key` pipeline works end-to-end
+    /// against a bufread-sourced passphrase by wiring the same seam
+    /// through a `Fixture` variant. This test is belt-and-braces —
+    /// the per-arm tests above cover the interactive path surface,
+    /// but this one pins the invariant that "whatever the
+    /// interactive helper produces, the outer `derive_master_key`
+    /// treats it identically to an equally-valued `Fixture`."
+    #[test]
+    fn interactive_and_fixture_produce_same_master_key_for_same_bytes() {
         let dir = TestDir::new();
-        let err = derive_master_key(
-            PassphraseSource::InteractivePrompt,
-            &dir.salt(),
+        let salt_path = dir.salt();
+
+        // Fixture path as the oracle.
+        let m_fix = derive_master_key(
+            fixture(b"pipe-passphrase"),
+            &salt_path,
             Argon2Params::weak_for_tests(),
         )
-        .unwrap_err();
-        assert!(matches!(err, PassphraseError::InteractiveNotImplemented));
+        .unwrap();
+
+        // Interactive path via the bufread seam. We can't pass the
+        // seam through `derive_master_key` directly (production API
+        // doesn't take a reader), so we mimic its zeroize-after-
+        // derive discipline inline: read via the helper, feed bytes
+        // to `aivyx_crypto::derive_master_key` with the same salt,
+        // zeroize.
+        let mut reader = &b"pipe-passphrase\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let mut bytes = read_interactive_password_inner(|| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, "p: ")
+        })
+        .unwrap();
+        let salt = load_or_create_salt(&salt_path).unwrap();
+        let m_inter = crypto_derive_master_key(&bytes, &salt, Argon2Params::weak_for_tests())
+            .unwrap();
+        bytes.zeroize();
+
+        assert_eq!(
+            subkey_fingerprint(&m_fix.derive_subkey(b"sessions").unwrap()),
+            subkey_fingerprint(&m_inter.derive_subkey(b"sessions").unwrap()),
+            "interactive and fixture paths must produce the same master key \
+             for the same passphrase + same salt",
+        );
+    }
+
+    // ---- Debug redaction tripwire — Env + InteractivePrompt ---------
+    //
+    // `PassphraseSource` has a custom `Debug` impl at
+    // `passphrase.rs:142` whose whole purpose is to redact secrets.
+    // The `Fixture` variant is already pinned by the older
+    // `debug_impl_does_not_leak_fixture_closure_contents` test; the
+    // two tests below extend coverage to the `Env` variant (name
+    // should appear, value should *not*) and the `InteractivePrompt`
+    // variant (format must not touch the tty). Together they cover
+    // all three variants against the "someone ever replaces the
+    // custom impl with `#[derive(Debug)]`" regression.
+
+    #[test]
+    fn debug_env_renders_var_name_but_not_value() {
+        let _lock = env_lock();
+        unsafe {
+            std::env::set_var("AIVYX_PASSPHRASE_TRIPWIRE", "should-not-appear");
+        }
+        let source = PassphraseSource::Env {
+            var_name: "AIVYX_PASSPHRASE_TRIPWIRE".to_string(),
+        };
+        let rendered = format!("{source:?}");
+        assert!(
+            rendered.contains("AIVYX_PASSPHRASE_TRIPWIRE"),
+            "Debug should include the var name, got {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("should-not-appear"),
+            "Debug must not read the env var or leak its value, got {rendered:?}"
+        );
+        unsafe {
+            std::env::remove_var("AIVYX_PASSPHRASE_TRIPWIRE");
+        }
+    }
+
+    #[test]
+    fn debug_interactive_prompt_renders_without_side_effects() {
+        // InteractivePrompt has no payload — the tripwire here is
+        // that `format!` must not touch the tty or block on a read.
+        let rendered = format!("{:?}", PassphraseSource::InteractivePrompt);
+        assert_eq!(rendered, "InteractivePrompt");
     }
 
     // ---- End-to-end with aivyx-storage -------------------------------

@@ -356,15 +356,77 @@ tasks are allowed to reorder and re-scope as we learn.
    extending the existing `banner: Option<String>` with one
    more line, same shape.
 
-4. **Interactive passphrase prompting.** Add `rpassword = "7"`
-   as a dep on `aivyx-channel`. Light up
-   `PassphraseSource::InteractivePrompt` with the real
-   `rpassword::prompt_password("aivyx passphrase: ")` call. The
-   binary's passphrase-sourcing logic changes from "env var or
-   crash" to "env var, or interactive prompt if we have a tty,
-   or crash with a clear message." Unit tests cover the
-   `passphrase::tests` redaction tripwire (unchanged) plus a new
-   `interactive_prompt_reads_from_stdin` test that pipes input.
+4. **Interactive passphrase prompting.** (Shipped 2026-04-14.)
+   `rpassword = "7"` lands in `aivyx-channel`'s `[dependencies]`
+   block (library-level, not dev-only, because the `passphrase`
+   module itself is the call site). `PassphraseSource::
+   InteractivePrompt` now routes through a private
+   `read_interactive_password_inner<F: FnOnce() -> io::Result<String>>`
+   helper: production passes `|| rpassword::prompt_password("aivyx
+   passphrase: ")` (opens `/dev/tty` directly on Unix, echo-off);
+   unit tests pass `|| rpassword::prompt_password_from_bufread(
+   &mut r, &mut w, "aivyx passphrase: ")` against an in-memory
+   `&[u8]` reader. Both branches share the same empty-check,
+   error-mapping, and `String::into_bytes` (no-copy) discipline,
+   so the zeroize path stays symmetric with the env-var path.
+
+   **Error variants updated.** `PassphraseError::
+   InteractiveNotImplemented` is deleted (the variant was a
+   stub-era placeholder). Two real variants replace it:
+   `InteractiveIo { reason: String }` wraps any underlying
+   `io::Error` from the rpassword read, and `InteractiveEmpty`
+   rejects a zero-length password the same way
+   `EnvEmpty` rejects a zero-length env var — Argon2id happily
+   hashes an empty input and the resulting key would be
+   trivially brute-forceable.
+
+   **Binary source selection — policy at the boundary.** The
+   `aivyx` binary gains a `select_passphrase_source()` helper
+   that picks between `Env` and `InteractivePrompt`:
+   (1) `AIVYX_PASSPHRASE` set and non-empty → `Env`;
+   (2) env var unset or empty, and `io::stdin().is_terminal()` →
+   `InteractivePrompt`; (3) otherwise bail with the message
+   "`AIVYX_PASSPHRASE` is not set and stdin is not a terminal."
+   Set-but-empty is treated as effectively-unset at the binary
+   layer so a stray `export AIVYX_PASSPHRASE=` in a shell rc
+   file doesn't crash an interactive shell run — the
+   `passphrase` module's `Env` arm still rejects empty with
+   `EnvEmpty` if a caller explicitly asks for that source, so
+   the strict type-level guarantee is preserved.
+
+   **Tests.** +5 in `passphrase::tests` (33 → 38;
+   workspace 271 → 276). The `interactive_source_returns_not_
+   implemented_stub` test is replaced by
+   `interactive_source_reads_password_from_bufread` which
+   drives the real bufread seam end-to-end. Three negative-path
+   tests cover empty-password rejection, I/O error wrapping,
+   and a round-trip invariant that the interactive helper
+   produces byte-identical bytes to a fixture source for the
+   same passphrase string. Two new debug-redaction tripwires
+   cover the `Env` variant (var name appears, value does not)
+   and `InteractivePrompt` (format renders without touching
+   the tty); the pre-existing
+   `debug_impl_does_not_leak_fixture_closure_contents` test
+   from Phase 5 covers the `Fixture` variant unchanged.
+
+   **Binary smoke-tested in three branches.** (1) env-var set
+   + `--verify-only` → exit 0, correct banner; (2) env-var
+   unset + pipe stdin + `--verify-only` → exit 1 with
+   `no passphrase available: ...`; (3) env-var set + pipe
+   stdin + `--verify-only` → env wins, exit 0. The fourth
+   branch (tty-driven real prompt) is exercised at unit-test
+   resolution by the bufread-seam tests.
+
+   **Six-phase DESIGN.md empty-diff streak survives a fourth
+   task-level decision.** Task 4 had one potential streak-
+   ender: if `PassphraseSource::InteractivePrompt` had needed
+   a new payload field (e.g., a trait-object reader for
+   testability), the enum shape would have changed and D7's
+   `PassphraseSource` description might have needed an
+   amendment. Resolved instead by the FnOnce closure seam,
+   which lives at the *private function* level, not the enum
+   level — the public `PassphraseSource::InteractivePrompt`
+   variant is still unit-shape.
 
 5. **Memory GC tripwire.** Add a size-cap check inside
    `MemoryWriteTool::execute` that counts the current topic's
@@ -657,8 +719,19 @@ wiring; defer to Phase 8+ otherwise.
       no new tool family, Phase 6's conditional promise does
       not trigger. DESIGN.md empty-diff streak preserved a
       third task in a row.)*
-- [ ] `PassphraseSource::InteractivePrompt` is lit up behind
-      `rpassword`, not a stub.
+- [x] `PassphraseSource::InteractivePrompt` is lit up behind
+      `rpassword`, not a stub. *(Task 4, 2026-04-14. Real
+      `rpassword::prompt_password` call site; private
+      `read_interactive_password_inner` closure seam lets
+      unit tests route through `prompt_password_from_bufread`
+      without a tty. `InteractiveNotImplemented` error variant
+      deleted, replaced by `InteractiveIo { reason }` and
+      `InteractiveEmpty`. Binary's new `select_passphrase_source()`
+      helper picks `Env` / `InteractivePrompt` / bail based on
+      env var + `io::stdin().is_terminal()`. +5 unit tests;
+      workspace 271 → 276. Smoke-tested in three binary
+      branches. DESIGN.md empty-diff streak preserved a fourth
+      task in a row.)*
 - [ ] `MemoryWriteTool` refuses writes above
       `AIVYX_MEMORY_MAX_PER_TOPIC` (default 10 000) with a
       typed `Failed` outcome the planner can observe.

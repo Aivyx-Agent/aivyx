@@ -29,6 +29,14 @@ thiserror = { workspace = true }
 # same major avoids trait-object fragmentation.
 zeroize = "1.8"
 
+# Phase 7 task 4 — the `passphrase` module's `InteractivePrompt`
+# source calls `rpassword::prompt_password("aivyx passphrase: ")`
+# in production and `rpassword::prompt_password_from_bufread` in
+# unit tests. `rpassword` is a thin wrapper around termios/ConIn
+# echo-disable plus a line read; it has no transitive async deps.
+# Pinned to `^7` (today 7.4.0) to match the current stable line.
+rpassword = "7"
+
 # Binary-only deps below. The library target (lib.rs) only needs the
 # entries above; the `aivyx` bin pulls in the rest so a single
 # `cargo run --bin aivyx` launches the full agent stack.

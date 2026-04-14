@@ -44,9 +44,13 @@
 //!   salt file is the same path with a `.salt` suffix appended.
 //!   Parent directories are created at startup if missing.
 //! - `AIVYX_PASSPHRASE` — the passphrase the Argon2id master-key
-//!   derivation feeds on. Phase 5 Q2 resolved to env-var-only for
-//!   this phase; an interactive prompt is a follow-up. Required
-//!   whenever storage is enabled (i.e., always in the binary path).
+//!   derivation feeds on. If unset or empty and stdin is a
+//!   terminal, the binary falls back to an interactive
+//!   `aivyx passphrase: ` prompt via `rpassword` (reads
+//!   `/dev/tty` directly, echo-off). If unset **and** stdin is
+//!   not a terminal (systemd/launchd/scripted runs), the binary
+//!   exits with a clear error rather than hanging on a tty read
+//!   that will never come.
 //!
 //! ## Cancellation
 //!
@@ -84,7 +88,7 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
-use std::io::{self};
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -177,14 +181,29 @@ fn run() -> Result<(), String> {
     let salt_path = salt_path_for(&storage_path);
 
     // ---- Master key ---------------------------------------------------
-    // Argon2id over the `AIVYX_PASSPHRASE` env var, using the sidecar
-    // salt file (generated on first run, persisted plaintext — salts
-    // are not secret per Argon2id design). Raw passphrase bytes never
-    // leave `derive_master_key`; we get back a zero-on-drop `MasterKey`.
+    // Argon2id over a passphrase, using the sidecar salt file
+    // (generated on first run, persisted plaintext — salts are not
+    // secret per Argon2id design). Raw passphrase bytes never leave
+    // `derive_master_key`; we get back a zero-on-drop `MasterKey`.
+    //
+    // Source selection policy — binary decides, module just honors
+    // the enum:
+    //
+    // 1. `AIVYX_PASSPHRASE` is set and non-empty → `Env`. This is
+    //    the systemd / launchd / scripted path and must stay the
+    //    first-checked branch so deployments don't accidentally
+    //    trip the interactive prompt.
+    // 2. stdin is a terminal → `InteractivePrompt`. The user gets
+    //    a one-line `aivyx passphrase: ` echo-off prompt read from
+    //    `/dev/tty`. This covers the "human runs `aivyx` at a
+    //    shell without exporting the env var" ergonomic case.
+    // 3. Otherwise → bail with a clear message. Neither env nor
+    //    tty means we have no interactive user *and* no configured
+    //    source — continuing would either hang on a tty read that
+    //    never comes, or crash with an opaque Argon2 error.
+    let passphrase_source = select_passphrase_source()?;
     let master_key = derive_master_key(
-        PassphraseSource::Env {
-            var_name: DEFAULT_ENV_VAR.to_string(),
-        },
+        passphrase_source,
         &salt_path,
         Argon2Params::d7_default(),
     )
@@ -330,6 +349,40 @@ fn parse_verify_only_flag() -> Result<bool, String> {
         Some(other) => Err(format!(
             "unrecognized argument: `{other}`. Supported flags: --verify-only"
         )),
+    }
+}
+
+/// Decide which `PassphraseSource` to hand to `derive_master_key`.
+///
+/// Policy (see the `run()` comment for the rationale):
+/// 1. `AIVYX_PASSPHRASE` set and non-empty → `Env`.
+/// 2. `AIVYX_PASSPHRASE` unset or empty, and stdin is a tty →
+///    `InteractivePrompt`.
+/// 3. Otherwise → `Err` with a clear operator-facing message.
+///
+/// "Set but empty" is treated as "unset" at this layer because a
+/// stray `export AIVYX_PASSPHRASE=` in a shell rc file should not
+/// crash the binary in a non-interactive context — we fall through
+/// to the tty branch (which fails cleanly if there's no tty) rather
+/// than immediately bailing. The `passphrase` module itself still
+/// rejects a truly empty env var with `EnvEmpty`, so if the user
+/// explicitly asked for `Env` they still get the clean error.
+fn select_passphrase_source() -> Result<PassphraseSource, String> {
+    match std::env::var(DEFAULT_ENV_VAR) {
+        Ok(ref s) if !s.is_empty() => Ok(PassphraseSource::Env {
+            var_name: DEFAULT_ENV_VAR.to_string(),
+        }),
+        _ => {
+            if io::stdin().is_terminal() {
+                Ok(PassphraseSource::InteractivePrompt)
+            } else {
+                Err(format!(
+                    "no passphrase available: `{DEFAULT_ENV_VAR}` is not set and \
+                     stdin is not a terminal. Export the env var or run aivyx \
+                     from an interactive shell."
+                ))
+            }
+        }
     }
 }
 
