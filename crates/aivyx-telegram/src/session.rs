@@ -86,6 +86,7 @@
 //! multi-chat pump that spawns one `TelegramChannel` per chat_id and
 //! routes accordingly is a Phase 9 concern.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -98,7 +99,7 @@ use aivyx_llm::LlmProvider;
 use aivyx_storage::Storage;
 
 use crate::telegram_channel::TelegramChannel;
-use crate::transport::{ReqwestTransport, TelegramTransport};
+use crate::transport::{IncomingMessage, ReqwestTransport, TelegramTransport, TransportError};
 
 /// Per-session knobs for the Telegram loop. Analogue of
 /// [`aivyx_channel::SessionConfig`], minus the local-only `prompt`
@@ -126,6 +127,149 @@ pub struct TelegramSessionConfig {
 /// override this via `run_telegram_session_with_transport` so they
 /// don't wait on real-world timeouts.
 const LONG_POLL_TIMEOUT_SECS: u32 = 25;
+
+/// How long each `scan_for_cancel` `getUpdates` call holds the connection
+/// open, in seconds. The Phase 8 Q8 design note called out ~2 seconds
+/// as the sweet spot: long enough that a user typing `/cancel` during
+/// a 30-second turn has multiple scan iterations to land on, short
+/// enough that a normal fast turn doesn't pay a noticeable wait cost
+/// on the losing select arm when the turn finishes quickly.
+///
+/// Tests override this via `run_telegram_session_with_transport_ex`.
+const SCAN_FOR_CANCEL_TIMEOUT_SECS: u32 = 2;
+
+/// Result of one `scan_for_cancel` probe. The session loop consumes
+/// this to advance its shared `offset` cursor and to reshuffle any
+/// updates the scan saw into the next turn's pending queue.
+///
+/// **Why the scan returns messages the turn loop has to re-queue, not
+/// the whole next-turn decision.** The scan is a transport-layer
+/// helper; the turn-loop logic of "what counts as a cancel" and "what
+/// to do next" stays in `run_telegram_session_with_transport`. The
+/// scan's only job is to answer: "did a `/cancel` land, and what
+/// other target-chat messages arrived in the same batch?"
+///
+/// **Design note on queueing vs. redelivery (PHASE_8.md:1376–1380
+/// open question).** We pick queueing: messages that arrive *alongside*
+/// `/cancel` in the same scan batch are appended to the session
+/// loop's pending queue in `update_id` order and drive subsequent
+/// turns. The rejected alternative was "drop them, let Telegram
+/// redeliver next poll" — simpler, but worse UX. A user who types
+/// "do X" then immediately "/cancel" shouldn't lose the X; a user
+/// who types "/cancel" then immediately "do Y" shouldn't lose the Y.
+/// Queueing preserves both.
+#[derive(Debug)]
+enum ScanResult {
+    /// The scan batch did not contain a `/cancel` from the target chat.
+    /// `queued` is any target-chat messages the scan *did* see (the
+    /// main loop prepends these to its pending queue; they're
+    /// non-cancel messages that the main loop can process after the
+    /// current turn finishes). `max_update_id` is the highest
+    /// `update_id` the scan observed from *any* chat, which the main
+    /// loop uses to advance the offset cursor past this batch so
+    /// Telegram doesn't redeliver it on the next `get_updates` call.
+    NoCancel {
+        max_update_id: Option<i64>,
+        queued: Vec<IncomingMessage>,
+    },
+    /// The scan batch contained a `/cancel` from the target chat. The
+    /// session loop cancels the channel's per-turn token so the
+    /// in-flight `agent.turn` resolves as `Cancelled`. `queued` is any
+    /// target-chat messages in the same batch with `update_id` other
+    /// than `cancel_update_id`, in batch order — they are re-queued
+    /// for subsequent turns per the queueing-over-redelivery design.
+    /// `cancel_update_id` is the highest `update_id` between `/cancel`
+    /// itself and any observed queued-message update_ids, used to
+    /// advance the offset cursor.
+    FoundCancel {
+        cancel_update_id: i64,
+        queued: Vec<IncomingMessage>,
+    },
+}
+
+/// Probe the Bot API for a short window, looking for a `/cancel`
+/// command from `target_chat`. This is the "scanning arm" of the
+/// `tokio::select!` inside the session loop's per-turn block — the
+/// other arm is `agent.turn(...)` itself.
+///
+/// **Cancellation-safety invariant the caller relies on.** When the
+/// turn arm wins the `select!`, this future is dropped mid-`await` on
+/// `get_updates`. For the production `ReqwestTransport`, dropping the
+/// reqwest future cancels the in-flight HTTP request *before* the Bot
+/// API's server-side cursor advances — so the next main-loop
+/// `get_updates(offset, ...)` with the same `offset` reproduces the
+/// same batch (or a superset). For the test `ScriptedTransport`,
+/// `get_updates` eagerly drains its internal queue, which is a test-
+/// artifact that does *not* model production precisely; the tests
+/// compensate by driving the scan to completion and reading the
+/// returned `ScanResult` rather than relying on select-drop.
+///
+/// **`/cancel` detection.** A message counts as a cancel iff its
+/// `text.trim() == "/cancel"` (case-sensitive, no arguments). Bot
+/// Mention forms like `/cancel@MyBotName` are a Phase 9+ refinement —
+/// they require reading the bot's `getMe` username, which this seam
+/// doesn't carry. A future task can thread the username through
+/// `TelegramSessionConfig` if the simpler form proves insufficient.
+///
+/// **Non-target-chat messages.** A scan batch can return messages
+/// for *any* chat this bot is in (Bot API behavior). Anything that
+/// isn't for `target_chat` is silently dropped here, mirroring the
+/// main-loop filter. Its `update_id` still contributes to
+/// `max_update_id` so the cursor advances past it.
+async fn scan_for_cancel<T: TelegramTransport + ?Sized>(
+    transport: &T,
+    offset: i64,
+    target_chat: i64,
+    scan_timeout_secs: u32,
+) -> Result<ScanResult, TransportError> {
+    let batch = transport.get_updates(offset, scan_timeout_secs).await?;
+
+    let mut max_update_id: Option<i64> = None;
+    let mut queued: Vec<IncomingMessage> = Vec::new();
+    let mut cancel_update_id: Option<i64> = None;
+
+    for msg in batch {
+        max_update_id = Some(max_update_id.map_or(msg.update_id, |m| m.max(msg.update_id)));
+
+        if msg.chat_id != target_chat {
+            continue;
+        }
+
+        if msg.text.trim() == "/cancel" {
+            // Remember only the *first* /cancel in the batch. A batch
+            // with multiple cancels is a pathological case (the user
+            // mashed the command), and one cancel is enough to fire
+            // the branch. Subsequent cancels are dropped (they'd
+            // cancel an already-cancelled turn).
+            if cancel_update_id.is_none() {
+                cancel_update_id = Some(msg.update_id);
+            }
+            // Do NOT queue the /cancel message itself — it is a
+            // control signal, not a prompt. A user shouldn't see the
+            // bot respond to "/cancel" as if it were a question.
+        } else {
+            queued.push(msg);
+        }
+    }
+
+    if let Some(cancel_id) = cancel_update_id {
+        // The cancel_update_id returned to the caller is the *cursor
+        // advance target*: the highest update_id the scan observed,
+        // whether that's the cancel itself, a queued normal message,
+        // or a non-target-chat message. The main loop will advance
+        // `offset` to `cancel_update_id + 1`.
+        let advance_to = max_update_id.unwrap_or(cancel_id).max(cancel_id);
+        Ok(ScanResult::FoundCancel {
+            cancel_update_id: advance_to,
+            queued,
+        })
+    } else {
+        Ok(ScanResult::NoCancel {
+            max_update_id,
+            queued,
+        })
+    }
+}
 
 /// Summary of what one Telegram session did, returned after the long-
 /// poll cursor is shut down. Matches the shape of
@@ -253,80 +397,233 @@ where
     // cursor. 0 on first iteration is the Bot API's "send me everything
     // you've got buffered for this bot" sentinel; subsequent iterations
     // advance to `max(update_id) + 1`.
+    //
+    // `pending` is a per-target-chat queue of messages waiting to be
+    // turned into agent turns. It is usually refilled from the main
+    // `get_updates` call at the top of each outer iteration, but the
+    // `/cancel` scan arm can also push messages it saw *during* a turn
+    // onto this queue (at the front, if a cancel arrived and pre-cancel
+    // messages need to run before the current turn's replacement; at
+    // the back, otherwise). This is the queueing-over-redelivery
+    // choice documented on `ScanResult`.
     let mut offset: i64 = 0;
     let mut turns_run: usize = 0;
+    let mut pending: VecDeque<IncomingMessage> = VecDeque::new();
     let target_chat = channel.chat_id();
     let transport = channel.transport();
 
     loop {
-        // Check both the process-wide shutdown signal AND the
-        // channel's per-turn token *before* the long-poll call so a
-        // ctrl-C received between turns exits immediately rather than
-        // stalling up to `long_poll_timeout_secs` seconds waiting for
-        // the Bot API to return an empty batch.
-        //
-        // Why two tokens: the per-turn token rotates on every turn
-        // (see `reset_cancellation` above) so that turn N's cancel
-        // doesn't poison turn N+1 — that's the Phase 3 monotonic-
-        // token fix. A process-wide shutdown signal needs to survive
-        // that rotation, so it's a separate token the binary's
-        // ctrl-C handler holds and cancels. The session unit test
-        // at `tests::run_telegram_session_drives_two_scripted_turns`
-        // cancels the per-turn token externally (simulating a ctrl-C
-        // that happened to land between turns); the binary uses the
-        // `shutdown` parameter proper.
-        if shutdown.is_cancelled() || channel.cancellation_token().is_cancelled() {
+        // Process-wide shutdown signal is checked every outer iteration:
+        // a ctrl-C received between turns (or between long-polls) must
+        // exit immediately rather than stalling up to
+        // `long_poll_timeout_secs` seconds waiting for the Bot API to
+        // return an empty batch.
+        if shutdown.is_cancelled() {
             return Ok(TelegramSessionReport { turns_run });
         }
 
-        let updates = match transport
-            .get_updates(offset, long_poll_timeout_secs)
-            .await
-        {
-            Ok(batch) => batch,
-            Err(e) => {
-                // Platform errors at the poll layer are non-fatal:
-                // Bot API 5xx, transient network flakiness, rate-
-                // limit 429s. Log to stderr and back off briefly so
-                // we don't hot-loop a broken network. Same shape as
-                // the session-marker error handling in `run_session`:
-                // a degraded transport should never take down the
-                // bot's ability to serve later messages.
-                eprintln!("aivyx-telegram: get_updates failed ({e}); backing off 1s");
-                tokio::time::sleep(Duration::from_secs(1)).await;
+        // If there's nothing pending, refill from a fresh long-poll.
+        // When the scan arm has queued messages from a mid-turn batch,
+        // we skip this — we'd prefer to drain the scan-provided queue
+        // first before paying for another round-trip.
+        if pending.is_empty() {
+            // Channel-token fast path: the per-turn token is rotated
+            // at the top of each turn (see `reset_cancellation` below)
+            // so it is a turn-internal signal, not an inter-turn one.
+            // Between turns the token is free to carry the previous
+            // turn's cancelled state — we must only check it when
+            // we're about to *block* on a long-poll, so that a ctrl-C
+            // equivalent that happened to land between a turn and its
+            // long-poll can short-circuit the wait. The
+            // `tests::run_telegram_session_drives_two_scripted_turns`
+            // test relies on this: it cancels the channel token
+            // externally (simulating a shutdown that lands between
+            // turns) and expects the session to exit on the next
+            // pre-poll check.
+            //
+            // Before Phase 9 Task 1 this check lived above the
+            // `pending.is_empty()` branch and fired on *every* outer
+            // iteration, which was fine when the old loop also did
+            // all per-turn work inside the same outer iteration. With
+            // Task 1's `pending: VecDeque` carrying across outer
+            // iterations, that placement was subtly wrong: it would
+            // observe the still-cancelled per-turn token *between*
+            // turns of one long-poll batch and exit before turn N+1
+            // got a chance to rotate the slot. Moving it here — only
+            // on the pre-long-poll path — restores the Phase 8 Task 5
+            // "cancelled turn 1, then turn 2 runs normally" invariant.
+            if channel.cancellation_token().is_cancelled() {
+                return Ok(TelegramSessionReport { turns_run });
+            }
+
+            let updates = match transport
+                .get_updates(offset, long_poll_timeout_secs)
+                .await
+            {
+                Ok(batch) => batch,
+                Err(e) => {
+                    // Platform errors at the poll layer are non-fatal:
+                    // Bot API 5xx, transient network flakiness, rate-
+                    // limit 429s. Log to stderr and back off briefly
+                    // so we don't hot-loop a broken network. Same
+                    // shape as the session-marker error handling in
+                    // `run_session`: a degraded transport should
+                    // never take down the bot's ability to serve
+                    // later messages.
+                    eprintln!("aivyx-telegram: get_updates failed ({e}); backing off 1s");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            if updates.is_empty() {
+                // Empty batch — Bot API long-poll timed out with no
+                // new messages. Loop immediately to re-arm.
                 continue;
+            }
+
+            for msg in updates {
+                // Advance the cursor regardless of whether we handle
+                // the message, so a malformed message from a chat
+                // we're not targeting doesn't cause the same update
+                // to be redelivered next poll.
+                offset = offset.max(msg.update_id + 1);
+
+                if msg.chat_id != target_chat {
+                    // Multi-chat pumping is a Phase 9 concern; for
+                    // now, drop anything that isn't for this
+                    // channel's chat.
+                    continue;
+                }
+
+                // A stray top-of-loop `/cancel` with no turn running
+                // is a no-op — there's nothing to cancel. We drop it
+                // rather than queueing it (a user shouldn't see the
+                // bot respond to "/cancel" as if it were a question;
+                // same rationale as the scan arm).
+                if msg.text.trim() == "/cancel" {
+                    continue;
+                }
+
+                pending.push_back(msg);
+            }
+
+            if pending.is_empty() {
+                // Entire batch was non-target-chat noise or /cancels
+                // with no turn to cancel. Skip straight to the next
+                // long-poll without trying to run a turn.
+                continue;
+            }
+        }
+
+        // Dequeue the next message and run a turn for it, racing
+        // `scan_for_cancel` against the turn to watch for an in-band
+        // `/cancel`. The scan arm never completes a turn itself — its
+        // only jobs are (a) advancing `offset` past any batch it sees
+        // and (b) cancelling the channel's per-turn token when it
+        // observes `/cancel`, which then lets the biased turn arm win
+        // the next select iteration with `TurnOutcome::Cancelled`.
+        let msg = pending.pop_front().expect("pending is non-empty here");
+
+        // Rotate cancellation per turn — identical rationale to
+        // `LocalChannel::reset_cancellation` in the local path.
+        // `tokio_util::CancellationToken` is monotonic, so a
+        // previously-cancelled turn would poison turn N+1 if we
+        // didn't swap the slot.
+        channel.reset_cancellation();
+
+        let message = Message::text(channel.session_id(), &msg.text);
+        let turn_fut = agent.turn(message, channel.as_ref());
+        tokio::pin!(turn_fut);
+
+        let _outcome = loop {
+            tokio::select! {
+                // Biased — the turn arm is checked first each poll.
+                // If the turn has already resolved (common case on a
+                // fast turn), we never even arm the scan and the
+                // `scan_for_cancel` future is constructed and dropped
+                // synchronously, paying no network round-trip.
+                biased;
+
+                outcome = &mut turn_fut => {
+                    // Turn completed (or was cancelled by a previous
+                    // scan-arm cancellation). Exit the per-turn select
+                    // loop with the outcome. Any `ScanResult` the scan
+                    // arm may have *also* seen on this iteration is
+                    // discarded by the drop here — which is fine,
+                    // because that batch either (a) hasn't been
+                    // fetched yet (scan arm still awaiting) or
+                    // (b) was fetched, and scripted-transport-drains-
+                    // eagerly corner cases aside, the main loop's
+                    // next `get_updates(offset, ...)` will re-fetch
+                    // the same window on production `ReqwestTransport`.
+                    break outcome;
+                }
+
+                scan = scan_for_cancel(
+                    transport.as_ref(),
+                    offset,
+                    target_chat,
+                    SCAN_FOR_CANCEL_TIMEOUT_SECS,
+                ) => {
+                    match scan {
+                        Ok(ScanResult::NoCancel { max_update_id, queued }) => {
+                            // No cancel this scan window; advance the
+                            // cursor past whatever we observed and
+                            // push any queued target-chat messages to
+                            // the *back* of `pending` so the current
+                            // turn finishes first, then those queued
+                            // messages drive subsequent turns in
+                            // arrival order.
+                            if let Some(m) = max_update_id {
+                                offset = offset.max(m + 1);
+                            }
+                            for q in queued {
+                                pending.push_back(q);
+                            }
+                            // Loop back to arm another scan against
+                            // the still-in-flight turn.
+                        }
+                        Ok(ScanResult::FoundCancel { cancel_update_id, queued }) => {
+                            // Cancel! Advance the cursor past the
+                            // cancel (and any same-batch queued
+                            // messages). Prepend the queued messages
+                            // to `pending` so they run *before* any
+                            // messages the user types after the
+                            // cancelled turn's finalize — preserving
+                            // arrival order from the user's point of
+                            // view.
+                            offset = offset.max(cancel_update_id + 1);
+                            for q in queued.into_iter().rev() {
+                                pending.push_front(q);
+                            }
+                            // Fire the per-turn cancel. The planner's
+                            // own `tokio::select!` against the
+                            // channel's cancellation token (see
+                            // `llm_planner.rs:176`) will win the next
+                            // scheduling step and `turn_fut` will
+                            // resolve as `TurnOutcome::Cancelled`,
+                            // which the biased branch above then
+                            // catches on the next loop iteration.
+                            channel.cancellation_token().cancel();
+                        }
+                        Err(e) => {
+                            // A scan-layer transport failure is not
+                            // fatal — the turn is still running and
+                            // should be allowed to finish (the user
+                            // didn't ask for a cancel as far as we
+                            // know). Back off briefly to avoid hot-
+                            // spinning on a consistently broken scan
+                            // and loop to re-arm.
+                            eprintln!(
+                                "aivyx-telegram: scan_for_cancel failed ({e}); dropping scan this round"
+                            );
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                    }
+                }
             }
         };
-
-        if updates.is_empty() {
-            // Empty batch — Bot API long-poll timed out with no new
-            // messages. Loop immediately to re-arm.
-            continue;
-        }
-
-        for msg in updates {
-            // Advance the cursor regardless of whether we handle the
-            // message, so a malformed message from a chat we're not
-            // targeting doesn't cause the same update to be redelivered
-            // next poll.
-            offset = offset.max(msg.update_id + 1);
-
-            if msg.chat_id != target_chat {
-                // Multi-chat pumping is a Phase 9 concern; for now,
-                // drop anything that isn't for this channel's chat.
-                continue;
-            }
-
-            // Rotate cancellation per turn — identical rationale to
-            // `LocalChannel::reset_cancellation` in the local path.
-            // `tokio_util::CancellationToken` is monotonic, so a
-            // previously-cancelled turn would poison turn N+1 if we
-            // didn't swap the slot.
-            channel.reset_cancellation();
-
-            let message = Message::text(channel.session_id(), &msg.text);
-            let _outcome = agent.turn(message, channel.as_ref()).await;
-            turns_run += 1;
-        }
+        turns_run += 1;
     }
 }
