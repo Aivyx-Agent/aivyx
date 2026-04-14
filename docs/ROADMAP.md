@@ -27,53 +27,40 @@ comes after the current phase?"* — nothing more.
 
 ## Phase 7 — Hardening (audit persistence first)
 
-**Leaning:** Hardening over Ecosystem, based on what Phase 6 uncovered.
+**Status:** Active — see [`PHASE_7.md`](PHASE_7.md).
 
-Phase 6 shipped memory-as-tool cleanly (`serde_json` encoding,
-per-topic monotonic sequence numbers, a `RedbMemory` substrate that
-seeds its counter from on-disk state at reopen, three `Tool` impls
-that derive `memory.<op>:topic:<topic>` scopes from their input, and
-a `memory_tool_e2e.rs` integration test that proves recall crosses a
-process boundary). The asymmetry it surfaced is the one that decides
-Phase 7: **memory now survives restarts, but the audit of how memory
-was written does not**. `HmacChainLog` still resets on every process
-start, so every `AuditEvent::MemoryAccess` tag Phase 6 just made
-load-bearing for D1's "memory is a tool" commitment is ephemeral —
-an attacker who can crash the process once can truncate the chain.
-That's the strongest hardening case the project has had so far, and
-it's the thing to fix first in Phase 7.
+## Phase 8 — Ecosystem (remote channels)
 
-Concrete Phase 7 candidates, ordered by Phase 6's evidence:
+Deliberately ambiguous until Phase 7 closes. With the core fully
+hardened (persistent audit, interactive passphrase, memory size
+caps, filesystem permission mode), Phase 8 is the first phase where
+ecosystem work — remote channels (Telegram, Discord, Slack, Matrix,
+Email), desktop GUI, federation, multi-agent — becomes a responsible
+target rather than a shortcut past unfinished plumbing. The D2
+`ChannelContext` trait and the trust-tier ladder (`Local` → `Trusted`
+→ `Untrusted`) have been waiting for their second concrete adapter
+since Phase 3 shipped `LocalChannel`; Phase 8 is where that second
+adapter finally lands.
 
-1. **Audit persistence via `KeyDomain::Audit`.** Load-bearing.
-   Requires deciding where the HMAC chain key comes from (derive
-   from passphrase? separate key in `KeyDomain::Secrets`?), what
-   "chain start" means across restarts (one chain forever? one
-   chain per session? merkle-linked session chains?), and how to
-   verify the chain from a cold start. This is real design work,
-   not just plumbing — the right shape is its own PHASE_7.md with
-   open questions at entry.
-2. **Interactive passphrase prompting.** ~20 lines of `rpassword`
-   once audit persistence decides how the chain key is sourced
-   (the two decisions touch the same surface). Still env-var-only
-   today.
-3. **Memory GC / TTL / size caps.** Phase 6 shipped an unbounded
-   substrate and explicitly deferred eviction. If Phase 7 is doing
-   hardening work, this is the right place for `memory.forget`-
-   driven compaction and a size-cap tripwire.
-4. **Filesystem permission hardening (`chmod 0600` on the store
-   and its salt sidecar).** Small, mechanical, but a real
-   disclosure hazard on a shared Unix box. Half an hour of work.
+The first concrete Phase 8 candidate is probably **Telegram**,
+chosen because it's the simplest credible non-local channel
+(long-poll or webhook, one auth token, small message model) and
+because its trust-tier story is unambiguous — a Telegram bot is
+`Untrusted` by default and the capability attenuation falls
+naturally out of D4's existing tier table. Matrix is a more
+principled choice but has a larger protocol surface; Discord and
+Slack have the best UX but need OAuth flows that Phase 8 shouldn't
+be the one to invent. Phase 8's entry will finalize this decision
+based on which adapter exercises the `ChannelContext` trait most
+completely.
 
-The **Ecosystem** framing (remote channels — Telegram, Discord,
-Slack, Matrix, Email; desktop GUI; federation; multi-agent) remains
-the longer-term destination. The lesson from the archived codebase
-is that ecosystem work started too early and shaped the core in
-ways that later became drift markers, so this time we want the core
-to be *stable* before we go there. Phase 6 leaves the core in
-exactly the shape Phase 7 hardening needs — session-level
-persistence, memory-level persistence, and an audit surface that is
-*almost* persistent — and Phase 7 is the phase that closes the gap.
-
-Ecosystem is likely Phase 8 or 9, not Phase 7. The decision lands
-firmly at Phase 7 entry.
+What Phase 7's hardening earns Phase 8: a core that can be handed
+to a network-facing adapter without the adapter inheriting any of
+the "works on a developer laptop" assumptions. Persistent audit
+means a bad message over an untrusted channel is still in the log
+tomorrow. Memory size caps mean an attacker who floods the agent
+with requests to "remember X" can't unbounded-allocate. Interactive
+passphrase means the adapter can't be the one to handle the
+master key. These are all "the core had to get this right before
+the adapter could exist" items, and Phase 7 is the last phase that
+gets to fix them without also having a running bot to migrate.
