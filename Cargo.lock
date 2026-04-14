@@ -57,11 +57,16 @@ dependencies = [
  "aivyx-audit",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-crypto",
  "aivyx-llm",
+ "aivyx-storage",
  "async-trait",
  "secrecy",
  "serde_json",
+ "thiserror",
  "tokio",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -14,13 +14,32 @@ aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
 async-trait = { workspace = true }
 
+# Phase 5 task 3 — the passphrase module derives a MasterKey via
+# aivyx-crypto's Argon2id entry and tests the full passphrase →
+# storage round-trip against aivyx-storage. Both are library-level
+# deps (not binary-only) because the `passphrase` module is part of
+# the lib target.
+aivyx-crypto = { path = "../aivyx-crypto" }
+aivyx-storage = { path = "../aivyx-storage" }
+thiserror = { workspace = true }
+
+# Zeroize the transient passphrase buffer between "passphrase sourced"
+# and "master key derived." aivyx-crypto pins the same 1.8 line and
+# exposes `Zeroize` on its key types, so keeping aivyx-channel on the
+# same major avoids trait-object fragmentation.
+zeroize = "1.8"
+
 # Binary-only deps below. The library target (lib.rs) only needs the
-# three entries above; the `aivyx` bin pulls in the rest so a single
+# entries above; the `aivyx` bin pulls in the rest so a single
 # `cargo run --bin aivyx` launches the full agent stack.
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal"] }
 secrecy = { workspace = true }
+# Salt bytes for the passphrase module — uuid::Uuid::new_v4() is the
+# workspace standard entropy source, same choice aivyx-storage makes
+# for its AEAD nonces.
+uuid = { workspace = true }
 
 [dev-dependencies]
 # LocalChannel unit tests exercise the async ChannelContext surface

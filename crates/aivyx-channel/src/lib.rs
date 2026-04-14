@@ -29,6 +29,7 @@ pub use aivyx_core::{
 };
 
 mod local;
+pub mod passphrase;
 mod render;
 mod session;
 
