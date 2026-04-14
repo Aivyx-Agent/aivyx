@@ -16,3 +16,6 @@ Thumbs.db
 # Local env / secrets
 .env
 *.local
+
+# Local-only audit / scratch docs (not part of frozen phase journals)
+/docs/walkthrough.md
