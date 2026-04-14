@@ -11,7 +11,7 @@
 //!       → LlmPlanner
 //!           → AnthropicProvider (live HTTPS)
 //!               → tokens streamed back through LocalChannel
-//!       → AuditBridge<HmacChainLog>
+//!       → PersistentAuditLog (HMAC chain persisted to KeyDomain::Audit)
 //!   → TurnOutcome
 //!   → [turn completed] marker printed by LocalChannel::finalize
 //! stdin (next prompt)
@@ -58,14 +58,20 @@
 //! this state machine via a shared `CancellationToken` wired into the
 //! `LocalChannel`.
 //!
+//! ## Verify-only mode
+//!
+//! Passing `--verify-only` as the first argument switches the binary
+//! into a forensic-verification mode: it opens the encrypted store,
+//! runs `PersistentAuditLog::verify_from_disk` over the whole
+//! `KeyDomain::Audit` range, prints a one-line `VerifyReport`, and
+//! exits with status 0 (chain OK) or non-zero (chain broken, corrupt
+//! entry, or storage error). No session is started, no provider is
+//! built, and `ANTHROPIC_API_KEY` is **not** required — an operator
+//! running verification on a production store should not have to hand
+//! the cloud key to a read-only forensic tool.
+//!
 //! ## What this binary is not
 //!
-//! - It does not persist the audit chain. The `HmacChainLog` still
-//!   uses an ephemeral per-process key. Phase 5 task 4 added the
-//!   encrypted store for *session metadata* (`KeyDomain::Sessions`);
-//!   Phase 6 task 4 added memory (`KeyDomain::Memory`). Audit
-//!   persistence (`KeyDomain::Audit`) is the remaining hardening
-//!   item on the ROADMAP for Phase 7+.
 //! - It does not persist conversation history. The planner's
 //!   `LlmHistory` lives in RAM for the lifetime of one
 //!   `ConcreteAgent`. Cross-turn *recall* now works through the
@@ -85,7 +91,7 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 
-use aivyx_audit::{AuditBridge, HmacChainLog};
+use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
@@ -115,13 +121,26 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
+    // ---- CLI args -----------------------------------------------------
+    // The only recognized flag today is `--verify-only`. Anything else
+    // is rejected early so a typo doesn't silently fall through into
+    // normal session bring-up.
+    let verify_only = parse_verify_only_flag()?;
+
     // ---- Config -------------------------------------------------------
-    let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-        "ANTHROPIC_API_KEY is not set. Export it and retry: \
-         `export ANTHROPIC_API_KEY=sk-ant-...`"
-            .to_string()
-    })?;
-    let api_key = SecretString::from(api_key);
+    // `ANTHROPIC_API_KEY` is only required for the normal session path.
+    // Verify-only mode is a read-only forensic surface and must not
+    // depend on the cloud key being present.
+    let api_key_for_session: Option<SecretString> = if verify_only {
+        None
+    } else {
+        let raw = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+            "ANTHROPIC_API_KEY is not set. Export it and retry: \
+             `export ANTHROPIC_API_KEY=sk-ant-...`"
+                .to_string()
+        })?;
+        Some(SecretString::from(raw))
+    };
 
     let model = std::env::var("AIVYX_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let system_prompt = std::env::var("AIVYX_SYSTEM_PROMPT")
@@ -133,9 +152,16 @@ fn run() -> Result<(), String> {
     // the user having to mkdir a magic path. `FsReadToolConfig::build()`
     // will canonicalize and reject non-directories, so we don't need a
     // second layer of validation here.
-    let fs_root = resolve_fs_root()?;
-    std::fs::create_dir_all(&fs_root)
-        .map_err(|e| format!("failed to create fs sandbox root {fs_root:?}: {e}"))?;
+    //
+    // Verify-only mode skips this — no session, no tools, no sandbox.
+    let fs_root = if verify_only {
+        PathBuf::new()
+    } else {
+        let root = resolve_fs_root()?;
+        std::fs::create_dir_all(&root)
+            .map_err(|e| format!("failed to create fs sandbox root {root:?}: {e}"))?;
+        root
+    };
 
     // Resolve the encrypted store path + its sidecar salt file. Both
     // live under `$XDG_DATA_HOME/aivyx/` by default; the binary mkdirs
@@ -164,6 +190,21 @@ fn run() -> Result<(), String> {
     )
     .map_err(|e| format!("failed to derive master key: {e}"))?;
 
+    // Derive the audit chain key *before* `RedbStorage::open` consumes
+    // `master_key`. `PersistentAuditLog` is documented as the single
+    // legitimate caller of `SubKey::as_bytes`; the raw `[u8; 32]` then
+    // lives on the stack until it's handed to the persistent audit
+    // log, where it's cloned into an HMAC key and zeroed on drop by
+    // the log itself.
+    let audit_chain_key: [u8; 32] = {
+        let subkey = master_key
+            .derive_subkey(b"audit")
+            .map_err(|e| format!("failed to derive audit chain key: {e}"))?;
+        let mut out = [0u8; 32];
+        out.copy_from_slice(subkey.as_bytes());
+        out
+    };
+
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
     // the workspace tokio feature set already enables it and the cost
@@ -181,7 +222,25 @@ fn run() -> Result<(), String> {
         let storage = RedbStorage::open(StorageConfig::new(storage_path.clone()), master_key)
             .await
             .map_err(|e| format!("failed to open encrypted store at {storage_path:?}: {e}"))?;
-        run_async(api_key, model, system_prompt, fs_root, storage).await
+
+        if verify_only {
+            return run_verify_only(storage, audit_chain_key).await;
+        }
+
+        // Unwrap is safe: `api_key_for_session` is `Some` on every
+        // path where `verify_only == false`, enforced by the early
+        // branch at the top of `run()`.
+        let api_key = api_key_for_session
+            .expect("api_key_for_session is Some whenever verify_only is false");
+        run_async(
+            api_key,
+            model,
+            system_prompt,
+            fs_root,
+            storage,
+            audit_chain_key,
+        )
+        .await
     })
 }
 
@@ -252,12 +311,63 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// Parse the CLI arg surface. Today that's a single recognized flag
+/// (`--verify-only`) and nothing else. Rejecting unknown args early
+/// keeps typos like `--verify_only` from silently falling through
+/// into normal session bring-up.
+fn parse_verify_only_flag() -> Result<bool, String> {
+    let mut args = std::env::args().skip(1);
+    match args.next() {
+        None => Ok(false),
+        Some(flag) if flag == "--verify-only" => {
+            if args.next().is_some() {
+                return Err(
+                    "`--verify-only` takes no additional arguments".to_string(),
+                );
+            }
+            Ok(true)
+        }
+        Some(other) => Err(format!(
+            "unrecognized argument: `{other}`. Supported flags: --verify-only"
+        )),
+    }
+}
+
+/// Verify-only path: open the persistent audit log cold, scan
+/// `KeyDomain::Audit`, replay the HMAC chain, print a one-line
+/// report, and return. No session is started.
+///
+/// On chain break this returns `Err(..)`, which `main` maps to
+/// `ExitCode::FAILURE` via the outer `match`. Callers grep the exit
+/// status, not the string — but the string is still a human-readable
+/// summary so an operator running the command interactively gets a
+/// useful answer.
+async fn run_verify_only(
+    storage: Arc<dyn Storage>,
+    audit_chain_key: [u8; 32],
+) -> Result<(), String> {
+    let report = PersistentAuditLog::verify_from_disk(storage, audit_chain_key)
+        .await
+        .map_err(|e| format!("audit chain verification failed: {e}"))?;
+
+    let head_seq_display: String = report
+        .head_seq
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "none (empty chain)".to_string());
+    println!(
+        "audit: verified {} events (head_seq={})",
+        report.entries_verified, head_seq_display,
+    );
+    Ok(())
+}
+
 async fn run_async(
     api_key: SecretString,
     model: String,
     system_prompt: String,
     fs_root: PathBuf,
     storage: Arc<dyn Storage>,
+    audit_chain_key: [u8; 32],
 ) -> Result<(), String> {
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -265,13 +375,18 @@ async fn run_async(
     let provider: Arc<dyn LlmProvider> = Arc::new(anthropic);
 
     // ---- Audit --------------------------------------------------------
-    // HmacChainLog uses an ephemeral per-process key. Phase 5's
-    // encrypted storage phase will wire this to a persisted key
-    // derived from the user's passphrase. For now the in-memory chain
-    // is enough to prove the audit seam works end-to-end.
-    let audit_key: [u8; 32] = rand_bytes_from_os()?;
-    let audit: Arc<dyn AuditHook> =
-        Arc::new(AuditBridge::new(HmacChainLog::new(audit_key.to_vec())));
+    // Persistent HMAC-chained audit log over `KeyDomain::Audit`.
+    // `PersistentAuditLog::open` verifies the on-disk chain as part
+    // of the open sequence: if any prior session tampered with the
+    // store, this call returns `ChainBroken` and the binary exits
+    // with failure before any new events land. The verified event
+    // count is read back via `len()` for the startup banner — no
+    // second scan is performed.
+    let persistent_audit = PersistentAuditLog::open(Arc::clone(&storage), audit_chain_key)
+        .await
+        .map_err(|e| format!("failed to open persistent audit log: {e}"))?;
+    let verified_event_count = persistent_audit.len();
+    let audit: Arc<dyn AuditHook> = Arc::new(persistent_audit);
 
     // ---- Tools --------------------------------------------------------
     // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`
@@ -384,9 +499,11 @@ async fn run_async(
         banner: Some(format!(
             "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
              fs sandbox: {}\n\
-             memory: live (recall persists across restarts)",
+             memory: live (recall persists across restarts)\n\
+             audit: persistent ({} events verified from disk)",
             env!("CARGO_PKG_VERSION"),
             canonical_root.display(),
+            verified_event_count,
         )),
     };
 
@@ -399,22 +516,4 @@ async fn run_async(
     run_session(provider, audit, session_config, channel, reader)
         .await
         .map(|_report| ())
-}
-
-/// Pull 32 bytes of OS entropy without adding a new crate dep. Uses
-/// `getrandom` indirectly via the standard library's thread-local RNG
-/// on every supported platform.
-fn rand_bytes_from_os() -> Result<[u8; 32], String> {
-    // The standard library's `HashMap` seed pulls from the OS RNG
-    // transitively, but there's no public API. Read from /dev/urandom
-    // directly — it's guaranteed present on every Unix target the
-    // workspace supports, and the single call is simple enough to
-    // justify skipping a dep for a 32-byte read.
-    use std::io::Read;
-    let mut f = std::fs::File::open("/dev/urandom")
-        .map_err(|e| format!("failed to open /dev/urandom: {e}"))?;
-    let mut buf = [0u8; 32];
-    f.read_exact(&mut buf)
-        .map_err(|e| format!("failed to read /dev/urandom: {e}"))?;
-    Ok(buf)
 }

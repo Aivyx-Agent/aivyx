@@ -289,15 +289,72 @@ tasks are allowed to reorder and re-scope as we learn.
    point as a CLI flag. The library-level plumbing is already in
    place.
 
-3. **Wire `PersistentAuditLog` into the `aivyx` binary.** In
-   `crates/aivyx-channel/src/bin/aivyx.rs`, replace the direct
-   `AuditBridge::new(HmacChainLog::new(key))` with
-   `PersistentAuditLog::open(storage.clone(), chain_key).await?`,
-   which internally constructs the `HmacChainLog`, verifies the
-   on-disk chain, and hands back an `Arc<dyn AuditHook>` that
-   writes to both. The capability-set helper from the Phase 6
-   refinements-queue lands here. Add a "`audit: persistent (N
-   events verified from disk)`" line to the startup banner.
+3. **Wire `PersistentAuditLog` into the `aivyx` binary.**
+   (Shipped 2026-04-14.) `crates/aivyx-channel/src/bin/aivyx.rs`
+   now derives the audit chain key via
+   `master_key.derive_subkey(b"audit")?.as_bytes()` *before* the
+   `RedbStorage::open` call that consumes `master_key`, then
+   constructs `PersistentAuditLog::open(storage.clone(),
+   audit_chain_key)` inside `run_async`. The old
+   `AuditBridge::new(HmacChainLog::new(...))` site collapses
+   into a single `Arc::new(persistent_audit)` — no bridge
+   intermediary on the persistent path, because
+   `PersistentAuditLog` implements `AuditHook` directly. The
+   orphan `rand_bytes_from_os` helper is deleted; its single
+   caller was the old ephemeral chain-key.
+
+   **Startup banner.** A new `audit: persistent ({N} events
+   verified from disk)` line lands in the `SessionConfig::banner`
+   block, sourced from `persistent_audit.len()` after `open`
+   returns. No second scan — `open` already verified the chain
+   on the way in, and reading `len()` is free. The four-line
+   banner now reads: version → fs sandbox → memory → audit.
+
+   **Q6 resolution — `--verify-only` ships as option 2.** The
+   binary now recognizes a single CLI flag via
+   `parse_verify_only_flag()`: bare `--verify-only` with no
+   extra args. The verify-only path branches *after* storage
+   open but *before* session bring-up: it calls
+   `PersistentAuditLog::verify_from_disk(storage, chain_key)`,
+   prints `audit: verified N events (head_seq=...)`, and
+   returns `Ok(())`. On chain break, the binary maps the
+   `AuditError` to `ExitCode::FAILURE` via the existing
+   `main`-level `match`. Critically, `ANTHROPIC_API_KEY` is
+   **not required** in verify-only mode — an operator running
+   forensic verification on a production store should not have
+   to hand the cloud key to a read-only tool. Smoke-tested
+   against a fresh redb store: exits 0 with
+   `audit: verified 0 events (head_seq=none (empty chain))`.
+
+   **Q3d resolution — capability-set helper stays re-queued.**
+   The Phase 6 promise at `PHASE_6.md:518-523` was conditional:
+   the helper lands *if Phase 7 adds another tool family*.
+   Phase 7 tasks 1–8 are all hardening work — no new tool
+   family. The binary's five `Scope::parse(...).unwrap()` call
+   sites are *less* repetitive than the ten Phase 6 measured,
+   so the ergonomics argument is weaker today than when the
+   refinement was first re-queued. Helper stays deferred; the
+   conditional commitment rolls forward to whichever future
+   phase adds the next tool family. The prior Task 3 draft
+   text that said "the capability-set helper from the Phase 6
+   refinements-queue lands here" was written assuming Phase 7
+   would include a tool family, and was stale by the time
+   Task 1 shipped.
+
+   **Six-phase DESIGN.md empty-diff streak survives a third
+   task-level decision.** Task 3 had three potential streak-
+   enders: (a) chain-key derivation route could have needed a
+   new `MasterKey::audit_chain_key()` accessor on
+   `aivyx-crypto`'s public API — resolved instead by using
+   the already-public `derive_subkey` + already-public
+   `SubKey::as_bytes`, both of which were in place since
+   Task 1. (b) `--verify-only` could have needed a new
+   `AuditEvent::ChainVerified` variant — resolved by printing
+   the outcome directly to stdout, no audit-event surface
+   touched. (c) The banner line could have needed a new
+   `SessionConfig::audit_status` field — resolved by
+   extending the existing `banner: Option<String>` with one
+   more line, same shape.
 
 4. **Interactive passphrase prompting.** Add `rpassword = "7"`
    as a dep on `aivyx-channel`. Light up
@@ -585,10 +642,21 @@ wiring; defer to Phase 8+ otherwise.
       as policy-at-the-boundary: error returned unchanged, no
       `AuditEvent::ChainBreakDetected` schema touch, DESIGN.md
       streak preserved.)*
-- [ ] The `aivyx` binary constructs a `PersistentAuditLog` in
+- [x] The `aivyx` binary constructs a `PersistentAuditLog` in
       place of the bare `HmacChainLog`, verifies the chain on
       startup, and surfaces the verified event count in the
-      startup banner.
+      startup banner. *(Task 3, 2026-04-14. Audit chain key now
+      derived from `master_key.derive_subkey(b"audit")` before
+      `RedbStorage::open` consumes the master key; old
+      `rand_bytes_from_os` ephemeral helper deleted. New
+      `--verify-only` CLI flag ships Q6 as a read-only forensic
+      surface that runs `verify_from_disk` without requiring
+      `ANTHROPIC_API_KEY`. Banner gains the
+      `audit: persistent (N events verified from disk)` line.
+      Q3d: capability-set helper stays re-queued — Phase 7 has
+      no new tool family, Phase 6's conditional promise does
+      not trigger. DESIGN.md empty-diff streak preserved a
+      third task in a row.)*
 - [ ] `PassphraseSource::InteractivePrompt` is lit up behind
       `rpassword`, not a stub.
 - [ ] `MemoryWriteTool` refuses writes above
