@@ -1,16 +1,28 @@
-# Phase 7 — Hardening (audit persistence first)
+# Phase 7 — Hardening (audit persistence first) (FROZEN)
 
-**Status:** Active (opened 2026-04-14)
+**Status:** Closed 2026-04-14
+**Exit commit:** `8164317` — *"Phase 7 task 7: scripted audit persistence integration test — two-session round-trip + direct-tamper negative"*
 **Predecessor:** [PHASE_6.md](PHASE_6.md) (exit commit `912f022`, frozen at `a21d341`)
+**Successor:** to be scaffolded at Phase 8 entry — see [ROADMAP.md](ROADMAP.md)
 **Contract:** [`../DESIGN.md`](../DESIGN.md) (Deliverables 1–8, all
-LOCKED — unchanged since `e0d6437`, **six phases running**)
+LOCKED — unchanged since `e0d6437`, **seven phases running**)
 
-This document is the **working journal** for Phase 7. It will churn.
-At phase exit it is frozen under the same convention as
-[`PHASE_6.md`](PHASE_6.md) — no edits except through commits tagged
-`docs(phase-7):`.
+This document is a historical record. The artifacts it produced live
+in `aivyx-audit` (the `PersistentAuditLog` struct and its shared
+`scan_decode_verify` helper backing both `open` and the standalone
+`verify_from_disk`), in `aivyx-channel` (the binary's
+`PersistentAuditLog` wiring, `--verify-only` forensic CLI path, real
+`rpassword` interactive passphrase prompt, and the
+`resolve_memory_max_per_topic` startup helper), in `aivyx-memory` (the
+`MemoryWriteTool` per-topic tripwire and
+`AIVYX_MEMORY_MAX_PER_TOPIC` resolution), in `aivyx-storage` (the
+cold-start `chmod 0600` on the store file), in `aivyx-core` (untouched
+— seventh consecutive phase), and in the integration test at
+`crates/aivyx-channel/tests/audit_persistence_e2e.rs`. This file
+explains *how* it came together, which Phase 7 open questions
+resolved which way, and what was deliberately left for Phase 8+.
 
-## Goal
+## Goal (as written at phase entry)
 
 Close Phase 6's most visible asymmetry: **memory now survives
 restarts, but the audit of how memory was written does not**. The
@@ -920,7 +932,294 @@ but it'd be useful for dev-box debugging.
 **Leaning:** ship if it falls out for free in task 3's binary
 wiring; defer to Phase 8+ otherwise.
 
-## Exit criteria (draft — revised as work lands)
+## Decisions made during Phase 7 that aren't in DESIGN.md
+
+Six open questions at phase entry (Q1–Q6). None resulted in a
+`DESIGN.md` amendment. The D2 `AuditHook` trait (the Q4 streak-ender
+candidate) stayed exactly as Phase 2 shipped it; the async impedance
+was absorbed entirely inside `aivyx-audit`. **Streak rolled to
+seven consecutive phases of empty-diff against `DESIGN.md` and
+`crates/aivyx-core/src/lib.rs`.**
+
+### Q1 — chain key source
+
+Entry-time options: (1) HKDF from master via a new `KeyDomain::Audit`
+subkey info, (2) random + stored in `KeyDomain::Secrets`, (3)
+Argon2id with a chain salt *(dismissed)*, (4) `AIVYX_AUDIT_KEY` env
+var for split-trust review.
+
+**Shipped: option (1).** `crates/aivyx-channel/src/bin/aivyx.rs`
+derives the audit chain key via
+`master_key.derive_subkey(b"audit")?.as_bytes()` **before**
+`RedbStorage::open` consumes the master key. Supporting API:
+new public `aivyx_crypto::SubKey::as_bytes(&self) -> &[u8; KEY_LEN]`
+with a doc comment naming `PersistentAuditLog` as the single
+legitimate caller. The prior ephemeral-key helper
+`rand_bytes_from_os` was deleted; its only caller was the
+placeholder chain key Phase 2–6 used to keep `HmacChainLog` happy.
+
+Option (4) is not lost — it's a real capability for split-trust
+audit-review workflows — but it belongs to whatever phase actually
+builds that workflow, not Phase 7.
+
+### Q2 — continuous vs per-session chain
+
+Entry-time options: (1) continuous across all sessions, (2)
+per-session chains with explicit `ChainLinked { prev_tip_hash,
+prev_tip_seq }` records, (3) Merkle tree over session tips
+*(overkill)*.
+
+**Shipped: option (1) — continuous chain.** Entry-time leaning was
+(2) for the strictly-stronger tamper-evidence, but the per-session
+link-record shape would have dragged a new `AuditEvent` variant
+through the D4 event list and an amendment to the `HmacChainLog`
+re-open contract. Task 1 re-evaluated: a continuous chain with
+range-scan verification at open handles the truncation-at-session-
+boundary attack **just as well** for any attacker model that
+doesn't already hold the AEAD key, because the gap between
+`head_seq_on_disk` and `HmacChainLog::len()` is observable at
+verify time. Per-session link records would only have added
+protection against an attacker who deleted the most recent session
+*entirely* — a real but narrower threat, and one that a future
+phase can layer on via a new event variant without rewriting this
+task.
+
+### Q3 — on-disk record shape
+
+Entry-time options: (1) `serde_json::to_vec(&AuditEvent)` + outer
+record, (2) `bincode` / `postcard` *(new dep)*, (3) hand-rolled
+layout *(migration debt)*.
+
+**Shipped: option (1) — `serde_json::to_vec(&SignedEntry)`.** The
+outer envelope is the existing `aivyx_audit::SignedEntry { seq,
+appended_at, event, mac, prev_mac }` struct (pub-exported for the
+Task 7 integration test's tamper recipe). Rationale identical to
+Phase 6's Q1: zero new deps, the store is AEAD-encrypted so
+on-disk human readability is a test-only benefit, and `serde_json`
+handles a growing enum (`AuditEvent`) gracefully where a binary
+layout would require migrations. The MAC is computed over
+`serde_jcs` canonical bytes (stable ordering), but the durable
+envelope uses plain `serde_json` because it only needs to
+round-trip the struct faithfully.
+
+### Q4 — `AuditHook::on_event` → async?
+
+**This was the streak-ender candidate.** Entry-time options: (1)
+sync + `spawn_blocking` *(awkward)*, (2) make the trait async —
+first amendment, ends the streak, (3) bounded-channel background
+drain.
+
+**Shipped: option (3) — streak holds.** The sync `on_event`
+path inside `PersistentAuditLog` calls `HmacChainLog::append`
+inline (so the chain MAC is computed before return — invariant 1),
+then `try_send`s the freshly-chained `SignedEntry` into a bounded
+tokio mpsc channel (capacity 1024). A background drain task,
+spawned by `open` and aborted in `Drop`, consumes the channel in
+FIFO order and persists each entry via `DomainHandle::put`.
+
+The entry-time objection to option (3) — *"a write failure after
+the session loop has moved on is orphaned"* — was answered by a
+specific invariant: an `Arc<AtomicBool>` **health flag** flips
+false on the first drain failure, and subsequent `on_event` calls
+observe the flag and short-circuit through a first-error closure
+(`Arc<dyn Fn(AuditError)>`). So the failure isn't silent — it's
+observed ≤1 event later and surfaces through the registered
+handler. Combined with the "bounded channel, abort on drop"
+lifetime (invariant 5), this gives the five Task 1 defended:
+
+1. MAC computed synchronously on-path before return.
+2. Drain order = disk order (mpsc FIFO, single writer).
+3. Persist failures observed ≤1 event later via the health flag.
+4. Chain-rejected events never acked as audited (handler runs
+   before channel push).
+5. Drain task lifetime bounded by `PersistentAuditLog` via
+   `Drop::abort`.
+
+Task 7's integration test proved the fourth and fifth at the
+process boundary: session A drains to disk, drops the log
+(aborting the drain), drops storage (releasing the redb file
+lock), and session B reopens and replays the full chain with a
+4-event Level-3 assertion.
+
+### Q5 — mandatory-or-logged chain verification at open
+
+Entry-time options: (1) refuse to start on any chain break,
+(2) log-and-continue with a synthetic
+`AuditEvent::ChainBreakDetected` event.
+
+**Shipped: neither — policy lives at the boundary, not the
+library.** Task 2 shipped `verify_from_disk(storage, key) ->
+Result<VerifyReport, AuditError>` as a standalone associated fn
+that returns the error *unchanged*. The decision of whether to
+exit non-zero, restore from backup, or (in a future dev tool)
+display-and-continue lives in the binary, not in `aivyx-audit`.
+This resolution kept `aivyx-audit` out of any
+`AuditEvent::ChainBreakDetected` schema-extension territory that
+would have amended D4's event list. Task 3's binary wires option
+(1) as the default for now: any `AuditError` from
+`PersistentAuditLog::open` or the `--verify-only` path maps to
+`ExitCode::FAILURE` via the existing top-level `match`. A future
+phase that wants log-and-continue for dev-box debugging can pick
+that policy at the binary edge without touching the library.
+
+### Q6 — `--verify-only` CLI mode
+
+Entry-time leaning: *"ship if it falls out for free in task 3's
+binary wiring; defer otherwise."*
+
+**Shipped: yes.** Task 3 landed a `--verify-only` flag (bare, no
+extra args) that branches *after* storage open but *before* session
+bring-up, calls `verify_from_disk`, prints
+`audit: verified N events (head_seq=...)`, and returns
+`Ok(())`. Critically, **`ANTHROPIC_API_KEY` is not required** in
+verify-only mode — a forensic operator running verification on a
+production store should not have to hand the cloud key to a
+read-only tool. This is the shape that falls naturally out of the
+Task 2 standalone `verify_from_disk` entry point; if Task 2 had
+only exposed verification via `PersistentAuditLog::open`, `--verify-
+only` would have had to spawn a drain task it never needs. The
+Phase 6 promise at `PHASE_6.md:518-523` to land
+`CapabilitySet::default()` "if it falls out" did **not** fall out
+this phase — see "Decisions deferred to Phase 8+" below.
+
+## Decisions deferred to Phase 8+
+
+- **Per-session chain link records.** Q2 shipped a continuous
+  chain because the per-session link-record shape would have
+  dragged a new `AuditEvent` variant through D4 for a real but
+  narrow threat (attacker deletes a session *entirely*, not
+  just truncates mid-session). A future phase can layer this in
+  via a new event variant without rewriting Task 1; the
+  `HmacChainLog::from_verified_entries` reopen-path constructor
+  already accepts arbitrary verified entries, so the added event
+  would slot in at the existing boundary.
+- **`AIVYX_AUDIT_KEY` env var for split-trust review.** Q1's
+  option (4). Real capability, narrower use case (an auditor
+  verifies a store they don't hold the master passphrase for),
+  and it belongs to whatever phase actually builds the
+  split-trust review workflow. Today's single-user story is
+  fully served by HKDF from the master via `KeyDomain::Audit`.
+- **Log-and-continue chain-break policy.** Q5's option (2).
+  The Task 2 shape already supports it — `verify_from_disk`
+  returns the error unchanged, so the binary edge can pick
+  log-and-continue without touching the library. A future dev-
+  tool or introspection surface that wants "show the break, let
+  me poke at the store anyway" can add that policy without
+  amendment. The current binary uses the strict "exit non-zero
+  on any chain break" policy because that's the safer default
+  for a production store.
+- **Cross-topic `memory.read`.** Re-re-queued (third time). Still
+  no substrate primitive, still no concrete use case. Phase 8's
+  Telegram adapter does not change the calculus; the first time
+  a bot user asks "what do you know about me across all topics"
+  is the first time this becomes a real phase.
+- **Session-scoped memory qualifiers.** Re-re-queued. Phase 8's
+  Telegram adapter is the first phase where "one binary serving
+  multiple humans" is a real shape, and the first phase where
+  `memory.read:session:<chat_id>` has a concrete meaning. So
+  this refinement is *aimed at Phase 8 proper* if PHASE_8.md's
+  multi-user trust story calls for it.
+- **`CapabilitySet::default()` ergonomics.** **Re-re-re-re-re-re-
+  deferred** — sixth consecutive phase roll-forward (Phase 2, 3,
+  4, 5, 6, 7). Phase 6 committed to landing it in Phase 7; it
+  did not land. The feature is small (one `Default` impl, one
+  doc comment) and the re-queue isn't because it's hard — it's
+  because every phase has had at least one larger fish, and
+  "small-and-easy" keeps losing the priority scrap to
+  "important-and-visible." **Pattern recorded as a lesson
+  below.** Explicit commitment for Phase 8: *do not promise it
+  again at entry; land it opportunistically when the first
+  Phase 8 task that touches `CapabilitySet` construction
+  naturally needs it, or leave it for Phase 9+.*
+- **Runtime JSON-schema validation for tool input.** Re-re-re-
+  queued. Unrelated to Phase 7's audit theme, unrelated to
+  Phase 8's adapter theme. No timeline; gets picked up when a
+  tool-layer refinement phase materializes.
+- **Tool name in `StreamEvent::ToolCallStarted`.** Re-re-re-
+  queued. Same status as JSON-schema validation.
+- **Chain rotation story.** Explicitly out of scope per Phase 7
+  entry. If the HMAC key ever needs to rotate (passphrase
+  change, key leak), the right shape is a new chain with a
+  `ChainRotated { prev_tip_hash, prev_tip_seq }` link record
+  cutting to it, and a `verify_from_disk` that walks across
+  rotation boundaries. The substrate supports it; no phase has
+  called for it yet.
+
+## Lessons carried forward
+
+- **Absorb async impedance inside the library, not at the trait
+  boundary.** Q4's resolution — bounded mpsc + background drain
+  task with a health flag — is the shape to reach for whenever a
+  new persistence story threatens to async-ify a trait that
+  shouldn't be async. The streak preservation was a welcome
+  side-effect, but the *design reason* is that `AuditHook::on_event`
+  is called from every tool call site in the codebase, and
+  making every one of those sites `.await` a hook that is *almost
+  always a no-op* (the in-memory `HmacChainLog::append` is pure
+  CPU) would propagate unnecessary async colour across half the
+  crates. The lesson: when a trait is called from many sync
+  sites and the *expected* implementation is sync, keep the trait
+  sync and absorb the async impl behind a drain task.
+- **Drop-order matters more than it looks in integration tests.**
+  Task 7 hit a redb `Database already open` failure on the first
+  test run because `tokio::task::JoinHandle::abort()` is
+  non-blocking — the drain task drops its captured
+  `Arc<dyn Storage>` only when the runtime next polls it, and
+  synchronous `drop()` never yields. The fix is a `yield_now()`
+  loop after the explicit drop sequence. The lesson: any
+  integration test that tears down a tokio-owning type and then
+  expects its resources to be immediately free needs either an
+  explicit handle-level `await` or a yield loop. "The drop
+  ordered things correctly" is not the same as "all drops have
+  executed."
+- **`serde_json` keeps winning over binary formats.** Phase 6 Q1
+  (memory entries) and Phase 7 Q3 (audit entries) both landed
+  on `serde_json::to_vec` for the same set of reasons: zero new
+  deps, growing enums handled gracefully, on-disk readability
+  for tests, and the AEAD layer removes the privacy argument
+  for a binary format. The bloat is real (~2-3× vs postcard)
+  but it has not mattered yet, and when it does matter the
+  migration is one crate-local change behind the existing
+  `DomainHandle::get/put` boundary, not a contract change.
+- **Roadmap optimism is bounded and observable: `CapabilitySet::
+  default()` has now been re-queued six phases running.** Phase
+  2 flagged it, Phase 3 re-queued it, Phase 4 re-queued it,
+  Phase 5 re-queued it, Phase 6 *committed to landing it in
+  Phase 7*, Phase 7 re-queued it again. The feature itself is
+  ~10 lines of code. The pattern isn't "it's hard"; the pattern
+  is "small-easy work consistently loses to larger-visible work
+  when a phase has a deadline." The lesson: **phase entry
+  commitments to 'small ergonomic refinements' should be
+  treated with the same skepticism as any other roadmap
+  optimism**, and the right place to land them is inside a
+  larger task that naturally touches the surface — not as a
+  standalone task line item that any larger fish can displace.
+  Phase 8's entry criteria will not re-promise this.
+- **Task-level decision sub-questions up front save two
+  round-trips in the middle.** Tasks 5, 6, and 7 all used the
+  "flag Qa–Qe at task entry, get a one-line answer each, then
+  proceed" pattern. Tasks that did not (Task 1) produced more
+  mid-task course corrections. The sub-decision list isn't
+  bureaucracy — it's the planning surface that replaces
+  mid-work re-plans.
+- **The test-count delta is the easiest phase-health metric.**
+  Phase 7: 257 → 284 (+27). Phase 6: 226 → 257 (+31). Phase 5:
+  ~180 → 226 (+46). The trend is downward because the easy
+  surfaces are already covered; a phase that ships zero new
+  tests is a phase that probably refactored something it
+  shouldn't have. Phase 8's exit criteria should include a net
+  test-count delta ≥ +20 as a proxy for "actually shipped
+  something concrete."
+- **Integration-test tempdir convention.** Every Phase 5, 6, and
+  7 e2e test uses a `SharedStoreDir` / `MemoryHarness` duplicated
+  per file. This is deliberate — the duplication cost is ~80
+  lines per file, the coupling cost of a shared helper would
+  be a cross-crate `dev-dependencies` in `aivyx-core` and the
+  first contract-surface pressure on the test harness. The
+  rule: **tests duplicate until the duplication is itself the
+  bug**. Phase 7 did not hit that threshold.
+
+## Exit criteria (all met)
 
 - [x] `aivyx-audit::PersistentAuditLog` exists, implements
       `AuditHook`, and has unit-test coverage of: in-memory +
@@ -1018,25 +1317,36 @@ wiring; defer to Phase 8+ otherwise.
       to the Task 2 shape `ChainBroken { seq, reason }`. +2
       tests; workspace 282 → 284. DESIGN.md empty-diff streak
       preserved a **seventh** task in a row.)*
-- [ ] `cargo test --workspace` green.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] **Either** `DESIGN.md` is still unchanged (streak rolls to
-      seven) **or** a single amendment file under
-      `docs/amendments/` documents the Q4 `async fn on_event`
-      refinement with a pointer from D2's trait text. Either
-      outcome is acceptable — **honesty over streak
-      preservation**, the Phase 6 Q5 rule.
-- [ ] Q1 (chain key source), Q2 (continuous vs per-session
+- [x] `cargo test --workspace` green. *(284 tests passing at
+      phase exit. Phase 7 added 27 new tests: Task 1 +10, Task 2
+      +4, Task 3 +0 binary-only, Task 4 +5, Task 5 +4, Task 6 +2,
+      Task 7 +2. Net 257 → 284.)*
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `DESIGN.md` is still unchanged — **streak rolls to
+      seven**. The Q4 `async fn on_event` refinement never became
+      necessary because Task 1 shipped `PersistentAuditLog::open`
+      as a spawn-at-open-time drain task over a bounded mpsc,
+      keeping `AuditHook::on_event` synchronous at the trait
+      level. No amendment file needed; the `docs/amendments/`
+      directory still doesn't exist. *(Q4 resolution documented
+      below under "Decisions made during Phase 7 that aren't in
+      DESIGN.md".)*
+- [x] Q1 (chain key source), Q2 (continuous vs per-session
       chain), Q3 (on-disk record shape), Q4 (async trait?), and
       Q5 (mandatory-or-logged verification) resolved and noted
       under "Decisions made during Phase 7 that aren't in
-      DESIGN.md" in the freeze doc — regardless of which option
-      won.
-- [ ] At least one Phase 6 queued refinement either landed or
-      explicitly re-queued to Phase 8+ with a reason. The
-      interactive-passphrase refinement is the headline one; the
-      `CapabilitySet::default()` ergonomics is the small one
-      Phase 6 committed to landing in Phase 7.
-- [ ] Phase 8 roadmap entry refined with whatever Phase 7
-      uncovered — this is the first phase where "Phase N+1 is
-      Ecosystem" is a real answer rather than a placeholder.
+      DESIGN.md" below.
+- [x] At least one Phase 6 queued refinement landed.
+      **Interactive passphrase** shipped as Task 4 via real
+      `rpassword::prompt_password` with a private
+      `read_interactive_password_inner` closure seam for
+      tty-free unit testing. `CapabilitySet::default()`
+      ergonomics **re-re-deferred** to Phase 8+ — see "Decisions
+      deferred to Phase 8+" below; the six-phase roll-forward
+      pattern is itself now a recorded lesson.
+- [x] Phase 8 roadmap entry refined with Phase 7's lessons, and
+      Phase 8 opened as **Telegram adapter** on the back of
+      Phase 7's hardening — persistent audit, memory caps,
+      chmod 0600, and interactive passphrase are precisely what
+      an untrusted-by-default bot needs. See [ROADMAP.md](ROADMAP.md)
+      and [PHASE_8.md](PHASE_8.md).

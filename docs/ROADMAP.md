@@ -25,42 +25,81 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 7 — Hardening (audit persistence first)
+## Phase 8 — Ecosystem: Telegram adapter
 
-**Status:** Active — see [`PHASE_7.md`](PHASE_7.md).
+**Leaning:** Telegram as the first non-local channel, on the back
+of Phase 7's hardening work.
 
-## Phase 8 — Ecosystem (remote channels)
+Phase 7 shipped exactly the core surface a network-facing adapter
+needs: **persistent audit** (a bad message over an untrusted
+channel is still in the log tomorrow — `verify_from_disk` can
+reconstruct the full history across any restart), **memory size
+caps** (an attacker who floods the bot with "remember X" hits the
+per-topic tripwire instead of unbounded-allocating),
+**`chmod 0600` on the store file** (a shared Unix host can't read
+another aivyx user's session state), and **interactive passphrase
+prompting** (so the adapter process itself can't be the one that
+decides how to get the master key — it has to route through a
+human or env var at startup, not a network handler). All four of
+those are things "the core had to get right before the adapter
+could exist," and Phase 7 is the phase that finished fixing them.
 
-Deliberately ambiguous until Phase 7 closes. With the core fully
-hardened (persistent audit, interactive passphrase, memory size
-caps, filesystem permission mode), Phase 8 is the first phase where
-ecosystem work — remote channels (Telegram, Discord, Slack, Matrix,
-Email), desktop GUI, federation, multi-agent — becomes a responsible
-target rather than a shortcut past unfinished plumbing. The D2
-`ChannelContext` trait and the trust-tier ladder (`Local` → `Trusted`
-→ `Untrusted`) have been waiting for their second concrete adapter
-since Phase 3 shipped `LocalChannel`; Phase 8 is where that second
-adapter finally lands.
+The D2 `ChannelContext` trait and the trust-tier ladder
+(`Local` → `Trusted` → `Untrusted`) have been waiting for their
+second concrete adapter since Phase 3 shipped `LocalChannel`.
+Phase 8 is where that second adapter finally lands, and where the
+trust-tier ladder's second rung gets exercised end-to-end.
 
-The first concrete Phase 8 candidate is probably **Telegram**,
-chosen because it's the simplest credible non-local channel
-(long-poll or webhook, one auth token, small message model) and
-because its trust-tier story is unambiguous — a Telegram bot is
-`Untrusted` by default and the capability attenuation falls
-naturally out of D4's existing tier table. Matrix is a more
-principled choice but has a larger protocol surface; Discord and
-Slack have the best UX but need OAuth flows that Phase 8 shouldn't
-be the one to invent. Phase 8's entry will finalize this decision
-based on which adapter exercises the `ChannelContext` trait most
-completely.
+**Why Telegram first over Matrix / Discord / Slack:** Telegram is
+the simplest credible non-local channel (long-poll or webhook, one
+auth token, small message model) and its trust-tier story is
+unambiguous — a Telegram bot is `ChannelTrustTier::Untrusted` by
+default and D4's capability attenuation falls naturally out of the
+existing tier table. Matrix is a more principled choice but has a
+larger protocol surface (federation, device verification, encrypted
+rooms) that would pull focus from the adapter pattern work.
+Discord and Slack have better UX but need OAuth flows that Phase 8
+shouldn't be the one to invent. Matrix / Discord / Slack adapters
+are explicit **Phase 9+** candidates, built on whatever shape
+Phase 8 hammers out for the *first* real `ChannelContext` impl.
 
-What Phase 7's hardening earns Phase 8: a core that can be handed
-to a network-facing adapter without the adapter inheriting any of
-the "works on a developer laptop" assumptions. Persistent audit
-means a bad message over an untrusted channel is still in the log
-tomorrow. Memory size caps mean an attacker who floods the agent
-with requests to "remember X" can't unbounded-allocate. Interactive
-passphrase means the adapter can't be the one to handle the
-master key. These are all "the core had to get this right before
-the adapter could exist" items, and Phase 7 is the last phase that
-gets to fix them without also having a running bot to migrate.
+What Phase 8 specifically has to figure out (these are the open
+questions that will become PHASE_8.md's entry-time Q list):
+
+1. **Where does the Telegram bot token live?** Env var
+   (`AIVYX_TELEGRAM_TOKEN`), a row under `KeyDomain::Secrets`, or
+   a flag passed at startup? Each has a different recovery story
+   if the token leaks.
+2. **Per-chat session identity.** One aivyx store per bot, or one
+   store shared across all chats with `session:<chat_id>`
+   qualifiers on memory/audit events? This is the first phase
+   where "multi-user, one process" is a real shape, and it
+   determines whether the Phase 7 "session-scoped memory
+   qualifiers" deferral lands in Phase 8 or slips again.
+3. **Scope attenuation at the channel boundary.** An `Untrusted`
+   channel must narrow the capability set before the turn loop
+   sees the request. Where does the narrowing live — at the
+   adapter, at the `ChannelContext` trait, or at a new
+   `TrustTierPolicy` helper? D4's tier table specifies the
+   *ratios* but not the *mechanism*.
+4. **Long-poll vs webhook.** Long-poll is simpler for dev boxes
+   and CI; webhook is the real-world deployment shape. Start
+   with long-poll, or design for webhook from day one?
+5. **Turn cancellation across the network.** Phase 3's wall-clock
+   cancellation assumes `stdin` as the cancel signal. A Telegram
+   turn doesn't have `stdin`; what maps to `ctrl-C`?
+
+Full task breakdown, entry criteria, and open-question resolutions
+live in PHASE_8.md when that scaffolds at Phase 8 open.
+
+## Phase 9+ — second-adapter surface + whatever Phase 8 uncovers
+
+Deliberately ambiguous until Phase 8 closes. Candidates:
+**Matrix adapter** (the federation story, encrypted rooms),
+**desktop GUI** (the other end of the trust-tier ladder —
+`Trusted` instead of `Untrusted`), and any **`aivyx-config`**
+work that Phase 8's multi-source secrets pulls forward. The
+pattern from Phases 5 → 6 → 7 is that each phase's exit reveals
+the sharp edges on the *next* phase's placeholder; Phase 9's
+entry will refine this list based on what the Telegram adapter
+taught us about the trust-tier and channel-context contracts.
