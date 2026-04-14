@@ -27,41 +27,31 @@ comes after the current phase?"* — nothing more.
 
 ## Phase 6 — Memory as Tool
 
-Implement `aivyx-memory` with `memory.read`, `memory.write`, and
-`memory.forget` as real tools. First agent that recalls across
-turns via the lazy-recall contract from D1 — memory is *a tool
-the agent chooses to call*, not ambient context injected at turn
-start.
+**Status:** Active — see [`PHASE_6.md`](PHASE_6.md).
 
-This closes the loop on D1's core commitment: every memory
-access is an explicit, scope-checked, audited tool call. If this
-phase works, Aivyx has structurally prevented the "hidden memory
-injection" class of bug by construction. Phase 6 is also the
-deadline for re-evaluating Phase 4's Q1: by then `aivyx-core`
-will hold filesystem tools *and* memory tools, and the choice
-between "keep piling into `aivyx-core::tools`" and "spin up an
-`aivyx-tools` umbrella crate" can be made against two concrete
-data points instead of one.
+## Phase 7 — (undecided: Hardening vs. Ecosystem)
 
-**What Phase 5 leaves on the table for this phase.** The
-encrypted store already reaches `KeyDomain::Memory` —
-`storage.domain(KeyDomain::Memory)` is a working handle the
-moment `aivyx-memory` wants one. The `Arc<dyn Storage>` resource
-pattern (one handle per process, cloned into each turn) and the
-composition-vs-execution split (binary owns wiring, `run_session`
-owns the loop) are the templates Phase 6 should copy rather than
-re-invent. If the memory schema ever needs a breaking change, the
-migration path is already in hand: bump the HKDF salt from
-`"aivyx-v1-storage"` to `"aivyx-v2-storage"` and the old stores
-become cleanly unreadable — no schema-version field needed
-inside the ciphertext.
+Deliberately ambiguous until Phase 6 closes. Phase 5 left a short
+hardening list that will be load-bearing the first time Aivyx is
+used somewhere other than a developer laptop: **audit persistence**
+(wire `HmacChainLog` into `KeyDomain::Audit` so the chain survives a
+restart — right now a crash erases every audit entry), **interactive
+passphrase prompting** (the binary still only reads
+`AIVYX_PASSPHRASE`, which is fine for CI and painful for humans),
+**memory GC** (size caps / TTL on `KeyDomain::Memory`, once Phase 6
+proves the substrate), and **filesystem permission hardening** on
+the store sidecar files (no explicit `chmod 600` today). None of
+these are hard, but together they're the difference between "works"
+and "safe to hand to a non-author."
 
-## Phase 7+ — Ecosystem
-
-Unplanned and intentionally so. Remote channels (Telegram, Discord,
-Slack, Matrix, Email), desktop GUI, federation, multi-agent — none of
-it is scoped until Phases 1–6 establish what the agent actually needs
-from the outside world. The lesson from the archived codebase is that
-ecosystem work started too early and shaped the core in ways that
-later became drift markers. This time the core gets to stabilize
-first.
+The alternative framing is **Ecosystem** — remote channels
+(Telegram, Discord, Slack, Matrix, Email), desktop GUI, federation,
+multi-agent. That was the original Phase 7+ placeholder. The lesson
+from the archived codebase is that ecosystem work started too early
+and shaped the core in ways that later became drift markers, so
+this time we want the core to be *stable* before we go there. The
+Phase 6 exit is the moment we decide which direction Phase 7 takes,
+based on concrete evidence: if Phase 6 surfaced a painful gap in
+audit/GC/passphrase UX, hardening comes first; if Phase 6 runs
+cleanly and the obvious next question is "how do I talk to this
+agent from my phone," ecosystem comes first.
