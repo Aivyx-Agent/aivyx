@@ -74,5 +74,11 @@
 mod telegram_channel;
 mod transport;
 
+// Phase 8 Task 4 — the Telegram analogue of
+// `aivyx_channel::run_session`. Owns its own long-poll loop.
+mod session;
+
+pub use session::{run_telegram_session, TelegramSessionConfig, TelegramSessionReport};
+
 #[cfg(test)]
 mod tests;

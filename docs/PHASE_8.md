@@ -568,11 +568,213 @@ because Phase 4 already had the right shape.
   into the public surface is a refactor that can wait until
   there are more than two call sites needing it.
 
+## Task 4 — shipped (2026-04-14)
+
+**Subject:** binary wiring — `aivyx --channel telegram`, and the
+`run_telegram_session` entry point that drives the long-poll loop
+end-to-end.
+
+**What landed:**
+
+- **`aivyx-telegram::run_telegram_session`** — a new public free
+  function + a private `run_telegram_session_with_transport<T>`
+  helper. The public function takes a bot token, a chat id, a
+  `TelegramSessionConfig`, a `LlmProvider`, an `AuditHook`, and a
+  `CancellationToken` shutdown signal; it builds a
+  `TelegramChannel<ReqwestTransport>` internally, and delegates to
+  the generic helper. The helper owns the long-poll loop: it builds
+  the `ConcreteAgent`, drains `getUpdates` batches, filters to the
+  bound `chat_id`, rotates the channel's per-turn cancellation
+  token, and runs `agent.turn(msg, &*channel).await` per inbound
+  message.
+- **`TelegramSessionConfig`** — a Telegram-flavored analogue of
+  `aivyx_channel::SessionConfig`, minus the local-only `prompt` and
+  `banner` fields. Defined as a sibling type rather than imported
+  because `aivyx-telegram` cannot depend on `aivyx-channel` — the
+  `aivyx` binary lives in `aivyx-channel` and imports the Telegram
+  entry point, which would create a package cycle. See "Cycle
+  resolution" below.
+- **`aivyx` binary: `--channel local|telegram` flag.** The old
+  `parse_verify_only_flag` is replaced by a `parse_cli_args` that
+  returns a `CliArgs { verify_only, channel }` bundle. `--verify-only`
+  and `--channel` are mutually exclusive. `run_async` takes the
+  channel kind and an optional `(token, chat_id)` bundle and
+  branches: the `Local` arm is byte-for-byte the old path, and the
+  `Telegram` arm reads `AIVYX_TELEGRAM_TOKEN` + `AIVYX_TELEGRAM_CHAT_ID`
+  at startup, builds a `TelegramSessionConfig` from the same
+  provider/audit/tools/caps the local path uses, and hands it to
+  `run_telegram_session`. The ctrl-C signal handler for the
+  Telegram path cancels a dedicated `shutdown` token the loop
+  checks at the top of each iteration.
+- **Shared capability set.** Both channel arms use the *same*
+  broad `CapabilitySet` — `memory.*` unqualified plus `fs.read`
+  and `fs.write` rooted at the sandbox. Tier attenuation at
+  `agent.rs:121` does the narrowing per turn: `LocalChannel`
+  reports `Trusted` (no-op narrow) and `TelegramChannel` reports
+  `SemiTrusted` (strips `fs.*` at the ceiling). Task 3's pin test
+  is the regression guard for this: if a future refactor breaks
+  the attenuation, the telegram binary would gain unintended
+  `fs.write` access and the pin test would fail before this
+  binary ever launches.
+- **Scripted session test:**
+  `run_telegram_session_drives_two_scripted_turns` in
+  `aivyx-telegram/src/tests.rs`. Drives the generic
+  `run_telegram_session_with_transport` against a `ScriptedProvider`
+  (two turns of scripted chunks) and a `ScriptedTransport` carrying
+  three inbound updates (two for the target chat, one for a
+  different chat that must be filtered out). Uses an
+  externally-cancelled per-turn token + a `tokio::time::timeout(5s)`
+  bound. Asserts two `send_message` calls with target `chat_id`,
+  the wrong-chat update silently dropped, and exactly two full
+  turns through `ConcreteAgent`.
+
+**Q1 — resolved: env var `AIVYX_TELEGRAM_TOKEN` (+ `AIVYX_TELEGRAM_CHAT_ID`).**
+
+PHASE_8.md's entry-time leaning was option (1). Ship shape:
+
+- `AIVYX_TELEGRAM_TOKEN` holds the Bot API token. Wrapped in
+  `secrecy::SecretString` the moment it's read, exposed via
+  `ExposeSecret` only at the last possible moment
+  (`ReqwestTransport::new`), and never logged. Same ergonomic and
+  threat model as `ANTHROPIC_API_KEY`.
+- `AIVYX_TELEGRAM_CHAT_ID` scopes the bot to a single chat. Parsed
+  as `i64` at startup; set-but-unparseable is a hard error
+  (matching the `AIVYX_MEMORY_MAX_PER_TOPIC` policy from Phase 7).
+  A deferred multi-chat pump (Phase 9) will replace this with a
+  watchlist or a wildcard; the one-chat-per-process shape is
+  Phase 8's simplification, not a permanent contract.
+- **Migration path to `KeyDomain::Secrets`:** the token could live
+  under a `b"telegram.bot_token"` row when Phase 9 adds the
+  `aivyx secrets set` CLI surface. The env-var shape can be
+  retained as a fallback so existing deployments don't break on
+  upgrade.
+
+**Q4 — resolved: flag `aivyx --channel telegram`.**
+
+PHASE_8.md's entry-time leaning was option (1). Ship shape:
+
+- `--channel <local|telegram>` parses as a paired "flag + value"
+  argument (not a standalone flag like `--verify-only`). Absence
+  of the flag defaults to `local`, preserving backwards
+  compatibility: every Phase 7 invocation of `aivyx` continues to
+  work unchanged.
+- `--verify-only` and `--channel` are mutually exclusive. The
+  combination is an operator error we flag explicitly rather than
+  picking a silent winner: verify mode is a read-only forensic
+  path and has nothing to do with which live channel would run.
+- The subcommand refactor (`aivyx telegram`, `aivyx local`) is
+  deferred to Phase 9 when a second network adapter (Matrix?
+  Discord?) forces the decision. A flat flag surface stays
+  readable with one adapter; a tree would be premature.
+
+**Cycle resolution: why `TelegramSessionConfig` duplicates `SessionConfig`.**
+
+The obvious design was for `aivyx-telegram::run_telegram_session`
+to take an `aivyx_channel::SessionConfig`, so the binary could
+hand it one config struct. Attempting this made cargo bail: the
+`aivyx` binary lives in `aivyx-channel`, and importing
+`aivyx_telegram::run_telegram_session` from the binary means
+`aivyx-channel` depends on `aivyx-telegram`. With the obvious
+design, `aivyx-telegram` also depends on `aivyx-channel` for
+`SessionConfig` — package cycle.
+
+Three fixes were considered:
+
+1. **Extract `SessionConfig` into a new leaf crate.** Correct,
+   but a cross-cutting refactor for a one-field delta.
+2. **Move the `aivyx` binary into its own crate.** Cleanest
+   long-term layering, but a structural change that touches
+   every phase's historical `cargo run` muscle memory.
+3. **Duplicate the shape.** Define `TelegramSessionConfig` in
+   `aivyx-telegram` with the same fields as `SessionConfig`
+   minus the local-only `prompt` and `banner`. The binary
+   constructs both at the call site.
+
+Option 3 shipped because it's the smallest change that breaks the
+cycle, and the "duplicated shape" is eight fields the binary was
+going to populate by hand anyway. A future refactor that picks up
+option 1 or 2 would collapse the two types without touching any
+call sites.
+
+**Deliberately omitted, compared to `run_session`:**
+
+- **No session marker under `KeyDomain::Sessions`.** The local
+  session marker is a single-row `current` record; a Telegram
+  bot's per-chat session notion would need a different schema
+  (one row per chat_id) and a new key convention. The `storage`
+  field is still threaded through `TelegramSessionConfig` so a
+  Phase 9 refinement can wire it without changing the function
+  signature.
+- **No banner printed to the chat.** Telegram bots have no
+  "session start" affordance; the first user message is the
+  implicit start. The binary does print a startup line to
+  **stderr** so an operator running the bot in a terminal sees
+  confirmation it's alive (`aivyx X.Y.Z — telegram bot live,
+  chat_id: N, ...`).
+- **No per-turn ctrl-C "cancel current turn" staging.** A
+  Telegram bot is expected to be long-running and ctrl-C is
+  always "bring the bot down", not "cancel the turn in flight."
+  The signal handler cancels the `shutdown` token the loop
+  checks at the top of each iteration.
+
+**Validation:** `cargo test --workspace` = 304 passed, 0 failed,
+1 ignored (303 → 304, one new telegram session test). `cargo build
+--workspace` clean, zero warnings.
+
+### Streak impact: the streak holds at eight, `aivyx-core` untouched.
+
+Task 4 edits four files in `aivyx-telegram` (session.rs new,
+lib.rs re-export, Cargo.toml deps, tests.rs new test), two in
+`aivyx-channel` (bin/aivyx.rs branch + Cargo.toml dep on
+aivyx-telegram), and this PHASE_8.md ship record. No edits to
+`aivyx-core`, `aivyx-capability`, or `docs/DESIGN.md`. The binary's
+new branching is entirely within its own file, not a contract
+change, and `LocalChannel` + `run_session` are byte-for-byte
+unchanged — Phase 3 task 5's integration test at
+`crates/aivyx-channel/tests/cli_e2e.rs` still covers the local
+path exactly as before.
+
+### Other Task 4 sub-decisions
+
+- **Two cancellation tokens, not one.** The channel's per-turn
+  token rotates on every turn (Phase 3 monotonic-token fix); the
+  binary's shutdown token does not. Merging them into one would
+  mean either the shutdown survives reset (making the first turn
+  non-cancellable from ctrl-C, since the binary's cancel landed
+  before the rotation) or the reset clobbers the shutdown
+  (making the loop never exit on ctrl-C). Keeping them separate
+  is the price of the rotation fix.
+- **Scripted `get_updates` simulates long-poll.** The existing
+  `ScriptedTransport::get_updates` returned instantly; Task 4
+  upgraded it to `tokio::time::sleep(timeout_secs)` on empty
+  queues so `run_telegram_session_with_transport` doesn't
+  hot-spin in tests after the scripted batch drains. The change
+  is backwards-compatible with Task 1 / 2 / 3 tests: none of
+  them called `get_updates` (all of them drove the channel's
+  `stream_event` / `finalize` surface directly), so the new
+  sleep path is dead for them.
+- **`tokio::time::timeout(5s)` as the test bound.** The test's
+  watcher cancels the channel token after two sends, and the
+  loop picks it up on the next iteration — which is at most
+  one `long_poll_timeout_secs=1` sleep away. Wall time: ~1
+  second. The 5-second timeout is belt-and-suspenders against
+  a future bug in the cancellation path; if it ever trips, the
+  symptom is "test takes 5s and panics on the `.expect`" rather
+  than "test hangs forever."
+- **Test uses `aivyx-crypto::MasterKey::from_raw` + a scratch
+  `$TMPDIR` store**, matching the pattern from `cli_e2e.rs`. The
+  alternative (add `tempfile` as a dev-dep) was rejected for
+  consistency with the rest of the workspace — every other
+  integration test hand-rolls its own scratch dir.
+
 ## Open questions
 
 ### Q1. Where does the Telegram bot token live?
 
-**Status:** open at phase entry. Must resolve before Task 4.
+**Status:** resolved at Task 4 ship (2026-04-14) — option (1),
+env var `AIVYX_TELEGRAM_TOKEN` + `AIVYX_TELEGRAM_CHAT_ID`, with
+the `KeyDomain::Secrets` migration path (option 2) documented
+in the Task 4 ship record as the Phase 9+ follow-up.
 
 Three options:
 
@@ -702,7 +904,10 @@ Task 3 once there's working Telegram code.
 
 ### Q4. Binary surface — `--channel telegram` flag, subcommand, or separate binary?
 
-**Status:** open at phase entry. Must resolve before Task 4.
+**Status:** resolved at Task 4 ship (2026-04-14) — option (1),
+`aivyx --channel telegram` flag, mutually exclusive with
+`--verify-only`. The subcommand tree (option 2) is deferred to
+Phase 9 when a second network adapter forces the refactor.
 
 Three shapes:
 

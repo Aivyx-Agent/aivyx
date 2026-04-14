@@ -90,9 +90,18 @@ impl TelegramTransport for ScriptedTransport {
     async fn get_updates(
         &self,
         _offset: i64,
-        _timeout_secs: u32,
+        timeout_secs: u32,
     ) -> Result<Vec<IncomingMessage>, TransportError> {
+        // Phase 8 Task 4 — simulate Bot API long-poll behavior: if the
+        // update queue is empty, block for up to `timeout_secs` before
+        // returning an empty batch. This matches what the real
+        // frankenstein/reqwest transport does and, more importantly,
+        // keeps `run_telegram_session_with_transport` from hot-spinning
+        // in tests after the scripted updates drain.
         let drained = std::mem::take(&mut *self.updates.lock().unwrap());
+        if drained.is_empty() {
+            tokio::time::sleep(Duration::from_secs(timeout_secs as u64)).await;
+        }
         Ok(drained)
     }
 
@@ -672,4 +681,284 @@ async fn tier_attenuation_denies_shell_exec_through_real_telegram_channel() {
         "expected TurnEnded at index 2, got {:?}",
         events[2]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 Task 4 — `run_telegram_session_with_transport` scripted drive.
+//
+// This test is the Task 4 payoff: the long-poll loop drains a scripted
+// queue of two inbound updates, runs two full turns through a real
+// `ConcreteAgent` wired to a scripted `LlmProvider`, and emits two
+// `send_message` calls to the scripted transport. Assert shape mirrors
+// the local path's `cli_e2e.rs` but through the Telegram loop.
+//
+// Termination: the scripted transport's upgraded `get_updates` blocks
+// for `timeout_secs` on an empty queue (simulating Bot API long-poll),
+// so once the two scripted updates are drained the loop's next call
+// would stall for `long_poll_timeout_secs` seconds. The test cancels
+// the channel's cancellation token externally as soon as two
+// `send_message` captures appear, which the loop checks at the top of
+// each iteration *before* the long-poll call — so cancellation fires
+// promptly and the spawned task returns cleanly.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_telegram_session_drives_two_scripted_turns() {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aivyx_audit::{AuditBridge, HmacChainLog};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{AuditHook, CancellationToken, ToolRegistry};
+    use crate::TelegramSessionConfig;
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::{
+        LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
+        LlmUsage,
+    };
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+    use crate::session::run_telegram_session_with_transport;
+
+    // ---- Scripted LLM provider ------------------------------------
+    // One `chat_stream` call per planner step; one FinalMessage per
+    // turn (no tools means no multi-step turns in this test). Exact
+    // copy of the `cli_e2e.rs` pattern — kept inline here so the
+    // telegram crate doesn't pull in a test-only dependency on the
+    // channel crate's tests module.
+    struct ScriptedStep {
+        events: Vec<LlmStreamEvent>,
+        terminal: LlmStepEnd,
+    }
+
+    struct ScriptedProvider {
+        queue: StdMutex<VecDeque<ScriptedStep>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            assert!(
+                !request.messages.is_empty(),
+                "planner must always send non-empty history"
+            );
+            assert!(
+                matches!(request.messages[0], LlmMessage::User { .. }),
+                "history[0] should be a User message for a turn with no tools"
+            );
+            let step = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+            Ok(Box::new(ScriptedStream {
+                events: step.events.into_iter(),
+                terminal: Some(step.terminal),
+            }))
+        }
+    }
+
+    struct ScriptedStream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+    #[async_trait]
+    impl LlmStream for ScriptedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal
+                .ok_or_else(|| LlmError::StreamEnded("ScriptedStream::finish double-called".into()))
+        }
+    }
+
+    fn final_step(chunks: &[&str], text: &str) -> ScriptedStep {
+        ScriptedStep {
+            events: chunks
+                .iter()
+                .map(|c| LlmStreamEvent::TextChunk((*c).to_string()))
+                .collect(),
+            terminal: LlmStepEnd::FinalMessage {
+                text: text.to_string(),
+                usage: LlmUsage::default(),
+            },
+        }
+    }
+
+    // ---- Scratch storage (matches cli_e2e.rs convention) ----------
+    // `SessionConfig.storage` is a required field because `run_session`
+    // writes a session marker. `run_telegram_session` does *not* write
+    // markers in Phase 8 (see session.rs module doc), but the config
+    // still carries a storage handle — we give it a real one so the
+    // API surface is honest and a future refinement that wires per-chat
+    // markers doesn't need a second test fixture path.
+    let tmp = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let parent = PathBuf::from(tmp).join(format!("aivyx-tg-task4-{pid}-{nanos}"));
+    std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+    let store_path = parent.join("store.redb");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path.clone()),
+        MasterKey::from_raw([7u8; 32]),
+    )
+    .await
+    .expect("scratch storage must open");
+
+    // ---- Wire the scripted provider + audit -----------------------
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(
+            vec![
+                final_step(&["Hello, ", "chat!"], "Hello, chat!"),
+                final_step(&["Bye!"], "Bye!"),
+            ]
+            .into(),
+        ),
+    });
+    let audit_bridge = Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let audit: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    // ---- Telegram channel + pre-loaded scripted updates -----------
+    let transport = Arc::new(ScriptedTransport::new());
+    transport.push_update(IncomingMessage {
+        update_id: 10,
+        chat_id: 777,
+        user_id: 1,
+        text: "first".to_string(),
+    });
+    transport.push_update(IncomingMessage {
+        update_id: 11,
+        chat_id: 777,
+        user_id: 1,
+        text: "second".to_string(),
+    });
+    // One extra update for a *different* chat — the loop must filter
+    // it out (one channel = one chat_id in Phase 8). If the loop mis-
+    // routes this, we'd see a third `send_message` call and the
+    // assertion below would fail.
+    transport.push_update(IncomingMessage {
+        update_id: 12,
+        chat_id: 999,
+        user_id: 1,
+        text: "wrong chat".to_string(),
+    });
+
+    let channel = Arc::new(TelegramChannel::new(
+        "tg-task4-test",
+        777,
+        Arc::clone(&transport),
+    ));
+
+    // ---- TelegramSessionConfig (empty tool registry, broad caps) -
+    let config = TelegramSessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "telegram test".to_string(),
+        max_tokens: 128,
+        // One memory scope so the Phase 4 attenuation has something
+        // to intersect against without stripping to empty. The turn
+        // isn't actually calling memory tools — the SemiTrusted
+        // ceiling would pass through `memory.read` / `memory.write`
+        // regardless — but giving the agent a held scope the
+        // ceiling admits keeps this test from shadowing a potential
+        // "empty caps is degenerate" bug.
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(Vec::new())),
+        storage: Arc::clone(&storage),
+    };
+
+    // ---- Drive the session loop under a bounded timeout ----------
+    //
+    // The scripted transport's long-poll simulation sleeps for
+    // `long_poll_timeout_secs` on empty queues. We pass `1` (instead
+    // of the 25s production default) so the test's third iteration —
+    // after the two scripted updates drain — takes at most 1 real
+    // second before the loop re-checks cancellation. A watcher task
+    // in parallel cancels the channel's token the instant both
+    // outbound `send_message` calls land, which the loop picks up at
+    // the top of the iteration *after* the empty-batch sleep. Total
+    // wall time: ~1 second on a loaded machine, well under the 5s
+    // overall test bound below.
+    //
+    // Trade-off acknowledged: this adds ~1 second to the test suite's
+    // wall-clock budget. The alternative (`tokio` `test-util` feature
+    // + `start_paused`) was considered but avoided here because the
+    // workspace-wide tokio features would need a dev-dep override,
+    // and one test being 1s slower is cheaper than the feature-flag
+    // surface area.
+    let channel_for_watcher = Arc::clone(&channel);
+    let transport_for_watcher = Arc::clone(&transport);
+    tokio::spawn(async move {
+        loop {
+            if transport_for_watcher.sent_snapshot().len() >= 2 {
+                channel_for_watcher.cancellation_token().cancel();
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    // Fresh, uncancelled shutdown token. The test exercises the
+    // **per-turn channel token** path (the watcher cancels it after
+    // two sends); the `shutdown` parameter here is always-live so
+    // we can be sure the cancellation that terminates the loop is
+    // the channel token, not a pre-set shutdown.
+    let shutdown = CancellationToken::new();
+    let report = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_telegram_session_with_transport(
+            Arc::clone(&channel),
+            config,
+            provider,
+            audit,
+            1, // long_poll_timeout_secs — small so empty-batch wakes up promptly
+            shutdown,
+        ),
+    )
+    .await
+    .expect("run_telegram_session must exit within the 5-second test bound")
+    .expect("run_telegram_session must return Ok");
+
+    // ---- Assertions -----------------------------------------------
+    assert_eq!(
+        report.turns_run, 2,
+        "two inbound messages for the target chat must each drive one turn"
+    );
+
+    let sent = transport.sent_snapshot();
+    assert_eq!(
+        sent.len(),
+        2,
+        "exactly two outbound messages (one per turn); the wrong-chat update must be filtered out: {sent:?}"
+    );
+    // Both sends must target the bound chat_id, not the mis-routed 999.
+    assert_eq!(sent[0].chat_id, 777);
+    assert_eq!(sent[1].chat_id, 777);
+    // Text content mirrors the scripted planner output, joined through
+    // the channel's buffer. `Hello, chat!` for turn 1, `Bye!` for turn 2.
+    assert!(
+        sent[0].text.contains("Hello, chat!"),
+        "turn 1 should contain scripted chunks, got: {:?}",
+        sent[0].text
+    );
+    assert!(
+        sent[1].text.contains("Bye!"),
+        "turn 2 should contain second scripted chunk, got: {:?}",
+        sent[1].text
+    );
+
+    // ---- Cleanup --------------------------------------------------
+    let _ = std::fs::remove_dir_all(&parent);
 }

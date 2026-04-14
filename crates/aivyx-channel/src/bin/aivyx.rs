@@ -106,7 +106,7 @@ use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
 use aivyx_core::{
-    AuditHook, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
+    AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -116,6 +116,7 @@ use aivyx_memory::{
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+use aivyx_telegram::{run_telegram_session, TelegramSessionConfig};
 
 const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -135,10 +136,49 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     // ---- CLI args -----------------------------------------------------
-    // The only recognized flag today is `--verify-only`. Anything else
-    // is rejected early so a typo doesn't silently fall through into
-    // normal session bring-up.
-    let verify_only = parse_verify_only_flag()?;
+    // Phase 8 Task 4 extended the arg parser to accept
+    // `--channel local|telegram` in addition to `--verify-only`.
+    // Unknown flags still fail fast with a clear error.
+    let CliArgs {
+        verify_only,
+        channel: channel_kind,
+    } = parse_cli_args()?;
+
+    // ---- Telegram config (if selected) --------------------------------
+    // Resolve Telegram env vars at startup so a missing token fails
+    // before we touch the storage layer or derive a master key. Same
+    // failure-fast principle as the `ANTHROPIC_API_KEY` check below.
+    //
+    // Q1 (PHASE_8.md) resolved: the token lives in the environment as
+    // `AIVYX_TELEGRAM_TOKEN`. The alternative of storing it under
+    // `KeyDomain::Secrets` was considered and deferred to Phase 9, at
+    // which point the binary will grow a `aivyx secrets set` surface.
+    //
+    // `AIVYX_TELEGRAM_CHAT_ID` scopes the bot to a single chat
+    // (Phase 8's one-channel-per-chat simplification — see Task 1's
+    // PHASE_8.md ship record). Multi-chat pumping is a Phase 9 concern.
+    let telegram_cfg: Option<(SecretString, i64)> = if matches!(channel_kind, ChannelKind::Telegram)
+    {
+        let token_raw = std::env::var("AIVYX_TELEGRAM_TOKEN").map_err(|_| {
+            "AIVYX_TELEGRAM_TOKEN is not set. Export it and retry: \
+             `export AIVYX_TELEGRAM_TOKEN=<bot-token-from-@BotFather>`"
+                .to_string()
+        })?;
+        let chat_id_raw = std::env::var("AIVYX_TELEGRAM_CHAT_ID").map_err(|_| {
+            "AIVYX_TELEGRAM_CHAT_ID is not set. Export it and retry: \
+             `export AIVYX_TELEGRAM_CHAT_ID=<telegram-chat-id>` \
+             (ask @RawDataBot in Telegram for your chat id)"
+                .to_string()
+        })?;
+        let chat_id: i64 = chat_id_raw.parse().map_err(|e| {
+            format!(
+                "AIVYX_TELEGRAM_CHAT_ID is set to {chat_id_raw:?} which is not a valid i64: {e}"
+            )
+        })?;
+        Some((SecretString::from(token_raw), chat_id))
+    } else {
+        None
+    };
 
     // ---- Config -------------------------------------------------------
     // `ANTHROPIC_API_KEY` is only required for the normal session path.
@@ -267,6 +307,8 @@ fn run() -> Result<(), String> {
             fs_root,
             storage,
             audit_chain_key,
+            channel_kind,
+            telegram_cfg,
         )
         .await
     })
@@ -367,26 +409,96 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
-/// Parse the CLI arg surface. Today that's a single recognized flag
-/// (`--verify-only`) and nothing else. Rejecting unknown args early
-/// keeps typos like `--verify_only` from silently falling through
-/// into normal session bring-up.
-fn parse_verify_only_flag() -> Result<bool, String> {
-    let mut args = std::env::args().skip(1);
-    match args.next() {
-        None => Ok(false),
-        Some(flag) if flag == "--verify-only" => {
-            if args.next().is_some() {
-                return Err(
-                    "`--verify-only` takes no additional arguments".to_string(),
-                );
+/// Which channel the session runs on.
+///
+/// Phase 8 Task 4 added `Telegram`; earlier phases only knew `Local`.
+/// Defaulting to `Local` preserves backwards compatibility with every
+/// previous invocation of the `aivyx` binary — `aivyx` with no flags
+/// still opens the local CLI REPL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelKind {
+    Local,
+    Telegram,
+}
+
+/// Parsed CLI arg bundle. The shape is intentionally closed — each
+/// new argument lands here, so the parser's failure mode is
+/// "unrecognized argument" rather than "silently ignored flag."
+#[derive(Debug)]
+struct CliArgs {
+    verify_only: bool,
+    channel: ChannelKind,
+}
+
+/// Parse the CLI arg surface.
+///
+/// Recognized forms:
+///
+/// - `aivyx` — local REPL, fresh session (default).
+/// - `aivyx --verify-only` — forensic verification path; skips
+///   session bring-up and exits after replaying the audit chain.
+/// - `aivyx --channel local` — explicit form of the default.
+/// - `aivyx --channel telegram` — Phase 8 Task 4 Telegram bot mode.
+///   Requires `AIVYX_TELEGRAM_TOKEN` and `AIVYX_TELEGRAM_CHAT_ID`
+///   env vars at `run_async` time.
+///
+/// `--verify-only` and `--channel` are mutually exclusive: verify
+/// mode is a read-only forensic surface and has nothing to do with
+/// which channel the live session would run on. Combining them is
+/// an operator error we flag explicitly rather than picking a
+/// silent winner.
+///
+/// Rejecting unknown args early keeps typos like `--verify_only` or
+/// `--chanel telegram` from silently falling through into normal
+/// session bring-up.
+fn parse_cli_args() -> Result<CliArgs, String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut verify_only = false;
+    let mut channel = ChannelKind::Local;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--verify-only" => {
+                verify_only = true;
+                i += 1;
             }
-            Ok(true)
+            "--channel" => {
+                let value = args.get(i + 1).ok_or_else(|| {
+                    "`--channel` requires a value: `local` or `telegram`".to_string()
+                })?;
+                channel = match value.as_str() {
+                    "local" => ChannelKind::Local,
+                    "telegram" => ChannelKind::Telegram,
+                    other => {
+                        return Err(format!(
+                            "unrecognized channel `{other}`. Supported: local, telegram"
+                        ));
+                    }
+                };
+                i += 2;
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized argument: `{other}`. \
+                     Supported flags: --verify-only, --channel <local|telegram>"
+                ));
+            }
         }
-        Some(other) => Err(format!(
-            "unrecognized argument: `{other}`. Supported flags: --verify-only"
-        )),
     }
+
+    if verify_only && channel != ChannelKind::Local {
+        return Err(
+            "`--verify-only` is a forensic mode and cannot be combined with `--channel`. \
+             Run verify without `--channel`, or run a live session without `--verify-only`."
+                .to_string(),
+        );
+    }
+
+    Ok(CliArgs {
+        verify_only,
+        channel,
+    })
 }
 
 /// Decide which `PassphraseSource` to hand to `derive_master_key`.
@@ -458,6 +570,8 @@ async fn run_async(
     fs_root: PathBuf,
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
+    channel_kind: ChannelKind,
+    telegram_cfg: Option<(SecretString, i64)>,
 ) -> Result<(), String> {
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -554,62 +668,139 @@ async fn run_async(
         fs_write_scope,
     ]);
 
-    // ---- Channel + signal handler ------------------------------------
-    // One LocalChannel per process: its SessionId is the session the
-    // user is in, and re-creating it per turn would make the LLM lose
-    // conversation context across turns (which the planner keys on
-    // SessionId-derived history).
-    let channel = LocalChannel::new("aivyx-cli", io::stdout());
-    let token_slot = channel.token_slot();
+    // ---- Channel branch ----------------------------------------------
+    // Phase 8 Task 4 — fork here on `channel_kind`. Everything upstream
+    // of this point is shared: same provider, same audit, same memory
+    // substrate, same fs sandbox, same capability set. The branches
+    // diverge only on (a) which `ChannelContext` drives the turn loop,
+    // (b) which REPL-style function runs, and (c) the shape of the
+    // ctrl-C signal handler.
+    //
+    // Trust-tier narrowing is **not** duplicated here: the broad
+    // `capabilities` set above is passed to both branches, and the
+    // Phase 4 turn loop intersects it with the channel's
+    // `trust_tier().default_ceiling()` on every turn. LocalChannel
+    // reports `Trusted` and the intersection is a no-op; TelegramChannel
+    // reports `SemiTrusted` and `shell.exec` would be stripped. The
+    // Task 3 pin test at `aivyx-telegram/src/tests.rs` verifies that
+    // attenuation through a real `TelegramChannel`.
+    match channel_kind {
+        ChannelKind::Local => {
+            let channel = LocalChannel::new("aivyx-cli", io::stdout());
+            let token_slot = channel.token_slot();
 
-    // Signal task: first ctrl-C during a turn cancels the turn; a
-    // second ctrl-C exits the process. We re-read the current token
-    // from the slot on every ctrl-C so that turn-N+1 sees a fresh
-    // token after turn-N's reset_cancellation() call (inside
-    // `run_session`).
-    tokio::spawn(async move {
-        loop {
-            if tokio::signal::ctrl_c().await.is_err() {
-                // Signal listener broke — bail rather than hanging.
-                std::process::exit(130);
-            }
-            let current = token_slot.lock().expect("token slot poisoned").clone();
-            if current.is_cancelled() {
-                eprintln!("\naivyx: interrupted, exiting.");
-                std::process::exit(130);
-            }
-            eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
-            current.cancel();
+            // Signal task (local): first ctrl-C during a turn cancels
+            // the turn; a second ctrl-C exits the process. We re-read
+            // the current token from the slot on every ctrl-C so that
+            // turn-N+1 sees a fresh token after turn-N's
+            // reset_cancellation() call (inside `run_session`).
+            tokio::spawn(async move {
+                loop {
+                    if tokio::signal::ctrl_c().await.is_err() {
+                        std::process::exit(130);
+                    }
+                    let current = token_slot.lock().expect("token slot poisoned").clone();
+                    if current.is_cancelled() {
+                        eprintln!("\naivyx: interrupted, exiting.");
+                        std::process::exit(130);
+                    }
+                    eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
+                    current.cancel();
+                }
+            });
+
+            let session_config = SessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                prompt: PROMPT.to_string(),
+                banner: Some(format!(
+                    "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
+                     fs sandbox: {}\n\
+                     memory: live (recall persists across restarts)\n\
+                     audit: persistent ({} events verified from disk)",
+                    env!("CARGO_PKG_VERSION"),
+                    canonical_root.display(),
+                    verified_event_count,
+                )),
+            };
+
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+            run_session(provider, audit, session_config, channel, reader)
+                .await
+                .map(|_report| ())
         }
-    });
 
-    // ---- Session ------------------------------------------------------
-    let session_config = SessionConfig {
-        model,
-        system_prompt,
-        max_tokens: DEFAULT_MAX_TOKENS,
-        capabilities,
-        tools,
-        storage,
-        prompt: PROMPT.to_string(),
-        banner: Some(format!(
-            "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
-             fs sandbox: {}\n\
-             memory: live (recall persists across restarts)\n\
-             audit: persistent ({} events verified from disk)",
-            env!("CARGO_PKG_VERSION"),
-            canonical_root.display(),
-            verified_event_count,
-        )),
-    };
+        ChannelKind::Telegram => {
+            // Unwrap is safe: `run()` populates `telegram_cfg` on
+            // exactly the `ChannelKind::Telegram` path.
+            let (token_secret, chat_id) = telegram_cfg
+                .expect("telegram_cfg is Some whenever channel_kind is Telegram");
 
-    // Lock stdin for the whole session. `io::Stdin::lock` returns a
-    // `StdinLock<'static>` on stable, so this binds for the whole
-    // `run_session` call.
-    let stdin = io::stdin();
-    let reader = stdin.lock();
+            // Signal handler (telegram): a single `shutdown`
+            // CancellationToken the signal task cancels on first
+            // ctrl-C. The session loop checks this at the top of each
+            // iteration and exits cleanly — we don't need the "cancel
+            // one turn, exit on second ctrl-C" staging that the local
+            // path uses, because a Telegram session is expected to be
+            // long-running and the only legitimate interrupt is
+            // "bring the bot down."
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!("\naivyx: shutting down telegram bot after current poll completes.");
+                shutdown_for_signal.cancel();
+            });
 
-    run_session(provider, audit, session_config, channel, reader)
-        .await
-        .map(|_report| ())
+            // Startup message: print to stderr (not the Telegram
+            // chat) so an operator running the bot in a terminal sees
+            // confirmation it's alive. The Telegram chat itself gets
+            // nothing at startup — the first user message is the
+            // implicit "session started" affordance.
+            eprintln!(
+                "aivyx {} — telegram bot live\n\
+                 chat_id: {}\n\
+                 fs sandbox: {}\n\
+                 memory: live (recall persists across restarts)\n\
+                 audit: persistent ({} events verified from disk)",
+                env!("CARGO_PKG_VERSION"),
+                chat_id,
+                canonical_root.display(),
+                verified_event_count,
+            );
+
+            // `SecretString` exposes the inner string via
+            // `secrecy::ExposeSecret`. We pull it out here at the
+            // last moment before handing it to `ReqwestTransport`,
+            // which owns the `frankenstein::Bot` and never logs the
+            // token.
+            use secrecy::ExposeSecret;
+            let telegram_config = TelegramSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+            };
+            run_telegram_session(
+                "aivyx-telegram",
+                token_secret.expose_secret(),
+                chat_id,
+                telegram_config,
+                provider,
+                audit,
+                shutdown,
+            )
+            .await
+            .map(|_report| ())
+        }
+    }
 }

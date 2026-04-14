@@ -64,6 +64,7 @@ dependencies = [
  "aivyx-llm",
  "aivyx-memory",
  "aivyx-storage",
+ "aivyx-telegram",
  "async-trait",
  "rpassword",
  "secrecy",
@@ -154,9 +155,13 @@ dependencies = [
 name = "aivyx-telegram"
 version = "0.1.0"
 dependencies = [
+ "aivyx-audit",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-crypto",
+ "aivyx-llm",
  "aivyx-memory",
+ "aivyx-storage",
  "async-trait",
  "frankenstein",
  "serde_json",

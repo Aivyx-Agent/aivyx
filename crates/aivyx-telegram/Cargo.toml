@@ -16,6 +16,22 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 
+# Phase 8 Task 4 — `run_telegram_session` builds a `ConcreteAgent`
+# per call, so it needs the LLM planner trait object. We deliberately
+# DO NOT depend on `aivyx-channel` here: the `aivyx` binary lives in
+# that crate and will need to `use aivyx_telegram::run_telegram_session`
+# for the `--channel telegram` path, which would create a package
+# cycle (aivyx-telegram → aivyx-channel → aivyx-telegram). Instead,
+# `aivyx-telegram` defines its own `TelegramSessionConfig` with the
+# same shape as `aivyx_channel::SessionConfig` minus the local-only
+# fields (prompt, banner — neither applies to a Telegram bot). A
+# future refactor that extracts the shared shape into a leaf crate
+# can collapse the two types; until then, duplication is the
+# cycle-breaking tool.
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+serde_json = { workspace = true }
+
 # Phase 8 task 1 — `frankenstein` is the thin Bot API wrapper we use
 # for Telegram. Chosen over `teloxide` because aivyx's turn loop IS
 # the dispatcher; we want a library that exposes raw `get_updates` /
@@ -28,8 +44,12 @@ frankenstein = { version = "0.49", features = ["client-reqwest"] }
 
 [dev-dependencies]
 # Unit tests drive the async ChannelContext surface + the scripted
-# transport. No network, no filesystem.
-tokio = { workspace = true, features = ["macros", "rt"] }
+# transport. `time` is new in Task 4: the scripted `get_updates` now
+# simulates Bot API long-poll via `tokio::time::sleep` on empty
+# queues so `run_telegram_session_with_transport` doesn't hot-spin
+# after the scripted updates drain, and the run_telegram_session
+# test uses `tokio::time::timeout` to bound the loop.
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 serde_json = { workspace = true }
 # Phase 8 Task 2 — the "two chats, one store, isolated partitions"
 # test drives `MemoryReadTool`/`MemoryWriteTool` with two
@@ -38,3 +58,13 @@ serde_json = { workspace = true }
 # what tools the agent registers — we pull it in only to exercise the
 # end-to-end Phase 8 Task 2 story.
 aivyx-memory = { path = "../aivyx-memory" }
+
+# Phase 8 Task 4 — the scripted `run_telegram_session` test needs an
+# `Arc<dyn Storage>` to fill `SessionConfig.storage` and an
+# `Arc<dyn AuditHook>` to hand to the session function. `aivyx-audit`
+# supplies `HmacChainLog` + `AuditBridge`; `aivyx-storage` + `aivyx-crypto`
+# supply a scratch `RedbStorage`. Matches the pattern `cli_e2e.rs` uses
+# in the channel crate, modulo the long-poll shape.
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-storage = { path = "../aivyx-storage" }
+aivyx-crypto = { path = "../aivyx-crypto" }

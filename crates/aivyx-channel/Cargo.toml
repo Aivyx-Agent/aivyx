@@ -43,6 +43,17 @@ rpassword = "7"
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
 
+# Phase 8 Task 4 — `aivyx --channel telegram` delegates into
+# `aivyx_telegram::run_telegram_session`. The dep is binary-only
+# (library consumers of `aivyx-channel` don't need the Telegram
+# adapter), but cargo's workspace resolver folds it into the
+# `aivyx-channel` compilation unit anyway. Alphabetical ordering
+# relative to the other `aivyx-*` deps would cluster this up with
+# `aivyx-audit`, but Phase 8 prefers appending new deps to the
+# bottom of the binary-only block so the task-provenance comment
+# history stays readable.
+aivyx-telegram = { path = "../aivyx-telegram" }
+
 # Phase 6 task 4 — the binary constructs a `RedbMemory` from the
 # same `Arc<dyn Storage>` it already opens for the session marker,
 # wraps it in `Arc<dyn Memory>`, and registers the three
