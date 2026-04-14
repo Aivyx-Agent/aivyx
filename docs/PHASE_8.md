@@ -463,6 +463,111 @@ documented here so a future phase can reference the precedent
   schema validation is enforced on tool input), so the agent
   never sees this field and the schema stays clean.
 
+## Task 3 — shipped
+
+**Landed:** 2026-04-14. Commit: _pending_. **Resolves Q3.**
+
+Task 3's deliverable turned out to be a *much* smaller surface than
+Q3 framed it, because **Q3 was already resolved in Phase 4 at the
+turn-loop layer**. `ConcreteAgent::turn` (in `agent.rs:121`) already
+computes `effective = self.capabilities.intersect(tier.default_ceiling())`
+on every turn, using `channel.trust_tier()` through the dyn
+`ChannelContext` boundary. That line — shipped in Phase 4, before
+the Telegram adapter existed — already does every bit of the
+narrowing Q3 contemplated, and does it in a spot no adapter can
+forget. Q3's four options (adapter / trait / helper / per-tool)
+all assumed this code did not exist; reading the code first was
+the move that collapsed the question.
+
+**What Task 3 actually shipped:** one end-to-end negative test in
+`aivyx-telegram/src/tests.rs` named
+`tier_attenuation_denies_shell_exec_through_real_telegram_channel`.
+It builds a real `ConcreteAgent` with `shell.exec:rm` in its
+declared capabilities, wires up a hand-rolled `ShellExecFake` tool
+whose `required_scope` derives `shell.exec:<command>` per R1, runs
+one turn through a real `TelegramChannel` (not `agent.rs`'s
+in-module `FakeChannel`), and asserts:
+
+1. The turn `Completed` with `tool_calls_made == 1` (denial is not
+   termination — Phase 4 invariant).
+2. The audit sequence is exactly `TurnStarted → ScopeDenied →
+   TurnEnded`.
+3. `TurnStarted.trust_tier == SemiTrusted`, `channel ==
+   ChannelPlatform::Telegram`, and crucially
+   `effective_capabilities` does **not** grant `shell.exec` in any
+   form — this is the post-narrow set the audit trail records.
+4. `ScopeDenied.scope_requested` has base `shell.exec` and
+   qualifier `rm`; `held_capabilities` does not grant the scope.
+5. No `ToolCall` event appears — the tool never ran.
+6. `ShellExecFake::execute` itself panics if reached, as a
+   belt-and-suspenders safety net: any regression that strips the
+   tier narrowing would produce a hard thread panic, not a
+   false-positive structural assertion.
+
+This is the second canary on the same wire. Phase 4's
+`shell_exec_denied_on_semitrusted_channel` (in `agent.rs`'s own
+test module at ~line 615) already pins the invariant through a
+`FakeChannel`. Task 3's new test pins the same invariant but
+through the real `TelegramChannel`, so we have end-to-end
+coverage that `TelegramChannel::trust_tier() == SemiTrusted` is
+observed by the turn loop *through the trait object*, not just by
+a `FakeChannel` that has the tier hard-coded.
+
+**Why Option A (test) beat Option B (extract helper).** Q3's
+Option 3 was a `TrustTierPolicy::narrow(tier, full_caps)` helper
+in `aivyx-capability`, which would have wrapped the one-line
+intersection into a named function. It's the right shape when
+there are two call sites — but there is only one (`agent.rs:121`).
+Until there are two, the helper is speculative generality that
+trades a clear one-liner for a grep target. Revisit when a
+Matrix/Discord adapter lands.
+
+**Validation:** `cargo test --workspace` = 303 passed, 0 failed,
+1 ignored (302 → 303, the one new telegram test). `cargo clippy
+--workspace --all-targets -- -D warnings` clean.
+
+### Streak impact: the streak holds at eight, zero core touches.
+
+Task 3 did not touch `aivyx-core`, `aivyx-capability`, or
+`docs/DESIGN.md`. The only edits are (a) one new test in
+`crates/aivyx-telegram/src/tests.rs`, (b) this shipped record,
+and (c) marking Q3 as resolved. This is the kind of task that
+was *supposed* to be a phase streak-ender (the entry-time
+question literally said "where does this live?" and assumed the
+answer would require trait surgery) but dissolved cleanly
+because Phase 4 already had the right shape.
+
+### Other Task 3 sub-decisions
+
+- **Hand-rolled `ShellExecFake` rather than reusing
+  `aivyx-core`'s internal `FakeTool`.** The core crate's
+  `FakeTool` is test-private (inside `#[cfg(test)] mod tests`),
+  so the telegram integration test can't reach it. Writing a
+  small 30-line `ShellExecFake` inline is the same pattern as
+  the `NoopChannel` in `aivyx-memory`'s tool tests — keep the
+  fake narrow and local so the test's assertions have no
+  hidden collaborators.
+- **Test vector is `shell.exec:rm`, matching Phase 4's test.**
+  The SemiTrusted ceiling has no `shell.exec` in any form, so
+  the base-level denial is unambiguous. Using `fs.write` would
+  have worked equally well but would have split the
+  shell-exec-shaped precedent across two vectors — Phase 4 and
+  Task 3 now pin the *same* vector through two different
+  channels, which makes the contract easier to trace.
+- **`Arc<RecordingAudit>` cast to `Arc<dyn AuditHook>` at the
+  `ConcreteAgent::new` call site.** Same shape as every other
+  `ConcreteAgent` test in the codebase — the cast is explicit
+  so the compiler resolves which AuditHook impl is in play.
+- **Recording audit is re-hand-rolled inline rather than exposed
+  from `aivyx-core` or `aivyx-audit`.** Same reason as
+  `ShellExecFake`: the existing `RecordingAudit` in `agent.rs`
+  is test-private, and `aivyx-audit`'s only public types are
+  the real persistent log (overkill) and `NullAuditLog` (no
+  recording). The inline 12-line version matches the core
+  crate's shape exactly; extracting a shared `RecordingAudit`
+  into the public surface is a refactor that can wait until
+  there are more than two call sites needing it.
+
 ## Open questions
 
 ### Q1. Where does the Telegram bot token live?
@@ -552,7 +657,19 @@ Phase 8 ships its first amendment file.
 
 ### Q3. Scope attenuation at the channel boundary — where does it live?
 
-**Status:** open at phase entry. Must resolve before Task 3.
+**Status:** **resolved at Task 3 ship (2026-04-14).** The
+attenuation already lives in the **turn loop**, not in any of the
+four places Q3 contemplated. `ConcreteAgent::turn` at
+`agent.rs:121` computes `effective = caps.intersect(tier.default_ceiling())`
+on every turn, using the channel's `trust_tier()` through the dyn
+`ChannelContext` boundary — shipped in Phase 4, before the
+Telegram adapter existed. Q3's framing ("at the adapter / at the
+trait / at a helper / per-tool") was a false taxonomy because it
+assumed the code did not already exist. Task 3 shipped a
+real-channel end-to-end pin
+(`tier_attenuation_denies_shell_exec_through_real_telegram_channel`)
+rather than introducing a new seam. See the "Task 3 — shipped"
+section above for the full Option-A rationale.
 
 D4's tier table specifies *that* `Untrusted` capabilities are
 narrower than `Trusted` capabilities, but not *where* the

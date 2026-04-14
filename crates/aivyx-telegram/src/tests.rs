@@ -436,3 +436,240 @@ async fn transport_error_propagates_as_channel_error() {
         "platform error should propagate verbatim: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8 Task 3 — end-to-end tier-attenuation pin through a real
+// `TelegramChannel`.
+//
+// Q3 was already resolved in Phase 4: `ConcreteAgent::turn` (at
+// `agent.rs:121`) computes `effective = caps.intersect(tier.default_ceiling())`
+// on every turn, using the channel's `trust_tier()` through the
+// `ChannelContext` trait object. That means no adapter can forget to
+// narrow — the narrowing lives in the turn loop, not the adapter.
+//
+// What Phase 4 could not test, and what Task 3 pins here, is that the
+// **real** `TelegramChannel` (not the `FakeChannel` in `agent.rs`'s
+// own test module) surfaces `SemiTrusted` through the dyn
+// `ChannelContext` boundary and that the turn loop strips `shell.exec`
+// accordingly. The test's assertion shape mirrors Phase 4's own
+// `shell.exec` denial test at `agent.rs:615-683`, intentionally —
+// this is the two-ends-of-the-same-string pin.
+//
+// The tool is a hand-rolled `ShellExecFake` that declares
+// `required_scope() == "shell.exec:rm"` and panics if it's ever
+// executed. The panic is load-bearing: if the tier attenuation ever
+// regresses to admit `shell.exec`, the test fails loudly at
+// `ShellExecFake::execute` rather than at the `ScopeDenied`
+// assertion, so the failure mode is unambiguous.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tier_attenuation_denies_shell_exec_through_real_telegram_channel() {
+    use std::sync::Mutex as StdMutex;
+
+    use aivyx_capability::{CapabilitySet, Scope, TrustTier};
+    use aivyx_core::{
+        Agent, AgentId, AuditHook, AuditTag, ConcreteAgent, Message, NextStep, Tool,
+        ToolContext, ToolId, ToolOutcome, ToolRegistry, TurnOutcome, VecPlanner,
+    };
+
+    // ---- Recording audit --------------------------------------
+    // Mirrors the shape of `agent.rs`'s own `RecordingAudit` — a
+    // Vec<AuditTag> behind a Mutex. Purely for inspection; the
+    // HMAC-chain integrity of real audit logs is `aivyx-audit`'s
+    // problem, not this test's.
+    #[derive(Default)]
+    struct RecordingAudit {
+        events: StdMutex<Vec<AuditTag>>,
+    }
+    impl RecordingAudit {
+        fn snapshot(&self) -> Vec<AuditTag> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+    impl AuditHook for RecordingAudit {
+        fn on_event(&self, tag: AuditTag) {
+            self.events.lock().unwrap().push(tag);
+        }
+    }
+
+    // ---- Fake shell.exec tool --------------------------------
+    // `required_scope` is *input-derived* per R1: `shell.exec:<command>`.
+    // `execute` panics if reached, because a successful tier strip
+    // means we never reach it. The panic IS the invariant's safety net.
+    struct ShellExecFake {
+        id: ToolId,
+        schema: serde_json::Value,
+    }
+    impl ShellExecFake {
+        fn new() -> Self {
+            ShellExecFake {
+                id: ToolId::new(),
+                schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                }),
+            }
+        }
+    }
+    #[async_trait]
+    impl Tool for ShellExecFake {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "shell.exec"
+        }
+        fn description(&self) -> &str {
+            "A fake shell.exec tool that must never be called from a SemiTrusted channel."
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            &self.schema
+        }
+        fn required_scope(&self, input: &serde_json::Value) -> aivyx_capability::Scope {
+            let command = input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<missing>");
+            aivyx_capability::Scope::parse(&format!("shell.exec:{command}"))
+                .expect("shell.exec:<command> must parse")
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> ToolOutcome {
+            panic!(
+                "ShellExecFake::execute was reached — the SemiTrusted \
+                 tier ceiling failed to strip shell.exec, which means \
+                 the Phase 4 attenuation at agent.rs:121 has regressed"
+            );
+        }
+    }
+
+    // ---- Wire up the agent ----------------------------------
+    // Agent nominally holds `shell.exec:rm` as a qualified scope.
+    // Under the Trusted ceiling it would be granted; under the
+    // SemiTrusted ceiling (which has no `shell.exec` at all) the
+    // intersection is empty for this base, so the scope check fails.
+    let audit: Arc<RecordingAudit> = Arc::new(RecordingAudit::default());
+    let agent_caps =
+        CapabilitySet::from_scopes([Scope::parse("shell.exec:rm").unwrap()]);
+    let tool = Arc::new(ShellExecFake::new());
+    let tool_id = tool.id();
+    let registry = Arc::new(ToolRegistry::new(vec![tool as Arc<dyn Tool>]));
+
+    let plan = vec![NextStep::ToolCall {
+        tool_id,
+        input: serde_json::json!({"command": "rm"}),
+    }];
+    let agent = ConcreteAgent::new(
+        AgentId::new(),
+        agent_caps,
+        registry,
+        audit.clone() as Arc<dyn AuditHook>,
+        move || Box::new(VecPlanner::new(plan.clone())),
+    );
+
+    // ---- Real TelegramChannel, not a FakeChannel -------------
+    let (channel, _transport) = make_channel();
+    assert_eq!(
+        channel.trust_tier(),
+        TrustTier::SemiTrusted,
+        "sanity: the real channel must surface SemiTrusted"
+    );
+
+    let message = Message::text(channel.session_id(), "delete my server please");
+    let outcome = agent.turn(message, &channel).await;
+
+    // ---- Assertions ------------------------------------------
+    // Denial is not a termination — the turn Completes with one
+    // attempted tool call, matching Phase 4's existing invariant.
+    match outcome {
+        TurnOutcome::Completed {
+            tool_calls_made, ..
+        } => assert_eq!(
+            tool_calls_made, 1,
+            "the attempted call still counts even though it was denied"
+        ),
+        other => panic!("expected Completed (denial is not termination), got {other:?}"),
+    }
+
+    let events = audit.snapshot();
+    assert_eq!(
+        events.len(),
+        3,
+        "expected TurnStarted → ScopeDenied → TurnEnded, got {events:?}"
+    );
+
+    // TurnStarted must advertise the SemiTrusted tier AND the
+    // already-narrowed effective capabilities. If the attenuation
+    // didn't happen, `effective_capabilities` would still grant
+    // `shell.exec:rm`.
+    match &events[0] {
+        AuditTag::TurnStarted {
+            trust_tier,
+            effective_capabilities,
+            channel: platform,
+            ..
+        } => {
+            assert_eq!(*trust_tier, TrustTier::SemiTrusted);
+            assert_eq!(*platform, aivyx_core::ChannelPlatform::Telegram);
+            assert!(
+                !effective_capabilities
+                    .grants(&Scope::parse("shell.exec:rm").unwrap()),
+                "SemiTrusted ceiling must strip shell.exec from effective set"
+            );
+            assert!(
+                !effective_capabilities.grants(&Scope::parse("shell.exec").unwrap()),
+                "no shell.exec in any form after SemiTrusted narrowing"
+            );
+        }
+        other => panic!("expected TurnStarted at index 0, got {other:?}"),
+    }
+
+    // ScopeDenied must name the exact requested scope and carry the
+    // held snapshot so auditors can reconstruct "what did the agent
+    // have when the denial fired". Mirrors Phase 4's
+    // `shell_exec_denied_on_semitrusted_channel` test at
+    // `agent.rs:615-683`, but through the real `TelegramChannel`.
+    match &events[1] {
+        AuditTag::ScopeDenied {
+            scope_requested,
+            held_capabilities,
+            ..
+        } => {
+            assert_eq!(scope_requested.base(), "shell.exec");
+            assert_eq!(scope_requested.qualifier(), Some("rm"));
+            assert!(
+                !held_capabilities.grants(&Scope::parse("shell.exec").unwrap()),
+                "held set (post-narrow) must not grant shell.exec"
+            );
+            assert!(
+                !held_capabilities.grants(&Scope::parse("shell.exec:rm").unwrap()),
+                "held set must not grant shell.exec:rm specifically"
+            );
+        }
+        other => panic!("expected ScopeDenied at index 1, got {other:?}"),
+    }
+
+    // And absolutely no ToolCall event — the denial is the whole
+    // point. If this assertion fails, `ShellExecFake::execute` would
+    // also have fired a panic, but we check explicitly anyway because
+    // a tool that short-circuits in `execute` could still produce an
+    // audit event before the panic aborted the thread.
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+        "no ToolCall event should appear for a denied call: {events:?}"
+    );
+
+    // TurnEnded closes the audit window.
+    assert!(
+        matches!(events[2], AuditTag::TurnEnded { .. }),
+        "expected TurnEnded at index 2, got {:?}",
+        events[2]
+    );
+}
