@@ -186,13 +186,15 @@ reorder and re-scope as we learn.
    chunk.
 
 6. **Integration test: two chats, one bot, one process.** A
-   scripted end-to-end test using a mock `teloxide` transport that
+   scripted end-to-end test using a mock transport that
    exercises: bot token handoff, long-poll ingestion, two
    concurrent chats, per-chat memory isolation, the full
-   persistent-audit round trip, and the `TrustTier::Untrusted`
-   attenuation at the boundary. Same shape as Phase 7 Task 7's
-   `audit_persistence_e2e.rs` — local fake transport, scripted
-   message injection, deterministic assertions.
+   persistent-audit round trip, and the `TrustTier::SemiTrusted`
+   attenuation at the boundary (corrected from the original
+   `Untrusted` wording — see Task 1's ship record for the fix).
+   Same shape as Phase 7 Task 7's `audit_persistence_e2e.rs` —
+   local fake transport, scripted message injection, deterministic
+   assertions.
 
 7. **Real-bot smoke test (manual).** Run against a real Telegram
    test bot from a dev box: send "remember my favorite color is
@@ -938,6 +940,116 @@ regression test for machinery core already owns.
   the second send appears to make the session loop exit
   promptly. Mirrors the two-token design from Task 4 exactly —
   one for per-turn cancellation, one for process-wide shutdown.
+
+## Task 6 — shipped (2026-04-14)
+
+**Landed:** 2026-04-14. Commit: _pending_.
+
+The concurrent two-chat end-to-end test lives in
+`crates/aivyx-telegram/src/tests.rs::run_telegram_session_two_chats_persistent_e2e`.
+It drives two `TelegramChannel<ScriptedTransport>` instances
+through `run_telegram_session_with_transport` on a shared
+`Arc<PersistentAuditLog>` and a shared `Arc<RedbMemory>`-backed
+tool registry, then reopens the redb store cold and asserts the
+HMAC chain, scope qualifiers, and per-chat memory partitions all
+survived the round trip.
+
+### Why this test lives in `src/tests.rs` (not `tests/`)
+
+Three crate-private items are required to drive the test:
+
+1. `TelegramChannel::new` — `pub(crate)` because the private
+   `TelegramTransport` bound would leak if the constructor went
+   public. See `telegram_channel.rs:84`.
+2. `ScriptedTransport` — the scripted double itself, defined
+   inline in `tests.rs` as a test-only `TelegramTransport` impl.
+3. `run_telegram_session_with_transport` — `pub(crate)` for the
+   same reason: the transport trait bound in the signature.
+
+An integration test under `tests/` only sees the crate's public
+API, which for this path is `run_telegram_session` (production,
+real HTTP) and `TelegramSessionConfig`. That's intentional — the
+public surface exists for the binary, not for tests. Keeping the
+full e2e suite in `src/tests.rs` gives it access to the scripted
+transport and transport-generic session driver without
+loosening visibility just for tests. Same pattern as Task 5's
+`run_telegram_session_cancelled_turn_renders_and_continues`.
+
+### What the test asserts
+
+- **`tokio::join!` both sessions to completion.** Each chat
+  runs its own `run_telegram_session_with_transport` future
+  with its own `ScriptedTransport`, its own per-chat watcher
+  task that cancels the channel's per-turn token once a send
+  lands, and its own `shutdown` token. `tokio::time::timeout`
+  caps the whole thing at 10 seconds so a bug can't hang CI.
+- **Per-chat provider queues, not a shared FIFO.** The first
+  design attempt used one `ScriptedProvider` with a shared
+  `VecDeque` that both chats pulled from. That looked clean but
+  had a nasty race: if chat A's agent ran `next_step` twice
+  before chat B's first `next_step` fired, chat A's turn would
+  consume chat B's scripted `FinalMessage` and then chat B's
+  scripted `ToolCall` — producing **two `ToolCall` events on
+  chat A's partition and zero on chat B's**, all while the
+  histogram still said "2 turns, 2 tool calls." The symptom:
+  memory reopen showed `chat_a=2, chat_b=0` after writes that
+  should have been `chat_a=1, chat_b=1`. Fix: one
+  `ScriptedProvider` instance per chat, independent queues.
+  This is why the test's histogram now pins **per-chat
+  ToolCall counts** (`tool_call_chat_a == 1 && tool_call_chat_b == 1`)
+  instead of a weaker "some ToolCall with a valid qualifier"
+  check — future refactors that reintroduce the shared queue
+  will fail loudly instead of silently leaking all writes into
+  one partition.
+- **8-event audit chain, 4 per chat.** Two `TurnStarted`, two
+  `MemoryAccess(Write)`, two `ToolCall`, two `TurnEnded`. The
+  `ToolCall` scope base is asserted to be `memory.write` and
+  the qualifier asserted to be exactly
+  `topic:notes:session:3001` or `topic:notes:session:4001` —
+  the Phase 8 Task 2 dual-qualifier form. Matching on
+  `scope_used.base()` rather than `tool_id` (the `AuditEvent::ToolCall`
+  variant carries a `ToolId(Uuid)`, not a human name) is the
+  idiomatic way to identify the tool in an audit entry.
+- **Reopen-phase `verify_from_disk`.** Same path as
+  `aivyx --verify-only` — confirms the HMAC chain is intact
+  after a cold open against the same redb path with the same
+  audit key (`[0x55u8; 32]`, distinct from Task 4's `[42]` and
+  Task 5's `[43]` so the three tests never collide under
+  `--test-threads=N`). Reports `entries_verified == 8` and
+  `head_seq == Some(7)`.
+- **Per-chat memory isolation survives reopen.** After the
+  log is dropped and the store is reopened, a fresh
+  `RedbMemory` is opened against the same path and queried
+  at the **physical** topic strings
+  `\x01s\x013001\x01notes` / `\x01s\x014001\x01notes` /
+  `\x01s\x019999\x01notes`. Chat A's partition has 1 entry,
+  chat B's has 1 entry, and a third made-up session ("9999")
+  has 0 — proving the partition prefix survives the AEAD
+  seal + HMAC replay + cold reopen path, not just the
+  in-memory Task 2 fake.
+
+### Two subtleties worth recording
+
+- **`Memory::get_recent` takes physical topics, not session
+  partitions.** The partitioning logic lives entirely in
+  `aivyx_memory::tools::namespaced_topic`, called from
+  `MemoryWriteTool`. Reading back at the substrate layer
+  requires reconstructing the same physical byte string. This
+  is intentional: `RedbMemory` is a flat topic→entries map,
+  and partitioning is a **tool-layer** concern. Any future
+  refactor that adds partition-aware helpers on `Memory`
+  itself would blur that line and make the substrate know
+  about the session namespace — exactly what the current
+  split avoids.
+- **`aivyx-core` untouched.** Task 6 ships zero production-
+  code changes to `aivyx-core`. The test was written against
+  the agent stack the earlier phases already ship, and the
+  Phase 8 Task 2 session-partition injection site
+  (`agent.rs:326`, added in Task 2) handled both chats
+  correctly on the first try. That makes Task 6 the ninth
+  consecutive phase-task with an empty `aivyx-core` diff — the
+  D1 "core is a finished artifact" discipline holds through
+  the end of Phase 8.
 
 ## Open questions
 

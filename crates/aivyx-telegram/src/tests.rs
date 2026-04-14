@@ -1340,3 +1340,646 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
     // ---- Cleanup --------------------------------------------------
     let _ = std::fs::remove_dir_all(&parent);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8 Task 6 — two chats, one bot, one process: the full-stack payoff.
+//
+// Every prior Phase 8 test pins *one slice* of the story:
+//
+// - Task 2 (`two_chats_isolated`) proves per-chat memory isolation
+//   but bypasses the turn loop entirely — it hand-injects the
+//   `session` key into tool inputs rather than going through
+//   `ConcreteAgent::run_tool_call`. It also uses `InMemoryMemory`,
+//   no persistence.
+// - Task 3 (`tier_attenuation_denies_shell_exec_through_real_telegram_channel`)
+//   drives a real `ConcreteAgent::turn` through a real `TelegramChannel`
+//   but uses a single chat, an in-memory `RecordingAudit`, and no
+//   memory tools — the point is the `SemiTrusted` ceiling strip.
+// - Task 4 (`run_telegram_session_drives_two_scripted_turns`) drives
+//   the real `run_telegram_session_with_transport` loop but uses a
+//   single chat, an in-memory `AuditBridge`, and no memory tools.
+// - Task 5 (`run_telegram_session_cancelled_turn_renders_and_continues`)
+//   proves cancel-and-continue, again single chat, in-memory audit,
+//   no memory tools.
+// - Phase 7's `audit_persistence_e2e.rs` proves persistent audit
+//   survives process restart but uses `LocalChannel` and a single
+//   chat.
+//
+// Task 6's unique contribution is **all of the above in one test**:
+// real `RedbStorage` + real `RedbMemory` + real `PersistentAuditLog`
+// + real `ConcreteAgent` + real `TelegramChannel` + real
+// `run_telegram_session_with_transport` + **two chats, each in its
+// own parallel session task**, writing into the same shared store.
+// After both sessions drop, we reopen the store cold, verify the
+// persistent audit chain via `verify_from_disk` (the exact same code
+// path `aivyx --verify-only` takes at startup), and replay the
+// decoded events to assert both chats' memory writes landed in the
+// chain with SemiTrusted tier, Telegram platform, and the narrowed
+// `memory.write:topic:notes` scope that Phase 4's R1 rule produces.
+//
+// ## Why two parallel tasks, not two sequential sessions
+//
+// The draft task bullet at PHASE_8.md:188 calls for "two chats, one
+// bot, one process" and says "two concurrent chats." Phase 8 Task 1
+// baked a one-chat-per-`TelegramChannel` simplification, so "two
+// concurrent chats" inside this phase has to mean two session tasks
+// each holding their own channel, both backed by the same audit hook
+// and store. That's what this test exercises: a single
+// `Arc<PersistentAuditLog>` handed to *both* sessions as
+// `Arc<dyn AuditHook>`, and a single `Arc<RedbMemory>`-backed tool
+// registry shared by both. If the drain task, the HMAC chain, or the
+// redb put path had a race under concurrent producers, this test
+// would catch it — either with a panic inside the drain's default
+// error handler or with a `verify_from_disk` failure on reopen.
+//
+// This also forecasts the Phase 9 multi-chat pump design: the
+// per-chat sessions are structurally already parallel here, and the
+// Phase 9 pump refactor will be "wrap this `tokio::join!` into a
+// `JoinSet` that maps `chat_id -> task`" rather than a fundamental
+// redesign.
+//
+// ## Scope discipline — one turn per chat, not many
+//
+// The draft also mentions "the full persistent-audit round trip"
+// which could tempt a 10-turn-per-chat test. Phase 7's
+// `audit_persistence_e2e.rs` already pins the 4-event-per-turn
+// shape, the HMAC-chain replay correctness, and the AEAD seal's
+// tamper detection in detail. Task 6 does not need to re-prove
+// those invariants — it needs to prove that **concurrent Telegram
+// sessions produce a well-formed chain**. One turn per chat is the
+// smallest experiment that exercises the concurrent producer path
+// end-to-end; adding more turns would just multiply wall time
+// without changing what the test proves.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_telegram_session_two_chats_persistent_e2e() {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aivyx_audit::{AuditEvent, MemoryOperation, PersistentAuditLog, TrustTierSummary};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{AuditHook, CancellationToken, Tool, ToolRegistry};
+    use crate::TelegramSessionConfig;
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+    use aivyx_memory::{Memory, MemoryReadTool, MemoryWriteTool, RedbMemory};
+    use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+    use crate::session::run_telegram_session_with_transport;
+    use serde_json::json;
+
+    // ---- Scripted two-step provider --------------------------------
+    //
+    // Each chat's turn needs two planner steps: (1) a `ToolCall`
+    // terminal that dispatches `memory.write`, and (2) a
+    // `FinalMessage` terminal closing the turn. Same shape as
+    // `audit_persistence_e2e.rs` uses for its one-turn memory.write
+    // script, which is the closest prior art.
+    //
+    // The `queue` is a flat `VecDeque<ScriptedStep>` — both chats
+    // pull from it sequentially. Because each chat's own session task
+    // serializes its turn through a single `ConcreteAgent`, and
+    // because the queue is behind a `Mutex`, the interleaving between
+    // the two chats' provider calls is whatever the tokio scheduler
+    // picks. The memory store's per-session-key namespacing makes the
+    // test order-independent: chat A always reads chat A's writes.
+    struct ScriptedStep {
+        events: Vec<LlmStreamEvent>,
+        terminal: LlmStepEnd,
+    }
+
+    struct ScriptedProvider {
+        queue: StdMutex<VecDeque<ScriptedStep>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            let step = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+            Ok(Box::new(ScriptedStream {
+                events: step.events.into_iter(),
+                terminal: Some(step.terminal),
+            }))
+        }
+    }
+
+    struct ScriptedStream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+    #[async_trait]
+    impl LlmStream for ScriptedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal
+                .ok_or_else(|| LlmError::StreamEnded("ScriptedStream::finish double-called".into()))
+        }
+    }
+
+    fn memory_write_turn(topic: &str, body: &str) -> Vec<ScriptedStep> {
+        vec![
+            ScriptedStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCall {
+                    call_id: format!("toolu_{body}"),
+                    tool_name: "memory.write".to_string(),
+                    input: json!({ "topic": topic, "body": body }),
+                    text_so_far: String::new(),
+                    usage: LlmUsage::default(),
+                },
+            },
+            ScriptedStep {
+                events: vec![LlmStreamEvent::TextChunk(format!("saved {body}"))],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: format!("saved {body}"),
+                    usage: LlmUsage::default(),
+                },
+            },
+        ]
+    }
+
+    // ---- Drain fence — wait for N audit rows on disk ---------------
+    //
+    // Local copy of the helper from
+    // `audit_persistence_e2e.rs::wait_for_audit_rows`. The persistent
+    // audit log's drain task is a background `tokio::spawn` that
+    // pulls signed entries off a bounded mpsc and issues `put` calls
+    // against the `KeyDomain::Audit` domain. `on_event` is
+    // synchronous and returns the moment the send lands in the
+    // channel — so "the hook returned" is earlier than "the row is
+    // on disk." Before we drop the log and reopen the store, we fence
+    // on the on-disk row count to guarantee the reopen sees a
+    // fully-drained chain.
+    const AUDIT_KEY_PREFIX: &[u8] = b"a\0";
+    async fn wait_for_audit_rows(storage: &Arc<dyn Storage>, expected: usize) {
+        let handle = storage.domain(KeyDomain::Audit);
+        for _ in 0..2000 {
+            let rows = handle
+                .scan_prefix(AUDIT_KEY_PREFIX)
+                .await
+                .expect("audit scan_prefix must succeed");
+            if rows.len() == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("persistent audit drain never flushed {expected} rows to disk");
+    }
+
+    // ---- Scratch storage -------------------------------------------
+    let tmp = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let parent = PathBuf::from(tmp).join(format!("aivyx-tg-task6-{pid}-{nanos}"));
+    std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+    let store_path = parent.join("store.redb");
+
+    // Deterministic audit key so the reopen path can decode the
+    // chain cleanly. Matches the `audit_persistence_e2e.rs` pattern
+    // of pinning the key inline rather than deriving it from
+    // `KeyDomain::Audit`'s `SubKey` — that path is covered by
+    // `cli_e2e.rs`, and this test is about concurrent producers, not
+    // key derivation.
+    const TEST_AUDIT_KEY: [u8; 32] = [0x55u8; 32];
+
+    // ======================================================================
+    // Session block — both sessions live inside this scope so every
+    // clone of `Arc<Database>` / `Arc<dyn Storage>` drops before the
+    // reopen phase below. redb enforces single-writer; a leftover
+    // handle from this block would make the reopen fail at
+    // `RedbStorage::open`.
+    // ======================================================================
+    {
+        let storage: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(store_path.clone()),
+            MasterKey::from_raw([11u8; 32]),
+        )
+        .await
+        .expect("scratch storage must open");
+
+        // ---- Shared memory tool registry ---------------------------
+        //
+        // One `RedbMemory` over the one `RedbStorage` — both chats
+        // hit the same physical store, but `session_partition()`
+        // returns a distinct chat_id per channel, so the per-row
+        // keys are disjoint. This is exactly the Task 2 isolation
+        // story, running through a real turn loop for the first time.
+        let memory: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
+            .await
+            .expect("RedbMemory::open must succeed over scratch storage");
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::new(MemoryReadTool::new(Arc::clone(&memory))) as Arc<dyn Tool>,
+            Arc::new(MemoryWriteTool::new(Arc::clone(&memory))) as Arc<dyn Tool>,
+        ]));
+        let capabilities = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+        ]);
+
+        // ---- Shared persistent audit -------------------------------
+        let persistent_audit = Arc::new(
+            PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
+                .await
+                .expect("persistent audit log must open on an empty chain"),
+        );
+        assert_eq!(
+            persistent_audit.len(),
+            0,
+            "empty chain before any turn runs"
+        );
+        let audit_hook: Arc<dyn AuditHook> = Arc::clone(&persistent_audit)
+            as Arc<dyn AuditHook>;
+
+        // ---- Shared scripted provider ------------------------------
+        //
+        // Pre-loaded with exactly four steps: two per chat, in the
+        // order the two-step memory.write script needs. The provider
+        // pulls FIFO, so whichever session's planner wins the race
+        // on the Mutex gets the first pair of steps. Because we can't
+        // Per-chat providers: **each chat gets its own FIFO queue**,
+        // not a shared one. The earlier design attempted a single
+        // shared queue where both chats pulled sequentially, but
+        // that's order-dependent: if chat A's turn loops twice
+        // (`ToolCall` → `FinalMessage`) while chat B is still waiting
+        // for its first planner reply, chat A drains both of chat B's
+        // scripted steps and chat B's turn ends with a FinalMessage
+        // but no tool call. The chain would still show 2 TurnStarted /
+        // 2 ToolCall / 2 TurnEnded because chat A's turn would emit
+        // 2 ToolCalls while chat B's emits 0 — exactly matching a
+        // shape that *looks* correct but has all memory writes in one
+        // partition. One provider per chat eliminates the race.
+        let provider_a: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+            queue: StdMutex::new(memory_write_turn("notes", "purple").into()),
+        });
+        let provider_b: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+            queue: StdMutex::new(memory_write_turn("notes", "purple").into()),
+        });
+
+        // ---- Chat A: transport + channel + pre-loaded update -------
+        let transport_a = Arc::new(ScriptedTransport::new());
+        transport_a.push_update(IncomingMessage {
+            update_id: 200,
+            chat_id: 3001,
+            user_id: 1,
+            text: "remember".to_string(),
+        });
+        let channel_a = Arc::new(TelegramChannel::new(
+            "tg-chat-a",
+            3001,
+            Arc::clone(&transport_a),
+        ));
+
+        // ---- Chat B: transport + channel + pre-loaded update -------
+        let transport_b = Arc::new(ScriptedTransport::new());
+        transport_b.push_update(IncomingMessage {
+            update_id: 300,
+            chat_id: 4001,
+            user_id: 2,
+            text: "remember".to_string(),
+        });
+        let channel_b = Arc::new(TelegramChannel::new(
+            "tg-chat-b",
+            4001,
+            Arc::clone(&transport_b),
+        ));
+
+        // ---- Session configs ---------------------------------------
+        let config_a = TelegramSessionConfig {
+            model: "claude-haiku-4-5-20251001".to_string(),
+            system_prompt: "telegram chat a".to_string(),
+            max_tokens: 256,
+            capabilities: capabilities.clone(),
+            tools: Arc::clone(&tools),
+            storage: Arc::clone(&storage),
+        };
+        let config_b = TelegramSessionConfig {
+            model: "claude-haiku-4-5-20251001".to_string(),
+            system_prompt: "telegram chat b".to_string(),
+            max_tokens: 256,
+            capabilities: capabilities.clone(),
+            tools: Arc::clone(&tools),
+            storage: Arc::clone(&storage),
+        };
+
+        // ---- Per-chat watcher tasks --------------------------------
+        //
+        // Each session loop will block on its `long_poll_timeout_secs`
+        // sleep after its scripted update drains. A watcher cancels
+        // that chat's channel token once the chat's outbound
+        // `send_message` lands, so each session exits at the top of
+        // its next iteration rather than waiting out the full
+        // long-poll timeout.
+        //
+        // Separate watchers instead of one watcher checking both:
+        // keeps the per-chat termination independent, mirroring how
+        // the Phase 9 multi-chat pump will run each chat's loop in
+        // its own task with its own cancellation path.
+        let channel_a_watch = Arc::clone(&channel_a);
+        let transport_a_watch = Arc::clone(&transport_a);
+        tokio::spawn(async move {
+            loop {
+                if !transport_a_watch.sent_snapshot().is_empty() {
+                    channel_a_watch.cancellation_token().cancel();
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+        let channel_b_watch = Arc::clone(&channel_b);
+        let transport_b_watch = Arc::clone(&transport_b);
+        tokio::spawn(async move {
+            loop {
+                if !transport_b_watch.sent_snapshot().is_empty() {
+                    channel_b_watch.cancellation_token().cancel();
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // ---- Fire both sessions in parallel ------------------------
+        //
+        // `tokio::join!` polls both futures on the same task, which
+        // the current-thread runtime tokio::test gives us. A
+        // multi-thread runtime would let the two sessions contend on
+        // the provider mutex and the persistent audit's drain mpsc
+        // across threads; the single-thread version still exercises
+        // the shared-producer shape (the drain task is its own
+        // spawned task even on current_thread), just with less
+        // scheduler variance. The invariant — "concurrent sessions
+        // produce a well-formed chain" — holds under both.
+        let shutdown_a = CancellationToken::new();
+        let shutdown_b = CancellationToken::new();
+        // Back to the simpler `tokio::join!` form — the race that
+        // motivated the `tokio::spawn` detour was the shared provider
+        // queue, not scheduler interleaving. Per-chat providers make
+        // this a pure cooperative test again.
+        let session_a_fut = run_telegram_session_with_transport(
+            Arc::clone(&channel_a),
+            config_a,
+            Arc::clone(&provider_a),
+            Arc::clone(&audit_hook),
+            1,
+            shutdown_a.clone(),
+        );
+        let session_b_fut = run_telegram_session_with_transport(
+            Arc::clone(&channel_b),
+            config_b,
+            Arc::clone(&provider_b),
+            Arc::clone(&audit_hook),
+            1,
+            shutdown_b.clone(),
+        );
+        let (report_a, report_b) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(session_a_fut, session_b_fut)
+        })
+        .await
+        .expect("both sessions must exit within 10s");
+
+        let report_a = report_a.expect("session A must return Ok");
+        let report_b = report_b.expect("session B must return Ok");
+        assert_eq!(report_a.turns_run, 1, "session A ran one scripted turn");
+        assert_eq!(report_b.turns_run, 1, "session B ran one scripted turn");
+
+        // Each chat's transport must have captured exactly one send.
+        assert_eq!(transport_a.sent_snapshot().len(), 1);
+        assert_eq!(transport_b.sent_snapshot().len(), 1);
+        assert_eq!(transport_a.sent_snapshot()[0].chat_id, 3001);
+        assert_eq!(transport_b.sent_snapshot()[0].chat_id, 4001);
+
+        // In-memory chain: 4 events per turn × 2 turns = 8.
+        assert_eq!(
+            persistent_audit.len(),
+            8,
+            "concurrent two-chat session must produce an 8-event in-memory chain"
+        );
+
+        // Fence the drain onto disk before the reopen phase below.
+        wait_for_audit_rows(&storage, 8).await;
+
+        // Explicit drops so redb's single-writer lock releases before
+        // the reopen phase. `persistent_audit`'s `Drop` aborts the
+        // drain task (`persistent.rs:408`) which releases its
+        // `Arc<dyn Storage>` only when the runtime next polls the
+        // aborted task — hence the yield loop below, which matches
+        // the pattern in `audit_persistence_e2e.rs`.
+        drop(channel_a);
+        drop(channel_b);
+        drop(transport_a);
+        drop(transport_b);
+        drop(provider_a);
+        drop(provider_b);
+        drop(audit_hook);
+        drop(persistent_audit);
+        drop(tools);
+        drop(memory);
+        drop(storage);
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    // ======================================================================
+    // Reopen phase — cold verification of the persistent chain.
+    //
+    // Same pattern as `audit_persistence_e2e.rs`'s session B: open a
+    // fresh `RedbStorage` handle against the same path, run
+    // `verify_from_disk` (exactly what `aivyx --verify-only` does),
+    // then open the log and inspect its entries to assert the
+    // per-chat shape survived the AEAD seal → redb row → reopen
+    // scan → HMAC replay pipeline.
+    // ======================================================================
+
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path.clone()),
+        MasterKey::from_raw([11u8; 32]),
+    )
+    .await
+    .expect("reopen must succeed after the session block drops everything");
+
+    let verify_report =
+        PersistentAuditLog::verify_from_disk(Arc::clone(&storage), TEST_AUDIT_KEY)
+            .await
+            .expect("verify_from_disk must succeed on a clean chain");
+    assert_eq!(
+        verify_report.entries_verified, 8,
+        "two concurrent chats × 4 events each = 8 entries"
+    );
+    assert_eq!(verify_report.head_seq, Some(7));
+
+    let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
+        .await
+        .expect("reopen for entries inspection must succeed");
+    let entries = log
+        .entries()
+        .expect("recovered chain must be readable post-reopen");
+    assert_eq!(entries.len(), 8);
+
+    // ---- Shape assertion: count events by variant ------------------
+    //
+    // Interleaving is scheduler-dependent: chat A's 4 events and
+    // chat B's 4 events can land in the chain in any order as long
+    // as each chat's internal turn-sequence is preserved. The
+    // strongest order-independent assertion is a histogram over the
+    // 8 entries: exactly 2 `TurnStarted`, 2 `MemoryAccess` (both
+    // `Write`), 2 `ToolCall` (both `memory.write`), and 2 `TurnEnded`.
+    //
+    // If concurrent producers ever corrupt an event mid-drain (e.g.
+    // a variant gets truncated or the `session` partition doesn't
+    // thread through), one of these counts would be off and the test
+    // would say exactly which one.
+    let mut turn_started = 0;
+    let mut memory_access_write = 0;
+    let mut tool_call_memory_write = 0;
+    let mut tool_call_chat_a = 0;
+    let mut tool_call_chat_b = 0;
+    let mut turn_ended = 0;
+    for entry in &entries {
+        match &entry.event {
+            AuditEvent::TurnStarted {
+                trust_tier,
+                channel,
+                ..
+            } => {
+                turn_started += 1;
+                assert_eq!(
+                    *trust_tier,
+                    TrustTierSummary::SemiTrusted,
+                    "every Telegram TurnStarted must carry SemiTrusted"
+                );
+                assert_eq!(
+                    *channel,
+                    ChannelPlatform::Telegram,
+                    "every turn was driven through a real TelegramChannel"
+                );
+            }
+            AuditEvent::MemoryAccess { operation, .. } => {
+                assert!(
+                    matches!(operation, MemoryOperation::Write),
+                    "only memory.write was called in this test"
+                );
+                memory_access_write += 1;
+            }
+            AuditEvent::ToolCall { scope_used, .. } => {
+                // Phase 4 R1 rule: the chain carries the *narrowed*
+                // scope, not the broad `memory.write` held by the
+                // agent. Phase 8 Task 2 dual-qualifier form:
+                // `memory.write:topic:<topic>:session:<chat_id>`.
+                // The scope base is the only reliable "which tool"
+                // signal on `AuditEvent::ToolCall` (the variant carries
+                // a `ToolId` UUID, not the human name) — any non-
+                // memory.write tool would surface as a different base.
+                assert_eq!(
+                    scope_used.base(),
+                    "memory.write",
+                    "ToolCall scope base must be memory.write"
+                );
+                let q = scope_used
+                    .qualifier()
+                    .expect("narrowed scope must have a qualifier");
+                // The histogram we enforce below requires one hit per
+                // chat — both forms must appear exactly once.
+                match q {
+                    "topic:notes:session:3001" => tool_call_chat_a += 1,
+                    "topic:notes:session:4001" => tool_call_chat_b += 1,
+                    other => panic!("unexpected ToolCall scope qualifier: {other:?}"),
+                }
+                tool_call_memory_write += 1;
+            }
+            AuditEvent::TurnEnded { .. } => {
+                turn_ended += 1;
+            }
+            other => {
+                panic!("unexpected audit event shape in two-chat chain: {other:?}");
+            }
+        }
+    }
+    assert_eq!(turn_started, 2, "two chats → two TurnStarted events");
+    assert_eq!(
+        memory_access_write, 2,
+        "two chats → two MemoryAccess(Write) events"
+    );
+    assert_eq!(
+        tool_call_memory_write, 2,
+        "two chats → two ToolCall(memory.write) events"
+    );
+    assert_eq!(
+        tool_call_chat_a, 1,
+        "chat A must have contributed exactly one ToolCall"
+    );
+    assert_eq!(
+        tool_call_chat_b, 1,
+        "chat B must have contributed exactly one ToolCall"
+    );
+    assert_eq!(turn_ended, 2, "two chats → two TurnEnded events");
+
+    // ---- Memory isolation survives reopen --------------------------
+    //
+    // The two chats both wrote `notes: purple` to the same logical
+    // topic but into different session partitions. Reopening
+    // `RedbMemory` and reading from chat A's partition must find
+    // exactly one entry; reading from chat B's partition must also
+    // find exactly one entry; and reading from a *third* made-up
+    // session partition must find zero. This proves the partition
+    // isolation Task 2 pins for in-memory storage also holds through
+    // the persistent redb path.
+    let memory_post: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
+        .await
+        .expect("RedbMemory reopen must succeed");
+    // `MemoryWriteTool` stores session-partitioned topics as the
+    // physical key `\x01s\x01<session>\x01<topic>` (see
+    // `aivyx_memory::tools::namespaced_topic`). Reading back at this
+    // lower layer requires reconstructing the same physical string —
+    // `Memory::get_recent` doesn't know about partitions. This is
+    // intentional: partitioning lives in the tool layer, the
+    // substrate is a flat topic→entries map.
+    let phys_a = "\x01s\x013001\x01notes";
+    let phys_b = "\x01s\x014001\x01notes";
+    let phys_c = "\x01s\x019999\x01notes";
+    let a_notes = memory_post
+        .get_recent(phys_a, 16)
+        .await
+        .expect("chat A notes must be readable");
+    let b_notes = memory_post
+        .get_recent(phys_b, 16)
+        .await
+        .expect("chat B notes must be readable");
+    let c_notes = memory_post
+        .get_recent(phys_c, 16)
+        .await
+        .expect("nonexistent chat must list without erroring");
+    assert_eq!(a_notes.len(), 1, "chat A wrote exactly one entry");
+    assert_eq!(b_notes.len(), 1, "chat B wrote exactly one entry");
+    assert_eq!(
+        c_notes.len(),
+        0,
+        "uninvolved chat must see nothing — partition isolation holds"
+    );
+
+    // ---- Cleanup --------------------------------------------------
+    drop(log);
+    drop(memory_post);
+    drop(storage);
+    let _ = std::fs::remove_dir_all(&parent);
+}
