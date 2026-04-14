@@ -110,7 +110,7 @@ impl FsReadToolConfig {
         Ok(FsReadTool {
             id: ToolId::new(),
             sandbox_root: Arc::from(canonical),
-            schema: input_schema_value(),
+            schema: read_input_schema_value(),
         })
     }
 }
@@ -136,61 +136,66 @@ impl FsReadTool {
     pub fn sandbox_root(&self) -> &Path {
         &self.sandbox_root
     }
+}
 
-    /// Lexically resolve `input_path` (which may be relative) against
-    /// the sandbox root, returning an absolute path with all `.` and
-    /// `..` segments collapsed. **Does not touch the filesystem** —
-    /// symlinks are not resolved here.
-    ///
-    /// Returns `None` if the lexical resolution escapes the sandbox
-    /// root (e.g., more `..` segments than there are components below
-    /// the root). The caller uses this signal to produce a deny-by-
-    /// construction scope.
-    fn lexical_resolve(&self, input_path: &Path) -> Option<PathBuf> {
-        // Join semantics: if `input_path` is absolute, `PathBuf::push`
-        // *replaces* the current path. That's the right thing for an
-        // agent that tries to pass an absolute path: it lands
-        // wherever the absolute path points, and the post-collapse
-        // prefix check will reject it if it's outside the sandbox.
-        let mut joined = PathBuf::from(&*self.sandbox_root);
-        joined.push(input_path);
+/// Lexically resolve `input_path` (which may be relative) against
+/// `sandbox_root`, returning an absolute path with all `.` and `..`
+/// segments collapsed. **Does not touch the filesystem** — symlinks
+/// are not resolved here.
+///
+/// Shared by [`FsReadTool`] and [`FsWriteTool`] (task 3) since both
+/// need the same purely-lexical TOCTOU-resistant path joining, but
+/// the canonical fence each tool runs afterwards differs (reads
+/// canonicalize the file itself; writes canonicalize the *parent
+/// directory* because the file may not exist yet).
+///
+/// Returns `None` if the lexical resolution escapes the sandbox
+/// root (e.g., more `..` segments than there are components below
+/// the root). The caller uses this signal to produce a deny-by-
+/// construction scope.
+fn lexical_resolve(sandbox_root: &Path, input_path: &Path) -> Option<PathBuf> {
+    // Join semantics: if `input_path` is absolute, `PathBuf::push`
+    // *replaces* the current path. That's the right thing for an
+    // agent that tries to pass an absolute path: it lands
+    // wherever the absolute path points, and the post-collapse
+    // prefix check will reject it if it's outside the sandbox.
+    let mut joined = PathBuf::from(sandbox_root);
+    joined.push(input_path);
 
-        // Collapse `.` and `..`. We iterate components and maintain a
-        // stack: `CurDir` is skipped, `ParentDir` pops the stack but
-        // only if the stack has more components than the sandbox
-        // root's component count (so `../` out of the sandbox root
-        // itself returns None).
-        let root_components: Vec<Component<'_>> =
-            self.sandbox_root.components().collect();
-        let mut stack: Vec<Component<'_>> = Vec::with_capacity(16);
-        for comp in joined.components() {
-            match comp {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    // Pop, unless popping would take us out of the
-                    // sandbox root.
-                    if stack.len() <= root_components.len() {
-                        return None;
-                    }
-                    stack.pop();
+    // Collapse `.` and `..`. We iterate components and maintain a
+    // stack: `CurDir` is skipped, `ParentDir` pops the stack but
+    // only if the stack has more components than the sandbox
+    // root's component count (so `../` out of the sandbox root
+    // itself returns None).
+    let root_components: Vec<Component<'_>> = sandbox_root.components().collect();
+    let mut stack: Vec<Component<'_>> = Vec::with_capacity(16);
+    for comp in joined.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Pop, unless popping would take us out of the
+                // sandbox root.
+                if stack.len() <= root_components.len() {
+                    return None;
                 }
-                other => stack.push(other),
+                stack.pop();
             }
+            other => stack.push(other),
         }
-
-        // Verify the resolved stack still starts with the sandbox
-        // root. A case this catches: a Unix absolute input like
-        // `/etc/passwd` replaces the prefix entirely via `push()`,
-        // so `stack` ends up as `[/, etc, passwd]` with no sandbox
-        // prefix, and the check below fires.
-        for (i, root_c) in root_components.iter().enumerate() {
-            if stack.get(i) != Some(root_c) {
-                return None;
-            }
-        }
-
-        Some(stack.into_iter().collect())
     }
+
+    // Verify the resolved stack still starts with the sandbox
+    // root. A case this catches: a Unix absolute input like
+    // `/etc/passwd` replaces the prefix entirely via `push()`,
+    // so `stack` ends up as `[/, etc, passwd]` with no sandbox
+    // prefix, and the check below fires.
+    for (i, root_c) in root_components.iter().enumerate() {
+        if stack.get(i) != Some(root_c) {
+            return None;
+        }
+    }
+
+    Some(stack.into_iter().collect())
 }
 
 #[async_trait]
@@ -223,13 +228,13 @@ impl Tool for FsReadTool {
             // `Failed` here because `required_scope` returns `Scope`,
             // not `Result`, and a Denied outcome is the closest
             // equivalent to "input is malformed, don't run."
-            return deny_scope();
+            return read_deny_scope();
         };
 
-        match self.lexical_resolve(Path::new(path_str)) {
+        match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
             Some(abs) => Scope::parse(&format!("fs.read:{}", abs.display()))
-                .unwrap_or_else(deny_scope),
-            None => deny_scope(),
+                .unwrap_or_else(read_deny_scope),
+            None => read_deny_scope(),
         }
     }
 
@@ -254,7 +259,7 @@ impl Tool for FsReadTool {
             }
         };
 
-        let lexical_abs = match self.lexical_resolve(Path::new(path_str)) {
+        let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
             Some(p) => p,
             None => {
                 // Should never reach here — the scope gate would have
@@ -381,12 +386,21 @@ impl Tool for FsReadTool {
 /// `ToolOutcome::Denied`. The specific string is meaningless — any
 /// legal scope with an impossible qualifier works; the value here is
 /// chosen for grep-ability in audit trails.
-fn deny_scope() -> Scope {
-    Scope::parse("fs.read:/aivyx/__deny__/invalid-input")
+///
+/// Parameterized by base so `fs.read` and `fs.write` produce distinct
+/// deny scopes — the audit entry for a denied call carries the base,
+/// and distinguishing "which tool tried to escape" is useful grep
+/// context when an LLM is probing.
+fn deny_scope_for(base: &str) -> Scope {
+    Scope::parse(&format!("{base}:/aivyx/__deny__/invalid-input"))
         .expect("deny scope must parse")
 }
 
-fn input_schema_value() -> Value {
+fn read_deny_scope() -> Scope {
+    deny_scope_for("fs.read")
+}
+
+fn read_input_schema_value() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -399,6 +413,413 @@ fn input_schema_value() -> Value {
         },
         "required": ["path"]
     })
+}
+
+fn write_deny_scope() -> Scope {
+    deny_scope_for("fs.write")
+}
+
+fn write_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to write. Relative paths resolve against \
+                               the agent's sandbox root. Absolute paths must \
+                               already be under the sandbox root. Parent \
+                               directories are created as needed, but only \
+                               within the sandbox root."
+            },
+            "content": {
+                "type": "string",
+                "description": "UTF-8 content to write. Existing files are \
+                               overwritten atomically via a same-directory \
+                               temp file plus rename."
+            }
+        },
+        "required": ["path", "content"]
+    })
+}
+
+// ---------------------------------------------------------------------------
+// FsWriteTool — Phase 4 task 3
+//
+// Writes a UTF-8 file under the sandbox root. Atomic via same-directory
+// temp file + rename — a partial write across a ctrl-C leaves the
+// target file untouched rather than half-written. Verification re-stats
+// the file after rename and checks the byte count matches what we
+// wrote, surfacing as `Verification::Verified` in the `ToolOutcome`.
+//
+// Shares `lexical_resolve` with `FsReadTool` but runs a *different*
+// canonical fence: for writes, the target file may not exist yet, so
+// we canonicalize the *parent directory* (after ensuring it exists
+// within the sandbox via `create_dir_all`) and check the canonicalized
+// parent is still inside the sandbox root. The final target path is
+// `canonical_parent.join(file_name)`, which is the write destination.
+//
+// See Q3 in PHASE_4.md for the atomic-vs-plain-vs-backup trade-off.
+// Resolution: atomic temp+rename, no backup file. Rationale:
+//   - Partial writes across ctrl-C are the dominant failure mode for
+//     a tool called by an LLM that may be interrupted mid-turn.
+//   - Backup files clutter directories, double I/O on every write,
+//     and the audit chain already records enough context
+//     (`input_hash` covering content bytes) for recovery.
+// ---------------------------------------------------------------------------
+
+/// Maximum size of a single write, in bytes. Symmetric with
+/// `MAX_READ_BYTES`. An LLM that tries to emit a megabyte in one turn
+/// is almost always a bug — either hallucination loop or stuck
+/// generation. Const, not config.
+pub const MAX_WRITE_BYTES: usize = 256 * 1024;
+
+/// Construction inputs for [`FsWriteTool`]. Same split pattern as
+/// [`FsReadToolConfig`]: fallible canonicalization at build time,
+/// infallible tool construction.
+pub struct FsWriteToolConfig {
+    sandbox_root: PathBuf,
+}
+
+impl FsWriteToolConfig {
+    pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
+        FsWriteToolConfig {
+            sandbox_root: sandbox_root.into(),
+        }
+    }
+
+    /// Canonicalize the sandbox root and return a ready-to-register
+    /// [`FsWriteTool`]. Fails at startup if the root doesn't exist
+    /// or isn't a directory — configuration errors must not surface
+    /// at tool-call time.
+    pub fn build(self) -> Result<FsWriteTool, AivyxError> {
+        let canonical = std::fs::canonicalize(&self.sandbox_root).map_err(|e| {
+            AivyxError::Config(format!(
+                "fs.write sandbox root {:?} cannot be canonicalized: {e}",
+                self.sandbox_root
+            ))
+        })?;
+        if !canonical.is_dir() {
+            return Err(AivyxError::Config(format!(
+                "fs.write sandbox root {canonical:?} is not a directory"
+            )));
+        }
+        Ok(FsWriteTool {
+            id: ToolId::new(),
+            sandbox_root: Arc::from(canonical),
+            schema: write_input_schema_value(),
+        })
+    }
+}
+
+/// Reference filesystem write tool. Agents holding
+/// `fs.write:<sandbox_root>/**` can write any file under the sandbox,
+/// creating parent directories on demand within the sandbox, up to
+/// [`MAX_WRITE_BYTES`] per call. Writes are atomic via same-directory
+/// temp file + rename.
+#[derive(Debug)]
+pub struct FsWriteTool {
+    id: ToolId,
+    sandbox_root: Arc<Path>,
+    schema: Value,
+}
+
+impl FsWriteTool {
+    pub fn sandbox_root(&self) -> &Path {
+        &self.sandbox_root
+    }
+}
+
+#[async_trait]
+impl Tool for FsWriteTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "fs.write"
+    }
+
+    fn description(&self) -> &str {
+        "Write a UTF-8 file under the agent's sandbox root, atomically. \
+         Input is a JSON object with `path` (where to write) and `content` \
+         (the UTF-8 text to write). Relative paths resolve against the \
+         sandbox root; absolute paths must already be under it. Parent \
+         directories are created on demand inside the sandbox. Existing \
+         files are overwritten. Max 256 KiB per call."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        let Some(path_str) = input.get("path").and_then(|v| v.as_str()) else {
+            return write_deny_scope();
+        };
+        // We don't require `content` to be present here — that's an
+        // execute-time validation. `required_scope` cares only about
+        // *where* the agent wants to write, which is the scope-gated
+        // decision. An agent with a valid path but missing content
+        // still deserves to see the call admitted-then-failed at the
+        // tool level so the LLM learns from the tool error text. A
+        // caller missing both fields has bigger problems.
+
+        match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(abs) => Scope::parse(&format!("fs.write:{}", abs.display()))
+                .unwrap_or_else(write_deny_scope),
+            None => write_deny_scope(),
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: Value,
+        _ctx: &ToolContext<'_>,
+    ) -> ToolOutcome {
+        // ---- Validate input fields -------------------------------
+        let path_str = match input.get("path").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a string `path` field".to_string(),
+                })
+            }
+        };
+        let content_str = match input.get("content").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a string `content` field".to_string(),
+                })
+            }
+        };
+        let content_bytes = content_str.as_bytes();
+        if content_bytes.len() > MAX_WRITE_BYTES {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "content is {} bytes; limit is {MAX_WRITE_BYTES}",
+                    content_bytes.len()
+                ),
+            });
+        }
+
+        // ---- Lexical resolve (mirrors FsReadTool::execute) -------
+        let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(p) => p,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(format!(
+                    "fs.write: lexical resolve escaped sandbox after scope gate \
+                     admitted the call (path={path_str:?})"
+                )));
+            }
+        };
+
+        // The lexical path has a parent (it's absolute and has at
+        // least the sandbox-root components plus a file name). If it
+        // doesn't, the input was "just the root" — refuse.
+        let lexical_parent = match lexical_abs.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "path {lexical_abs:?} has no parent directory — cannot \
+                         write the sandbox root itself"
+                    ),
+                });
+            }
+        };
+        let file_name = match lexical_abs.file_name() {
+            Some(n) => n.to_owned(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "path {lexical_abs:?} has no final component (trailing \
+                         slash?)"
+                    ),
+                });
+            }
+        };
+
+        // ---- Ensure parent exists (within sandbox) ---------------
+        //
+        // `create_dir_all` is the right tool here but it could follow
+        // a symlink that points outside the sandbox, creating
+        // directories in unexpected places. We defend by first
+        // verifying the lexical parent is still under the lexical
+        // sandbox root (which `lexical_resolve` already guaranteed),
+        // then running `create_dir_all`, then canonicalizing the
+        // parent and re-verifying against the canonical sandbox root.
+        // The canonical check catches any symlink in the parent
+        // chain that escapes.
+        if let Err(e) = std::fs::create_dir_all(&lexical_parent) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("cannot create parent {lexical_parent:?}: {e}"),
+            });
+        }
+
+        // ---- Canonical fence on the parent -----------------------
+        let canonical_parent = match std::fs::canonicalize(&lexical_parent) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("cannot canonicalize parent {lexical_parent:?}: {e}"),
+                });
+            }
+        };
+        if !canonical_parent.starts_with(&*self.sandbox_root) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "parent {canonical_parent:?} escapes sandbox root {:?} \
+                     after symlink resolution",
+                    self.sandbox_root
+                ),
+            });
+        }
+        let canonical_target = canonical_parent.join(&file_name);
+
+        // If the target already exists as a symlink (not a regular
+        // file), we must also canonicalize it and verify the resolved
+        // path is still in-sandbox. Otherwise an attacker who got
+        // `fs.write:<sandbox>/link` admitted could still redirect the
+        // final write to wherever `<sandbox>/link` points by using
+        // `rename` to replace it — except `rename` on Unix replaces
+        // the symlink itself, not the target. But a previously-
+        // existing symlink that we're about to overwrite via rename
+        // is actually safe (rename replaces the symlink with the
+        // temp file), whereas a previously-existing *regular file*
+        // that the agent is legitimately overwriting is the happy
+        // path. The one edge case is if `canonical_target` points at
+        // a symlink that already exists *inside* the sandbox root
+        // but resolves to something outside. For that, we check:
+        if canonical_target.exists() {
+            let target_canonical = match std::fs::canonicalize(&canonical_target) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "cannot canonicalize existing target {canonical_target:?}: {e}"
+                        ),
+                    });
+                }
+            };
+            if !target_canonical.starts_with(&*self.sandbox_root) {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "existing target {target_canonical:?} escapes sandbox \
+                         root {:?} after symlink resolution",
+                        self.sandbox_root
+                    ),
+                });
+            }
+            // If the existing target is itself a symlink (even one
+            // pointing in-sandbox), remove it before the atomic
+            // rename so we replace the *link*, not whatever it points
+            // at. Otherwise `rename(tmp, link)` would follow the link
+            // and overwrite the pointed-to file, which is surprising.
+            if canonical_target.is_symlink() {
+                if let Err(e) = std::fs::remove_file(&canonical_target) {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "cannot unlink existing symlink {canonical_target:?}: {e}"
+                        ),
+                    });
+                }
+            }
+        }
+
+        // ---- Atomic write: temp file in same dir + rename --------
+        //
+        // Temp file *must* live in the same directory as the target
+        // so that `rename` is atomic (POSIX rename within a single
+        // filesystem is atomic; cross-filesystem falls back to
+        // copy+delete). Name includes a UUID to avoid collisions if
+        // two concurrent `FsWriteTool` calls happen to touch the
+        // same directory — registered tools are shared across turns
+        // in `Arc<ToolRegistry>`, so concurrent turns calling
+        // `fs.write` on the same file is a real scenario.
+        let tmp_name = format!(
+            ".aivyx-fswrite-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        );
+        let tmp_path = canonical_parent.join(&tmp_name);
+
+        // Use OpenOptions with `create_new` so we fail loudly if a
+        // temp file with our UUID already exists (which shouldn't
+        // happen, but makes the invariant explicit).
+        use std::io::Write as IoWrite;
+        let mut tmp_file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("cannot create temp file {tmp_path:?}: {e}"),
+                });
+            }
+        };
+        if let Err(e) = tmp_file.write_all(content_bytes) {
+            // Clean up the temp file before bailing.
+            let _ = std::fs::remove_file(&tmp_path);
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("write error on temp file {tmp_path:?}: {e}"),
+            });
+        }
+        // Drop the file handle before rename — on Windows rename
+        // would fail if the source is still open. Linux doesn't
+        // require this, but dropping early is cheap and keeps the
+        // code portable.
+        drop(tmp_file);
+
+        if let Err(e) = std::fs::rename(&tmp_path, &canonical_target) {
+            // Rename failed — the temp file may still exist. Try to
+            // clean it up; ignore failure there.
+            let _ = std::fs::remove_file(&tmp_path);
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "rename {tmp_path:?} → {canonical_target:?} failed: {e}"
+                ),
+            });
+        }
+
+        // ---- Verification: re-stat and check size ---------------
+        //
+        // Verification::Verified requires that we confirm the effect.
+        // A `metadata` call on the just-renamed target gives us the
+        // on-disk byte count; compare against what we wrote. If the
+        // stat fails or the count doesn't match, we still return
+        // Completed (the write did happen) but mark the verification
+        // as Unverified so the audit trail shows we couldn't confirm.
+        let verified = match std::fs::metadata(&canonical_target) {
+            Ok(md) if md.len() as usize == content_bytes.len() => {
+                Verification::Verified
+            }
+            _ => Verification::Unverified,
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "path": canonical_target.display().to_string(),
+                "bytes": content_bytes.len(),
+            }),
+            verified,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +889,7 @@ mod tests {
     /// don't run the execute path against `ctx` fields other than the
     /// cancellation token, so the cheapest fake is a channel and audit
     /// hook that do nothing. Import them from the core test helpers.
-    fn run_execute(tool: &FsReadTool, input: Value) -> ToolOutcome {
+    fn run_execute(tool: &dyn Tool, input: Value) -> ToolOutcome {
         use crate::{
             AgentId, CancellationToken, NullAuditHook, SessionId, TurnId,
         };
@@ -824,5 +1245,370 @@ mod tests {
             }
             other => panic!("intra-sandbox symlink must succeed, got {other:?}"),
         }
+    }
+
+    // ---- FsWriteTool =================================================
+
+    fn build_write_tool(sandbox: &SandboxDir) -> FsWriteTool {
+        FsWriteToolConfig::new(sandbox.root.clone())
+            .build()
+            .expect("sandbox root must be canonicalizable for write tests")
+    }
+
+    // ---- FsWriteTool: construction + config -----------------------
+
+    #[test]
+    fn write_build_fails_if_root_does_not_exist() {
+        let err = FsWriteToolConfig::new("/definitely/not/a/real/aivyx-write-root")
+            .build()
+            .expect_err("nonexistent write root must fail to build");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn write_build_fails_if_root_is_a_file() {
+        let sandbox = SandboxDir::new();
+        let file = sandbox.write_file("not-a-dir", b"x");
+        let err = FsWriteToolConfig::new(file)
+            .build()
+            .expect_err("file-as-root must fail");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn write_tool_descriptor_fields_are_what_the_planner_expects() {
+        // The LLM planner builds its tool descriptor list by calling
+        // `name`, `description`, and `input_schema` on every
+        // registered tool. A regression on any of these three — a
+        // rename, a docstring drift, a broken schema builder —
+        // silently corrupts what the LLM sees, with no compile-time
+        // signal. Pin them here.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        assert_eq!(tool.name(), "fs.write");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["required"], json!(["path", "content"]));
+        assert!(schema["properties"]["path"].is_object());
+        assert!(schema["properties"]["content"].is_object());
+    }
+
+    // ---- FsWriteTool: required_scope (lexical layer) --------------
+
+    #[test]
+    fn write_scope_for_relative_path_inside_sandbox() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert_eq!(scope.base(), "fs.write");
+        let q = scope.qualifier().expect("qualifier");
+        assert!(q.ends_with("/notes/today.md"));
+        assert!(q.starts_with(&tool.sandbox_root().display().to_string()));
+        assert!(!q.contains("__deny__"));
+    }
+
+    #[test]
+    fn write_scope_for_traversal_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "../../etc/passwd"}));
+        let q = scope.qualifier().expect("qualifier");
+        assert_eq!(scope.base(), "fs.write");
+        assert!(q.contains("__deny__"));
+    }
+
+    #[test]
+    fn write_scope_missing_path_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"content": "hi"}));
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn write_scope_missing_content_is_still_admitted_for_scope_check() {
+        // `required_scope` cares only about *where* the agent wants
+        // to write. Missing content is an execute-time failure, not
+        // a scope denial — the agent learns from the tool error text
+        // rather than from a silent denial.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert!(!scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn write_scope_base_is_fs_write_not_fs_read() {
+        // Sanity: deny and happy-path must both report the `fs.write`
+        // base so audit trails distinguish the two tools' denials.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        assert_eq!(
+            tool.required_scope(&json!({"path": "../../etc/passwd"}))
+                .base(),
+            "fs.write"
+        );
+        assert_eq!(
+            tool.required_scope(&json!({"path": "notes/today.md"}))
+                .base(),
+            "fs.write"
+        );
+    }
+
+    // ---- FsWriteTool: execute (canonical + atomic rename) ---------
+
+    #[test]
+    fn write_happy_path_creates_file_with_content() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "hello.txt", "content": "hello world"}),
+        );
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert!(matches!(verified, Verification::Verified));
+                assert_eq!(output["bytes"], json!(11));
+                let abs = sandbox.root.join("hello.txt");
+                let actual = std::fs::read_to_string(&abs).expect("file exists");
+                assert_eq!(actual, "hello world");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_creates_parent_directories_within_sandbox() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "deep/nested/path/note.md", "content": "n"}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        let abs = sandbox.root.join("deep/nested/path/note.md");
+        assert!(abs.exists());
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "n");
+    }
+
+    #[test]
+    fn write_overwrites_existing_file() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("existing.txt", b"old content");
+        let tool = build_write_tool(&sandbox);
+
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "existing.txt", "content": "new content"}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        let abs = sandbox.root.join("existing.txt");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "new content");
+    }
+
+    #[test]
+    fn write_atomic_temp_file_is_cleaned_up_on_success() {
+        // After a successful write, the sandbox directory should
+        // contain the target file and NOT any `.aivyx-fswrite-*.tmp`
+        // sibling. The temp-then-rename approach should leave no
+        // breadcrumbs on the happy path.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        let _ = run_execute(
+            &tool,
+            json!({"path": "clean.txt", "content": "hi"}),
+        );
+
+        let stray_tmp: Vec<_> = std::fs::read_dir(&sandbox.root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".aivyx-fswrite-")
+            })
+            .collect();
+        assert!(
+            stray_tmp.is_empty(),
+            "temp file must be renamed away on success"
+        );
+    }
+
+    #[test]
+    fn write_missing_content_field_fails_with_tool_error() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "x.txt"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("content"), "detail: {detail}");
+            }
+            other => panic!("expected Failed(Tool), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_oversize_content_is_refused() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        // One byte over the cap.
+        let big: String = "A".repeat(MAX_WRITE_BYTES + 1);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "too-big.txt", "content": big}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("limit"), "detail: {detail}");
+            }
+            other => panic!("expected oversize Failed, got {other:?}"),
+        }
+        // And no file was created.
+        assert!(!sandbox.root.join("too-big.txt").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_denies_target_that_is_symlink_escaping_sandbox() {
+        // An attacker creates `<sandbox>/escape → /tmp/evil-target`
+        // (outside the sandbox) and tries to write through it. The
+        // existing-target canonical check must refuse.
+        use std::os::unix::fs::symlink;
+
+        let sandbox = SandboxDir::new();
+        // Create a target outside the sandbox.
+        let outside_dir = sandbox._parent.join("outside");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside_file = outside_dir.join("victim.txt");
+        std::fs::write(&outside_file, b"original").unwrap();
+
+        // Symlink inside sandbox pointing outside.
+        let link = sandbox.root.join("escape");
+        symlink(&outside_file, &link).expect("can create escape symlink");
+
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "escape", "content": "PWNED"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(
+                    detail.contains("escapes sandbox"),
+                    "expected sandbox-escape refusal, got {detail}"
+                );
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+
+        // And the outside victim file must be untouched.
+        assert_eq!(
+            std::fs::read_to_string(&outside_file).unwrap(),
+            "original",
+            "outside file must not have been overwritten"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_allows_overwriting_intra_sandbox_symlink_by_replacing_it() {
+        // Overwriting an in-sandbox symlink: the tool should replace
+        // the *link*, not follow it. A symlink `a → b` where both
+        // are in-sandbox: writing to "a" should leave "a" as a
+        // regular file with the new content, and "b" should keep
+        // its old content.
+        use std::os::unix::fs::symlink;
+
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("target.txt", b"original target");
+        let link = sandbox.root.join("link.txt");
+        symlink("target.txt", &link).expect("create link");
+
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "link.txt", "content": "replacement"}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+
+        // "link.txt" is now a regular file with new content.
+        let link_content = std::fs::read_to_string(sandbox.root.join("link.txt")).unwrap();
+        assert_eq!(link_content, "replacement");
+        assert!(!sandbox.root.join("link.txt").is_symlink());
+
+        // "target.txt" retains its original content — the rename
+        // replaced the symlink itself, not what it pointed at.
+        let target_content = std::fs::read_to_string(sandbox.root.join("target.txt")).unwrap();
+        assert_eq!(target_content, "original target");
+    }
+
+    #[test]
+    fn write_traversal_via_parent_dots_is_denied_lexically() {
+        // The lexical resolver rejects `../../etc/passwd` as a target
+        // path, producing the deny scope. But since we're going
+        // through `execute` directly (not the loop), the deny scope
+        // is not gated anywhere — instead execute itself should
+        // detect the internal invariant violation. Real integration
+        // (task 5) will test the full scope-gate path.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "../../etc/test-should-never-exist", "content": "x"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Internal(msg)) => {
+                assert!(
+                    msg.contains("escaped sandbox"),
+                    "expected lexical-escape invariant error, got {msg}"
+                );
+            }
+            other => panic!(
+                "expected Internal invariant violation (task 5 tests the \
+                 scope-gate path), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn write_sandbox_capability_grants_in_sandbox_write_scope() {
+        // Parallel to the read tool's capability test: an agent with
+        // a broad sandbox write scope must cover a derived narrow
+        // write scope under the sandbox.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        let held_pattern = format!("fs.write:{}/**", tool.sandbox_root().display());
+        let held = CapabilitySet::from_scopes([Scope::parse(&held_pattern).unwrap()]);
+        let effective = held.intersect(TrustTier::Trusted.default_ceiling());
+
+        let needed = tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert!(
+            effective.grants(&needed),
+            "sandbox write capability must grant in-sandbox derived write, got needed={needed:?}"
+        );
+    }
+
+    #[test]
+    fn write_sandbox_capability_does_not_grant_fs_read() {
+        // The cross-base check: holding `fs.write:<sandbox>/**` must
+        // NOT grant any `fs.read:...` scope — D4 rule 1 (different
+        // bases never match). Ensures the tools can't be confused
+        // for each other in the capability layer.
+        let sandbox = SandboxDir::new();
+        let write_tool = build_write_tool(&sandbox);
+        let read_tool = build_tool(&sandbox);
+
+        let held_pattern = format!("fs.write:{}/**", write_tool.sandbox_root().display());
+        let held = CapabilitySet::from_scopes([Scope::parse(&held_pattern).unwrap()]);
+        let effective = held.intersect(TrustTier::Trusted.default_ceiling());
+
+        let read_needed = read_tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert!(
+            !effective.grants(&read_needed),
+            "fs.write capability must not grant fs.read scope"
+        );
     }
 }

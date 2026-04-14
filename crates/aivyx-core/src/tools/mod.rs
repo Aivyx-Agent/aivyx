@@ -27,4 +27,4 @@
 
 pub mod fs;
 
-pub use fs::{FsReadTool, FsReadToolConfig};
+pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};

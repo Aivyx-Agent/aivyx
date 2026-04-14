@@ -38,7 +38,7 @@ pub mod tools;
 pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig};
 pub use planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner, VecPlanner};
-pub use tools::{FsReadTool, FsReadToolConfig};
+pub use tools::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
