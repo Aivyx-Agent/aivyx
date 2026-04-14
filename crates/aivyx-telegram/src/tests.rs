@@ -962,3 +962,381 @@ async fn run_telegram_session_drives_two_scripted_turns() {
     // ---- Cleanup --------------------------------------------------
     let _ = std::fs::remove_dir_all(&parent);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8 Task 5 — cancellation over the network.
+//
+// The production concern Task 5 was opened for is "what plays the role
+// of ctrl-C for a Telegram turn?" Candidates named in PHASE_8.md's
+// draft task list were (a) a `/cancel` command, (b) a wall-clock
+// timeout, and (c) a per-chat active-turn lock.
+//
+// What we discovered during Task 5: `aivyx-core` already owns a
+// hardcoded `TURN_TIMEOUT = 120s` wall-clock deadline inside
+// `ConcreteAgent::turn` (`agent.rs:66`). It spawns a background task
+// that sleeps for the budget, cancels the channel's token, flags
+// `deadline_fired`, and the loop translates the result into
+// `TurnOutcome::TimedOut`. That machinery has been there since Phase 3
+// and applies to every `ChannelContext` impl, Local and Telegram
+// alike. The Telegram `finalize_footer` already renders
+// `"⏱ timed out"` for it (pinned by `finalize_footer_reflects_outcome`
+// above).
+//
+// So the Option-B design sketched at phase entry — "add
+// `turn_deadline: Option<Duration>` to TelegramSessionConfig and wrap
+// `agent.turn` in `tokio::time::timeout`" — would have duplicated
+// machinery that already exists and contradicted core's explicit
+// "const, not config knob" philosophy. The streak-preserving,
+// honest-about-what-we-already-have move is to ship a **regression
+// test** that proves the end-to-end cancel-and-continue flow works
+// for the Telegram long-poll loop specifically, without inventing a
+// second deadline layer.
+//
+// That's what this test is. It drives `run_telegram_session_with_transport`
+// through:
+//
+// 1. One inbound update whose turn **stalls mid-stream** (the scripted
+//    provider's `next_event` awaits a `tokio::time::sleep` longer than
+//    the overall test bound, so if the cancellation path is broken we
+//    hang and the 5-second test timeout catches it).
+// 2. A watcher task that waits until the stall is confirmed entered
+//    (via an `AtomicUsize` the provider bumps on stream construction)
+//    and then cancels the channel's per-turn token — this is the same
+//    thing the core `deadline_task` does internally, just triggered
+//    deterministically without waiting 120 seconds wall-clock.
+// 3. A second inbound update with a normal scripted final message
+//    that must drive a **second turn to completion** — proving the
+//    per-turn token rotation the session loop does via
+//    `channel.reset_cancellation()` actually works for Telegram, the
+//    same way Phase 3's fix works for LocalChannel.
+//
+// Asserts (in order of what they prove):
+//
+// - `report.turns_run == 2` — the cancelled turn counts, and the
+//   session loop kept going to serve turn 2.
+// - Exactly two `send_message` calls.
+// - The first send's text contains `"✕ cancelled"` (from the
+//   finalize_footer path for `TurnOutcome::Cancelled`), confirming
+//   the agent returned Cancelled and the channel rendered it.
+// - The second send's text contains the second turn's scripted
+//   content — proving the per-turn token slot was rotated and a
+//   fresh uncancelled token was in place when turn 2 started.
+//
+// If any of this breaks in a future phase, the symptom is either (a)
+// the test hangs for 5 seconds and times out on the outer
+// `tokio::time::timeout`, or (b) the assertion about two sends fails
+// because the loop exited early. Both are loud.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_telegram_session_cancelled_turn_renders_and_continues() {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aivyx_audit::{AuditBridge, HmacChainLog};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{AuditHook, CancellationToken, ToolRegistry};
+    use crate::TelegramSessionConfig;
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+    use crate::session::run_telegram_session_with_transport;
+
+    // ---- Scripted provider with one stalling turn and one normal -
+    //
+    // `chat_stream` pulls from a queue of `Script` values. `Stall`
+    // returns a stream whose `next_event` awaits a very long sleep —
+    // it never resolves naturally inside the test's 5s bound, so the
+    // only way it terminates is the planner's `tokio::select!` against
+    // `cancellation.cancelled()` at `llm_planner.rs:176` picking the
+    // cancel branch. `Final` returns a normal stream that yields one
+    // TextChunk and a terminal FinalMessage, the same shape used by
+    // `run_telegram_session_drives_two_scripted_turns` above.
+    enum Script {
+        Stall,
+        Final { chunks: Vec<String>, text: String },
+    }
+
+    struct ScriptedProvider {
+        queue: StdMutex<VecDeque<Script>>,
+        // Bumped the moment a stalling stream is constructed, so the
+        // watcher task can synchronize on "the first turn has begun
+        // awaiting a stream event" rather than a wall-clock guess.
+        stall_entered: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            assert!(
+                !request.messages.is_empty(),
+                "planner must always send non-empty history"
+            );
+            let script = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+            match script {
+                Script::Stall => {
+                    self.stall_entered.fetch_add(1, Ordering::SeqCst);
+                    Ok(Box::new(StallingStream))
+                }
+                Script::Final { chunks, text } => Ok(Box::new(FinalStream {
+                    events: chunks
+                        .into_iter()
+                        .map(LlmStreamEvent::TextChunk)
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                    terminal: Some(LlmStepEnd::FinalMessage {
+                        text,
+                        usage: LlmUsage::default(),
+                    }),
+                })),
+            }
+        }
+    }
+
+    /// Stream whose `next_event` awaits a sleep longer than any
+    /// reasonable test budget. Borrows the pattern from
+    /// `agent.rs:860`'s "blocks forever on next_event" test provider;
+    /// we use a very large `sleep` rather than `pending::<()>().await`
+    /// because a concrete future is easier to reason about under the
+    /// planner's `tokio::select!` against cancellation.
+    struct StallingStream;
+
+    #[async_trait]
+    impl LlmStream for StallingStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            // 60s — well past the 5s overall test timeout, well under
+            // the 120s core `TURN_TIMEOUT`. If the channel token is
+            // never cancelled (the bug this test guards against), the
+            // test's outer `tokio::time::timeout(5s)` fires first and
+            // the failure mode is "ran for 5s and panicked" rather
+            // than "slept for 120s and produced the wrong outcome."
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(None)
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            // Should never be called: the planner's cancellation
+            // branch wins before `next_event` returns.
+            Err(LlmError::StreamEnded(
+                "StallingStream::finish called — cancellation path did not interrupt the turn".into(),
+            ))
+        }
+    }
+
+    struct FinalStream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+    #[async_trait]
+    impl LlmStream for FinalStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal
+                .ok_or_else(|| LlmError::StreamEnded("FinalStream::finish double-called".into()))
+        }
+    }
+
+    // ---- Scratch storage ------------------------------------------
+    let tmp = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let parent = PathBuf::from(tmp).join(format!("aivyx-tg-task5-{pid}-{nanos}"));
+    std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+    let store_path = parent.join("store.redb");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path.clone()),
+        MasterKey::from_raw([9u8; 32]),
+    )
+    .await
+    .expect("scratch storage must open");
+
+    // ---- Wire provider + audit ------------------------------------
+    let stall_entered = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(
+            vec![
+                Script::Stall,
+                Script::Final {
+                    chunks: vec!["second turn ".into(), "completed".into()],
+                    text: "second turn completed".into(),
+                },
+            ]
+            .into(),
+        ),
+        stall_entered: Arc::clone(&stall_entered),
+    });
+    let audit_bridge = Arc::new(AuditBridge::new(HmacChainLog::new([43u8; 32].to_vec())));
+    let audit: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    // ---- Transport + pre-loaded updates ---------------------------
+    let transport = Arc::new(ScriptedTransport::new());
+    transport.push_update(IncomingMessage {
+        update_id: 100,
+        chat_id: 555,
+        user_id: 1,
+        text: "please stall".to_string(),
+    });
+    transport.push_update(IncomingMessage {
+        update_id: 101,
+        chat_id: 555,
+        user_id: 1,
+        text: "please reply normally".to_string(),
+    });
+
+    let channel = Arc::new(TelegramChannel::new(
+        "tg-task5-test",
+        555,
+        Arc::clone(&transport),
+    ));
+
+    let config = TelegramSessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "telegram cancel test".to_string(),
+        max_tokens: 128,
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(Vec::new())),
+        storage: Arc::clone(&storage),
+    };
+
+    // ---- Watcher: cancel the per-turn token once the stall begins -
+    //
+    // Synchronization point is deterministic: the watcher spins on
+    // `stall_entered.load()` until the scripted provider bumps it to
+    // 1 (meaning `chat_stream` returned `StallingStream` and the
+    // planner is now about to `await stream.next_event()` inside its
+    // `tokio::select!`). At that point cancelling the channel token
+    // wins the select and propagates into `TurnOutcome::Cancelled`.
+    //
+    // No wall-clock sleep here — the `yield_now` hand-off lets the
+    // provider task actually run between polls on a single-threaded
+    // runtime. If the provider path stops bumping the counter in a
+    // future refactor, the symptom is the watcher spinning forever,
+    // which the outer 5s timeout catches.
+    let channel_for_watcher = Arc::clone(&channel);
+    let stall_entered_watcher = Arc::clone(&stall_entered);
+    tokio::spawn(async move {
+        loop {
+            if stall_entered_watcher.load(Ordering::SeqCst) >= 1 {
+                // A tiny sleep so the planner has definitely reached
+                // the `tokio::select!` await before we cancel. Without
+                // it there's a race where the cancel could fire
+                // *before* the planner arms the select arm, which
+                // would still work via the top-of-loop check — but
+                // the mid-stream select path is the interesting one
+                // and this ensures we exercise it.
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                channel_for_watcher.cancellation_token().cancel();
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    // ---- Drive the session loop under the 5s overall bound --------
+    let shutdown = CancellationToken::new();
+    let report = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_telegram_session_with_transport(
+            Arc::clone(&channel),
+            config,
+            provider,
+            audit,
+            1, // long_poll_timeout_secs — short so the empty-batch
+               // wait after turn 2 wakes up quickly enough for the
+               // outer-loop shutdown check to fire.
+            shutdown.clone(),
+        ),
+    );
+
+    // Fire a secondary cancellation of `shutdown` a bit after the
+    // second send appears, to guarantee the session loop exits on
+    // the next top-of-loop check instead of waiting out another
+    // `long_poll_timeout_secs` iteration. This is the same pattern
+    // the Task 4 test uses against the channel token — here we use
+    // `shutdown` because the per-turn token slot will have been
+    // rotated by turn 2.
+    let transport_for_shutdown = Arc::clone(&transport);
+    let shutdown_for_task = shutdown.clone();
+    tokio::spawn(async move {
+        loop {
+            if transport_for_shutdown.sent_snapshot().len() >= 2 {
+                shutdown_for_task.cancel();
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let report = report
+        .await
+        .expect("run_telegram_session must exit within the 5-second test bound")
+        .expect("run_telegram_session must return Ok");
+
+    // ---- Assertions -----------------------------------------------
+    assert_eq!(
+        report.turns_run, 2,
+        "cancelled turn must still count, and the session loop must continue to drive turn 2 after the rotation"
+    );
+
+    let sent = transport.sent_snapshot();
+    assert_eq!(
+        sent.len(),
+        2,
+        "one cancelled turn + one completed turn = exactly two Telegram sends, got: {sent:?}"
+    );
+    assert_eq!(sent[0].chat_id, 555);
+    assert_eq!(sent[1].chat_id, 555);
+
+    // Turn 1: the cancelled-turn footer. `finalize_footer` renders
+    // `TurnOutcome::Cancelled` as `"\n✕ cancelled"`, so the sent
+    // payload ends with that marker. The check is `contains` rather
+    // than `ends_with` to stay robust against a future refactor that
+    // appends additional trailing metadata (e.g. a duration).
+    assert!(
+        sent[0].text.contains("✕ cancelled"),
+        "turn 1 must render as a cancelled outcome; got: {:?}",
+        sent[0].text
+    );
+
+    // Turn 2: proves the per-turn token rotation worked. A fresh
+    // uncancelled token was in place when turn 2 started, the scripted
+    // FinalMessage ran to completion, and the channel buffered the
+    // chunks into one send.
+    assert!(
+        sent[1].text.contains("second turn completed"),
+        "turn 2 must contain the second scripted final message; got: {:?}",
+        sent[1].text
+    );
+    // Turn 2 must NOT have a cancelled footer — a bug where the
+    // rotated token was still the cancelled clone would either emit
+    // Cancelled again here, or race and emit nothing.
+    assert!(
+        !sent[1].text.contains("✕ cancelled"),
+        "turn 2 must not carry a cancelled footer; got: {:?}",
+        sent[1].text
+    );
+
+    // ---- Cleanup --------------------------------------------------
+    let _ = std::fs::remove_dir_all(&parent);
+}

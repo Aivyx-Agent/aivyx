@@ -767,6 +767,178 @@ path exactly as before.
   consistency with the rest of the workspace — every other
   integration test hand-rolls its own scratch dir.
 
+## Task 5 — shipped (2026-04-14)
+
+**Landed:** 2026-04-14. Commit: _pending_.
+
+### The reframing: `aivyx-core` already shipped the timeout in Phase 3
+
+Task 5 opened with the prompt "what plays the role of `ctrl-C` for
+a Telegram turn?" and three candidates from the draft task list: a
+`/cancel` command (Option A), a wall-clock timeout (Option B), or a
+per-chat active-turn lock (Option C). The phase-entry leaning,
+captured in the initial session with the user, was "ship Option B
+now as a `turn_deadline: Option<Duration>` knob on
+`TelegramSessionConfig`, defer Option A to Phase 9."
+
+Reading `aivyx-core/src/agent.rs` before writing the knob flipped
+the plan. **A wall-clock deadline already exists inside
+`ConcreteAgent::turn`**:
+
+```rust
+// crates/aivyx-core/src/agent.rs:66
+pub const TURN_TIMEOUT: Duration = Duration::from_secs(120);
+```
+
+The turn loop (a) spawns a background `deadline_task` that sleeps
+for `TURN_TIMEOUT`, (b) sets a `deadline_fired` atomic flag and
+cancels the channel's cancellation token when the sleep fires, and
+(c) translates the resulting `LoopOutcome::TimedOut` into
+`TurnOutcome::TimedOut`. Every `ChannelContext` impl — Local and
+Telegram alike — has been covered by this since Phase 3 task 4.
+The Telegram `finalize_footer` already renders it as
+`"⏱ timed out after {elapsed:?}"` and the
+`finalize_footer_reflects_outcome` test in `tests.rs` has been
+pinning that rendering since Task 1.
+
+The core module doc is explicit about the design opinion: *"Follows
+the same 'const, not config knob' philosophy as
+`MAX_STEPS_PER_TURN`: a caller who needs a custom budget is almost
+certainly papering over a real bug."*
+
+Adding a `turn_deadline` knob to `TelegramSessionConfig` in the
+face of that finding would (a) duplicate machinery that already
+exists, (b) directly contradict core's stated design opinion, and
+(c) touch the session config surface for no production-visible
+benefit, since the 120s budget already prevents an LLM hang from
+wedging the bot forever. **The streak-preserving, honest move is
+to ship a regression test that proves the end-to-end cancel-and-
+continue flow works for the Telegram long-poll loop, and leave
+every production file untouched.**
+
+### What landed
+
+One new test in `crates/aivyx-telegram/src/tests.rs`:
+`run_telegram_session_cancelled_turn_renders_and_continues`.
+
+It drives `run_telegram_session_with_transport` through two
+inbound updates:
+
+1. **Turn 1 stalls mid-stream.** A scripted `StallingStream`
+   returns from `LlmStream::next_event` via a 60-second sleep —
+   well past the test's 5s overall bound, so the only way the
+   turn terminates is the planner's `tokio::select!` at
+   `llm_planner.rs:176` picking the cancellation branch. A watcher
+   task deterministically fires the cancel: it spins on an
+   `AtomicUsize` that the scripted provider bumps when the
+   stalling stream is constructed, waits ~10ms for the planner to
+   arm its select arm, then calls
+   `channel.cancellation_token().cancel()`. This is exactly what
+   the core `deadline_task` would do internally at the 120s mark,
+   just triggered without waiting 120 real seconds.
+2. **Turn 2 is a normal scripted `FinalMessage`.** Proves the per-
+   turn token rotation the session loop does via
+   `channel.reset_cancellation()` actually works for Telegram,
+   the same way Phase 3's fix works for `LocalChannel`.
+
+Assertions (in order of what they prove, each failure mode loud):
+
+- `report.turns_run == 2` — the cancelled turn counts, and the
+  session loop continued.
+- Exactly two `send_message` calls on the scripted transport.
+- The first send contains `"✕ cancelled"` — the
+  `TurnOutcome::Cancelled` footer from `telegram_channel.rs:189`,
+  confirming the agent translated the cancel cleanly and the
+  channel rendered it.
+- The second send contains the scripted `"second turn completed"`
+  text and does **not** carry the cancelled footer — proving the
+  rotation actually put a fresh token in the slot.
+
+If a future phase breaks any of this, the failure mode is either
+"test takes 5s and panics on the outer `tokio::time::timeout`"
+(cancellation path gone) or "send count is 1 not 2" (loop exited
+early after the cancel). Both are obvious.
+
+### Option A (`/cancel` in-band) — deferred to Phase 9
+
+The `/cancel` command is a UX feature, and the Phase 8 non-goals
+list already defers rich UX. But the deeper reason to defer is a
+real design constraint surfaced during Task 5 prep that deserves
+its own task: **Telegram rejects concurrent `getUpdates` on one
+bot token with 409 Conflict**, which means a naive "keep polling
+while the turn runs" design does not work. The viable design —
+structure each turn as a `tokio::select!` between
+`agent.turn(...)` and a short-timeout `get_updates` scanning arm,
+with careful offset interleaving — is big enough to be its own
+task, not a sub-bullet of Task 5. Full sketch in the new Q8
+below.
+
+### Validation
+
+`cargo test --workspace` = 305 passed, 0 failed, 1 ignored (304
+→ 305). `cargo build --workspace` clean, zero warnings. The new
+test runs in ~1.1s wall-clock — the same order of magnitude as
+Task 4's test, dominated by the watcher's 10ms settle sleep plus
+the post-turn `long_poll_timeout_secs=1` wait before `shutdown`
+propagates.
+
+### Streak impact: the streak holds at eight, and Task 5 is a no-production-file ship.
+
+Task 5 edits **one file** — `crates/aivyx-telegram/src/tests.rs`
+(one new `#[tokio::test]`) — plus this PHASE_8.md ship record.
+No edits to `aivyx-core`, `aivyx-capability`, `aivyx-channel`,
+`session.rs`, `telegram_channel.rs`, `transport.rs`,
+`aivyx-telegram/src/lib.rs`, the binary, any Cargo.toml, or
+`docs/DESIGN.md`. The aivyx-core 8-phase empty-diff streak is not
+only preserved — it's *demonstrated*: Task 5 was originally
+planned as a `TelegramSessionConfig` surface change, and the
+process of reading the existing code honestly turned it into a
+regression test for machinery core already owns.
+
+### Other Task 5 sub-decisions
+
+- **Deterministic sync via `AtomicUsize`, not wall-clock.** The
+  watcher could have used `tokio::time::sleep(50ms)` to give turn
+  1 time to start and then cancel. That would still have worked
+  (the session loop's top-of-iteration cancellation check would
+  have caught the cancel and exited as `Cancelled`), but it would
+  have exercised the *top-of-loop* cancellation path, not the
+  mid-stream `tokio::select!` at `llm_planner.rs:176`. The
+  in-stream path is the interesting one — it's how the core
+  deadline task's cancel actually interrupts an LLM that's
+  mid-completion — and the `AtomicUsize` + `yield_now` spin makes
+  the test deterministically exercise it.
+- **Short-sleep settle before cancelling.** After
+  `stall_entered.load() >= 1`, the watcher sleeps 10ms before
+  cancelling. Not load-bearing for correctness — the cancel would
+  win either way — but it ensures the planner has actually
+  *armed* its select arm on `next_event()` before the cancel
+  fires, rather than racing the cancel against the provider's
+  task startup. In a future refactor that changes the planner's
+  await order, this sleep is the difference between "we prove
+  the select arm works" and "we prove some cancellation path
+  works."
+- **60s stall vs. `future::pending`.** The `StallingStream`
+  uses `tokio::time::sleep(Duration::from_secs(60))` rather than
+  `std::future::pending::<()>().await`. `pending` is the shorter
+  spelling, but a concrete future with a wall-clock bound fails
+  more visibly if the cancellation path ever breaks: instead of
+  "test hangs forever," the symptom becomes "test takes 5s on
+  the outer timeout" (still loud) *or* "test takes 60s and
+  produces wrong outcome" (still loud, but finite). Concrete
+  wall-clock > open-ended `pending` for failure-mode legibility.
+- **Fresh audit + fresh scratch store path.** `[43u8; 32]` vs.
+  Task 4's `[42u8; 32]` HMAC seed; `aivyx-tg-task5-...` vs.
+  Task 4's `aivyx-tg-task4-...` scratch dir. No state collision
+  with Task 4's test means the two can run in parallel under
+  `cargo test --test-threads=...` without fighting.
+- **Two-stage cancel (channel token, then shutdown token).** The
+  test cancels the channel's per-turn token to fire turn 1's
+  `Cancelled` outcome, then cancels the `shutdown` token once
+  the second send appears to make the session loop exit
+  promptly. Mirrors the two-token design from Task 4 exactly —
+  one for per-turn cancellation, one for process-wide shutdown.
+
 ## Open questions
 
 ### Q1. Where does the Telegram bot token live?
@@ -1023,6 +1195,108 @@ the Telegram API's edge cases (rate-limiting, retry,
 to re-implement whatever slice of that surface it ends up
 needing. If three of those edge cases get hit during Task 1,
 the leaning flips.
+
+### Q8. User-initiated cancel (`/cancel` command) over Telegram
+
+**Status:** deferred to Phase 9 as the explicit follow-up to
+Task 5 (2026-04-14). Design sketch below so Phase 9 has a
+starting point.
+
+Task 5's finding was that `aivyx-core` already owns a hardcoded
+120s `TURN_TIMEOUT`, which covers the **infrastructure** failure
+mode (LLM hang, rate-limit stall, mid-stream network wedge) for
+every channel. What that does *not* give Telegram specifically
+is the **user affordance** — a way for a user who realizes they
+asked for the wrong thing to interrupt a running turn without
+waiting two minutes. That's Option A from the original Task 5
+candidate list: a `/cancel` command observed by the session loop,
+which cancels the channel's per-turn token.
+
+The hard constraint that makes this its own task:
+
+> **Telegram rejects concurrent `getUpdates` calls on one bot
+> token with 409 Conflict.**
+
+Which means the obvious design — "keep polling for `/cancel`
+while the turn is running" — cannot be implemented as two
+concurrent `get_updates` futures. It has to be *one* poll,
+structured as a `tokio::select!` between `agent.turn(...)` and a
+short-timeout `get_updates` scanning arm, with careful handling
+of two interleavings:
+
+1. **Turn finishes first.** Normal path: `agent.turn` returns,
+   the scanning poll is aborted mid-flight, the main loop does
+   its usual `reset_cancellation` + next-turn shape. But: what
+   about any updates the aborted scan *had already received*
+   from the server? The `getUpdates` offset semantics mean that
+   updates returned in a batch are *not* acked until the next
+   poll with a higher `offset` — so as long as the next main-
+   loop poll advances the cursor correctly, the updates reappear
+   in the next batch. Requires that the scanning arm doesn't
+   advance the channel-owned offset counter; it only scans a
+   *read-only copy* and reports "I saw /cancel at update_id N"
+   or "no /cancel in this batch."
+2. **Scan finds `/cancel` first.** Cancel branch: cancel the
+   channel token, `agent.turn` returns `Cancelled`, the finalize
+   path renders `"✕ cancelled"` to the user. But: the `/cancel`
+   message itself has a `update_id` that must not be redelivered
+   next poll. The main loop's cursor has to advance past
+   `/cancel.update_id` on the next `get_updates` call —
+   otherwise the cancelled turn's finalize runs, and then the
+   main loop re-polls and sees `/cancel` *again* and tries to
+   cancel a turn that already finished.
+
+Both sides converge on: **the scanning arm must return its
+findings (including the highest `update_id` it saw) to the main
+loop, which then threads that into its next-poll cursor.** The
+data shape is something like:
+
+```rust
+enum ScanResult {
+    NoCancel { max_update_id: Option<i64> },
+    FoundCancel { cancel_update_id: i64, other_updates: Vec<IncomingMessage> },
+}
+```
+
+`other_updates` matters because a batch could contain both
+`/cancel` *and* a follow-up regular message — Phase 9 has to
+decide whether to queue those for the next turn or drop them
+and let Telegram redeliver. Queueing is better UX; redelivery
+is simpler. The Phase 9 task description should call this out
+explicitly.
+
+Short-timeout for the scanning poll: probably ~2 seconds.
+Long enough that a user typing `/cancel` during a 30-second
+turn has multiple scan iterations to land on, short enough
+that a normal fast turn doesn't pay a noticeable wait cost
+when the turn finishes between scans. Adjustable via config if
+necessary.
+
+**Phase 9 task sketch:**
+
+1. Upgrade `run_telegram_session_with_transport` to run each
+   turn as `tokio::select!(agent.turn, scan_for_cancel)` with
+   a ~2s `scan_for_cancel` that wraps a short-timeout
+   `get_updates` call.
+2. Thread the scan's result into the main loop's cursor so no
+   update is redelivered or lost.
+3. Add a private `ScanResult` enum + a `scan_for_cancel`
+   helper; the main loop consumes its result and reshuffles
+   queued updates.
+4. Unit test: scripted transport with turn that stalls, inject
+   `/cancel` into the update queue, assert the turn finishes
+   as `Cancelled` and the cursor advances past the `/cancel`
+   `update_id`.
+5. Unit test: turn finishes before any scan finds `/cancel`,
+   updates arrived during the scan are preserved and drive
+   the next turn.
+6. Optional: a sub-120s user-configurable deadline knob on
+   `TelegramSessionConfig`, if a real UX requirement surfaces
+   in Phase 9 that the 120s core budget doesn't cover. Note
+   that this contradicts core's "const, not config" design
+   opinion — shipping it requires either a DESIGN.md amendment
+   or a convincing product argument, and the streak may break
+   there.
 
 ## Exit criteria (draft — revised as work lands)
 
