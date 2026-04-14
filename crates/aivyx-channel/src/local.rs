@@ -40,11 +40,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
+use aivyx_capability::TrustTier;
 use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId, StreamEvent,
-    TurnOutcome, TurnOutcomeSummary,
+    TurnOutcome,
 };
-use aivyx_capability::TrustTier;
+
+use crate::render::{render_finalize, render_stream_event, RenderMode};
 
 /// A CLI `ChannelContext` that streams turn output to a synchronous
 /// writer.
@@ -112,27 +114,8 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
             .lock()
             .map_err(|e| ChannelError::Send(format!("LocalChannel writer poisoned: {e}")))?;
 
-        let write_result = match event {
-            StreamEvent::Text(chunk) => writer.write_all(chunk.as_bytes()),
-            StreamEvent::Status(msg) => writeln!(writer, "\n  · {msg}"),
-            StreamEvent::ToolCallStarted { tool, input } => {
-                writeln!(writer, "\n  → tool[{tool:?}] {input}")
-            }
-            StreamEvent::ToolCallFinished {
-                tool,
-                outcome_summary,
-            } => writeln!(writer, "  ← tool[{tool:?}] {outcome_summary}"),
-            StreamEvent::Attachment { kind, data, filename } => {
-                let name = filename.unwrap_or("<unnamed>");
-                writeln!(
-                    writer,
-                    "\n  ⎘ attachment[{kind:?}] {name} ({} bytes)",
-                    data.len()
-                )
-            }
-        };
-
-        write_result.map_err(|e| ChannelError::Send(format!("LocalChannel write failed: {e}")))?;
+        render_stream_event(RenderMode::Human, &mut *writer, &event)
+            .map_err(|e| ChannelError::Send(format!("LocalChannel write failed: {e}")))?;
         writer
             .flush()
             .map_err(|e| ChannelError::Send(format!("LocalChannel flush failed: {e}")))?;
@@ -146,16 +129,7 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
             .lock()
             .map_err(|e| ChannelError::Send(format!("LocalChannel writer poisoned: {e}")))?;
 
-        let summary = TurnOutcomeSummary::from(outcome);
-        let marker = match summary {
-            TurnOutcomeSummary::Completed => "completed",
-            TurnOutcomeSummary::Escalated => "escalated",
-            TurnOutcomeSummary::TimedOut => "timed out",
-            TurnOutcomeSummary::Cancelled => "cancelled",
-            TurnOutcomeSummary::Failed => "failed",
-        };
-
-        writeln!(writer, "\n[turn {marker}]")
+        render_finalize(RenderMode::Human, &mut *writer, outcome)
             .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
         writer
             .flush()
@@ -175,9 +149,14 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
 
 #[cfg(test)]
 mod tests {
+    //! Tests here focus on what `LocalChannel` *specifically owns* —
+    //! metadata, session stability, cancellation, and the flush-per-
+    //! chunk guarantee. Per-variant render format is covered by the
+    //! `render` module's own tests (`render::tests`). One end-to-end
+    //! delegation smoke test proves the channel actually calls the
+    //! renderer.
+
     use super::*;
-    use aivyx_core::{AivyxError, ToolId};
-    use serde_json::json;
 
     /// Build a `LocalChannel` wrapped around an in-memory byte sink,
     /// plus the shared handle the test uses to read back what was
@@ -209,113 +188,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_chunks_are_written_verbatim_in_order() {
+    async fn stream_event_delegates_to_renderer() {
+        // One integration smoke test proving the channel's
+        // stream_event + finalize actually call through the render
+        // module. Detailed per-variant format assertions live in
+        // `render::tests`.
         let (channel, handle) = mem_channel();
-
         channel
-            .stream_event(StreamEvent::Text("Hello, "))
+            .stream_event(StreamEvent::Text("hello "))
             .await
             .unwrap();
         channel
-            .stream_event(StreamEvent::Text("world!"))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            read_output(&handle),
-            "Hello, world!",
-            "text chunks should be concatenated verbatim — no added whitespace"
-        );
-    }
-
-    #[tokio::test]
-    async fn tool_call_markers_are_distinct_from_text() {
-        let (channel, handle) = mem_channel();
-        let tool = ToolId::new();
-
-        channel
-            .stream_event(StreamEvent::Text("thinking…"))
+            .stream_event(StreamEvent::Text("world"))
             .await
             .unwrap();
         channel
-            .stream_event(StreamEvent::ToolCallStarted {
-                tool,
-                input: &json!({"topic": "todos"}),
+            .finalize(&TurnOutcome::Completed {
+                final_message: "hello world".into(),
+                tool_calls_made: 0,
+                duration: std::time::Duration::from_millis(1),
             })
-            .await
-            .unwrap();
-        channel
-            .stream_event(StreamEvent::ToolCallFinished {
-                tool,
-                outcome_summary: "completed (2 items)",
-            })
-            .await
-            .unwrap();
-        channel
-            .stream_event(StreamEvent::Text("here's what I found."))
             .await
             .unwrap();
 
         let out = read_output(&handle);
-        assert!(out.starts_with("thinking…"), "text prefix preserved");
-        assert!(
-            out.contains("→ tool["),
-            "tool-start marker should appear: {out:?}"
-        );
-        assert!(
-            out.contains("← tool["),
-            "tool-end marker should appear: {out:?}"
-        );
-        assert!(
-            out.contains("completed (2 items)"),
-            "outcome summary should be rendered: {out:?}"
-        );
-        assert!(out.ends_with("here's what I found."), "trailing text preserved");
-    }
-
-    #[tokio::test]
-    async fn status_events_render_with_prefix() {
-        let (channel, handle) = mem_channel();
-        channel
-            .stream_event(StreamEvent::Status("retrying"))
-            .await
-            .unwrap();
-        assert!(read_output(&handle).contains("· retrying"));
-    }
-
-    #[tokio::test]
-    async fn finalize_completed_writes_marker() {
-        let (channel, handle) = mem_channel();
-        let outcome = TurnOutcome::Completed {
-            final_message: "done".to_string(),
-            tool_calls_made: 0,
-            duration: std::time::Duration::from_millis(1),
-        };
-        channel.finalize(&outcome).await.unwrap();
-        let out = read_output(&handle);
+        assert!(out.starts_with("hello world"), "text was relayed: {out:?}");
         assert!(
             out.ends_with("[turn completed]\n"),
-            "finalize should end with the completion marker, got {out:?}"
+            "finalize marker was relayed: {out:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn finalize_cancelled_and_failed_write_distinct_markers() {
-        let (channel_a, handle_a) = mem_channel();
-        channel_a
-            .finalize(&TurnOutcome::Cancelled {
-                tool_calls_made: 0,
-            })
-            .await
-            .unwrap();
-        assert!(read_output(&handle_a).contains("[turn cancelled]"));
-
-        let (channel_b, handle_b) = mem_channel();
-        channel_b
-            .finalize(&TurnOutcome::Failed(AivyxError::Internal("boom".into())))
-            .await
-            .unwrap();
-        assert!(read_output(&handle_b).contains("[turn failed]"));
     }
 
     #[tokio::test]

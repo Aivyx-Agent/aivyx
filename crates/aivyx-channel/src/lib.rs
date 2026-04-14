@@ -29,4 +29,7 @@ pub use aivyx_core::{
 };
 
 mod local;
+mod render;
+
 pub use local::LocalChannel;
+pub use render::{render_finalize, render_stream_event, RenderMode};

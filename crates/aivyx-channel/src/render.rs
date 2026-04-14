@@ -1,0 +1,305 @@
+//! `StreamEvent` → terminal bytes.
+//!
+//! This module holds the pure rendering logic for the CLI channel:
+//! given a `StreamEvent` (or a `TurnOutcome` at finalize time) and a
+//! mutable `Write` sink, produce the human-readable bytes a user
+//! should see.
+//!
+//! ## Why it's its own module
+//!
+//! Task 1 inlined the rendering into `LocalChannel::stream_event` /
+//! `finalize`. That worked but mixed three concerns: locking the
+//! writer, deciding *what bytes* each variant should produce, and
+//! flushing so tokens appear as they arrive. Task 2 factors the middle
+//! concern out so that:
+//!
+//! - **Rendering can be tested without async or mutex machinery.** A
+//!   test feeds a `&mut Vec<u8>` in and asserts the bytes that come
+//!   out. No `#[tokio::test]`, no `Arc<Mutex<>>`, no writer handle
+//!   gymnastics.
+//! - **A future machine-oriented channel can reuse the same renderer**
+//!   with a different output mode. For now there's only a human mode
+//!   (what the CLI prints); a JSON-lines mode for programmatic
+//!   consumers is a natural extension of the same module, not a new
+//!   channel.
+//! - **Display-format tweaks (colors, compact mode, tool-name
+//!   lookup) land in one place** — they don't leak into the
+//!   `ChannelContext` impl, so the channel layer stays about
+//!   lifecycle and the render layer stays about bytes.
+//!
+//! ## What this module does *not* do
+//!
+//! - It does not flush. The caller decides when partial output should
+//!   be pushed to the terminal; the renderer only writes.
+//! - It does not lock. If the sink needs synchronization, the caller
+//!   holds the mutex.
+//! - It does not resolve `ToolId` → tool name. The current
+//!   `StreamEvent::ToolCallStarted` variant (per `DESIGN.md` D3)
+//!   carries only `tool: ToolId`, not a human name. The renderer
+//!   therefore displays a short UUID prefix (`tool[a1b2c3d4]`) —
+//!   ugly but unambiguous and dependency-free. Adding a name would
+//!   require a contract amendment and belongs in a future phase if
+//!   the CLI ergonomics prove painful.
+
+use std::io::{self, Write};
+
+use aivyx_core::{StreamEvent, TurnOutcome, TurnOutcomeSummary};
+
+/// How the renderer should format output. For now there's only one
+/// mode (`Human`). A `JsonLines` or `Compact` mode would be a new
+/// enum variant plus a new match arm in each render function, not a
+/// new module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    /// Human-readable: text chunks verbatim, tool calls as single-
+    /// line arrow markers, outcomes as bracketed status lines.
+    Human,
+}
+
+/// Render a single `StreamEvent` into the given sink.
+///
+/// Does not flush. The caller is responsible for calling `flush()`
+/// after each call if partial output should be visible immediately —
+/// which is exactly what `LocalChannel::stream_event` does.
+pub fn render_stream_event(
+    mode: RenderMode,
+    w: &mut dyn Write,
+    event: &StreamEvent<'_>,
+) -> io::Result<()> {
+    match mode {
+        RenderMode::Human => render_stream_event_human(w, event),
+    }
+}
+
+/// Render the finalization marker for a completed turn.
+pub fn render_finalize(
+    mode: RenderMode,
+    w: &mut dyn Write,
+    outcome: &TurnOutcome,
+) -> io::Result<()> {
+    match mode {
+        RenderMode::Human => render_finalize_human(w, outcome),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Human renderer
+// ---------------------------------------------------------------------------
+
+fn render_stream_event_human(w: &mut dyn Write, event: &StreamEvent<'_>) -> io::Result<()> {
+    match *event {
+        StreamEvent::Text(chunk) => w.write_all(chunk.as_bytes()),
+        StreamEvent::Status(msg) => writeln!(w, "\n  · {msg}"),
+        StreamEvent::ToolCallStarted { tool, input } => {
+            writeln!(w, "\n  → tool[{}] {input}", short_id(tool.to_string()))
+        }
+        StreamEvent::ToolCallFinished {
+            tool,
+            outcome_summary,
+        } => writeln!(
+            w,
+            "  ← tool[{}] {outcome_summary}",
+            short_id(tool.to_string())
+        ),
+        StreamEvent::Attachment {
+            kind,
+            data,
+            filename,
+        } => {
+            let name = filename.unwrap_or("<unnamed>");
+            writeln!(
+                w,
+                "\n  ⎘ attachment[{kind:?}] {name} ({} bytes)",
+                data.len()
+            )
+        }
+    }
+}
+
+fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result<()> {
+    let summary = TurnOutcomeSummary::from(outcome);
+    let marker = match summary {
+        TurnOutcomeSummary::Completed => "completed",
+        TurnOutcomeSummary::Escalated => "escalated",
+        TurnOutcomeSummary::TimedOut => "timed out",
+        TurnOutcomeSummary::Cancelled => "cancelled",
+        TurnOutcomeSummary::Failed => "failed",
+    };
+    writeln!(w, "\n[turn {marker}]")
+}
+
+/// Take the first eight characters of a UUID string. The full UUID is
+/// 36 characters and extremely noisy in a terminal; the first 8 hex
+/// chars are enough to disambiguate at human scale. If anyone ever
+/// hands us a non-UUID ID, this still behaves — we're just slicing a
+/// string by char count.
+fn short_id(id: String) -> String {
+    id.chars().take(8).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aivyx_core::{AivyxError, AttachmentKind, ToolId};
+    use serde_json::json;
+    use std::time::Duration;
+
+    /// Drive a single `StreamEvent` through the human renderer and
+    /// return what was written. No async, no locks.
+    fn render_one(event: StreamEvent<'_>) -> String {
+        let mut buf = Vec::<u8>::new();
+        render_stream_event(RenderMode::Human, &mut buf, &event).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn render_final(outcome: &TurnOutcome) -> String {
+        let mut buf = Vec::<u8>::new();
+        render_finalize(RenderMode::Human, &mut buf, outcome).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn text_is_written_verbatim_with_no_decoration() {
+        assert_eq!(render_one(StreamEvent::Text("hello")), "hello");
+        assert_eq!(render_one(StreamEvent::Text("")), "");
+        assert_eq!(
+            render_one(StreamEvent::Text("multi\nline\n")),
+            "multi\nline\n",
+            "newlines inside a text chunk should be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn status_renders_with_dot_prefix_on_its_own_line() {
+        let out = render_one(StreamEvent::Status("thinking"));
+        assert!(
+            out.starts_with('\n'),
+            "status should start with a leading newline so it breaks from any in-flight text: {out:?}"
+        );
+        assert!(out.contains("· thinking"), "got {out:?}");
+        assert!(out.ends_with('\n'), "status should end with a newline");
+    }
+
+    #[test]
+    fn tool_call_started_uses_short_id_and_arrow() {
+        let tool = ToolId::new();
+        let input = json!({"topic": "todos"});
+        let out = render_one(StreamEvent::ToolCallStarted {
+            tool,
+            input: &input,
+        });
+
+        let expected_prefix: String = tool.to_string().chars().take(8).collect();
+        assert!(
+            out.contains(&format!("→ tool[{expected_prefix}]")),
+            "should contain short-id marker with arrow, got {out:?}"
+        );
+        assert!(
+            out.contains("\"topic\":\"todos\""),
+            "JSON input should be rendered: {out:?}"
+        );
+        assert!(
+            !out.contains(&tool.to_string()),
+            "full UUID should NOT appear — short id only: {out:?}"
+        );
+    }
+
+    #[test]
+    fn tool_call_finished_uses_reverse_arrow() {
+        let tool = ToolId::new();
+        let out = render_one(StreamEvent::ToolCallFinished {
+            tool,
+            outcome_summary: "completed (2 items)",
+        });
+        assert!(out.contains("← tool["), "got {out:?}");
+        assert!(out.contains("completed (2 items)"), "got {out:?}");
+    }
+
+    #[test]
+    fn attachment_renders_byte_count_and_filename() {
+        let out = render_one(StreamEvent::Attachment {
+            kind: AttachmentKind::Image { mime: "image/png" },
+            data: &[0u8; 1234],
+            filename: Some("screenshot.png"),
+        });
+        assert!(out.contains("screenshot.png"), "got {out:?}");
+        assert!(out.contains("1234 bytes"), "got {out:?}");
+    }
+
+    #[test]
+    fn attachment_without_filename_shows_placeholder() {
+        let out = render_one(StreamEvent::Attachment {
+            kind: AttachmentKind::File { mime: "text/plain" },
+            data: &[0u8; 10],
+            filename: None,
+        });
+        assert!(out.contains("<unnamed>"), "got {out:?}");
+    }
+
+    #[test]
+    fn finalize_renders_completed_marker() {
+        let out = render_final(&TurnOutcome::Completed {
+            final_message: "done".into(),
+            tool_calls_made: 0,
+            duration: Duration::from_millis(1),
+        });
+        assert_eq!(out, "\n[turn completed]\n");
+    }
+
+    #[test]
+    fn finalize_renders_all_five_outcome_kinds_distinctly() {
+        let completed = render_final(&TurnOutcome::Completed {
+            final_message: String::new(),
+            tool_calls_made: 0,
+            duration: Duration::ZERO,
+        });
+        let escalated = render_final(&TurnOutcome::Escalated {
+            reason: "needs kernel".into(),
+            pending_tool: ToolId::new(),
+            tool_calls_made: 0,
+        });
+        let timed_out = render_final(&TurnOutcome::TimedOut {
+            tool_calls_made: 0,
+            elapsed: Duration::ZERO,
+        });
+        let cancelled = render_final(&TurnOutcome::Cancelled {
+            tool_calls_made: 0,
+        });
+        let failed = render_final(&TurnOutcome::Failed(AivyxError::Internal("boom".into())));
+
+        assert!(completed.contains("[turn completed]"));
+        assert!(escalated.contains("[turn escalated]"));
+        assert!(timed_out.contains("[turn timed out]"));
+        assert!(cancelled.contains("[turn cancelled]"));
+        assert!(failed.contains("[turn failed]"));
+
+        // All five markers must be distinct — otherwise the user
+        // can't tell why a turn ended.
+        let all = [completed, escalated, timed_out, cancelled, failed];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "markers {i} and {j} must differ");
+            }
+        }
+    }
+
+    #[test]
+    fn short_id_truncates_full_uuid_to_eight_chars() {
+        let tool = ToolId::new();
+        let full = tool.to_string();
+        assert_eq!(full.len(), 36, "UUIDs should be 36 chars");
+        let short = short_id(full.clone());
+        assert_eq!(short.len(), 8);
+        assert_eq!(short, full[..8]);
+    }
+
+    #[test]
+    fn short_id_handles_string_shorter_than_eight_chars() {
+        assert_eq!(short_id("abc".to_string()), "abc");
+        assert_eq!(short_id(String::new()), "");
+    }
+}
