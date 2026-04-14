@@ -116,7 +116,7 @@ use aivyx_memory::{
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
-use aivyx_telegram::{run_telegram_session, TelegramSessionConfig};
+use aivyx_telegram::{run_telegram_multi_session, TelegramSessionConfig};
 
 const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -154,31 +154,34 @@ fn run() -> Result<(), String> {
     // `KeyDomain::Secrets` was considered and deferred to Phase 9, at
     // which point the binary will grow a `aivyx secrets set` surface.
     //
-    // `AIVYX_TELEGRAM_CHAT_ID` scopes the bot to a single chat
-    // (Phase 8's one-channel-per-chat simplification — see Task 1's
-    // PHASE_8.md ship record). Multi-chat pumping is a Phase 9 concern.
-    let telegram_cfg: Option<(SecretString, i64)> = if matches!(channel_kind, ChannelKind::Telegram)
-    {
-        let token_raw = std::env::var("AIVYX_TELEGRAM_TOKEN").map_err(|_| {
-            "AIVYX_TELEGRAM_TOKEN is not set. Export it and retry: \
-             `export AIVYX_TELEGRAM_TOKEN=<bot-token-from-@BotFather>`"
-                .to_string()
-        })?;
-        let chat_id_raw = std::env::var("AIVYX_TELEGRAM_CHAT_ID").map_err(|_| {
-            "AIVYX_TELEGRAM_CHAT_ID is not set. Export it and retry: \
-             `export AIVYX_TELEGRAM_CHAT_ID=<telegram-chat-id>` \
-             (ask @RawDataBot in Telegram for your chat id)"
-                .to_string()
-        })?;
-        let chat_id: i64 = chat_id_raw.parse().map_err(|e| {
-            format!(
-                "AIVYX_TELEGRAM_CHAT_ID is set to {chat_id_raw:?} which is not a valid i64: {e}"
-            )
-        })?;
-        Some((SecretString::from(token_raw), chat_id))
-    } else {
-        None
-    };
+    // `AIVYX_TELEGRAM_CHAT_ID` was required in Phase 8 (one-channel-
+    // per-chat). Phase 9 Task 2 makes it **optional**: when set, the
+    // multi-chat multiplexer filters inbound updates to that single
+    // chat (Phase 8 compatibility — the bot only responds to the one
+    // allowed chat); when unset, the multiplexer accepts every chat
+    // the bot is in and lazy-spawns a per-chat session task for each.
+    let telegram_cfg: Option<(SecretString, Option<i64>)> =
+        if matches!(channel_kind, ChannelKind::Telegram) {
+            let token_raw = std::env::var("AIVYX_TELEGRAM_TOKEN").map_err(|_| {
+                "AIVYX_TELEGRAM_TOKEN is not set. Export it and retry: \
+                 `export AIVYX_TELEGRAM_TOKEN=<bot-token-from-@BotFather>`"
+                    .to_string()
+            })?;
+            let chat_filter: Option<i64> = match std::env::var("AIVYX_TELEGRAM_CHAT_ID") {
+                Ok(raw) => {
+                    let chat_id: i64 = raw.parse().map_err(|e| {
+                        format!(
+                            "AIVYX_TELEGRAM_CHAT_ID is set to {raw:?} which is not a valid i64: {e}"
+                        )
+                    })?;
+                    Some(chat_id)
+                }
+                Err(_) => None,
+            };
+            Some((SecretString::from(token_raw), chat_filter))
+        } else {
+            None
+        };
 
     // ---- Config -------------------------------------------------------
     // `ANTHROPIC_API_KEY` is only required for the normal session path.
@@ -582,7 +585,7 @@ async fn run_async(
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
     channel_kind: ChannelKind,
-    telegram_cfg: Option<(SecretString, i64)>,
+    telegram_cfg: Option<(SecretString, Option<i64>)>,
 ) -> Result<(), String> {
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -749,7 +752,7 @@ async fn run_async(
         ChannelKind::Telegram => {
             // Unwrap is safe: `run()` populates `telegram_cfg` on
             // exactly the `ChannelKind::Telegram` path.
-            let (token_secret, chat_id) = telegram_cfg
+            let (token_secret, chat_filter) = telegram_cfg
                 .expect("telegram_cfg is Some whenever channel_kind is Telegram");
 
             // Signal handler (telegram): a single `shutdown`
@@ -775,14 +778,18 @@ async fn run_async(
             // confirmation it's alive. The Telegram chat itself gets
             // nothing at startup — the first user message is the
             // implicit "session started" affordance.
+            let chat_scope_label: String = match chat_filter {
+                Some(chat_id) => format!("chat_id: {chat_id} (single-chat mode)"),
+                None => "chat_id: <any> (multi-chat mode)".to_string(),
+            };
             eprintln!(
                 "aivyx {} — telegram bot live\n\
-                 chat_id: {}\n\
+                 {}\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
                  audit: persistent ({} events verified from disk)",
                 env!("CARGO_PKG_VERSION"),
-                chat_id,
+                chat_scope_label,
                 canonical_root.display(),
                 verified_event_count,
             );
@@ -801,10 +808,10 @@ async fn run_async(
                 tools,
                 storage,
             };
-            run_telegram_session(
+            run_telegram_multi_session(
                 "aivyx-telegram",
                 token_secret.expose_secret(),
-                chat_id,
+                chat_filter,
                 telegram_config,
                 provider,
                 audit,

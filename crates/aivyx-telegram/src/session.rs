@@ -86,9 +86,12 @@
 //! multi-chat pump that spawns one `TelegramChannel` per chat_id and
 //! routes accordingly is a Phase 9 concern.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use aivyx_capability::CapabilitySet;
 use aivyx_core::{
@@ -111,6 +114,7 @@ use crate::transport::{IncomingMessage, ReqwestTransport, TelegramTransport, Tra
 /// `SessionConfig`. A future refactor that extracts the shared shape
 /// into a third crate would collapse both into one type without
 /// touching any call sites.
+#[derive(Clone)]
 pub struct TelegramSessionConfig {
     pub model: String,
     pub system_prompt: String,
@@ -281,6 +285,30 @@ async fn scan_for_cancel<T: TelegramTransport + ?Sized>(
 pub struct TelegramSessionReport {
     /// Number of inbound text messages that drove a turn to completion.
     pub turns_run: usize,
+}
+
+/// Phase 9 Task 2 multi-chat report. One aivyx process can now drive N
+/// chats concurrently through a single outer multiplexer; this report
+/// collapses each inner task's [`TelegramSessionReport`] into a per-
+/// chat map plus a total.
+///
+/// The per-chat map key is `chat_id`. A chat appears in the map iff an
+/// inner task was spawned for it during the session — chats that never
+/// sent a message never incur an entry, which matches the lazy-spawn
+/// policy in the multiplexer.
+#[derive(Debug, Clone, Default)]
+pub struct TelegramMultiSessionReport {
+    /// Per-chat turn counts, keyed on `chat_id`.
+    pub turns_by_chat: HashMap<i64, usize>,
+}
+
+impl TelegramMultiSessionReport {
+    /// Sum of all per-chat `turns_run` values. Useful for tests and
+    /// for operator-facing "how many turns did this process serve"
+    /// logs without having to spell out the full map shape.
+    pub fn total_turns(&self) -> usize {
+        self.turns_by_chat.values().sum()
+    }
 }
 
 /// Drive a Telegram session to completion against a real bot token.
@@ -626,4 +654,440 @@ where
         };
         turns_run += 1;
     }
+}
+
+// ============================================================================
+// Phase 9 Task 2 — multi-chat pumping
+// ============================================================================
+//
+// Everything below this line is the multi-chat path. The single-chat
+// [`run_telegram_session_with_transport`] above is left structurally
+// untouched so Phase 8's test suite keeps passing verbatim — zero
+// regression risk on the Phase 8 cancel/finalize/scan behavior.
+//
+// The multi-chat design has two moving parts:
+//
+// 1. **Outer multiplexer** — [`run_telegram_multi_session`]. Owns the
+//    single `get_updates` cursor (Bot API 409 Conflict forbids more
+//    than one concurrent `getUpdates` per bot token), holds a
+//    `HashMap<i64, ChatRoute>` of per-chat mailboxes and join handles,
+//    and routes each inbound message to its chat's inner task via an
+//    `mpsc::Sender<IncomingMessage>`.
+//
+// 2. **Inner task** — [`run_telegram_session_with_mailbox`]. Structurally
+//    a copy of `run_telegram_session_with_transport`, but the inbound
+//    source is `mpsc::Receiver<IncomingMessage>` instead of
+//    `transport.get_updates`. Per-turn cancel detection is a biased
+//    select between `turn_fut` and `mailbox.recv()` — a `/cancel`
+//    message on the mailbox fires the per-turn token; a normal message
+//    goes to the pending queue. No `scan_for_cancel` probe needed: the
+//    outer multiplexer is already the only thing polling the network,
+//    and it hands us pre-parsed `IncomingMessage`s synchronously.
+//
+// This pair preserves the Phase 8 queueing-over-redelivery contract on
+// a per-chat basis: a user who types "do X" then "/cancel" then "do Y"
+// in one chat has X queued before the cancel lands and Y queued after.
+// Users in *other* chats are completely unaffected — their inner tasks
+// have their own mailboxes, their own pending queues, and their own
+// channel cancellation tokens.
+
+/// Per-chat mailbox capacity. Sized to absorb a short burst of messages
+/// from one chat while the inner task is busy on a turn, without
+/// applying backpressure to the outer multiplexer's `get_updates`
+/// loop. If a single chat floods past this, the outer multiplexer's
+/// `.send(msg).await` will block briefly, which is the intended
+/// backpressure: a misbehaving chat should throttle itself, not other
+/// chats (the outer loop drains the *current* batch before looping,
+/// so a brief block here doesn't starve other chats — it only delays
+/// the *next* `get_updates` by the unblock time).
+const CHAT_MAILBOX_CAPACITY: usize = 32;
+
+/// Inner-task entry point for the multi-chat pump. One of these runs
+/// per active chat, driven by messages posted to `mailbox` from the
+/// outer [`run_telegram_multi_session`] multiplexer.
+///
+/// Returns the per-chat `turns_run` count so the outer multiplexer
+/// can aggregate a [`TelegramMultiSessionReport`].
+///
+/// ## How this differs from `run_telegram_session_with_transport`
+///
+/// - **Inbound source:** `mpsc::Receiver<IncomingMessage>` instead of
+///   `transport.get_updates(offset, timeout)`. The offset cursor lives
+///   in the outer multiplexer, not here.
+/// - **`/cancel` detection:** per-turn biased select races `turn_fut`
+///   against `mailbox.recv()`. A `/cancel` on the mailbox fires the
+///   channel token; a normal message is pushed to `pending` (front if
+///   the batch also contained `/cancel`, back otherwise — matching
+///   the single-chat `scan_for_cancel` `FoundCancel` vs `NoCancel`
+///   semantics).
+/// - **Shutdown:** the inner task exits when (a) the shutdown token
+///   fires, or (b) the mailbox sender is dropped — which the outer
+///   multiplexer does at shutdown to signal "no more messages coming
+///   for your chat." Either path drains the pending queue into
+///   completed turns before returning so a user who just typed
+///   something isn't silently dropped on ctrl-C.
+///
+/// ## Cancel-message semantics at the mailbox boundary
+///
+/// A `/cancel` received while no turn is running is a no-op (same as
+/// the single-chat top-of-loop drop). A `/cancel` received *during* a
+/// turn fires the channel token and is itself consumed — it never
+/// becomes a prompt.
+pub(crate) async fn run_telegram_session_with_mailbox<T>(
+    channel: Arc<TelegramChannel<T>>,
+    config: TelegramSessionConfig,
+    provider: Arc<dyn LlmProvider>,
+    audit: Arc<dyn AuditHook>,
+    mut mailbox: mpsc::Receiver<IncomingMessage>,
+    shutdown: CancellationToken,
+) -> Result<TelegramSessionReport, String>
+where
+    T: TelegramTransport + 'static,
+{
+    let registry = config.tools;
+    let _storage = config.storage;
+
+    let provider_for_factory = Arc::clone(&provider);
+    let registry_for_factory = Arc::clone(&registry);
+    let planner_config = LlmPlannerConfig::new(config.model)
+        .with_system_prompt(config.system_prompt)
+        .with_max_tokens(config.max_tokens);
+
+    let agent = ConcreteAgent::new(
+        AgentId::new(),
+        config.capabilities,
+        registry,
+        audit,
+        move || {
+            Box::new(LlmPlanner::new(
+                Arc::clone(&provider_for_factory),
+                Arc::clone(&registry_for_factory),
+                planner_config.clone(),
+            ))
+        },
+    );
+
+    let mut turns_run: usize = 0;
+    let mut pending: VecDeque<IncomingMessage> = VecDeque::new();
+    let target_chat = channel.chat_id();
+
+    loop {
+        if shutdown.is_cancelled() {
+            return Ok(TelegramSessionReport { turns_run });
+        }
+
+        // If there's nothing pending, block on the mailbox for the next
+        // inbound message. A drop of the sender (outer multiplexer
+        // shutting down this chat) returns `None`, which we treat as
+        // "drain and exit."
+        if pending.is_empty() {
+            // Same channel-token pre-wait check as the single-chat
+            // path: a cancel that landed between turns must be observed
+            // before we block. See the long comment in
+            // `run_telegram_session_with_transport` for the Phase 9
+            // Task 1 placement rationale.
+            if channel.cancellation_token().is_cancelled() {
+                return Ok(TelegramSessionReport { turns_run });
+            }
+
+            tokio::select! {
+                biased;
+
+                _ = shutdown.cancelled() => {
+                    return Ok(TelegramSessionReport { turns_run });
+                }
+
+                maybe_msg = mailbox.recv() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            // Top-of-loop /cancel with no turn running
+                            // is a no-op — drop it. Same rationale as
+                            // the single-chat path.
+                            if msg.text.trim() == "/cancel" {
+                                continue;
+                            }
+                            // Messages from foreign chats should never
+                            // reach this mailbox (the outer
+                            // multiplexer routes by chat_id), but
+                            // defense-in-depth: drop them if they do.
+                            if msg.chat_id != target_chat {
+                                continue;
+                            }
+                            pending.push_back(msg);
+                        }
+                        None => {
+                            // Sender dropped — outer multiplexer is
+                            // shutting us down. Nothing pending, so
+                            // exit cleanly.
+                            return Ok(TelegramSessionReport { turns_run });
+                        }
+                    }
+                }
+            }
+        }
+
+        let msg = pending.pop_front().expect("pending is non-empty here");
+
+        channel.reset_cancellation();
+
+        let message = Message::text(channel.session_id(), &msg.text);
+        let turn_fut = agent.turn(message, channel.as_ref());
+        tokio::pin!(turn_fut);
+
+        let _outcome = loop {
+            tokio::select! {
+                biased;
+
+                outcome = &mut turn_fut => {
+                    break outcome;
+                }
+
+                maybe_msg = mailbox.recv() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            // Defense-in-depth chat_id filter.
+                            if msg.chat_id != target_chat {
+                                continue;
+                            }
+                            if msg.text.trim() == "/cancel" {
+                                // Fire the per-turn cancel; the turn
+                                // arm will win the next iteration with
+                                // TurnOutcome::Cancelled. /cancel is
+                                // itself consumed — it never becomes
+                                // a prompt.
+                                channel.cancellation_token().cancel();
+                            } else {
+                                // Normal message during a running
+                                // turn — queue it for after the
+                                // current turn finishes. push_back so
+                                // it runs in arrival order relative
+                                // to anything else that comes in
+                                // before the turn resolves.
+                                pending.push_back(msg);
+                            }
+                        }
+                        None => {
+                            // Sender dropped mid-turn. Cancel the
+                            // current turn so the inner task can
+                            // finalize and exit promptly — this is
+                            // the multi-chat analogue of the
+                            // single-chat shutdown path waiting for
+                            // the in-flight turn to resolve.
+                            channel.cancellation_token().cancel();
+                        }
+                    }
+                }
+            }
+        };
+        turns_run += 1;
+    }
+}
+
+/// Drive a multi-chat Telegram session to completion against a real
+/// bot token. This is the Phase 9 Task 2 production entry point for
+/// `aivyx --channel telegram` — one aivyx process, N chats, N
+/// [`TelegramChannel`] instances, one shared audit chain and memory
+/// store.
+///
+/// ## Parameters
+///
+/// - `channel_name` — base label for spawned channels. Each inner
+///   task's channel is constructed with this name verbatim; per-chat
+///   disambiguation happens via `session_partition()` on the channel
+///   context, not by mangling names.
+/// - `token` — Bot API token, passed straight to the production
+///   `ReqwestTransport`.
+/// - `chat_filter` — Phase 8 compatibility knob. `Some(chat_id)` makes
+///   the outer multiplexer drop inbound messages for any chat other
+///   than `chat_id` (matching Phase 8 single-chat semantics). `None`
+///   accepts all chats this bot is in.
+/// - `config` — template [`TelegramSessionConfig`] cloned per inner
+///   task at spawn time. All heavy fields are `Arc`'d, so each clone
+///   is a handful of refcount bumps.
+/// - `provider` / `audit` — shared across all inner tasks. The audit
+///   log is the cross-chat audit chain that records turns from every
+///   chat in interleaved order.
+/// - `shutdown` — ctrl-C-driven token. When cancelled, the outer loop
+///   stops polling and drops all per-chat mpsc senders, which in turn
+///   cancels each inner task's in-flight turn (via the mailbox-close
+///   branch above) and lets them drain to completion.
+pub async fn run_telegram_multi_session(
+    channel_name: impl Into<String> + Clone,
+    token: &str,
+    chat_filter: Option<i64>,
+    config: TelegramSessionConfig,
+    provider: Arc<dyn LlmProvider>,
+    audit: Arc<dyn AuditHook>,
+    shutdown: CancellationToken,
+) -> Result<TelegramMultiSessionReport, String> {
+    let transport = Arc::new(ReqwestTransport::new(token));
+    run_telegram_multi_session_with_transport(
+        channel_name,
+        transport,
+        chat_filter,
+        config,
+        provider,
+        audit,
+        LONG_POLL_TIMEOUT_SECS,
+        shutdown,
+    )
+    .await
+}
+
+/// One per-chat route: the mpsc sender the outer loop uses to deliver
+/// messages to the inner task, plus the JoinHandle the outer loop
+/// awaits at shutdown. Bundled so the `HashMap` stays a single lookup.
+struct ChatRoute {
+    sender: mpsc::Sender<IncomingMessage>,
+    handle: JoinHandle<Result<TelegramSessionReport, String>>,
+}
+
+/// Transport-generic multi-chat driver. Production callers go through
+/// [`run_telegram_multi_session`]; tests call this directly with a
+/// `ScriptedTransport`. Mirrors the single-chat
+/// [`run_telegram_session_with_transport`] seam.
+///
+/// The 8-argument shape mirrors the single-chat variant (7 args) plus
+/// a `chat_filter`, and is expected to stay wide: channel_name, token-
+/// or-transport, per-chat filter, config, provider, audit, timeout,
+/// shutdown are all independent knobs that don't collapse into a
+/// struct without hurting call-site legibility. Same scoped allow the
+/// binary's `run_async` uses for its wide top-level.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_telegram_multi_session_with_transport<T>(
+    channel_name: impl Into<String> + Clone,
+    transport: Arc<T>,
+    chat_filter: Option<i64>,
+    config: TelegramSessionConfig,
+    provider: Arc<dyn LlmProvider>,
+    audit: Arc<dyn AuditHook>,
+    long_poll_timeout_secs: u32,
+    shutdown: CancellationToken,
+) -> Result<TelegramMultiSessionReport, String>
+where
+    T: TelegramTransport + 'static,
+{
+    let base_name: String = channel_name.into();
+    let mut routes: HashMap<i64, ChatRoute> = HashMap::new();
+    let mut offset: i64 = 0;
+
+    // Outer long-poll loop. The single call site of `get_updates` in
+    // the multi-chat path — Bot API 409 Conflict would reject any
+    // concurrent call on the same token.
+    loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        let updates = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            res = transport.get_updates(offset, long_poll_timeout_secs) => match res {
+                Ok(batch) => batch,
+                Err(e) => {
+                    eprintln!(
+                        "aivyx-telegram(multi): get_updates failed ({e}); backing off 1s"
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+        };
+
+        if updates.is_empty() {
+            continue;
+        }
+
+        for msg in updates {
+            offset = offset.max(msg.update_id + 1);
+
+            // Phase 8 compatibility: if a chat filter is set, drop
+            // messages from other chats at the outer boundary so the
+            // rest of the pipeline only ever sees the one allowed
+            // chat. When unset, every chat is accepted.
+            if let Some(allowed) = chat_filter {
+                if msg.chat_id != allowed {
+                    continue;
+                }
+            }
+
+            let chat_id = msg.chat_id;
+
+            // Lazy-spawn the inner task the first time we see this
+            // chat. Each inner task gets:
+            //   - its own `TelegramChannel<T>` bound to the chat_id
+            //     (constructed inside this crate, which is why
+            //     `TelegramChannel::new` can stay `pub(crate)`)
+            //   - its own mailbox receiver
+            //   - cloned shared state (provider, audit, config)
+            //   - a clone of the shutdown token — when it fires, the
+            //     inner task also notices and exits
+            let route = routes.entry(chat_id).or_insert_with(|| {
+                let (tx, rx) = mpsc::channel::<IncomingMessage>(CHAT_MAILBOX_CAPACITY);
+                let channel = Arc::new(TelegramChannel::new(
+                    base_name.clone(),
+                    chat_id,
+                    Arc::clone(&transport),
+                ));
+                let config_clone = config.clone();
+                let provider_clone = Arc::clone(&provider);
+                let audit_clone = Arc::clone(&audit);
+                let shutdown_clone = shutdown.clone();
+                let handle = tokio::spawn(async move {
+                    run_telegram_session_with_mailbox(
+                        channel,
+                        config_clone,
+                        provider_clone,
+                        audit_clone,
+                        rx,
+                        shutdown_clone,
+                    )
+                    .await
+                });
+                ChatRoute { sender: tx, handle }
+            });
+
+            // Deliver the message to the inner task. A `.send().await`
+            // blocks briefly if the mailbox is full, applying the
+            // intended per-chat backpressure.
+            if let Err(e) = route.sender.send(msg).await {
+                // The inner task's receiver has been dropped — it
+                // exited for some reason (likely a panic, since the
+                // normal shutdown path has the outer loop dropping
+                // *senders* rather than the inner dropping
+                // *receivers*). Remove the dead route so a
+                // subsequent message for the same chat_id respawns.
+                eprintln!(
+                    "aivyx-telegram(multi): chat {chat_id} mailbox send failed ({e}); dropping route"
+                );
+                routes.remove(&chat_id);
+            }
+        }
+    }
+
+    // Shutdown drain: drop every sender so inner tasks see mailbox
+    // close, then join each handle and aggregate turn counts. Dropping
+    // the senders is the signal; joining collects the reports.
+    let mut turns_by_chat: HashMap<i64, usize> = HashMap::new();
+    let drained: Vec<(i64, ChatRoute)> = routes.drain().collect();
+    for (chat_id, ChatRoute { sender, handle }) in drained {
+        drop(sender);
+        match handle.await {
+            Ok(Ok(report)) => {
+                turns_by_chat.insert(chat_id, report.turns_run);
+            }
+            Ok(Err(e)) => {
+                eprintln!(
+                    "aivyx-telegram(multi): chat {chat_id} inner task errored: {e}"
+                );
+            }
+            Err(join_err) => {
+                eprintln!(
+                    "aivyx-telegram(multi): chat {chat_id} inner task join failed: {join_err}"
+                );
+            }
+        }
+    }
+
+    Ok(TelegramMultiSessionReport { turns_by_chat })
 }

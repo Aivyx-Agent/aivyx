@@ -2550,3 +2550,447 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
     // ---- Cleanup --------------------------------------------------
     let _ = std::fs::remove_dir_all(&parent);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9 Task 2 — multi-chat pumping e2e
+// ---------------------------------------------------------------------------
+//
+// Drives `run_telegram_multi_session_with_transport` against a single
+// `ScriptedTransport` pre-loaded with messages from three distinct
+// chat_ids. The Phase 8 Task 6 test ran *two* separate
+// `run_telegram_session_with_transport` calls (one per chat, each with
+// its own transport) because Phase 8's single-chat loop couldn't
+// pump more than one chat. Task 2's multiplexer makes this the native
+// shape: one transport, one cursor, one shared audit + memory, and
+// N lazy-spawned inner tasks all feeding the same chain.
+//
+// What this test proves:
+//
+// 1. **Per-chat memory partition isolation** — three chats each write
+//    `notes: purple` through `memory.write`, and after shutdown each
+//    chat's partition holds exactly its own entry.
+// 2. **Shared audit chain records interleaved turns** — one
+//    `Arc<dyn AuditHook>` handed to the outer multiplexer records
+//    12 events (3 turns × 4 events per turn).
+// 3. **`verify_from_disk` on the combined chain** — the cross-chat
+//    chain reopens cleanly and HMAC-replays to exactly 12 verified
+//    entries, proving the concurrent producer path doesn't corrupt
+//    the chain even when three inner tasks write in parallel.
+// 4. **`AIVYX_TELEGRAM_CHAT_ID` optional** — `chat_filter: None` is
+//    the new Phase 9 default and it accepts all three chats without
+//    the operator having to list them.
+//
+// Provider scheme: all three chats run the same deterministic
+// `memory_write_turn("notes", "purple")` script, so one flat
+// `SharedScriptedProvider` queue (six steps = 2 per turn × 3 turns)
+// is sufficient. A per-chat routing scheme was considered and
+// rejected because the multiplexer clones one config verbatim for
+// every chat — all inner tasks would carry the same system_prompt,
+// so `request.system`-based routing would collapse to one bucket.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_telegram_multi_session_three_chats_interleaved() {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aivyx_audit::{AuditEvent, MemoryOperation, PersistentAuditLog, TrustTierSummary};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{AuditHook, CancellationToken, Tool, ToolRegistry};
+    use crate::TelegramSessionConfig;
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::LlmProvider;
+    use aivyx_memory::{Memory, MemoryReadTool, MemoryWriteTool, RedbMemory};
+    use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+    use crate::session::run_telegram_multi_session_with_transport;
+
+    const AUDIT_KEY_PREFIX: &[u8] = b"a\0";
+    async fn wait_for_audit_rows(storage: &Arc<dyn Storage>, expected: usize) {
+        let handle = storage.domain(KeyDomain::Audit);
+        for _ in 0..2000 {
+            let rows = handle
+                .scan_prefix(AUDIT_KEY_PREFIX)
+                .await
+                .expect("audit scan_prefix must succeed");
+            if rows.len() == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("persistent audit drain never flushed {expected} rows to disk");
+    }
+
+    // ---- Scratch storage -------------------------------------------
+    let tmp = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let parent = PathBuf::from(tmp).join(format!("aivyx-tg-p9t2-{pid}-{nanos}"));
+    std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+    let store_path = parent.join("store.redb");
+
+    const TEST_AUDIT_KEY: [u8; 32] = [0x66u8; 32];
+
+    const CHAT_A: i64 = 7001;
+    const CHAT_B: i64 = 7002;
+    const CHAT_C: i64 = 7003;
+
+    {
+        let storage: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(store_path.clone()),
+            MasterKey::from_raw([22u8; 32]),
+        )
+        .await
+        .expect("scratch storage must open");
+
+        let memory: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
+            .await
+            .expect("RedbMemory::open must succeed over scratch storage");
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::new(MemoryReadTool::new(Arc::clone(&memory))) as Arc<dyn Tool>,
+            Arc::new(MemoryWriteTool::new(Arc::clone(&memory))) as Arc<dyn Tool>,
+        ]));
+        let capabilities = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+        ]);
+
+        let persistent_audit = Arc::new(
+            PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
+                .await
+                .expect("persistent audit log must open on an empty chain"),
+        );
+        assert_eq!(persistent_audit.len(), 0);
+        let audit_hook: Arc<dyn AuditHook> = Arc::clone(&persistent_audit)
+            as Arc<dyn AuditHook>;
+
+        // Stateless per-turn-aware provider. See the doc on
+        // `SharedScriptedProvider` below for why this uses
+        // `request.messages.len()` instead of a shared FIFO queue
+        // of pre-canned steps.
+        let provider: Arc<dyn LlmProvider> = Arc::new(SharedScriptedProvider);
+
+        // ---- Shared scripted transport with 3 interleaved updates --
+        //
+        // One transport for all three chats — the whole Task 2 point:
+        // a single `get_updates` cursor routes to N inner tasks.
+        // Updates are pushed in non-sorted chat_id order so any
+        // "routes by arrival order" bug would surface as a routing
+        // mismatch in the per-chat memory partition assertion below.
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.push_update(IncomingMessage {
+            update_id: 500,
+            chat_id: CHAT_B,
+            user_id: 20,
+            text: "remember".to_string(),
+        });
+        transport.push_update(IncomingMessage {
+            update_id: 501,
+            chat_id: CHAT_A,
+            user_id: 10,
+            text: "remember".to_string(),
+        });
+        transport.push_update(IncomingMessage {
+            update_id: 502,
+            chat_id: CHAT_C,
+            user_id: 30,
+            text: "remember".to_string(),
+        });
+
+        let config = TelegramSessionConfig {
+            model: "claude-haiku-4-5-20251001".to_string(),
+            system_prompt: "telegram multi".to_string(),
+            max_tokens: 256,
+            capabilities: capabilities.clone(),
+            tools: Arc::clone(&tools),
+            storage: Arc::clone(&storage),
+        };
+
+        // ---- Shutdown watcher --------------------------------------
+        //
+        // The outer multiplexer runs forever until `shutdown` fires.
+        // Watch the transport's `sent_snapshot` and cancel the
+        // shutdown token once one outbound per chat has been
+        // captured.
+        let shutdown = CancellationToken::new();
+        let shutdown_for_watcher = shutdown.clone();
+        let transport_for_watcher = Arc::clone(&transport);
+        tokio::spawn(async move {
+            loop {
+                let sent = transport_for_watcher.sent_snapshot();
+                let mut seen_a = false;
+                let mut seen_b = false;
+                let mut seen_c = false;
+                for msg in &sent {
+                    match msg.chat_id {
+                        CHAT_A => seen_a = true,
+                        CHAT_B => seen_b = true,
+                        CHAT_C => seen_c = true,
+                        _ => {}
+                    }
+                }
+                if seen_a && seen_b && seen_c {
+                    shutdown_for_watcher.cancel();
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let report = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_telegram_multi_session_with_transport(
+                "tg-multi",
+                Arc::clone(&transport),
+                None, // chat_filter = None → accept every chat
+                config,
+                Arc::clone(&provider),
+                Arc::clone(&audit_hook),
+                1, // long_poll_timeout_secs
+                shutdown.clone(),
+            ),
+        )
+        .await
+        .expect("multi-session must exit within 10s")
+        .expect("multi-session must return Ok");
+
+        // ---- Per-chat turns_run ------------------------------------
+        assert_eq!(
+            report.turns_by_chat.len(),
+            3,
+            "three chats sent messages → three inner tasks should have spawned"
+        );
+        for chat_id in [CHAT_A, CHAT_B, CHAT_C] {
+            assert_eq!(
+                report.turns_by_chat.get(&chat_id).copied(),
+                Some(1),
+                "chat {chat_id} should have run exactly one turn"
+            );
+        }
+        assert_eq!(report.total_turns(), 3);
+
+        let sent = transport.sent_snapshot();
+        assert_eq!(sent.len(), 3, "three turns → three outbound messages");
+        let mut chat_ids: Vec<i64> = sent.iter().map(|m| m.chat_id).collect();
+        chat_ids.sort();
+        assert_eq!(chat_ids, vec![CHAT_A, CHAT_B, CHAT_C]);
+
+        assert_eq!(
+            persistent_audit.len(),
+            12,
+            "three chats × 4 events each = 12 (TurnStarted, ToolCall, MemoryAccess, TurnEnded)"
+        );
+
+        wait_for_audit_rows(&storage, 12).await;
+
+        drop(transport);
+        drop(provider);
+        drop(audit_hook);
+        drop(persistent_audit);
+        drop(tools);
+        drop(memory);
+        drop(storage);
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    // ---- Reopen phase — cold verify combined chain -----------------
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path.clone()),
+        MasterKey::from_raw([22u8; 32]),
+    )
+    .await
+    .expect("reopen must succeed after the session block drops everything");
+
+    let verify_report =
+        PersistentAuditLog::verify_from_disk(Arc::clone(&storage), TEST_AUDIT_KEY)
+            .await
+            .expect("verify_from_disk must succeed on a clean combined chain");
+    assert_eq!(
+        verify_report.entries_verified, 12,
+        "three concurrent chats × 4 events = 12 entries"
+    );
+    assert_eq!(verify_report.head_seq, Some(11));
+
+    let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
+        .await
+        .expect("reopen for entries inspection must succeed");
+    let entries = log.entries().expect("recovered chain must be readable");
+    assert_eq!(entries.len(), 12);
+
+    // ---- Histogram over the 12 events by variant -------------------
+    let mut turn_started = 0;
+    let mut memory_access_write = 0;
+    let mut tool_call_memory_write = 0;
+    let mut tool_call_chat_a = 0;
+    let mut tool_call_chat_b = 0;
+    let mut tool_call_chat_c = 0;
+    let mut turn_ended = 0;
+    for entry in &entries {
+        match &entry.event {
+            AuditEvent::TurnStarted {
+                trust_tier,
+                channel,
+                ..
+            } => {
+                turn_started += 1;
+                assert_eq!(*trust_tier, TrustTierSummary::SemiTrusted);
+                assert_eq!(*channel, ChannelPlatform::Telegram);
+            }
+            AuditEvent::MemoryAccess { operation, .. } => {
+                assert!(matches!(operation, MemoryOperation::Write));
+                memory_access_write += 1;
+            }
+            AuditEvent::ToolCall { scope_used, .. } => {
+                assert_eq!(scope_used.base(), "memory.write");
+                let q = scope_used
+                    .qualifier()
+                    .expect("narrowed scope must have a qualifier");
+                match q {
+                    "topic:notes:session:7001" => tool_call_chat_a += 1,
+                    "topic:notes:session:7002" => tool_call_chat_b += 1,
+                    "topic:notes:session:7003" => tool_call_chat_c += 1,
+                    other => panic!("unexpected ToolCall scope qualifier: {other:?}"),
+                }
+                tool_call_memory_write += 1;
+            }
+            AuditEvent::TurnEnded { .. } => {
+                turn_ended += 1;
+            }
+            other => {
+                panic!("unexpected audit event in multi-chat chain: {other:?}");
+            }
+        }
+    }
+    assert_eq!(turn_started, 3);
+    assert_eq!(memory_access_write, 3);
+    assert_eq!(tool_call_memory_write, 3);
+    assert_eq!(tool_call_chat_a, 1);
+    assert_eq!(tool_call_chat_b, 1);
+    assert_eq!(tool_call_chat_c, 1);
+    assert_eq!(turn_ended, 3);
+
+    // ---- Per-chat memory partition isolation -----------------------
+    let memory_post: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
+        .await
+        .expect("RedbMemory reopen must succeed");
+    let phys_a = "\x01s\x017001\x01notes";
+    let phys_b = "\x01s\x017002\x01notes";
+    let phys_c = "\x01s\x017003\x01notes";
+    let phys_uninvolved = "\x01s\x018888\x01notes";
+    let a = memory_post.get_recent(phys_a, 16).await.unwrap();
+    let b = memory_post.get_recent(phys_b, 16).await.unwrap();
+    let c = memory_post.get_recent(phys_c, 16).await.unwrap();
+    let none = memory_post.get_recent(phys_uninvolved, 16).await.unwrap();
+    assert_eq!(a.len(), 1, "chat A wrote exactly one entry");
+    assert_eq!(b.len(), 1, "chat B wrote exactly one entry");
+    assert_eq!(c.len(), 1, "chat C wrote exactly one entry");
+    assert_eq!(none.len(), 0, "uninvolved chat must see nothing");
+
+    drop(log);
+    drop(memory_post);
+    drop(storage);
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+// ---- Supporting types for the multi-chat test -----------------------
+//
+// A **stateless** `LlmProvider` shared across all inner tasks. Lives
+// outside the `#[tokio::test]` function so the `impl LlmProvider` and
+// `impl LlmStream` blocks have somewhere to hang.
+//
+// The provider holds no per-turn queue — instead, each `chat_stream`
+// call inspects `request.messages.len()` to decide whether to return
+// a `ToolCall` step (first call of a turn: only the user message is
+// present) or a `FinalMessage` step (second call: user + assistant
+// tool_call + tool_result already appended by the planner).
+//
+// This makes the provider **safe under concurrent consumption**: three
+// inner tasks can call `chat_stream` in any interleaving and each one
+// gets the step its own turn is actually at, rather than pulling from
+// a shared FIFO that could hand task A's step 2 to task B. A shared-
+// FIFO approach was tried first and produced audit events where one
+// chat's ToolCall was attributed to another chat's session partition.
+// The bug was that a late-starting task would pull a `FinalMessage`
+// step intended as another task's step 2, see "final message, turn
+// complete", and emit zero ToolCall events — so its chat_id never
+// appeared in the ToolCall scope histogram.
+//
+// Inspecting `request.messages.len()` is a cheap stand-in for
+// per-task state: the planner's step count is reflected in the
+// request history on every `chat_stream` call, so the provider can
+// derive "which step of which turn" without needing any mutable
+// state it would have to synchronize.
+struct SharedScriptedProvider;
+
+#[async_trait]
+impl aivyx_llm::LlmProvider for SharedScriptedProvider {
+    async fn chat_stream(
+        &self,
+        request: aivyx_llm::LlmRequest<'_>,
+        _cancellation: &aivyx_core::CancellationToken,
+    ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+        use aivyx_llm::{LlmStepEnd, LlmStreamEvent, LlmUsage};
+        use serde_json::json;
+
+        // Step 1 of a turn: the planner has sent the user's message
+        // and nothing else. Return a ToolCall that writes to memory.
+        // Step 2+: the planner has appended the assistant's tool call
+        // and the tool result. Return a FinalMessage to close the
+        // turn. Anything beyond step 2 shouldn't happen in this test
+        // but we still return FinalMessage so an unexpected extra
+        // planner iteration doesn't emit a cascading ToolCall chain.
+        let step_end: LlmStepEnd = if request.messages.len() <= 1 {
+            LlmStepEnd::ToolCall {
+                call_id: "toolu_purple".to_string(),
+                tool_name: "memory.write".to_string(),
+                input: json!({ "topic": "notes", "body": "purple" }),
+                text_so_far: String::new(),
+                usage: LlmUsage::default(),
+            }
+        } else {
+            LlmStepEnd::FinalMessage {
+                text: "saved purple".to_string(),
+                usage: LlmUsage::default(),
+            }
+        };
+
+        let events: Vec<LlmStreamEvent> = match &step_end {
+            LlmStepEnd::FinalMessage { text, .. } => {
+                vec![LlmStreamEvent::TextChunk(text.clone())]
+            }
+            _ => Vec::new(),
+        };
+
+        Ok(Box::new(SharedScriptedStream {
+            events: events.into_iter(),
+            terminal: Some(step_end),
+        }))
+    }
+}
+
+struct SharedScriptedStream {
+    events: std::vec::IntoIter<aivyx_llm::LlmStreamEvent>,
+    terminal: Option<aivyx_llm::LlmStepEnd>,
+}
+
+#[async_trait]
+impl aivyx_llm::LlmStream for SharedScriptedStream {
+    async fn next_event(
+        &mut self,
+    ) -> Result<Option<aivyx_llm::LlmStreamEvent>, aivyx_llm::LlmError> {
+        Ok(self.events.next())
+    }
+    async fn finish(
+        self: Box<Self>,
+    ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
+        self.terminal
+            .ok_or_else(|| aivyx_llm::LlmError::StreamEnded("double-finish".into()))
+    }
+}
