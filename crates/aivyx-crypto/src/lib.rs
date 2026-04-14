@@ -295,6 +295,26 @@ impl SubKey {
             .decrypt(nonce, Payload { msg: ciphertext, aad })
             .map_err(|_| CryptoError::AeadOpenFailed)
     }
+
+    /// Borrow the raw 32 bytes of this subkey.
+    ///
+    /// **The preferred entry points are [`seal`](Self::seal) and
+    /// [`open`](Self::open)** — both use the bytes internally and never
+    /// expose them across the call. This accessor exists for the one
+    /// legitimate non-AEAD caller: `aivyx-audit`'s `PersistentAuditLog`
+    /// uses the `KeyDomain::Audit` subkey as an HMAC-SHA256 chain key,
+    /// and HMAC is a primitive `SubKey` does not wrap. The audit code
+    /// copies the bytes into its own `HmacChainLog::key: Vec<u8>` (a
+    /// non-`ZeroizeOnDrop` buffer) exactly once at open time; the copy's
+    /// lifetime is bounded by the `PersistentAuditLog` and nothing else
+    /// in the workspace calls this method.
+    ///
+    /// Do not reach for this accessor when `seal`/`open` would do. Every
+    /// additional caller is a place the raw-bytes contract has to be
+    /// re-justified.
+    pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
+        &self.bytes
+    }
 }
 
 impl std::fmt::Debug for SubKey {

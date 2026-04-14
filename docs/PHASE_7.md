@@ -170,19 +170,82 @@ This is a *draft*. Phase 6's breakdown survived intact from entry
 to exit (as did Phases 3–5 before it), but Phase 2's did not —
 tasks are allowed to reorder and re-scope as we learn.
 
-1. **Design the `PersistentAuditLog` composition.** Write a new
-   module in `aivyx-audit` that holds `Arc<HmacChainLog>` plus an
-   `Arc<dyn Storage>` handle, implements `AuditHook`, and writes
-   each event to `KeyDomain::Audit` under a monotonic seq key
-   (`b"a\0" || seq_be`) after letting the chain layer compute the
-   HMAC over the event. The chain-key question (Q1) and the async
-   question (Q4) must resolve before this task ships — they
-   jointly determine the impl's shape. 10+ unit tests covering:
-   in-memory-plus-persist round-trip, reopen-and-verify, the
-   wrong-key negative path, seq monotonicity across reopen, and
-   chain-break detection (flip a byte in on-disk ciphertext →
-   `verify` must fail at that seq). No integration with
-   `run_session` yet.
+1. **Design the `PersistentAuditLog` composition.** ✅ Shipped
+   2026-04-14. `crates/aivyx-audit/src/persistent.rs`,
+   `PersistentAuditLog` holds `Arc<HmacChainLog>` plus
+   `Arc<dyn Storage>`, implements `aivyx_core::AuditHook` directly
+   (sibling to `AuditBridge`, not a replacement), and writes each
+   event to `KeyDomain::Audit` under `b"a\0" || seq_be`. 10 unit
+   tests under `persistent::tests` land the round-trip, reopen,
+   wrong-key, seq-monotonic, tamper-detection, truncation-gap,
+   corrupt-value, key-layout, and error-handler paths. Workspace
+   test count 257 → 267.
+
+   **Resolution of the Q1 / Q2 / Q3 / Q4 gates this task depended
+   on:**
+
+   - **Q1 (chain key):** HKDF from master via
+     `KeyDomain::Audit`. Exposed through a new public
+     `aivyx_crypto::SubKey::as_bytes()` with a doc comment
+     naming `PersistentAuditLog` as the single legitimate caller
+     and forbidding broader use. The binary extracts the raw
+     `[u8; 32]` at wire-up time, so `aivyx-audit` stays free of
+     any direct `aivyx-crypto` prod dep.
+   - **Q2 (continuous vs per-session chain):** Continuous.
+     `HmacChainLog` is keyed once per store and chains across
+     every session/reopen. Per-session linking was considered
+     and rejected as scope creep — it can be layered on later
+     via a `session_marker` event variant without rewriting
+     this task.
+   - **Q3 (on-disk record shape):** `serde_json::to_vec(&SignedEntry)`.
+     The MAC already uses `serde_jcs` for canonical integrity
+     bytes; the durable envelope only needs to round-trip the
+     struct faithfully, and plain `serde_json` does that for
+     every field currently in `SignedEntry`.
+   - **Q4 (async trait streak-ender):** **Not an amendment —
+     streak holds.** `aivyx_core::AuditHook::on_event` stays
+     sync. The async impedance is absorbed inside
+     `persistent.rs`: the sync `on_event` path calls
+     `HmacChainLog::append` inline (so the chain MAC is
+     computed before return, invariant 1), then `try_send`s the
+     freshly-chained `SignedEntry` into a bounded tokio mpsc
+     channel (capacity 1024). A background drain task — spawned
+     by `open`, aborted in `Drop` — consumes the channel in
+     FIFO order and persists each entry with `DomainHandle::put`.
+     A health flag (`Arc<AtomicBool>`) flips false on the first
+     drain failure; subsequent `on_event` calls observe the flag
+     and short-circuit through the error handler. `git diff
+     e0d6437..HEAD -- DESIGN.md` = empty, now across six frozen
+     phases plus the first task of Phase 7.
+
+   **Invariants preserved by the bounded-channel design** (the
+   five Task 1 had to defend to claim "audit survives a crash"):
+   (1) chain MAC computed synchronously on-path before
+   `on_event` returns; (2) drain order = disk order via mpsc
+   FIFO and a single writer; (3) persist failures observed ≤1
+   event later via the health flag; (4) a chain-rejected event
+   is never acked as audited because the handler runs before
+   the channel push; (5) drain task lifetime bounded by
+   `PersistentAuditLog` via `Drop::abort`.
+
+   **Supporting API additions landed by this task:**
+   - `aivyx_crypto::SubKey::as_bytes(&self) -> &[u8; KEY_LEN]`
+     — documented single-caller escape hatch.
+   - `aivyx_audit::HmacChainLog::from_verified_entries(key,
+     entries)` — reopen-path constructor that inserts
+     externally-verified entries without recomputing MACs
+     (recomputation would mask any tamper the reopen verifier
+     missed).
+   - `aivyx_audit::AuditError::{Storage, CorruptStoredEntry}`
+     — two new variants for the storage-boundary and
+     decode-boundary failure modes.
+
+   Task 2 (`verify_from_disk` as a named entry point) and Task 3
+   (binary wire-up) remain. Task 2 is partially pre-absorbed:
+   verification already runs inside `PersistentAuditLog::open`,
+   so Task 2 is mostly about exposing it as a standalone public
+   fn for a `--verify-only` CLI mode (Q6) and deciding the
+   mandatory-vs-logged policy (Q5).
 
 2. **Ship chain verification on open.** Add a
    `PersistentAuditLog::verify_from_disk(storage, key) -> Result`
@@ -476,11 +539,13 @@ wiring; defer to Phase 8+ otherwise.
 
 ## Exit criteria (draft — revised as work lands)
 
-- [ ] `aivyx-audit::PersistentAuditLog` exists, implements
+- [x] `aivyx-audit::PersistentAuditLog` exists, implements
       `AuditHook`, and has unit-test coverage of: in-memory +
       persist round-trip, reopen-and-verify, wrong-key negative,
       seq monotonicity across reopen, chain-break detection
       (tampered byte at mid-sequence), and truncation detection.
+      *(Task 1, 2026-04-14. 10 new `persistent::tests` lines;
+      workspace 257 → 267.)*
 - [ ] Chain verification at `PersistentAuditLog::open` runs
       against the on-disk range-scan and returns a typed result
       a caller can branch on.

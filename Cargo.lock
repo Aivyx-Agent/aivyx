@@ -27,7 +27,9 @@ version = "0.1.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-crypto",
  "aivyx-llm",
+ "aivyx-storage",
  "async-trait",
  "bytes",
  "futures-util",
@@ -40,6 +42,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]

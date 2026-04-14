@@ -188,6 +188,20 @@ pub enum AuditError {
 
     #[error("lock poisoned")]
     LockPoisoned,
+
+    /// A put/get/scan call into `aivyx-storage` failed while reading or
+    /// writing `KeyDomain::Audit`. Phase 7 task 1 wraps the upstream
+    /// `StorageError` as a string so `aivyx-audit`'s public error
+    /// surface does not leak storage internals to dependents.
+    #[error("storage error: {0}")]
+    Storage(String),
+
+    /// An on-disk record could not be decoded, or its key/seq fields
+    /// disagreed with its position in the scan. Surfaces at
+    /// `PersistentAuditLog::open` only — once reopened, the in-memory
+    /// chain is the source of truth.
+    #[error("corrupt stored entry at seq {seq}: {reason}")]
+    CorruptStoredEntry { seq: u64, reason: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +261,31 @@ impl HmacChainLog {
             inner: Mutex::new(Inner {
                 entries: Vec::new(),
             }),
+        }
+    }
+
+    /// Construct a log pre-populated with entries recovered from durable
+    /// storage.
+    ///
+    /// **Caller must have already verified the chain** (`AuditLog::verify`
+    /// semantics) over `entries` against `key` before calling this. The
+    /// constructor inserts them *as-is* into the in-memory entry vec
+    /// without recomputing MACs — which is the only way to honour the
+    /// invariant that in-memory entries are byte-identical to what the
+    /// reopen path blessed on disk. Recomputing here would hide any
+    /// tamper the caller's verify missed.
+    ///
+    /// Intended exclusively for `PersistentAuditLog::open`'s reopen path.
+    /// Subsequent `append` calls chain off the last entry's `mac` as
+    /// usual, so seq numbering continues monotonically from
+    /// `entries.len()`.
+    pub fn from_verified_entries(
+        key: impl Into<Vec<u8>>,
+        entries: Vec<SignedEntry>,
+    ) -> Self {
+        HmacChainLog {
+            key: key.into(),
+            inner: Mutex::new(Inner { entries }),
         }
     }
 
@@ -548,6 +587,13 @@ impl<W: AuditWriter + 'static> aivyx_core::AuditHook for AuditBridge<W> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// PersistentAuditLog — Phase 7 task 1 durable wrapper
+// ---------------------------------------------------------------------------
+
+mod persistent;
+pub use persistent::PersistentAuditLog;
 
 // ---------------------------------------------------------------------------
 // Utility: input_hash helper for ToolCall events.

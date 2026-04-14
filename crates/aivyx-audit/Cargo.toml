@@ -12,6 +12,12 @@ readme.workspace = true
 [dependencies]
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 7 task 1: PersistentAuditLog reads and writes SignedEntry records
+# through KeyDomain::Audit. aivyx-audit talks to storage only through
+# Storage / DomainHandle — it never sees redb or raw subkeys. The raw
+# HMAC key is extracted by the binary via SubKey::as_bytes() and passed
+# in as [u8; 32], so aivyx-audit has no direct dep on aivyx-crypto.
+aivyx-storage = { path = "../aivyx-storage" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,14 +25,27 @@ serde_jcs = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# Phase 7 task 1: bounded mpsc channel + background drain task bridge
+# sync on_event to async storage.put. "sync" for the channel primitives,
+# "rt" for tokio::spawn on the drain task.
+tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
 # Bridge integration tests drive a real ConcreteAgent turn loop through
 # the bridge into an HmacChainLog. aivyx-core is already a prod dep; the
 # dev-only pieces we need are tokio (for #[tokio::test]), async-trait (for
 # fake ChannelContext / Tool impls), and serde_json (already a prod dep).
-tokio = { workspace = true, features = ["macros", "rt"] }
+# Phase 7 task 1's persistent_audit tests need `time` (tokio::time::sleep
+# for the drain-wait poll loop) on top of the earlier feature set.
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 async-trait = { workspace = true }
+# Phase 7 task 1: persistent_audit tests drive PersistentAuditLog against
+# a real RedbStorage over a temp directory, using MasterKey::from_raw to
+# keep Argon2 off the test hot path. `aivyx-storage` is already a prod
+# dep, so only aivyx-crypto (for MasterKey) and uuid (for unique temp
+# directory names, avoiding redb file-lock collisions) land here.
+aivyx-crypto = { path = "../aivyx-crypto" }
+uuid = { workspace = true }
 # Phase 2 task 5 E2E integration test pulls in the Anthropic reference
 # provider + its fake-transport seam so the test can drive the whole
 # stack (agent → LlmPlanner → AnthropicProvider → FakeTransport → SSE
