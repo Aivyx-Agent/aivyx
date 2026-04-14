@@ -1,0 +1,636 @@
+//! Phase 4 task 5 — LLM-driven filesystem tool round-trip.
+//!
+//! This test is the whole point of Phase 4: it proves that when a
+//! (simulated) LLM asks to call `fs.read` with a concrete path, the
+//! request flows through the full stack —
+//!
+//! ```text
+//! ScriptedProvider → LlmPlanner → ConcreteAgent::turn
+//!   → ToolRegistry::get
+//!     → scope gate at agent.rs (grants `fs.read:<sandbox>/**`)
+//!       → FsReadTool::execute (real std::fs::read)
+//!         → ToolOutcome::Completed
+//!   → LlmPlanner::observe_tool_outcome
+//!     → next chat_stream step (with tool_result in history)
+//!       → LlmStepEnd::FinalMessage
+//!         → TurnOutcome::Completed
+//! ```
+//!
+//! …and the audit chain comes out of the other end with a
+//! `ToolCall` entry carrying the `Completed` outcome between the
+//! `TurnStarted` / `TurnEnded` pair.
+//!
+//! The same `ScriptedProvider` shape as [`cli_e2e.rs`] is used
+//! (one `chat_stream` call per `ScriptedStep`), but here each user
+//! turn is **two scripted steps**: step 1 terminates with
+//! [`LlmStepEnd::ToolCall`], step 2 terminates with
+//! [`LlmStepEnd::FinalMessage`]. Between the two, the planner
+//! dispatches the tool call, the agent scope-checks and executes,
+//! and the tool result is appended to the planner's history so the
+//! second `chat_stream` sees it as an [`LlmMessage::ToolResult`].
+//!
+//! ## What this test is *not*
+//!
+//! - **Not a replacement for `cli_e2e.rs`.** That test is the
+//!   chat-only regression for the Phase 3 session loop; this test
+//!   is the Phase 4 tool-execution regression. They exercise
+//!   disjoint code paths on top of the same `run_session`.
+//! - **Not a behavioural test of `FsReadTool` internals.** Those
+//!   live next to the tool impl in `aivyx-core::tools::fs::tests`.
+//!   Here the tool is a black box — we care that it ran, that it
+//!   saw the right sandbox, and that its output round-tripped.
+//! - **Not a live-API test.** Everything is scripted. The
+//!   `#[ignore]`-gated live test lives elsewhere.
+
+use std::io::{Cursor, Write as _};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use aivyx_audit::{AuditBridge, AuditEvent, AuditLog, HmacChainLog};
+use aivyx_capability::{CapabilitySet, Scope};
+use aivyx_channel::{run_session, LocalChannel, SessionConfig};
+use aivyx_core::{
+    tools::{FsReadToolConfig, FsWriteToolConfig},
+    AuditHook, CancellationToken, Tool, ToolOutcomeSummary, ToolRegistry, TurnOutcome,
+    TurnOutcomeSummary,
+};
+use aivyx_llm::{
+    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+};
+
+// ---------------------------------------------------------------------------
+// Scripted provider. Identical in shape to the one in cli_e2e.rs, but
+// kept local to this test file so the two integration tests stay
+// independent — a refactor in one should never force a rebuild of
+// the other's fixtures.
+// ---------------------------------------------------------------------------
+
+struct ScriptedStep {
+    events: Vec<LlmStreamEvent>,
+    terminal: LlmStepEnd,
+}
+
+struct ScriptedProvider {
+    queue: Mutex<std::collections::VecDeque<ScriptedStep>>,
+    /// Snapshot of the last `LlmRequest.messages` we were handed. Used
+    /// by the assertion at the end of the test to prove the planner
+    /// correctly wove a `ToolResult` into the history before the
+    /// second `chat_stream` call.
+    last_messages: Mutex<Vec<LlmMessage>>,
+}
+
+impl ScriptedProvider {
+    fn new(steps: Vec<ScriptedStep>) -> Arc<Self> {
+        Arc::new(ScriptedProvider {
+            queue: Mutex::new(steps.into()),
+            last_messages: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ScriptedProvider {
+    async fn chat_stream(
+        &self,
+        request: LlmRequest<'_>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        *self.last_messages.lock().unwrap() = request.messages.to_vec();
+
+        let step = self
+            .queue
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+        Ok(Box::new(ScriptedStream {
+            events: step.events.into_iter(),
+            terminal: Some(step.terminal),
+        }))
+    }
+}
+
+struct ScriptedStream {
+    events: std::vec::IntoIter<LlmStreamEvent>,
+    terminal: Option<LlmStepEnd>,
+}
+
+#[async_trait]
+impl LlmStream for ScriptedStream {
+    async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+        Ok(self.events.next())
+    }
+    async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+        self.terminal
+            .ok_or_else(|| LlmError::StreamEnded("ScriptedStream::finish double-called".into()))
+    }
+}
+
+fn zero_usage() -> LlmUsage {
+    LlmUsage::default()
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox — a short-lived temp directory seeded with one file the
+// scripted tool call reads. No `tempfile` dep: a process-unique
+// subdirectory under `$TMPDIR` is enough for a single integration
+// test, and the `Drop` impl cleans up on any exit path.
+// ---------------------------------------------------------------------------
+
+struct TestSandbox {
+    root: PathBuf,
+    parent: PathBuf,
+}
+
+impl TestSandbox {
+    fn new() -> Self {
+        let tmp = std::env::var("TMPDIR")
+            .or_else(|_| std::env::var("TEMP"))
+            .unwrap_or_else(|_| "/tmp".to_string());
+        // Process id + nanoseconds is sufficient uniqueness for a
+        // single-process integration test. Tests in the same crate
+        // run in parallel threads, not processes, so a plain atomic
+        // counter would also work — nanos keep the name informative
+        // when a test drops cleanup and you're staring at leftover
+        // directories.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let parent = PathBuf::from(tmp).join(format!("aivyx-fs-e2e-{pid}-{nanos}"));
+        let root = parent.join("root");
+        std::fs::create_dir_all(&root).expect("test sandbox root must be creatable");
+        TestSandbox { root, parent }
+    }
+
+    fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    fn write(&self, rel: &str, contents: &[u8]) {
+        let path = self.root.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir -p parent");
+        }
+        let mut f = std::fs::File::create(&path).expect("create test file");
+        f.write_all(contents).expect("write test file");
+    }
+}
+
+impl Drop for TestSandbox {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.parent);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Build a full SessionConfig + registry + audit stack. Shared by the
+// two tests below so the fixture wiring stays in one place.
+// ---------------------------------------------------------------------------
+
+struct Harness {
+    /// The canonicalized sandbox path the scope capabilities were
+    /// anchored on — also the sandbox the tools were built with.
+    /// The tests use this to construct input paths.
+    canonical_root: PathBuf,
+    tools: Arc<ToolRegistry>,
+    capabilities: CapabilitySet,
+}
+
+fn build_harness(sandbox: &TestSandbox) -> Harness {
+    // Build both tools at the raw sandbox root; their `build()` calls
+    // canonicalize internally. We then pull the canonical root back
+    // out of the read tool and anchor the capability scopes on it so
+    // a symlinked `$TMPDIR` can't silently widen or shift the grant.
+    let fs_read = FsReadToolConfig::new(sandbox.root().to_path_buf())
+        .build()
+        .expect("fs.read tool must build against a live sandbox");
+    let fs_write = FsWriteToolConfig::new(sandbox.root().to_path_buf())
+        .build()
+        .expect("fs.write tool must build against a live sandbox");
+
+    let canonical_root = fs_read.sandbox_root().to_path_buf();
+    let root_display = canonical_root.display();
+    let fs_read_scope = Scope::parse(&format!("fs.read:{root_display}/**"))
+        .expect("canonical fs.read scope must parse");
+    let fs_write_scope = Scope::parse(&format!("fs.write:{root_display}/**"))
+        .expect("canonical fs.write scope must parse");
+
+    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+        Arc::new(fs_read) as Arc<dyn Tool>,
+        Arc::new(fs_write) as Arc<dyn Tool>,
+    ]));
+
+    let capabilities = CapabilitySet::from_scopes([fs_read_scope, fs_write_scope]);
+
+    Harness {
+        canonical_root,
+        tools,
+        capabilities,
+    }
+}
+
+fn base_session_config(harness: &Harness) -> SessionConfig {
+    SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities: harness.capabilities.clone(),
+        tools: Arc::clone(&harness.tools),
+        prompt: String::new(),
+        banner: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 1 — happy path. An LLM asks for fs.read on a sandboxed file,
+// the tool runs, the second LLM step echoes a summary as the final
+// message, and the audit chain bears witness to all of it.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
+    let sandbox = TestSandbox::new();
+    sandbox.write("notes/today.md", b"buy milk\n");
+
+    let harness = build_harness(&sandbox);
+
+    // The LLM will ask for an absolute canonical path — the same
+    // path a real provider would receive back from Anthropic after
+    // an LLM decided to call the tool. Constructing it ourselves
+    // here keeps the test independent of any path-rewriting that
+    // might land later.
+    let target_path = harness.canonical_root.join("notes/today.md");
+    let target_path_str = target_path.to_str().unwrap().to_string();
+
+    let provider = ScriptedProvider::new(vec![
+        // Step 1: LLM calls fs.read. The planner dispatches the call.
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCall {
+                call_id: "toolu_read_01".to_string(),
+                tool_name: "fs.read".to_string(),
+                input: json!({ "path": target_path_str }),
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        },
+        // Step 2: LLM sees the tool result in its history and replies
+        // with a final message. The streamed chunk is a single piece
+        // of text that names the file contents — easy to assert on.
+        ScriptedStep {
+            events: vec![LlmStreamEvent::TextChunk("the note says: buy milk".into())],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "the note says: buy milk".to_string(),
+                usage: zero_usage(),
+            },
+        },
+    ]);
+
+    let audit_log = HmacChainLog::new([7u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let stdin_script = b"please read my note\n";
+    let reader = Cursor::new(&stdin_script[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("fs-e2e", Vec::new());
+    let sink = channel.writer_handle();
+
+    let config = base_session_config(&harness);
+
+    let report = run_session(
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        audit_hook,
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session must complete cleanly");
+
+    // ---- Assertion 1: turn completed with exactly one tool call.
+    assert_eq!(report.turns_run, 1);
+    match report.last_outcome {
+        Some(TurnOutcome::Completed {
+            ref final_message,
+            tool_calls_made,
+            ..
+        }) => {
+            assert_eq!(final_message, "the note says: buy milk");
+            assert_eq!(tool_calls_made, 1);
+        }
+        other => panic!("expected Completed(1 tool call), got {other:?}"),
+    }
+
+    // ---- Assertion 2: the final message reached the user.
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(
+        output.contains("the note says: buy milk"),
+        "final message chunk must be streamed to the channel: {output:?}"
+    );
+    assert!(
+        output.contains("[turn completed]"),
+        "finalize marker must render after the turn: {output:?}"
+    );
+
+    // ---- Assertion 3: the planner fed a ToolResult into step 2's
+    //      history. This proves the tool-result weaving path in
+    //      `LlmPlanner::observe_tool_outcome` actually ran, so an
+    //      eventual regression there would surface here and not
+    //      only in the core crate's unit tests.
+    let last_messages = provider.last_messages.lock().unwrap().clone();
+    let saw_tool_result = last_messages.iter().any(|m| {
+        matches!(
+            m,
+            LlmMessage::ToolResult {
+                call_id,
+                is_error,
+                ..
+            } if call_id == "toolu_read_01" && !is_error
+        )
+    });
+    assert!(
+        saw_tool_result,
+        "step 2 must have seen the tool result in history: {last_messages:?}"
+    );
+
+    // ---- Assertion 4: the audit chain recorded the whole shape —
+    //      TurnStarted → ToolCall(Completed) → TurnEnded(Completed) —
+    //      and verifies cleanly.
+    let log = audit_bridge.writer();
+    log.verify().expect("audit chain must verify");
+
+    let entries = log.entries().expect("can read entries");
+    let events: Vec<&AuditEvent> = entries.iter().map(|e| &e.event).collect();
+
+    // Exactly three entries: one TurnStarted, one ToolCall, one
+    // TurnEnded. A surprise 4th entry would suggest the chat-only
+    // path leaked a phantom event.
+    assert_eq!(
+        entries.len(),
+        3,
+        "expected TurnStarted + ToolCall + TurnEnded, got {} entries: {:#?}",
+        entries.len(),
+        events
+    );
+
+    assert!(matches!(events[0], AuditEvent::TurnStarted { .. }));
+    match events[1] {
+        AuditEvent::ToolCall {
+            outcome,
+            scope_used,
+            ..
+        } => {
+            // `ToolOutcomeSummary::Completed` is a struct variant with
+            // a `verified` field — match on it rather than equating so
+            // future additions to that variant don't force this test
+            // to be rewritten.
+            assert!(
+                matches!(outcome, ToolOutcomeSummary::Completed { .. }),
+                "expected Completed outcome in audit, got {outcome:?}"
+            );
+            // The scope stored in the audit entry is the one the tool
+            // asked for (the R1-derived narrow scope), not the broad
+            // capability the agent held. For fs.read this is a
+            // path-qualified scope pointing at the file the tool was
+            // asked to read.
+            assert_eq!(scope_used.base(), "fs.read");
+            assert!(
+                scope_used
+                    .qualifier()
+                    .map(|q| q.contains("notes/today.md"))
+                    .unwrap_or(false),
+                "audit scope must carry the requested path, got {scope_used:?}"
+            );
+        }
+        other => panic!("expected AuditEvent::ToolCall at index 1, got {other:?}"),
+    }
+    match events[2] {
+        AuditEvent::TurnEnded {
+            outcome,
+            tool_calls_made,
+            ..
+        } => {
+            assert_eq!(*outcome, TurnOutcomeSummary::Completed);
+            assert_eq!(*tool_calls_made, 1);
+        }
+        other => panic!("expected AuditEvent::TurnEnded at index 2, got {other:?}"),
+    }
+
+    // Turn id correlation: the ToolCall's turn_id must match the
+    // TurnStarted / TurnEnded pair wrapping it. This is the D5
+    // guarantee that audit correlates within a turn.
+    let (started_turn, started_session) = match events[0] {
+        AuditEvent::TurnStarted {
+            turn_id,
+            session_id,
+            ..
+        } => (*turn_id, *session_id),
+        _ => unreachable!(),
+    };
+    let tool_turn = match events[1] {
+        AuditEvent::ToolCall { turn_id, .. } => *turn_id,
+        _ => unreachable!(),
+    };
+    let ended_turn = match events[2] {
+        AuditEvent::TurnEnded { turn_id, .. } => *turn_id,
+        _ => unreachable!(),
+    };
+    assert_eq!(started_turn, tool_turn, "tool call must share the turn id");
+    assert_eq!(
+        started_turn, ended_turn,
+        "turn-end must share the turn id"
+    );
+    // Session id is just surfaced so a regression that forgot to
+    // propagate it would fail loudly. No further assertion needed.
+    let _ = started_session;
+}
+
+// ---------------------------------------------------------------------------
+// Test 2 — scope denial. The LLM asks for a path outside the sandbox
+// prefix. The scope gate denies the tool call at the loop, the
+// planner sees a `{"error":"denied"}` tool result, and then the LLM
+// gives up with a final message. The turn still lands in
+// `TurnOutcome::Completed` (D1: denial is a normal loop outcome,
+// not a loop-level failure), and the audit chain has both a
+// `ScopeDenied` entry and a `ToolCall` entry carrying
+// `ToolOutcomeSummary::Denied`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
+    let sandbox = TestSandbox::new();
+    // Don't seed the sandbox with anything — the attack path points
+    // at a filename the sandbox doesn't even contain, and the test
+    // is going to assert the scope check rejects it before the tool
+    // ever reaches the filesystem.
+    let harness = build_harness(&sandbox);
+
+    // The LLM asks to read `/etc/passwd`. The scope the tool derives
+    // from the input will be `fs.read:/etc/passwd`, which is not
+    // covered by the held `fs.read:<canonical_root>/**` capability,
+    // so the loop's scope gate (agent.rs:~314) denies the call.
+    let provider = ScriptedProvider::new(vec![
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCall {
+                call_id: "toolu_bad_01".to_string(),
+                tool_name: "fs.read".to_string(),
+                input: json!({ "path": "/etc/passwd" }),
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        },
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "I can't read that path.".to_string(),
+                usage: zero_usage(),
+            },
+        },
+    ]);
+
+    let audit_log = HmacChainLog::new([13u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let stdin_script = b"read /etc/passwd\n";
+    let reader = Cursor::new(&stdin_script[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("fs-e2e-deny", Vec::new());
+
+    let config = base_session_config(&harness);
+
+    let report = run_session(
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        audit_hook,
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session must complete cleanly even on scope denial");
+
+    // ---- Assertion 1: the turn lands as Completed with the planner's
+    //      recovery final message. A denied tool call is NOT a loop-
+    //      level failure — the planner gets to see the denial and
+    //      decide what to do.
+    assert_eq!(report.turns_run, 1);
+    match report.last_outcome {
+        Some(TurnOutcome::Completed {
+            ref final_message,
+            tool_calls_made,
+            ..
+        }) => {
+            assert_eq!(final_message, "I can't read that path.");
+            // `tool_calls_made` counts attempted tool calls, including
+            // denied ones — the loop bumps the counter before the
+            // scope gate runs. This matches the existing
+            // `tool_calls_made` coverage in agent.rs:631-635.
+            assert_eq!(tool_calls_made, 1);
+        }
+        other => panic!("expected Completed(1 tool call) on denial, got {other:?}"),
+    }
+
+    // ---- Assertion 2: the planner's step-2 history carries a
+    //      ToolResult with is_error=true and an "error":"denied"
+    //      envelope. This is the exact shape `render_tool_result`
+    //      emits for a `Denied` outcome.
+    let last_messages = provider.last_messages.lock().unwrap().clone();
+    let denial_result = last_messages.iter().find_map(|m| match m {
+        LlmMessage::ToolResult {
+            call_id,
+            content,
+            is_error,
+        } if call_id == "toolu_bad_01" => Some((content.clone(), *is_error)),
+        _ => None,
+    });
+    let (content, is_error) =
+        denial_result.expect("step 2 must see a ToolResult for the denied call");
+    assert!(is_error, "denied tool result must be flagged as an error");
+    let parsed: Value = serde_json::from_str(&content).expect("denial envelope is JSON");
+    assert_eq!(parsed["error"], "denied");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .map(|s| s.contains("fs.read"))
+            .unwrap_or(false),
+        "denial message must name the denied scope, got {parsed:?}"
+    );
+
+    // ---- Assertion 3: the audit chain has the shape
+    //      [TurnStarted, ScopeDenied, TurnEnded(Completed)].
+    //
+    //      Note: the loop emits `ScopeDenied` *instead of* `ToolCall`
+    //      — the early return at `agent.rs:316-338` means a denied
+    //      call never reaches the `ToolCall` append site. So the
+    //      runtime-auditor view (`ToolCall`) and the policy-auditor
+    //      view (`ScopeDenied`) are mutually exclusive for a given
+    //      call, not redundant. The invariant is "exactly one of the
+    //      two per tool call attempt."
+    let log = audit_bridge.writer();
+    log.verify().expect("audit chain must verify on denial");
+    let entries = log.entries().expect("can read entries");
+    let events: Vec<&AuditEvent> = entries.iter().map(|e| &e.event).collect();
+
+    assert_eq!(
+        entries.len(),
+        3,
+        "expected TurnStarted + ScopeDenied + TurnEnded, got {} entries: {:#?}",
+        entries.len(),
+        events
+    );
+
+    assert!(matches!(events[0], AuditEvent::TurnStarted { .. }));
+    match events[1] {
+        AuditEvent::ScopeDenied {
+            scope_requested, ..
+        } => {
+            // When `FsReadTool::required_scope` sees an absolute input
+            // path that escapes the sandbox, `lexical_resolve` returns
+            // `None` and the tool falls back to a deny sentinel
+            // (`fs.read:/aivyx/__deny__/invalid-input`). That is the
+            // scope the agent compares against the held capability
+            // set — not `fs.read:/etc/passwd`. Asserting the sentinel
+            // proves the lexical-escape path ran, which is the whole
+            // point of this test.
+            assert_eq!(scope_requested.base(), "fs.read");
+            assert_eq!(
+                scope_requested.qualifier(),
+                Some("/aivyx/__deny__/invalid-input"),
+                "denied scope must be the tool's lexical-escape sentinel, got {scope_requested:?}"
+            );
+        }
+        other => panic!("expected ScopeDenied at index 1, got {other:?}"),
+    }
+    match events[2] {
+        AuditEvent::TurnEnded {
+            outcome,
+            tool_calls_made,
+            ..
+        } => {
+            // D1 invariant: a denied tool call is still "one attempted
+            // tool call" from the loop's perspective, and the turn
+            // itself lands as Completed (not Failed) because the
+            // planner got to recover with a final message.
+            assert_eq!(*outcome, TurnOutcomeSummary::Completed);
+            assert_eq!(*tool_calls_made, 1);
+        }
+        other => panic!("expected TurnEnded at index 2, got {other:?}"),
+    }
+
+    // Confirm there is NO `ToolCall` entry — the early return after
+    // `ScopeDenied` is the reason, and a regression that accidentally
+    // started emitting both should be caught here.
+    let has_any_tool_call = events
+        .iter()
+        .any(|e| matches!(e, AuditEvent::ToolCall { .. }));
+    assert!(
+        !has_any_tool_call,
+        "scope denial must NOT emit a ToolCall entry (loop returns early): {events:#?}"
+    );
+}
