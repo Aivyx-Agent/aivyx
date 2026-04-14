@@ -421,6 +421,62 @@ breakdown — revised as work lands" framing exists to handle. The
 draft stays in place above as historical context; the resolutions
 below are the definitive Phase 10 plan.
 
+### Task 2 — second mid-phase correction: validation order vs. session injection
+
+While wiring the validator into `agent.rs`, a second subtlety
+emerged. The draft above said to run the validator "between the
+session-partition injection at `agent.rs:326–330` and the
+`required_scope` call at `agent.rs:332`." **This is also wrong.**
+
+Running validation *after* session injection means that every
+`memory.*` tool call fails validation on any channel that sets a
+session partition. Here's why:
+
+- `memory.read`, `memory.write`, and `memory.forget` schemas declare
+  `additionalProperties: false`.
+- `session` is injected into the tool input as a reserved key by
+  the turn loop (Phase 8 Task 2), and is **deliberately not** in
+  any tool's `input_schema` — it is a loop-internal routing field,
+  not an agent-visible contract.
+- A validator running after injection would see `{"topic": "notes",
+  "session": "chat-42"}`, note that `session` is not in
+  `properties`, and reject it via `UnknownField`.
+
+Resolution: **validation runs before session injection**, not
+after. The call order in `agent.rs` is now:
+
+1. Look up the tool.
+2. **Validate the raw planner input against `tool.input_schema()`**.
+   → If invalid, return `ToolOutcome::Failed` with detail.
+3. Inject `session` if the channel provides one.
+4. Compute `required_scope(input)`.
+5. Capability gate.
+6. `execute`.
+
+This preserves the Phase 6 invariant that the schema contract is
+"what the LLM may emit," strictly separate from the "what the
+runtime reshapes the input into before `required_scope` sees it"
+concern that session injection lives in.
+
+Validation failures route through `ToolOutcome::Failed`, not
+`ToolOutcome::Denied`. These two paths carry different semantics:
+`Denied` is a capability-layer signal the agent lacks scope;
+`Failed` is "the tool call is structurally broken." Prompt-
+injection attempts emitting malformed JSON must not be
+indistinguishable from an under-capabilitied agent in the audit
+chain, so they stay on the Failed track.
+
+The two integration tests in `agent.rs::tests` lock this in:
+
+- `malformed_tool_input_is_rejected_before_required_scope` — the
+  FakeTool's `scope_fn` is a panicking closure; if validation ever
+  regresses to run after `required_scope`, the panic fires and the
+  test fails loudly rather than silently accepting.
+- `well_formed_tool_input_passes_validation_and_runs` — the
+  counterpart proving the validator isn't over-rejecting (a buggy
+  validator that rejected everything would still pass the negative
+  test alone).
+
 ## Open questions
 
 Numbered so resolutions can be cited in ship records. Each question

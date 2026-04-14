@@ -311,6 +311,38 @@ impl ConcreteAgent {
             );
         };
 
+        // Phase 10 Task 2 — hand-rolled JSON-schema validation.
+        //
+        // Runs *before* session injection, not after: memory tool
+        // schemas set `additionalProperties: false` and do not
+        // declare a `session` property, so validating the
+        // post-injection input would reject every memory call the
+        // moment a Telegram-style channel provides a partition. The
+        // session field is a turn-loop internal, not an agent-
+        // visible surface, so it sits outside the schema contract.
+        //
+        // On mismatch the loop short-circuits to
+        // `ToolOutcome::Failed` with a human-readable detail, which
+        // the planner observes via `observe_tool_outcome` exactly
+        // like any other tool failure. We deliberately do NOT route
+        // through the deny-scope path: structural malformation is a
+        // *planner* bug (or prompt-injection attempt), not a
+        // capability question, and routing it through `Denied`
+        // would pollute the scope-denial telemetry stream.
+        if let Err(err) = crate::schema::validate(tool.input_schema(), &input) {
+            let outcome = ToolOutcome::Failed(AivyxError::Tool {
+                tool: tool_id,
+                detail: format!("input validation failed: {err}"),
+            });
+            return (
+                StepObservation {
+                    tool_id,
+                    summary: ToolOutcomeSummary::Failed,
+                },
+                outcome,
+            );
+        }
+
         // Phase 8 Task 2 — session partition injection. Channels that
         // want per-instance memory isolation (Telegram: one chat = one
         // partition) override `ChannelContext::session_partition`. The
@@ -518,6 +550,24 @@ mod tests {
                 id: ToolId::new(),
                 name,
                 schema: json!({}),
+                scope_fn: Box::new(f),
+            }
+        }
+
+        /// Task-2 helper: build a FakeTool whose input_schema is a
+        /// real JSON-Schema fragment. `scope_fn` is still invoked
+        /// for well-formed inputs; callers that expect validation
+        /// to short-circuit before `scope_fn` can plant a panicking
+        /// closure there to prove the validator fired first.
+        fn new_with_schema(
+            name: &'static str,
+            schema: Value,
+            f: impl Fn(&Value) -> Scope + Send + Sync + 'static,
+        ) -> Self {
+            FakeTool {
+                id: ToolId::new(),
+                name,
+                schema,
                 scope_fn: Box::new(f),
             }
         }
@@ -1036,5 +1086,131 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    // ---- Phase 10 task 2: JSON-schema validation at the turn loop ----
+    //
+    // The validator has its own unit tests in `schema.rs`; these two
+    // tests prove the *wiring*: the turn loop runs validation before
+    // `required_scope`, a failure short-circuits to `Failed` without
+    // invoking `scope_fn` or `execute`, and a well-formed input
+    // passes through unchanged.
+
+    #[tokio::test]
+    async fn malformed_tool_input_is_rejected_before_required_scope() {
+        // The FakeTool has a schema requiring a string `path` field.
+        // The planner emits an input missing `path`. If validation
+        // works, `scope_fn` is never called; it's set to panic so a
+        // regression (validator removed or moved after scope check)
+        // would panic loudly rather than silently accept.
+        let audit = RecordingAudit::new();
+
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" }
+            },
+            "required": ["path"]
+        });
+        let tool = Arc::new(FakeTool::new_with_schema("fs.read", schema, |_| {
+            panic!("required_scope must not run when validation fails");
+        }));
+        let tool_id = tool.id();
+
+        // Cap grant exists, so the test isolates the effect of
+        // validation from the scope-denial path. If the validator
+        // were missing, this call would reach `scope_fn` and panic
+        // — which is exactly the regression this test locks in.
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+
+        let plan = vec![NextStep::ToolCall {
+            tool_id,
+            input: json!({}), // missing required `path`
+        }];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "bad call");
+        let outcome = agent.turn(message, &channel).await;
+
+        // The turn still Completes — validation failure is a Failed
+        // step, not a turn-ending error. Tool_calls_made == 1 because
+        // the loop did attempt the call, just not reach execute.
+        match outcome {
+            TurnOutcome::Completed {
+                tool_calls_made, ..
+            } => assert_eq!(tool_calls_made, 1),
+            other => panic!("expected Completed (validation fail is not termination), got {other:?}"),
+        }
+
+        // The audit trail must contain NO ToolCall event and NO
+        // ScopeDenied event — validation fails before either runs.
+        // It also must not contain a panic trace; if the panic
+        // fired we'd never have reached this assertion.
+        let events = audit.snapshot();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "validation failure must not emit ToolCall"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "validation failure must route through Failed, not Denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn well_formed_tool_input_passes_validation_and_runs() {
+        // Positive case: schema-valid input reaches execute as
+        // before, proving validation isn't over-rejecting. This is
+        // the counterpart to the negative test above — without it,
+        // a buggy validator that rejected *everything* would still
+        // pass the negative assertion.
+        let audit = RecordingAudit::new();
+
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" }
+            },
+            "required": ["path"]
+        });
+        let tool = Arc::new(FakeTool::new_with_schema("fs.read", schema, |_| {
+            Scope::parse("fs.read").unwrap()
+        }));
+        let tool_id = tool.id();
+
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+
+        let plan = vec![NextStep::ToolCall {
+            tool_id,
+            input: json!({"path": "notes/today.md"}),
+        }];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "good call");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Completed {
+                tool_calls_made, ..
+            } => assert_eq!(tool_calls_made, 1),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // A valid input reaches execute → ToolCall is recorded.
+        let events = audit.snapshot();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "valid input must reach ToolCall"
+        );
     }
 }
