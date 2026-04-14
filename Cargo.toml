@@ -23,7 +23,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Core async runtime — shared so all crates use the same version
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-std", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 

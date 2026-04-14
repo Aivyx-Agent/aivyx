@@ -72,6 +72,18 @@ Phase 3 is the last mile — the code that turns a terminal into a
   hit the missing `Default` impl and worked around it. Cheap add,
   probably drops in at the start of Phase 3 if a `LocalChannel`
   smoke test needs it.
+- **Per-turn cancellation token lifecycle (from task 3).** The task
+  3 binary uses a single process-wide `CancellationToken` held by
+  `LocalChannel`. `tokio-util`'s token is monotonic — once cancelled
+  it stays cancelled forever — so after the user ctrl-Cs a turn and
+  returns to the prompt, the next turn would see a pre-cancelled
+  token. The task-3 binary works around this by exiting the process
+  in the pre-turn guard; it's safe but user-hostile. Proper fix:
+  `LocalChannel` owns a `Mutex<CancellationToken>` and rotates it
+  per turn, while the signal task watches a *separate*
+  process-lifetime token for the exit path. This is natural to
+  land alongside task 4's timeout work because both touch the same
+  token-lifecycle seam.
 
 ## Phase 3 task list
 
