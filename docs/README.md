@@ -26,6 +26,17 @@ session needs to rely on, it goes in `DESIGN.md`. If it's a decision
 log, task list, or "why we chose A over B today," it goes in the phase
 doc.
 
+## Cross-phase reference docs
+
+Living documents that span multiple phases and capture patterns
+learned across the phase sequence. Unlike phase journals, these are
+edited freely when a new adapter or subsystem teaches us something new.
+
+- [`ADAPTER_PATTERN.md`](ADAPTER_PATTERN.md) — future-proof checklist
+  for adding a new `ChannelContext` adapter, grounded in the two
+  adapters in tree (`LocalChannel`, `TelegramChannel`). Read this
+  first if you're about to add a third.
+
 ## Phase status
 
 | Phase    | Status  | Doc                        | Commit    |
