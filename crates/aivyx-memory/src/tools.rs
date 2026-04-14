@@ -109,6 +109,20 @@ pub const DEFAULT_READ_LIMIT: usize = 16;
 /// store into context.
 pub const MAX_READ_LIMIT: usize = 64;
 
+/// Phase 7 task 5 — default ceiling on the number of entries a single
+/// topic may hold before `memory.write` starts refusing new entries.
+/// Not a hard disk-space bound (the redb file can still grow from
+/// *many topics*); this is the per-topic GC tripwire that prevents a
+/// single topic from becoming an unbounded log. 10_000 is generous
+/// enough that realistic "remember X" usage never trips it, but small
+/// enough that a runaway loop gets caught long before the substrate
+/// chokes.
+///
+/// The binary reads `AIVYX_MEMORY_MAX_PER_TOPIC` once at startup and
+/// passes the resolved cap through `MemoryWriteTool::set_max_per_topic`.
+/// Tests override it with the same builder. No ambient global config.
+pub const DEFAULT_MAX_PER_TOPIC: usize = 10_000;
+
 /// Construct a `Scope` no agent will ever be granted. Uses the
 /// qualifier `"topic:\x00denied"` — a NUL byte inside a qualifier is
 /// unreachable through normal `Scope::parse` on user-supplied
@@ -333,6 +347,13 @@ pub struct MemoryWriteTool {
     id: ToolId,
     memory: Arc<dyn Memory>,
     schema: Value,
+    /// Phase 7 task 5 — per-topic GC tripwire. When a topic already
+    /// holds at least this many entries, `execute` refuses further
+    /// writes with a `ToolOutcome::Failed` carrying a
+    /// recovery-actionable error detail. Defaults to
+    /// [`DEFAULT_MAX_PER_TOPIC`]; binaries and tests can override via
+    /// [`MemoryWriteTool::set_max_per_topic`].
+    max_per_topic: usize,
 }
 
 impl std::fmt::Debug for MemoryWriteTool {
@@ -340,6 +361,7 @@ impl std::fmt::Debug for MemoryWriteTool {
         f.debug_struct("MemoryWriteTool")
             .field("id", &self.id)
             .field("memory", &"Arc<dyn Memory>")
+            .field("max_per_topic", &self.max_per_topic)
             .finish()
     }
 }
@@ -350,7 +372,22 @@ impl MemoryWriteTool {
             id: ToolId::new(),
             memory,
             schema: write_input_schema_value(),
+            max_per_topic: DEFAULT_MAX_PER_TOPIC,
         }
+    }
+
+    /// Override the per-topic write cap. Returns `self` for the
+    /// builder-style chaining the binary uses when
+    /// `AIVYX_MEMORY_MAX_PER_TOPIC` is set, and that tests use to drive
+    /// the tripwire with a manageable number of seeded entries.
+    ///
+    /// A cap of `0` is legal and means "refuse every write" — useful
+    /// for testing the refusal path but nothing else. The tool does
+    /// not silently reinterpret `0` as "unlimited"; if you want that,
+    /// use `usize::MAX`.
+    pub fn set_max_per_topic(mut self, cap: usize) -> Self {
+        self.max_per_topic = cap;
+        self
     }
 }
 
@@ -429,6 +466,32 @@ impl Tool for MemoryWriteTool {
             scope: memory_scope("memory.write", &topic),
             query_or_key: topic.clone(),
         });
+
+        // Phase 7 task 5 — GC tripwire. Count the topic's existing
+        // entries via a bounded `get_recent` call. `RedbMemory::get_recent`
+        // does a full `scan_prefix` on the topic regardless of limit
+        // (decode cost is what scales with `limit`), so passing
+        // `max_per_topic` gives us the smallest decoded prefix that
+        // can still answer "is the topic at or above cap?" The audit
+        // event above has already been emitted — a refused write is
+        // still a write *intent*, and recording it is the whole point
+        // of the audit chain. Only after the tripwire fires do we
+        // surface the refusal to the caller.
+        let existing = match self.memory.get_recent(&topic, self.max_per_topic).await {
+            Ok(v) => v,
+            Err(e) => return memory_err_to_failed(self.id, e),
+        };
+        if existing.len() >= self.max_per_topic {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "topic '{topic}' has reached the per-topic size cap \
+                     ({} entries); call memory.forget for this topic or \
+                     write under a different topic",
+                    self.max_per_topic
+                ),
+            });
+        }
 
         let seq = match self.memory.put(&topic, &body).await {
             Ok(s) => s,
@@ -968,6 +1031,166 @@ mod tests {
             MemoryForgetTool::new(fresh_memory()).name(),
             "memory.forget"
         );
+    }
+
+    // ---- Phase 7 task 5: per-topic GC tripwire ---------------------
+
+    #[tokio::test]
+    async fn write_at_cap_still_succeeds() {
+        // With `max_per_topic = 3` and two existing entries, the next
+        // write is still legal: `existing.len() == 2 < 3`, so the
+        // tripwire does not fire. This is the boundary case — one
+        // more write takes the topic *exactly to* the cap, and the
+        // next one after that is the first one that must fail.
+        let mem = fresh_memory();
+        mem.put("notes", "first").await.unwrap();
+        mem.put("notes", "second").await.unwrap();
+
+        let writer = MemoryWriteTool::new(mem.clone()).set_max_per_topic(3);
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = writer
+            .execute(json!({"topic": "notes", "body": "third"}), &ctx)
+            .await;
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "notes");
+                assert_eq!(output["seq"], 2);
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("at-cap write should Complete, got {other:?}"),
+        }
+        // And the topic is now exactly at cap — the next write must
+        // refuse.
+        assert_eq!(mem.get_recent("notes", 10).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn write_over_cap_fails_with_tool_error_naming_topic_and_cap() {
+        let mem = fresh_memory();
+        for i in 0..3 {
+            mem.put("notes", &format!("entry {i}")).await.unwrap();
+        }
+
+        let writer = MemoryWriteTool::new(mem.clone()).set_max_per_topic(3);
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&chan, &audit);
+
+        let outcome = writer
+            .execute(
+                json!({"topic": "notes", "body": "one too many"}),
+                &ctx,
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { tool, detail }) => {
+                assert_eq!(tool, writer.id());
+                // Recovery hint must name the topic (so the agent knows
+                // *which* forget call to make) and the cap (so the
+                // agent has grounds to tell the user this was a
+                // configured tripwire, not substrate failure).
+                assert!(
+                    detail.contains("notes"),
+                    "detail should name topic, got {detail}"
+                );
+                assert!(
+                    detail.contains('3'),
+                    "detail should mention the cap, got {detail}"
+                );
+                assert!(
+                    detail.contains("memory.forget"),
+                    "detail should suggest memory.forget, got {detail}"
+                );
+            }
+            other => panic!("over-cap write must Fail with Tool error, got {other:?}"),
+        }
+        // The refused write must not have landed.
+        assert_eq!(mem.get_recent("notes", 10).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn forget_clears_the_cap_so_next_write_succeeds() {
+        // A full topic + forget + retry is the agent's documented
+        // recovery path. This test walks it end-to-end through the
+        // tool surface, to prove the detail message's advice actually
+        // works.
+        let mem = fresh_memory();
+        for i in 0..3 {
+            mem.put("notes", &format!("entry {i}")).await.unwrap();
+        }
+
+        let writer = MemoryWriteTool::new(mem.clone()).set_max_per_topic(3);
+        let forget = MemoryForgetTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        // Sanity: the next write fails.
+        let ctx = make_ctx(&chan, &audit);
+        let first = writer
+            .execute(json!({"topic": "notes", "body": "blocked"}), &ctx)
+            .await;
+        assert!(matches!(first, ToolOutcome::Failed(_)));
+
+        // Recovery: forget the topic.
+        let ctx = make_ctx(&chan, &audit);
+        let cleared = forget.execute(json!({"topic": "notes"}), &ctx).await;
+        match cleared {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["deleted"], 3);
+            }
+            other => panic!("forget should Complete, got {other:?}"),
+        }
+
+        // Retry: the same write now succeeds.
+        let ctx = make_ctx(&chan, &audit);
+        let retry = writer
+            .execute(json!({"topic": "notes", "body": "blocked"}), &ctx)
+            .await;
+        match retry {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "notes");
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("retry after forget should Complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cap_is_per_topic_not_global() {
+        // Fill topic `notes` to cap, then prove that `todos` — a
+        // different topic — still accepts writes under the same tool
+        // instance. This pins the cap as per-*qualifier*, matching
+        // the scope model where `memory.write:topic:notes` and
+        // `memory.write:topic:todos` are distinct capabilities.
+        let mem = fresh_memory();
+        for i in 0..3 {
+            mem.put("notes", &format!("note {i}")).await.unwrap();
+        }
+
+        let writer = MemoryWriteTool::new(mem.clone()).set_max_per_topic(3);
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        let blocked = writer
+            .execute(json!({"topic": "notes", "body": "nope"}), &ctx)
+            .await;
+        assert!(matches!(blocked, ToolOutcome::Failed(_)));
+
+        let ctx = make_ctx(&chan, &audit);
+        let ok = writer
+            .execute(json!({"topic": "todos", "body": "unrelated"}), &ctx)
+            .await;
+        match ok {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "todos");
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("other-topic write should Complete, got {other:?}"),
+        }
     }
 
     #[test]

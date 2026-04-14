@@ -51,6 +51,12 @@
 //!   not a terminal (systemd/launchd/scripted runs), the binary
 //!   exits with a clear error rather than hanging on a tty read
 //!   that will never come.
+//! - `AIVYX_MEMORY_MAX_PER_TOPIC` — override the per-topic GC
+//!   tripwire for `memory.write` (Phase 7 task 5). Defaults to
+//!   [`aivyx_memory::DEFAULT_MAX_PER_TOPIC`] (10_000). Parsed as
+//!   `usize` once at startup; an unparseable value is a hard error
+//!   rather than a silent fallback, because a mis-set cap hides
+//!   runaway-write bugs.
 //!
 //! ## Cancellation
 //!
@@ -103,7 +109,10 @@ use aivyx_core::{
     AuditHook, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
 };
 use aivyx_crypto::Argon2Params;
-use aivyx_memory::{Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory};
+use aivyx_memory::{
+    Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory,
+    DEFAULT_MAX_PER_TOPIC,
+};
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
@@ -316,6 +325,34 @@ fn resolve_storage_path() -> Result<PathBuf, String> {
         .join("store.redb"))
 }
 
+/// Resolve the per-topic memory write cap (Phase 7 task 5).
+///
+/// Priority:
+/// 1. `AIVYX_MEMORY_MAX_PER_TOPIC` set and non-empty → parse as
+///    `usize`. An unparseable value is a **hard error** rather than
+///    a silent fallback to the default: a mis-set cap would mask
+///    runaway-write bugs, which is exactly the failure mode the
+///    tripwire exists to catch.
+/// 2. Unset or empty → [`DEFAULT_MAX_PER_TOPIC`].
+///
+/// Parsing happens once at startup, before any session work, so a
+/// typo in the env var fails fast with a clean error instead of
+/// surfacing as a mysterious "topic full" at the first
+/// `memory.write` call of a live session.
+fn resolve_memory_max_per_topic() -> Result<usize, String> {
+    match std::env::var("AIVYX_MEMORY_MAX_PER_TOPIC") {
+        Ok(s) if !s.is_empty() => s.parse::<usize>().map_err(|e| {
+            format!(
+                "AIVYX_MEMORY_MAX_PER_TOPIC is set to {s:?} which is not a \
+                 valid usize: {e}. Unset the variable to accept the default \
+                 ({DEFAULT_MAX_PER_TOPIC}), or set it to a non-negative \
+                 integer."
+            )
+        }),
+        _ => Ok(DEFAULT_MAX_PER_TOPIC),
+    }
+}
+
 /// Build the sidecar salt file path for a given store path.
 ///
 /// Convention: append a literal `.salt` to the store path's OS string.
@@ -478,7 +515,13 @@ async fn run_async(
         .await
         .map_err(|e| format!("failed to open memory substrate: {e}"))?;
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
-    let memory_write = MemoryWriteTool::new(Arc::clone(&memory));
+    // Phase 7 task 5 — resolve the per-topic GC tripwire from
+    // `AIVYX_MEMORY_MAX_PER_TOPIC` once at startup. Unset → default.
+    // Set-but-unparseable is a hard error: a misconfigured cap would
+    // silently mask runaway-write bugs if we fell back quietly.
+    let memory_cap = resolve_memory_max_per_topic()?;
+    let memory_write =
+        MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![

@@ -428,19 +428,80 @@ tasks are allowed to reorder and re-scope as we learn.
    level — the public `PassphraseSource::InteractivePrompt`
    variant is still unit-shape.
 
-5. **Memory GC tripwire.** Add a size-cap check inside
-   `MemoryWriteTool::execute` that counts the current topic's
-   entries before the put and refuses to write if the count
-   exceeds a configurable threshold (default 10 000 per topic,
-   overridable via `AIVYX_MEMORY_MAX_PER_TOPIC`). Return
+5. **Memory GC tripwire.** (Shipped 2026-04-14.)
+   `MemoryWriteTool` gains a `max_per_topic: usize` field, defaulted
+   to a new `aivyx_memory::DEFAULT_MAX_PER_TOPIC` const (10_000) by
+   `MemoryWriteTool::new(memory)` and overridable via a builder
+   `set_max_per_topic(self, cap) -> Self`. Inside `execute`, the
+   tripwire runs **after** the `AuditTag::MemoryAccess::Write`
+   event and **before** the `Memory::put` call: a bounded
+   `get_recent(&topic, self.max_per_topic)` counts the topic's
+   existing entries, and if `existing.len() >= max_per_topic` the
+   tool returns `ToolOutcome::Failed(AivyxError::Tool { tool,
+   detail })` with a detail that names the topic, the cap value,
+   and the `memory.forget` recovery path. The audit chain records
+   the write *intent* regardless of outcome, which was the whole
+   reason the tripwire lives after the audit event and not before.
+   
+   **Draft-shape correction.** The Task 5 draft said
    `ToolOutcome::Failed { reason: "topic size cap reached" }`.
-   This is not a real GC — it's the "tripwire" version that
-   surfaces the unbounded-substrate problem to the agent as a
-   tool error, so the planner can call `memory.forget` or move
-   to a new topic. Real GC (TTL, LRU, compaction) is re-deferred
-   to a future phase. Unit tests add: put-at-cap succeeds,
-   put-over-cap fails with the right error, forget-and-retry
-   works.
+   `Failed` is a tuple variant wrapping `AivyxError`, not a
+   struct variant with a `reason` field, so the draft text was
+   mechanically wrong. Shipped shape is
+   `ToolOutcome::Failed(AivyxError::Tool { tool, detail })` with
+   a detail that carries actionable recovery text. Same
+   correction-in-shipped-record pattern as Task 3's stale
+   capability-set helper line.
+   
+   **Cost analysis for `get_recent` as a count primitive.**
+   `RedbMemory::get_recent` does a full `scan_prefix(topic)`
+   regardless of the `limit` parameter — decode cost is the only
+   thing that scales with `limit`. Passing `max_per_topic` as the
+   limit gives us the smallest decoded prefix that can still
+   answer "is the topic at or above cap?" without adding a
+   `Memory::count` trait method we'd have to implement on every
+   substrate. The decision was "grow the trait surface or reuse
+   the existing read path" — reuse wins because the read path is
+   already the one the tool trusts for the verification fence.
+   
+   **Binary wire-up.** `aivyx.rs` gains a
+   `resolve_memory_max_per_topic() -> Result<usize, String>`
+   helper next to `resolve_fs_root`/`resolve_storage_path` that
+   reads `AIVYX_MEMORY_MAX_PER_TOPIC` once at startup. Unset or
+   empty → default; set → `parse::<usize>()` with a **hard error**
+   on unparseable input. A mis-set cap would silently mask
+   runaway-write bugs, which is exactly the failure mode this
+   tripwire exists to catch, so a typo has to fail loudly rather
+   than fall back to the default. The resolved cap flows into
+   the `MemoryWriteTool` construction via the builder setter at
+   the existing `memory_write = MemoryWriteTool::new(...)` site.
+   
+   **Tests.** Four new `tools::tests` entries
+   (workspace 276 → 280): `write_at_cap_still_succeeds` exercises
+   the boundary (2 existing, cap 3, write succeeds at seq 2);
+   `write_over_cap_fails_with_tool_error_naming_topic_and_cap`
+   proves the refusal and asserts the detail contains the topic,
+   the cap, and the `memory.forget` recovery hint;
+   `forget_clears_the_cap_so_next_write_succeeds` walks the
+   end-to-end recovery path through the tool surface (write
+   fails → forget succeeds → retry succeeds), proving the
+   detail's advice actually works; `cap_is_per_topic_not_global`
+   pins the tripwire as per-topic by filling `notes` to cap and
+   then successfully writing `todos` through the same tool
+   instance.
+   
+   **Six-phase DESIGN.md empty-diff streak survives a fifth
+   task-level decision.** Task 5 had two potential streak-enders:
+   (a) the refusal mode could have needed a new
+   `ToolOutcome::Refused` variant or a new `AivyxError::MemoryFull`
+   variant — resolved by fitting the refusal into the existing
+   `ToolOutcome::Failed(AivyxError::Tool { tool, detail })` slot,
+   which was already the right shape for "tool-specific failure
+   with recovery text." (b) `Memory` trait could have grown a
+   `count(topic) -> MemoryResult<usize>` method, which would have
+   needed impls in `InMemoryMemory` and `RedbMemory` — resolved
+   by reusing `get_recent` as described in the cost-analysis
+   block above, keeping the trait surface frozen.
 
 6. **Filesystem permission hardening.** On Linux (the only
    supported platform per D5), `chmod 0600` the store file, the
@@ -732,9 +793,23 @@ wiring; defer to Phase 8+ otherwise.
       workspace 271 → 276. Smoke-tested in three binary
       branches. DESIGN.md empty-diff streak preserved a fourth
       task in a row.)*
-- [ ] `MemoryWriteTool` refuses writes above
+- [x] `MemoryWriteTool` refuses writes above
       `AIVYX_MEMORY_MAX_PER_TOPIC` (default 10 000) with a
       typed `Failed` outcome the planner can observe.
+      *(Task 5, 2026-04-14. New `DEFAULT_MAX_PER_TOPIC` const
+      and `set_max_per_topic` builder; tripwire runs after the
+      audit event and before `Memory::put`, surfacing as
+      `ToolOutcome::Failed(AivyxError::Tool { tool, detail })`
+      with a detail that names the topic, the cap, and the
+      `memory.forget` recovery hint. Binary resolves the cap once
+      at startup via a new `resolve_memory_max_per_topic` helper
+      — unparseable env-var values are a hard error, not a silent
+      fallback. Draft's wrong `Failed { reason }` shape corrected
+      in the shipped record. +4 tests; workspace 276 → 280.
+      DESIGN.md empty-diff streak preserved a fifth task in a
+      row — `Memory` trait did not grow a `count` method, and
+      `ToolOutcome::Failed(AivyxError::Tool {...})` absorbed the
+      refusal without a new variant.)*
 - [ ] The store file, its salt sidecar, and any audit-chain
       state files are `chmod 0600` at create time on Linux.
 - [ ] A scripted integration test
