@@ -247,18 +247,47 @@ tasks are allowed to reorder and re-scope as we learn.
    fn for a `--verify-only` CLI mode (Q6) and deciding the
    mandatory-vs-logged policy (Q5).
 
-2. **Ship chain verification on open.** Add a
-   `PersistentAuditLog::verify_from_disk(storage, key) -> Result`
-   entry point that range-scans `KeyDomain::Audit` in seq order,
-   decrypts each event, and replays the HMAC chain against the
-   stored MACs. This is the "cold start proves the prior chain
-   was untampered" step. The task 1 impl writes the chain; this
-   task reads it back and verifies it. Question: is verification
-   mandatory at open, or logged-and-continued? See Q5. Unit tests
-   add: verify-empty-store, verify-clean-chain, verify-tampered-
-   chain (flip a byte in a mid-sequence record), verify-truncated-
-   chain (delete the last N records), verify-resumption after a
-   clean close.
+2. **Ship chain verification on open.** (Shipped 2026-04-14.)
+   `PersistentAuditLog::verify_from_disk(storage, audit_key) ->
+   Result<VerifyReport, AuditError>` lands as a standalone async
+   associated fn: callers hand it an `Arc<dyn Storage>` and a raw
+   `[u8; 32]`, it range-scans `KeyDomain::Audit` in seq order,
+   decodes each row, and replays the HMAC chain from the genesis
+   seed. No live `PersistentAuditLog` is constructed — the
+   verify-only path never spawns a drain task, never takes a
+   write handle. On success it returns a `VerifyReport` with
+   `entries_verified`, `head_seq`, and `head_mac`; on failure it
+   returns `AuditError::ChainBroken { seq }` or
+   `AuditError::CorruptStoredEntry { seq, reason }` unchanged.
+
+   **Refactor hygiene.** Both `open` and `verify_from_disk` now
+   route through a shared private `scan_decode_verify` helper
+   that owns the "what counts as a valid on-disk chain"
+   definition. The ten pre-existing Task 1 reopen tests doubled
+   as the regression harness for the extraction — they would
+   have failed loudly if the helper changed behavior. Four new
+   tests land for the cold-start path: empty store reports
+   `(0, None, genesis)`; five-event write reports
+   `(5, Some(4), entries[4].mac)`; tampering `entry1.mac[7]`
+   surfaces `ChainBroken { seq: 1 }` (deliberately non-boundary
+   to catch seq-off-by-one regressions); two back-to-back
+   `verify_from_disk` calls followed by a live `open` all
+   succeed, proving no lock is held across await points.
+
+   **Q5 resolution — policy at the boundary.** Neither "mandatory
+   at open" nor "logged and continued" became the rule inside
+   `aivyx-audit`. `verify_from_disk` returns the error unchanged;
+   the binary (Task 3) decides whether to exit non-zero, restore
+   from backup, or (in a future dev tool) display the break and
+   continue. This keeps aivyx-audit out of any
+   `AuditEvent::ChainBreakDetected` schema-extension territory
+   that would have amended D4 — the six-phase DESIGN.md empty-
+   diff streak survives a second task.
+
+   **Q6 (`--verify-only` CLI mode).** Deferred to Task 3, where
+   the binary decides whether to expose the standalone entry
+   point as a CLI flag. The library-level plumbing is already in
+   place.
 
 3. **Wire `PersistentAuditLog` into the `aivyx` binary.** In
    `crates/aivyx-channel/src/bin/aivyx.rs`, replace the direct
@@ -546,9 +575,16 @@ wiring; defer to Phase 8+ otherwise.
       (tampered byte at mid-sequence), and truncation detection.
       *(Task 1, 2026-04-14. 10 new `persistent::tests` lines;
       workspace 257 → 267.)*
-- [ ] Chain verification at `PersistentAuditLog::open` runs
+- [x] Chain verification at `PersistentAuditLog::open` runs
       against the on-disk range-scan and returns a typed result
-      a caller can branch on.
+      a caller can branch on. *(Task 2, 2026-04-14. Shipped
+      as a standalone `verify_from_disk(storage, key) ->
+      Result<VerifyReport, AuditError>` associated fn; shared
+      `scan_decode_verify` helper now backs both `open` and
+      verify-only; 4 new tests; workspace 267 → 271. Q5 resolved
+      as policy-at-the-boundary: error returned unchanged, no
+      `AuditEvent::ChainBreakDetected` schema touch, DESIGN.md
+      streak preserved.)*
 - [ ] The `aivyx` binary constructs a `PersistentAuditLog` in
       place of the bare `HmacChainLog`, verifies the chain on
       startup, and surfaces the verified event count in the

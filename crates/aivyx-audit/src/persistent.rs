@@ -156,14 +156,9 @@ impl PersistentAuditLog {
         audit_key: [u8; 32],
         on_error: Box<dyn Fn(AuditError) + Send + Sync>,
     ) -> Result<Self, AuditError> {
-        let handle = storage.domain(KeyDomain::Audit);
-
-        let rows: Vec<ScanRow> = handle
-            .scan_prefix(AUDIT_KEY_PREFIX)
-            .await
-            .map_err(|e| AuditError::Storage(e.to_string()))?;
-
-        let entries = decode_and_validate_rows(&audit_key, rows)?;
+        // Shared with `verify_from_disk`: one scan+decode+verify
+        // pipeline, so reopen and standalone-verify cannot drift.
+        let entries = scan_decode_verify(&storage, &audit_key).await?;
 
         let chain = Arc::new(HmacChainLog::from_verified_entries(
             audit_key.to_vec(),
@@ -230,6 +225,94 @@ impl PersistentAuditLog {
     /// Snapshot of all entries, for tests and admin tools.
     pub fn entries(&self) -> Result<Vec<SignedEntry>, AuditError> {
         self.chain.entries()
+    }
+
+    /// Cold-start chain verification over `KeyDomain::Audit`.
+    ///
+    /// Runs the same scan + decode + HMAC-replay pipeline that
+    /// [`Self::open`] runs internally, but **without** building a
+    /// live `PersistentAuditLog` — no in-memory chain held open, no
+    /// drain task spawned. Intended for:
+    ///
+    /// - **Startup banners.** The binary in Task 3 calls this before
+    ///   constructing the live log so it can surface "audit:
+    ///   persistent (N events verified from disk)" to the operator.
+    /// - **Integration tests.** Task 7's `audit_persistence_e2e.rs`
+    ///   drives a two-session flow and asserts the verified chain
+    ///   matches session A's emitted events.
+    /// - **A future `--verify-only` CLI mode** (Q6, deferred to
+    ///   Task 3) where the binary verifies then exits without
+    ///   opening a session at all.
+    ///
+    /// ## Q5 resolution — fail-closed at the boundary
+    ///
+    /// Tamper, truncation, or decode failure returns
+    /// `Err(AuditError::ChainBroken { .. })` /
+    /// `Err(AuditError::CorruptStoredEntry { .. })` unchanged. The
+    /// caller decides whether to exit non-zero, restore from
+    /// backup, or (in a future dev tool) display the break and
+    /// continue. No policy is baked in here — which keeps
+    /// `aivyx-audit` out of any `AuditEvent::ChainBreakDetected`
+    /// schema-extension territory that would amend D4. See
+    /// `PHASE_7.md` Q5 for the decision trail.
+    pub async fn verify_from_disk(
+        storage: Arc<dyn Storage>,
+        audit_key: [u8; 32],
+    ) -> Result<VerifyReport, AuditError> {
+        let entries = scan_decode_verify(&storage, &audit_key).await?;
+        Ok(VerifyReport::from_entries(&entries))
+    }
+}
+
+/// Result of a cold-start `verify_from_disk` run.
+///
+/// Intentionally small — fields are added only when a concrete
+/// caller needs them. Today's callers are:
+///
+/// - Task 3 startup banner → `entries_verified`
+/// - Task 7 integration test → `head_seq`, `head_mac`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyReport {
+    /// Number of entries that passed the full chain replay. Equals
+    /// the number of rows under `KeyDomain::Audit` — verify is
+    /// all-or-nothing (we return `Err` at the first break), so this
+    /// also equals "rows scanned."
+    pub entries_verified: usize,
+    /// Sequence number of the last verified entry, or `None` on an
+    /// empty store. Equivalent to `entries_verified - 1` when
+    /// `entries_verified > 0`, exposed separately so callers can
+    /// pattern-match on `Option` without subtracting from a
+    /// `usize`.
+    pub head_seq: Option<u64>,
+    /// HMAC tag of the last verified entry, or the genesis seed on
+    /// an empty store. This is the value that a subsequent
+    /// [`PersistentAuditLog::open`] will chain its first new
+    /// append onto — useful for integration tests that want to
+    /// prove session B picked up exactly where session A left off.
+    pub head_mac: [u8; 32],
+}
+
+impl VerifyReport {
+    fn from_entries(entries: &[SignedEntry]) -> Self {
+        let genesis = {
+            const GENESIS_SEED: &[u8] = b"aivyx-audit-v1-genesis";
+            let mut seed = [0u8; 32];
+            let start = seed.len() - GENESIS_SEED.len();
+            seed[start..].copy_from_slice(GENESIS_SEED);
+            seed
+        };
+        match entries.last() {
+            Some(last) => VerifyReport {
+                entries_verified: entries.len(),
+                head_seq: Some(last.seq),
+                head_mac: last.mac,
+            },
+            None => VerifyReport {
+                entries_verified: 0,
+                head_seq: None,
+                head_mac: genesis,
+            },
+        }
     }
 }
 
@@ -329,8 +412,26 @@ impl Drop for PersistentAuditLog {
 }
 
 // ---------------------------------------------------------------------------
-// Reopen path: decode + verify SignedEntry rows from disk.
+// Reopen path: scan + decode + verify SignedEntry rows from disk.
+//
+// Used by *both* `PersistentAuditLog::open` (which then constructs an
+// in-memory chain from the result) and `PersistentAuditLog::verify_from_disk`
+// (which discards the result after building a `VerifyReport`). Sharing
+// one pipeline guarantees the two entry points cannot drift in their
+// definition of "valid on-disk audit state."
 // ---------------------------------------------------------------------------
+
+async fn scan_decode_verify(
+    storage: &Arc<dyn Storage>,
+    audit_key: &[u8; 32],
+) -> Result<Vec<SignedEntry>, AuditError> {
+    let handle = storage.domain(KeyDomain::Audit);
+    let rows: Vec<ScanRow> = handle
+        .scan_prefix(AUDIT_KEY_PREFIX)
+        .await
+        .map_err(|e| AuditError::Storage(e.to_string()))?;
+    decode_and_validate_rows(audit_key, rows)
+}
 
 fn decode_and_validate_rows(
     audit_key: &[u8; 32],
@@ -824,6 +925,122 @@ mod tests {
         );
         let parsed = seq_from_key_bytes(&audit_key(42)).unwrap();
         assert_eq!(parsed, 42);
+    }
+
+    // ---- Task 2: verify_from_disk standalone entry point --------------
+    //
+    // These four tests exercise the cold-start verification path that
+    // does not construct a live `PersistentAuditLog`. They share the
+    // `fresh_storage` + `wait_for_disk` fixtures above and use seeds
+    // 20–23 to stay out of the 1–9 range Task 1's tests already own.
+
+    #[tokio::test]
+    async fn verify_from_disk_on_empty_store_reports_zero() {
+        let (_dir, storage, chain_key) = fresh_storage(20).await;
+        let report = PersistentAuditLog::verify_from_disk(storage, chain_key)
+            .await
+            .unwrap();
+        assert_eq!(report.entries_verified, 0);
+        assert_eq!(report.head_seq, None);
+        // Genesis seed is left-padded into [u8; 32].
+        let mut expected = [0u8; 32];
+        let seed = b"aivyx-audit-v1-genesis";
+        expected[32 - seed.len()..].copy_from_slice(seed);
+        assert_eq!(report.head_mac, expected);
+    }
+
+    #[tokio::test]
+    async fn verify_from_disk_reports_entries_verified_count() {
+        let (_dir, storage, chain_key) = fresh_storage(21).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            log.append(sample_memory_access()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            log.append(sample_turn_ended()).unwrap();
+            wait_for_disk(&storage, 5).await;
+
+            // Capture the last entry's mac so we can assert
+            // `verify_from_disk` reports the same head.
+            let entries = log.entries().unwrap();
+            assert_eq!(entries.len(), 5);
+            let head_mac = entries[4].mac;
+
+            drop(log);
+
+            let report =
+                PersistentAuditLog::verify_from_disk(Arc::clone(&storage), chain_key)
+                    .await
+                    .unwrap();
+            assert_eq!(report.entries_verified, 5);
+            assert_eq!(report.head_seq, Some(4));
+            assert_eq!(report.head_mac, head_mac);
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_from_disk_returns_chain_broken_with_known_at_seq() {
+        let (_dir, storage, chain_key) = fresh_storage(22).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            log.append(sample_turn_ended()).unwrap();
+            wait_for_disk(&storage, 3).await;
+        }
+
+        // Tamper with seq=1 — a non-boundary row — so we can assert
+        // the reported `seq` is not trivially the genesis edge.
+        let handle = storage.domain(KeyDomain::Audit);
+        let key1 = audit_key(1);
+        let val1 = handle.get(&key1).await.unwrap().unwrap();
+        let mut entry1: SignedEntry = serde_json::from_slice(&val1).unwrap();
+        entry1.mac[7] ^= 0xff;
+        let tampered = serde_json::to_vec(&entry1).unwrap();
+        handle.put(&key1, &tampered).await.unwrap();
+
+        let err = PersistentAuditLog::verify_from_disk(storage, chain_key)
+            .await
+            .unwrap_err();
+        match err {
+            AuditError::ChainBroken { seq, .. } => assert_eq!(seq, 1),
+            other => panic!("expected ChainBroken {{ seq: 1 }}, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_from_disk_does_not_hold_storage_lock() {
+        // Regression: `scan_decode_verify` must not hold any lock on
+        // the storage across its await points, or back-to-back verifies
+        // followed by a live `open` would deadlock under redb.
+        let (_dir, storage, chain_key) = fresh_storage(23).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            wait_for_disk(&storage, 2).await;
+        }
+
+        let r1 = PersistentAuditLog::verify_from_disk(Arc::clone(&storage), chain_key)
+            .await
+            .unwrap();
+        let r2 = PersistentAuditLog::verify_from_disk(Arc::clone(&storage), chain_key)
+            .await
+            .unwrap();
+        assert_eq!(r1, r2);
+        assert_eq!(r1.entries_verified, 2);
+
+        // The live open must still succeed after two verify passes.
+        let log = PersistentAuditLog::open(storage, chain_key).await.unwrap();
+        assert_eq!(log.len(), 2);
+        log.verify().unwrap();
     }
 
     #[tokio::test]
