@@ -25,10 +25,6 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
-## Phase 9 — refinements on the second-adapter pattern
-
-**Status:** Active — see [`PHASE_9.md`](PHASE_9.md).
-
 ## Channel Activation Milestone — operator verification across all channels
 
 **Status:** Scheduled after the Phase sequence closes. Not a
@@ -83,9 +79,27 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 10+ — open
+## Phase 10 — third adapter (candidate) or cross-topic memory read
 
-Deliberately ambiguous until Phase 9 closes. The pattern of
-one-paragraph placeholders refined at each phase exit holds
-here: whatever Phase 9 teaches us about the adapter pattern
-(or fails to teach us) will shape the Phase 10 entry.
+**Leading candidate: a third channel adapter.** Phase 9 explicitly
+refused to add one (Q1 Fork B chose polish over a third data
+point), on the grounds that `ADAPTER_PATTERN.md` is a *hypothesis*
+drawn from two adapters, and the honest way to validate it is to
+actually add a third and see which sections of the checklist
+survive contact. Matrix, Discord, or Slack are all plausible —
+the choice depends on which protocol's quirks most stress the
+parts of the pattern we're least sure about (`session_partition`
+multi-tenant story, private transport-trait seam shape, tier
+assignment at `SemiTrusted`).
+
+**Alternate candidate: cross-topic `memory.read`.** Rolled forward
+from Phase 7 and untouched through Phases 8–9. The Phase 9
+`session_partition` work made the physical layout unambiguous
+(`\x01s\x01<session>\x01<topic>`), which unblocks a read-only
+traversal API, but no adapter has yet asked for it. Likely
+deferred again unless a Phase 10 feature needs it.
+
+The final choice is made at Phase 10 entry, based on whatever
+the post-Phase-9 dust settles into. If a third adapter lands,
+`ADAPTER_PATTERN.md` becomes the primary design surface for the
+phase; if cross-topic read lands, `aivyx-memory` does.

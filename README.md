@@ -9,8 +9,8 @@ process live under [`docs/`](docs/README.md).
 
 ## Status
 
-**Phases 0–8 complete.** The design contract (D1–D8) has been locked
-since commit `1b4f271` and held unchanged across **eight** consecutive
+**Phases 0–9 complete.** The design contract (D1–D8) has been locked
+since commit `1b4f271` and held unchanged across **nine** consecutive
 implementation phases. The working agent ships with:
 
 - a capability-typed tool registry and turn loop (`aivyx-core`),
@@ -50,9 +50,20 @@ implementation phases. The working agent ships with:
   passphrase from `AIVYX_PASSPHRASE` **or** prompts interactively via
   `rpassword` when stdin is a tty, persists session state and memory
   under `$XDG_DATA_HOME/aivyx/store.redb`, and exposes `--verify-only`
-  as a read-only forensic entry point.
+  as a read-only forensic entry point,
+- a **two-phase config loader** (`aivyx-config`) that merges an
+  optional `aivyx.toml` with environment-variable overrides and
+  threads `Sourced<T>`/`SourcedSecret` provenance through every
+  field, so the binary can tell an operator *which* source supplied
+  any given setting and redact secrets on the way out,
+- a cross-phase adapter reference doc
+  ([`docs/ADAPTER_PATTERN.md`](docs/ADAPTER_PATTERN.md)) that
+  distills the two in-tree `ChannelContext` adapters
+  (`LocalChannel`, `TelegramChannel`) into a future-proof checklist
+  — grounded in file:line references, marked tentative because two
+  data points is a hypothesis, not a pattern.
 
-Phase 9 is the next architectural phase — see
+Phase 10 is the next architectural phase — see
 [`docs/ROADMAP.md`](docs/ROADMAP.md). For the frozen per-phase
 records, see [`docs/`](docs/README.md). The Channel Activation
 Milestone (operator verification of all channel adapters shipped
@@ -69,7 +80,8 @@ After cloning, run the pre-commit hook installer once:
 This copies `scripts/pre-commit.sh` into `.git/hooks/pre-commit`. The
 hook runs `cargo clippy --workspace --all-targets -- -D warnings`
 before every commit, enforcing the per-task `-D warnings` policy
-Phase 8 Task 8 established. See `docs/PHASE_9.md` Q4 for the rationale.
+Phase 8 Task 8 established and Phase 9 Task 3 wired into the hook
+(see `docs/PHASE_9.md` Q4 for the rationale).
 
 ## License
 

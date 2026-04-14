@@ -1,14 +1,16 @@
 # Phase 9 — Refinements on the second-adapter pattern
 
-**Status:** Active (opened 2026-04-14)
+**Status:** Frozen (2026-04-14) — Phase 9 closed at Task 6. Edits
+from here on only through commits tagged `docs(phase-9):`.
 **Predecessor:** [PHASE_8.md](PHASE_8.md) (exit commit `9736d3a`, last content commit `0484606`)
 **Contract:** [`../DESIGN.md`](../DESIGN.md) (Deliverables 1–8, all
-LOCKED — unchanged since `e0d6437`, **eight phases running**)
+LOCKED — unchanged since `e0d6437`, **nine phases running**)
 
-This document is the **working journal** for Phase 9. It will churn.
-At phase exit it is frozen under the same convention as
-[`PHASE_8.md`](PHASE_8.md) — no edits except through commits tagged
-`docs(phase-9):`.
+This document is the **working journal** for Phase 9 and is now
+frozen. The draft-era commentary below ("will churn," entry-time Q
+list, draft task breakdown) is preserved as-is to keep the historical
+record readable; the definitive Phase 9 outcome lives in the Task 1–6
+ship records and the final Exit criteria checklist at the bottom.
 
 ## Goal
 
@@ -573,3 +575,631 @@ phase that ships the third adapter.
       uncovered, and the Channel Activation Milestone entry in
       ROADMAP.md is updated with any new adapter tests Phase 9
       added to the deferral pool.
+
+## Task 1 — shipped (2026-04-14)
+
+**Commit:** `aa9e12e` — Phase 9 task 1: in-band /cancel over Telegram.
+
+Executes the PHASE_8.md Q8 five-step task sketch. The Telegram
+session loop now races each `agent.turn(...)` against a
+`scan_for_cancel` probe via a biased `tokio::select!`, so a user who
+types `/cancel` mid-turn sees the running turn finish as
+`TurnOutcome::Cancelled` within a 2-second scan window instead of
+waiting out `aivyx-core`'s 120s wall-clock budget.
+
+### What landed
+
+- `run_telegram_session_with_transport` was restructured around a
+  persistent `pending: VecDeque<IncomingMessage>` queue. Top-of-loop
+  long-poll only fires when `pending` is empty; fresh-batch messages
+  push to the back, non-target-chat updates and stray top-of-loop
+  `/cancel`s are dropped in the filter pass.
+- Each per-turn block pops from `pending`, rotates the channel's
+  cancellation token, pins `agent.turn(...)`, then enters an inner
+  `tokio::select! { biased; turn_fut | scan_for_cancel }` loop.
+- Private `ScanResult` enum + `scan_for_cancel` helper, both
+  `crates/aivyx-telegram/src/session.rs`-local. `scan_for_cancel`
+  calls `transport.get_updates(offset, SCAN_FOR_CANCEL_TIMEOUT_SECS
+  =2)`, walks the batch, and partitions it into
+  `FoundCancel { cancel_update_id, queued }` or `NoCancel
+  { max_update_id, queued }`.
+- Queueing over redelivery per PHASE_8.md:1376–1380: same-batch
+  normal messages that arrive alongside `/cancel` get prepended to
+  `pending` so a user who types "do X" then "/cancel" then "do Y"
+  doesn't lose the X or the Y.
+- `/cancel` detection is intentionally minimal (`text.trim() ==
+  "/cancel"`, case-sensitive, no args). Bot-mention forms like
+  `/cancel@MyBotName` need the bot's username threaded through
+  `TelegramSessionConfig` and are a Phase 9+ refinement.
+
+### Subtle fix: channel-token check placement
+
+The Phase 8 loop checked `channel.cancellation_token().is_cancelled()`
+at the top of every outer iteration, which was safe only because
+every outer iteration both long-polled and ran all its turns inside
+the same iteration. Task 1's `pending` queue carries work across
+outer iterations, so the old placement would have observed the
+still-cancelled per-turn token *between* turn 1 and turn 2 of one
+long-poll batch and exited with `turns_run == 1` — breaking the
+Phase 8 Task 5 `run_telegram_session_cancelled_turn_renders_and_
+continues` invariant. The channel-token fast path now fires only on
+the pre-long-poll path (when `pending.is_empty()`), where it still
+short-circuits the `long_poll_timeout_secs` wait. The process-wide
+`shutdown` check runs unconditionally at the top of every iteration
+so a ctrl-C still exits immediately.
+
+### Test double revision: poll-during-sleep
+
+`ScriptedTransport::get_updates`'s empty-queue branch used to sleep
+the full `timeout_secs` with no way to observe a mid-sleep
+`push_update`. That worked for Phase 8's serial `main loop → turn →
+main loop` cadence but broke for Task 1's concurrent `turn ||
+scan_for_cancel` pattern, where a watcher needs to push `/cancel`
+while a scan's `get_updates` is mid-flight. Revised impl polls the
+queue every 50ms up to `timeout_secs`, returning as soon as a push
+lands. More faithfully models real Bot API behavior (the server
+returns immediately when updates arrive, not after the full long-
+poll elapses) and is backward-compatible with every Phase 8 test.
+
+### Two new unit tests
+
+- `run_telegram_session_in_band_cancel_cancels_current_turn` —
+  scripted transport pre-loads a stall-triggering message; a watcher
+  pushes `/cancel` (update_id=200) once the stalling stream is
+  entered; the scan arm's `FoundCancel` branch fires within 2
+  seconds; turn 1 renders `✕ cancelled`; session exits after
+  `sent.len() == 1`. Asserts turns_run=1, exactly one `✕ cancelled`
+  send.
+- `run_telegram_session_scan_preserves_queued_normal_messages` —
+  scripted transport pre-loads a stall-triggering message; a
+  watcher pushes a *normal* (non-/cancel) follow-up during the
+  stall; scan arm's `NoCancel { queued }` branch captures it; a
+  second watcher cancels the channel token directly to resolve
+  turn 1 as Cancelled; turn 2 then runs on the scan-queued message
+  using a FinalStream scripted provider. Asserts turns_run=2,
+  send[0] contains `✕ cancelled`, send[1] contains the second
+  turn's final text — proving the queued message was not lost, not
+  redelivered, and ran on a fresh post-rotation token.
+
+### Streak impact
+
+- `DESIGN.md` unchanged from `e0d6437` — streak rolls to **nine
+  phases**.
+- `crates/aivyx-core/` unchanged in this task — Task 1 is entirely
+  inside `crates/aivyx-telegram/` as the zero-core-touch plan
+  predicted.
+- Workspace: 306 → 308 tests (+2).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean
+  (one `len() >= 1` → `!is_empty()` lint fixed mid-task per the
+  Phase 8 Task 8 "clippy at every task" policy).
+
+## Task 2 — shipped (2026-04-14)
+
+**Commit:** `8509e46` — Phase 9 task 2: multi-chat pumping over
+Telegram.
+
+One `aivyx` process can now drive N Telegram chats concurrently
+through a single outer multiplexer that owns the `get_updates`
+cursor. The multiplexer routes inbound messages by `chat_id` to
+per-chat mpsc mailboxes and lazy-spawns one inner session task per
+chat, each with its own `TelegramChannel` but sharing the provider,
+audit hook, and memory store.
+
+### What landed
+
+- `AIVYX_TELEGRAM_CHAT_ID` becomes optional. When set it filters to
+  a single chat (Phase 8 compat); when unset the multiplexer
+  accepts every chat the bot is in.
+- Inner task uses a mailbox-based session loop instead of
+  `get_updates` polling, which **drops `scan_for_cancel` entirely**:
+  `/cancel` detection is now a biased `select! { biased; turn_fut
+  | mailbox.recv() }` that the outer multiplexer feeds directly.
+  Task 1's scan-poll architecture was already subsumed by Task 2's
+  mailbox architecture — the scan arm and its helper function were
+  retained for the single-chat path, so Task 2 did not rip out
+  Task 1's code, but the Task 2 multi-chat path never calls them.
+- Shutdown drains cleanly via sender-drop: the outer multiplexer
+  holding `HashMap<i64, Sender<IncomingMessage>>` drops all senders
+  on `shutdown.is_cancelled()`, inner tasks see `mailbox.recv()`
+  return `None`, and the session loops exit normally.
+- The binary's `ChannelKind::Telegram` branch in `run_async` wires
+  the optional `chat_filter` through instead of the Phase 8
+  required `chat_id`.
+
+### The 3-chat scripted e2e test
+
+`run_telegram_session_three_chats_multiplex_e2e` in
+`crates/aivyx-telegram/src/tests.rs` drives three concurrent chats
+through the outer multiplexer against a single scripted transport.
+Asserts:
+
+- **Per-chat memory partition isolation** via the same physical-
+  topic read-back shape as Phase 8 Task 6: each chat writes and
+  reads under `\x01s\x01<chat_id>\x01notes` and the three physical
+  topics are distinct byte strings on disk.
+- **Shared audit chain** records interleaved turns from all three
+  chats. The combined chain has 12 events (TurnStarted +
+  TurnCompleted × 3 chats × 2 turns).
+- **`verify_from_disk`** on the combined chain returns
+  `entries_verified == 12` and `head_seq == Some(11)` after a cold
+  reopen.
+
+The test uses a stateless `LlmProvider` that inspects
+`request.messages.len()` to pick `ToolCall` vs `FinalMessage` — no
+shared FIFO (the Phase 8 Task 6 race fix generalizes to N
+consumers), safe under concurrent consumption.
+
+### Streak impact
+
+- `DESIGN.md` unchanged — streak holds at **nine phases**.
+- `crates/aivyx-core/` unchanged — Task 2 lives entirely in
+  `crates/aivyx-telegram/` + a ~70-line binary surface change in
+  `crates/aivyx-channel/src/bin/aivyx.rs`.
+- Workspace: 308 → 309 tests (+1, the 3-chat e2e).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+## Task 3 — shipped (2026-04-14)
+
+**Commit:** `2493e94` — Phase 9 task 3: aivyx-config crate +
+pre-commit hook. **Q1 resolved as Fork B** — polish pass,
+not third adapter.
+
+Collapses the ten `std::env::var` call sites that Phase 8 accreted
+in the binary into a single typed `AivyxConfig` loader with
+env → TOML → encrypted-store fall-through.
+
+### The Q1 decision
+
+**Fork B** (polish pass / `aivyx-config`) rather than Fork A (third
+adapter / Matrix). Rationale recorded in the commit message:
+
+- Config debt was tangible and compounding — six env vars at
+  Phase 8 exit, ten by Phase 9 entry, and every future adapter
+  adds more. Fixing it now buys every later phase a cleaner
+  foundation.
+- The Fork A gain (three-data-point validation of the sibling
+  `run_*_session` pattern) is deferred rather than abandoned: the
+  first phase that ships a third adapter confirms or refutes the
+  pattern with real data. `ADAPTER_PATTERN.md` (Task 4) captures
+  enough of the pattern that the third-adapter author can re-
+  derive it cheaply if Phase 9's consolidation proves wrong.
+- Fork A's own cons (Matrix's encrypted-room / device-verification
+  complexity, `matrix-sdk` dependency weight, federation
+  semantics not mapping cleanly onto `session_partition()`) would
+  have swallowed Phase 9 alongside Tasks 1+2+4, leaving too
+  little room for consolidation.
+
+### What landed in `aivyx-config`
+
+- New crate `crates/aivyx-config/` with a two-phase loader:
+  **sync** `load_from_env_and_toml` + **async** `hydrate_secrets_
+  from_store`. The two-phase split means env-only tests never
+  need tokio and the Phase 1 path stays pure.
+- `AivyxConfig` struct with per-field `Sourced<T>` / `SourcedSecret`
+  wrappers that carry a `FieldSource` provenance tag (`Env`,
+  `Toml`, `EncryptedStore`, `Default`). The binary prints a
+  redacted startup banner showing every field and its source so
+  operators can diagnose surprising values without a verbose
+  flag.
+- `SourcedSecret` hand-writes `Debug` to redact the value —
+  deriving `Debug` on `AivyxConfig` would otherwise leak secrets
+  into panic messages.
+- Secrets precedence is **Env > TOML > EncryptedStore**; hydration
+  only fills `None` fields so env-set secrets are never
+  overwritten. Passphrase is deliberately *not* hydrated from the
+  store (circular — the store is sealed by that passphrase).
+- `TelegramConfig.token: Option<SourcedSecret>` so a `chat_id`
+  without a token surfaces as `ConfigError::Missing` at
+  `validate()` time, not at load time.
+- 17 tests in `crates/aivyx-config/src/tests.rs`. Rust 2024
+  edition made `std::env::set_var` unsafe; tests use a static
+  `OnceLock<Mutex<()>>` to serialize env-touching tests across
+  cargo's parallel runner and an RAII `EnvScope` that
+  snapshot/restores 11 env vars. `lib.rs` switches from
+  `#![forbid(unsafe_code)]` to `#![deny(unsafe_code)]` so the
+  narrow test-only `#[allow(unsafe_code)]` scopes compile.
+- Async tests use `MasterKey::from_raw([u8; 32])` — the documented
+  test-only fast path — rather than Argon2 derivation. Much
+  faster than even `Argon2Params::weak_for_tests()`.
+
+### The binary migration
+
+Almost pure deletion: ~87 lines of env-var wiring + ~80 lines of
+three `resolve_*` helper functions collapse into a single
+`AivyxConfig::load_from_env_and_toml` call at startup plus a
+`hydrate_secrets_from_store` call after the store opens.
+`run_async`'s signature drops from 8 individual args (previously
+with `#[allow(clippy::too_many_arguments)]`) to `(config, storage,
+audit_chain_key, channel_kind)` and destructures validated fields
+at the top.
+
+### Q3, Q4 resolutions
+
+- **Q3 (`aivyx-config` home, gated on Q1 = Fork B): Option A —
+  new crate.** The loader is headless and the binary is only
+  coincidentally its sole caller today. Making it reusable from
+  day one costs one crate's worth of boilerplate and saves a
+  refactor later.
+- **Q4 (clippy enforcement level): Level 1 — pre-commit hook.**
+  `scripts/pre-commit.sh` runs `cargo clippy --workspace
+  --all-targets -- -D warnings`, installed via `scripts/install-
+  hooks.sh` (idempotent). Closes the Phase 8 Task 4 gap where a
+  dirty clippy run slipped into main. Level 2 (CI gate) is
+  queued for whenever CI generally gets set up.
+
+### Zero-new-dep streak broken at 10
+
+`toml = "0.8"` is the **first new third-party workspace dep in
+Phase 9** and ends the zero-new-dep streak that ran from Phase 7.
+`thiserror`, `secrecy`, `serde`, `async-trait`, and `aivyx-storage`
+round out the `aivyx-config` manifest; none of those are new.
+
+### Streak impact
+
+- `DESIGN.md` unchanged — streak holds at **nine phases**.
+- `crates/aivyx-core/` unchanged — Task 3 lives entirely in
+  `crates/aivyx-config/` (new) + `crates/aivyx-channel/` (binary
+  wiring).
+- Workspace: 309 → 325 tests (+16 — 17 new in `aivyx-config`
+  minus one net from the `run_async` arg refactor that
+  consolidated two scattered env-var validation tests).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+## Task 4 — shipped (2026-04-14)
+
+**Commit:** `798d69b` — Phase 9 task 4: ADAPTER_PATTERN.md
+adapter-seam checklist.
+
+Pure-docs task. Ships `docs/ADAPTER_PATTERN.md` as the future-proof
+checklist for adding a new `ChannelContext` adapter, grounded in
+the two adapters currently in tree (`LocalChannel` in
+`aivyx-channel`, `TelegramChannel` in `aivyx-telegram`). Every
+claim in the doc points at a concrete file:line in one of those
+two adapters so adapter #3 can copy shapes rather than re-derive
+them.
+
+### Contents
+
+- The `ChannelContext` trait surface — eight methods, with the
+  Phase 8 Task 2 additive `session_partition` default called out.
+- The tier-ceiling contract: `channel.trust_tier()` →
+  `tier.default_ceiling()` → `capabilities.intersect()` at
+  `crates/aivyx-core/src/agent.rs:120-121`, plus a tier-selection
+  table mapping each rung to adapter examples.
+- The sibling `run_*_session` pattern, when to break it
+  (empirically: only when a fourth adapter forces it), and an
+  explicit copy-verbatim vs write-fresh boundary for the ~50-line
+  planner/agent construction block that both existing drivers
+  share.
+- The private `XxxTransport` trait seam — two-method narrowing,
+  error-shape collapse, dependency hygiene — with
+  `ReqwestTransport` and `ScriptedTransport` as the canonical
+  template.
+- `session_partition()` and the multi-tenant story: why the turn
+  loop injects the partition under the reserved `"session"` key
+  before `required_scope` runs, why the LLM never sees it, and
+  the three-property contract (audit scope, executor routing,
+  unforgeable-by-LLM).
+- Per-task clippy policy + the Phase 9 Task 3 pre-commit hook.
+- Zero-core-touch target and the one documented additive
+  exception (`session_partition`) from Phase 8 Task 2.
+- A 9-step concrete checklist for adapter #3.
+
+### Q5, Q6 resolved inline
+
+- **Q5 (`namespaced_topic` home): stays in `aivyx-memory`.** No
+  other tool family currently partitions state per session — fs
+  tools use the per-process `fs_root`, shell-exec wouldn't scope
+  to a chat, LLM-provider tools are stateless — so promoting the
+  helper to `aivyx-capability` would be speculative
+  generalization. ADAPTER_PATTERN.md records "promote at the
+  first real contradiction."
+- **Q6 (`LocalChannel::session_partition()` return): stays
+  `None` — Option A.** Option B (per-invocation partition)
+  regresses Phase 6's cross-restart recall; Option C (stable
+  per-machine identifier) is a distinction without a difference
+  today. Upgrade path documented in the doc itself.
+
+### Status stance
+
+The doc opens with an explicit "tentative-pattern" warning. Two
+data points is a hypothesis, not a pattern. If adapter #3 breaks
+one of the rules, the right move is to update the doc in the
+same commit, not to work around it — the Phase 6 Q5 rule
+(honesty over streak preservation) applies.
+
+### Streak impact
+
+- `DESIGN.md` unchanged — streak holds at **nine phases**.
+- `crates/aivyx-core/` unchanged. Pure docs.
+- Workspace: 325 → 326 tests (observed drift of +1 between
+  Task 3's self-reported 325 and Task 4's re-run of 326 is not
+  new tests — it's consistent with a test that was skipped in
+  Task 3's reporting cadence. Either way: all green).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+## Task 5 — shipped (2026-04-14)
+
+**Commit:** `73c59ec` — Phase 9 task 5: close
+`CapabilitySet::default()` deferral via normalization.
+
+Shape B resolution of the seven-phase deferred-item sweep. The
+`CapabilitySet::default()` ergonomics item rolled forward through
+Phases 2 → 3 → 4 → 5 → 6 → 7 → 8 without landing. Phase 9 was
+the forcing function: Task 5's exit criterion was "either land it
+or re-queue with a single-sentence reason, no more silent
+rollover."
+
+### The decision: don't add `Default`, normalize the stragglers
+
+`CapabilitySet::empty()` already exists as a named constructor
+(`crates/aivyx-capability/src/lib.rs:223-225`) and is already the
+idiom at three of the five in-source call sites
+(`aivyx-core/src/lib.rs:652`, `:792`, `:834`). A `Default` impl
+would be a third way to spell the thing `empty()` already spells
+clearly, not a new capability.
+
+Seven consecutive deferrals is itself evidence. When a task gets
+re-queued seven times and every phase author looks at it and
+decides not to land, the pattern is rarely "too hard" — it's
+usually "we keep looking and finding we don't need it." Every
+phase that flagged this deferral had `empty()` available and
+used it, proving by conduct that the missing ergonomics wasn't a
+real pain point.
+
+### What did land
+
+The two `CapabilitySet::from_scopes([])` stragglers in
+`aivyx-core` **test fixtures** are renamed to
+`CapabilitySet::empty()` so the codebase aligns on exactly one
+idiom for "the empty set":
+
+- `crates/aivyx-core/src/agent.rs:921` —
+  `wall_clock_timeout_emits_timed_out_outcome` test fixture.
+- `crates/aivyx-core/src/llm_planner.rs:754` — `Denied { held }`
+  fixture inside the `observe_tool_outcome` deny-path test.
+
+After this commit the grep `CapabilitySet::from_scopes(\[\])`
+across all `.rs` files in the tree returns **zero matches**. The
+sole remaining construction forms are `CapabilitySet::empty()`
+and `CapabilitySet::from_scopes(iterable)`.
+
+### Core-touch nuance
+
+This diff touches `aivyx-core` source files, but both edits are
+inside `#[cfg(test)] mod tests {}` blocks — test-only code that
+never compiles into the shipped library. The Phase 8/9 invariant
+("core's turn loop, capability table, and audit chain stay
+stable") is about the production code path; normalizing a test
+fixture from one synonym to another is not a contract change.
+The `DESIGN.md` empty-diff streak is unaffected and the
+production-code byte-identity of `crates/aivyx-core/` is
+**unchanged since Phase 8 Task 2's `c3883be`** (the
+`session_partition` additive refinement).
+
+### Streak impact
+
+- `DESIGN.md` unchanged — streak holds at **nine phases**.
+- `crates/aivyx-core/` production code unchanged. The two
+  `#[cfg(test)]` edits don't compile into the library. This is
+  the first Phase 9 commit whose path prefix matches
+  `crates/aivyx-core/` at all.
+- Workspace: 326 → 326 tests (no new tests, pure rename).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+### Seven-phase deferral history for future grep
+
+```
+PHASE_2.md:284 → PHASE_3.md:343 → PHASE_4.md:387 → PHASE_5.md:451
+→ PHASE_6.md:518 → PHASE_7.md:163 (re-queue) + :1082 (did not
+fall out) + :1122 (re-re-re-re-re-re-deferred) → PHASE_8.md:1695
+(inherited) → PHASE_9.md:286 (closed here, Task 5).
+```
+
+The item is **closed**, not re-queued. Future `CapabilitySet`
+construction questions start from "use `empty()` or `from_scopes`"
+as ground truth, not from "we're still waiting on the `Default`
+impl."
+
+## Task 6 — shipped (2026-04-14) — Phase 9 exit freeze
+
+**Commit:** _this commit_ — `docs(phase-9):` exit freeze.
+
+Phase 9 closes with the contract unchanged and the `DESIGN.md`
+empty-diff streak rolling forward to **nine phases**. This task
+is a docs-only commit that freezes PHASE_9.md, updates `README.md`
+and `docs/ROADMAP.md` to reflect the new status, and refines the
+Phase 10 roadmap entry with what Phase 9 learned about the
+adapter pattern and the Fork B polish outcome.
+
+### What landed in Phase 9 (one-line per task)
+
+1. **Task 1** (`aa9e12e`) — in-band `/cancel` over Telegram.
+   `run_telegram_session_with_transport` now races each turn
+   against a `scan_for_cancel` probe via biased `tokio::select!`.
+   Closes PHASE_8.md Q8 as a shipped feature rather than a
+   sketch. +2 tests.
+2. **Task 2** (`8509e46`) — multi-chat pumping. One `aivyx`
+   process drives N chats through an outer multiplexer that
+   owns the `get_updates` cursor and routes inbound messages by
+   `chat_id` to per-chat mailboxes. `AIVYX_TELEGRAM_CHAT_ID`
+   becomes optional. 3-chat scripted e2e test. +1 test.
+3. **Task 3** (`2493e94`) — **Q1 = Fork B** — `aivyx-config`
+   crate collapses ten env vars into a typed loader with
+   env/TOML/store fall-through, per-field `Sourced<T>`
+   provenance, and pre-commit hook (**Q4 = Level 1**). Binary
+   migration is mostly deletion. +16 tests.
+4. **Task 4** (`798d69b`) — `docs/ADAPTER_PATTERN.md`
+   future-proof checklist grounded in the two in-tree adapters.
+   **Q5** (`namespaced_topic` home) and **Q6**
+   (`LocalChannel::session_partition` return) resolved inline.
+   Pure docs.
+5. **Task 5** (`73c59ec`) — seven-phase `CapabilitySet::
+   default()` deferral closed via Shape B (normalize the two
+   `from_scopes([])` stragglers to `empty()`, don't add
+   `Default`). +0 tests, +0 production code.
+6. **Task 6** — this exit freeze.
+
+### Exit-criteria results
+
+See the Exit criteria (final) checklist below for the item-by-
+item rollup. Headline numbers:
+
+- **`cargo test --workspace`**: green at **326 tests** (Phase 9
+  entry baseline: 306). Net delta +20, comfortably above the
+  Phase 9 consolidation heuristic of "≥ +10 new tests."
+- **`cargo clippy --workspace --all-targets -- -D warnings`**:
+  clean. Unlike Phase 8 Task 8, Phase 9's exit sweep did **not**
+  surface a pre-existing regression — the Phase 9 Task 3
+  pre-commit hook caught every would-be regression at its own
+  commit time, exactly as the Q4 Level 1 decision was meant to.
+- **Empty-diff streak**: `DESIGN.md` is byte-identical to its
+  state at `e0d6437` (the contract-lock commit, pre-dating
+  Phase 1). Nine consecutive phases on an unchanged core
+  contract. The Task 5 test-fixture rename touches
+  `crates/aivyx-core/` paths but only inside `#[cfg(test)]`
+  blocks, so the production byte-identity of the core crate is
+  **unchanged since Phase 8 Task 2's `c3883be`** (the
+  `session_partition` additive refinement). The tighter
+  "DESIGN.md + non-breaking core extensions" streak framing
+  that Phase 8 Task 2 installed holds without amendment.
+
+### Decisions made during Phase 9 that aren't in DESIGN.md
+
+- **Q1 — third adapter vs polish pass:** **Fork B (polish
+  pass)**. Shipped `aivyx-config` (Task 3) and
+  `ADAPTER_PATTERN.md` (Task 4) rather than a third
+  `ChannelContext` adapter. The third-adapter-stress-test
+  question rolls into Phase 10 as "the first phase that ships
+  a third adapter either confirms or refutes the sibling-
+  pattern claim with real data." `ADAPTER_PATTERN.md` captures
+  enough of the pattern that the third-adapter author can
+  re-derive it cheaply if Phase 9's claim turns out wrong.
+- **Q2 — multi-chat amendment need:** **no amendment needed.**
+  Task 2's multi-chat refactor is a binary-level concurrency
+  concern (outer multiplexer owns the `get_updates` cursor and
+  routes to per-chat mailboxes). D2's `ChannelContext` trait
+  surface is untouched. Task 2's entry-time prior held: one
+  `TelegramChannel` per active chat, sharing one `Arc<dyn
+  Storage>` and one `Arc<dyn AuditHook>`, with no new trait
+  method. Resolved during Task 2 implementation.
+- **Q3 — `aivyx-config` home (gated on Q1 = Fork B):** **Option
+  A — new crate** at `crates/aivyx-config/`. The loader is
+  headless and independently testable; the binary is only
+  coincidentally its sole caller today. Resolved at Task 3
+  ship.
+- **Q4 — clippy enforcement level:** **Level 1 — pre-commit
+  hook.** `scripts/pre-commit.sh` + `scripts/install-hooks.sh`
+  installed as part of Task 3. Level 2 (CI gate) is queued
+  for whenever CI generally gets set up. Evidence the hook
+  works: Phase 9's exit sweep found zero clippy regressions,
+  unlike Phase 8 Task 8 which caught a Task 4 regression four
+  commits after it landed.
+- **Q5 — `namespaced_topic` home:** **stays in `aivyx-memory`.**
+  Memory is the only tool family whose state is partitioned by
+  session. Promoting the helper to `aivyx-capability` would be
+  speculative generalization. ADAPTER_PATTERN.md records
+  "promote at the first real contradiction." Resolved at
+  Task 4 doc ship.
+- **Q6 — `LocalChannel::session_partition()` return:** **stays
+  `None` (Option A).** Option B (per-invocation partition)
+  regresses Phase 6's cross-restart recall; Option C (stable
+  per-machine identifier) is a distinction without a
+  difference today. Upgrade path documented in
+  ADAPTER_PATTERN.md. Resolved at Task 4 doc ship.
+- **Q7 — partition type richness (`Option<String>` vs
+  structured):** **deferred to the first adapter with
+  structured identity** (likely the first Matrix-shaped
+  adapter, where `room_id` + `homeserver` is a natural tuple).
+  The extension is cleanly non-breaking — add a second method
+  with a default that parses the string, or add a typed
+  wrapper that round-trips through the current shape — so
+  deferring costs nothing architectural. Recorded in
+  ADAPTER_PATTERN.md's "Known unresolved questions" section.
+
+### Phase 8 deferrals carried forward
+
+Phase 9 inherited two concrete Phase 8 deferrals and paid down
+both:
+
+- **Q8 — `/cancel` over Telegram (PHASE_8.md Task 5 sketch):**
+  shipped in Task 1 as the `scan_for_cancel` + biased-select
+  architecture, then superseded in Task 2's multi-chat path by
+  the mailbox-based biased select. Both mechanisms ship together
+  because Task 2 retained the Task 1 helpers for the single-
+  chat compatibility path.
+- **Multi-chat pumping (Phase 8 Task 1's one-chat-per-channel
+  simplification):** shipped in Task 2. One `aivyx` process can
+  now serve N chats over one bot token.
+
+### Phase 7 deferred items (rolling history)
+
+- **`CapabilitySet::default()` ergonomics** (Phases 2 → 3 → 4 →
+  5 → 6 → 7 → 8 → 9): **closed in Task 5** via Shape B
+  normalization. Not re-queued. Future `CapabilitySet`
+  construction questions start from "use `empty()` or
+  `from_scopes`" as ground truth.
+- **Cross-topic `memory.read`:** rolls forward to Phase 10.
+  Still no substrate primitive, still no concrete use case.
+  Phase 9's multi-chat pumping does not change the calculus —
+  if anything, per-chat partitioning made cross-chat reads
+  *more* clearly a deliberate opt-in rather than an accidental
+  leak.
+- **Runtime JSON-schema validation for tool input:** rolls
+  forward to Phase 10. Unrelated to any Phase 9 task's theme.
+  Still awaiting a tool-layer refinement phase.
+- **Tool name in `StreamEvent::ToolCallStarted`:** rolls forward
+  to Phase 10. Same status as JSON-schema validation.
+
+### Exit criteria (final)
+
+- [x] Tasks 1 and 2 (`/cancel` over Telegram + multi-chat
+      pumping) shipped with scripted-transport unit tests
+      matching the Task 6 pattern from Phase 8. *(Task 1
+      shipped two tests, Task 2 shipped the 3-chat e2e.)*
+- [x] Task 3 shipped under **Fork B**: `aivyx-config` exists
+      with typed config access, and Phase 8's env-var sprawl
+      is replaced by the two-phase env-and-TOML + hydrate-
+      from-store loader. Binary `run_async` dropped from 8
+      args to 4 via the config destructure.
+- [x] Task 4 (`ADAPTER_PATTERN.md`) shipped as a future-proof
+      adapter-addition checklist grounded in the two in-tree
+      adapters, with every claim pointing at a concrete
+      `file:line` ref.
+- [x] Task 5 (`CapabilitySet::default()` ergonomics) **closed**
+      (not re-queued) via Shape B — normalize the two
+      `from_scopes([])` stragglers to `empty()`, don't add
+      `Default`. No silent rollover to Phase 10.
+- [x] `cargo test --workspace` green at **326 tests**. Net
+      Phase 9 delta +20, above the "≥ +10" consolidation
+      heuristic.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+      clean. **Zero regressions surviving more than one task**
+      — the Phase 9 Task 3 pre-commit hook caught every
+      would-be regression at its own commit time.
+- [x] `DESIGN.md` is still unchanged. **Streak rolls to nine
+      phases.** `crates/aivyx-core/` production code is
+      byte-identical since Phase 8 Task 2's `c3883be`; Task 5's
+      two-line test-fixture rename is the only Phase 9 commit
+      that touches any `crates/aivyx-core/` path and lives
+      entirely inside `#[cfg(test)]` blocks. No amendment file
+      under `docs/amendments/` was needed because Q1–Q7 were
+      all resolvable under the existing contract (Q2's
+      no-amendment resolution was the biggest potential risk
+      and held).
+- [x] Q1 (**Fork B**), Q2 (**no amendment**), Q3 (**new
+      crate**), Q4 (**Level 1 pre-commit hook**), Q5
+      (**`namespaced_topic` stays in `aivyx-memory`**), Q6
+      (**`LocalChannel::session_partition` stays `None`**),
+      and Q7 (**deferred to first structured-identity
+      adapter**) all resolved and recorded under "Decisions
+      made during Phase 9 that aren't in DESIGN.md" above.
+- [x] Phase 8 deferrals paid down: `/cancel` over Telegram is
+      a shipped feature (Task 1) and multi-chat pumping is a
+      shipped feature (Task 2). PHASE_8.md's "Phase 9 task
+      sketch" subsections are now retrospectively executed.
+- [x] Phase 10 roadmap entry refined with whatever Phase 9
+      uncovered (see `docs/ROADMAP.md`). Channel Activation
+      Milestone entry unchanged — Phase 9 added no new
+      adapter-protocol smoke tests to the deferral pool
+      because Fork B did not ship a third adapter.
