@@ -111,11 +111,22 @@ Phase 3 is the last mile — the code that turns a terminal into a
       `TurnOutcome::TimedOut`. Poll the cancellation token inside
       the `LlmPlanner`'s stream consumer so the timeout actually
       interrupts mid-completion.
-- [ ] **Task 5 — End-to-end CLI integration test.** Drive the CLI
-      binary via a byte-level stdio harness (write a user turn to
-      its stdin, read tokens from its stdout) with `FakeTransport`
-      supplying canned SSE. Verify token-streaming order, audit
-      chain contents, and clean exit.
+- [x] **Task 5 — End-to-end CLI integration test.** Drive the CLI
+      via a scripted stdio harness (`Cursor` stdin, `Vec<u8>` stdout)
+      with a `ScriptedProvider` returning canned `TextChunk` +
+      `FinalMessage` steps. Verifies token-streaming order, audit
+      chain contents + verification, and clean EOF exit. Landed as
+      `crates/aivyx-channel/tests/cli_e2e.rs`, built on the new
+      `run_session` extraction that refactored the binary's REPL
+      into a reusable library function so the test drives the same
+      loop the binary does — no parallel reimplementation.
+      **Decision note:** the task description said "FakeTransport +
+      canned SSE," but that would have tested the Anthropic SSE
+      parser (which already has its own coverage) rather than the
+      CLI. Used a `ScriptedProvider` at the `LlmProvider` layer
+      instead, which is one layer above the transport and is the
+      right surface for an E2E test that's about the *session*, not
+      the *wire format*.
 - [ ] **(Exit)** Document Phase 3 outcome + known issues in this
       file, freeze it, open `PHASE_4.md` (first real `Tool`).
 

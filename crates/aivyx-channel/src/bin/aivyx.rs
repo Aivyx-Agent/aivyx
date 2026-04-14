@@ -54,7 +54,7 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -62,11 +62,8 @@ use secrecy::SecretString;
 
 use aivyx_audit::{AuditBridge, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
-use aivyx_channel::LocalChannel;
-use aivyx_core::{
-    agent::ConcreteAgent, llm_planner::LlmPlanner, planner::ToolRegistry, Agent, AgentId,
-    ChannelContext, LlmPlannerConfig, Message,
-};
+use aivyx_channel::{run_session, LocalChannel, SessionConfig};
+use aivyx_core::AuditHook;
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 
@@ -116,55 +113,29 @@ async fn run_async(
     model: String,
     system_prompt: String,
 ) -> Result<(), String> {
-    // ---- Agent stack --------------------------------------------------
+    // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
         .map_err(|e| format!("failed to build Anthropic provider: {e}"))?;
     let provider: Arc<dyn LlmProvider> = Arc::new(anthropic);
 
-    // Phase 3 ships without concrete tools. An empty ToolRegistry means
-    // every planner step that would emit a ToolCall fails scope lookup
-    // — but the Phase 3 non-goal is "no real tools," so we expect the
-    // planner to produce only FinalMessage steps for now.
-    let registry = Arc::new(ToolRegistry::new(Vec::new()));
-
+    // ---- Audit --------------------------------------------------------
     // HmacChainLog uses an ephemeral per-process key. Phase 5's
     // encrypted storage phase will wire this to a persisted key
     // derived from the user's passphrase. For now the in-memory chain
     // is enough to prove the audit seam works end-to-end.
     let audit_key: [u8; 32] = rand_bytes_from_os()?;
-    let audit = Arc::new(AuditBridge::new(HmacChainLog::new(audit_key.to_vec())));
+    let audit: Arc<dyn AuditHook> =
+        Arc::new(AuditBridge::new(HmacChainLog::new(audit_key.to_vec())));
 
+    // ---- Capabilities -------------------------------------------------
     // The CLI is the most-trusted channel on the box; the agent gets
     // a broad capability set so chat-only turns don't get denied for
     // scopes they never actually request. Real tools in Phase 4 will
     // constrain this per-session.
-    let caps = CapabilitySet::from_scopes([
+    let capabilities = CapabilitySet::from_scopes([
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
     ]);
-
-    // Planner factory — one fresh LlmPlanner per turn. Captures the
-    // provider Arc, the registry Arc, and a planner-config-by-value
-    // (cloned per turn since LlmPlannerConfig is small).
-    let provider_for_factory = Arc::clone(&provider);
-    let registry_for_factory = Arc::clone(&registry);
-    let config = LlmPlannerConfig::new(model)
-        .with_system_prompt(system_prompt)
-        .with_max_tokens(DEFAULT_MAX_TOKENS);
-
-    let agent = ConcreteAgent::new(
-        AgentId::new(),
-        caps,
-        registry,
-        audit,
-        move || {
-            Box::new(LlmPlanner::new(
-                Arc::clone(&provider_for_factory),
-                Arc::clone(&registry_for_factory),
-                config.clone(),
-            ))
-        },
-    );
 
     // ---- Channel + signal handler ------------------------------------
     // One LocalChannel per process: its SessionId is the session the
@@ -177,7 +148,8 @@ async fn run_async(
     // Signal task: first ctrl-C during a turn cancels the turn; a
     // second ctrl-C exits the process. We re-read the current token
     // from the slot on every ctrl-C so that turn-N+1 sees a fresh
-    // token after turn-N's reset_cancellation() call below.
+    // token after turn-N's reset_cancellation() call (inside
+    // `run_session`).
     tokio::spawn(async move {
         loop {
             if tokio::signal::ctrl_c().await.is_err() {
@@ -186,8 +158,6 @@ async fn run_async(
             }
             let current = token_slot.lock().expect("token slot poisoned").clone();
             if current.is_cancelled() {
-                // Second ctrl-C on the *same* token (the first cancel
-                // already set it). Exit.
                 eprintln!("\naivyx: interrupted, exiting.");
                 std::process::exit(130);
             }
@@ -196,52 +166,28 @@ async fn run_async(
         }
     });
 
-    // ---- Banner ------------------------------------------------------
-    println!("aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.", env!("CARGO_PKG_VERSION"));
+    // ---- Session ------------------------------------------------------
+    let session_config = SessionConfig {
+        model,
+        system_prompt,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        capabilities,
+        prompt: PROMPT.to_string(),
+        banner: Some(format!(
+            "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.",
+            env!("CARGO_PKG_VERSION")
+        )),
+    };
 
-    // ---- REPL --------------------------------------------------------
+    // Lock stdin for the whole session. `io::Stdin::lock` returns a
+    // `StdinLock<'static>` on stable, so this binds for the whole
+    // `run_session` call.
     let stdin = io::stdin();
-    let mut line = String::new();
+    let reader = stdin.lock();
 
-    loop {
-        // Print the prompt *before* blocking on read_line so the user
-        // sees it. stdout() is line-buffered on terminals but we flush
-        // explicitly to handle piped-stdout cases too.
-        {
-            let mut out = io::stdout().lock();
-            write!(out, "{PROMPT}").ok();
-            out.flush().ok();
-        }
-
-        line.clear();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => {
-                // EOF (ctrl-D). Clean exit.
-                println!();
-                return Ok(());
-            }
-            Ok(_) => {}
-            Err(e) => return Err(format!("failed to read from stdin: {e}")),
-        }
-
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        // Rotate the cancellation token so a ctrl-C from turn N does
-        // not pre-cancel turn N+1. `tokio_util`'s CancellationToken is
-        // monotonic, so we cannot reset in place — we swap a fresh
-        // token into the channel's slot. The signal task reads the
-        // slot on every ctrl-C, so it picks up the new token.
-        channel.reset_cancellation();
-
-        let message = Message::text(channel.session_id(), input);
-        let _outcome = agent.turn(message, &channel).await;
-        // LocalChannel::finalize has already printed the turn marker.
-        // We intentionally discard `_outcome` here — the channel is
-        // the user-facing surface, not the return value.
-    }
+    run_session(provider, audit, session_config, channel, reader)
+        .await
+        .map(|_report| ())
 }
 
 /// Pull 32 bytes of OS entropy without adding a new crate dep. Uses

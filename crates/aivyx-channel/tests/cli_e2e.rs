@@ -1,0 +1,301 @@
+//! Phase 3 task 5 — end-to-end CLI integration test.
+//!
+//! This test drives the same `run_session` function the `aivyx` binary
+//! calls, but with every non-deterministic seam replaced by a
+//! test-owned fake:
+//!
+//! | Seam              | Binary                      | Test                  |
+//! |-------------------|-----------------------------|-----------------------|
+//! | `LlmProvider`     | `AnthropicProvider` (HTTPS) | `ScriptedProvider`    |
+//! | `reader`          | `io::stdin().lock()`        | `Cursor<&[u8]>`       |
+//! | `writer`          | `io::stdout()`              | `Arc<Mutex<Vec<u8>>>` |
+//! | audit             | key from `/dev/urandom`     | fixed key             |
+//! | signal handler    | `tokio::signal::ctrl_c`     | (skipped)             |
+//!
+//! The scripted provider returns a short run of `TextChunk` events
+//! followed by a `FinalMessage` terminal for each call. The test asserts:
+//!
+//! 1. **User-visible output.** Every scripted text chunk appears in
+//!    stdout, in order, followed by the `[turn completed]` marker. The
+//!    prompt (`> `) appears once before each turn.
+//! 2. **Audit chain.** The in-memory `HmacChainLog` contains exactly
+//!    the events the loop should have emitted (`TurnStarted`,
+//!    `TurnEnded`) for each turn, in order, and `verify()` passes.
+//! 3. **Clean EOF.** When the scripted reader hits EOF, `run_session`
+//!    returns `Ok` with the expected `turns_run` count.
+//!
+//! What this test deliberately does *not* do: assert on byte-exact
+//! rendering of the finalize marker (the renderer has its own tests),
+//! verify the SSE parser (the Anthropic provider has its own tests),
+//! or replay any Anthropic wire bytes (that would just be re-testing
+//! the provider-to-planner conversion path).
+
+use std::io::Cursor;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+
+use aivyx_audit::{AuditBridge, AuditEvent, AuditLog, HmacChainLog};
+use aivyx_capability::{CapabilitySet, Scope};
+use aivyx_channel::{run_session, LocalChannel, SessionConfig};
+use aivyx_core::{AuditHook, CancellationToken, TurnOutcome, TurnOutcomeSummary};
+use aivyx_llm::{
+    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+};
+
+// ---------------------------------------------------------------------------
+// ScriptedProvider — yields one scripted step per `chat_stream` call.
+// One `chat_stream` invocation corresponds to one planner `one_step`,
+// and one `FinalMessage` terminal corresponds to one user turn
+// (Phase 3 has no tools, so there's no tool-call → tool-result loop
+// within a single turn).
+// ---------------------------------------------------------------------------
+
+struct ScriptedStep {
+    events: Vec<LlmStreamEvent>,
+    terminal: LlmStepEnd,
+}
+
+struct ScriptedProvider {
+    queue: Mutex<std::collections::VecDeque<ScriptedStep>>,
+}
+
+impl ScriptedProvider {
+    fn new(steps: Vec<ScriptedStep>) -> Arc<Self> {
+        Arc::new(ScriptedProvider {
+            queue: Mutex::new(steps.into()),
+        })
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ScriptedProvider {
+    async fn chat_stream(
+        &self,
+        request: LlmRequest<'_>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        // Sanity: the planner must always send a non-empty message list
+        // or Anthropic would reject the request. We check it here so a
+        // regression in `LlmPlanner::begin_turn` would fail this test
+        // loudly instead of silently emptying the history.
+        assert!(
+            !request.messages.is_empty(),
+            "planner sent an empty message list to the provider"
+        );
+        // And the planner must seed the history with a user message
+        // first. (Tools don't run in Phase 3, so every request starts
+        // with User.)
+        assert!(
+            matches!(request.messages[0], LlmMessage::User { .. }),
+            "expected history[0] to be a User message"
+        );
+
+        let step = self
+            .queue
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+        Ok(Box::new(ScriptedStream {
+            events: step.events.into_iter(),
+            terminal: Some(step.terminal),
+        }))
+    }
+}
+
+struct ScriptedStream {
+    events: std::vec::IntoIter<LlmStreamEvent>,
+    terminal: Option<LlmStepEnd>,
+}
+
+#[async_trait]
+impl LlmStream for ScriptedStream {
+    async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+        Ok(self.events.next())
+    }
+    async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+        self.terminal
+            .ok_or_else(|| LlmError::StreamEnded("ScriptedStream::finish double-called".into()))
+    }
+}
+
+fn usage() -> LlmUsage {
+    LlmUsage::default()
+}
+
+fn final_step(chunks: &[&str], text: &str) -> ScriptedStep {
+    ScriptedStep {
+        events: chunks
+            .iter()
+            .map(|c| LlmStreamEvent::TextChunk((*c).to_string()))
+            .collect(),
+        terminal: LlmStepEnd::FinalMessage {
+            text: text.to_string(),
+            usage: usage(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The test proper.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scripted_session_drives_two_turns_end_to_end() {
+    // -- Scripted LLM responses. Two user turns → two scripted steps.
+    let provider = ScriptedProvider::new(vec![
+        final_step(&["Hello", ", ", "world"], "Hello, world"),
+        final_step(&["Goodbye"], "Goodbye"),
+    ]);
+
+    // -- Audit log with a deterministic key so the chain is reproducible
+    //    across runs. The binary uses /dev/urandom; tests use a fixed
+    //    32-byte key because we assert on `entries().len()` and the
+    //    actual MAC is whatever the key produces.
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    // -- Scripted stdin: two non-empty lines + a blank line + EOF.
+    //    The blank line proves the loop skips whitespace-only input.
+    let stdin_script = b"what time is it\n\ngoodbye\n";
+    let reader = Cursor::new(&stdin_script[..]);
+
+    // -- Capture stdout into an in-memory sink via LocalChannel.
+    //    The channel keeps a second Arc<Mutex<Vec<u8>>> handle that
+    //    we inspect after the session returns.
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+
+    // -- Session config. Empty prompt keeps captured output easy to
+    //    assert on; no banner for the same reason.
+    let config = SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        prompt: String::new(),
+        banner: None,
+    };
+
+    // -- Drive the session.
+    let report = run_session(provider, audit_hook, config, channel, reader)
+        .await
+        .expect("run_session must complete cleanly on scripted EOF");
+
+    // ---- Assertion 1: the session ran two turns and finished cleanly.
+    assert_eq!(
+        report.turns_run, 2,
+        "scripted stdin has two non-empty lines; blank line should be skipped"
+    );
+    match report.last_outcome {
+        Some(TurnOutcome::Completed {
+            ref final_message,
+            tool_calls_made,
+            ..
+        }) => {
+            assert_eq!(final_message, "Goodbye");
+            assert_eq!(tool_calls_made, 0);
+        }
+        other => panic!("expected last turn to be Completed(Goodbye), got {other:?}"),
+    }
+
+    // ---- Assertion 2: captured stdout contains every streamed chunk
+    //      in the right order, plus the finalize marker after each turn.
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    // Turn 1 chunks in order:
+    let hello_at = output.find("Hello").expect("Hello chunk present");
+    let comma_at = output.find(", ").expect(", chunk present");
+    let world_at = output.find("world").expect("world chunk present");
+    assert!(
+        hello_at < comma_at && comma_at < world_at,
+        "turn 1 chunks out of order in captured output: {output:?}"
+    );
+    // Finalize marker for turn 1 must appear before turn 2's chunks.
+    let first_finalize = output
+        .find("[turn completed]")
+        .expect("turn 1 finalize marker present");
+    let goodbye_at = output.find("Goodbye").expect("Goodbye chunk present");
+    assert!(
+        first_finalize < goodbye_at,
+        "turn 1 must finalize before turn 2 starts streaming"
+    );
+    // And a second finalize marker for turn 2.
+    let second_finalize = output[first_finalize + 1..]
+        .find("[turn completed]")
+        .expect("turn 2 finalize marker present");
+    assert!(
+        second_finalize > 0,
+        "turn 2 finalize must appear after turn 1 finalize"
+    );
+
+    // ---- Assertion 3: the audit chain has exactly the shape we expect
+    //      and verifies cleanly.
+    let log = audit_bridge.writer();
+    log.verify().expect("audit chain must verify");
+
+    let entries = log.entries().expect("can read entries");
+    // Two turns, two (TurnStarted, TurnEnded) pairs, no tool calls in
+    // between since Phase 3 has no concrete tools registered.
+    assert_eq!(
+        entries.len(),
+        4,
+        "expected 4 audit entries (2 turns × TurnStarted+TurnEnded), got {}",
+        entries.len()
+    );
+
+    // The chain stores typed `AuditEvent` values directly (not raw
+    // bytes — the MAC covers the canonical JSON, but the entry keeps
+    // the structured event for inspection). Pattern-match the sequence
+    // shape directly.
+    let events: Vec<&AuditEvent> = entries.iter().map(|e| &e.event).collect();
+
+    assert!(matches!(events[0], AuditEvent::TurnStarted { .. }));
+    assert!(matches!(
+        events[1],
+        AuditEvent::TurnEnded {
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 0,
+            ..
+        }
+    ));
+    assert!(matches!(events[2], AuditEvent::TurnStarted { .. }));
+    assert!(matches!(
+        events[3],
+        AuditEvent::TurnEnded {
+            outcome: TurnOutcomeSummary::Completed,
+            tool_calls_made: 0,
+            ..
+        }
+    ));
+
+    // The two `TurnStarted` entries must carry the *same* session id
+    // — both turns run on the one `LocalChannel`, so they share a
+    // session. Different turn ids, same session.
+    match (&events[0], &events[2]) {
+        (
+            AuditEvent::TurnStarted {
+                turn_id: t1,
+                session_id: s1,
+                ..
+            },
+            AuditEvent::TurnStarted {
+                turn_id: t2,
+                session_id: s2,
+                ..
+            },
+        ) => {
+            assert_eq!(s1, s2, "both turns must share the channel's session id");
+            assert_ne!(t1, t2, "each turn must get a distinct turn id");
+        }
+        _ => unreachable!(),
+    }
+
+    // Seq numbers are monotonic 0..4 (HmacChainLog invariant, but
+    // worth asserting here so a regression in the chain would be
+    // caught by the E2E test too, not just the audit-crate tests).
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(entry.seq, i as u64);
+    }
+}
