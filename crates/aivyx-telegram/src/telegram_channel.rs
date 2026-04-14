@@ -221,6 +221,16 @@ impl<T: TelegramTransport + 'static> ChannelContext for TelegramChannel<T> {
         self.session
     }
 
+    fn session_partition(&self) -> Option<String> {
+        // Phase 8 Task 2 — one Telegram chat = one memory partition.
+        // The stringified `chat_id` is the stable, Telegram-assigned
+        // identity the turn loop uses to namespace session-scoped
+        // tool state. Two `TelegramChannel` instances sharing the
+        // same `RedbMemory` and different `chat_id`s cannot see each
+        // other's memory; see `tests/two_chats_isolated.rs`.
+        Some(self.chat_id.to_string())
+    }
+
     async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
         let mut buf = self
             .buffer

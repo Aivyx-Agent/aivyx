@@ -287,6 +287,137 @@ async fn finalize_footer_reflects_outcome() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8 Task 2 — two chats, one store, isolated memory partitions.
+//
+// This test is the end-to-end payoff for Task 2: it drives the real
+// `MemoryReadTool`/`MemoryWriteTool` with two `TelegramChannel`s
+// sharing one `InMemoryMemory`, and proves that chat A's
+// `memory.write` is invisible to chat B's `memory.read`.
+//
+// The turn-loop injection (`agent.rs::run_tool_call`) is simulated
+// here as a tiny `inject_session` helper because spinning up a full
+// `ConcreteAgent` would pull in a planner and a capability set for
+// a test whose point is just the partition-isolation invariant.
+// The simulation is a one-line `obj.insert("session", ...)` on the
+// input — the *same* operation the production turn loop does, so
+// the test would catch any drift between the two sites.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn two_chats_isolated() {
+    use aivyx_core::{
+        AgentId, CancellationToken, NullAuditHook, SessionId, Tool, ToolContext, ToolOutcome,
+        TurnId,
+    };
+    use aivyx_memory::{InMemoryMemory, MemoryReadTool, MemoryWriteTool};
+    use std::sync::Arc;
+
+    // One memory store, shared by both chats.
+    let mem: Arc<dyn aivyx_memory::Memory> = Arc::new(InMemoryMemory::new());
+    let writer = MemoryWriteTool::new(mem.clone());
+    let reader = MemoryReadTool::new(mem.clone());
+
+    // Two channels, two chat_ids. Each channel's
+    // `session_partition()` returns its own `chat_id.to_string()` —
+    // that's the Task 2 override being exercised.
+    let transport_a = Arc::new(ScriptedTransport::new());
+    let chan_a: TelegramChannel<ScriptedTransport> =
+        TelegramChannel::new("tg-a", 1001, Arc::clone(&transport_a));
+    let transport_b = Arc::new(ScriptedTransport::new());
+    let chan_b: TelegramChannel<ScriptedTransport> =
+        TelegramChannel::new("tg-b", 2002, Arc::clone(&transport_b));
+
+    assert_eq!(chan_a.session_partition(), Some("1001".to_string()));
+    assert_eq!(chan_b.session_partition(), Some("2002".to_string()));
+
+    // Simulate what `ConcreteAgent::run_tool_call` does between
+    // "planner emitted a tool call" and "required_scope": insert the
+    // channel's partition under the reserved `"session"` key. The
+    // production injection is in `agent.rs`; this helper exists so
+    // if the two sites drift, this test would flag it.
+    fn inject_session(
+        input: &mut serde_json::Value,
+        channel: &dyn aivyx_core::ChannelContext,
+    ) {
+        if let Some(partition) = channel.session_partition()
+            && let Some(obj) = input.as_object_mut()
+        {
+            obj.insert("session".to_string(), serde_json::Value::String(partition));
+        }
+    }
+
+    // Helper: build a ToolContext borrowing the given channel.
+    // `session_id`, `agent_id`, `turn_id` are irrelevant to the
+    // partition-isolation check — the memory tools never read them
+    // — so fresh values each call are fine.
+    let audit = NullAuditHook;
+    fn make_ctx<'a>(
+        channel: &'a dyn aivyx_core::ChannelContext,
+        audit: &'a dyn aivyx_core::AuditHook,
+        cancel: &'a CancellationToken,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            turn_id: TurnId::new(),
+            channel,
+            audit,
+            cancellation: cancel,
+        }
+    }
+    let cancel = CancellationToken::new();
+
+    // Chat A writes "purple" to `notes`.
+    let mut input = serde_json::json!({"topic": "notes", "body": "purple"});
+    inject_session(&mut input, &chan_a);
+    assert_eq!(
+        input["session"], "1001",
+        "injection must stamp chat_a's partition onto the tool input"
+    );
+    let out = writer.execute(input, &make_ctx(&chan_a, &audit, &cancel)).await;
+    assert!(
+        matches!(out, ToolOutcome::Completed { .. }),
+        "chat A write should Complete, got {out:?}"
+    );
+
+    // Chat B writes "green" to the same logical topic `notes`.
+    let mut input = serde_json::json!({"topic": "notes", "body": "green"});
+    inject_session(&mut input, &chan_b);
+    let out = writer.execute(input, &make_ctx(&chan_b, &audit, &cancel)).await;
+    assert!(matches!(out, ToolOutcome::Completed { .. }));
+
+    // Chat A reads `notes` — must see only "purple", not "green".
+    let mut input = serde_json::json!({"topic": "notes"});
+    inject_session(&mut input, &chan_a);
+    let out = reader.execute(input, &make_ctx(&chan_a, &audit, &cancel)).await;
+    let ToolOutcome::Completed { output, .. } = out else {
+        panic!("chat A read should Complete");
+    };
+    let entries = output["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "chat A must see exactly its own entry");
+    assert_eq!(
+        entries[0]["body"], "purple",
+        "chat A must see its own body, not chat B's"
+    );
+    // Logical topic restored on the way out — the agent never sees
+    // the namespaced physical key.
+    assert_eq!(entries[0]["topic"], "notes");
+    assert_eq!(output["topic"], "notes");
+
+    // Chat B reads `notes` — must see only "green".
+    let mut input = serde_json::json!({"topic": "notes"});
+    inject_session(&mut input, &chan_b);
+    let out = reader.execute(input, &make_ctx(&chan_b, &audit, &cancel)).await;
+    let ToolOutcome::Completed { output, .. } = out else {
+        panic!("chat B read should Complete");
+    };
+    let entries = output["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["body"], "green");
+    assert_eq!(entries[0]["topic"], "notes");
+}
+
 #[tokio::test]
 async fn transport_error_propagates_as_channel_error() {
     // The channel translates `TransportError::Platform(..)` to

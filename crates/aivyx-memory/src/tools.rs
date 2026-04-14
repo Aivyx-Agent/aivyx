@@ -150,12 +150,81 @@ fn topic_from_input(input: &Value) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-/// Build a qualified memory scope of the form `<base>:topic:<topic>`.
-/// Falls back to the deny scope if parse fails (e.g., the topic
-/// contained a colon that broke the qualifier shape — `Scope::parse`
-/// is the authority on what's legal, not this function).
-fn memory_scope(base: &str, topic: &str) -> Scope {
-    Scope::parse(&format!("{base}:topic:{topic}")).unwrap_or_else(|| deny_scope(base))
+/// Extract the optional session partition string from a tool-input
+/// JSON value. Phase 8 Task 2 introduced this field to namespace
+/// memory per `ChannelContext::session_partition()` — a multi-chat
+/// Telegram bot sees a different `session` value per chat, so two
+/// chats can write `topic:notes` without seeing each other's entries.
+///
+/// The field is **never** set by the LLM or by the tool caller's
+/// hand-written JSON; the turn loop in `aivyx-core` injects it after
+/// the LLM emits the tool call and before `required_scope` runs. See
+/// the module doc on `ChannelContext::session_partition` and the
+/// turn-loop insertion site for the exact contract.
+///
+/// A missing field, wrong type, or empty string all map to `None`,
+/// which is the single-partition default (`LocalChannel` and any
+/// other channel whose `session_partition()` returns `None`).
+fn session_from_input(input: &Value) -> Option<&str> {
+    let s = input.get("session")?.as_str()?;
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// The reserved prefix marker that identifies a session-namespaced
+/// physical topic. Uses ASCII `0x01` bytes as separators so no
+/// well-formed agent-chosen topic can collide: topics are UTF-8
+/// strings and the Phase 6 contract already forbids NUL, but `0x01`
+/// is equally unusable as a literal string by a language model and
+/// equally easy to reject at the tool-input validation step.
+///
+/// A physical topic under session `12345` with logical topic `notes`
+/// is stored as `\x01s\x0112345\x01notes`. Phase 7 stores open cleanly
+/// because they were written under logical topics like `notes` whose
+/// literal bytes never start with `\x01`.
+const SESSION_PREFIX: &str = "\x01s\x01";
+
+/// Build a session-namespaced physical topic string. When `session`
+/// is `None`, returns the logical topic unchanged — this is the
+/// single-partition path that preserves every Phase 6/7 on-disk
+/// layout exactly. When `session` is `Some`, builds
+/// `\x01s\x01<session>\x01<topic>` which can never collide with a
+/// logical topic because logical topics cannot contain `\x01`.
+fn namespaced_topic(session: Option<&str>, topic: &str) -> String {
+    match session {
+        None => topic.to_string(),
+        Some(s) => format!("{SESSION_PREFIX}{s}\x01{topic}"),
+    }
+}
+
+/// Reject topics whose literal form starts with the reserved
+/// session-namespace prefix. Returning `true` from the caller means
+/// "route this input to the deny scope" so the gate never admits a
+/// call that would have collided with a physical-topic name. Phase 8
+/// Task 2 makes this a hard validation at both `required_scope` and
+/// `execute`.
+fn topic_uses_reserved_prefix(topic: &str) -> bool {
+    topic.starts_with('\x01')
+}
+
+/// Build a qualified memory scope.
+///
+/// Two shapes:
+/// - `<base>:topic:<topic>` — Phase 6 single-partition form (when
+///   `session` is `None`).
+/// - `<base>:topic:<topic>:session:<session>` — Phase 8 Task 2
+///   dual-qualifier form (when `session` is `Some`), for
+///   multi-chat channels like Telegram.
+///
+/// Qualifier order is fixed so two logically equivalent scopes
+/// always stringify identically — otherwise the audit chain would
+/// see non-canonical variants on the same held capability and
+/// `Scope::is_granted_by` would flip on qualifier reordering.
+fn memory_scope(base: &str, topic: &str, session: Option<&str>) -> Scope {
+    let qualified = match session {
+        None => format!("{base}:topic:{topic}"),
+        Some(s) => format!("{base}:topic:{topic}:session:{s}"),
+    };
+    Scope::parse(&qualified).unwrap_or_else(|| deny_scope(base))
 }
 
 /// Convert a [`MemoryError`] to a [`ToolOutcome::Failed`] with the
@@ -270,15 +339,22 @@ impl Tool for MemoryReadTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match topic_from_input(input) {
-            Some(topic) => memory_scope("memory.read", topic),
-            None => deny_scope("memory.read"),
+            Some(topic) if !topic_uses_reserved_prefix(topic) => {
+                memory_scope("memory.read", topic, session_from_input(input))
+            }
+            // Missing topic, wrong type, empty topic, or a topic that
+            // literally starts with the reserved `\x01` session-
+            // namespace prefix — the last case would let an agent
+            // side-door into another chat's physical storage key, so
+            // deny at the gate.
+            _ => deny_scope("memory.read"),
         }
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let topic = match topic_from_input(&input) {
-            Some(t) => t.to_string(),
-            None => {
+            Some(t) if !topic_uses_reserved_prefix(t) => t.to_string(),
+            _ => {
                 // Same invariant violation argument as FsReadTool: the
                 // scope gate would have denied a missing-topic call
                 // because `required_scope` returned the deny scope.
@@ -287,12 +363,16 @@ impl Tool for MemoryReadTool {
                 // bug. Either way, fail loudly in audit.
                 return ToolOutcome::Failed(AivyxError::Internal(
                     "memory.read: reached execute with malformed input \
-                     (topic missing or non-string) after scope gate \
-                     admitted the call"
+                     (topic missing, non-string, or reserved prefix) \
+                     after scope gate admitted the call"
                         .to_string(),
                 ));
             }
         };
+        // `session` is the namespacing source from the channel's
+        // `session_partition()`, injected by the turn loop. `None`
+        // preserves Phase 6 single-partition behavior.
+        let session = session_from_input(&input).map(str::to_string);
 
         let requested = input
             .get("limit")
@@ -301,17 +381,30 @@ impl Tool for MemoryReadTool {
             .unwrap_or(DEFAULT_READ_LIMIT);
         let limit = requested.clamp(1, MAX_READ_LIMIT);
 
+        // Audit records the *logical* scope and the *logical* topic the
+        // agent asked for. The physical topic is an internal storage
+        // detail and must never leak into the audit chain — otherwise
+        // `verify_from_disk` would have to know about namespacing to
+        // round-trip a chain, breaking D1's "audit verifies without
+        // live substrate" rule.
         ctx.audit.on_event(AuditTag::MemoryAccess {
             turn_id: ctx.turn_id,
             operation: MemoryOperation::Read,
-            scope: memory_scope("memory.read", &topic),
+            scope: memory_scope("memory.read", &topic, session.as_deref()),
             query_or_key: topic.clone(),
         });
 
-        let entries = match self.memory.get_recent(&topic, limit).await {
+        let physical = namespaced_topic(session.as_deref(), &topic);
+        let mut entries = match self.memory.get_recent(&physical, limit).await {
             Ok(v) => v,
             Err(e) => return memory_err_to_failed(self.id, e),
         };
+        // Restore the logical topic on the way out — the agent asked
+        // for `notes`, not `\x01s\x0112345\x01notes`. Same reasoning
+        // as the audit event above.
+        for entry in entries.iter_mut() {
+            entry.topic = topic.clone();
+        }
 
         let json_entries: Vec<Value> = entries.iter().map(entry_to_json).collect();
 
@@ -433,23 +526,26 @@ impl Tool for MemoryWriteTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match topic_from_input(input) {
-            Some(topic) => memory_scope("memory.write", topic),
-            None => deny_scope("memory.write"),
+            Some(topic) if !topic_uses_reserved_prefix(topic) => {
+                memory_scope("memory.write", topic, session_from_input(input))
+            }
+            _ => deny_scope("memory.write"),
         }
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let topic = match topic_from_input(&input) {
-            Some(t) => t.to_string(),
-            None => {
+            Some(t) if !topic_uses_reserved_prefix(t) => t.to_string(),
+            _ => {
                 return ToolOutcome::Failed(AivyxError::Internal(
                     "memory.write: reached execute with malformed input \
-                     (topic missing or non-string) after scope gate \
-                     admitted the call"
+                     (topic missing, non-string, or reserved prefix) \
+                     after scope gate admitted the call"
                         .to_string(),
                 ));
             }
         };
+        let session = session_from_input(&input).map(str::to_string);
         let body = match input.get("body").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
             None => {
@@ -463,7 +559,7 @@ impl Tool for MemoryWriteTool {
         ctx.audit.on_event(AuditTag::MemoryAccess {
             turn_id: ctx.turn_id,
             operation: MemoryOperation::Write,
-            scope: memory_scope("memory.write", &topic),
+            scope: memory_scope("memory.write", &topic, session.as_deref()),
             query_or_key: topic.clone(),
         });
 
@@ -477,7 +573,18 @@ impl Tool for MemoryWriteTool {
         // still a write *intent*, and recording it is the whole point
         // of the audit chain. Only after the tripwire fires do we
         // surface the refusal to the caller.
-        let existing = match self.memory.get_recent(&topic, self.max_per_topic).await {
+        //
+        // Phase 8 Task 2 — the tripwire counts entries in the
+        // *physical* (namespaced) topic, not the logical one.
+        // Otherwise chat A filling its `notes` bucket would cap chat
+        // B's unrelated `notes` bucket — the whole point of session
+        // partitioning is that these are independent quotas.
+        let physical = namespaced_topic(session.as_deref(), &topic);
+        let existing = match self
+            .memory
+            .get_recent(&physical, self.max_per_topic)
+            .await
+        {
             Ok(v) => v,
             Err(e) => return memory_err_to_failed(self.id, e),
         };
@@ -493,7 +600,7 @@ impl Tool for MemoryWriteTool {
             });
         }
 
-        let seq = match self.memory.put(&topic, &body).await {
+        let seq = match self.memory.put(&physical, &body).await {
             Ok(s) => s,
             Err(e) => return memory_err_to_failed(self.id, e),
         };
@@ -505,7 +612,7 @@ impl Tool for MemoryWriteTool {
         // out of sync with the store, we want `Verified` to be a
         // lie only when the write truly landed. D1 calls this the
         // "verify what you did" rule.
-        let verified = match self.memory.get_recent(&topic, 1).await {
+        let verified = match self.memory.get_recent(&physical, 1).await {
             Ok(latest) => match latest.first() {
                 Some(top) if top.seq == seq && top.body == body => Verification::Verified,
                 _ => Verification::Unverified,
@@ -603,32 +710,36 @@ impl Tool for MemoryForgetTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match topic_from_input(input) {
-            Some(topic) => memory_scope("memory.forget", topic),
-            None => deny_scope("memory.forget"),
+            Some(topic) if !topic_uses_reserved_prefix(topic) => {
+                memory_scope("memory.forget", topic, session_from_input(input))
+            }
+            _ => deny_scope("memory.forget"),
         }
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let topic = match topic_from_input(&input) {
-            Some(t) => t.to_string(),
-            None => {
+            Some(t) if !topic_uses_reserved_prefix(t) => t.to_string(),
+            _ => {
                 return ToolOutcome::Failed(AivyxError::Internal(
                     "memory.forget: reached execute with malformed input \
-                     (topic missing or non-string) after scope gate \
-                     admitted the call"
+                     (topic missing, non-string, or reserved prefix) \
+                     after scope gate admitted the call"
                         .to_string(),
                 ));
             }
         };
+        let session = session_from_input(&input).map(str::to_string);
 
         ctx.audit.on_event(AuditTag::MemoryAccess {
             turn_id: ctx.turn_id,
             operation: MemoryOperation::Forget,
-            scope: memory_scope("memory.forget", &topic),
+            scope: memory_scope("memory.forget", &topic, session.as_deref()),
             query_or_key: topic.clone(),
         });
 
-        let deleted = match self.memory.forget(&topic).await {
+        let physical = namespaced_topic(session.as_deref(), &topic);
+        let deleted = match self.memory.forget(&physical).await {
             Ok(n) => n,
             Err(e) => return memory_err_to_failed(self.id, e),
         };
@@ -640,7 +751,7 @@ impl Tool for MemoryForgetTool {
         // write, not a survivor. But if the substrate returns an
         // error on the read, we cannot prove the forget worked, so
         // report Unverified.
-        let verified = match self.memory.get_recent(&topic, 1).await {
+        let verified = match self.memory.get_recent(&physical, 1).await {
             Ok(v) if v.is_empty() => Verification::Verified,
             Ok(_) => Verification::Unverified,
             Err(_) => Verification::Unverified,
@@ -1198,5 +1309,243 @@ mod tests {
         let a = MemoryReadTool::new(fresh_memory()).id();
         let b = MemoryReadTool::new(fresh_memory()).id();
         assert_ne!(a, b, "ToolId::new must mint fresh UUIDs");
+    }
+
+    // ---- Phase 8 task 2: session-scoped qualifier derivation ------
+
+    #[test]
+    fn read_scope_with_session_yields_both_qualifiers() {
+        // With the turn loop's injected `session` field, the derived
+        // scope gains a trailing `:session:<id>` qualifier. This is
+        // what lets a capability bundle for chat A
+        // (`memory.read:topic:notes:session:A`) fail to grant a read
+        // attempt from chat B.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({
+            "topic": "notes",
+            "session": "12345",
+        }));
+        assert_eq!(scope.base(), "memory.read");
+        assert_eq!(scope.qualifier(), Some("topic:notes:session:12345"));
+    }
+
+    #[test]
+    fn read_scopes_for_same_topic_different_sessions_are_distinct() {
+        let tool = MemoryReadTool::new(fresh_memory());
+        let a = tool.required_scope(&json!({"topic": "notes", "session": "A"}));
+        let b = tool.required_scope(&json!({"topic": "notes", "session": "B"}));
+        assert_ne!(
+            a, b,
+            "session qualifier must distinguish otherwise-identical reads"
+        );
+    }
+
+    #[test]
+    fn write_scope_with_session_is_session_qualified() {
+        let tool = MemoryWriteTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({
+            "topic": "secrets",
+            "body": "x",
+            "session": "chatA",
+        }));
+        assert_eq!(scope.qualifier(), Some("topic:secrets:session:chatA"));
+    }
+
+    #[test]
+    fn forget_scope_with_session_is_session_qualified() {
+        let tool = MemoryForgetTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({
+            "topic": "notes",
+            "session": "chatB",
+        }));
+        assert_eq!(scope.qualifier(), Some("topic:notes:session:chatB"));
+    }
+
+    #[test]
+    fn empty_session_is_treated_as_none_for_scope_derivation() {
+        // The injection point sends `""` only if a channel override
+        // returns `Some("")`, which would be a channel bug — but we
+        // still want the tool to degrade to unsession-qualified rather
+        // than emitting a scope like `memory.read:topic:notes:session:`
+        // that no capability bundle would ever grant.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"topic": "notes", "session": ""}));
+        assert_eq!(scope.qualifier(), Some("topic:notes"));
+    }
+
+    #[test]
+    fn reserved_prefix_topic_is_denied_even_with_session() {
+        // A topic that literally starts with `\x01` would let an
+        // agent side-door into another chat's physical key. Denied
+        // regardless of whether `session` is present.
+        let tool = MemoryReadTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({
+            "topic": "\x01s\x01other\x01notes",
+            "session": "mine",
+        }));
+        assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    // ---- Phase 8 task 2: physical isolation at the substrate ------
+
+    #[tokio::test]
+    async fn writes_in_different_sessions_do_not_share_storage() {
+        // This is the whole point of Option B. Two sessions writing to
+        // the same *logical* topic `notes` must land under different
+        // physical keys so that a read from session A cannot observe
+        // session B's body.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        // Session A writes "purple" to `notes`.
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "purple", "session": "A"}),
+                &ctx,
+            )
+            .await;
+
+        // Session B writes "green" to `notes`.
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "green", "session": "B"}),
+                &ctx,
+            )
+            .await;
+
+        // Session A reads back — sees only purple.
+        let ctx = make_ctx(&chan, &audit);
+        let a_out = reader
+            .execute(json!({"topic": "notes", "session": "A"}), &ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = a_out else {
+            panic!("session A read should Complete");
+        };
+        let entries_a = output["entries"].as_array().unwrap();
+        assert_eq!(entries_a.len(), 1);
+        assert_eq!(entries_a[0]["body"], "purple");
+        // And the agent-visible topic is the logical name, not the
+        // physical namespaced one.
+        assert_eq!(entries_a[0]["topic"], "notes");
+        assert_eq!(output["topic"], "notes");
+
+        // Session B reads back — sees only green.
+        let ctx = make_ctx(&chan, &audit);
+        let b_out = reader
+            .execute(json!({"topic": "notes", "session": "B"}), &ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = b_out else {
+            panic!("session B read should Complete");
+        };
+        let entries_b = output["entries"].as_array().unwrap();
+        assert_eq!(entries_b.len(), 1);
+        assert_eq!(entries_b[0]["body"], "green");
+        assert_eq!(entries_b[0]["topic"], "notes");
+    }
+
+    #[tokio::test]
+    async fn forget_in_one_session_does_not_clear_another() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let forget = MemoryForgetTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "keep me", "session": "A"}),
+                &ctx,
+            )
+            .await;
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "me too", "session": "B"}),
+                &ctx,
+            )
+            .await;
+
+        // B forgets — A's entry must survive.
+        let ctx = make_ctx(&chan, &audit);
+        let cleared = forget
+            .execute(json!({"topic": "notes", "session": "B"}), &ctx)
+            .await;
+        match cleared {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["deleted"], 1);
+            }
+            other => panic!("forget B should Complete, got {other:?}"),
+        }
+
+        let ctx = make_ctx(&chan, &audit);
+        let a_out = reader
+            .execute(json!({"topic": "notes", "session": "A"}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = a_out {
+            let entries = output["entries"].as_array().unwrap();
+            assert_eq!(entries.len(), 1, "session A should be untouched");
+            assert_eq!(entries[0]["body"], "keep me");
+        } else {
+            panic!("session A read should still Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn per_topic_cap_is_per_session() {
+        // Filling session A's `notes` to cap must not refuse session
+        // B's unrelated `notes` writes.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone()).set_max_per_topic(2);
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        // A fills to cap.
+        for i in 0..2 {
+            let ctx = make_ctx(&chan, &audit);
+            let out = writer
+                .execute(
+                    json!({
+                        "topic": "notes",
+                        "body": format!("a{i}"),
+                        "session": "A",
+                    }),
+                    &ctx,
+                )
+                .await;
+            assert!(matches!(out, ToolOutcome::Completed { .. }));
+        }
+
+        // A's next write is refused.
+        let ctx = make_ctx(&chan, &audit);
+        let blocked = writer
+            .execute(
+                json!({"topic": "notes", "body": "over", "session": "A"}),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(blocked, ToolOutcome::Failed(_)));
+
+        // But B's first write still succeeds — different bucket.
+        let ctx = make_ctx(&chan, &audit);
+        let ok = writer
+            .execute(
+                json!({"topic": "notes", "body": "b0", "session": "B"}),
+                &ctx,
+            )
+            .await;
+        match ok {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["topic"], "notes");
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("B's first write should Complete, got {other:?}"),
+        }
     }
 }

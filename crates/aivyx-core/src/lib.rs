@@ -168,6 +168,34 @@ pub trait ChannelContext: Send + Sync {
     async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError>;
 
     fn cancellation_token(&self) -> CancellationToken;
+
+    /// Stable, per-channel-instance partition identifier used by the
+    /// turn loop to namespace session-scoped state (currently: memory
+    /// tool topics). Returns `None` for single-partition channels
+    /// where no namespacing is wanted — that is the default and it is
+    /// what `LocalChannel` returns (one user per process, one partition).
+    ///
+    /// Multi-partition channels (the canonical example is
+    /// `TelegramChannel`, where one bot process may serve many
+    /// independent Telegram chats) override this to return
+    /// `Some(partition_id)`. The turn loop injects that string into
+    /// session-aware tool inputs (e.g., `memory.read` gains a
+    /// `session` field) *before* `required_scope` is computed, so
+    /// the audit chain records a session-qualified scope like
+    /// `memory.read:topic:notes:session:<partition_id>` and the
+    /// memory tools route to a namespaced topic key.
+    ///
+    /// **Added in Phase 8 Task 2 as a default method** so every
+    /// existing `impl ChannelContext` (task 2's only pre-existing
+    /// consumer is `LocalChannel`) compiles unchanged. The D2
+    /// contract in `DESIGN.md` says *channels implement this trait
+    /// to advertise platform, trust tier, and session identity* —
+    /// a per-channel-instance partition identifier is a natural
+    /// extension of "session identity," not an override of any
+    /// locked decision, so this addition is non-amendment.
+    fn session_partition(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Events the agent pushes to the channel during a turn. Borrowed so the

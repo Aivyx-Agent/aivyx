@@ -311,6 +311,24 @@ impl ConcreteAgent {
             );
         };
 
+        // Phase 8 Task 2 — session partition injection. Channels that
+        // want per-instance memory isolation (Telegram: one chat = one
+        // partition) override `ChannelContext::session_partition`. The
+        // turn loop threads that partition into the tool's JSON input
+        // under a reserved `"session"` key *before* `required_scope`
+        // runs, so session-scoped tools (memory.read/write/forget)
+        // derive a `session:<partition>` qualifier that the capability
+        // check enforces. The LLM never sees this field — it is not
+        // in any advertised `input_schema` and is added after the
+        // planner emits the call. Non-object inputs (unlikely — all
+        // current tools take object inputs) are left untouched.
+        let mut input = input;
+        if let Some(partition) = channel.session_partition()
+            && let Some(obj) = input.as_object_mut()
+        {
+            obj.insert("session".to_string(), serde_json::Value::String(partition));
+        }
+
         let needed: Scope = tool.required_scope(&input);
 
         if !effective.grants(&needed) {

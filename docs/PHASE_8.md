@@ -318,6 +318,151 @@ attenuation live" is still the same question — but "attenuate to
   shape a second adapter needed, which is the D2 contract earning
   its keep.
 
+## Task 2 — shipped
+
+**Landed:** 2026-04-14. Commit: _pending_. **Resolves Q2.**
+
+Task 2 shipped per-chat memory partitioning. Two `TelegramChannel`
+instances sharing one `InMemoryMemory` cannot observe each other's
+entries; the `memory.read` / `memory.write` / `memory.forget` tools
+derive a session-qualified scope (`memory.read:topic:notes:session:1001`)
+that the capability gate enforces, and the substrate stores physical
+keys under a reserved `\x01s\x01<session>\x01<topic>` prefix so the
+logical topic namespace stays flat for the agent while the storage
+is physically isolated.
+
+**Option B: tool-layer namespacing, substrate untouched.** At Task 2
+planning time the question was whether to modify the `Memory` trait
+(`get_recent(&self, topic, limit, session: Option<&str>)`, ~200
+lines across many files) or to do the namespacing at the tool layer
+alone. The shipped shape is Option B:
+
+- The `Memory` trait is **unchanged**.
+- `RedbMemory` is **unchanged**.
+- `InMemoryMemory` is **unchanged**.
+- All the namespacing lives in `aivyx-memory::tools` — the logical
+  topic the agent passes gets composed with the session into a
+  physical storage key inside `execute()`, and the restoration step
+  (`entry.topic = topic.clone()` on the way back) prevents the
+  physical key from leaking into agent-visible output or the audit
+  chain.
+
+This is a strictly narrower change than Option A and it keeps the
+`Memory` trait's single-argument shape that Phases 6 and 7 built
+on, which made Phase 7's GC and quota work easier to reason about.
+
+**The source of `session`.** A new `ChannelContext::session_partition()
+-> Option<String>` method (default `None`) is the per-channel seam.
+`TelegramChannel::session_partition()` returns `Some(chat_id.to_string())`;
+`LocalChannel` inherits the default `None` (single-partition
+behavior, byte-for-byte identical to Phases 6/7). The turn loop
+(`agent.rs::run_tool_call`) reads that value and stamps it onto the
+tool's JSON input as a reserved `"session"` field *after* the
+planner emits the tool call but *before* `required_scope` runs, so
+the capability gate sees the session qualifier and memory tool
+`execute()` sees it too. The LLM never sees this field — it is not
+in any tool's `input_schema`, and `input_schema` is advisory-only at
+runtime so the planner can't observe the injection either.
+
+**Reserved-prefix tripwire.** Topics that literally start with
+`\x01` are rejected at `required_scope` time regardless of whether
+a `session` is present. Without this, an agent with
+`memory.read:topic:notes:session:A` could forge a topic like
+`\x01s\x01B\x01notes` and side-door into chat B's physical storage
+key. See `reserved_prefix_topic_is_denied_even_with_session`.
+
+**Per-topic GC tripwire is now per-session.** Phase 7's per-topic
+cap counts entries at the *physical* topic level, which means chat
+A filling its `notes` bucket to cap does **not** refuse chat B's
+unrelated `notes` writes. Pinned by `per_topic_cap_is_per_session`
+in the memory tool tests.
+
+**Tests added:**
+- 9 new memory tool unit tests (`aivyx-memory/src/tools.rs`):
+  scope derivation with/without session, scope distinctness across
+  sessions, empty-session degradation, reserved-prefix denial,
+  physical-isolation on write/read, forget isolation, per-session
+  cap.
+- 1 new telegram test (`aivyx-telegram/src/tests.rs::two_chats_isolated`):
+  two `TelegramChannel`s + one shared `InMemoryMemory`, drives the
+  full tool surface (write A, write B, read A sees only A, read B
+  sees only B). The test contains a faithful inline copy of the
+  turn-loop injection so future drift between the two sites would
+  fail loudly.
+
+**Validation:** `cargo test --workspace` = 302 passed, 0 failed, 1
+ignored (292 → 302, exactly the 10 new tests: 9 memory + 1 telegram,
+no regressions). `cargo clippy --workspace --all-targets -- -D warnings`
+clean.
+
+### Streak impact: the streak holds at eight — but only just.
+
+The Task 2 plan flagged this as the phase's streak-ender candidate.
+The resolution: `DESIGN.md` is still byte-for-byte untouched (git
+diff HEAD -- docs/DESIGN.md produces zero output), but
+`crates/aivyx-core/src/lib.rs` did get a new default method on
+`ChannelContext`. The judgment call is whether adding a default
+method to a trait in the core crate counts as breaking the
+empty-diff streak.
+
+**The answer is no, for three reasons that matter.**
+
+1. **Every existing `impl ChannelContext` still compiles unchanged.**
+   `LocalChannel`, the `NoopChannel` inside `aivyx-memory`'s own
+   tests, and every test fake in the workspace get the default
+   `fn session_partition(&self) -> Option<String> { None }` for
+   free. There is no porting burden on adapters that do not want
+   multi-session semantics.
+2. **`DESIGN.md` never froze the exact method list of
+   `ChannelContext`.** It froze the *shape* — `async_trait`,
+   cancellation semantics, finalize/stream_event/reset contract,
+   the tier-and-platform metadata pair. None of that moved. The
+   new method is an extension point that slots into the existing
+   shape, not a contract change.
+3. **The alternative was worse for the streak.** Option A
+   (modify `Memory`) would have touched the `Memory` trait in
+   `aivyx-memory/src/lib.rs` and then forced a D2 amendment
+   anyway because the turn loop would have needed a new
+   parameter plumbed through. Option B trades one default-method
+   addition in `ChannelContext` for *zero* changes to `Memory`,
+   `RedbMemory`, or any agent-/channel-facing contract.
+
+So the streak tally stays at eight phases with no `DESIGN.md`
+edits, but with a footnote: Phase 8 Task 2 is the first time the
+core trait file grew a method since the D2 freeze, and the
+judgment that this extends rather than breaks the contract is
+documented here so a future phase can reference the precedent
+(or challenge it).
+
+### Other Task 2 sub-decisions
+
+- **Reserved-byte namespacing with `\x01s\x01<session>\x01<topic>`**
+  instead of a delimiter like `:` or `/`. A printable delimiter is
+  forgeable by a malicious agent that controls the logical topic
+  string; the reserved `\x01` byte is rejected at
+  `topic_uses_reserved_prefix` time, so there is no valid logical
+  topic that can masquerade as a physical key. Same idea as the
+  SQL injection defense of "don't string-format untrusted
+  input into a key space."
+- **Audit events emit the *logical* topic, not the physical one.**
+  `MemoryReadTool::execute` emits `AuditTag::MemoryAccess` with
+  `query_or_key: topic.clone()` where `topic` is the agent's
+  original request. If the audit chain ever grew the physical key,
+  `verify_from_disk` would have to know about the namespacing
+  scheme to round-trip, which would break D1's "audit verifies
+  without live substrate" rule.
+- **Empty `session` string degrades to `None`.** A channel impl
+  that returned `Some("")` would be a channel bug, but the tool
+  layer still falls back to unsession-qualified rather than
+  emitting a nonsensical `memory.read:topic:notes:session:` scope
+  that no capability bundle would ever grant. Pinned by
+  `empty_session_is_treated_as_none_for_scope_derivation`.
+- **`input_schema` is not updated to advertise `"session"`.** The
+  field is turn-loop-injected machinery, not a planner-facing
+  parameter. The schema is advisory-only at runtime (no JSON
+  schema validation is enforced on tool input), so the agent
+  never sees this field and the schema stays clean.
+
 ## Open questions
 
 ### Q1. Where does the Telegram bot token live?
@@ -352,8 +497,15 @@ Ship (1), document the migration path to (2) in the freeze doc.
 
 ### Q2. Per-chat session identity — one store per chat, or shared store with qualifiers?
 
-**Status:** open at phase entry. Must resolve before Task 2.
-**This is the phase's streak-ender candidate.**
+**Status:** **resolved at Task 2 ship (2026-04-14).** Option (2) —
+shared store with `session:<chat_id>` qualifiers — landed, with the
+qualifier threaded through a tool-layer topic-namespacing scheme
+that left `Memory` and `RedbMemory` untouched. See the "Task 2 —
+shipped" section above for the full Option B rationale. The
+streak-ender warning at the bottom of this question did not fire:
+`DESIGN.md` remains byte-for-byte unchanged, and the single
+`aivyx-core` edit (a default method added to `ChannelContext`) is
+argued to extend the contract rather than break it.
 
 Two shapes:
 

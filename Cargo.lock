@@ -156,6 +156,7 @@ version = "0.1.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-memory",
  "async-trait",
  "frankenstein",
  "serde_json",
