@@ -798,3 +798,558 @@ freeze, when retrospectively assessing test coverage).
       12 intent refined with Phase 11 learnings.
 - [ ] All five tasks have ship records in this document below
       this line.
+
+## Task 1 — shipped (2026-04-15)
+
+**Commit:** `1b4cd1c` — `Phase 11 task 1: Role primitive in
+aivyx-config`.
+
+Adds `Role`, `ToolAllowlist`, and the `[[role]]` TOML table-array
+to `aivyx-config`, plus the `LoadOptions::role_override` field
+that Task 4 later wires to a `--role` CLI flag. Two seed roles
+ship in the test fixtures: `coder` (shell.exec + fs tools +
+memory) and `researcher` (fs.read + memory only, no shell.exec)
+— deliberately contrasting allowlists so Task 4's regression
+tests have a real rejection scenario and a real acceptance
+scenario against the same tool catalog.
+
+Backwards-compat bridge: a config with no `[[role]]` entries
+synthesizes an implicit `default` role whose `system_prompt` is
+taken from the legacy top-level `cfg.system_prompt` field,
+whose `tool_allowlist` is `AllowAll`, and whose
+`memory_topic_prefix` is `None`. Pre-Phase-11 configs see zero
+behavior change.
+
+**Q3 resolved as Option C** — the TOML loader deserializes
+`tool_allowlist` as `Option<Vec<String>>` and maps `None →
+AllowAll`, `Some([]) → Only(empty)`. "Field absent" and "field
+present but empty" stay distinguishable, which matters because
+the two have opposite meanings (the former is "no filter," the
+latter is "deny all tools for this role"). The `ToolAllowlist`
+enum encodes this directly at the type level rather than behind
+a boolean flag.
+
+**Q4 resolved as Option D** — load-time warning, no error. A
+config with both legacy `system_prompt` and explicit `[[role]]`
+entries loads with explicit-roles-winning semantics and appends
+a warning to `cfg.warnings` that the banner renders to stderr.
+The warning text names both the legacy field and the roles that
+would take precedence so the operator sees exactly what was
+honored.
+
+Active-role resolution chain: `LoadOptions::role_override` >
+`AIVYX_ROLE` env var > `aivyx.active_role` TOML field >
+`"default"`. Each hop is covered by its own config-layer test
+(`role_override_beats_env_var`, `env_role_beats_toml_active_role`,
+etc.), and the priority is what Task 4's `--role` CLI flag
+later slots into at the top of the chain.
+
+Tests: **+10** (367 → 377). Sixteen new tests in
+`aivyx-config/src/tests.rs` covering role parsing, the
+implicit-`default` synthesis path, the legacy-plus-roles
+warning path, the resolution chain, and validation of an
+`active_role` that doesn't key into `roles` — offset by a
+handful of pre-existing tests that moved into the role-aware
+shape. The binary also grows one test site in
+`aivyx-channel/src/bin/aivyx.rs` for the `parse_cli_args` plumb
+(Task 4 expands that further).
+
+`aivyx-core/src/lib.rs` **byte-identical** after Task 1 — the
+whole role primitive lives in `aivyx-config`, and no change
+reached the production-core re-export surface.
+
+## Task 2 — shipped (2026-04-15)
+
+**Commit:** `10c9fdc` — `Phase 11 task 2: role-aware memory
+topic prefixing`.
+
+Threads an optional memory-topic prefix through the
+dispatch-layer injection path (the same path Phase 8 used for
+session-partition injection). `ConcreteAgent` gains a
+`memory_topic_prefix: Option<String>` field and a
+`with_memory_topic_prefix` builder; when present, every
+`memory.*` tool dispatch has the prefix prepended to the
+`topic` input before the tool sees it. The prefix is invisible
+to the model — it still calls `memory.write { topic: "notes",
+... }`, and the substrate sees `"coder/notes"` if the active
+role has `memory_topic_prefix = "coder/"`.
+
+**Key design choice:** prefix injection lives at the dispatch
+layer, not in the tool's JSON schema. The alternative would
+have been adding a prefix parameter to `memory.read` /
+`memory.write` / `memory.forget`, but that changes the
+contract surface the model sees and forces every role-naive
+planner to know about prefixes. Dispatch-layer injection
+matches how Phase 8's `session:<id>` qualifier is injected and
+keeps the model-facing schema stable.
+
+**Cross-topic wildcard interaction:** Phase 10's
+`{topics: "*"}` variant on `memory.read` respects the prefix
+boundary — a role with prefix `"coder/"` sees only its own
+`coder/*` keys under the wildcard, not the `researcher/*`
+keys. This is the invariant that makes two roles with the same
+literal topic name isolated from each other at the substrate
+level; a regression test in `aivyx-memory::tools` pins it
+with both roles writing to `"notes"` and each reading back
+only its own value.
+
+Tests: **+8** (377 → 385). All fifteen added tests live in
+`aivyx-memory/src/tools.rs`'s test module — five for the
+forward prefix-prepending path on each of the three tools, and
+ten for the wildcard-and-forget boundary cases, partially
+offset by two tests that were rewritten rather than added.
+
+`aivyx-core/src/lib.rs` **byte-identical** after Task 2 — the
+new field + builder on `ConcreteAgent` don't expand the
+re-export surface.
+
+## Task 3 — shipped (2026-04-15)
+
+**Commit:** `f9f6be2` — `Phase 11 task 3: shell.exec tool +
+nested-object validator`.
+
+Adds `ShellExecTool` + `ShellExecToolConfig` in a new
+`aivyx-core/src/tools/shell.rs` module (~820 LOC including
+tests). The tool spawns via `tokio::process::Command`, captures
+stdout/stderr/exit code, enforces a wall-clock timeout, and
+returns a bundled `ToolCallFinished` payload — **Q2 resolved
+as bundled** rather than a new `StreamEvent::ToolOutput`
+variant. Streaming output is deferred to the phase that ships
+the second streaming-output tool, where the design pressure
+will be real rather than speculative.
+
+**Scope shape:** `shell.exec:cwd:<canonical_root>/**`. The
+`cwd:` prefix distinguishes the path-glob attenuation shape
+that `shell.exec` uses from hypothetical future attenuation
+shapes on the same base (e.g., a program allowlist like
+`shell.exec:prog:git|cargo`). One base name, two orthogonal
+attenuation families, both parseable by the existing
+`QualifierKind::of` dispatch in `aivyx-capability`.
+
+**Registration-time trust-tier gate:** `shell.exec` is
+registered **only** for `ChannelKind::Local` (Trusted). The
+gate lives in a factored `build_shell_exec_for_channel` free
+function in the binary — a single match site, pin-tested from
+the binary's own test module. A SemiTrusted channel like
+`aivyx-telegram` never sees `shell.exec` in its dispatch
+registry, which means it never even appears as a *denial* in
+the audit chain — the strictness Phase 11 requires for the
+first tool that can touch the outside world. This is
+belt-and-suspenders with the turn loop's default-ceiling
+intersection (Phase 4) that would strip `shell.exec` from a
+SemiTrusted capability set anyway, but the registration-time
+gate is stricter: no audit mention, not even a denial.
+
+**Nested-object validator extension:** the Phase 10 hand-rolled
+`aivyx-core::schema::validate` module grew ~230 LOC to support
+`type: object` inside `properties`, with recursive
+`join_path` error rendering so validation failures produce
+JSON-pointer paths like `/args/cwd`. The extension was the
+sole justification for the `shell.exec` schema's nested
+`args` sub-object — a flat schema would have avoided the
+validator work but would have pushed the nesting pressure into
+every future tool that wants structured arguments. Q2-nesting
+from Phase 10 lands here as Q2's first real user.
+
+**Streak accounting — production-core break:** Task 3 adds
+`ShellExecTool` / `ShellExecToolConfig` to the re-export block
+in `aivyx-core/src/lib.rs` (`pub use tools::{..., ShellExecTool,
+ShellExecToolConfig};`). This is the **intentional production-
+core byte-identity break** Phase 11 budgeted — Task 3 is the
+one task this phase that touches `lib.rs`. The break is
+additive within D3's contract: a new tool type in the re-export
+list doesn't change any existing trait signature or outcome
+variant. The re-baseline happens at the Phase 11 exit commit
+(this task's follow-up, Task 5 below).
+
+Tests: **+25** (385 → 410). Sixteen `tools/shell.rs` unit
+tests covering scope derivation, the canonical-cwd escape
+check, the `cwd:` qualifier format, the timeout path, and
+exit-code-non-zero-still-Completed semantics; five validator
+tests for the new nested-object code paths; two binary pin
+tests for the registration-time gate (`channel_local_receives
+_shell_exec`, `channel_telegram_receives_no_shell_exec`);
+two backwards-compat schema tests that lock flat-object
+acceptance so the nesting extension can't silently break
+Phase 10's flat tool schemas.
+
+## Task 4 — shipped (2026-04-15)
+
+**Commit:** `00ca41a` — `Phase 11 task 4: turn-loop role
+wiring (allowlist + system prompt)`.
+
+Active role threads end-to-end through the turn loop. Three
+integration points land in one commit:
+
+1. **System prompt sourcing** — `run_async` in the binary
+   resolves `cfg.roles[cfg.active_role.value()]` once at
+   session start and passes `role.system_prompt.value` through
+   `SessionConfig::system_prompt` / `TelegramSessionConfig::
+   system_prompt`. The legacy top-level `cfg.system_prompt`
+   field is still loaded by `aivyx-config` and still drives
+   the synthesized `default` role's prompt via Task 1's
+   backwards-compat bridge, so pre-Phase-11 configs keep
+   working unchanged — the sourcing path is indirected but the
+   effective value is identical.
+2. **Planner-layer tool catalog filter** — `LlmPlannerConfig`
+   gains a `tool_allowlist: Option<BTreeSet<String>>` field;
+   `LlmPlanner::new` filters the advertised descriptor list
+   through the allowlist before the catalog is sent to the
+   provider. Filtered tools are **never advertised to the
+   model**, so the model never tries to call them. This is
+   the primary enforcement point: the role allowlist works by
+   restricting what the model can see, not by rejecting what
+   it tries to do. A new
+   `LlmPlanner::advertised_tool_names` accessor makes the
+   filter output observable to tests.
+3. **Dispatch-layer belt-and-suspenders gate** —
+   `ConcreteAgent` gains a `tool_allowlist` field and a
+   dispatch check in `run_tool_call` that fires **between**
+   schema validation and session injection. An out-of-
+   allowlist call is rejected via a synthetic
+   `tool.allowlist:<tool_name>` scope routed through the
+   existing `ToolOutcome::Denied` variant. This catches the
+   class of attacks where a stale `tool_use` block survives
+   into a resumed conversation or a non-LLM planner
+   synthesizes a call against a tool that was filtered out
+   — the scenarios the planner-layer filter structurally
+   can't catch.
+
+**Q1 resolved as Option A** — reuse `ToolOutcome::Denied`
+with a synthetic `tool.allowlist:<tool_name>` scope. The
+alternative (new `ToolOutcome::NotInRole` variant) would
+have been a second production-core byte-identity break this
+phase, which Task 3's budget already consumed. The synthetic
+scope is distinguishable from a real capability denial by
+its `scope_requested.base() == "tool.allowlist"` — forensic
+walks that care about the distinction can grep for the base.
+The `tool.allowlist` base is added to `KNOWN_BASES` in
+`aivyx-capability` so the synthetic scope parses, and a new
+test (`tool_allowlist_parses_and_is_absent_from_real_ceilings`)
+pins that the base is deliberately absent from the
+Trusted / SemiTrusted / Untrusted default ceilings so no
+real role can ever hold a scope with that base.
+
+**Q5 resolved as ship both** — `--role <name>` CLI flag lands
+in the binary alongside the existing `AIVYX_ROLE` env var
+path. The flag populates `LoadOptions::role_override`, which
+the config layer's resolution chain already ranks above the
+env var. Five new tests in the binary's test module pin the
+flag parser (`role_flag_parses_into_cli_args_role_field`,
+missing-value error, empty-value error, absent-flag leaves
+`None`, composes with `--channel`).
+
+**Q6 resolved as no third channel** — Phase 11's role tests
+live at the turn-loop level where the primitive is defined.
+The existing `aivyx-channel` E2E tests pick up the role
+primitive transparently via the `SessionConfig::
+tool_allowlist` / `memory_topic_prefix` fields defaulting
+to `None` (the backwards-compat path), and the Telegram tests
+do the same. A third channel would exercise the same turn-loop
+code the unit tests already pin, at higher cost. Revisit if a
+channel-seam-specific bug ever surfaces.
+
+**Memory prefix share:** the active role's `memory_topic_
+prefix` is sourced from the same `cfg.roles[active_role]`
+lookup that Task 4's other integration points use. Task 2
+did the dispatch-layer wiring; Task 4 wires the binary-level
+lookup that feeds it. This is the first commit where the
+memory prefix actually flows from config through to the
+substrate — Task 2's tests used the `with_memory_topic_prefix`
+builder directly against a unit-test harness.
+
+**Session-config field additions:** `SessionConfig` and
+`TelegramSessionConfig` each grow two fields
+(`tool_allowlist`, `memory_topic_prefix`). These are
+required fields, not defaulted, which forces every existing
+E2E test site to make an explicit `None` choice. Five
+`aivyx-channel/tests/*.rs` and seven `aivyx-telegram/src/
+tests.rs` call sites got the two-line `None, None` append —
+the compiler turned this into a checklist, which is the
+point.
+
+Tests: **+12** (410 → 422). Six tests in `aivyx-core/src/
+agent.rs` for the dispatch-layer gate
+(`role_allowlist_rejects_out_of_role_tool_at_dispatch_layer`,
+`role_allowlist_accepts_in_role_tool`,
+`role_allowlist_none_preserves_legacy_behavior`,
+`role_allowlist_fires_before_capability_gate`, plus two
+planner-filter tests —
+`llm_planner_filters_tool_catalog_by_role_allowlist`,
+`llm_planner_none_allowlist_advertises_every_tool`); one
+test in `aivyx-capability` for the new `KNOWN_BASES` entry;
+five in the binary for CLI parser flag handling.
+
+`aivyx-core/src/lib.rs` **byte-identical** after Task 4 —
+the new method on `ConcreteAgent` and the new field on
+`LlmPlannerConfig` don't expand the re-export surface. Only
+Task 3 touched `lib.rs` this phase.
+
+## Task 5 — shipped (2026-04-15) — Phase 11 exit freeze
+
+**Commit:** _this commit_ — `docs(phase-11):` exit freeze.
+
+Phase 11 closes as the **first product phase** — the first
+phase since Phase 8 (Telegram adapter) that ships user-
+visible behavior rather than internal refinement. The role
+primitive is live, `shell.exec` is wired at the Trusted tier
+only, and the tool allowlist enforces role boundaries at
+both the planner advertisement layer and the dispatch gate.
+
+The `DESIGN.md` empty-diff streak rolls forward to **eleven
+consecutive phases**. Production-core byte-identity broke
+once this phase, in Task 3's `ShellExecTool` re-export — the
+one intentional break Phase 11 budgeted for — and re-baselines
+at this commit. Zero-new-dep held: the only manifest change
+is a `tokio::process` feature flag on the `aivyx-core`
+`Cargo.toml`, not a new crate entering the lock file.
+
+### What landed in Phase 11 (one-line per task)
+
+1. **Task 1** (`1b4cd1c`) — `Role` + `ToolAllowlist` in
+   `aivyx-config`, `[[role]]` TOML schema, implicit-`default`
+   backwards-compat bridge, `LoadOptions::role_override`.
+   Q3 resolved as Option C (absent vs empty distinction);
+   Q4 resolved as Option D (warn-don't-error on
+   legacy-plus-roles). **+10 tests.**
+2. **Task 2** (`10c9fdc`) — `memory_topic_prefix` dispatch-
+   layer injection on `memory.read` / `memory.write` /
+   `memory.forget`, cross-topic wildcard respects the prefix
+   boundary. **+8 tests.**
+3. **Task 3** (`f9f6be2`) — `ShellExecTool` at Trusted tier
+   only, `shell.exec:cwd:<path>/**` scope shape, nested-
+   object validator extension with JSON-pointer error paths.
+   Q2 resolved as bundled-blob output (streaming deferred).
+   **+25 tests.** Production-core byte-identity breaks here.
+4. **Task 4** (`00ca41a`) — turn-loop role wiring (system
+   prompt + tool allowlist + memory prefix share), `--role`
+   CLI flag, two-layer allowlist enforcement. Q1 resolved
+   as Option A (synthetic `tool.allowlist:<name>` scope via
+   existing `Denied` variant); Q5 resolved as ship both
+   (flag and env); Q6 resolved as no third channel.
+   **+12 tests.**
+5. **Task 5** — this exit freeze.
+
+### Exit-criteria results
+
+See the Exit criteria (final) checklist below for the item-
+by-item rollup. Headline numbers:
+
+- **`cargo test --workspace`**: green at **422 tests**
+  (Phase 11 entry baseline: 367). Net delta **+55**, well
+  above the ≥+10 heuristic and above the 398–415 realistic
+  estimate drafted at phase open. Task 3's +25 drove the
+  overshoot — the `shell.exec` tool's surface was wider
+  than the draft estimated because of the canonical-cwd
+  escape check, timeout-path coverage, and the nested-
+  object validator extension all landing under the same
+  task budget.
+- **`cargo clippy --workspace --all-targets -- -D warnings`**:
+  clean at exit. Matching Phases 9 and 10, the pre-commit
+  hook caught every would-be regression at its own commit
+  time; no task left a regression for the exit sweep to
+  discover.
+- **`DESIGN.md` empty-diff streak**: byte-identical to
+  `e0d6437`. **Streak rolls to eleven consecutive phases**
+  on an unchanged core contract. No amendment file was
+  created — the `docs/amendments/` directory still does
+  not exist.
+- **Production-core byte-identity streak**: **broken** in
+  Phase 11 by Task 3 (`f9f6be2`), re-baselined at this
+  commit. The break is the `ShellExecTool` /
+  `ShellExecToolConfig` additions to the re-export block
+  in `aivyx-core/src/lib.rs` — additive within D3's
+  contract, no trait or outcome-variant changes. Tasks 1,
+  2, and 4 all left `lib.rs` byte-identical (the Task 4
+  dispatch gate lives in `agent.rs`, the planner filter in
+  `llm_planner.rs`, neither of which is re-exported at the
+  item level).
+- **Zero-new-dep streak**: **held.** Phase 11 added no new
+  workspace crates. The only `Cargo.toml` change is
+  `aivyx-core` gaining the `tokio::process` feature flag
+  — and `tokio` was already in every Phase 10 dependency
+  graph. The zero-new-dep invariant is specifically about
+  new crates entering `Cargo.lock`, not about toggling
+  features on an already-present crate.
+
+### Decisions made during Phase 11 that aren't in DESIGN.md
+
+- **Q1 — allowlist-rejection routing:** **Option A —
+  reuse `ToolOutcome::Denied` with a synthetic
+  `tool.allowlist:<tool_name>` scope.** Forensic walks
+  that care about the distinction can grep for
+  `scope_requested.base() == "tool.allowlist"`. The
+  `tool.allowlist` base is in `KNOWN_BASES` but
+  deliberately absent from every real trust-tier ceiling,
+  so no real role can ever hold it and it never shadows a
+  genuine capability denial. Resolved in Task 4.
+- **Q2 — `shell.exec` output format:** **bundled blob in
+  `ToolCallFinished`.** Streaming via a new
+  `StreamEvent::ToolOutput` variant deferred to the phase
+  that ships the *second* streaming-output tool, where
+  the design pressure becomes real. Resolved in Task 3.
+- **Q3 — empty `tool_allowlist` semantics:** **Option C —
+  distinguish "field absent" from "field present and
+  empty."** The TOML loader deserializes as
+  `Option<Vec<String>>` and maps `None → AllowAll`,
+  `Some([]) → Only(empty)`. The `ToolAllowlist` enum
+  encodes this at the type level, so every downstream
+  consumer pattern-matches rather than checking a boolean.
+  Resolved in Task 1.
+- **Q4 — legacy `system_prompt` plus explicit `[[role]]`:**
+  **Option D — load-time warning, no error.** Explicit
+  roles win, the legacy field is passed through to the
+  synthesized `default` role only if `default` is not in
+  the explicit list, and any override accumulates a line
+  in `cfg.warnings` that the banner renders to stderr.
+  Resolved in Task 1.
+- **Q5 — `--role <name>` CLI flag:** **ship both.** The
+  flag and the `AIVYX_ROLE` env var both populate
+  `LoadOptions::role_override`; the flag takes priority.
+  Resolution chain: `--role` > `AIVYX_ROLE` > TOML
+  `active_role` > `"default"`. Resolved in Task 4.
+- **Q6 — third regression channel:** **not needed.**
+  Phase 11's role tests live at the turn-loop level
+  where the primitive is defined. The existing
+  `aivyx-channel` and `aivyx-telegram` E2E tests exercise
+  the channel-seam integration via the new
+  `tool_allowlist` / `memory_topic_prefix` session-
+  config fields defaulting to `None` (the backwards-compat
+  path). Resolved in Task 5.
+- **Registration-time trust-tier gate for `shell.exec`:**
+  the `build_shell_exec_for_channel` gate in the binary
+  is stricter than the Phase 4 ceiling intersection — a
+  SemiTrusted channel never sees `shell.exec` in its
+  dispatch registry, so the audit chain never mentions
+  it, not even as a denial. This is the first tool in
+  Aivyx whose registration is channel-conditional; the
+  pattern generalizes to any future tool that must be
+  Trusted-only. Recorded as a Task 3 design choice.
+- **`cwd:` qualifier prefix on `shell.exec:cwd:<path>`:**
+  the scope base gets a two-part qualifier
+  (`cwd:` + path) rather than a bare path so the same
+  base name can carry orthogonal attenuation families.
+  Future attenuations (`shell.exec:prog:git|cargo`) would
+  use a different qualifier prefix and dispatch through
+  `QualifierKind::of` the same way. Recorded as a Task 3
+  design choice.
+- **Dispatch-layer allowlist gate runs between schema
+  validation and session injection:** identity gate
+  (`is this role allowed to call this tool?`) runs
+  *before* the authority gate (`does this capability
+  set grant the scope?`), but *after* schema validation
+  (`is the input well-formed?`). Malformed input stays a
+  `Failed` outcome, out-of-allowlist is a `Denied`
+  outcome, capability-failed is also a `Denied` outcome
+  but distinguishable by base. Three-stage ordering
+  pinned by `role_allowlist_fires_before_capability_gate`
+  in `agent.rs`. Recorded as a Task 4 design choice.
+- **Planner-layer catalog filter as the primary
+  enforcement, dispatch-layer gate as belt-and-
+  suspenders:** the model can't call tools it never sees,
+  so filtering the advertised catalog is the simplest
+  and strongest enforcement. The dispatch gate exists for
+  the class of cases the filter structurally can't catch
+  (stale `tool_use` blocks on resumed conversations,
+  non-LLM planners synthesizing calls). Two layers are
+  defense in depth, not redundancy. Recorded as a Task 4
+  design choice.
+
+### Phase 11 deferrals
+
+Phase 11 opened with an **empty** foundation backlog
+(Phase 10 closed all three rolling items). The deferrals
+below are **net new** from Phase 11 itself:
+
+- **Streaming `shell.exec` output via
+  `StreamEvent::ToolOutput`** — Q2 deferred from Task 3.
+  Becomes worth implementing when the *second* streaming-
+  output tool ships (`web.fetch`, a long-running
+  `git.clone`, etc.) — the design pressure is one tool
+  away from justifying the `StreamEvent` variant plus the
+  renderer / audit-bridge / telegram-session changes.
+  Tagged: **Task 3, earliest plausible: whichever phase
+  ships the second streaming-output tool.**
+- **Forensic `ToolOutcome::NotInRole` variant** — Q1
+  deferred from Task 4. The synthetic `tool.allowlist:
+  <name>` scope routing is forensically distinguishable
+  from a real capability denial (different base name),
+  but it's not pattern-matchable on the variant shape.
+  If a long-running session ever surfaces a case where
+  the distinction matters for audit walkers, the typed
+  variant becomes worth the extra production-core break.
+  Tagged: **Task 4, earliest plausible: whichever phase
+  has a concrete forensic-tooling story that needs the
+  distinction.**
+- **Second regression channel for the role primitive**
+  — Q6 deferred from Task 5. Not implemented because the
+  existing two channels cover the role primitive
+  transparently via the session-config field defaults.
+  Re-opens if a channel-seam bug ever surfaces that the
+  turn-loop tests miss. Tagged: **Task 5, earliest
+  plausible: only reactive.**
+
+### Exit criteria (final)
+
+- [x] Task 1 shipped at `1b4cd1c`: `Role` / `ToolAllowlist`
+      in `aivyx-config`, `[[role]]` TOML loader, two seed
+      roles (`coder` + `researcher`) in test fixtures,
+      backwards-compat bridge for configs with no
+      `[[role]]` entries, `aivyx-core/src/lib.rs` byte-
+      identical, **+10 tests**.
+- [x] Task 2 shipped at `10c9fdc`: turn loop threads role
+      memory prefix into every `memory.*` dispatch via
+      dispatch-layer injection (not as a schema field),
+      Phase 10 cross-topic wildcard respects the prefix
+      boundary, backwards compat held for
+      `memory_topic_prefix = None`, **+8 tests**.
+- [x] Task 3 shipped at `f9f6be2`: `shell.exec` at
+      `TrustTier::Trusted` only via the registration-time
+      gate in `build_shell_exec_for_channel`, nested-
+      object validator support added (~230 LOC, zero new
+      deps), JSON-pointer error paths, `shell.exec:cwd:
+      <path>` scope shape with canonicalized path-prefix
+      attenuation, **+25 tests**. Production-core byte-
+      identity streak **broken** here and re-baselined at
+      this exit commit.
+- [x] Task 4 shipped at `00ca41a`: active role threaded
+      through the turn loop, system prompt sourced from
+      `role.system_prompt`, tool catalog filtered through
+      `role.tool_allowlist` at the planner layer (primary)
+      and the dispatch layer (belt-and-suspenders),
+      allowlist-rejection routed via synthetic
+      `tool.allowlist:<name>` scope per Q1 Option A,
+      `--role` CLI flag shipped per Q5, **+12 tests**.
+- [x] `cargo test --workspace` green at **422 tests**.
+      Net Phase 11 delta **+55**, well above the ≥+10
+      heuristic and above the 398–415 draft estimate.
+- [x] `cargo clippy --workspace --all-targets -- -D
+      warnings` clean at exit. Pre-commit hook held
+      throughout.
+- [x] `DESIGN.md` byte-identical to `e0d6437`. **Streak
+      rolls to eleven consecutive phases.** No amendment
+      file was created in Phase 11.
+- [x] Production-core byte-identity streak: **broken** in
+      Task 3 (`f9f6be2`, `ShellExecTool` re-export),
+      re-baselined at this commit. Tasks 1, 2, and 4 all
+      left `aivyx-core/src/lib.rs` byte-identical.
+- [x] Zero-new-dep streak: **held.** Phase 11 added no
+      new workspace crates; the only manifest change is
+      `aivyx-core` gaining the `tokio::process` feature
+      flag on an already-present crate.
+- [x] Foundation backlog at Phase 11 exit: **three net-
+      new deferrals**, all enumerated in the Phase 11
+      deferrals block above and all tagged with their
+      originating task. Phase 11 entered with an empty
+      backlog; it exits with a short list of specific,
+      scoped items.
+- [x] `docs/README.md` phase-status table flipped to
+      Phase 11 Frozen; commit hash backfilled in a
+      separate follow-up commit.
+- [x] `docs/ROADMAP.md` rolled: Phase 11 entry removed,
+      Phase 12 entry's intent refined with what Phase 11
+      learned about the shape of product phases.
+- [x] All five tasks have ship records above this line.
+- [x] Q1 through Q6 all resolved and recorded in the
+      "Decisions made during Phase 11 that aren't in
+      DESIGN.md" block above.
