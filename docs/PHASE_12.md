@@ -872,6 +872,97 @@ state.
 
 ---
 
+## Task 1 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **`StreamEvent::ToolOutput { tool, tool_name, chunk }`
+   variant** in `crates/aivyx-core/src/lib.rs`. Borrowed to
+   match the existing variants (`&'a str` chunk, UTF-8 only).
+   `tool` + `tool_name` carried for symmetry with
+   `ToolCallStarted` / `ToolCallFinished` so renderers that
+   eventually need to interleave chunks from concurrent tool
+   calls can do so without a follow-up variant widening.
+2. **Three exhaustive-match sites updated** — Local renderer
+   (`crates/aivyx-channel/src/render.rs`), Telegram renderer
+   (`crates/aivyx-telegram/src/telegram_channel.rs`), and the
+   agent test recorder (`crates/aivyx-core/src/agent.rs`).
+   The Tool trait itself is **not** widened: emission goes
+   through the already-existing `ToolContext::channel.
+   stream_event(StreamEvent<'_>)` seam — see the Task 1
+   correction block above for why the draft's "new streaming
+   sink parameter on `Tool::run`" plan was dropped.
+3. **Rendering decisions.** Local renderer writes chunks
+   verbatim between the existing start/finish markers (same
+   arm shape as `StreamEvent::Text`) — no per-chunk header,
+   no delimiter. Telegram renderer is a deliberate **no-op**:
+   per-chunk Telegram rendering would need a per-tool-call
+   accumulator on the channel struct, which is more surface
+   than the Phase 11 trust-tier asymmetry pattern justifies.
+   Telegram users see the Phase 11 shape unchanged — start
+   marker, finish marker, `outcome_summary` one-liner — and
+   the regression test `telegram_tool_output_chunks_are_
+   dropped` pins the secret-chunks-never-leak invariant with
+   three SECRET-marked chunks.
+4. **Audit bridge: zero code change.** Audit entries are
+   written by `AuditHook` method calls at specific turn-loop
+   points, not by pattern-matching on `StreamEvent`. Task 1
+   does not touch `aivyx-audit`, and the "exactly one
+   `AuditTag::ToolCall` per tool call regardless of chunk
+   count" invariant is pinned by a regression test
+   (`five_chunks_produce_exactly_one_toolcall_audit`).
+5. **`ScriptedStreamingTool` test subject** lives inside
+   `#[cfg(test)]` in `agent.rs` next to `FakeTool`, driven by
+   a `Vec<String>` of chunks that are emitted via the
+   `ToolContext::channel.stream_event` seam during
+   `execute()`. Schema is stored as an owned `Value` on the
+   struct, matching `FakeTool`'s shape and avoiding any new
+   `once_cell`-style static cache.
+
+**Exit criteria — all met.**
+
+- ✅ `StreamEvent::ToolOutput` variant lands with borrowed
+  `tool_name` + `chunk` fields and a `tool: ToolId` for
+  forensic symmetry.
+- ✅ Three exhaustive-match sites extended; `cargo build`
+  fails closed for any site the refactor misses.
+- ✅ Local renderer streams chunks verbatim; Telegram
+  renderer drops chunks silently; audit bridge emits
+  exactly one `ToolCall` tag per tool call independent of
+  chunk count. All three rules locked by regression tests.
+- ✅ Q6 resolved early (variant shape, pre-implementation)
+  and Q2 resolved-in-passing (cancellation plumbing was a
+  no-op — `ToolContext.cancellation` already propagates
+  naturally; no streaming-specific plumbing needed).
+- ✅ `cargo test --workspace` green: **422 → 429 passed**,
+  delta **+7** for Task 1 alone, above the draft's ≥+5
+  target.
+- ✅ `cargo clippy --workspace --all-targets -- -D warnings`
+  clean.
+- ✅ Zero new workspace dependencies.
+- ⚠ **Production-core `lib.rs` byte-identity streak:
+  broken** (27-line diff vs Phase 11 exit `16422e2`). This
+  was expected — the new variant plus its doc comment is
+  additive within D3's illustrative code block, not a
+  contract change. Will re-baseline at the Phase 12 exit
+  commit. Task 1 is the first break this phase; Task 2's
+  break (another re-export) layered on top of this one.
+
+**Deferred (recorded so the backlog doesn't silently grow).**
+
+- **Per-chunk Telegram rendering.** Would need a per-tool-
+  call `HashMap<ToolId, String>` accumulator on
+  `TelegramChannel` plus an edit-message flush on finish.
+  Not load-bearing; re-opens only if Telegram operators ask
+  for it.
+- **Binary (non-UTF-8) chunks.** The `&'a str` chunk shape
+  restricts to UTF-8. A future `Tool::run` that needs to
+  stream binary would either add a second variant
+  (`ToolOutputBytes { chunk: &'a [u8] }`) or base64-wrap at
+  the tool level. No phase currently needs this.
+
+---
+
 ## Task 2 — shipped (2026-04-15)
 
 **What landed.**
@@ -1100,7 +1191,383 @@ doesn't silently grow).**
 
 ---
 
-*(Task ship records land below as Phase 12 progresses. Follow
-the Phase 11 shape: one `## Task N — shipped (YYYY-MM-DD)`
-block per task, terminal exit-criteria checklist at the very
-bottom of the file after Task 5 freezes.)*
+## Task 4 — skipped (2026-04-15)
+
+Task 4 was the draft's "working-session slot (contingent)"
+— explicitly scoped as "a task that exists only if the
+phase surfaces something worth a dedicated block, otherwise
+it is skipped." By the time Task 3 shipped, every candidate
+the draft listed had been closed:
+
+- **Audit-payload widening for response headers.** Killed
+  by Task 2's ship record: `web.fetch` returns
+  `{url, status, body}` with no header propagation, so
+  there is no header data reaching `ToolCallFinished` to
+  widen. Deferred to a future phase per the Phase 12
+  deferrals block below.
+- **URL canonicalization deep-dive.** Subsumed by Task 2's
+  `url_prefix_grants` / `parse_scope_url` work, which
+  already handles (scheme, host, port) exact match with
+  default-port normalization, ASCII case-insensitive host
+  compare, trailing-slash equivalence, component-boundary
+  path prefix, and query/fragment stripping. The nine
+  regression tests in `aivyx-capability/src/lib.rs` cover
+  every canonicalization rule the draft considered
+  worth a working-session block.
+- **Default `researcher` role TOML config file.** Killed
+  by Task 3's correction block: there is no shipped
+  default config file to update; the phase-level "roles
+  actually work for real product tools" property is
+  provable at the agent layer and already pinned by
+  Task 3's cross-role regression.
+
+With all three candidates closed, opening Task 4 would be
+busywork. Task 4 is **skipped outright**, bringing Phase 12
+to four shipped tasks (Task 1, Task 2, Task 3, Task 5) — the
+same shape as the phases where the working-session slot
+didn't fire.
+
+---
+
+## Task 5 — shipped (2026-04-15)
+
+**What landed.**
+
+Standard docs-only exit freeze, mirroring Phase 11 Task 5 /
+Phase 10 Task 4 / Phase 9 Task 6.
+
+1. **Ship records appended.** This commit is the first time
+   Task 1's ship record lands in `PHASE_12.md` — Task 1 was
+   committed without a ship record in place because the
+   working order put ship records at freeze time rather than
+   per-task. Tasks 2 and 3 already had ship records from
+   their own commits. Task 4 gets a "skipped" record
+   documenting why the working-session slot didn't fire.
+2. **Decisions block.** `### Decisions made during Phase 12
+   that aren't in DESIGN.md` records the Q1 and Q3 pins plus
+   the Q2, Q4, Q5, Q6 task-level resolutions — the
+   capability-layer hostile-suffix fix gets its own entry
+   because it is a Phase 12 decision with load-bearing
+   consequences for every future URL-scoped tool.
+3. **Phase 12 deferrals block.** Enumerates what rolled up
+   for Phase 13+ consideration: response headers in audit
+   payload, non-GET verbs, redirect following with per-hop
+   scope re-check, binary response bodies, per-chunk
+   Telegram rendering, default role config file, forensic
+   `ToolOutcome::NotInRole` variant (carried forward from
+   Phase 11 unchanged — nothing in Phase 12 touched its
+   case).
+4. **Exit criteria (final)** checklist at the bottom of the
+   document, mirroring Phase 11's shape exactly.
+5. **`docs/README.md`** phase-status table flipped to
+   Phase 12 **Frozen** (hash backfilled in a separate
+   follow-up commit per the phase-discipline workflow).
+6. **`docs/ROADMAP.md`** rolled: Phase 12 entry removed
+   (it's now frozen here), Phase 13 entry scaffolded with
+   a one-paragraph intent refined by what Phase 12
+   learned.
+
+**Exit criteria — all met.**
+
+- ✅ Ship records for Tasks 1, 2, 3 (shipped), Task 4
+  (skipped), and Task 5 (this commit) are all present
+  above this line.
+- ✅ Decisions block recorded.
+- ✅ Deferrals block recorded.
+- ✅ `cargo test --workspace` green at **453 tests** (422
+  entry → 453 exit, delta **+31**, well above the ≥+10
+  heuristic and above the ≥+17 draft target).
+- ✅ `cargo clippy --workspace --all-targets -- -D
+  warnings` clean at exit.
+- ✅ Docs-only commit per the phase-discipline guardrail —
+  no source edits, no `Cargo.toml` edits, no test edits in
+  this commit.
+- ✅ `docs/README.md` Phase 12 row updated to `Frozen` with
+  hash placeholder for follow-up backfill.
+- ✅ `docs/ROADMAP.md` rolled — Phase 12 entry removed,
+  Phase 13 entry scaffolded.
+
+---
+
+### Decisions made during Phase 12 that aren't in DESIGN.md
+
+- **Q1 — HTTP verbs:** **GET-only**, pinned at phase open.
+  Write verbs (POST/PUT/PATCH/DELETE) are categorically out
+  for Phase 12; HEAD was considered cheap-to-add but
+  deliberately skipped to avoid "why not OPTIONS" scope
+  creep. If a concrete use case for HEAD surfaces in a
+  later phase, it lands as a task-local decision in that
+  phase's journal. Resolved at phase open.
+- **Q2 — Cancellation plumbing for streaming chunks:**
+  **no-op.** `Tool::run` receives a `ToolContext` whose
+  `cancellation` field already propagates from the turn
+  loop's `CancellationToken`; streaming tools observe it
+  the same way non-streaming tools do. No streaming-
+  specific plumbing was needed. Resolved in Task 1 (by
+  writing the code and discovering the plumbing was
+  already complete).
+- **Q3 — Response headers:** **audit-log-only**, pinned at
+  phase open. The model sees `{url, status, body}` only.
+  Task 2 punted the audit-log half (headers never reach
+  `ToolCallFinished`'s payload at all in Phase 12); see
+  the Phase 12 deferrals block for the forward-looking
+  plan.
+- **Q4 — URL-prefix scope matching:** **hand-rolled
+  origin-aware matcher.** The existing capability-layer
+  matcher was using raw `needed_q.starts_with(held_q)`,
+  which admitted the hostile-suffix attack (held
+  `https://example.com/` "matches" needed
+  `https://example.com.evil.com/`). Replaced with
+  `url_prefix_grants` + `parse_scope_url` in
+  `aivyx-capability/src/lib.rs`: (scheme, host, port)
+  exact match with default-port normalization and
+  ASCII-case-insensitive host compare, path prefix on
+  component boundaries with trailing-slash equivalence,
+  query/fragment stripped from needed URL. **Zero new
+  dependencies** — the matcher is 40-ish lines of `&str`
+  arithmetic specialized for scope comparison, not a
+  general-purpose URL parser. Resolved in Task 2.
+- **Q4 bonus — the `net.fetch` scope base was buggy since
+  Phase 1.** The `starts_with` bug had been shipping since
+  the `QualifierKind::UrlPrefix` dispatch was first added;
+  it had simply never been exercised by any tool with a
+  URL-shaped scope (the other `UrlPrefix` callers were all
+  test fixtures). Phase 12's first real `UrlPrefix`
+  consumer surfaced the bug, the capability-layer fix is
+  the load-bearing change, and the tool-level regression
+  is the belt-and-suspenders layer.
+- **Q5 — Redirect following:** **off.** `reqwest::redirect::
+  Policy::none()` in `WebFetchToolConfig::build`. 3xx
+  responses surface to the model as
+  `{status: 302, body: ""}` (body empty because
+  `Location` is a response header, not a body); the agent
+  can choose to call `web.fetch` again on the redirect
+  target, which will re-check the capability layer
+  naturally. "On, but gated" was the alternative; it lost
+  on simplicity plus putting redirect decisions in the
+  model's context rather than hiding them in transport.
+  Resolved in Task 2.
+- **Q6 — `StreamEvent::ToolOutput` payload shape:**
+  **`{ tool: ToolId, tool_name: &'a str, chunk: &'a str }`**,
+  borrowed to match existing variants. UTF-8 only via
+  `&str`; binary bodies are out of Phase 12 scope. `tool`
+  + `tool_name` carried on every chunk for forensic
+  symmetry with `ToolCallStarted` / `ToolCallFinished` and
+  to future-proof against the day concurrent tool calls
+  land. Resolved in Task 1.
+- **Scope base reuse over scope base addition.** Task 2's
+  draft assumed a new `web.fetch` scope base name; the
+  correction block records why `net.fetch` (the base that
+  was already in `KNOWN_BASES`) was reused instead. The
+  load-bearing reason is **the tool name is independent of
+  the scope base**: the tool answers "which tool was
+  called," the scope answers "which capability was
+  exercised," and the same scope base can front multiple
+  tools that exercise the same capability family. Bakes
+  in the D2 separation one level deeper than Phase 11's
+  `shell.exec:cwd:<path>` shape showed.
+- **Registration-time gate is reused from Phase 11 without
+  modification.** `build_web_fetch_for_channel` in
+  `aivyx-channel/src/bin/aivyx.rs` returns the tool
+  unconditionally for both `ChannelKind::Local` and
+  `ChannelKind::Telegram` — the pattern from Phase 11 Task
+  3's `build_shell_exec_for_channel` generalizes cleanly
+  to "channel-agnostic but still gated per-tool." The fact
+  that `web.fetch` is actually channel-agnostic (both
+  trust tiers include `net.fetch` in their ceiling) while
+  `shell.exec` is not (only `TRUSTED` has it) did not
+  require any change to the pattern shape, which is the
+  Phase 11 handoff property the phase was supposed to
+  validate.
+- **Cross-role regression lives at the agent layer, not
+  the TOML layer.** The draft assumed Task 3 would update
+  a shipped default config file. None exists — `coder` /
+  `researcher` are test fixtures only, not compiled-in
+  defaults. The correction block in Task 3 records the
+  scope change from binary-through-TOML to agent-through-
+  fixture; the agent-layer regression stays load-bearing
+  even if a later phase ships a default TOML (that phase
+  would add binary-through-TOML on top, not replace the
+  agent-layer test).
+- **`PanicOnExecute` fake as an ordering invariant.** Task
+  3's second test uses a tool whose `execute()`
+  unconditionally panics, proving the allowlist gate
+  short-circuits at the denied outcome **before** dispatch
+  ever reaches `execute`. A plain "Denied" assertion would
+  pass even if the gate fired after execute as long as the
+  outer code routed to Denied; the panic makes the
+  ordering mechanical. Pattern is worth reusing for any
+  future gate that must run before a side-effectful stage.
+- **Task 4 working-session slot empty is fine.** Phase 12
+  is the first phase where the contingent Task 4 slot
+  produced nothing worth doing. Recording that outcome
+  explicitly in the skipped-record above is preferable to
+  squeezing busywork into the slot.
+
+### Phase 12 deferrals
+
+Phase 12 entered carrying three rolling deferrals from
+Phase 11 (streaming tool output, forensic `NotInRole`
+variant, second regression channel). Task 1 consumed the
+first; the other two carry forward unchanged.
+
+**Rolling deferrals still open after Phase 12:**
+
+- **Forensic `ToolOutcome::NotInRole` variant** — Phase 11
+  Q1 deferral, untouched by Phase 12. Carries forward.
+  Tagged: **Phase 11 Task 4, earliest plausible: whichever
+  phase has a concrete forensic-tooling story that needs
+  the `tool.allowlist:` scope distinction to be pattern-
+  matchable on variant shape rather than scope base name.**
+- **Second regression channel for the role primitive** —
+  Phase 11 Q6 deferral. Untouched by Phase 12; reopens
+  reactively only if a channel-seam bug surfaces that
+  turn-loop tests miss.
+
+**Net-new deferrals from Phase 12 itself:**
+
+- **Response headers in audit payload (Q3 audit-log half).**
+  The "model sees no headers" half shipped in Task 2; the
+  "headers land in the audit payload" half is deferred.
+  Adding it spans `aivyx-audit` +
+  `aivyx-core::ToolCallFinished` + at least one audit
+  bridge — a dedicated working-session task's worth of
+  surface, out of scope for Phase 12. Tagged: **Task 2,
+  earliest plausible: whichever phase has a concrete
+  forensic story that wants response headers in the audit
+  chain (a phase that ships a second-URL-scoped tool like
+  `git.clone` where header inspection matters, or a phase
+  that widens the audit schema for other reasons and can
+  pick this up cheaply).**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Q1 pinned
+  GET-only for Phase 12. Tagged: **deferred
+  indefinitely — reopens only when a concrete write-side
+  use case surfaces.**
+- **Redirect following with per-hop scope re-check.** Q5
+  pinned `Policy::none()`. Tagged: **deferred
+  indefinitely — reopens reactively if the fetch-
+  redirect-fetch loop ergonomics become a real pain
+  point in operator usage.**
+- **Binary response bodies / non-UTF-8.** `web.fetch`
+  currently fails loudly on non-UTF-8 bodies. Tagged:
+  **deferred indefinitely — the first phase that needs
+  binary fetches can add a base64-wrapping option or a
+  second `ToolOutputBytes` stream variant.**
+- **Per-chunk Telegram rendering.** Task 1 chose silent
+  chunk drop on Telegram rather than a per-tool-call
+  accumulator. Tagged: **Task 1, earliest plausible:
+  reactive — reopens if Telegram operators ask for live
+  in-progress tool output.**
+- **Default role config file (`examples/aivyx.toml` or
+  equivalent).** Recorded in Task 3's correction block.
+  Tagged: **Task 3, earliest plausible: a later phase
+  that ships operator-facing configuration samples as a
+  first-class concern.**
+
+**Backlog shape at Phase 12 exit:** two rolling items
+inherited from Phase 11 + six net-new items from Phase
+12. Total eight — up from Phase 11's exit total of three.
+This is the first phase since Phase 6 where the foundation
+backlog grew net-positive; every item is scoped,
+originating-task-tagged, and reactive-trigger-tagged, so
+the growth is "known deferrals" rather than "accumulated
+debt."
+
+### Exit criteria (final)
+
+- [x] Task 1 shipped at `dc6ac22`: `StreamEvent::ToolOutput
+      { tool, tool_name, chunk }` variant, three
+      exhaustive-match sites extended, Local renderer
+      verbatim / Telegram drop / audit one-tag-per-call
+      invariants all regression-pinned, **+7 tests**.
+- [x] Task 2 shipped at `ba9a724`: `WebFetchTool` at
+      `TrustTier::Trusted` + `SemiTrusted` via
+      `build_web_fetch_for_channel`, `net.fetch:<url>`
+      scope shape, GET-only + 10 MiB UTF-8 body cap,
+      capability-layer `url_prefix_grants` hardening
+      that fixes a latent `starts_with` hostile-suffix
+      bug shipping since Phase 1, **+22 tests**.
+      Production-core byte-identity streak **broken
+      again** here (47-line diff), layered on top of
+      Task 1's break, re-baselined at this exit commit.
+- [x] Task 3 shipped at `d31954f`: cross-role allowlist
+      regression test at the agent layer — same
+      `Arc::clone`-shared `FakeTool` registry driven by
+      two `with_tool_allowlist` configurations, four
+      cross-product scenarios, plus a `PanicOnExecute`
+      ordering-invariant test. Pure `#[cfg(test)]`
+      additions, zero production surface change, **+2
+      tests**.
+- [x] Task 4 **skipped**: working-session slot empty
+      because all three draft candidates were closed by
+      earlier tasks (audit-payload widening punted, URL
+      canonicalization already covered in Task 2, default
+      role config file doesn't exist). Skip recorded
+      explicitly above rather than squeezing busywork
+      into the slot.
+- [x] Task 5 shipped at the commit this file freezes in:
+      docs-only exit freeze — Task 1 ship record
+      backfilled, Task 4 skip record recorded, Task 5
+      ship record written, decisions block recorded,
+      deferrals block recorded, `docs/README.md`
+      flipped to Frozen, `docs/ROADMAP.md` rolled. Zero
+      source edits.
+- [x] `cargo test --workspace` green at **453 tests**
+      (Phase 11 exit `16422e2`: 422 → Phase 12 exit:
+      453, delta **+31**, well above the ≥+10 heuristic
+      and above the draft's ≥+17 target).
+- [x] `cargo clippy --workspace --all-targets -- -D
+      warnings` clean at exit. Pre-commit hook held
+      throughout.
+- [x] **`DESIGN.md` byte-identical to `e0d6437`.**
+      **Streak rolls to twelve consecutive phases.**
+      Verified: `git diff e0d6437 HEAD -- docs/DESIGN.md
+      | wc -l == 0`. No amendment file created during
+      Phase 12.
+- [x] **Production-core byte-identity streak: broken**
+      — twice, both times in Task 1 (27-line diff adding
+      `StreamEvent::ToolOutput`) and Task 2 (47-line
+      cumulative diff adding the `WebFetchTool` /
+      `WebFetchToolConfig` re-export on top of Task 1's
+      variant). Both breaks are additive within D3's
+      illustrative code block, no trait or outcome-
+      variant contract change. Re-baselined at this
+      exit commit. Task 3 left `lib.rs` byte-identical
+      relative to its post-Task-2 state (all Task 3
+      changes were inside `#[cfg(test)]` in `agent.rs`).
+- [x] **Zero-new-dep streak: held.** Phase 12 added
+      zero new workspace crates to `Cargo.lock`. The
+      only `Cargo.toml` change is `crates/aivyx-core/
+      Cargo.toml` promoting `reqwest`, `bytes`, and
+      `futures-util` to **direct** deps — all three
+      were already in `[workspace.dependencies]` via
+      `aivyx-llm`, so no new `Cargo.lock` entries land.
+      The zero-new-dep invariant is about new crates
+      entering `Cargo.lock`, not about which crate
+      declares an existing workspace dep directly.
+- [x] Foundation backlog at Phase 12 exit: **eight
+      items** (two rolling from Phase 11 + six net-new
+      from Phase 12), enumerated and tagged in the
+      Phase 12 deferrals block above. First phase since
+      Phase 6 where the backlog grew net-positive;
+      growth is known-deferral shape, not
+      accumulated-debt shape.
+- [x] `docs/README.md` phase-status table flipped to
+      Phase 12 **Frozen**; commit hash backfilled in a
+      separate follow-up commit per the
+      `docs(phase-12): backfill` convention.
+- [x] `docs/ROADMAP.md` rolled: Phase 12 entry removed,
+      Phase 13 entry scaffolded with a one-paragraph
+      intent refined by what Phase 12 learned about
+      product-phase shape.
+- [x] Task 1 ship record backfilled (committed without
+      one during the working order, landed here).
+- [x] Task 4 skip record explicit; the working-session
+      slot being empty is recorded as a phase outcome,
+      not silently dropped.
+- [x] Q1 through Q6 all resolved and recorded in the
+      "Decisions made during Phase 12 that aren't in
+      DESIGN.md" block above. Q1 and Q3 resolved at
+      phase open (pinned); Q2/Q4/Q5/Q6 resolved
+      task-level (Task 1 for Q2 + Q6, Task 2 for Q4 +
+      Q5).

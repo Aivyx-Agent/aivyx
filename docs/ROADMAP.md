@@ -79,6 +79,31 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 12 — `web.fetch` + streaming tool output (second product phase)
+## Phase 13 — consolidation phase (shape TBD at open)
 
-*Active — see [PHASE_12.md](PHASE_12.md).*
+The three product phases (11, 12, and whatever Phase 13
+eventually looks like) share one pattern: ship one dangerous
+tool plus whatever infrastructure that tool justifies, then
+freeze. Phase 12 confirmed the pattern generalizes — the
+Phase 11 seams (role allowlist gate, trust-tier ceilings,
+registration-time per-tool gate, `ToolContext.channel.
+stream_event` seam) were reused with **zero** design rework
+for a structurally distinct second tool. Phase 13's shape is
+therefore open: it could be a third product phase (candidate
+tools include `git.clone`/`git.fetch` — a long-running
+streaming-output tool that would exercise the Task 1
+`StreamEvent::ToolOutput` primitive a second time — or a
+tool that needs to write to disk under an attenuated
+`fs.write:` scope), or it could be a consolidation phase
+that works through the eight-item foundation backlog
+(response headers in audit payload, forensic
+`ToolOutcome::NotInRole` variant, per-chunk Telegram
+rendering, default role config file, and the rolling-
+deferral items carried from earlier phases). The decision
+is made at Phase 13 open, informed by whichever item has
+the sharpest design pressure by then — not pre-committed
+here. If Phase 13 turns out to be a product phase, the
+Phase 12 pattern says Phase 11's infrastructure is enough
+and the backlog keeps rolling; if Phase 13 is a
+consolidation phase, the product-phase cadence resumes at
+Phase 14.
