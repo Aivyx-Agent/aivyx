@@ -116,6 +116,20 @@ pub struct SessionConfig {
     /// prompt. `None` means "no banner" — the test path uses this to
     /// keep stdout output deterministic.
     pub banner: Option<String>,
+    /// Phase 11 Task 4 — role-derived tool allowlist. `None` means
+    /// "allow every registered tool" (legacy Phase 6–10 behavior).
+    /// `Some(set)` filters the advertised catalog at the planner
+    /// layer and the dispatch gate at the agent layer — see
+    /// `LlmPlannerConfig::tool_allowlist` and
+    /// `ConcreteAgent::with_tool_allowlist` for the two enforcement
+    /// points.
+    pub tool_allowlist: Option<std::collections::BTreeSet<String>>,
+    /// Phase 11 Task 4 — role-derived memory-topic prefix. `None`
+    /// means "no prefix" (legacy behavior). A `Some` value is
+    /// prepended by the dispatch layer to every `memory.*` tool
+    /// call's `topic` input before the tool sees it. Invisible to
+    /// the model by design.
+    pub memory_topic_prefix: Option<String>,
 }
 
 /// Summary of what the session did, returned after EOF.
@@ -177,7 +191,8 @@ where
     let registry_for_factory = Arc::clone(&registry);
     let planner_config = LlmPlannerConfig::new(config.model)
         .with_system_prompt(config.system_prompt)
-        .with_max_tokens(config.max_tokens);
+        .with_max_tokens(config.max_tokens)
+        .with_tool_allowlist(config.tool_allowlist.clone());
 
     let agent = ConcreteAgent::new(
         AgentId::new(),
@@ -191,7 +206,9 @@ where
                 planner_config.clone(),
             ))
         },
-    );
+    )
+    .with_tool_allowlist(config.tool_allowlist)
+    .with_memory_topic_prefix(config.memory_topic_prefix);
 
     // ---- Session marker (Phase 5 task 4) -----------------------------
     //

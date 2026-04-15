@@ -67,6 +67,20 @@ pub struct LlmPlannerConfig {
     pub max_tokens: u32,
     /// Optional sampling temperature; `None` means provider default.
     pub temperature: Option<f32>,
+    /// Phase 11 Task 4 — role-derived tool allowlist. When `Some`,
+    /// `LlmPlanner::new` filters the registry's tool list through
+    /// this set before sending the catalog to the provider. The
+    /// filtered-out tools are never advertised to the model, so
+    /// the model never tries to call them — **this** is the
+    /// primary enforcement. The dispatch-layer check in
+    /// `ConcreteAgent::run_tool_call` is belt-and-suspenders for
+    /// tool calls that bypass advertisement (stale tool_use
+    /// blocks on resumed conversations, non-LLM planners, etc.).
+    ///
+    /// `None` means "no filter — advertise every registered
+    /// tool," preserving Phase 6–10 behavior for planners built
+    /// without a role.
+    pub tool_allowlist: Option<std::collections::BTreeSet<String>>,
 }
 
 impl LlmPlannerConfig {
@@ -76,6 +90,7 @@ impl LlmPlannerConfig {
             system_prompt: None,
             max_tokens: 1024,
             temperature: None,
+            tool_allowlist: None,
         }
     }
 
@@ -91,6 +106,17 @@ impl LlmPlannerConfig {
 
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    /// Attach a role-derived tool allowlist. See
+    /// [`Self::tool_allowlist`] for semantics. `None` preserves
+    /// legacy behavior (allow all registered tools).
+    pub fn with_tool_allowlist(
+        mut self,
+        allowlist: Option<std::collections::BTreeSet<String>>,
+    ) -> Self {
+        self.tool_allowlist = allowlist;
         self
     }
 }
@@ -117,8 +143,24 @@ impl LlmPlanner {
         registry: Arc<ToolRegistry>,
         config: LlmPlannerConfig,
     ) -> Self {
+        // Phase 11 Task 4 — role-allowlist filter on the advertised
+        // tool catalog. When `config.tool_allowlist` is `Some`,
+        // tools whose name is not in the set are not collected
+        // into the descriptor list, so the provider request
+        // (`request.tools`) never mentions them and the model
+        // therefore never emits a tool_use block against them.
+        // This is the primary enforcement point for the role
+        // allowlist; see the dispatch-layer check in
+        // `agent.rs::run_tool_call` for the belt-and-suspenders
+        // safety net.
         let tools = registry
             .iter_tools()
+            .filter(|tool| {
+                config
+                    .tool_allowlist
+                    .as_ref()
+                    .is_none_or(|set| set.contains(tool.name()))
+            })
             .map(|tool| LlmToolDescriptor {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -141,6 +183,17 @@ impl LlmPlanner {
     /// after tool observations.
     pub fn history(&self) -> &[LlmMessage] {
         &self.history
+    }
+
+    /// Names of tools actually advertised to the provider — i.e. the
+    /// post-filter catalog after `config.tool_allowlist` is applied.
+    /// Tests assert on this to confirm the planner-layer allowlist
+    /// filter is the *primary* enforcement point for Phase 11 roles
+    /// (the dispatch-layer gate in `ConcreteAgent::run_tool_call` is
+    /// the belt-and-suspenders). Returns names in registry iteration
+    /// order.
+    pub fn advertised_tool_names(&self) -> Vec<&str> {
+        self.tools.iter().map(|t| t.name.as_str()).collect()
     }
 
     /// Build one `LlmRequest` from the current history + config and

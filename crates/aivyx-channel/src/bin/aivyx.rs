@@ -109,7 +109,7 @@ use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
-use aivyx_config::{AivyxConfig, FieldSource, LoadOptions};
+use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::{
     AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
     ShellExecToolConfig, Tool, ToolRegistry,
@@ -202,6 +202,7 @@ fn run() -> Result<(), String> {
     let CliArgs {
         verify_only,
         channel: channel_kind,
+        role: role_override,
     } = parse_cli_args()?;
 
     // ---- Config -------------------------------------------------------
@@ -222,11 +223,12 @@ fn run() -> Result<(), String> {
         toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
         require_api_key: !verify_only,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram),
-        // Phase 11 Task 1 added `role_override`; Task 4 will wire it
-        // to a `--role <name>` CLI flag. Until then the binary leaves
-        // it `None` and users select non-default roles via the
-        // `AIVYX_ROLE` env var only.
-        role_override: None,
+        // Phase 11 Task 4 — `--role <name>` is now the highest-
+        // priority source. `parse_cli_args` turns the flag into
+        // `role_override`, which `aivyx-config`'s resolver honors
+        // above `AIVYX_ROLE` / TOML / `"default"`. A `None` here
+        // means "no flag was passed — fall through to env/TOML."
+        role_override,
     };
     let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
 
@@ -500,6 +502,12 @@ enum ChannelKind {
 struct CliArgs {
     verify_only: bool,
     channel: ChannelKind,
+    /// Phase 11 Task 4 — `--role <name>`. Highest-priority source for
+    /// `LoadOptions::role_override`; beats `AIVYX_ROLE` env var, the
+    /// `aivyx.active_role` TOML field, and the implicit `"default"`
+    /// fallback. `None` means "no override — fall back to the env var
+    /// and config-layer resolution chain."
+    role: Option<String>,
 }
 
 /// Parse the CLI arg surface.
@@ -513,6 +521,12 @@ struct CliArgs {
 /// - `aivyx --channel telegram` — Phase 8 Task 4 Telegram bot mode.
 ///   Requires `AIVYX_TELEGRAM_TOKEN` and `AIVYX_TELEGRAM_CHAT_ID`
 ///   env vars at `run_async` time.
+/// - `aivyx --role <name>` — Phase 11 Task 4. Highest-priority
+///   source for the active-role selection. Overrides `AIVYX_ROLE`
+///   env var, the `aivyx.active_role` TOML field, and the implicit
+///   `"default"` fallback. An unknown name fails at
+///   `AivyxConfig::validate` with a typed error listing the roles
+///   the config knows about.
 ///
 /// `--verify-only` and `--channel` are mutually exclusive: verify
 /// mode is a read-only forensic surface and has nothing to do with
@@ -525,8 +539,17 @@ struct CliArgs {
 /// session bring-up.
 fn parse_cli_args() -> Result<CliArgs, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    parse_cli_args_from(&args)
+}
+
+/// Testable core of [`parse_cli_args`]. Split out so tests can drive
+/// it with a synthetic argv without touching the real process
+/// arguments. `parse_cli_args` itself is a one-line shim that hands
+/// `std::env::args().skip(1)` to this function.
+fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut verify_only = false;
     let mut channel = ChannelKind::Local;
+    let mut role: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -550,10 +573,20 @@ fn parse_cli_args() -> Result<CliArgs, String> {
                 };
                 i += 2;
             }
+            "--role" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "`--role` requires a value".to_string())?;
+                if value.is_empty() {
+                    return Err("`--role` requires a non-empty name".to_string());
+                }
+                role = Some(value.clone());
+                i += 2;
+            }
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported flags: --verify-only, --channel <local|telegram>"
+                     Supported flags: --verify-only, --channel <local|telegram>, --role <name>"
                 ));
             }
         }
@@ -570,6 +603,7 @@ fn parse_cli_args() -> Result<CliArgs, String> {
     Ok(CliArgs {
         verify_only,
         channel,
+        role,
     })
 }
 
@@ -668,25 +702,23 @@ async fn run_async(
     let AivyxConfig {
         anthropic_api_key,
         model,
-        system_prompt,
+        system_prompt: _legacy_system_prompt,
         fs_root,
         storage_path: _,
         memory_max_per_topic,
         passphrase: _,
         telegram,
-        // Phase 11 Task 1 added the `Role` primitive. Task 4 is where
-        // this binary actually starts consuming `roles` and
-        // `active_role` — filtering the advertised tool catalog
-        // against the active role's allowlist and sourcing the system
-        // prompt from the active role rather than the legacy top-
-        // level `system_prompt` field above. Task 1 silences the
-        // pattern's unused-binding warning with `_ =` and does
-        // nothing else with the fields; every behavior a pre-Phase-11
-        // user depended on is still driven by the legacy fields
-        // because the Task 1 backwards-compat bridge copies them into
-        // the synthesized `default` role.
-        roles: _,
-        active_role: _,
+        // Phase 11 Task 4 — the binary now resolves the active role
+        // here and sources its `system_prompt`, `tool_allowlist`, and
+        // `memory_topic_prefix` from the entry in `roles` keyed by
+        // `active_role`. The legacy top-level `system_prompt` field
+        // is still loaded by `aivyx-config`, but it's bridged into
+        // the synthesized `default` role at config-load time, so
+        // pre-Phase-11 configs that set only the top-level field
+        // continue to work: the `default` role carries the same
+        // prompt and the resolution below picks it up normally.
+        roles,
+        active_role,
         // `warnings` is rendered by the banner in `print_startup_banner`
         // directly from `&config.warnings` before the destructure; by
         // the time we land here the banner has already printed any
@@ -697,9 +729,27 @@ async fn run_async(
         .expect("anthropic_api_key validated non-None before run_async")
         .value;
     let model = model.value;
-    let system_prompt = system_prompt.value;
     let fs_root = fs_root.value;
     let memory_cap = memory_max_per_topic.value;
+
+    // ---- Role resolution ---------------------------------------------
+    // `aivyx-config::validate` has already guaranteed that
+    // `active_role` keys into `roles` — either the operator's
+    // explicit choice resolves, or the implicit `"default"` role is
+    // present by the Task 1 backwards-compat synthesis. `.expect`
+    // encodes this invariant: if it fires, validation is buggy.
+    let active_role_name = active_role.value.clone();
+    let role = roles
+        .get(&active_role_name)
+        .expect("active_role must key into roles after validate()")
+        .clone();
+    let system_prompt = role.system_prompt.value;
+    let tool_allowlist: Option<std::collections::BTreeSet<String>> =
+        match role.tool_allowlist.value {
+            ToolAllowlist::AllowAll => None,
+            ToolAllowlist::Only(list) => Some(list.into_iter().collect()),
+        };
+    let memory_topic_prefix: Option<String> = role.memory_topic_prefix.value;
 
     // ---- Provider -----------------------------------------------------
     let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
@@ -881,11 +931,15 @@ async fn run_async(
                     "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
                      fs sandbox: {}\n\
                      memory: live (recall persists across restarts)\n\
-                     audit: persistent ({} events verified from disk)",
+                     audit: persistent ({} events verified from disk)\n\
+                     active role: {}",
                     env!("CARGO_PKG_VERSION"),
                     canonical_root.display(),
                     verified_event_count,
+                    active_role_name,
                 )),
+                tool_allowlist,
+                memory_topic_prefix,
             };
 
             let stdin = io::stdin();
@@ -961,6 +1015,8 @@ async fn run_async(
                 capabilities,
                 tools,
                 storage,
+                tool_allowlist,
+                memory_topic_prefix,
             };
             run_telegram_multi_session(
                 "aivyx-telegram",
@@ -1040,6 +1096,72 @@ mod tests {
             qualifier.ends_with("/**"),
             "shell.exec scope must end with `/**`, got {qualifier}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 11 Task 4 — `--role <name>` CLI flag parser tests.
+    //
+    // These pin the binary's own arg parser. The higher-level priority
+    // chain (`--role` beats `AIVYX_ROLE` beats TOML beats `"default"`)
+    // is covered by `aivyx-config`'s test `role_override_beats_env_var`
+    // and its siblings — the binary's contribution is turning the flag
+    // into `LoadOptions::role_override`, which is what these tests
+    // verify.
+    // -----------------------------------------------------------------
+
+    fn argv(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn role_flag_parses_into_cli_args_role_field() {
+        let parsed = parse_cli_args_from(&argv(&["--role", "researcher"]))
+            .expect("`--role researcher` must parse");
+        assert_eq!(parsed.role.as_deref(), Some("researcher"));
+        assert!(!parsed.verify_only);
+        assert_eq!(parsed.channel, ChannelKind::Local);
+    }
+
+    #[test]
+    fn role_flag_absent_leaves_role_none() {
+        // No `--role` at all — the parser must return `None` so that
+        // `LoadOptions::role_override = None` and the config layer
+        // falls through to `AIVYX_ROLE` / TOML / `"default"`.
+        let parsed = parse_cli_args_from(&argv(&[])).expect("empty argv must parse");
+        assert!(parsed.role.is_none());
+    }
+
+    #[test]
+    fn role_flag_missing_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--role"]))
+            .expect_err("`--role` with no value must error");
+        assert!(
+            err.contains("--role"),
+            "error must mention the flag: {err}"
+        );
+    }
+
+    #[test]
+    fn role_flag_empty_value_is_an_error() {
+        // An explicit empty string as the role name is a user mistake
+        // we catch at the binary rather than forwarding as a "role not
+        // found" error from the config layer — closer to the operator,
+        // clearer message.
+        let err = parse_cli_args_from(&argv(&["--role", ""]))
+            .expect_err("`--role ''` must error");
+        assert!(
+            err.contains("non-empty"),
+            "error must call out non-empty: {err}"
+        );
+    }
+
+    #[test]
+    fn role_flag_combines_with_channel_flag() {
+        // `--role` and `--channel` are orthogonal and must compose.
+        let parsed = parse_cli_args_from(&argv(&["--channel", "telegram", "--role", "coder"]))
+            .expect("orthogonal flags must compose");
+        assert_eq!(parsed.channel, ChannelKind::Telegram);
+        assert_eq!(parsed.role.as_deref(), Some("coder"));
     }
 
     #[test]

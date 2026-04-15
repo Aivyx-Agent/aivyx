@@ -122,6 +122,14 @@ pub struct TelegramSessionConfig {
     pub capabilities: CapabilitySet,
     pub tools: Arc<ToolRegistry>,
     pub storage: Arc<dyn Storage>,
+    /// Phase 11 Task 4 — role-derived tool allowlist. See
+    /// `aivyx_channel::SessionConfig::tool_allowlist` for semantics.
+    /// `None` preserves legacy behavior (allow every registered tool).
+    pub tool_allowlist: Option<std::collections::BTreeSet<String>>,
+    /// Phase 11 Task 4 — role-derived memory-topic prefix. See
+    /// `aivyx_channel::SessionConfig::memory_topic_prefix` for
+    /// semantics. `None` preserves legacy behavior.
+    pub memory_topic_prefix: Option<String>,
 }
 
 /// How long to hold each `getUpdates` request open (seconds).
@@ -403,7 +411,8 @@ where
     let registry_for_factory = Arc::clone(&registry);
     let planner_config = LlmPlannerConfig::new(config.model)
         .with_system_prompt(config.system_prompt)
-        .with_max_tokens(config.max_tokens);
+        .with_max_tokens(config.max_tokens)
+        .with_tool_allowlist(config.tool_allowlist.clone());
 
     let agent = ConcreteAgent::new(
         AgentId::new(),
@@ -417,7 +426,9 @@ where
                 planner_config.clone(),
             ))
         },
-    );
+    )
+    .with_tool_allowlist(config.tool_allowlist)
+    .with_memory_topic_prefix(config.memory_topic_prefix);
 
     // ---- Long-poll loop ----------------------------------------------
     //
@@ -751,7 +762,8 @@ where
     let registry_for_factory = Arc::clone(&registry);
     let planner_config = LlmPlannerConfig::new(config.model)
         .with_system_prompt(config.system_prompt)
-        .with_max_tokens(config.max_tokens);
+        .with_max_tokens(config.max_tokens)
+        .with_tool_allowlist(config.tool_allowlist.clone());
 
     let agent = ConcreteAgent::new(
         AgentId::new(),
@@ -765,7 +777,9 @@ where
                 planner_config.clone(),
             ))
         },
-    );
+    )
+    .with_tool_allowlist(config.tool_allowlist)
+    .with_memory_topic_prefix(config.memory_topic_prefix);
 
     let mut turns_run: usize = 0;
     let mut pending: VecDeque<IncomingMessage> = VecDeque::new();

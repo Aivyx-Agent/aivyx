@@ -90,6 +90,25 @@ pub struct ConcreteAgent {
     /// behavior byte-for-byte: a bare topic name hits the substrate
     /// unchanged.
     memory_topic_prefix: Option<String>,
+    /// Phase 11 Task 4 — role-derived tool allowlist gate (the
+    /// belt-and-suspenders dispatch-layer check). When `Some`, the
+    /// turn loop rejects any tool call whose name is not in the
+    /// set, **before** session/prefix injection and **before** the
+    /// capability scope check. The rejection synthesizes a
+    /// `tool.allowlist:<tool_name>` scope and routes through
+    /// `ToolOutcome::Denied { scope, held }` unchanged, so auditors
+    /// grep `scope_requested.base() == "tool.allowlist"` to
+    /// distinguish role rejection from capability rejection.
+    ///
+    /// `None` means "no filter — allow every registered tool,"
+    /// preserving Phase 6–10 behavior for agents built without a
+    /// role. This is the primary safety net for the planner-layer
+    /// filter in `LlmPlannerConfig`: the planner never advertises
+    /// filtered tools to the model, so the model never tries to
+    /// call them, but a stale-history tool_use block (e.g. from a
+    /// resumed conversation) or a non-LLM planner could still
+    /// produce an out-of-role call. This check catches that.
+    tool_allowlist: Option<std::collections::BTreeSet<String>>,
 }
 
 impl ConcreteAgent {
@@ -107,6 +126,7 @@ impl ConcreteAgent {
             audit,
             planner_factory: Box::new(planner_factory),
             memory_topic_prefix: None,
+            tool_allowlist: None,
         }
     }
 
@@ -117,6 +137,20 @@ impl ConcreteAgent {
     /// construction time.
     pub fn with_memory_topic_prefix(mut self, prefix: Option<String>) -> Self {
         self.memory_topic_prefix = prefix;
+        self
+    }
+
+    /// Attach a role-derived tool allowlist. See the
+    /// [`Self::tool_allowlist`] field doc for semantics. `None`
+    /// means "no filter," preserving legacy behavior. Task 4 of
+    /// Phase 11 wires this from
+    /// `cfg.roles[active_role].tool_allowlist` at session
+    /// construction time.
+    pub fn with_tool_allowlist(
+        mut self,
+        allowlist: Option<std::collections::BTreeSet<String>>,
+    ) -> Self {
+        self.tool_allowlist = allowlist;
         self
     }
 }
@@ -359,6 +393,62 @@ impl ConcreteAgent {
                 StepObservation {
                     tool_id,
                     summary: ToolOutcomeSummary::Failed,
+                },
+                outcome,
+            );
+        }
+
+        // Phase 11 Task 4 — role-allowlist dispatch-layer gate.
+        //
+        // If the agent was built with an explicit `tool_allowlist`
+        // (from `cfg.roles[active_role].tool_allowlist`), reject
+        // any call whose tool name is not in the set. The
+        // primary enforcement is at the planner layer
+        // (`LlmPlannerConfig` filters the tool catalog before
+        // advertising to Anthropic, so the model never sees
+        // disallowed tools), but this belt-and-suspenders check
+        // catches stale tool_use blocks from resumed conversations
+        // and non-LLM planners that don't go through the
+        // advertisement filter.
+        //
+        // Ordering matters: runs *after* schema validation (so
+        // malformed input routes to `Failed`, not `Denied`) and
+        // *before* session/prefix injection and `required_scope`
+        // (so the identity gate "may this role use this tool"
+        // fires before the authority gate "what scope does this
+        // call need"). Q1 Option A: reuse `ToolOutcome::Denied`
+        // with a synthetic `tool.allowlist:<tool_name>` scope.
+        // Auditors distinguish role rejection from capability
+        // rejection by `scope_requested.base() == "tool.allowlist"`.
+        // No new `ToolOutcome` variant, so the production-core
+        // byte streak (broken once at Task 3) stays at a single
+        // Phase 11 break.
+        let tool_name_str = tool.name().to_string();
+        if let Some(allowlist) = self.tool_allowlist.as_ref()
+            && !allowlist.contains(&tool_name_str)
+        {
+            // `Scope::parse` must accept this because Phase 11
+            // Task 4 added `tool.allowlist` to the aivyx-capability
+            // `KNOWN_BASES` allowlist. `expect` is correct: an
+            // unparseable synthetic scope is a bug in the
+            // capability crate's base list, not a runtime
+            // condition we should handle.
+            let synthetic = Scope::parse(&format!("tool.allowlist:{tool_name_str}"))
+                .expect("tool.allowlist:<name> must parse — see aivyx-capability KNOWN_BASES");
+            self.audit.on_event(AuditTag::ScopeDenied {
+                turn_id,
+                tool_attempted: tool_id,
+                scope_requested: synthetic.clone(),
+                held_capabilities: effective.clone(),
+            });
+            let outcome = ToolOutcome::Denied {
+                scope: synthetic,
+                held: effective.clone(),
+            };
+            return (
+                StepObservation {
+                    tool_id,
+                    summary: ToolOutcomeSummary::Denied,
                 },
                 outcome,
             );
@@ -1506,5 +1596,350 @@ mod tests {
                 )),
             "denied tool calls must not emit tool-call stream events: {events:?}"
         );
+    }
+
+    // =====================================================================
+    // Phase 11 Task 4 — role-allowlist dispatch-layer gate
+    // =====================================================================
+    //
+    // These tests pin the belt-and-suspenders allowlist check in
+    // `run_tool_call`. The primary enforcement is at the planner layer
+    // (`LlmPlannerConfig::tool_allowlist` filters the advertised catalog),
+    // tested separately in `llm_planner.rs`. Here we cover the
+    // dispatch-layer safety net: even a planner that emits a call to an
+    // out-of-allowlist tool (a non-LLM planner, a resumed conversation's
+    // stale tool_use block, etc.) must be rejected before session
+    // injection, before `required_scope`, and before the capability
+    // check.
+    //
+    // Q1 Option A — the rejection routes through `ToolOutcome::Denied
+    // { scope, held }` with a synthetic `tool.allowlist:<tool_name>`
+    // scope. No new `ToolOutcome` variant, preserving the production-
+    // core byte-identity streak at a single Phase 11 break (Task 3).
+
+    use std::collections::BTreeSet;
+
+    fn allowlist(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn role_allowlist_rejects_out_of_role_tool_at_dispatch_layer() {
+        // Setup mirrors the Phase 11 seed roles: `researcher` gets a
+        // read-only allowlist, no `shell.exec`. The agent *has* the
+        // capability to call shell.exec (so the capability gate
+        // would have granted it), but the allowlist gate fires
+        // earlier and denies.
+        let audit = RecordingAudit::new();
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let shell_id = shell.id();
+        let fs_read = Arc::new(FakeTool::new_bare("fs.read", "fs.read"));
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("shell.exec").unwrap(),
+            Scope::parse("fs.read").unwrap(),
+        ]);
+        let plan = vec![NextStep::ToolCall {
+            tool_id: shell_id,
+            input: json!({}),
+        }];
+
+        let registry = Arc::new(ToolRegistry::new(vec![
+            shell as Arc<dyn Tool>,
+            fs_read as Arc<dyn Tool>,
+        ]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["fs.read", "memory.read"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "run rm -rf");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        // Exactly one ScopeDenied event must appear, and the
+        // scope's base must be `tool.allowlist` (NOT `shell.exec`) —
+        // that's the distinguishing signal for auditors.
+        let denial = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied {
+                    scope_requested, ..
+                } => Some(scope_requested),
+                _ => None,
+            })
+            .expect("role-allowlist rejection must emit ScopeDenied");
+        assert_eq!(
+            denial.base(),
+            "tool.allowlist",
+            "scope base must be the synthetic tool.allowlist, not \
+             the tool's real capability base"
+        );
+        assert_eq!(
+            denial.qualifier(),
+            Some("shell.exec"),
+            "qualifier must carry the rejected tool name"
+        );
+
+        // Critically: no ToolCall audit event (which would only fire
+        // after successful execute). If this assertion fails, the
+        // allowlist gate let the call through.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "allowlist rejection must NOT emit a ToolCall event"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_allowlist_accepts_in_role_tool() {
+        // Positive control: an agent whose role DOES include the
+        // tool in its allowlist reaches the normal
+        // execute-and-emit-ToolCall path.
+        let audit = RecordingAudit::new();
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let shell_id = shell.id();
+
+        let caps =
+            CapabilitySet::from_scopes([Scope::parse("shell.exec").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: shell_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let registry =
+            Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["shell.exec", "fs.read"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "build");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Completed {
+                tool_calls_made, ..
+            } => {
+                assert_eq!(tool_calls_made, 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let events = audit.snapshot();
+        assert!(
+            events.iter().any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "in-role call must produce a ToolCall audit event"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "in-role call must not produce ScopeDenied"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_allowlist_none_preserves_legacy_behavior() {
+        // Backwards-compat invariant: an agent built without
+        // `with_tool_allowlist` (or with `None`) behaves exactly
+        // like a Phase 6–10 agent — every registered tool is
+        // callable, subject only to the capability gate. This is
+        // the synthesized `default` role's contract from Task 1's
+        // backwards-compat bridge.
+        let audit = RecordingAudit::new();
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let shell_id = shell.id();
+
+        let caps =
+            CapabilitySet::from_scopes([Scope::parse("shell.exec").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: shell_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("ok".to_string()),
+        ];
+        let registry =
+            Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        // Note: NO `with_tool_allowlist` call — field stays `None`.
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hi");
+        let outcome = agent.turn(message, &channel).await;
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+        let events = audit.snapshot();
+        assert!(
+            events.iter().any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "with no allowlist, shell.exec must execute normally"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_allowlist_fires_before_capability_gate() {
+        // Ordering invariant: the allowlist gate runs *before* the
+        // capability check, so even if the agent has zero caps
+        // (which would produce a `shell.exec` capability denial),
+        // the role-rejection path wins and the audit record shows
+        // `tool.allowlist:shell.exec`, not `shell.exec`. This is
+        // what makes the allowlist the "identity gate" vs. the
+        // capability layer's "authority gate."
+        let audit = RecordingAudit::new();
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let shell_id = shell.id();
+
+        // Deliberately empty caps.
+        let caps = CapabilitySet::from_scopes([]);
+        let plan = vec![NextStep::ToolCall {
+            tool_id: shell_id,
+            input: json!({}),
+        }];
+        let registry =
+            Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["fs.read"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "try it");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        let denial = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied {
+                    scope_requested, ..
+                } => Some(scope_requested),
+                _ => None,
+            })
+            .expect("must emit a denial");
+        assert_eq!(
+            denial.base(),
+            "tool.allowlist",
+            "allowlist gate must fire before capability gate"
+        );
+    }
+
+    // =====================================================================
+    // Phase 11 Task 4 — `LlmPlannerConfig::tool_allowlist` catalog filter
+    // =====================================================================
+    //
+    // The dispatch-layer gate above is the belt-and-suspenders; this
+    // test pins the primary enforcement: the planner, when handed a
+    // `Some(allowlist)`, must NOT advertise filtered-out tools to the
+    // provider. Covered here at the unit level because the filter
+    // applies inside `LlmPlanner::new`, before any turn runs.
+
+    #[test]
+    fn llm_planner_filters_tool_catalog_by_role_allowlist() {
+        use crate::llm_planner::{LlmPlanner, LlmPlannerConfig};
+        // A minimal registry with three tools.
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"))
+            as Arc<dyn Tool>;
+        let fs_read =
+            Arc::new(FakeTool::new_bare("fs.read", "fs.read")) as Arc<dyn Tool>;
+        let memory_read =
+            Arc::new(FakeTool::new_bare("memory.read", "memory.read"))
+                as Arc<dyn Tool>;
+        let registry =
+            Arc::new(ToolRegistry::new(vec![shell, fs_read, memory_read]));
+
+        // Researcher-style allowlist: no shell.exec.
+        let config = LlmPlannerConfig::new("test-model")
+            .with_tool_allowlist(Some(allowlist(&["fs.read", "memory.read"])));
+
+        // A provider we never actually call — LlmPlanner::new only
+        // reads the registry and config at construction.
+        let provider: Arc<dyn aivyx_llm::LlmProvider> =
+            Arc::new(FakeProvider);
+        let planner = LlmPlanner::new(provider, registry, config);
+
+        let advertised_names: Vec<&str> = planner
+            .advertised_tool_names()
+            .into_iter()
+            .collect();
+        assert!(
+            advertised_names.contains(&"fs.read"),
+            "fs.read must be advertised"
+        );
+        assert!(
+            advertised_names.contains(&"memory.read"),
+            "memory.read must be advertised"
+        );
+        assert!(
+            !advertised_names.contains(&"shell.exec"),
+            "shell.exec must NOT be advertised to a researcher-role planner"
+        );
+        assert_eq!(
+            advertised_names.len(),
+            2,
+            "exactly two tools advertised"
+        );
+    }
+
+    #[test]
+    fn llm_planner_none_allowlist_advertises_every_tool() {
+        // Backwards-compat: `tool_allowlist: None` preserves the
+        // Phase 6–10 "advertise every registered tool" behavior.
+        use crate::llm_planner::{LlmPlanner, LlmPlannerConfig};
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"))
+            as Arc<dyn Tool>;
+        let fs_read =
+            Arc::new(FakeTool::new_bare("fs.read", "fs.read")) as Arc<dyn Tool>;
+        let registry = Arc::new(ToolRegistry::new(vec![shell, fs_read]));
+        // Default config, no allowlist.
+        let config = LlmPlannerConfig::new("test-model");
+        let provider: Arc<dyn aivyx_llm::LlmProvider> =
+            Arc::new(FakeProvider);
+        let planner = LlmPlanner::new(provider, registry, config);
+        let names = planner.advertised_tool_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"shell.exec"));
+        assert!(names.contains(&"fs.read"));
+    }
+
+    // Minimal fake provider for the filter tests. `LlmPlanner::new`
+    // stores the provider but doesn't call it unless a turn runs,
+    // so a panicking stub is sufficient.
+    struct FakeProvider;
+
+    #[async_trait]
+    impl aivyx_llm::LlmProvider for FakeProvider {
+        async fn chat_stream(
+            &self,
+            _request: aivyx_llm::LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+            panic!("FakeProvider::chat_stream must not be called in filter tests")
+        }
     }
 }

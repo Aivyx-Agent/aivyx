@@ -274,6 +274,8 @@ fn base_session_config(harness: &MemoryHarness, storage: Arc<dyn Storage>) -> Se
         storage,
         prompt: String::new(),
         banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     }
 }
 

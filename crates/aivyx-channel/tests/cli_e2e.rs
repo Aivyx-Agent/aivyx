@@ -244,6 +244,8 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         storage,
         prompt: String::new(),
         banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     };
 
     // -- Drive the session.

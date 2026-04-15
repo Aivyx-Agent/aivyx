@@ -268,6 +268,8 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         storage,
         prompt: String::new(),
         banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     }
 }
 

@@ -918,6 +918,8 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
         tools: Arc::new(ToolRegistry::new(Vec::new())),
         storage: Arc::clone(&storage),
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     };
 
     // ---- Drive the session loop under a bounded timeout ----------
@@ -1258,6 +1260,8 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
         tools: Arc::new(ToolRegistry::new(Vec::new())),
         storage: Arc::clone(&storage),
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     };
 
     // ---- Watcher: cancel the per-turn token once the stall begins -
@@ -1713,6 +1717,8 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             capabilities: capabilities.clone(),
             tools: Arc::clone(&tools),
             storage: Arc::clone(&storage),
+            tool_allowlist: None,
+            memory_topic_prefix: None,
         };
         let config_b = TelegramSessionConfig {
             model: "claude-haiku-4-5-20251001".to_string(),
@@ -1721,6 +1727,8 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             capabilities: capabilities.clone(),
             tools: Arc::clone(&tools),
             storage: Arc::clone(&storage),
+            tool_allowlist: None,
+            memory_topic_prefix: None,
         };
 
         // ---- Per-chat watcher tasks --------------------------------
@@ -2181,6 +2189,8 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
         tools: Arc::new(ToolRegistry::new(Vec::new())),
         storage: Arc::clone(&storage),
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     };
 
     // ---- Watcher: push `/cancel` once the first turn has started
@@ -2432,6 +2442,8 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
         capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
         tools: Arc::new(ToolRegistry::new(Vec::new())),
         storage: Arc::clone(&storage),
+        tool_allowlist: None,
+        memory_topic_prefix: None,
     };
 
     // ---- Watcher A: push a *normal* (non-/cancel) follow-up message
@@ -2718,6 +2730,8 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             capabilities: capabilities.clone(),
             tools: Arc::clone(&tools),
             storage: Arc::clone(&storage),
+            tool_allowlist: None,
+            memory_topic_prefix: None,
         };
 
         // ---- Shutdown watcher --------------------------------------

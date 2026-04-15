@@ -21,8 +21,17 @@ use serde::{Deserialize, Serialize};
 // Scope registry — the v1 active namespace (21 scopes, per D4).
 // ---------------------------------------------------------------------------
 
-/// The 21 v1 active scope bases. `Scope::parse` rejects anything not in this
+/// The v1 active scope bases. `Scope::parse` rejects anything not in this
 /// set, so unknown scopes fail at parse time, not check time.
+///
+/// Phase 11 Task 4 adds `tool.allowlist` as a **synthetic dispatch-layer
+/// base**: the turn loop synthesizes `tool.allowlist:<tool_name>` scopes
+/// to represent role-allowlist rejections and routes them through
+/// `ToolOutcome::Denied { scope, held }` unchanged. Auditors distinguish
+/// "capability denial" from "role-allowlist denial" by reading
+/// `scope_requested.base()`. No `TrustTier` ceiling includes
+/// `tool.allowlist` — it exists as a parseable label only; the scope
+/// gate never holds it.
 const KNOWN_BASES: &[&str] = &[
     // fs
     "fs.read",
@@ -51,6 +60,8 @@ const KNOWN_BASES: &[&str] = &[
     // config
     "config.read",
     "config.write",
+    // role allowlist (synthetic — Phase 11 Task 4)
+    "tool.allowlist",
 ];
 
 // ---------------------------------------------------------------------------
@@ -654,6 +665,52 @@ mod tests {
         assert!(!u.grants(&s("memory.write")));
         // The one explicit narrow grant.
         assert!(u.grants(&s("memory.read:scope:public:feed")));
+    }
+
+    // ---- Phase 11 Task 4: synthetic `tool.allowlist` base ----
+
+    #[test]
+    fn tool_allowlist_parses_and_is_absent_from_real_ceilings() {
+        // The Phase 11 Task 4 role-allowlist gate synthesizes
+        // `tool.allowlist:<tool_name>` scopes at the dispatch layer
+        // and routes them through `ToolOutcome::Denied { scope,
+        // held }` so auditors can distinguish "capability denial"
+        // from "role allowlist denial" by reading
+        // `scope_requested.base()`. The base must parse cleanly,
+        // and NO real-tier ceiling (Trusted, SemiTrusted,
+        // Untrusted) may hold it — otherwise an audit event for a
+        // role rejection would show a held set that contradicts
+        // the denial.
+        let synthetic = Scope::parse("tool.allowlist:shell.exec")
+            .expect("tool.allowlist base must parse");
+        assert_eq!(synthetic.base(), "tool.allowlist");
+        assert_eq!(synthetic.qualifier(), Some("shell.exec"));
+
+        let bare = s("tool.allowlist");
+        assert!(
+            !TrustTier::Trusted.default_ceiling().grants(&bare),
+            "Trusted ceiling must NOT hold tool.allowlist — it's \
+             a synthetic dispatch-layer base, not a real capability"
+        );
+        assert!(
+            !TrustTier::SemiTrusted.default_ceiling().grants(&bare),
+            "SemiTrusted ceiling must NOT hold tool.allowlist"
+        );
+        assert!(
+            !TrustTier::Untrusted.default_ceiling().grants(&bare),
+            "Untrusted ceiling must NOT hold tool.allowlist"
+        );
+
+        // Kernel DOES hold it unqualified — that's fine; kernel is
+        // an internal-only tier, no real binary dispatches through
+        // it. The `ceiling_kernel_grants_everything` test already
+        // pins the "kernel holds every base" invariant.
+        assert!(
+            TrustTier::Kernel.default_ceiling().grants(&bare),
+            "Kernel holds every KNOWN_BASES entry including the \
+             synthetic one, per the ceiling-kernel-grants-everything \
+             invariant"
+        );
     }
 
     // ---- End-to-end: D1 scenario 3 ("rm -rf from Telegram") ----
