@@ -1501,3 +1501,305 @@ inject it and the chain stripped it.
   breakdown as structured data would be useful for
   integration into operator tooling. Not needed for
   Phase 13 P9 exit.
+
+## Task 5 — exit freeze (2026-04-15)
+
+Phase 13 closes cleanly: four implementation tasks, four
+ship records, three mid-implementation correction blocks
+(Tasks 1, 2, 3, 4), the Phase 12 Task 3 deferral
+consumed by Task 3, every byte-level streak held.
+
+### Q1–Q6 resolution
+
+- **Q1 — Where does `capability_scopes` live?**
+  *Resolved to* per-role TOML table-array in the single
+  config file (`[[role]]` entries in
+  `examples/aivyx.toml`). Task 1 extended the existing
+  `RawRole` struct in `aivyx-config` rather than
+  inventing a second config surface. The
+  one-file-per-role option was not pursued; the single-
+  file shape composed cleanly with Phase 11's loader.
+- **Q2 — How are scope strings parsed?**
+  *Resolved to* `Scope::parse` directly at config-load
+  time (Task 1). Parse errors point at the specific
+  scope string with the TOML path context. No config-
+  side wrapper type was introduced — the capability
+  layer's parser is the single source of truth for
+  scope syntax.
+- **Q3 — How does `trust_ceiling` interact with the
+  channel's trust tier?**
+  *Resolved to* two sequential intersections (Task 2):
+  role envelope intersected against role-tier ceiling,
+  then against channel-tier ceiling. The more-
+  restrictive of the two wins at dispatch time. The
+  example file's `researcher` comment block walks
+  through why this produces asymmetries (`CEILING_
+  SEMITRUSTED`'s ▲ rows strip unqualified fs.read).
+- **Q4 — Is `parent_role = "default"` implicit or
+  explicit?**
+  *Resolved to* **explicit** (Task 1 correction block).
+  No implicit parenting: the `default` role is an
+  ordinary node in the inheritance forest. The Task 1
+  draft had assumed implicit, and the correction block
+  records why explicit is less magic for operators
+  reading their own config.
+- **Q5 — How does the child-parent attenuation check
+  surface errors?**
+  *Resolved to* declared-sets-only, walking up
+  through empty ancestors, enforced at config-load
+  time against the walker's nearest constraining
+  ancestor (Task 2 correction block). An empty child's
+  declared set is the unconstrained sentinel; the
+  runtime assembler substitutes the binary's
+  backcompat floor for that level one step deep,
+  surfacing the "empty-child surprise" as a separate
+  teaching case. Error messages quote the operator's
+  own scope strings and name the parent they failed
+  to attenuate against.
+- **Q6 — Does the binary's hard-coded capability
+  vector survive Phase 13 at all?**
+  *Resolved to* **yes, as a backcompat floor**
+  (Task 2). The vector stays as a private binary
+  constant, consulted only when a chain level has
+  empty `capability_scopes`. Operator-facing config
+  never names the floor; it surfaces explicitly in
+  `--print-role` output via the "backcompat floor
+  (substituted for empty levels)" block and the
+  canonicalization-failure footnote, so an operator
+  debugging a surprise can see exactly which scopes
+  came from the floor vs. their own TOML.
+
+### Phase 13 deferrals
+
+Phase 13 entered carrying **eight** rolling deferrals
+from Phase 12. Task 3 consumed the `default role
+config file` item directly. Tasks 2, 3, and 4 each
+recorded one net-new deferral. Phase 13 exits with
+**ten** rolling deferrals total (seven inherited + three
+net-new).
+
+**Rolling deferrals still open after Phase 13 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral, untouched by Phase 13.
+  Carries forward. Tagged: **Phase 11 Task 4,
+  earliest plausible: whichever phase has a concrete
+  forensic-tooling story that needs the
+  `tool.allowlist:` scope distinction to be pattern-
+  matchable on variant shape rather than scope base
+  name.**
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched by
+  Phase 13; reopens reactively only if a channel-seam
+  bug surfaces that turn-loop tests miss.
+- **Response headers in audit payload (Phase 12 Q3
+  half).** Untouched by Phase 13. Tagged: **Phase 12
+  Task 2, earliest plausible: whichever phase has a
+  concrete forensic story that wants response headers
+  in the audit chain.**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Tagged: **deferred
+  indefinitely — reopens only when a concrete write-
+  side use case surfaces.**
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Tagged:
+  **deferred indefinitely.**
+- **Binary response bodies / non-UTF-8.** `web.fetch`
+  currently fails loudly on non-UTF-8 bodies.
+  Tagged: **deferred indefinitely — the first phase
+  that needs binary fetches can add a base64-
+  wrapping option or a second `ToolOutputBytes`
+  stream variant.**
+- **Per-chunk Telegram rendering.** Phase 12 Task 1
+  chose silent chunk drop on Telegram. Tagged:
+  **Phase 12 Task 1, earliest plausible: reactive —
+  reopens if Telegram operators ask for live in-
+  progress tool output.**
+
+**Net-new deferrals from Phase 13 itself:**
+
+- **Lift `assemble_role_envelope` into
+  `aivyx-channel/src/lib.rs`.** Task 3's correction
+  block records why the worked-example regression
+  tests had to live *inside* the binary's `mod tests`
+  (the assembly fn is binary-private). A future task
+  that wants the example file exercised by a true
+  *integration* test under `crates/aivyx-channel/
+  tests/` should lift the fn into the lib first. The
+  fn has no binary-specific state — a clean cut, not
+  a refactor. Tagged: **Phase 13 Task 3, earliest
+  plausible: whichever phase wants a cross-crate
+  integration test against the example config.**
+- **Per-tier worked examples.** `examples/aivyx.toml`
+  demonstrates `Trusted` thoroughly. A SemiTrusted-
+  channel-focused example (with path-qualified
+  fs scopes that survive `CEILING_SEMITRUSTED`'s ▲
+  rows) and an Untrusted example for completeness
+  are worth shipping in a future phase. Tagged:
+  **Phase 13 Task 3, earliest plausible: a phase
+  that ships a second channel adapter at a lower
+  trust tier and needs a canonical role profile to
+  pair with it.**
+- **`CapabilitySet::grants` reflexivity
+  investigation.** Task 4's correction block records
+  a workaround in `render_role_envelope` where a
+  url-prefix-qualified scope present in the effective
+  set by exact identity did not return true from
+  `effective.grants(scope)`. The call site works
+  around it with an equality check before the
+  `grants` call. A future phase should investigate
+  the root cause in `aivyx-capability` and either
+  fix it or document the asymmetry as intentional.
+  Tagged: **Phase 13 Task 4, earliest plausible: any
+  phase that touches `aivyx-capability` — the
+  investigation should live alongside whatever other
+  capability-layer work pulls the crate into scope.**
+
+**JSON output mode for `--print-role`** is also
+recorded in the Task 4 ship record but deliberately
+not promoted to the phase-level deferrals list: it's a
+UX nicety, not a foundation primitive, and will be
+picked up reactively if operator tooling asks for
+structured debug output.
+
+**Backlog shape at Phase 13 exit:** seven rolling items
+inherited from Phase 12 (minus the one Task 3 closed) +
+three net-new items from Phase 13. Total ten — up from
+Phase 12's exit total of eight. Every item is scoped,
+originating-task-tagged, and reactive-trigger-tagged.
+The growth is "known deferrals" rather than "accumulated
+debt": Phase 13 closed one item directly (the worked
+example) and recorded three follow-ups that each pin to
+a concrete future task-shape rather than drifting into
+the backlog as untagged TODOs.
+
+### Phase 13 exit criteria (final)
+
+- [x] Task 1 shipped at `2c7acfe`: per-role capability
+      envelope fields (`capability_scopes`,
+      `trust_ceiling`, `parent_role`) in
+      `aivyx-config`, single-inheritance substrate,
+      load-time parent-chain cycle + dangling-parent +
+      attenuation invariants. **+7 tests**.
+- [x] Task 2 shipped at `af89874`: binary capability
+      assembly rewritten to consume the per-role
+      envelope via `assemble_role_envelope` walking
+      the parent chain, intersecting declared sets
+      leaf-to-root with backcompat-floor substitution
+      per empty level, composed through two
+      sequential ceiling intersections. **+8 tests**.
+- [x] Task 3 shipped at `a19c6e4`: `examples/aivyx.toml`
+      worked inheritance case with four roles
+      (`default`, `coder`, `researcher`,
+      `junior_researcher`) and top-of-file operator-
+      facing comment block walking through the
+      empty-child surprise. **+3 tests**. Phase 12
+      Task 3 `default role config file` deferral
+      closed.
+- [x] Task 4 shipped at `3e83422`: `--print-role <name>`
+      CLI flag with early-exit branch (after config
+      load, before mkdir/keys/store), human-readable
+      renderer, two-surfaces drop-reporting rule
+      distinguishing intentional attenuation from
+      genuine surprise. **+9 tests** (5 parse + 4
+      functional).
+- [x] Decisions block (Q1–Q6 resolution) recorded
+      above.
+- [x] Deferrals block recorded above: 7 inherited +
+      3 net-new = 10 rolling items.
+- [x] `cargo test --workspace` green at exit: **453 →
+      480 passed**, delta **+27** across the phase
+      (well above the draft's ≥+16 acceptance — Task
+      1 +7, Task 2 +8, Task 3 +3, Task 4 +9).
+- [x] `cargo clippy --workspace --all-targets -- -D
+      warnings` clean at exit. Pre-commit hook held
+      throughout.
+- [x] **`DESIGN.md` byte-identical to `e0d6437`.**
+      **Streak rolls to thirteen consecutive phases.**
+      (Draft said "fourteen" — an off-by-one; Phase
+      12 exit had it at twelve, so Phase 13 is
+      thirteen. Recorded here rather than amending
+      the draft, so the phase arithmetic stays
+      legible.) Verified: `git diff e0d6437 HEAD --
+      docs/DESIGN.md | wc -l == 0`. No amendment file
+      created during Phase 13.
+- [x] **`PRODUCT.md` byte-identical to `80189b4`.**
+      **First phase since PRODUCT.md landed where it
+      is byte-identical through exit** — the product
+      contract is delivered on, not revised, by
+      Phase 13. Verified: `git diff 80189b4 HEAD --
+      PRODUCT.md | wc -l == 0`. PRODUCT.md streak
+      begins at **one consecutive phase**.
+- [x] **Production-core `lib.rs` byte-identical to
+      `16e618c`.** **Streak extends to two
+      consecutive phases** — the first re-established
+      production-core streak since Phase 10/11 held
+      and Phase 12 broke it. Verified: `git diff
+      16e618c HEAD -- crates/aivyx-core/src/lib.rs |
+      wc -l == 0`. Phase 13 touched zero lines of
+      `aivyx-core` (the config work sits entirely
+      above it, as the phase-open decision block
+      predicted).
+- [x] **Zero-new-dep streak: held.** Phase 13 added
+      zero new workspace crates. `examples/aivyx.toml`
+      is a config file with no build-time footprint.
+- [x] `docs/README.md` phase-status table row
+      updated: `| Phase 13 | Frozen  | PHASE_13.md |
+      <exit-hash> |`. (Exit-hash backfilled in a
+      separate follow-up commit per the Phase 11/12
+      recipe.)
+- [x] `docs/ROADMAP.md` Phase 13 entry replaced with
+      a Phase 14 scaffold.
+- [x] `docs/PRODUCT_ROADMAP.md` Role-Config Migration
+      milestone entry updated to reflect the landed
+      shape (single-inheritance per-role envelope in
+      a single TOML file + worked example + debug
+      flag) and flag the two remaining follow-up
+      sub-phase candidates (lift `assemble_role_
+      envelope` + per-tier worked examples) as not
+      requiring a dedicated sub-phase.
+- [x] Phase 12 Task 3 deferral (`default role config
+      file`) explicitly consumed by Task 3 and
+      closed in the deferrals block above.
+
+### Phase 13 recap
+
+Phase 13 is the first phase written under both
+DESIGN.md **and** PRODUCT.md as locked contracts, and
+the first to deliver against a numbered Product
+Commitment (**P9 — Per-Role Full Capability
+Declaration**). It is also the phase where the
+foundation backlog first grew modestly under the
+dual-contract regime — from eight rolling items at
+Phase 12 exit to ten at Phase 13 exit. The growth is
+healthy: one item closed (the worked example), three
+net-new items recorded with concrete trigger tags, no
+items dropped silently.
+
+The four tasks composed cleanly: Task 1 built the
+config substrate, Task 2 consumed it in the binary
+with the declared-only attenuation walk, Task 3
+exercised the whole thing against a worked example
+that doubles as operator documentation, Task 4 made
+the whole machinery introspectable via a debug flag
+the operator can run without any side effects. Each
+task's correction block records a specific case
+where the draft plan assumed the wrong thing and the
+implementation revealed the right thing — the Phase
+11 discipline of recording corrections in-place
+rather than rewriting the draft continues to pay
+off.
+
+Three streaks survived the phase:
+- DESIGN.md → **thirteen** consecutive phases.
+- PRODUCT.md → **one** (phase of origin).
+- Production-core `aivyx-core/src/lib.rs` → **two**
+  (re-established after Phase 12 broke it).
+
+Phase 14 shape TBD — the draft's three candidates
+(Daemon Migration start, Mission Primitive, Sub-
+Agent Role-Switching) all remain viable, and Phase
+13's clean exit means none of them are blocked on
+further foundation work. The decision can be made at
+Phase 14 open under the same dual-contract
+discipline.

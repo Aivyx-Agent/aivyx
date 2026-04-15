@@ -60,26 +60,51 @@ shape of the IPC protocol is the load-bearing design decision
 this milestone has to settle, because P5 (channel SDK) and P12
 (tool IPC) both consume it.
 
-## Milestone — Role-Config Migration
+## Milestone — Role-Config Migration (shipped in Phase 13)
 
 **Forward commitment:** [`PRODUCT.md` P9](../PRODUCT.md). **Keystone:** unlocks
 P1 (sub-agents), P2 (missions).
 
 Phase 11 introduced the role primitive but left every capability
 grant inside `crates/aivyx-channel/src/bin/aivyx.rs` at the
-operator level. This milestone migrates those grants out of the
+operator level. This milestone migrated those grants out of the
 binary and into a per-role config file that declares **the
 complete capability envelope** of each role: tool allowlist,
 scope set with qualifiers, trust ceiling, memory topic prefix,
-and the parent role it inherits from per **P7**. Once the binary
-no longer hard-codes role bodies, two derived capabilities become
-mechanical to add: a primary agent can switch into a child role
-mid-session under an attenuated envelope (the substrate **P1**
-needs), and a long-running mission can be tied to a specific
-role's envelope independent of which channel kicked it off (the
-substrate **P2** needs). The milestone is expected to be one
-phase, though it may share a phase with another small item if
-the migration turns out to be lighter than expected.
+and the parent role it inherits from per **P7**.
+
+**Landed shape (Phase 13, 2026-04-15):** per-role
+`[[role]]` table-array entries in a single TOML file (not
+one file per role), with `capability_scopes` parsed
+directly via `Scope::parse` at config-load time and
+`parent_role` as explicit single-inheritance (no implicit
+`default` parenting). Attenuation is enforced against
+declared sets only, walking up through empty ancestors;
+an empty child's envelope triggers a one-step-deep
+backcompat-floor substitution at runtime. A
+worked-example `examples/aivyx.toml` demonstrates four
+roles (`default`, `coder`, `researcher`,
+`junior_researcher`) including the deliberate empty-
+child surprise case, and a `--print-role <name>` debug
+flag lets operators inspect the effective envelope of
+any role without side effects. See
+[`docs/PHASE_13.md`](PHASE_13.md) for the full phase
+record.
+
+Once the binary no longer hard-codes role bodies, two derived
+capabilities become mechanical to add: a primary agent can
+switch into a child role mid-session under an attenuated
+envelope (the substrate **P1** needs), and a long-running
+mission can be tied to a specific role's envelope independent
+of which channel kicked it off (the substrate **P2** needs).
+Both are now unblocked. Two non-blocking follow-ups are
+recorded in Phase 13's deferrals (lift
+`assemble_role_envelope` from the binary into
+`aivyx-channel/src/lib.rs` for cross-crate integration
+tests; ship per-tier worked examples for SemiTrusted and
+Untrusted channels) — neither requires a dedicated sub-
+phase and both can be picked up reactively whenever a
+future phase needs them.
 
 ## Milestone — Mission Primitive
 

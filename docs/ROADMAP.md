@@ -79,41 +79,49 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 13 — Role-Config Migration (first product-shape keystone)
+## Phase 13 — Role-Config Migration (shipped)
 
-**Active — see [PHASE_13.md](PHASE_13.md).** Opened 2026-04-15.
-Phase 13 is the first phase written under the dual-contract
-regime (DESIGN.md + PRODUCT.md, both LOCKED), and delivers the
-first numbered Product Commitment directly: **P9 — Per-Role
-Full Capability Declaration**. The goal is to move every
-capability grant currently inlined in
-`crates/aivyx-channel/src/bin/aivyx.rs:907–934` into per-role
-config — each role declaring its complete envelope
-(`capability_scopes`, `trust_ceiling`, `parent_role` per
-**P7**'s single-inheritance rule). Phase 13 is a
-config-substrate phase, not a capability-layer rewrite; the
-existing capability layer gets *consumed* by the new config
-fields rather than modified. Ships a worked-example
-`examples/aivyx.toml` in the same phase to close the Phase 12
-Task 3 deferral and prove the inheritance primitive against a
-non-trivial multi-level role tree. Task count: 5, same cadence
-as Phase 11 and 12.
+**Frozen — see [PHASE_13.md](PHASE_13.md).** Opened and
+exited 2026-04-15. Delivered **P9 — Per-Role Full
+Capability Declaration** in four tasks: per-role envelope
+fields in `aivyx-config` (Task 1, `2c7acfe`), binary
+capability assembly rewritten to walk the declared
+parent chain with backcompat-floor substitution per
+empty level (Task 2, `af89874`), worked-example
+`examples/aivyx.toml` demonstrating the inheritance
+primitive including the empty-child surprise case
+(Task 3, `a19c6e4`), and a `--print-role` debug flag
+for operator introspection of effective envelopes
+(Task 4, `3e83422`). Phase 12 Task 3 `default role
+config file` deferral closed directly. Workspace tests
+rolled 453 → 480 (+27). DESIGN.md streak rolls to
+thirteen; PRODUCT.md streak begins at one; production-
+core `aivyx-core/src/lib.rs` streak re-establishes to
+two (first re-established production-core streak since
+Phase 10/11 held and Phase 12 broke it).
 
-## Phase 14 — shape TBD at Phase 13 exit
+## Phase 14 — shape TBD at Phase 14 open
 
-The Phase 11 + 12 + 13 triplet will have validated three
-distinct phase shapes: product phase, product phase again,
-config-substrate phase. Phase 14's shape is decided at Phase
-13 exit informed by what Phase 13 uncovered. Candidates from
-`PRODUCT_ROADMAP.md`: **Daemon Migration keystone start**
-(the largest forward reshape, now unblocked because Role-
-Config Migration has landed first), **Mission Primitive**
-(couples to both Daemon Migration and Role-Config
-Migration, smaller if only the approval-gate `StreamEvent`
-lands), or **Sub-Agent Role-Switching** (smallest of the
-three, consumes Role-Config Migration directly). The backlog
-still carries seven items after Phase 13 closes the
-`default role config file` deferral, so a consolidation
-sub-phase is also possible if the foundation backlog grows
-sharper design pressure during Phase 13 than a keystone
-does.
+The Phase 11 + 12 + 13 triplet validated three distinct
+phase shapes: product phase, product phase, config-
+substrate phase. Phase 14's shape is decided at
+Phase 14 open informed by what Phase 13 uncovered
+(cleanly; no deferrals block a specific follow-up).
+Candidates from `PRODUCT_ROADMAP.md`: **Daemon
+Migration keystone start** (the largest forward
+reshape, now unblocked because Role-Config Migration
+has landed), **Mission Primitive** (couples to both
+Daemon Migration and Role-Config Migration, smaller if
+only the approval-gate `StreamEvent` lands), or **Sub-
+Agent Role-Switching** (smallest of the three,
+consumes Role-Config Migration directly — Phase 13's
+`assemble_role_envelope` walker is the substrate it
+would plug into). The backlog carries ten items after
+Phase 13 exit (seven inherited from Phase 12 minus
+the `default role config file` item Task 3 closed,
+plus three net-new Phase 13 items: lift
+`assemble_role_envelope` into the lib, per-tier
+worked examples, `CapabilitySet::grants` reflexivity
+investigation), so a consolidation sub-phase remains
+possible if the foundation backlog grows sharper
+design pressure than a keystone does.
