@@ -173,6 +173,17 @@ fn append_event(buffer: &mut String, event: &StreamEvent<'_>) {
             // a Telegram channel should degrade gracefully, not
             // crash the turn.
         }
+        StreamEvent::ToolOutput { .. } => {
+            // Phase 12 task 1 trust-tier asymmetry: `SemiTrusted`
+            // adapters get the same finish-time summary they had
+            // before Phase 12. Per-chunk rendering would need a
+            // per-tool-call accumulator on the channel, which is
+            // more surface than the Phase 11 asymmetry pattern
+            // justifies — Local gets the richer streamed UX, and
+            // Telegram sees `ToolOutput` as a no-op and renders
+            // the aggregated result at `ToolCallFinished`. Users
+            // on Telegram see exactly what they saw in Phase 11.
+        }
     }
 }
 

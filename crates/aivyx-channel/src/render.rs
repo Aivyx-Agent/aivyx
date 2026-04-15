@@ -117,6 +117,13 @@ fn render_stream_event_human(w: &mut dyn Write, event: &StreamEvent<'_>) -> io::
                 data.len()
             )
         }
+        // Phase 12 task 1: tool output streams through inline as
+        // verbatim text between the start/finish markers already
+        // emitted above. No per-chunk marker — the user sees a
+        // continuous body, same visual shape as streamed LLM text.
+        // `tool_name` and `tool` id are on the event for audit
+        // bridges, not displayed.
+        StreamEvent::ToolOutput { chunk, .. } => w.write_all(chunk.as_bytes()),
     }
 }
 
@@ -243,6 +250,76 @@ mod tests {
             filename: None,
         });
         assert!(out.contains("<unnamed>"), "got {out:?}");
+    }
+
+    // Phase 12 task 1: `StreamEvent::ToolOutput` renders as verbatim
+    // text in the human renderer, matching the `Text` variant's shape
+    // so streamed tool output reads like streamed LLM text. No
+    // per-chunk marker, no UUID leak, concatenation-friendly.
+
+    #[test]
+    fn tool_output_chunk_renders_verbatim_like_text() {
+        let tool = ToolId::new();
+        let out = render_one(StreamEvent::ToolOutput {
+            tool,
+            tool_name: "web.fetch",
+            chunk: "hello world",
+        });
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn tool_output_empty_chunk_renders_empty() {
+        let tool = ToolId::new();
+        let out = render_one(StreamEvent::ToolOutput {
+            tool,
+            tool_name: "web.fetch",
+            chunk: "",
+        });
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn tool_output_does_not_leak_tool_id_or_name_into_human_output() {
+        let tool = ToolId::new();
+        let out = render_one(StreamEvent::ToolOutput {
+            tool,
+            tool_name: "web.fetch",
+            chunk: "body content",
+        });
+        // Body text is the only thing in the output — same rule as
+        // `Text`. The `tool_name` is there for audit bridges that
+        // observe `StreamEvent` but deliberately is not rendered to
+        // the human, because a streamed body should read like LLM
+        // text rather than like a decorated event log.
+        assert!(
+            !out.contains("web.fetch"),
+            "tool_name must not appear in rendered body: {out:?}"
+        );
+        assert!(
+            !out.contains(&tool.to_string()),
+            "ToolId UUID must not appear in rendered body: {out:?}"
+        );
+        assert_eq!(out, "body content");
+    }
+
+    #[test]
+    fn tool_output_consecutive_chunks_concatenate_with_no_separators() {
+        let tool = ToolId::new();
+        let mut buf = Vec::<u8>::new();
+        for chunk in ["part-one ", "part-two ", "part-three"] {
+            render_stream_event(
+                RenderMode::Human,
+                &mut buf,
+                &StreamEvent::ToolOutput {
+                    tool,
+                    tool_name: "web.fetch",
+                    chunk,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(String::from_utf8(buf).unwrap(), "part-one part-two part-three");
     }
 
     #[test]

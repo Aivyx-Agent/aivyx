@@ -282,6 +282,74 @@ async fn tool_markers_and_status_append_to_buffer() {
     assert!(text.ends_with("done"), "trailing text joined: {text:?}");
 }
 
+// Phase 12 task 1: `StreamEvent::ToolOutput` must NOT alter
+// Telegram's visible output. The trust-tier asymmetry pattern
+// (Local gets the streamed UX, SemiTrusted gets the unchanged
+// finish-time summary) means per-chunk rendering would require
+// a per-tool-call accumulator on the channel struct, and Phase
+// 12 deliberately does not add that. Telegram users on Phase 12
+// see exactly what they saw on Phase 11. This regression locks
+// that claim.
+#[tokio::test]
+async fn tool_output_chunks_are_dropped_silently_on_telegram() {
+    let (channel, transport) = make_channel();
+    let tool = ToolId::new();
+    let input = serde_json::json!({"url": "https://example.com/"});
+
+    channel.stream_event(StreamEvent::Text("fetching\n")).await.unwrap();
+    channel
+        .stream_event(StreamEvent::ToolCallStarted {
+            tool,
+            tool_name: "web.fetch",
+            input: &input,
+        })
+        .await
+        .unwrap();
+    // Three chunks that should be completely invisible to the
+    // Telegram user. If any of these text values surface in the
+    // sent message, the trust-tier asymmetry is broken.
+    for chunk in ["SECRET-ONE ", "SECRET-TWO ", "SECRET-THREE"] {
+        channel
+            .stream_event(StreamEvent::ToolOutput {
+                tool,
+                tool_name: "web.fetch",
+                chunk,
+            })
+            .await
+            .unwrap();
+    }
+    channel
+        .stream_event(StreamEvent::ToolCallFinished {
+            tool,
+            tool_name: "web.fetch",
+            outcome_summary: "200 OK",
+        })
+        .await
+        .unwrap();
+    channel.stream_event(StreamEvent::Text("done")).await.unwrap();
+
+    channel.finalize(&completed_outcome()).await.unwrap();
+
+    let sent = transport.sent_snapshot();
+    assert_eq!(sent.len(), 1);
+    let text = &sent[0].text;
+
+    // The start/finish markers appear as usual — that's the Phase
+    // 11 behavior, unchanged.
+    assert!(text.contains("→ web.fetch"), "start marker: {text:?}");
+    assert!(
+        text.contains("← web.fetch") && text.contains("200 OK"),
+        "finish marker + summary: {text:?}"
+    );
+    // None of the streamed chunk payloads may appear.
+    for secret in ["SECRET-ONE", "SECRET-TWO", "SECRET-THREE"] {
+        assert!(
+            !text.contains(secret),
+            "streamed tool output chunk `{secret}` must not surface on Telegram: {text:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn empty_turn_yields_no_reply_placeholder() {
     // A turn the LLM ended without speaking a single Text chunk (all

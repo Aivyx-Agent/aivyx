@@ -247,6 +247,33 @@ pub enum StreamEvent<'a> {
         data: &'a [u8],
         filename: Option<&'a str>,
     },
+
+    /// Phase 12 task 1: incremental chunk of a tool's output,
+    /// emitted from inside `Tool::execute` before the tool
+    /// completes. Lets a long-running or streaming tool
+    /// (`web.fetch`, a future `git.clone`, etc.) hand back
+    /// partial results as they arrive instead of buffering the
+    /// whole body to the `ToolCallFinished.outcome_summary`
+    /// one-liner.
+    ///
+    /// Invariant: the audit bridge treats `ToolOutput` as
+    /// pass-through. Per-chunk events are *not* audit-logged;
+    /// the chain continues to record exactly one entry per
+    /// `ToolCallFinished` with the aggregated result. The
+    /// `--verify-only` forensic walker relies on
+    /// one-entry-per-tool-call staying true.
+    ///
+    /// `tool` and `tool_name` are carried for symmetry with
+    /// `ToolCallStarted` / `ToolCallFinished` so renderers can
+    /// interleave chunks from concurrent tool calls in a
+    /// future world where that matters. `chunk: &'a str`
+    /// restricts streaming to UTF-8; binary streaming is a
+    /// later-phase concern.
+    ToolOutput {
+        tool: ToolId,
+        tool_name: &'a str,
+        chunk: &'a str,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

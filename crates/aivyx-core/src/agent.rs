@@ -721,6 +721,7 @@ mod tests {
         ToolCallStarted { tool_name: String },
         ToolCallFinished { tool_name: String, summary: String },
         Attachment,
+        ToolOutput { tool_name: String, chunk: String },
     }
 
     struct RecordingChannel {
@@ -774,6 +775,12 @@ mod tests {
                     summary: outcome_summary.to_string(),
                 },
                 StreamEvent::Attachment { .. } => RecordedEvent::Attachment,
+                StreamEvent::ToolOutput {
+                    tool_name, chunk, ..
+                } => RecordedEvent::ToolOutput {
+                    tool_name: tool_name.to_string(),
+                    chunk: chunk.to_string(),
+                },
             };
             self.events.lock().unwrap().push(rec);
             Ok(())
@@ -862,6 +869,67 @@ mod tests {
         }
     }
 
+    // Phase 12 task 1 test subject: a tool that streams a scripted
+    // sequence of chunks via `StreamEvent::ToolOutput` before
+    // completing. Exists only to give Task 1 a real driver for the
+    // streaming seam without waiting for Task 2's `web.fetch` to
+    // land — keeping Task 1 pure infrastructure per the phase draft.
+    // Not registered anywhere in production.
+    struct ScriptedStreamingTool {
+        id: ToolId,
+        name: &'static str,
+        schema: Value,
+        scope: Scope,
+        chunks: Vec<String>,
+    }
+
+    impl ScriptedStreamingTool {
+        fn new(name: &'static str, scope: &str, chunks: Vec<&str>) -> Self {
+            ScriptedStreamingTool {
+                id: ToolId::new(),
+                name,
+                schema: json!({}),
+                scope: Scope::parse(scope).unwrap(),
+                chunks: chunks.into_iter().map(String::from).collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for ScriptedStreamingTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "scripted streaming test tool"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            self.scope.clone()
+        }
+        async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+            for chunk in &self.chunks {
+                let _ = ctx
+                    .channel
+                    .stream_event(StreamEvent::ToolOutput {
+                        tool: self.id,
+                        tool_name: self.name,
+                        chunk: chunk.as_str(),
+                    })
+                    .await;
+            }
+            ToolOutcome::Completed {
+                output: json!({"streamed": self.chunks.len()}),
+                verified: Verification::NotApplicable,
+            }
+        }
+    }
+
     fn make_agent(
         caps: CapabilitySet,
         tools: Vec<Arc<dyn Tool>>,
@@ -926,6 +994,165 @@ mod tests {
             *channel.finalized.lock().unwrap(),
             Some(TurnOutcomeSummary::Completed)
         );
+    }
+
+    // ---- Phase 12 task 1: streaming tool output ----
+    //
+    // A tool that emits `StreamEvent::ToolOutput` chunks from inside
+    // its `execute` body must see every chunk land on the channel in
+    // order, bracketed by the usual `ToolCallStarted` / `ToolCallFinished`
+    // markers. Audit chain must still record exactly one `ToolCall`
+    // entry per tool call — chunks are a rendering concern, not a
+    // forensic one, and the `--verify-only` walker depends on
+    // one-entry-per-tool-call staying true.
+
+    #[tokio::test]
+    async fn streaming_tool_output_chunks_land_in_order_between_start_and_finish_markers(
+    ) {
+        let audit = RecordingAudit::new();
+
+        // Tool name stays `test.stream` so the event assertions are
+        // specific, but the *scope* has to be a real base from
+        // `KNOWN_BASES` — the capability layer's allowlist rejects
+        // unknown bases at parse time. `memory.read` is the
+        // established test-fixture stand-in for "some bare scope";
+        // see `FakeTool::new_bare("memory.read", "memory.read")` in
+        // the golden-path test above.
+        let tool = Arc::new(ScriptedStreamingTool::new(
+            "test.stream",
+            "memory.read",
+            vec!["chunk-one ", "chunk-two ", "chunk-three"],
+        ));
+        let tool_id = tool.id();
+
+        let agent_caps =
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]);
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = RecordingChannel::new();
+        let message = Message::text(channel.session, "stream please");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Completed {
+                tool_calls_made, ..
+            } => assert_eq!(tool_calls_made, 1),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // The recorded event sequence must be:
+        //   ToolCallStarted → ToolOutput × 3 → ToolCallFinished → (any trailing Text)
+        // We do not pin the absolute index of the start marker (the
+        // turn loop may emit non-tool events around it), but we do
+        // pin relative order and the chunk payloads.
+        let events = channel.events.lock().unwrap().clone();
+
+        // Collect (index, kind) tuples for the events we care about.
+        let mut start_idx = None;
+        let mut finish_idx = None;
+        let mut output_indices: Vec<(usize, String)> = Vec::new();
+        for (i, ev) in events.iter().enumerate() {
+            match ev {
+                RecordedEvent::ToolCallStarted { tool_name } if tool_name == "test.stream" => {
+                    start_idx = Some(i);
+                }
+                RecordedEvent::ToolCallFinished { tool_name, .. }
+                    if tool_name == "test.stream" =>
+                {
+                    finish_idx = Some(i);
+                }
+                RecordedEvent::ToolOutput { tool_name, chunk }
+                    if tool_name == "test.stream" =>
+                {
+                    output_indices.push((i, chunk.clone()));
+                }
+                _ => {}
+            }
+        }
+
+        let start = start_idx.expect("ToolCallStarted must be recorded");
+        let finish = finish_idx.expect("ToolCallFinished must be recorded");
+        assert_eq!(
+            output_indices.len(),
+            3,
+            "expected 3 ToolOutput chunks, got {}",
+            output_indices.len()
+        );
+        assert!(
+            start < output_indices[0].0,
+            "first chunk must come after ToolCallStarted"
+        );
+        assert!(
+            output_indices[2].0 < finish,
+            "last chunk must come before ToolCallFinished"
+        );
+        assert_eq!(output_indices[0].1, "chunk-one ");
+        assert_eq!(output_indices[1].1, "chunk-two ");
+        assert_eq!(output_indices[2].1, "chunk-three");
+        // Chunks are in sequence with no interleaving of other
+        // `test.stream` events between them.
+        assert_eq!(output_indices[1].0, output_indices[0].0 + 1);
+        assert_eq!(output_indices[2].0, output_indices[1].0 + 1);
+    }
+
+    #[tokio::test]
+    async fn streaming_tool_output_produces_exactly_one_audit_entry_regardless_of_chunk_count(
+    ) {
+        let audit = RecordingAudit::new();
+
+        // Five chunks — the assertion is that N chunks produce
+        // exactly one ToolCall audit entry, not N+1 or N. This
+        // invariant is load-bearing for the --verify-only forensic
+        // walker and is part of the Phase 12 task 1 acceptance list.
+        let tool = Arc::new(ScriptedStreamingTool::new(
+            "test.stream",
+            "memory.read",
+            vec!["a", "b", "c", "d", "e"],
+        ));
+        let tool_id = tool.id();
+
+        let agent_caps =
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]);
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("ok".to_string()),
+        ];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+        let channel = RecordingChannel::new();
+        let message = Message::text(channel.session, "stream five");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        let tool_calls: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .collect();
+        assert_eq!(
+            tool_calls.len(),
+            1,
+            "streaming tool output must produce exactly one ToolCall audit entry, got {} (full trail: {:#?})",
+            tool_calls.len(),
+            events
+        );
+        // The overall audit shape is still TurnStarted → ToolCall → TurnEnded.
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], AuditTag::TurnStarted { .. }));
+        assert!(matches!(events[1], AuditTag::ToolCall { .. }));
+        assert!(matches!(events[2], AuditTag::TurnEnded { .. }));
     }
 
     // ---- Scope denied: Tier 2 + shell.exec → ScopeDenied in trail ----

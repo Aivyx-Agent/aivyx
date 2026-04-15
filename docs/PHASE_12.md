@@ -617,6 +617,105 @@ it becomes a follow-up commit after the freeze, not a bundle.
 
 ---
 
+## Task 1 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed:** Task 1 would need to extend the
+`Tool` trait with a streaming sink parameter — the draft listed
+three candidate mechanisms (pass a `StreamEventSink` handle into
+`Tool::run`, extend `ToolResult` with a streaming variant, or a
+channel-based sender closed over at dispatch) and leaned toward
+(a). The draft also expected this to "**may** break the
+production-core byte-identity streak" on top of the new
+`StreamEvent` variant.
+
+**What the code actually shows:** the seam already exists.
+`Tool::execute` at `crates/aivyx-core/src/lib.rs:503` already
+takes `context: &ToolContext<'_>`, and `ToolContext` at line
+513 already carries `channel: &'a dyn ChannelContext`.
+`ChannelContext::stream_event` at line 171 already accepts
+`StreamEvent<'_>`. A streaming tool emits incremental output by
+calling `context.channel.stream_event(StreamEvent::ToolOutput
+{ tool, tool_name, chunk: &s }).await` inside its `execute`
+body — identical to the planner's text-streaming pattern at
+`llm_planner.rs:246` where the planner emits
+`channel.stream_event(StreamEvent::Text(chunk)).await` inside
+its own step loop.
+
+**Scope change.** Task 1 no longer touches the `Tool` trait at
+all. It does not add a `StreamEventSink`, does not extend
+`ToolResult`, does not pass any new argument anywhere. The
+entire Task 1 delta is:
+
+1. Add `StreamEvent::ToolOutput { tool, tool_name, chunk }`
+   variant to the enum in `aivyx-core/src/lib.rs`.
+2. Extend the three exhaustive `match StreamEvent` sites to
+   handle it:
+   - `crates/aivyx-channel/src/render.rs:91-108` (Local
+     renderer — inline pass-through, no marker).
+   - `crates/aivyx-telegram/src/telegram_channel.rs:134-169`
+     (Telegram — buffer-and-ignore so finalized text lands at
+     `ToolCallFinished` per the trust-tier asymmetry rule).
+   - `crates/aivyx-core/src/agent.rs:761-776` (the
+     `RecordedEvent` shadow enum used by the agent-level
+     fake-channel tests).
+3. Ship a `ScriptedStreamingTool` under a test-support module
+   of `aivyx-core` that drives streaming emission through an
+   integration test. The tool itself is **not** registered in
+   any production channel — it exists purely as a test subject.
+4. Add regression tests for: (a) Local channel captures all
+   chunks in order between start/finish markers, (b) audit
+   chain records exactly one `ToolCallFinished` entry for N
+   chunks (the invariant the draft's success metric names
+   as load-bearing).
+
+**Production-core streak break: still expected, for a
+smaller reason.** The `StreamEvent` variant addition is the
+only break, not a trait signature change. Per the Phase 11
+handoff rule (DESIGN.md code blocks are illustrative, not
+byte-exact), this remains a legitimate streak break to
+record in the ship log rather than an amendment trigger.
+Re-baselined at the Phase 12 exit commit as normal.
+
+**Telegram rendering: deferred to implementation.** The
+draft said "buffer chunks locally and emit one finalized
+message at the tool's finish event." That's still the
+direction, but the actual Telegram renderer at
+`telegram_channel.rs:134-169` shows every match arm is
+effectively stateless — it turns a `StreamEvent` into an
+async call with no per-tool-call accumulator state. Adding
+per-tool-call buffering would need a new `HashMap<ToolId,
+String>` on the channel struct, which is more surface than
+the "Telegram gets a no-op rendering" one-liner implied.
+**Simpler resolution:** Telegram's `ToolOutput` arm is a
+no-op return (`Ok(())`), and the existing
+`ToolCallFinished { outcome_summary, .. }` arm already
+renders the final tool result. Users on Telegram see the
+same finish-time summary they see today. Chunks are just
+dropped. This matches the Phase 11 trust-tier asymmetry
+pattern exactly (Local gets richer UX, SemiTrusted gets
+unchanged-from-today) and avoids adding a per-tool-call
+accumulator to the Telegram adapter. Recorded here so the
+Task 1 ship log doesn't have to re-justify it.
+
+**Q6 resolved (early):** the `StreamEvent::ToolOutput`
+variant shape is:
+```
+ToolOutput {
+    tool: ToolId,
+    tool_name: &'a str,
+    chunk: &'a str,
+}
+```
+Borrowed string chunk (UTF-8 only), matching the borrow
+lifetime pattern of the other variants. `tool` and
+`tool_name` included for symmetry with `ToolCallStarted` /
+`ToolCallFinished`, future-proofing against a concurrent-
+tool-call world. `&'a str` rather than `&'a [u8]` restricts
+streaming to UTF-8 text; binary streaming is out of scope
+for Phase 12 and is a later-phase concern.
+
+---
+
 *(Task ship records land below as Phase 12 progresses. Follow
 the Phase 11 shape: one `## Task N — shipped (YYYY-MM-DD)`
 block per task, terminal exit-criteria checklist at the very
