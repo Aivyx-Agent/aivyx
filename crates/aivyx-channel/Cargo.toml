@@ -12,6 +12,18 @@ readme.workspace = true
 [dependencies]
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 14 Task 1 — `aivyx-config` promoted from binary-only to a
+# library dependency because `assemble_role_envelope` lifted into
+# `src/role_envelope.rs` takes `aivyx_config::Role` as a parameter.
+# The Phase 9 comment below (in the former binary-only block) said
+# "aivyx-channel's library target has nothing to configure," which
+# was true pre-Phase-13. Phase 13 made per-role envelope assembly a
+# first-class library concern and Phase 14 Task 1 is the consumer
+# that pulled the dep up into the lib tier. The library surface
+# stays narrow: only `Role` (and its transitive `Sourced<T>` /
+# `FieldSource` types via the `capability_scopes.value` field) are
+# touched.
+aivyx-config = { path = "../aivyx-config" }
 async-trait = { workspace = true }
 
 # Phase 5 task 3 — the passphrase module derives a MasterKey via
@@ -57,9 +69,10 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 # Phase 9 Task 3 — unified config loader. The binary's ten
 # `std::env::var` call sites collapse into a single
 # `AivyxConfig::load_from_env_and_toml` + `hydrate_secrets_from_store`
-# pair. Binary-only: `aivyx-channel`'s library target has nothing
-# to configure, so this dep does not leak to library consumers.
-aivyx-config = { path = "../aivyx-config" }
+# pair. This dep was binary-only at Phase 9 open and was promoted to
+# a library dependency in Phase 14 Task 1 (see the `[dependencies]`
+# block above) when `assemble_role_envelope` lifted from this binary
+# into the lib target and started taking `aivyx_config::Role`.
 
 # Phase 6 task 4 — the binary constructs a `RedbMemory` from the
 # same `Arc<dyn Storage>` it already opens for the session marker,

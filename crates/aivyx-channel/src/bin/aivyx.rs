@@ -97,7 +97,6 @@
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Phase 9 Task 3 — `SecretString` no longer lives on the binary's
@@ -109,7 +108,7 @@ use std::sync::Arc;
 use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
-use aivyx_channel::{run_session, LocalChannel, SessionConfig};
+use aivyx_channel::{assemble_role_envelope, run_session, LocalChannel, SessionConfig};
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, Role, ToolAllowlist};
 use aivyx_core::{
     AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
@@ -219,102 +218,16 @@ fn build_web_fetch_for_channel(
     Ok(Arc::new(tool) as Arc<dyn Tool>)
 }
 
-/// Phase 13 Task 2 — assemble the effective capability envelope
-/// for an active role by walking its `parent_role` chain.
-///
-/// **Algorithm.** Starting from `active`, walk up the chain
-/// through `roles`, collecting each role's declared
-/// `capability_scopes`. At each level:
-///
-/// - If the role's `capability_scopes` is non-empty, use it as
-///   declared.
-/// - If empty, substitute `backcompat_floor`. This is the **Q6
-///   minimal backcompat floor**: a role that declares no
-///   envelope inherits whatever the binary used to grant
-///   pre-Phase-13 (the hard-coded `aivyx.rs:907–934` vector,
-///   shrunk to the Phase 1–10 zero-config defaults). The floor
-///   substitution happens at every empty level, not just at
-///   the root, so a chain of empty roles all see the same
-///   floor and intersect to itself — preserving Phase 11
-///   `tool_allowlist`-narrows-broad-floor backcompat exactly.
-///
-/// The resulting per-level scope sets are then folded
-/// pairwise via `CapabilitySet::intersect` from leaf toward
-/// root. Intersection under D4 prefix-attenuation keeps the
-/// **narrower** of two scopes that share a base (the child's
-/// `fs.read:/tmp/**` survives intersection with the parent's
-/// `fs.read`), which is the structural meaning of P7's
-/// "child can attenuate, never widen" rule.
-///
-/// **Why leaf-to-root, not root-to-leaf.** Both directions
-/// produce the same final set under intersection (the operation
-/// is commutative and associative), but the leaf-to-root walk
-/// matches how an operator reads the config — "this role,
-/// then its parent, then its grandparent" — and keeps the
-/// "active role" the natural starting point.
-///
-/// **Trust ceiling intersection happens at the call site, not
-/// here.** `assemble_role_envelope` is purely about scope-set
-/// inheritance; the Q3 `trust_ceiling.default_ceiling()` layer
-/// composes on top via a separate `intersect` call right
-/// before the envelope is handed to the channel branch. This
-/// keeps the function's contract narrow: "given a role tree
-/// and a backcompat floor, what scopes does this role declare
-/// it wants?"
-///
-/// **Cycle safety.** `aivyx_config::validate_role_inheritance`
-/// has already rejected cycles by the time this function runs,
-/// so an unbounded `while let Some(parent)` walk is safe. As
-/// belt-and-suspenders, the loop carries a depth counter and
-/// bails after `MAX_INHERITANCE_DEPTH` to make a future
-/// validator regression loud rather than infinite-looping a
-/// production process.
-fn assemble_role_envelope(
-    active: &Role,
-    roles: &BTreeMap<String, Role>,
-    backcompat_floor: &[Scope],
-) -> CapabilitySet {
-    /// Belt-and-suspenders bound — the config validator already
-    /// rejects cycles, so this can only fire if a regression
-    /// in `validate_role_inheritance` lets one through.
-    /// Realistic role trees are 2–3 deep; 64 is comfortably
-    /// above any plausible operator config.
-    const MAX_INHERITANCE_DEPTH: usize = 64;
-
-    let level_scopes = |role: &Role| -> Vec<Scope> {
-        if role.capability_scopes.value.is_empty() {
-            backcompat_floor.to_vec()
-        } else {
-            role.capability_scopes.value.clone()
-        }
-    };
-
-    let mut effective = CapabilitySet::from_scopes(level_scopes(active));
-    let mut cursor = active.parent_role.value.as_deref();
-    let mut depth = 0;
-    while let Some(parent_name) = cursor {
-        depth += 1;
-        if depth > MAX_INHERITANCE_DEPTH {
-            // Validator regression — bail out with whatever we
-            // have so far rather than loop forever. The next
-            // turn's capability check will surface the
-            // truncation as a denial, which is a louder failure
-            // than an infinite loop and keeps the audit chain
-            // honest.
-            break;
-        }
-        let Some(parent) = roles.get(parent_name) else {
-            // Validator already rejected unknown parents; this
-            // branch is unreachable under a well-validated
-            // config but kept for defensive composition.
-            break;
-        };
-        let parent_set = CapabilitySet::from_scopes(level_scopes(parent));
-        effective = effective.intersect(&parent_set);
-        cursor = parent.parent_role.value.as_deref();
-    }
-    effective
-}
+// Phase 13 Task 2's `assemble_role_envelope` walker lifted into
+// `aivyx-channel/src/role_envelope.rs` in Phase 14 Task 1. The
+// function is now reachable at `aivyx_channel::assemble_role_
+// envelope` for every library-side caller (including the future
+// `role.switch` tool from Phase 14 Tasks 2–3). The binary
+// continues to call it through the re-export in the `use
+// aivyx_channel::...` block above, so every production call site
+// and the `tests::example_aivyx_toml_*` regression block below
+// works unchanged. See `role_envelope.rs` for the doc-comment and
+// `MAX_INHERITANCE_DEPTH` const that used to live here.
 
 /// Build the backcompat floor that the binary would use at
 /// startup for the given channel kind. This is the *display*
@@ -1620,6 +1533,7 @@ mod tests {
     //! The `Scratch` helper mirrors the one in
     //! `aivyx-core/src/tools/shell.rs`.
     use super::*;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     struct Scratch {

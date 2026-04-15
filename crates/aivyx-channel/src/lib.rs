@@ -31,8 +31,10 @@ pub use aivyx_core::{
 mod local;
 pub mod passphrase;
 mod render;
+mod role_envelope;
 mod session;
 
 pub use local::LocalChannel;
 pub use render::{render_finalize, render_stream_event, RenderMode};
+pub use role_envelope::{assemble_role_envelope, MAX_INHERITANCE_DEPTH};
 pub use session::{run_session, SessionConfig, SessionReport};
