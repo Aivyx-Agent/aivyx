@@ -504,6 +504,75 @@ fn render_role_envelope(
     if !any_dropped {
         writeln!(out, "  <none - every scope the active role declared survived intersection>").unwrap();
     }
+    writeln!(out).unwrap();
+
+    // Phase 14 Task 4 — reachable role.switch targets.
+    //
+    // Enumerate the named roles this role can switch into via the
+    // role.switch tool. The source of truth is `effective`, *not*
+    // `leaf.capability_scopes`: a `role.switch:scribe` the leaf
+    // declared but the parent chain stripped must not show up as
+    // reachable. That mirrors PRODUCT.md P1.3 ("structurally
+    // impossible escalation") at the debug surface — the
+    // enumerator and the production sub-session dispatcher answer
+    // "can this role switch into X?" through the same envelope.
+    //
+    // Three shapes the operator can see:
+    //
+    // 1. No `role.switch` scope in `effective` at all. The role
+    //    cannot start a sub-session. Print a single-line note.
+    //
+    // 2. Unqualified `role.switch` in `effective`. Under D4 Rule 2
+    //    the bare base grants any qualifier, so every other role
+    //    in this config is reachable. Print "(any role: <list>)"
+    //    where `<list>` is the other role names — actionable, not
+    //    abstract.
+    //
+    // 3. One or more `role.switch:<target>` qualifiers in
+    //    `effective`. Print each surviving target on its own line,
+    //    annotated with `<unknown role>` if the target name is not
+    //    declared in the current config (indicates a typo or a
+    //    config drift the operator should know about).
+    writeln!(out, "reachable role.switch targets (from effective envelope):").unwrap();
+    let switch_scopes: Vec<&Scope> = effective
+        .iter()
+        .filter(|s| s.base() == "role.switch")
+        .collect();
+    if switch_scopes.is_empty() {
+        writeln!(out, "  <none - this role cannot start a sub-session>").unwrap();
+    } else {
+        let unqualified_present = switch_scopes.iter().any(|s| s.qualifier().is_none());
+        if unqualified_present {
+            let mut others: Vec<&str> = cfg
+                .roles
+                .keys()
+                .map(String::as_str)
+                .filter(|n| *n != role_name)
+                .collect();
+            others.sort_unstable();
+            if others.is_empty() {
+                writeln!(out, "  (any role - unqualified role.switch held; no other roles declared in this config)").unwrap();
+            } else {
+                writeln!(out, "  (any role - unqualified role.switch held)").unwrap();
+                for name in &others {
+                    writeln!(out, "    {name}").unwrap();
+                }
+            }
+        } else {
+            let mut targets: Vec<(&str, bool)> = switch_scopes
+                .iter()
+                .filter_map(|s| s.qualifier().map(|q| (q, cfg.roles.contains_key(q))))
+                .collect();
+            targets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            for (target, known) in &targets {
+                if *known {
+                    writeln!(out, "  {target}").unwrap();
+                } else {
+                    writeln!(out, "  {target}  <unknown role - not declared in this config>").unwrap();
+                }
+            }
+        }
+    }
 
     Ok(out)
 }
@@ -2495,6 +2564,160 @@ mod tests {
             "researcher's declared scopes all survive intersection; \
              the dropped block must say so explicitly to avoid false-positive \
              noise: {rendered}"
+        );
+    }
+
+    // --------------------------------------------------------------
+    // Phase 14 Task 4 — reachable role.switch targets
+    //
+    // These tests pin the three shapes the enumerator can produce
+    // and the structural-impossibility guarantee from PRODUCT.md
+    // P1.3: a leaf-declared `role.switch:<X>` that doesn't survive
+    // intersection must NOT show up as reachable.
+    // --------------------------------------------------------------
+
+    /// Case 3 (single qualified target) + structural impossibility.
+    ///
+    /// `coder` in `examples/aivyx.toml` declares
+    /// `role.switch:researcher` and inherits unqualified
+    /// `role.switch` from `default`. Intersection picks the
+    /// narrower form, so `coder`'s effective envelope holds
+    /// exactly `role.switch:researcher` — and the rendered
+    /// reachable-targets section must list `researcher` and
+    /// *only* `researcher`. Listing any other role would mean
+    /// `coder` could escape its declared qualifier — exactly
+    /// the escalation that P1.3 forbids.
+    #[test]
+    fn print_role_lists_role_switch_targets_for_coder() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("coder", &cfg, ChannelKind::Local)
+            .expect("coder must render");
+
+        assert!(
+            rendered.contains("reachable role.switch targets"),
+            "section header must be present: {rendered}"
+        );
+        // Find the section and assert content within it. We slice
+        // from the section header to end-of-string so an unrelated
+        // earlier mention of "researcher" (e.g. in the effective
+        // envelope listing of `role.switch:researcher`) does not
+        // satisfy the assertion.
+        let section_start = rendered
+            .find("reachable role.switch targets")
+            .expect("section header must be present");
+        let section = &rendered[section_start..];
+        assert!(
+            section.contains("\n  researcher\n"),
+            "researcher must be listed as a reachable target on its own line: {section}"
+        );
+        // Structural impossibility: no other role names may appear
+        // in the section, even though all of them exist in the
+        // config.
+        for forbidden in &["default", "coder", "junior_researcher"] {
+            // Use a tight pattern that matches the indented bullet
+            // form the enumerator emits, so we don't trip on the
+            // word appearing inside an unrelated noun phrase.
+            let pattern = format!("\n  {forbidden}");
+            assert!(
+                !section.contains(&pattern),
+                "`{forbidden}` must NOT be listed as a reachable target for coder \
+                 (would violate PRODUCT.md P1.3 structural impossibility): {section}"
+            );
+        }
+    }
+
+    /// Case 2 (unqualified `role.switch` → any role).
+    ///
+    /// `default` in `examples/aivyx.toml` declares unqualified
+    /// `role.switch`. Under D4 Rule 2 the bare base grants any
+    /// qualifier, so the enumerator should emit the
+    /// "(any role - unqualified role.switch held)" line and list
+    /// every other role in the config. Pin both the line and the
+    /// presence of every non-self role name.
+    #[test]
+    fn print_role_lists_all_other_roles_when_unqualified_role_switch_held() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("default", &cfg, ChannelKind::Local)
+            .expect("default must render");
+
+        let section_start = rendered
+            .find("reachable role.switch targets")
+            .expect("section header must be present");
+        let section = &rendered[section_start..];
+        assert!(
+            section.contains("(any role - unqualified role.switch held)"),
+            "unqualified role.switch must trigger the any-role marker: {section}"
+        );
+        // Every other role name must appear as an indented bullet.
+        // `default` itself must not, because the enumerator filters
+        // out the active role from the list (a role switching to
+        // itself is a no-op the dispatcher rejects).
+        for other in &["coder", "researcher", "junior_researcher"] {
+            let pattern = format!("\n    {other}\n");
+            assert!(
+                section.contains(&pattern),
+                "`{other}` must be listed as a reachable target for default: {section}"
+            );
+        }
+        let self_pattern = "\n    default\n";
+        assert!(
+            !section.contains(self_pattern),
+            "default must not list itself as a reachable target: {section}"
+        );
+    }
+
+    /// Case 1 (no `role.switch` survives intersection → no targets).
+    ///
+    /// `researcher` in `examples/aivyx.toml` does NOT declare
+    /// `role.switch` in its `capability_scopes`. Even though
+    /// `default` declares unqualified `role.switch`, the
+    /// child→parent intersection drops it from the leaf side
+    /// (researcher's declared set is what gets attenuated against
+    /// the parent, not the other way around). So researcher's
+    /// effective envelope has no `role.switch` scope and the
+    /// enumerator must emit the explicit "cannot start a
+    /// sub-session" line — actionable feedback rather than an
+    /// ambiguous empty section.
+    #[test]
+    fn print_role_reports_no_targets_when_role_switch_not_in_effective_envelope() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("researcher", &cfg, ChannelKind::Local)
+            .expect("researcher must render");
+
+        let section_start = rendered
+            .find("reachable role.switch targets")
+            .expect("section header must be present");
+        let section = &rendered[section_start..];
+        assert!(
+            section.contains("<none - this role cannot start a sub-session>"),
+            "researcher has no role.switch in effective envelope; \
+             enumerator must say so explicitly: {section}"
+        );
+    }
+
+    /// `junior_researcher` is the empty-child case — its declared
+    /// `capability_scopes` is empty so the runtime substitutes the
+    /// backcompat floor for that level. The floor does NOT contain
+    /// `role.switch`, and `researcher` (the parent) does not
+    /// declare `role.switch` either, so the assembled envelope has
+    /// no `role.switch` scope. This test pins that the empty-child
+    /// substitution path also produces the case-1 "cannot start a
+    /// sub-session" output rather than silently inheriting
+    /// `default`'s unqualified `role.switch` through some
+    /// transitive accident.
+    #[test]
+    fn print_role_empty_child_does_not_inherit_role_switch_through_floor() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("junior_researcher", &cfg, ChannelKind::Local)
+            .expect("junior_researcher must render");
+
+        let section_start = rendered
+            .find("reachable role.switch targets")
+            .expect("section header must be present");
+        let section = &rendered[section_start..];
+        assert!(
+            section.contains("<none - this role cannot start a sub-session>"),
+            "junior_researcher (empty child) must not transitively gain role.switch: {section}"
         );
     }
 
