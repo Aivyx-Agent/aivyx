@@ -219,6 +219,37 @@ fn session_from_input(input: &Value) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Extract the optional role-derived topic prefix from a tool-input
+/// JSON value. Phase 11 Task 2 introduced this alongside `session`:
+/// the turn loop injects it from `cfg.roles[active_role]
+/// .memory_topic_prefix` before `required_scope` runs so that two
+/// roles writing to the same logical topic (e.g. `notes`) get
+/// isolated namespaces.
+///
+/// The field is **never** set by the LLM or by the tool caller's
+/// hand-written JSON; `agent.rs::run_tool_call` inserts it right
+/// after the session-partition insert. A missing field, wrong type,
+/// or empty string all map to `None`, which is the no-role-prefix
+/// path that preserves Phase 6–10 behavior exactly.
+fn role_prefix_from_input(input: &Value) -> Option<&str> {
+    let s = input.get("role_prefix")?.as_str()?;
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Prepend the role-derived prefix (if any) to a logical topic.
+/// `None` returns the topic unchanged. A `Some("coder/")` and
+/// topic `"notes"` returns `"coder/notes"`. The prefix is opaque to
+/// this helper — it can end in `/`, `:`, or anything else; the
+/// config layer decides the convention. Two-role isolation requires
+/// the prefix to be *different* between roles, not *any specific
+/// shape*.
+fn logical_with_role_prefix(role_prefix: Option<&str>, topic: &str) -> String {
+    match role_prefix {
+        None => topic.to_string(),
+        Some(p) => format!("{p}{topic}"),
+    }
+}
+
 /// The reserved prefix marker that identifies a session-namespaced
 /// physical topic. Uses ASCII `0x01` bytes as separators so no
 /// well-formed agent-chosen topic can collide: topics are UTF-8
@@ -432,6 +463,10 @@ impl Tool for MemoryReadTool {
         // `session_partition()`, injected by the turn loop. `None`
         // preserves Phase 6 single-partition behavior.
         let session = session_from_input(&input).map(str::to_string);
+        // Phase 11 Task 2 — `role_prefix` is the role-derived
+        // logical-topic prefix, also injected by the turn loop.
+        // `None` preserves Phase 6–10 behavior (bare logical topics).
+        let role_prefix = role_prefix_from_input(&input).map(str::to_string);
 
         let requested_limit = input.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
 
@@ -448,7 +483,11 @@ impl Tool for MemoryReadTool {
                 // audit chain — otherwise `verify_from_disk` would have
                 // to know about namespacing to round-trip a chain,
                 // breaking D1's "audit verifies without live substrate"
-                // rule.
+                // rule. The role prefix is part of the physical key, not
+                // the logical topic, so it is *not* in the audited
+                // scope or query_or_key either — the audit chain is
+                // byte-identical whether the role is `default`,
+                // `coder`, or anything else.
                 ctx.audit.on_event(AuditTag::MemoryAccess {
                     turn_id: ctx.turn_id,
                     operation: MemoryOperation::Read,
@@ -456,7 +495,8 @@ impl Tool for MemoryReadTool {
                     query_or_key: topic.clone(),
                 });
 
-                let physical = namespaced_topic(session.as_deref(), &topic);
+                let role_qualified = logical_with_role_prefix(role_prefix.as_deref(), &topic);
+                let physical = namespaced_topic(session.as_deref(), &role_qualified);
                 let mut entries = match self.memory.get_recent(&physical, limit).await {
                     Ok(v) => v,
                     Err(e) => return memory_err_to_failed(self.id, e),
@@ -501,17 +541,26 @@ impl Tool for MemoryReadTool {
                 });
 
                 // The scan prefix is the session-namespace prefix for
-                // the caller's session. When the caller has no session
-                // (single-partition channels like LocalChannel), the
-                // scan prefix is empty, which means "every topic in
-                // the substrate." That is deliberately permissive at
-                // the substrate, because the capability gate above
-                // already required the agent to hold the wildcard
-                // scope.
-                let scan_prefix = match session.as_deref() {
+                // the caller's session, optionally extended by the
+                // role prefix. When the caller has no session
+                // (single-partition channels like LocalChannel) and
+                // no role, the scan prefix is empty, which means
+                // "every topic in the substrate." That is deliberately
+                // permissive at the substrate, because the capability
+                // gate above already required the agent to hold the
+                // wildcard scope.
+                //
+                // Phase 11 Task 2 appends the role prefix so a
+                // wildcard from one role enumerates only that role's
+                // topics: e.g. `\x01s\x0142\x01coder/` isolates the
+                // `coder` role in session `42` from the `researcher`
+                // role in the same session.
+                let session_scan_prefix = match session.as_deref() {
                     Some(s) => format!("{SESSION_PREFIX}{s}\x01"),
                     None => String::new(),
                 };
+                let role_segment = role_prefix.as_deref().unwrap_or("");
+                let scan_prefix = format!("{session_scan_prefix}{role_segment}");
 
                 let grouped = match self
                     .memory
@@ -522,18 +571,21 @@ impl Tool for MemoryReadTool {
                     Err(e) => return memory_err_to_failed(self.id, e),
                 };
 
-                // Strip the session prefix from each physical topic on
-                // the way out, so the agent sees logical topic names.
-                // Single-partition callers (empty prefix) see the
-                // physical topic unchanged, which is correct because
-                // their physical and logical topics are identical.
+                // Strip the session *and* role prefixes from each
+                // physical topic on the way out, so the agent sees
+                // logical topic names (`notes`, not `coder/notes`
+                // and certainly not `\x01s\x0142\x01coder/notes`).
+                // Single-partition no-role callers see the physical
+                // topic unchanged, which is correct because their
+                // physical and logical topics are identical.
                 let mut topic_objects: Vec<Value> = Vec::with_capacity(grouped.len());
                 for (physical_topic, mut entries) in grouped {
-                    let logical_topic = match session.as_deref() {
-                        Some(_) if physical_topic.starts_with(&scan_prefix) => {
-                            physical_topic[scan_prefix.len()..].to_string()
-                        }
-                        _ => physical_topic.clone(),
+                    let logical_topic = if physical_topic.starts_with(&scan_prefix)
+                        && !scan_prefix.is_empty()
+                    {
+                        physical_topic[scan_prefix.len()..].to_string()
+                    } else {
+                        physical_topic.clone()
                     };
                     for entry in entries.iter_mut() {
                         entry.topic = logical_topic.clone();
@@ -701,6 +753,7 @@ impl Tool for MemoryWriteTool {
             }
         };
         let session = session_from_input(&input).map(str::to_string);
+        let role_prefix = role_prefix_from_input(&input).map(str::to_string);
         let body = match input.get("body").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
             None => {
@@ -734,7 +787,13 @@ impl Tool for MemoryWriteTool {
         // Otherwise chat A filling its `notes` bucket would cap chat
         // B's unrelated `notes` bucket — the whole point of session
         // partitioning is that these are independent quotas.
-        let physical = namespaced_topic(session.as_deref(), &topic);
+        //
+        // Phase 11 Task 2 extends this with the role prefix: the
+        // `coder` role and the `researcher` role both writing to
+        // logical `notes` get independent quotas, for the exact same
+        // "independent namespaces are independent" reason.
+        let role_qualified = logical_with_role_prefix(role_prefix.as_deref(), &topic);
+        let physical = namespaced_topic(session.as_deref(), &role_qualified);
         let existing = match self
             .memory
             .get_recent(&physical, self.max_per_topic)
@@ -885,6 +944,7 @@ impl Tool for MemoryForgetTool {
             }
         };
         let session = session_from_input(&input).map(str::to_string);
+        let role_prefix = role_prefix_from_input(&input).map(str::to_string);
 
         ctx.audit.on_event(AuditTag::MemoryAccess {
             turn_id: ctx.turn_id,
@@ -893,7 +953,8 @@ impl Tool for MemoryForgetTool {
             query_or_key: topic.clone(),
         });
 
-        let physical = namespaced_topic(session.as_deref(), &topic);
+        let role_qualified = logical_with_role_prefix(role_prefix.as_deref(), &topic);
+        let physical = namespaced_topic(session.as_deref(), &role_qualified);
         let deleted = match self.memory.forget(&physical).await {
             Ok(n) => n,
             Err(e) => return memory_err_to_failed(self.id, e),
@@ -1960,5 +2021,490 @@ mod tests {
         } else {
             panic!("empty-substrate wildcard read should Complete");
         }
+    }
+
+    // ---- Phase 11 Task 2 — role-aware memory topic prefixing -------
+    //
+    // These tests simulate what `agent.rs::run_tool_call` does at
+    // dispatch time: it injects a reserved `"role_prefix"` key into
+    // the tool input *after* JSON-schema validation and *alongside*
+    // session-partition injection, taking its value from
+    // `cfg.roles[active_role].memory_topic_prefix`. Here we inject
+    // the same key directly via `json!` so the unit tests stay at
+    // microsecond speed and do not need a full turn loop.
+    //
+    // The guarantee being tested is that two roles writing to the
+    // same logical topic in the same session get isolated stores —
+    // the whole point of the role namespace — and that the no-
+    // prefix path preserves Phase 6–10 behavior byte-for-byte.
+
+    #[tokio::test]
+    async fn two_roles_same_topic_see_isolated_stores() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        // Role `coder` writes "red" to logical `notes`.
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "red",
+                    "role_prefix": "coder/",
+                }),
+                &ctx,
+            )
+            .await;
+
+        // Role `researcher` writes "blue" to the same logical
+        // `notes`. In Phase 10 these would have collided in the
+        // single `notes` bucket; with role-aware prefixing they
+        // land in `coder/notes` and `researcher/notes`
+        // respectively.
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "blue",
+                    "role_prefix": "researcher/",
+                }),
+                &ctx,
+            )
+            .await;
+
+        // Read from the coder role — should see only "red".
+        let out = reader
+            .execute(
+                json!({"topic": "notes", "role_prefix": "coder/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["entries"][0]["body"], "red");
+            // Logical topic on the way out is bare `notes`, not
+            // `coder/notes` — the prefix is invisible to the model.
+            assert_eq!(output["topic"], "notes");
+        } else {
+            panic!("coder read should Complete");
+        }
+
+        // Read from the researcher role — should see only "blue".
+        let out = reader
+            .execute(
+                json!({"topic": "notes", "role_prefix": "researcher/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["entries"][0]["body"], "blue");
+            assert_eq!(output["topic"], "notes");
+        } else {
+            panic!("researcher read should Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_role_prefix_preserves_phase10_behavior() {
+        // A read with no `role_prefix` injected (or an empty one)
+        // must see exactly the entries that a Phase 10 read would
+        // have seen: no namespacing, no hidden prefix. This is the
+        // backwards-compat anchor for every existing test that
+        // omits the field.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        // Legacy write (no role_prefix): stored under logical
+        // `notes` exactly as Phase 10 would have done.
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "legacy entry"}),
+                &ctx,
+            )
+            .await;
+
+        // Read without role_prefix sees it.
+        let out = reader
+            .execute(json!({"topic": "notes"}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["entries"][0]["body"], "legacy entry");
+        } else {
+            panic!("legacy read should Complete");
+        }
+
+        // Read WITH a role_prefix does NOT see the legacy entry,
+        // because the legacy entry lives at bare `notes` and the
+        // roled read looks under `coder/notes`. Crucially this
+        // also means a Phase 11 role does not silently inherit a
+        // Phase 10 legacy store — it starts empty.
+        let out = reader
+            .execute(
+                json!({"topic": "notes", "role_prefix": "coder/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 0);
+        } else {
+            panic!("roled read of legacy store should Complete empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_role_prefix_string_falls_through_to_no_prefix() {
+        // `role_prefix_from_input` normalizes `""` to `None`, so
+        // an empty-string prefix must behave identically to an
+        // absent field. This matches `session_from_input`'s
+        // identical empty-string normalization — the two
+        // dispatch-layer fields share semantics deliberately.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        let _ = writer
+            .execute(
+                json!({"topic": "notes", "body": "x", "role_prefix": ""}),
+                &ctx,
+            )
+            .await;
+
+        // Read with bare topic sees the write (proving the
+        // empty-string prefix was equivalent to no prefix on the
+        // write path).
+        let out = reader
+            .execute(json!({"topic": "notes"}), &ctx)
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["entries"][0]["body"], "x");
+        } else {
+            panic!("empty-prefix read should Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn wildcard_read_with_role_prefix_scans_only_own_namespace() {
+        // A wildcard `memory.read` from the `coder` role must
+        // enumerate only `coder/*` topics, even when the session
+        // partition also contains `researcher/*` writes. This is
+        // the integration-of-two-dimensions test: the scan prefix
+        // must compose (session prefix || role prefix) correctly.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "coder-note",
+                    "role_prefix": "coder/",
+                }),
+                &ctx,
+            )
+            .await;
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "todos",
+                    "body": "coder-todo",
+                    "role_prefix": "coder/",
+                }),
+                &ctx,
+            )
+            .await;
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "researcher-note",
+                    "role_prefix": "researcher/",
+                }),
+                &ctx,
+            )
+            .await;
+
+        // Wildcard read from the coder role — should see exactly
+        // two logical topics (`notes`, `todos`), each with one
+        // entry and that entry's body prefixed with `coder-`.
+        // The logical topic names in the output must be bare,
+        // not role-qualified.
+        let out = reader
+            .execute(
+                json!({"topics": "*", "role_prefix": "coder/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["topic_count"], 2);
+            let topics = output["topics"].as_array().unwrap();
+            let mut seen: Vec<String> = topics
+                .iter()
+                .map(|t| t["topic"].as_str().unwrap().to_string())
+                .collect();
+            seen.sort();
+            assert_eq!(seen, vec!["notes".to_string(), "todos".to_string()]);
+            // Each entry's body must be the coder-written one.
+            for topic_obj in topics {
+                let entries = topic_obj["entries"].as_array().unwrap();
+                for entry in entries {
+                    let body = entry["body"].as_str().unwrap();
+                    assert!(
+                        body.starts_with("coder-"),
+                        "researcher entry leaked into coder wildcard: {body}",
+                    );
+                }
+            }
+        } else {
+            panic!("coder wildcard read should Complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn role_and_session_cross_product_is_four_isolated_namespaces() {
+        // Two roles × two sessions = four quadrants. A write in
+        // one quadrant must not leak into any of the other three.
+        // This is the composition test for the two dispatch-
+        // layer fields: they must multiply, not collapse.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        let quadrants = [
+            ("A", "coder/", "A-coder"),
+            ("A", "researcher/", "A-research"),
+            ("B", "coder/", "B-coder"),
+            ("B", "researcher/", "B-research"),
+        ];
+
+        for (session, role_prefix, body) in &quadrants {
+            let _ = writer
+                .execute(
+                    json!({
+                        "topic": "notes",
+                        "body": *body,
+                        "session": *session,
+                        "role_prefix": *role_prefix,
+                    }),
+                    &ctx,
+                )
+                .await;
+        }
+
+        // Each quadrant's single-topic read sees only its own
+        // body and exactly one entry.
+        for (session, role_prefix, body) in &quadrants {
+            let out = reader
+                .execute(
+                    json!({
+                        "topic": "notes",
+                        "session": *session,
+                        "role_prefix": *role_prefix,
+                    }),
+                    &ctx,
+                )
+                .await;
+            match out {
+                ToolOutcome::Completed { output, .. } => {
+                    assert_eq!(
+                        output["count"], 1,
+                        "quadrant ({session}, {role_prefix}) saw {} entries",
+                        output["count"],
+                    );
+                    assert_eq!(output["entries"][0]["body"], *body);
+                }
+                _ => panic!(
+                    "quadrant ({session}, {role_prefix}) read should Complete"
+                ),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn forget_with_role_prefix_only_deletes_own_namespace() {
+        // A `memory.forget` from the coder role must clear only
+        // `coder/notes`, leaving `researcher/notes` untouched.
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let forgetter = MemoryForgetTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(NullAuditHook);
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "coder-entry",
+                    "role_prefix": "coder/",
+                }),
+                &ctx,
+            )
+            .await;
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "researcher-entry",
+                    "role_prefix": "researcher/",
+                }),
+                &ctx,
+            )
+            .await;
+
+        // Forget from coder.
+        let out = forgetter
+            .execute(
+                json!({"topic": "notes", "role_prefix": "coder/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, verified } = out {
+            assert_eq!(output["deleted"], 1);
+            assert_eq!(verified, Verification::Verified);
+        } else {
+            panic!("coder forget should Complete");
+        }
+
+        // Coder's notes: empty.
+        let out = reader
+            .execute(
+                json!({"topic": "notes", "role_prefix": "coder/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 0);
+        } else {
+            panic!("coder post-forget read should Complete");
+        }
+
+        // Researcher's notes: still there.
+        let out = reader
+            .execute(
+                json!({"topic": "notes", "role_prefix": "researcher/"}),
+                &ctx,
+            )
+            .await;
+        if let ToolOutcome::Completed { output, .. } = out {
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["entries"][0]["body"], "researcher-entry");
+        } else {
+            panic!("researcher read after coder forget should Complete");
+        }
+    }
+
+    #[test]
+    fn role_prefix_is_not_declared_in_any_tool_input_schema() {
+        // Validation-before-injection discipline: the reserved
+        // `role_prefix` field must not appear in any advertised
+        // `input_schema`. If it did, a Phase 10 validator run on
+        // the post-injection input would still accept — but the
+        // LLM would also see the field in the schema and could
+        // then forge its own role prefix, which is precisely
+        // what the dispatch-layer pattern exists to prevent.
+        //
+        // The same discipline protects the `session` field, which
+        // Phase 8 Task 2 established and Phase 10 Task 2's
+        // schema validator preserved by running before injection.
+        let read = MemoryReadTool::new(fresh_memory());
+        let write = MemoryWriteTool::new(fresh_memory());
+        let forget = MemoryForgetTool::new(fresh_memory());
+
+        for (name, schema) in [
+            ("memory.read", read.input_schema()),
+            ("memory.write", write.input_schema()),
+            ("memory.forget", forget.input_schema()),
+        ] {
+            let props = schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .expect("schema has a properties object");
+            assert!(
+                !props.contains_key("role_prefix"),
+                "{name} advertised role_prefix in its input schema",
+            );
+            assert!(
+                !props.contains_key("session"),
+                "{name} advertised session in its input schema",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_scope_and_query_stay_logical_under_role_prefix() {
+        // The audit chain must remain keyed on the *logical*
+        // topic the agent typed, not on the physical role-
+        // qualified topic. Otherwise two instances of Aivyx
+        // using different role prefixes on the same logical
+        // topic would produce different audit bytes, breaking
+        // D1's "audit bytes depend only on agent-visible intent"
+        // invariant.
+        use aivyx_core::{AuditHook, AuditTag};
+        use std::sync::Mutex;
+
+        struct CaptureAudit {
+            events: Mutex<Vec<AuditTag>>,
+        }
+
+        impl AuditHook for CaptureAudit {
+            fn on_event(&self, tag: AuditTag) {
+                self.events.lock().unwrap().push(tag);
+            }
+        }
+
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let channel = fresh_channel();
+        let audit = Arc::new(CaptureAudit {
+            events: Mutex::new(Vec::new()),
+        });
+        let ctx = make_ctx(&channel, audit.as_ref());
+
+        let _ = writer
+            .execute(
+                json!({
+                    "topic": "notes",
+                    "body": "x",
+                    "role_prefix": "coder/",
+                }),
+                &ctx,
+            )
+            .await;
+
+        let events = audit.events.lock().unwrap();
+        let found = events.iter().any(|tag| {
+            matches!(
+                tag,
+                AuditTag::MemoryAccess { query_or_key, scope, .. }
+                if query_or_key == "notes"
+                    && scope.qualifier() == Some("topic:notes")
+            )
+        });
+        assert!(
+            found,
+            "audit event should record the logical topic `notes`, \
+             not the role-qualified `coder/notes`",
+        );
     }
 }

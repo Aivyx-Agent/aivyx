@@ -81,6 +81,15 @@ pub struct ConcreteAgent {
     /// callers can hand us a fresh planner per turn without us needing to
     /// own a `Mutex<Planner>` (which would serialize concurrent turns).
     planner_factory: Box<dyn Fn() -> Box<dyn TurnPlanner> + Send + Sync>,
+    /// Phase 11 Task 2 — role-derived memory topic prefix. When `Some`,
+    /// the turn loop injects a `"role_prefix"` key into every tool
+    /// input under the same dispatch-layer mechanism that Phase 8
+    /// Task 2 uses for `"session"`. Memory tools consume it to
+    /// namespace logical topics per role; tools that don't consume
+    /// it ignore the extra field. `None` preserves Phase 6–10
+    /// behavior byte-for-byte: a bare topic name hits the substrate
+    /// unchanged.
+    memory_topic_prefix: Option<String>,
 }
 
 impl ConcreteAgent {
@@ -97,7 +106,18 @@ impl ConcreteAgent {
             tools,
             audit,
             planner_factory: Box::new(planner_factory),
+            memory_topic_prefix: None,
         }
+    }
+
+    /// Attach a role-derived memory topic prefix. Builder-style so
+    /// existing `ConcreteAgent::new` call sites remain byte-identical
+    /// when no role is in play. Task 4 of Phase 11 wires this from
+    /// `cfg.roles[active_role].memory_topic_prefix` at session
+    /// construction time.
+    pub fn with_memory_topic_prefix(mut self, prefix: Option<String>) -> Self {
+        self.memory_topic_prefix = prefix;
+        self
     }
 }
 
@@ -360,6 +380,31 @@ impl ConcreteAgent {
             && let Some(obj) = input.as_object_mut()
         {
             obj.insert("session".to_string(), serde_json::Value::String(partition));
+        }
+
+        // Phase 11 Task 2 — role memory-topic-prefix injection.
+        //
+        // Same dispatch-layer pattern as session injection above:
+        // the prefix is a turn-loop internal, not in any advertised
+        // `input_schema`, not visible to the LLM, and not carried
+        // into audit or scope qualifiers (those stay keyed on the
+        // logical topic the agent actually typed — e.g. `notes` —
+        // so an audit chain is identical whether the role was
+        // `coder` or `default`).
+        //
+        // Memory tools read the `"role_prefix"` key via a local
+        // helper and prepend it to the logical topic before handing
+        // the physical key to the substrate. Tools that don't
+        // consume memory ignore the extra field entirely; the
+        // validator already ran (above), so the injected key
+        // cannot trigger an `additionalProperties: false` rejection.
+        if let Some(prefix) = self.memory_topic_prefix.as_ref()
+            && let Some(obj) = input.as_object_mut()
+        {
+            obj.insert(
+                "role_prefix".to_string(),
+                serde_json::Value::String(prefix.clone()),
+            );
         }
 
         let needed: Scope = tool.required_scope(&input);
