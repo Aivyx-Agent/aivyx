@@ -21,7 +21,18 @@
 //!
 //! - top-level `{"type": "object", "properties": {...}, "required":
 //!   [...], "additionalProperties": false}`
-//! - per-field `{"type": "string"}`, `{"type": "integer"}`
+//! - per-field `{"type": "string"}`, `{"type": "integer"}`,
+//!   `{"type": "boolean"}`
+//! - per-field `{"type": "object", ...}` (Phase 11 Task 3 — one
+//!   level of nesting, used by `shell.exec` for its `args` block).
+//!   Nested objects recursively honor `required` and
+//!   `additionalProperties: false` at each level independently,
+//!   and validation errors thread a dotted JSON-pointer path
+//!   (e.g., `args.cwd: expected string`) so audit messages stay
+//!   readable. Nesting depth is not bounded by the validator —
+//!   the recursion follows whatever the schema declares — but
+//!   the in-tree tools only go one level deep and there is no
+//!   in-tree reason to go further.
 //! - `{"enum": [...]}` on string fields
 //! - `{"minimum": N, "maximum": N}` on integer fields
 //!
@@ -30,7 +41,7 @@
 //!
 //! ## What this validator deliberately does NOT do
 //!
-//! - Nested objects / arrays of objects. No in-tree tool uses them.
+//! - Arrays, or arrays of objects. No in-tree tool uses them.
 //! - `oneOf` / `anyOf` / `allOf`. The `memory.read` "topic xor
 //!   topics" rule is cross-field and handled by
 //!   `classify_memory_read_input` inside the tool, not here.
@@ -161,8 +172,31 @@ impl std::error::Error for ValidationError {}
 /// checks is insertion order of the `properties` map — callers
 /// should not depend on *which* error fires first when an input
 /// has multiple problems, only that at least one fires.
+///
+/// Nested objects (Phase 11 Task 3) are validated recursively and
+/// error `field` values are dotted JSON-pointer-style paths
+/// (`args.cwd`, `args.timeout_ms`) so audit messages identify the
+/// exact offending location regardless of nesting depth.
 pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
-    // ---- Top-level object shape ---------------------------------
+    validate_at(schema, input, "")
+}
+
+/// Recursive implementation of [`validate`]. `path` is the dotted
+/// JSON-pointer prefix to prepend to any error's `field`. At the
+/// top level `path` is empty; for a nested `args` subobject it is
+/// `"args"`; for `args.cwd` inside `args` it would be `"args.cwd"`.
+///
+/// Extracted as a free function so the top-level `validate` stays a
+/// pure entry point and tests that want to exercise path-prefixing
+/// directly can call this helper without poking at private struct
+/// state. Kept `pub(crate)` rather than `pub` so the recursive
+/// surface does not leak into `aivyx-core`'s public API.
+pub(crate) fn validate_at(
+    schema: &Value,
+    input: &Value,
+    path: &str,
+) -> Result<(), ValidationError> {
+    // ---- Top-level (or nested) object shape ---------------------
     let schema_obj = schema.as_object().ok_or_else(|| ValidationError::NotAnObject {
         found: kind_of(schema).to_string(),
     })?;
@@ -192,7 +226,7 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
             };
             if !input_obj.contains_key(name_str) {
                 return Err(ValidationError::MissingRequired {
-                    field: name_str.to_string(),
+                    field: join_path(path, name_str),
                 });
             }
         }
@@ -211,14 +245,14 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
             for field in input_obj.keys() {
                 if !props.contains_key(field) {
                     return Err(ValidationError::UnknownField {
-                        field: field.clone(),
+                        field: join_path(path, field),
                     });
                 }
             }
         }
     }
 
-    // ---- per-field type / enum / minimum / maximum ----------------
+    // ---- per-field type / enum / minimum / maximum / nested ------
     if let Some(props) = properties {
         for (field_name, field_schema) in props {
             let Some(value) = input_obj.get(field_name) else {
@@ -227,13 +261,14 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
             let Some(field_schema_obj) = field_schema.as_object() else {
                 continue; // malformed per-field schema — advisory only
             };
+            let field_path = join_path(path, field_name);
 
             let field_type = field_schema_obj.get("type").and_then(Value::as_str);
             match field_type {
                 Some("string") => {
                     let Some(s) = value.as_str() else {
                         return Err(ValidationError::WrongType {
-                            field: field_name.clone(),
+                            field: field_path,
                             expected: "string",
                             found: kind_of(value),
                         });
@@ -248,7 +283,7 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
                             .collect();
                         if !allowed_strs.iter().any(|a| a == s) {
                             return Err(ValidationError::NotInEnum {
-                                field: field_name.clone(),
+                                field: field_path,
                                 allowed: allowed_strs,
                                 found: s.to_string(),
                             });
@@ -262,7 +297,7 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
                     // `{"type": "integer"}`.
                     let Some(n) = value.as_i64() else {
                         return Err(ValidationError::WrongType {
-                            field: field_name.clone(),
+                            field: field_path,
                             expected: "integer",
                             found: kind_of(value),
                         });
@@ -273,7 +308,7 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
                         && n < min
                     {
                         return Err(ValidationError::BelowMinimum {
-                            field: field_name.clone(),
+                            field: field_path,
                             minimum: min,
                             found: n,
                         });
@@ -284,24 +319,60 @@ pub fn validate(schema: &Value, input: &Value) -> Result<(), ValidationError> {
                         && n > max
                     {
                         return Err(ValidationError::AboveMaximum {
-                            field: field_name.clone(),
+                            field: field_path,
                             maximum: max,
                             found: n,
                         });
                     }
                 }
+                Some("boolean") => {
+                    if !value.is_boolean() {
+                        return Err(ValidationError::WrongType {
+                            field: field_path,
+                            expected: "boolean",
+                            found: kind_of(value),
+                        });
+                    }
+                }
+                Some("object") => {
+                    // Phase 11 Task 3 — recurse into the nested
+                    // object's own schema. Each nesting level gets
+                    // its own independent `required` and
+                    // `additionalProperties` check via the
+                    // recursion's top-level shape walk above, and
+                    // the dotted `field_path` becomes the new
+                    // recursion-local prefix so errors surface with
+                    // the full dotted JSON pointer.
+                    if !value.is_object() {
+                        return Err(ValidationError::WrongType {
+                            field: field_path,
+                            expected: "object",
+                            found: kind_of(value),
+                        });
+                    }
+                    validate_at(field_schema, value, &field_path)?;
+                }
                 Some(_) | None => {
-                    // Unknown or missing type keyword — accept. The
-                    // in-tree tools don't emit anything outside
-                    // {string, integer}, so there's nothing to
-                    // check. A future tool that adds a boolean or
-                    // array field extends this match.
+                    // Unknown or missing type keyword — accept. A
+                    // future tool that adds an array field extends
+                    // this match.
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Dotted JSON-pointer join. Empty prefix yields the bare field
+/// name (so a top-level `cmd` field stays `"cmd"`, not `".cmd"`),
+/// which preserves the exact error shape Phase 10 tests pinned.
+fn join_path(prefix: &str, field: &str) -> String {
+    if prefix.is_empty() {
+        field.to_string()
+    } else {
+        format!("{prefix}.{field}")
+    }
 }
 
 /// Short human-readable JSON kind for error messages.
@@ -583,6 +654,233 @@ mod tests {
         assert!(validate(&schema, &json!({"topics": "everything"})).is_err());
         // Bad limit.
         assert!(validate(&schema, &json!({"topic": "notes", "limit": 0})).is_err());
+    }
+
+    // ---- Phase 11 Task 3 — nested-object support ------------------
+
+    /// A fixture mirroring `shell.exec`'s advertised nested schema:
+    /// top-level `{cmd, args: {cwd, timeout_ms}}`. `cmd` required,
+    /// `args` optional; when present, `args.cwd` and `args.timeout_ms`
+    /// are both optional, `additionalProperties: false` at both
+    /// levels.
+    fn shell_exec_nested_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "cmd": { "type": "string" },
+                "args": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": { "type": "string" },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 600_000
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "required": ["cmd"],
+            "additionalProperties": false
+        })
+    }
+
+    #[test]
+    fn nested_schema_accepts_flat_required_only_shape() {
+        // The nested `args` object is optional — a call with just
+        // `cmd` must validate. This is the no-args shell invocation.
+        assert!(
+            validate(&shell_exec_nested_schema(), &json!({"cmd": "ls"})).is_ok()
+        );
+    }
+
+    #[test]
+    fn nested_schema_accepts_nested_shape() {
+        assert!(
+            validate(
+                &shell_exec_nested_schema(),
+                &json!({
+                    "cmd": "ls",
+                    "args": {
+                        "cwd": "/repo",
+                        "timeout_ms": 5000
+                    }
+                })
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn nested_schema_rejects_wrong_nested_type() {
+        // `args.cwd` is an integer — the inner schema requires string.
+        // The error `field` must be the dotted path `args.cwd`, not
+        // just `cwd` — otherwise audit messages for nested schemas
+        // would be ambiguous when two levels share a field name.
+        let err = validate(
+            &shell_exec_nested_schema(),
+            &json!({"cmd": "ls", "args": {"cwd": 42}}),
+        )
+        .unwrap_err();
+        match err {
+            ValidationError::WrongType {
+                field,
+                expected,
+                found,
+            } => {
+                assert_eq!(field, "args.cwd");
+                assert_eq!(expected, "string");
+                assert_eq!(found, "number");
+            }
+            other => panic!("expected WrongType for args.cwd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_schema_rejects_nested_additional_property() {
+        // `args.rogue` is not declared, and the nested schema sets
+        // `additionalProperties: false`. The path must be
+        // `args.rogue`.
+        let err = validate(
+            &shell_exec_nested_schema(),
+            &json!({"cmd": "ls", "args": {"rogue": "x"}}),
+        )
+        .unwrap_err();
+        match err {
+            ValidationError::UnknownField { field } => {
+                assert_eq!(field, "args.rogue");
+            }
+            other => panic!("expected UnknownField for args.rogue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_schema_rejects_top_level_additional_property() {
+        // Top-level `additionalProperties: false` must still fire
+        // for top-level unknown keys — adding nested support must
+        // not have demoted the top-level gate.
+        let err = validate(
+            &shell_exec_nested_schema(),
+            &json!({"cmd": "ls", "rogue": 1}),
+        )
+        .unwrap_err();
+        match err {
+            ValidationError::UnknownField { field } => {
+                assert_eq!(field, "rogue");
+            }
+            other => panic!("expected UnknownField for rogue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_schema_rejects_nested_integer_out_of_range() {
+        // The `args.timeout_ms` integer has a `minimum` and `maximum`;
+        // a value of 0 must fire BelowMinimum with the dotted path.
+        let err = validate(
+            &shell_exec_nested_schema(),
+            &json!({"cmd": "ls", "args": {"timeout_ms": 0}}),
+        )
+        .unwrap_err();
+        match err {
+            ValidationError::BelowMinimum { field, .. } => {
+                assert_eq!(field, "args.timeout_ms");
+            }
+            other => panic!("expected BelowMinimum for args.timeout_ms, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_schema_rejects_args_of_wrong_type() {
+        // Passing `args` as a string instead of an object must fire
+        // WrongType at the `args` path, not recurse into a non-
+        // object.
+        let err = validate(
+            &shell_exec_nested_schema(),
+            &json!({"cmd": "ls", "args": "oops"}),
+        )
+        .unwrap_err();
+        match err {
+            ValidationError::WrongType {
+                field,
+                expected,
+                found,
+            } => {
+                assert_eq!(field, "args");
+                assert_eq!(expected, "object");
+                assert_eq!(found, "string");
+            }
+            other => panic!("expected WrongType for args, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_required_field_missing_at_nested_level() {
+        // Construct a schema where the nested object has a required
+        // field, and verify the error dotted-path is correct. The
+        // `shell.exec` schema makes nothing required inside `args`,
+        // so this fixture is synthetic — it pins the "nested required
+        // checks produce dotted paths" contract independently.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "object",
+                    "properties": {
+                        "inner": { "type": "string" }
+                    },
+                    "required": ["inner"]
+                }
+            },
+            "required": ["outer"]
+        });
+        let err = validate(&schema, &json!({"outer": {}})).unwrap_err();
+        match err {
+            ValidationError::MissingRequired { field } => {
+                assert_eq!(field, "outer.inner");
+            }
+            other => panic!("expected MissingRequired for outer.inner, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn boolean_type_accepts_true_and_false() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "flag": { "type": "boolean" } }
+        });
+        assert!(validate(&schema, &json!({"flag": true})).is_ok());
+        assert!(validate(&schema, &json!({"flag": false})).is_ok());
+    }
+
+    #[test]
+    fn boolean_type_rejects_non_boolean() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "flag": { "type": "boolean" } }
+        });
+        let err = validate(&schema, &json!({"flag": "true"})).unwrap_err();
+        match err {
+            ValidationError::WrongType {
+                field,
+                expected: "boolean",
+                found: "string",
+            } => {
+                assert_eq!(field, "flag");
+            }
+            other => panic!("expected WrongType boolean, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_path_preserves_flat_shape_for_empty_prefix() {
+        // Backwards-compat anchor: before Task 3 all errors had bare
+        // field names. `join_path("", "cmd")` must return `"cmd"`,
+        // not `".cmd"`, so every Phase 10 test that pinned a bare
+        // field name keeps matching.
+        assert_eq!(join_path("", "cmd"), "cmd");
+        assert_eq!(join_path("args", "cwd"), "args.cwd");
+        assert_eq!(join_path("outer.middle", "leaf"), "outer.middle.leaf");
     }
 
     #[test]

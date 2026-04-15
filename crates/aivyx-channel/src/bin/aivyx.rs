@@ -111,7 +111,8 @@ use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions};
 use aivyx_core::{
-    AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig, Tool, ToolRegistry,
+    AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
+    ShellExecToolConfig, Tool, ToolRegistry,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -131,6 +132,57 @@ const PROMPT: &str = "> ";
 /// or elsewhere paths belong in `$AIVYX_CONFIG_PATH` (future amendment)
 /// or just be driven via env vars.
 const DEFAULT_TOML_PATH: &str = "aivyx.toml";
+
+/// Optional `(shell.exec tool, required capability scope)` pair
+/// returned by `build_shell_exec_for_channel`. Aliased to satisfy
+/// clippy's `type_complexity` lint and because the pair has a
+/// specific meaning — "the shell.exec the agent gets for this
+/// channel, plus the canonical cwd-root scope that lets it run".
+type ShellExecRegistration = Option<(Arc<dyn Tool>, Scope)>;
+
+/// Phase 11 Task 3 — registration-time trust-tier gate for
+/// `shell.exec`.
+///
+/// This is the single site where the binary decides "does this
+/// channel get the shell-execution tool?". `Local` (Trusted) yes,
+/// `Telegram` (SemiTrusted) no. The gate is registration-time and
+/// stricter than the turn loop's ceiling intersection: a
+/// SemiTrusted audit chain never sees `shell.exec` mentioned, not
+/// even as a denial, because the tool is simply absent from the
+/// dispatch registry.
+///
+/// Returns `Ok(Some((tool, scope)))` if the channel receives
+/// `shell.exec`, `Ok(None)` otherwise. The scope is the
+/// capability the agent must hold to call the tool — it uses the
+/// Phase 11 Task 3 `shell.exec:cwd:<canonical_root>/**` shape.
+/// The factoring lives in a tiny free function (not inlined) so
+/// `channel_kind_telegram_has_no_shell_exec` below can pin the
+/// property with a real filesystem fixture without pulling the
+/// rest of `run()`'s startup machinery.
+fn build_shell_exec_for_channel(
+    channel_kind: ChannelKind,
+    fs_root: &std::path::Path,
+) -> Result<ShellExecRegistration, String> {
+    match channel_kind {
+        ChannelKind::Local => {
+            let shell = ShellExecToolConfig::new(fs_root.to_path_buf())
+                .build()
+                .map_err(|e| format!("failed to build shell.exec tool: {e}"))?;
+            let canonical_cwd_root = shell.cwd_root().to_path_buf();
+            let scope = Scope::parse(&format!(
+                "shell.exec:cwd:{}/**",
+                canonical_cwd_root.display()
+            ))
+            .ok_or_else(|| {
+                format!(
+                    "canonical shell.exec cwd scope not parseable from {canonical_cwd_root:?}"
+                )
+            })?;
+            Ok(Some((Arc::new(shell) as Arc<dyn Tool>, scope)))
+        }
+        ChannelKind::Telegram => Ok(None),
+    }
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -714,13 +766,37 @@ async fn run_async(
         MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
 
-    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+    // ---- Tool list (with the Phase 11 Task 3 trust-tier gate) --------
+    // This is the single registration site where the binary decides
+    // "what tools do I expose for this channel?" Phase 11 Task 3
+    // specifies `shell.exec` is registered **only** for `Trusted`
+    // channels — `aivyx-telegram` (`SemiTrusted`) must never even
+    // see the tool in its dispatch registry. The gate is a single
+    // match on `channel_kind` right here; scattered per-call
+    // `if tier == Trusted` checks are explicitly out of scope.
+    //
+    // Note: this is belt-and-suspenders with the turn loop's
+    // ceiling intersection (`default_ceiling()` strips `shell.exec`
+    // from any SemiTrusted capability set at dispatch time), but
+    // registration-time gating is stricter: the audit chain for a
+    // SemiTrusted channel never sees `shell.exec` mentioned, not
+    // even as a denial. That strictness is the point.
+    let mut tool_list: Vec<Arc<dyn Tool>> = vec![
         Arc::new(fs_read) as Arc<dyn Tool>,
         Arc::new(fs_write) as Arc<dyn Tool>,
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,
-    ]));
+    ];
+    let shell_exec_scope: Option<Scope> =
+        match build_shell_exec_for_channel(channel_kind, &fs_root)? {
+            Some((shell, scope)) => {
+                tool_list.push(shell);
+                Some(scope)
+            }
+            None => None,
+        };
+    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
     // The CLI is the most-trusted channel on the box; the agent gets
@@ -736,13 +812,21 @@ async fn run_async(
     // attenuation becomes interesting the moment Phase 7+ introduces
     // a non-Trusted channel for the memory tools; Trusted CLI gets
     // the full family by default per D4's tier table.
-    let capabilities = CapabilitySet::from_scopes([
+    let mut scopes: Vec<Scope> = vec![
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
         Scope::parse("memory.forget").unwrap(),
         fs_read_scope,
         fs_write_scope,
-    ]);
+    ];
+    // Only the Local (Trusted) branch ever holds this scope — the
+    // tool itself is absent from the registry on SemiTrusted
+    // channels, so the scope is useless there anyway and we elide
+    // it to keep the audited capability footprint tight.
+    if let Some(s) = shell_exec_scope {
+        scopes.push(s);
+    }
+    let capabilities = CapabilitySet::from_scopes(scopes);
 
     // ---- Channel branch ----------------------------------------------
     // Phase 8 Task 4 — fork here on `channel_kind`. Everything upstream
@@ -890,5 +974,89 @@ async fn run_async(
             .await
             .map(|_report| ())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Phase 11 Task 3 — registration-time gate pin tests.
+    //!
+    //! These tests live in the binary so they sit next to the
+    //! gate they protect (`build_shell_exec_for_channel`). The
+    //! point is not to re-verify the capability layer (that's
+    //! aivyx-telegram's `tier_attenuation_denies_shell_exec_
+    //! through_real_telegram_channel` test) but to pin the
+    //! *binary's own choice* of what tools to hand each channel.
+    //! If a future refactor of `run()` accidentally lifts the
+    //! `shell.exec` append out of the `ChannelKind::Local` arm,
+    //! this test breaks loudly.
+    //!
+    //! No `tempfile` crate — the zero-new-dep streak is sacred.
+    //! The `Scratch` helper mirrors the one in
+    //! `aivyx-core/src/tools/shell.rs`.
+    use super::*;
+    use std::path::PathBuf;
+
+    struct Scratch {
+        dir: PathBuf,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            let tmp = std::env::var("TMPDIR")
+                .or_else(|_| std::env::var("TEMP"))
+                .unwrap_or_else(|_| "/tmp".to_string());
+            let dir = PathBuf::from(tmp)
+                .join(format!("aivyx-bin-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
+            let canonical = std::fs::canonicalize(&dir).expect("canonicalize scratch");
+            Scratch { dir: canonical }
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn channel_local_receives_shell_exec() {
+        let scratch = Scratch::new();
+        let result = build_shell_exec_for_channel(ChannelKind::Local, &scratch.dir)
+            .expect("local branch must build shell.exec cleanly");
+        let (tool, scope) = result.expect("local must receive shell.exec");
+        assert_eq!(tool.name(), "shell.exec");
+        assert_eq!(scope.base(), "shell.exec");
+        let qualifier = scope.qualifier().expect("scope must be qualified");
+        // The `cwd:` prefix is required — that's the Phase 11
+        // Task 3 convention that lets one base name carry two
+        // attenuation shapes (path-glob vs. program-allowlist).
+        assert!(
+            qualifier.starts_with("cwd:"),
+            "shell.exec scope must use `cwd:` qualifier prefix, got {qualifier}"
+        );
+        assert!(
+            qualifier.ends_with("/**"),
+            "shell.exec scope must end with `/**`, got {qualifier}"
+        );
+    }
+
+    #[test]
+    fn channel_telegram_receives_no_shell_exec() {
+        // The binary's single-match gate must return `None` for
+        // the Telegram (SemiTrusted) branch. If this test ever
+        // fails, it means `shell.exec` has leaked into a
+        // SemiTrusted registry at registration time — which
+        // would bypass the strictness Phase 11 Task 3 requires
+        // (no mention in audit chains, not even as denials).
+        let scratch = Scratch::new();
+        let result = build_shell_exec_for_channel(ChannelKind::Telegram, &scratch.dir)
+            .expect("telegram branch must not error — it's a no-op");
+        assert!(
+            result.is_none(),
+            "Telegram channel must NOT receive shell.exec; \
+             this is the registration-time gate"
+        );
     }
 }

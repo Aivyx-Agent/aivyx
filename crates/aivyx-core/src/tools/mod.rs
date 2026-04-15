@@ -26,5 +26,7 @@
 //! or propose an amendment with real evidence behind it.
 
 pub mod fs;
+pub mod shell;
 
 pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
+pub use shell::{ShellExecTool, ShellExecToolConfig};
