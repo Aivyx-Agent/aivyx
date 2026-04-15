@@ -1268,3 +1268,236 @@ src/lib.rs | wc -l` returning `0`.
   Untrusted example for completeness — but Phase 13's
   one-file-fits-all approach is sufficient for the
   P9 exit criterion.
+
+## Task 4 — correction recorded mid-implementation (2026-04-15)
+
+**What I drafted.** A first-pass `render_role_envelope`
+in `aivyx.rs` that walked the resolved parent chain,
+intersected declared sets with the floor and ceiling,
+printed the effective envelope, and then printed a
+"dropped" section listing **every** scope from every
+level of the chain plus the floor that did not survive
+intersection. The intent: surface anything a naive
+reader might have expected to see but didn't.
+
+**What broke when I ran the first test pass.** The
+`print_role_renders_coder_envelope_against_example_config`
+test failed because the rendered output listed
+`net.fetch [level 2 default]  reason: no scope with
+base 'net.fetch' in the effective envelope` — i.e., the
+renderer flagged `default`'s `net.fetch` as a dropped
+scope when rendering `coder`. But **`coder` drops
+`net.fetch` on purpose.** Its own declared
+`capability_scopes` list deliberately omits it. That is
+the entire point of the attenuation machinery Task 2
+built: a child role attenuates its parent by *not*
+re-declaring scopes it doesn't want.
+
+Listing that as a "dropped" surprise conflates two very
+different operator concerns:
+
+- **Intentional ancestor attenuation** — the child's
+  author chose to drop this. The child's TOML is the
+  evidence; no debugging is needed; listing it as
+  "dropped" is just noise the operator has to visually
+  skip past.
+- **Genuine surprise** — something the *leaf* role
+  declared that evaporated (e.g. a SemiTrusted role
+  declaring unqualified `fs.read` and silently losing
+  it to `CEILING_SEMITRUSTED`'s ▲ rows), OR something
+  the *floor* injected via the empty-child substitution
+  path that didn't survive (the Task 2/Task 3 surprise).
+
+The first pass treated these identically. It would
+have generated 6–10 lines of "drops" for a clean
+attenuation like `coder`, burying the one line an
+operator actually needs to read under noise.
+
+**What I changed.** Restrict the dropped section to
+exactly two surfaces:
+
+1. **Active/leaf role drops.** Iterate the leaf role's
+   own `capability_scopes.value`. For each scope, if it
+   is not in the effective envelope (by exact equality
+   or `effective.grants`), report it with tag
+   `[active role <leaf_name>]`. This surfaces the
+   SemiTrusted-fs.read footgun and any other case
+   where the leaf wrote a scope the intersection chain
+   stripped.
+2. **Floor drops (empty-child only).** If and only if
+   at least one level in the chain has empty
+   `capability_scopes`, iterate the backcompat floor
+   and report unsurvived scopes with tag `[floor]`.
+   This surfaces the Task 2/Task 3 empty-child
+   surprise by name: an operator running
+   `--print-role junior_researcher` sees explicit
+   "shell.exec [floor]" and "fs.write [floor]" lines
+   and immediately understands *which* scopes the
+   floor tried to inject and which the intersection
+   chain stripped.
+
+Ancestor levels (level ≥ 2) are never listed in the
+dropped section. Their drops are by-design
+attenuations; the operator can read them off the TOML
+directly.
+
+The header line was also rewritten to spell the new
+contract out explicitly: `dropped (surprises only —
+scopes the active role or backcompat floor declared
+that did not survive intersection; intentional
+ancestor-level attenuations are not listed)`. The
+empty-state line similarly changed from `<none - every
+declared scope survived intersection>` to `<none -
+every scope the active role declared survived
+intersection>`, so a reader knows exactly which scope
+population the "none" applies to.
+
+**A second bug surfaced during the fix.** The
+scope-survival check initially used
+`effective.grants(scope) || effective.iter().any(|s|
+s.is_granted_by(scope))`. The second clause is
+backwards: `s.is_granted_by(scope)` asks *"does `scope`
+grant `s`"*, not *"does some effective scope grant
+`scope`"*. In practice this misfired on
+`net.fetch:url-prefix:https://httpbin.org/` in the
+researcher envelope: the scope was literally present
+in `effective`, but `effective.grants` returned false
+for reasons I didn't chase (likely a subtlety in how
+the url-prefix qualifier reflexive case dispatches).
+The fix short-circuits the check with exact equality
+before falling through to `grants`:
+`effective.iter().any(|s| s == scope) ||
+effective.grants(scope)`. The backwards `is_granted_by`
+clause is gone.
+
+*Deferral recorded:* investigate why `CapabilitySet::
+grants` does not return true for a scope present by
+exact identity in the set, when that scope has a
+url-prefix qualifier. This is almost certainly a
+capability-layer reflexivity issue worth a small
+standalone fix in a future phase — Phase 13 works
+around it at the call site, but the workaround should
+not become load-bearing elsewhere.
+
+**Why this is the right line.** The whole point of
+`--print-role` is to answer *"why doesn't my role have
+the scope I declared?"*. An operator who reads a long
+dropped block of ancestor attenuations and then gives
+up before finding their actual surprise is worse off
+than one who sees a short, focused "here is what you
+declared that got stripped" section. The two-surfaces
+rule matches the two ways a scope can disappear
+non-obviously: the active role wrote it and the
+chain/ceiling stripped it, or the floor tried to
+inject it and the chain stripped it.
+
+## Task 4 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **`--print-role <name>` CLI flag** in
+   `crates/aivyx-channel/src/bin/aivyx.rs`. Parses via
+   `parse_cli_args_from` alongside the existing
+   `--role`, `--channel`, `--verify-only` flags.
+   Mutually exclusive with `--verify-only`; composes
+   orthogonally with `--channel`; empty value is an
+   error with a pointer to the flag name.
+2. **Early-exit branch in `run()`.** When
+   `print_role.is_some()`, the branch lands **after**
+   config load (so typos surface with the same
+   `UnknownRole` error + candidate list that
+   `--role` already produces) but **before**
+   `mkdir fs_root`, master-key derivation, store open,
+   and runtime build. No passphrase prompt, no
+   filesystem side effects, no Telegram bot
+   handshake. The config loader runs with
+   `require_api_key = false` and
+   `require_telegram_token = false` when in
+   print-role mode.
+3. **`build_display_floor(fs_root, channel_kind)`
+   helper.** Produces a representative backcompat
+   floor for the requested channel. Uses
+   `fs::canonicalize(fs_root)` if it succeeds (same
+   as production startup), falls back to the
+   as-written path with a `false` canonicalization
+   flag otherwise. The renderer prints a footnote
+   when canonicalization failed: `(note: fs sandbox
+   at <path> did not exist or could not be
+   canonicalized; the floor's fs.read/fs.write
+   scopes use the as-written path. A live binary
+   would canonicalize through any symlinks at
+   startup.)`. This makes the output stable on CI
+   hosts that don't have the operator's sandbox dir.
+4. **`render_role_envelope(role_name, cfg,
+   channel_kind)` renderer.** Walks the parent chain
+   leaf-to-root, prints each level's declared scopes +
+   trust_ceiling, prints the floor and footnote,
+   prints the effective envelope (sorted, so diffs
+   are stable), prints the dropped section per the
+   two-surfaces rule from the correction block.
+   Returns a `Result<String, String>` so the unknown-
+   role error carries the typed message up to
+   `run()`'s exit branch.
+5. **`drop_reason_for(dropped, effective)` helper.**
+   Three-case classification: (a) "no scope with
+   base `<b>` in the effective envelope" when the
+   entire base is missing, (b) "qualified-held
+   cannot grant unqualified-needed (D4 Rule 4)" when
+   the needed scope is unqualified but the effective
+   set has a more-qualified form, (c) "qualifier
+   shape mismatch with surviving scopes: <list>"
+   fallback. Explicitly less precise than full D4
+   rule dispatch — the goal is a hint, not a proof.
+6. **Nine new tests** in `mod tests`:
+   - **Five parse tests:**
+     `print_role_flag_parses_into_cli_args`,
+     `print_role_flag_missing_value_is_an_error`,
+     `print_role_flag_empty_value_is_an_error`,
+     `print_role_and_verify_only_are_mutually_exclusive`,
+     `print_role_composes_with_channel_flag`.
+   - **Four functional tests:**
+     `print_role_renders_coder_envelope_against_example_config`,
+     `print_role_renders_junior_researcher_with_visible_drops`
+     (the load-bearing test that pins `shell.exec
+     [floor]` and `fs.write [floor]` as explicit
+     surprise signals),
+     `print_role_renders_researcher_with_no_drops`
+     (the contrast test that pins clean attenuation
+     produces no false-positive noise),
+     `print_role_unknown_name_lists_known_roles_in_error`.
+
+**Exit criteria — all met.**
+
+- ✅ `--print-role <name>` parses, exits early, renders
+  a useful envelope breakdown for any role in
+  `examples/aivyx.toml`.
+- ✅ `cargo test --workspace` green: **471 → 480
+  passed**, delta **+9** for Task 4 alone (5 parse +
+  4 functional).
+- ✅ `cargo clippy --workspace --all-targets -- -D
+  warnings` clean.
+- ✅ **Production-core `lib.rs` byte-identity streak
+  preserved.** `git diff 16e618c -- crates/aivyx-core/
+  src/lib.rs | wc -l` returns `0`.
+- ✅ **DESIGN.md + PRODUCT.md byte-identity preserved.**
+  `git diff 80189b4 -- DESIGN.md PRODUCT.md | wc -l`
+  returns `0`.
+
+**Deferred (recorded so the backlog doesn't silently grow).**
+
+- **`CapabilitySet::grants` reflexivity investigation.**
+  The correction block records a workaround in
+  `render_role_envelope` where a url-prefix-qualified
+  scope present in the effective set by exact identity
+  did not return true from `effective.grants(scope)`.
+  The call site works around this with an equality
+  check before the `grants` call. A future Phase
+  should investigate the root cause in
+  `aivyx-capability` and either fix it or document
+  the asymmetry as intentional.
+- **JSON output mode for `--print-role`.** The
+  current renderer produces a human-readable string.
+  A `--print-role-json` variant that emits the same
+  breakdown as structured data would be useful for
+  integration into operator tooling. Not needed for
+  Phase 13 P9 exit.

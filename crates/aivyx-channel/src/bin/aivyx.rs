@@ -95,7 +95,7 @@
 //!   gap becomes painful.
 
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -316,6 +316,319 @@ fn assemble_role_envelope(
     effective
 }
 
+/// Build the backcompat floor that the binary would use at
+/// startup for the given channel kind. This is the *display*
+/// version: where the production code calls
+/// `std::fs::canonicalize` on the sandbox root (which requires
+/// the directory to exist), this helper takes the configured
+/// path as-written. It returns `(floor, canonicalized)` —
+/// `canonicalized` is `true` if the directory existed and
+/// canonicalization succeeded, `false` if we used the as-written
+/// path. Callers (currently just `render_role_envelope`) use the
+/// flag to print a footnote when the displayed envelope might
+/// differ from the production envelope by a symlink resolution.
+///
+/// This duplicates the floor-construction logic from `run()`
+/// (see the `backcompat_floor` builder around the `assemble_
+/// role_envelope` call site). The duplication is acceptable
+/// because the `--print-role` path is a debug surface and
+/// "factor into a single helper used by both sites" would
+/// require pulling channel kind, sandbox path, and shell.exec
+/// gate together at a layer above either call site — more
+/// structural shift than a Task 4 working-session warrants.
+/// If a future task moves the production floor builder into a
+/// helper, this function should call into it.
+fn build_display_floor(
+    fs_root: &Path,
+    channel_kind: ChannelKind,
+) -> Result<(Vec<Scope>, bool), String> {
+    let (root_string, canonicalized) = match std::fs::canonicalize(fs_root) {
+        Ok(c) => (c.display().to_string(), true),
+        Err(_) => (fs_root.display().to_string(), false),
+    };
+    let fs_read_scope = Scope::parse(&format!("fs.read:{root_string}/**"))
+        .ok_or_else(|| format!("could not parse fs.read scope for sandbox {root_string}"))?;
+    let fs_write_scope = Scope::parse(&format!("fs.write:{root_string}/**"))
+        .ok_or_else(|| format!("could not parse fs.write scope for sandbox {root_string}"))?;
+    let mut floor: Vec<Scope> = vec![
+        Scope::parse("memory.read").unwrap(),
+        Scope::parse("memory.write").unwrap(),
+        Scope::parse("memory.forget").unwrap(),
+        fs_read_scope,
+        fs_write_scope,
+        Scope::parse("net.fetch").unwrap(),
+    ];
+    if matches!(channel_kind, ChannelKind::Local) {
+        floor.push(Scope::parse("shell.exec").unwrap());
+    }
+    Ok((floor, canonicalized))
+}
+
+/// Render the named role's effective capability envelope into a
+/// human-readable string suitable for printing. Pure function —
+/// returns the string instead of writing to stdout — so tests
+/// can assert on its content without redirecting global state.
+///
+/// Output structure:
+///
+/// ```text
+/// role: <name>
+/// channel: <local|telegram>
+/// parent chain: <leaf> -> <mid> -> <root>
+///
+/// level 1 — <name> (declared)
+///   capability_scopes: <list, or "<empty - backcompat floor will be substituted>">
+///   trust_ceiling: <tier>
+///
+/// level 2 — <parent> (declared)
+///   ...
+///
+/// backcompat floor (substituted for empty levels):
+///   <list>
+/// (optional footnote about non-canonical fs root)
+///
+/// effective envelope:
+///   <list of surviving scopes>
+///
+/// dropped:
+///   <scope> [from <where>]  reason: <short reason>
+///   ...
+/// ```
+///
+/// The "dropped" section is the load-bearing teaching feature.
+/// For each level transition, it walks both sides of the
+/// intersection and lists scopes that did not survive, with a
+/// short reason: either "not granted by <other side>" (the base
+/// is missing entirely) or "qualifier mismatch (D4 Rule 4 —
+/// qualified-held cannot grant unqualified-needed)" (the base is
+/// present but the qualifier shape blocks it). This is
+/// deliberately less precise than reimplementing the full D4
+/// rule dispatch; it is precise enough for an operator to
+/// understand why a declared scope evaporated.
+fn render_role_envelope(
+    role_name: &str,
+    cfg: &AivyxConfig,
+    channel_kind: ChannelKind,
+) -> Result<String, String> {
+    use std::fmt::Write as _;
+
+    let role = cfg.roles.get(role_name).ok_or_else(|| {
+        let known: Vec<&str> = cfg.roles.keys().map(String::as_str).collect();
+        format!(
+            "role `{role_name}` is not declared in this config. Known roles: {known:?}"
+        )
+    })?;
+
+    let (floor, canonicalized) = build_display_floor(&cfg.fs_root.value, channel_kind)?;
+
+    let mut out = String::new();
+    writeln!(out, "role: {role_name}").unwrap();
+    writeln!(
+        out,
+        "channel: {}",
+        match channel_kind {
+            ChannelKind::Local => "local",
+            ChannelKind::Telegram => "telegram",
+        }
+    )
+    .unwrap();
+
+    // Walk parent chain leaf-to-root and collect each level's
+    // role + the level number. The chain is bounded by the
+    // validator; an unbounded loop here would be a regression
+    // hazard if the validator ever ships broken, so we bound it
+    // explicitly the same way `assemble_role_envelope` does.
+    let mut chain: Vec<&Role> = vec![role];
+    {
+        let mut cursor = role.parent_role.value.as_deref();
+        let mut depth = 0;
+        while let Some(parent_name) = cursor {
+            depth += 1;
+            if depth > 64 {
+                break;
+            }
+            let Some(parent) = cfg.roles.get(parent_name) else {
+                break;
+            };
+            chain.push(parent);
+            cursor = parent.parent_role.value.as_deref();
+        }
+    }
+    let chain_names: Vec<&str> = chain.iter().map(|r| r.name.value.as_str()).collect();
+    writeln!(out, "parent chain: {}", chain_names.join(" -> ")).unwrap();
+    writeln!(out).unwrap();
+
+    for (i, level) in chain.iter().enumerate() {
+        let level_num = i + 1;
+        let level_name = level.name.value.as_str();
+        writeln!(out, "level {level_num} - {level_name} (declared)").unwrap();
+        if level.capability_scopes.value.is_empty() {
+            writeln!(
+                out,
+                "  capability_scopes: <empty - backcompat floor will be substituted at runtime>"
+            )
+            .unwrap();
+        } else {
+            writeln!(out, "  capability_scopes:").unwrap();
+            for scope in &level.capability_scopes.value {
+                writeln!(out, "    {}", scope.as_str()).unwrap();
+            }
+        }
+        writeln!(
+            out,
+            "  trust_ceiling: {:?}",
+            level.trust_ceiling.value
+        )
+        .unwrap();
+        writeln!(out).unwrap();
+    }
+
+    writeln!(out, "backcompat floor (substituted for empty levels):").unwrap();
+    for scope in &floor {
+        writeln!(out, "  {}", scope.as_str()).unwrap();
+    }
+    if !canonicalized {
+        writeln!(
+            out,
+            "  (note: fs sandbox at {} did not exist or could not be canonicalized; the floor's fs.read/fs.write scopes use the as-written path. A live binary would canonicalize through any symlinks at startup.)",
+            cfg.fs_root.value.display()
+        )
+        .unwrap();
+    }
+    writeln!(out).unwrap();
+
+    // Compute the effective envelope by reusing the production
+    // assembly fn, then folding in the role's declared trust
+    // ceiling — exactly the same composition the production
+    // `run()` path uses at the role-resolution site.
+    let role_envelope = assemble_role_envelope(role, &cfg.roles, &floor);
+    let role_tier_ceiling = role.trust_ceiling.value.default_ceiling();
+    let effective = role_envelope.intersect(role_tier_ceiling);
+
+    writeln!(
+        out,
+        "effective envelope (after intersection chain + role tier ceiling {:?}):",
+        role.trust_ceiling.value
+    )
+    .unwrap();
+    let effective_strs: Vec<&str> = effective.iter().map(|s| s.as_str()).collect();
+    if effective_strs.is_empty() {
+        writeln!(out, "  <empty - this role has no live capabilities>").unwrap();
+    } else {
+        for s in &effective_strs {
+            writeln!(out, "  {s}").unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+
+    // Compute dropped scopes — but only those that represent a
+    // *surprise* for the operator, not those they declared away
+    // on purpose by attenuating an ancestor. Two surfaces qualify
+    // as "surprise":
+    //
+    // 1. Scopes the **active (leaf) role itself** declared but
+    //    that didn't survive intersection. This is the
+    //    SemiTrusted-fs.read footgun: the operator wrote
+    //    `["fs.read", ...]` and the ceiling silently stripped
+    //    it. They asked for it explicitly; getting nothing back
+    //    deserves a loud explanation.
+    //
+    // 2. **Backcompat floor** scopes that didn't survive — but
+    //    only when at least one level in the chain is empty,
+    //    because that's the only path that pulls the floor into
+    //    the assembly. This is the empty-child surprise: the
+    //    operator wrote `parent_role = "researcher"` thinking
+    //    they'd get researcher's view, and instead the floor
+    //    leaked in and got partially stripped.
+    //
+    // Drops from *ancestor* levels (level >= 2) are *not*
+    // reported. Those are by-design attenuations: if `coder`
+    // omits `net.fetch` and `default` declares it, that's coder
+    // narrowing the envelope on purpose. Listing it as "dropped"
+    // would conflate intent with surprise and bury the actual
+    // surprises in noise.
+    writeln!(out, "dropped (surprises only — scopes the active role or backcompat floor declared that did not survive intersection; intentional ancestor-level attenuations are not listed):").unwrap();
+    let mut any_dropped = false;
+
+    // Surface (1): drops from the active/leaf role.
+    let leaf = chain[0];
+    let leaf_name = leaf.name.value.as_str();
+    for scope in &leaf.capability_scopes.value {
+        if effective.iter().any(|s| s == scope) || effective.grants(scope) {
+            continue;
+        }
+        any_dropped = true;
+        let reason = drop_reason_for(scope, &effective);
+        writeln!(
+            out,
+            "  {} [active role {leaf_name}]  reason: {reason}",
+            scope.as_str()
+        )
+        .unwrap();
+    }
+
+    // Surface (2): drops from the floor (only when at least one
+    // chain level is empty — otherwise the floor was never
+    // substituted in and listing its drops would be misleading).
+    let any_empty = chain.iter().any(|r| r.capability_scopes.value.is_empty());
+    if any_empty {
+        for scope in &floor {
+            if effective.grants(scope) || effective.iter().any(|s| s.is_granted_by(scope)) {
+                continue;
+            }
+            any_dropped = true;
+            let reason = drop_reason_for(scope, &effective);
+            writeln!(
+                out,
+                "  {} [floor]  reason: {reason}",
+                scope.as_str()
+            )
+            .unwrap();
+        }
+    }
+    if !any_dropped {
+        writeln!(out, "  <none - every scope the active role declared survived intersection>").unwrap();
+    }
+
+    Ok(out)
+}
+
+/// Produce a short human-readable reason for why `dropped` is
+/// not in `effective`. Three cases, in priority order:
+///
+/// 1. The base does not appear at all in `effective`. Reason:
+///    "no scope with this base in the effective envelope". This
+///    is the common case (the intersection chain stripped every
+///    scope sharing the base).
+/// 2. The base appears, but only in a *more* qualified form than
+///    `dropped`, i.e. `dropped` is unqualified and the effective
+///    set has a path-qualified or url-prefix-qualified
+///    counterpart. Reason: "qualified-held cannot grant
+///    unqualified-needed (D4 Rule 4)".
+/// 3. Fallback: "qualifier shape mismatch with surviving scopes"
+///    — covers the rare cases where two qualified scopes share a
+///    base but have different qualifier kinds.
+///
+/// This is deliberately less precise than full D4 rule dispatch.
+/// The goal is to give an operator a hint, not a formal proof.
+fn drop_reason_for(dropped: &Scope, effective: &CapabilitySet) -> String {
+    let base = dropped.base();
+    let same_base: Vec<&Scope> = effective.iter().filter(|s| s.base() == base).collect();
+    if same_base.is_empty() {
+        return format!("no scope with base `{base}` in the effective envelope");
+    }
+    if dropped.qualifier().is_none() {
+        return format!(
+            "qualified-held cannot grant unqualified-needed (D4 Rule 4); effective envelope has only qualified `{base}` scopes: {:?}",
+            same_base.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+        );
+    }
+    format!(
+        "qualifier shape mismatch with surviving `{base}` scopes: {:?}",
+        same_base.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+    )
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -335,6 +648,7 @@ fn run() -> Result<(), String> {
         verify_only,
         channel: channel_kind,
         role: role_override,
+        print_role,
     } = parse_cli_args()?;
 
     // ---- Config -------------------------------------------------------
@@ -351,18 +665,48 @@ fn run() -> Result<(), String> {
     // it; `--channel telegram` does need `AIVYX_TELEGRAM_TOKEN`, so a
     // missing token surfaces as a clean `ConfigError::Missing` instead
     // of a Frankenstein "invalid request" on the first HTTP call.
+    // `--print-role` is a debug exit mode that should not require
+    // any of the secret-bearing fields. `--verify-only` already
+    // gets the same treatment for `require_api_key`; `--print-role`
+    // additionally relaxes `require_telegram_token` because the
+    // print path never opens a telegram connection regardless of
+    // `--channel`.
+    let print_role_mode = print_role.is_some();
     let load_opts = LoadOptions {
         toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
-        require_api_key: !verify_only,
-        require_telegram_token: matches!(channel_kind, ChannelKind::Telegram),
+        require_api_key: !verify_only && !print_role_mode,
+        require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
         // Phase 11 Task 4 — `--role <name>` is now the highest-
         // priority source. `parse_cli_args` turns the flag into
         // `role_override`, which `aivyx-config`'s resolver honors
         // above `AIVYX_ROLE` / TOML / `"default"`. A `None` here
         // means "no flag was passed — fall through to env/TOML."
-        role_override,
+        //
+        // For `--print-role`, the print-role name *is* the active
+        // role for the load: this is the cleanest way to surface a
+        // typo'd name as `UnknownRole` with the candidate list at
+        // load time, instead of either fabricating a synthetic
+        // "default" expectation that may not exist in the config or
+        // letting the print branch hit a `roles.get(name)` with no
+        // helpful error context. The trade-off: the print branch
+        // never starts a session, so "active role" here is purely a
+        // load-time validation hook, not a runtime behavior.
+        role_override: print_role.clone().or(role_override),
     };
     let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
+
+    // Phase 13 Task 4 — `--print-role` exit branch. Lands here,
+    // *before* `mkdir fs_root`, master-key derivation, store open,
+    // and runtime build. None of those are needed to render an
+    // envelope; skipping them keeps `--print-role` fast, free of
+    // passphrase prompts, and free of filesystem side effects (no
+    // sandbox dir creation, no store file creation). The
+    // `print_role` Option holds the requested role name.
+    if let Some(name) = print_role {
+        let rendered = render_role_envelope(&name, &config, channel_kind)?;
+        print!("{rendered}");
+        return Ok(());
+    }
 
     // Sandbox root: create the directory if it does not exist so a
     // fresh install "just works" the same way Phase 4 promised. The
@@ -640,6 +984,19 @@ struct CliArgs {
     /// fallback. `None` means "no override — fall back to the env var
     /// and config-layer resolution chain."
     role: Option<String>,
+    /// Phase 13 Task 4 — `--print-role <name>`. A debug-mode flag
+    /// that loads the config, walks the named role's inheritance
+    /// chain, and prints a structured rendering of the effective
+    /// capability envelope (declared scopes per level, the
+    /// substituted backcompat floor, the final intersected set,
+    /// and a "dropped" diff explaining which scopes were removed
+    /// at each layer and why). Exits without starting a session,
+    /// without deriving the master key, and without opening the
+    /// encrypted store. `None` means "no print mode — run a normal
+    /// session." `Some(name)` means "render this role and exit."
+    /// Composes with `--channel` (the floor differs per channel),
+    /// is mutually exclusive with `--verify-only`.
+    print_role: Option<String>,
 }
 
 /// Parse the CLI arg surface.
@@ -659,12 +1016,26 @@ struct CliArgs {
 ///   `"default"` fallback. An unknown name fails at
 ///   `AivyxConfig::validate` with a typed error listing the roles
 ///   the config knows about.
+/// - `aivyx --print-role <name>` — Phase 13 Task 4. Debug-mode
+///   flag. Loads the config, renders the named role's capability
+///   envelope (declared scopes per inheritance level, the
+///   substituted backcompat floor, the final intersected set, and
+///   a "dropped" diff with reasons), then exits. Does not derive
+///   the master key, open the encrypted store, or start a session.
+///   Composes with `--channel local|telegram` to render the floor
+///   the matching session would use. Mutually exclusive with
+///   `--verify-only` (different exit modes).
 ///
 /// `--verify-only` and `--channel` are mutually exclusive: verify
 /// mode is a read-only forensic surface and has nothing to do with
 /// which channel the live session would run on. Combining them is
 /// an operator error we flag explicitly rather than picking a
 /// silent winner.
+///
+/// `--verify-only` and `--print-role` are also mutually exclusive
+/// for the same structural reason: each is its own exit mode.
+/// `--print-role` and `--channel` *do* compose — channel selection
+/// determines which floor is shown.
 ///
 /// Rejecting unknown args early keeps typos like `--verify_only` or
 /// `--chanel telegram` from silently falling through into normal
@@ -682,6 +1053,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut verify_only = false;
     let mut channel = ChannelKind::Local;
     let mut role: Option<String> = None;
+    let mut print_role: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -715,10 +1087,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 role = Some(value.clone());
                 i += 2;
             }
+            "--print-role" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "`--print-role` requires a value".to_string())?;
+                if value.is_empty() {
+                    return Err("`--print-role` requires a non-empty name".to_string());
+                }
+                print_role = Some(value.clone());
+                i += 2;
+            }
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported flags: --verify-only, --channel <local|telegram>, --role <name>"
+                     Supported flags: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>"
                 ));
             }
         }
@@ -732,10 +1114,19 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         );
     }
 
+    if verify_only && print_role.is_some() {
+        return Err(
+            "`--verify-only` and `--print-role` are mutually exclusive exit modes. \
+             Pick one: verify (audit-chain replay) or print-role (capability envelope render)."
+                .to_string(),
+        );
+    }
+
     Ok(CliArgs {
         verify_only,
         channel,
         role,
+        print_role,
     })
 }
 
@@ -1811,6 +2202,213 @@ mod tests {
              envelopes: that divergence is the empty-child surprise the \
              example file documents (junior gets fs.read path-qualified by \
              the floor; researcher keeps it unqualified)"
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Phase 13 Task 4 — `--print-role` flag tests
+    // ----------------------------------------------------------------
+    //
+    // Two layers: parse-time tests (mirror the existing `role_flag_*`
+    // tests in shape) and functional tests that drive
+    // `render_role_envelope` against `examples/aivyx.toml` and assert
+    // that the rendered string contains the load-bearing teaching
+    // strings the operator needs to see.
+    //
+    // The rendered output is asserted *by content*, not by
+    // byte-for-byte match, because the floor's path-qualified scopes
+    // depend on whether `/tmp/sandbox` happens to exist on the test
+    // host (it usually does not, so the rendering uses the
+    // as-written path with a footnote — and the footnote is itself
+    // one of the things we assert is present).
+
+    #[test]
+    fn print_role_flag_parses_into_cli_args() {
+        let parsed = parse_cli_args_from(&argv(&["--print-role", "junior_researcher"]))
+            .expect("`--print-role junior_researcher` must parse");
+        assert_eq!(parsed.print_role.as_deref(), Some("junior_researcher"));
+        assert!(!parsed.verify_only);
+    }
+
+    #[test]
+    fn print_role_flag_missing_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--print-role"]))
+            .expect_err("`--print-role` with no value must error");
+        assert!(
+            err.contains("--print-role"),
+            "error must mention the flag: {err}"
+        );
+    }
+
+    #[test]
+    fn print_role_flag_empty_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--print-role", ""]))
+            .expect_err("`--print-role ''` must error");
+        assert!(
+            err.contains("non-empty"),
+            "error must call out non-empty: {err}"
+        );
+    }
+
+    #[test]
+    fn print_role_and_verify_only_are_mutually_exclusive() {
+        let err = parse_cli_args_from(&argv(&["--verify-only", "--print-role", "coder"]))
+            .expect_err("--verify-only + --print-role must error");
+        assert!(
+            err.contains("mutually exclusive"),
+            "error must call out mutual exclusion: {err}"
+        );
+    }
+
+    #[test]
+    fn print_role_composes_with_channel_flag() {
+        // `--print-role` and `--channel` are orthogonal — the
+        // channel determines which floor gets rendered.
+        let parsed = parse_cli_args_from(&argv(&[
+            "--channel",
+            "telegram",
+            "--print-role",
+            "researcher",
+        ]))
+        .expect("orthogonal flags must compose");
+        assert_eq!(parsed.channel, ChannelKind::Telegram);
+        assert_eq!(parsed.print_role.as_deref(), Some("researcher"));
+    }
+
+    /// Render `coder` against `examples/aivyx.toml`. Verifies the
+    /// structural elements (header, parent chain, level breakdown,
+    /// effective envelope) and pins that the documented six scopes
+    /// each appear in the rendered output. Coder has no dropped
+    /// scopes, so the dropped block reads "<none - every declared
+    /// scope survived intersection>".
+    #[test]
+    fn print_role_renders_coder_envelope_against_example_config() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("coder", &cfg, ChannelKind::Local)
+            .expect("coder must render");
+
+        assert!(rendered.contains("role: coder"), "header line: {rendered}");
+        assert!(
+            rendered.contains("parent chain: coder -> default"),
+            "parent chain line: {rendered}"
+        );
+        assert!(
+            rendered.contains("level 1 - coder (declared)"),
+            "level header for coder: {rendered}"
+        );
+        assert!(
+            rendered.contains("level 2 - default (declared)"),
+            "level header for default: {rendered}"
+        );
+        assert!(
+            rendered.contains("trust_ceiling: Trusted"),
+            "trust ceiling label: {rendered}"
+        );
+        for scope in &[
+            "fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec",
+        ] {
+            assert!(
+                rendered.contains(scope),
+                "expected scope `{scope}` somewhere in render: {rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("<none - every scope the active role declared survived intersection>"),
+            "coder has no dropped scopes; render must say so: {rendered}"
+        );
+    }
+
+    /// Render `junior_researcher`. This is the load-bearing test:
+    /// it pins that the rendered output mechanically surfaces the
+    /// "empty-child surprise" by showing both
+    /// (a) the empty `capability_scopes` line for the junior
+    /// level, and
+    /// (b) at least one *dropped* entry in the dropped section
+    /// sourced from the backcompat floor, because researcher
+    /// declares no `fs.write` and no `shell.exec` at all — so
+    /// those floor scopes cannot be granted upward and get
+    /// reported as drops. (Note: the floor's unqualified
+    /// `net.fetch` does NOT drop, because researcher's
+    /// `net.fetch:url-prefix:...` is granted by it via D4 Rule 2.
+    /// The surprise is specifically that fs.write and shell.exec
+    /// silently disappear, not net.fetch.) If a future refactor
+    /// makes `--print-role` claim "no dropped scopes" for a
+    /// junior_researcher run, the operator loses the only
+    /// surface that exposes the surprise *before* production.
+    #[test]
+    fn print_role_renders_junior_researcher_with_visible_drops() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("junior_researcher", &cfg, ChannelKind::Local)
+            .expect("junior_researcher must render");
+
+        assert!(
+            rendered.contains("role: junior_researcher"),
+            "header: {rendered}"
+        );
+        assert!(
+            rendered.contains("parent chain: junior_researcher -> researcher -> default"),
+            "three-level parent chain: {rendered}"
+        );
+        assert!(
+            rendered.contains("<empty - backcompat floor will be substituted at runtime>"),
+            "empty-capability-scopes line for junior level: {rendered}"
+        );
+        // The dropped block must mention at least one of the
+        // surprises documented in `examples/aivyx.toml`. We assert
+        // the strongest signal: shell.exec from the floor gets
+        // dropped (researcher does not declare it), with a reason
+        // line that names the floor.
+        assert!(
+            rendered.contains("shell.exec [floor]"),
+            "shell.exec must be reported as dropped from the floor: {rendered}"
+        );
+        // fs.write from the floor should also drop: researcher
+        // declares no fs.write at all (not even qualified), so
+        // the floor's `fs.write:<sandbox>/**` cannot be granted
+        // upward through researcher's declared set.
+        assert!(
+            rendered.contains("fs.write") && rendered.contains("[floor]"),
+            "fs.write (floor-qualified) must be reported as dropped from the floor: {rendered}"
+        );
+    }
+
+    /// Render `researcher` and verify the dropped block stays
+    /// empty for it (researcher's declared scopes are all granted
+    /// by default and survive CEILING_TRUSTED intact). This test
+    /// exists as a *contrast* to the junior_researcher test: it
+    /// pins that a "cleanly attenuated" role does not produce
+    /// false-positive drop noise.
+    #[test]
+    fn print_role_renders_researcher_with_no_drops() {
+        let cfg = load_example_config();
+        let rendered = render_role_envelope("researcher", &cfg, ChannelKind::Local)
+            .expect("researcher must render");
+
+        assert!(rendered.contains("role: researcher"));
+        assert!(rendered.contains("parent chain: researcher -> default"));
+        assert!(
+            rendered.contains("<none - every scope the active role declared survived intersection>"),
+            "researcher's declared scopes all survive intersection; \
+             the dropped block must say so explicitly to avoid false-positive \
+             noise: {rendered}"
+        );
+    }
+
+    /// Asking for an unknown role name produces a typed error
+    /// listing the known roles. Mirrors the load-time `UnknownRole`
+    /// behavior the `--role` flag already exposes.
+    #[test]
+    fn print_role_unknown_name_lists_known_roles_in_error() {
+        let cfg = load_example_config();
+        let err = render_role_envelope("nonsense", &cfg, ChannelKind::Local)
+            .expect_err("unknown role must error");
+        assert!(
+            err.contains("nonsense"),
+            "error must echo the requested name: {err}"
+        );
+        assert!(
+            err.contains("coder"),
+            "error must list known roles so the operator can spot a typo: {err}"
         );
     }
 }
