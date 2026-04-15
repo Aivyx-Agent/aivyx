@@ -2486,4 +2486,504 @@ mod tests {
             panic!("FakeProvider::chat_stream must not be called in filter tests")
         }
     }
+
+    // =====================================================================
+    // Phase 14 Task 3 — sub-agent role-switching end-to-end
+    // =====================================================================
+    //
+    // These tests pin the full `role.switch` dispatch flow against a
+    // real `ConcreteAgent::turn` loop, a real `RoleSwitchTool` with a
+    // wired child factory, and a `RecordingAudit` capturing the
+    // parent→child→parent audit transition. They cover:
+    //
+    // - happy path: parent holding `role.switch:researcher`
+    //   dispatches, child turn runs, audit shows two distinct
+    //   `TurnStarted` events with different `effective_capabilities`
+    // - structural impossibility: the child's effective capability
+    //   set is exactly what the factory built (a narrower one), NOT
+    //   whatever scopes the parent held — so the child cannot hold
+    //   any scope the parent's factory didn't hand it
+    // - negative (scope gate): parent holding only `role.switch:researcher`
+    //   calling `role.switch` with `target=scribe` produces a
+    //   `ScopeDenied` audit event and no child `TurnStarted`
+    // - negative (factory-level): parent holding `role.switch` (broad)
+    //   calling `target=unknown` produces a `ToolOutcome::Failed`
+    //   via the child factory's `Err` path, and no child `TurnStarted`
+    // - output shape: a `Completed` child turn surfaces as a
+    //   `ToolOutcome::Completed` whose output JSON has the expected
+    //   `status=completed`, `final_message`, `target`, and
+    //   `tool_calls_made` fields
+    //
+    // These tests do NOT need an `LlmPlanner` or a network provider —
+    // both the parent and the child run `VecPlanner` with a scripted
+    // sequence of `NextStep`s. The role.switch tool's child factory
+    // closes over a small "build a child agent with these tools and
+    // this plan" function.
+
+    use crate::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
+
+    /// Helper: build a child `ConcreteAgent` that will run a fixed
+    /// `VecPlanner` script and hold a specific `CapabilitySet`. The
+    /// returned `Box<dyn Agent>` is what the parent's `role.switch`
+    /// tool's child factory hands back at execute time.
+    ///
+    /// The child uses the same tool registry and audit hook as the
+    /// parent — this is the structural shape a real session layer
+    /// produces. Audit events from the child's turn land in the same
+    /// `RecordingAudit` so the test can assert on the parent→child
+    /// event sequence in one snapshot.
+    fn build_child_agent(
+        tools: Arc<ToolRegistry>,
+        audit: Arc<RecordingAudit>,
+        caps: CapabilitySet,
+        plan: Vec<NextStep>,
+    ) -> Box<dyn Agent> {
+        let plan_arc = Arc::new(plan);
+        let child = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            tools,
+            audit,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+        Box::new(child)
+    }
+
+    /// Assert helper: drain the captured audit events down to just
+    /// the `TurnStarted` events and return their
+    /// `effective_capabilities` snapshots in emission order. The
+    /// parent→child pattern produces exactly two `TurnStarted`
+    /// events (parent's first, then child's inside the tool
+    /// execute), and the two snapshots let the test compare
+    /// role envelopes directly.
+    fn turn_started_cap_snapshots(events: &[AuditTag]) -> Vec<CapabilitySet> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AuditTag::TurnStarted {
+                    effective_capabilities,
+                    ..
+                } => Some(effective_capabilities.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn role_switch_happy_path_dispatches_child_turn_with_narrowed_caps() {
+        // Parent capability set: holds `role.switch:researcher` plus
+        // `fs.read` and `fs.write` (the "broad parent" envelope).
+        let parent_caps = CapabilitySet::from_scopes([
+            Scope::parse("role.switch:researcher").unwrap(),
+            Scope::parse("fs.read").unwrap(),
+            Scope::parse("fs.write").unwrap(),
+        ]);
+
+        // Child capability set: a deliberately narrower subset —
+        // `fs.read` only, no `fs.write`, no `role.switch`. This is
+        // the attenuated envelope the factory hands the child.
+        let child_caps =
+            CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+
+        // Build the role.switch tool and install the child factory.
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+
+        // Shared audit + tools so both parent and child emit into
+        // the same record. Tools are just the role.switch tool for
+        // this test — the child's plan doesn't call any other tool.
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+        ]));
+
+        // The child factory: closes over the child's cap set, tools,
+        // audit, and a fixed plan. Only recognizes "researcher" as
+        // a target — anything else produces an Err (exercised by
+        // the unknown-target test below).
+        let child_tools = Arc::clone(&tools);
+        let child_audit = Arc::clone(&audit);
+        let child_caps_for_factory = child_caps.clone();
+        let factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
+            if target != "researcher" {
+                return Err(format!("unknown target role {target:?}"));
+            }
+            // Child's plan: emit a FinalMessage and stop. The
+            // child runs one turn and reports a single string.
+            let plan = vec![NextStep::FinalMessage(
+                "researcher summary: done".to_string(),
+            )];
+            Ok(build_child_agent(
+                Arc::clone(&child_tools),
+                Arc::clone(&child_audit),
+                child_caps_for_factory.clone(),
+                plan,
+            ))
+        });
+        assert!(
+            role_switch.set_child_factory(factory).is_ok(),
+            "first set_child_factory call must succeed"
+        );
+
+        // Parent's plan: call role.switch once, then FinalMessage.
+        // The role.switch call runs the child synchronously inside
+        // `execute`; when the child completes, the parent's planner
+        // observes the Completed tool outcome and proceeds to the
+        // FinalMessage step.
+        let parent_plan = vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({
+                    "target": "researcher",
+                    "task": "read file X and summarize"
+                }),
+            },
+            NextStep::FinalMessage("parent done".to_string()),
+        ];
+        let plan_arc = Arc::new(parent_plan);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            parent_caps.clone(),
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let outcome = parent_agent.turn(message, &channel).await;
+
+        // Parent's turn completed cleanly.
+        assert!(
+            matches!(outcome, TurnOutcome::Completed { .. }),
+            "parent turn should complete: {outcome:?}"
+        );
+
+        // Two TurnStarted events: parent's first, child's second.
+        let events = audit.snapshot();
+        let snapshots = turn_started_cap_snapshots(&events);
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "expected exactly 2 TurnStarted events (parent + child), got {}",
+            snapshots.len()
+        );
+
+        // Parent's effective caps include fs.write; child's do not.
+        // This is the structural-impossibility property: the child's
+        // envelope was built by the factory, not by the parent's
+        // held set being copied across.
+        let parent_snapshot = &snapshots[0];
+        let child_snapshot = &snapshots[1];
+        assert!(
+            parent_snapshot.grants(&Scope::parse("fs.write").unwrap()),
+            "parent must hold fs.write at turn-start"
+        );
+        assert!(
+            !child_snapshot.grants(&Scope::parse("fs.write").unwrap()),
+            "child MUST NOT hold fs.write — that's the whole point of sub-agent attenuation"
+        );
+        assert!(
+            child_snapshot.grants(&Scope::parse("fs.read").unwrap()),
+            "child still holds fs.read (it's in the factory's hand-built envelope)"
+        );
+
+        // Parent's observed tool outcome (the one the planner sees)
+        // shows the child's final message in the output payload.
+        // We find it by looking for the ToolCall audit event for
+        // the role.switch id and asserting the summary is Completed.
+        let tool_call_event = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ToolCall {
+                    tool_id, outcome, ..
+                } if *tool_id == role_switch_id => Some(outcome),
+                _ => None,
+            })
+            .expect("must emit a ToolCall audit event for role.switch");
+        assert!(
+            matches!(
+                tool_call_event,
+                ToolOutcomeSummary::Completed { .. }
+            ),
+            "role.switch ToolCall audit outcome must be Completed, got {tool_call_event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_switch_scope_gate_denies_when_parent_lacks_target_scope() {
+        // Parent holds `role.switch:researcher` but asks to switch
+        // into `scribe`. The derived scope is `role.switch:scribe`,
+        // which is NOT granted by `role.switch:researcher` (Rule 3,
+        // SimpleGlob equality mismatch). The dispatch gate produces
+        // a `ScopeDenied` event and `execute` never runs — so the
+        // child factory is never called, no child `TurnStarted`
+        // event fires.
+        let parent_caps = CapabilitySet::from_scopes([
+            Scope::parse("role.switch:researcher").unwrap(),
+        ]);
+
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+        ]));
+
+        // Factory that panics if called — proves the scope gate
+        // short-circuited before the factory was invoked.
+        let factory: Arc<ChildAgentFactory> = Arc::new(|_target: &str| {
+            panic!("child factory must not be called when scope gate denies");
+        });
+        role_switch.set_child_factory(factory).ok();
+
+        let parent_plan = vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({ "target": "scribe", "task": "x" }),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(parent_plan);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            parent_caps,
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let _ = parent_agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+
+        // Exactly one TurnStarted (the parent's) — no child turn
+        // started because the scope gate fired first.
+        let snapshots = turn_started_cap_snapshots(&events);
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "scope-denied role.switch must NOT start a child turn"
+        );
+
+        // ScopeDenied event for `role.switch:scribe` must appear.
+        let denial = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied {
+                    scope_requested, ..
+                } => Some(scope_requested),
+                _ => None,
+            })
+            .expect("must emit a ScopeDenied event for the denied role.switch call");
+        assert_eq!(denial.base(), "role.switch");
+        assert_eq!(denial.qualifier(), Some("scribe"));
+    }
+
+    #[tokio::test]
+    async fn role_switch_factory_error_surfaces_as_failed_tool_outcome() {
+        // Parent holds the broad unqualified `role.switch` (Rule 2
+        // grants any qualified needed). The scope gate passes, the
+        // factory runs, and the factory returns an Err for the
+        // unknown target. Expected: `ToolOutcome::Failed`, no child
+        // `TurnStarted`.
+        let parent_caps =
+            CapabilitySet::from_scopes([Scope::parse("role.switch").unwrap()]);
+
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+        ]));
+
+        // Factory that always returns Err.
+        let factory: Arc<ChildAgentFactory> =
+            Arc::new(|target: &str| Err(format!("unknown target role {target:?}")));
+        role_switch.set_child_factory(factory).ok();
+
+        let parent_plan = vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({ "target": "phantom", "task": "x" }),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(parent_plan);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            parent_caps,
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let _ = parent_agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+
+        // Only the parent's TurnStarted fires — the child is never
+        // constructed because the factory returned Err.
+        let snapshots = turn_started_cap_snapshots(&events);
+        assert_eq!(snapshots.len(), 1, "factory Err must not start a child turn");
+
+        // The ToolCall audit event for role.switch is `Failed`, and
+        // it carries NO `ScopeDenied` (this is a tool-level failure,
+        // not a policy denial — the scope gate passed, the factory
+        // lookup failed).
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "factory failure must NOT emit a ScopeDenied event"
+        );
+        let tool_outcome = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ToolCall {
+                    tool_id, outcome, ..
+                } if *tool_id == role_switch_id => Some(outcome),
+                _ => None,
+            })
+            .expect("must emit a ToolCall audit event for the role.switch attempt");
+        assert!(
+            matches!(tool_outcome, ToolOutcomeSummary::Failed),
+            "factory Err must surface as Failed, got {tool_outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_switch_unconfigured_factory_produces_failed_outcome_not_panic() {
+        // A RoleSwitchTool without `set_child_factory` called is a
+        // misconfigured session layer. The tool must return
+        // `Failed` (not panic) so the error surfaces as a planner-
+        // observable tool failure. This test pins that diagnostic
+        // path.
+        let parent_caps =
+            CapabilitySet::from_scopes([Scope::parse("role.switch").unwrap()]);
+
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+        ]));
+        // NOTE: deliberately DO NOT call `set_child_factory`.
+
+        let parent_plan = vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({ "target": "researcher", "task": "x" }),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(parent_plan);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            parent_caps,
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let outcome = parent_agent.turn(message, &channel).await;
+
+        // Parent turn still completes — a single Failed tool call
+        // is observed by the planner, not a turn-level failure.
+        assert!(
+            matches!(outcome, TurnOutcome::Completed { .. }),
+            "parent turn should complete even when role.switch fails: {outcome:?}"
+        );
+
+        let events = audit.snapshot();
+        let tool_outcome = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ToolCall {
+                    tool_id, outcome, ..
+                } if *tool_id == role_switch_id => Some(outcome),
+                _ => None,
+            })
+            .expect("must emit a ToolCall audit event for the unconfigured call");
+        assert!(
+            matches!(tool_outcome, ToolOutcomeSummary::Failed),
+            "unconfigured factory must surface as Failed, got {tool_outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_switch_child_and_parent_audit_events_use_distinct_turn_ids() {
+        // PRODUCT.md P1.4 says each turn must be tagged by the role
+        // active at turn-start. The structural realization of that
+        // rule is: parent and child emit their OWN `TurnStarted`
+        // events, each with its own `TurnId` (because
+        // `ConcreteAgent::turn` mints a fresh one at entry). This
+        // test pins the distinct-turn-id property.
+        let parent_caps = CapabilitySet::from_scopes([
+            Scope::parse("role.switch:researcher").unwrap(),
+        ]);
+        let child_caps =
+            CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+        ]));
+
+        let child_tools = Arc::clone(&tools);
+        let child_audit = Arc::clone(&audit);
+        let child_caps_for_factory = child_caps.clone();
+        let factory: Arc<ChildAgentFactory> = Arc::new(move |_target: &str| {
+            let plan = vec![NextStep::FinalMessage("child done".to_string())];
+            Ok(build_child_agent(
+                Arc::clone(&child_tools),
+                Arc::clone(&child_audit),
+                child_caps_for_factory.clone(),
+                plan,
+            ))
+        });
+        role_switch.set_child_factory(factory).ok();
+
+        let parent_plan = vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({ "target": "researcher", "task": "x" }),
+            },
+            NextStep::FinalMessage("parent done".to_string()),
+        ];
+        let plan_arc = Arc::new(parent_plan);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            parent_caps,
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let _ = parent_agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        let turn_ids: Vec<TurnId> = events
+            .iter()
+            .filter_map(|e| match e {
+                AuditTag::TurnStarted { turn_id, .. } => Some(*turn_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(turn_ids.len(), 2, "expected 2 TurnStarted events, got {turn_ids:?}");
+        assert_ne!(
+            turn_ids[0], turn_ids[1],
+            "parent and child must have distinct TurnIds — that's the P1.4 tagging guarantee"
+        );
+    }
 }

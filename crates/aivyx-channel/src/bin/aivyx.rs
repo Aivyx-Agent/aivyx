@@ -110,9 +110,11 @@ use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{assemble_role_envelope, run_session, LocalChannel, SessionConfig};
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, Role, ToolAllowlist};
+use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
 use aivyx_core::{
-    AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
-    ShellExecToolConfig, Tool, ToolRegistry, WebFetchToolConfig,
+    Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsReadToolConfig,
+    FsWriteToolConfig, LlmPlanner, LlmPlannerConfig, ShellExecToolConfig, Tool, ToolRegistry,
+    WebFetchToolConfig,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -1299,6 +1301,33 @@ async fn run_async(
     // and the broad `net.fetch` held by the Local CLI
     // (granted below) covers the Trusted-tier catch-all.
     tool_list.push(build_web_fetch_for_channel(channel_kind)?);
+
+    // Phase 14 Task 3 — `role.switch` sub-agent primitive. The
+    // tool is created here with an empty `child_factory` slot
+    // (an internal `OnceLock`) and pushed into the registry
+    // alongside the Phase 4–12 tools. After the registry is
+    // built *and* after `provider` / `audit` / `backcompat_floor`
+    // are in scope below, we come back with
+    // `role_switch_tool.set_child_factory(...)` and install the
+    // real wiring. The outer `Arc<RoleSwitchTool>` handle kept
+    // here and the registry's `Arc<dyn Tool>` clone point at the
+    // same instance, so the `OnceLock` write is visible through
+    // both the dispatch lookup and the outer handle. See
+    // `RoleSwitchTool`'s struct doc for the rationale behind the
+    // initialization dance.
+    //
+    // The tool is registered unconditionally (both Local and
+    // Telegram channels). On a SemiTrusted channel,
+    // `role.switch` is still registered but the turn loop's
+    // ceiling intersection strips the scope — `CEILING_TRUSTED`
+    // holds `role.switch` but `CEILING_SEMITRUSTED` does not —
+    // so any call dispatched by a SemiTrusted planner hits the
+    // scope gate's `Denied` path before reaching `execute`. This
+    // is deliberate: role-switching is a Trusted-tier operation
+    // per Phase 14 Task 2's ceiling decision.
+    let role_switch_tool: Arc<RoleSwitchTool> = Arc::new(RoleSwitchTool::new());
+    tool_list.push(Arc::clone(&role_switch_tool) as Arc<dyn Tool>);
+
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
@@ -1359,6 +1388,149 @@ async fn run_async(
     // structural-impossibility rule from P1+P7.
     let role_tier_ceiling = role_for_envelope.trust_ceiling.value.default_ceiling();
     let capabilities = role_envelope.intersect(role_tier_ceiling);
+
+    // ---- Phase 14 Task 3 — wire the role.switch child factory --------
+    //
+    // Everything the child agent factory needs is now in scope:
+    // provider, audit, tool registry, the full roles map, the
+    // backcompat floor, the model id, and the token budget. We
+    // build a closure that captures `Arc::clone`s of the shared
+    // handles (and plain clones of the non-Arc data), then install
+    // it into the `RoleSwitchTool` via `OnceLock::set`.
+    //
+    // The closure's signature — `Fn(&str) -> Result<Box<dyn Agent>,
+    // String>` — takes a target role name and returns either a
+    // fully-wired child agent or a human-readable error. Errors
+    // here surface as `ToolOutcome::Failed` from `role.switch`'s
+    // `execute`, which the parent's planner observes as a tool
+    // failure and can react to (typically by reporting the error
+    // in its next message to the user).
+    //
+    // ### Structural-impossibility rationale
+    //
+    // The closure *must* call `assemble_role_envelope` against the
+    // target role — there is no other code path inside it that
+    // synthesizes a `CapabilitySet`. This is the type-system
+    // enforcement of PRODUCT.md P1.3: a child cannot hold any
+    // scope that the parent's chain does not transitively grant,
+    // because the child's envelope is always computed by walking
+    // the target's chain and intersecting against the same
+    // `backcompat_floor` the parent was built against. The
+    // `role_tier_ceiling` intersection below adds the second gate
+    // (child's declared tier, same semantics as the parent's).
+    // The channel layer's per-turn ceiling then composes on top
+    // when `child.turn()` runs, giving a three-way intersection
+    // identical to the one the parent sees.
+    //
+    // ### Memory-topic-prefix and tool-allowlist inheritance
+    //
+    // Phase 11 Tasks 2 and 4 wire role-derived memory prefixes
+    // and tool allowlists through the agent builder (`.with_*`).
+    // The child factory applies the *target* role's values here,
+    // not the parent's: a child `researcher` reads and writes
+    // memory under `researcher/` even if the parent is `coder`
+    // running with `coder/`. This is deliberate — the memory
+    // namespace is one of the things the role config actually
+    // configures, and inheriting it from the parent would defeat
+    // the partitioning.
+    let provider_for_factory = Arc::clone(&provider);
+    let audit_for_factory = Arc::clone(&audit);
+    let tools_for_factory = Arc::clone(&tools);
+    let roles_for_factory = roles.clone();
+    let backcompat_floor_for_factory = backcompat_floor.clone();
+    let model_for_factory = model.clone();
+    let max_tokens_for_factory: u32 = DEFAULT_MAX_TOKENS;
+
+    let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
+        // Resolve the target role. `roles` is the same validated
+        // map the parent was built against, so a missing key is a
+        // planner bug (or an operator config change mid-session,
+        // which the current architecture doesn't support) — the
+        // error message distinguishes the two cases.
+        let target_role = roles_for_factory
+            .get(target)
+            .ok_or_else(|| {
+                format!(
+                    "unknown target role {target:?}; declared roles are: {}",
+                    roles_for_factory
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?
+            .clone();
+
+        // Compute the child's effective capability envelope.
+        // Structural-impossibility property: the only path that
+        // produces a child `CapabilitySet` goes through
+        // `assemble_role_envelope`, which walks the target's
+        // ancestor chain and intersects at every level.
+        let child_envelope = assemble_role_envelope(
+            &target_role,
+            &roles_for_factory,
+            &backcompat_floor_for_factory,
+        );
+        let child_tier_ceiling = target_role.trust_ceiling.value.default_ceiling();
+        let child_capabilities = child_envelope.intersect(child_tier_ceiling);
+
+        // Destructure the target role's per-role config for the
+        // child's planner and agent builder. Mirrors the parent
+        // path at lines 1193-1199.
+        let child_system_prompt = target_role.system_prompt.value;
+        let child_tool_allowlist: Option<std::collections::BTreeSet<String>> =
+            match target_role.tool_allowlist.value {
+                ToolAllowlist::AllowAll => None,
+                ToolAllowlist::Only(list) => Some(list.into_iter().collect()),
+            };
+        let child_memory_topic_prefix: Option<String> =
+            target_role.memory_topic_prefix.value;
+
+        // Build the child's planner factory. Same shape as the
+        // parent's `run_session` planner factory: captures the
+        // provider and registry by Arc, the planner config by
+        // value (cloned per-turn). The child's planner is
+        // independent of the parent's — a fresh `LlmPlanner` per
+        // sub-session turn, exactly like the parent.
+        let planner_config = LlmPlannerConfig::new(model_for_factory.clone())
+            .with_system_prompt(child_system_prompt)
+            .with_max_tokens(max_tokens_for_factory)
+            .with_tool_allowlist(child_tool_allowlist.clone());
+        let planner_provider = Arc::clone(&provider_for_factory);
+        let planner_tools = Arc::clone(&tools_for_factory);
+        let child_planner_factory = move || {
+            Box::new(LlmPlanner::new(
+                Arc::clone(&planner_provider),
+                Arc::clone(&planner_tools),
+                planner_config.clone(),
+            )) as Box<dyn aivyx_core::TurnPlanner>
+        };
+
+        let child_agent = ConcreteAgent::new(
+            AgentId::new(),
+            child_capabilities,
+            Arc::clone(&tools_for_factory),
+            Arc::clone(&audit_for_factory),
+            child_planner_factory,
+        )
+        .with_tool_allowlist(child_tool_allowlist)
+        .with_memory_topic_prefix(child_memory_topic_prefix);
+
+        Ok(Box::new(child_agent) as Box<dyn Agent>)
+    });
+
+    // Install the factory into the tool. `set_child_factory`
+    // returns `Err` if called twice — we treat that as a binary
+    // startup bug (the factory is built exactly once at this
+    // site) and surface it as a startup error rather than
+    // silently dropping the factory.
+    role_switch_tool
+        .set_child_factory(child_factory)
+        .map_err(|_| {
+            "role.switch child factory was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
 
     // ---- Channel branch ----------------------------------------------
     // Phase 8 Task 4 — fork here on `channel_kind`. Everything upstream
