@@ -1585,6 +1585,176 @@ parent_role = "a"
     }
 }
 
+// ====================================================================
+// Phase 13 Task 2 — child-parent attenuation invariant (invariant 5)
+// ====================================================================
+
+/// PRODUCT.md P7's "child can attenuate, never widen" rule fires
+/// at config-load time when a child role declares a
+/// `capability_scopes` entry that its constraining ancestor does
+/// not grant. The error message names both the child role, the
+/// offending scope string, and the constraining ancestor whose
+/// declared scopes failed to grant it.
+#[test]
+fn child_role_widening_parent_envelope_fails_at_load_time() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13t2-widen");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "default"
+system_prompt = "root"
+capability_scopes = ["fs.read"]
+
+[[role]]
+name = "rogue"
+system_prompt = "tries to widen"
+parent_role = "default"
+capability_scopes = ["fs.read", "shell.exec"]
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "rogue");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("widening child should fail");
+    match err {
+        ConfigError::RoleInheritance { reason } => {
+            assert!(reason.contains("rogue"), "names child: {reason}");
+            assert!(
+                reason.contains("shell.exec"),
+                "names offending scope: {reason}"
+            );
+            assert!(
+                reason.contains("default"),
+                "names constraining ancestor: {reason}"
+            );
+        }
+        other => panic!("expected RoleInheritance, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+/// Empty `capability_scopes` is the unconstrained sentinel: a
+/// role with no declared scopes adds no constraint, and the
+/// attenuation walk skips through it to find the next non-empty
+/// ancestor. This pins that a `grandparent → empty parent →
+/// child` chain validates the child against the **grandparent's**
+/// scopes, not the parent's empty set (which would otherwise
+/// either pass everything or fail everything depending on edge
+/// behavior).
+#[test]
+fn attenuation_walk_skips_empty_parent_to_grandparent() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13t2-skip-empty");
+    let toml_path = tmp.path().join("aivyx.toml");
+    // grandparent: fs.read only
+    // parent: empty (sentinel — adds nothing)
+    // child: tries to declare net.fetch
+    // Expected: fail, because grandparent doesn't grant net.fetch
+    // and the walk skips through the empty parent.
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "grandparent"
+system_prompt = "gp"
+capability_scopes = ["fs.read"]
+
+[[role]]
+name = "parent"
+system_prompt = "p"
+parent_role = "grandparent"
+
+[[role]]
+name = "child"
+system_prompt = "c"
+parent_role = "parent"
+capability_scopes = ["net.fetch"]
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "child");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("widening through empty parent should fail");
+    match err {
+        ConfigError::RoleInheritance { reason } => {
+            assert!(reason.contains("child"), "names child: {reason}");
+            assert!(reason.contains("net.fetch"), "names scope: {reason}");
+            assert!(
+                reason.contains("grandparent"),
+                "constraining ancestor is grandparent, not parent: {reason}"
+            );
+        }
+        other => panic!("expected RoleInheritance, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+/// D4 prefix-attenuation under inheritance: a child declaring
+/// `fs.read:/tmp/**` under a parent declaring unqualified
+/// `fs.read` loads cleanly, because Rule 2 ("unqualified held
+/// grants any qualified needed with the same base") makes the
+/// parent's unqualified scope grant the child's narrow one. This
+/// is the load-time analog of the runtime intersection behavior
+/// — both routes (config validation, runtime envelope assembly)
+/// agree on what counts as "child can attenuate."
+#[test]
+fn child_qualifier_under_unqualified_parent_loads_cleanly() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13t2-qualifier-attenuation");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "default"
+system_prompt = "broad parent"
+capability_scopes = ["fs.read", "fs.write"]
+
+[[role]]
+name = "narrow"
+system_prompt = "narrowed child"
+parent_role = "default"
+capability_scopes = ["fs.read:/etc/**"]
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "narrow");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect("qualifier attenuation should load");
+    let role = cfg.roles.get("narrow").unwrap();
+    assert_eq!(role.capability_scopes.value.len(), 1);
+    assert_eq!(
+        role.capability_scopes.value[0].as_str(),
+        "fs.read:/etc/**"
+    );
+}
+
 /// Q4 ergonomic — when an explicit `default` role is declared
 /// alongside other roles, those other roles implicitly inherit
 /// from `default` (with `FieldSource::Default` provenance, since

@@ -308,6 +308,13 @@ pub enum ConfigError {
     ///   rule is "no role has more than one parent," which a forest
     ///   satisfies — so this variant only fires when *zero* roots
     ///   exist, not when there are two or more.
+    /// - A role declares a `capability_scopes` entry that is not
+    ///   granted by its nearest non-empty ancestor's declared
+    ///   scopes. PRODUCT.md P7's "child can attenuate, never widen"
+    ///   rule, enforced at config-load time per Q5. The error
+    ///   message names the offending child role, the offending
+    ///   scope string, and the constraining ancestor whose
+    ///   declared scopes failed to grant it.
     ///
     /// The `reason` field carries a human-readable explanation that
     /// includes the offending role name(s) and, where applicable,
@@ -1390,6 +1397,17 @@ fn env_path(var: &str) -> Option<PathBuf> {
 ///    by a single rooted tree, so we deliberately tolerate
 ///    multi-root configs (Phase 11 fixtures with two sibling roles
 ///    and no `default` are the canonical example).
+/// 5. **Child-parent attenuation.** Each role's declared
+///    `capability_scopes` (when non-empty) must be a subset, under
+///    D4 prefix-attenuation, of its **nearest non-empty ancestor**'s
+///    declared scopes. PRODUCT.md P7's "child can attenuate, never
+///    widen" rule, enforced at config-load time per Q5. Empty
+///    `capability_scopes` is the unconstrained sentinel: an empty
+///    role declares no constraint, so the walk skips it and looks
+///    at the next ancestor up. If every ancestor up to the root is
+///    empty, there's no constraint to enforce and the child's
+///    declared set is legal at this level (the binary's backcompat
+///    floor and the channel ceiling cap it at runtime).
 ///
 /// Does not mutate `roles`. On success returns `Ok(())`; on any
 /// violation returns `Err(ConfigError::RoleInheritance { reason })`
@@ -1486,6 +1504,98 @@ fn validate_role_inheritance(roles: &BTreeMap<String, Role>) -> Result<(), Confi
                 .to_string(),
         });
     }
+
+    // Invariant 5: child-parent attenuation. PRODUCT.md P7 commits
+    // to "child can attenuate, never widen" — a role that declares
+    // `capability_scopes` must declare a *subset* of its nearest
+    // non-empty ancestor's declared scopes (under D4 prefix-
+    // attenuation: every declared scope must be `is_granted_by`
+    // some scope in that ancestor's set). Q5 resolution: enforce
+    // at config-load time so a typo in a child role surfaces with
+    // file context, not at the next capability check.
+    //
+    // **Empty `capability_scopes` is the unconstrained sentinel.**
+    // A role with no declared scopes is saying "I add no
+    // constraint — take whatever inheritance gives me, or the
+    // binary's backcompat floor if nothing else applies." The
+    // attenuation walk skips empty links: when looking for a
+    // child's effective constraint, we walk up the parent chain
+    // through empty roles until we find a non-empty ancestor.
+    // If the entire chain to the root is empty, the child has no
+    // constraint to validate against and any declared set is
+    // legal at config-load time (the binary's backcompat floor
+    // and the channel ceiling do the actual capping at runtime).
+    //
+    // **Why declared sets, not effective sets.** The binary's
+    // backcompat floor lives in `aivyx-channel/src/bin/aivyx.rs`,
+    // not in `aivyx-config`, and bleeding it into a leaf crate
+    // would invert the workspace dep graph. Validating against
+    // declared sets keeps `aivyx-config` self-contained: if an
+    // operator wants two-level attenuation enforcement, they
+    // must explicitly declare scopes on the parent. The
+    // implicit-floor path goes one level deep only — which is
+    // the right strictness for a backcompat hatch (Q6).
+    for (name, role) in roles {
+        if role.capability_scopes.value.is_empty() {
+            // Empty role declares no constraint — nothing to
+            // attenuate against the parent.
+            continue;
+        }
+        // Walk up the parent chain through empty roles until we
+        // hit a non-empty ancestor or run out of parents. Cycles
+        // were rejected by invariant 3, so this loop terminates.
+        let mut cursor = role.parent_role.value.as_deref();
+        let constraining_ancestor: Option<&Role> = loop {
+            let Some(parent_name) = cursor else {
+                break None;
+            };
+            let Some(parent) = roles.get(parent_name) else {
+                // Already caught by invariant 1; keeping the
+                // pattern exhaustive for clarity.
+                break None;
+            };
+            if !parent.capability_scopes.value.is_empty() {
+                break Some(parent);
+            }
+            cursor = parent.parent_role.value.as_deref();
+        };
+        let Some(ancestor) = constraining_ancestor else {
+            // Whole chain to root is empty (or this role is
+            // itself a root). No constraint to enforce.
+            continue;
+        };
+        let ancestor_name = ancestor.name.value.as_str();
+        // Every declared scope on `role` must be granted by some
+        // scope on `ancestor`.
+        for child_scope in &role.capability_scopes.value {
+            let granted = ancestor
+                .capability_scopes
+                .value
+                .iter()
+                .any(|parent_scope| child_scope.is_granted_by(parent_scope));
+            if !granted {
+                let ancestor_scope_strings: Vec<&str> = ancestor
+                    .capability_scopes
+                    .value
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
+                return Err(ConfigError::RoleInheritance {
+                    reason: format!(
+                        "role `{name}` declares capability scope \
+                         {child:?} that is not granted by its \
+                         constraining ancestor `{ancestor_name}` \
+                         (PRODUCT.md P7: a child may attenuate but \
+                         never widen its parent's envelope; \
+                         `{ancestor_name}`'s declared scopes are \
+                         {ancestor_scope_strings:?})",
+                        child = child_scope.as_str(),
+                    ),
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 

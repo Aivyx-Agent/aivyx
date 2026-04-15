@@ -97,6 +97,7 @@
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Phase 9 Task 3 — `SecretString` no longer lives on the binary's
@@ -109,7 +110,7 @@ use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
-use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
+use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, Role, ToolAllowlist};
 use aivyx_core::{
     AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
     ShellExecToolConfig, Tool, ToolRegistry, WebFetchToolConfig,
@@ -216,6 +217,103 @@ fn build_web_fetch_for_channel(
         .build()
         .map_err(|e| format!("failed to build web.fetch tool: {e}"))?;
     Ok(Arc::new(tool) as Arc<dyn Tool>)
+}
+
+/// Phase 13 Task 2 — assemble the effective capability envelope
+/// for an active role by walking its `parent_role` chain.
+///
+/// **Algorithm.** Starting from `active`, walk up the chain
+/// through `roles`, collecting each role's declared
+/// `capability_scopes`. At each level:
+///
+/// - If the role's `capability_scopes` is non-empty, use it as
+///   declared.
+/// - If empty, substitute `backcompat_floor`. This is the **Q6
+///   minimal backcompat floor**: a role that declares no
+///   envelope inherits whatever the binary used to grant
+///   pre-Phase-13 (the hard-coded `aivyx.rs:907–934` vector,
+///   shrunk to the Phase 1–10 zero-config defaults). The floor
+///   substitution happens at every empty level, not just at
+///   the root, so a chain of empty roles all see the same
+///   floor and intersect to itself — preserving Phase 11
+///   `tool_allowlist`-narrows-broad-floor backcompat exactly.
+///
+/// The resulting per-level scope sets are then folded
+/// pairwise via `CapabilitySet::intersect` from leaf toward
+/// root. Intersection under D4 prefix-attenuation keeps the
+/// **narrower** of two scopes that share a base (the child's
+/// `fs.read:/tmp/**` survives intersection with the parent's
+/// `fs.read`), which is the structural meaning of P7's
+/// "child can attenuate, never widen" rule.
+///
+/// **Why leaf-to-root, not root-to-leaf.** Both directions
+/// produce the same final set under intersection (the operation
+/// is commutative and associative), but the leaf-to-root walk
+/// matches how an operator reads the config — "this role,
+/// then its parent, then its grandparent" — and keeps the
+/// "active role" the natural starting point.
+///
+/// **Trust ceiling intersection happens at the call site, not
+/// here.** `assemble_role_envelope` is purely about scope-set
+/// inheritance; the Q3 `trust_ceiling.default_ceiling()` layer
+/// composes on top via a separate `intersect` call right
+/// before the envelope is handed to the channel branch. This
+/// keeps the function's contract narrow: "given a role tree
+/// and a backcompat floor, what scopes does this role declare
+/// it wants?"
+///
+/// **Cycle safety.** `aivyx_config::validate_role_inheritance`
+/// has already rejected cycles by the time this function runs,
+/// so an unbounded `while let Some(parent)` walk is safe. As
+/// belt-and-suspenders, the loop carries a depth counter and
+/// bails after `MAX_INHERITANCE_DEPTH` to make a future
+/// validator regression loud rather than infinite-looping a
+/// production process.
+fn assemble_role_envelope(
+    active: &Role,
+    roles: &BTreeMap<String, Role>,
+    backcompat_floor: &[Scope],
+) -> CapabilitySet {
+    /// Belt-and-suspenders bound — the config validator already
+    /// rejects cycles, so this can only fire if a regression
+    /// in `validate_role_inheritance` lets one through.
+    /// Realistic role trees are 2–3 deep; 64 is comfortably
+    /// above any plausible operator config.
+    const MAX_INHERITANCE_DEPTH: usize = 64;
+
+    let level_scopes = |role: &Role| -> Vec<Scope> {
+        if role.capability_scopes.value.is_empty() {
+            backcompat_floor.to_vec()
+        } else {
+            role.capability_scopes.value.clone()
+        }
+    };
+
+    let mut effective = CapabilitySet::from_scopes(level_scopes(active));
+    let mut cursor = active.parent_role.value.as_deref();
+    let mut depth = 0;
+    while let Some(parent_name) = cursor {
+        depth += 1;
+        if depth > MAX_INHERITANCE_DEPTH {
+            // Validator regression — bail out with whatever we
+            // have so far rather than loop forever. The next
+            // turn's capability check will surface the
+            // truncation as a denial, which is a louder failure
+            // than an infinite loop and keeps the audit chain
+            // honest.
+            break;
+        }
+        let Some(parent) = roles.get(parent_name) else {
+            // Validator already rejected unknown parents; this
+            // branch is unreachable under a well-validated
+            // config but kept for defensive composition.
+            break;
+        };
+        let parent_set = CapabilitySet::from_scopes(level_scopes(parent));
+        effective = effective.intersect(&parent_set);
+        cursor = parent.parent_role.value.as_deref();
+    }
+    effective
 }
 
 fn main() -> ExitCode {
@@ -777,6 +875,15 @@ async fn run_async(
         .get(&active_role_name)
         .expect("active_role must key into roles after validate()")
         .clone();
+    // Phase 13 Task 2 — keep a second handle on the active role
+    // for `assemble_role_envelope` to borrow downstream. The
+    // per-field destructure below moves `system_prompt`,
+    // `tool_allowlist`, and `memory_topic_prefix` out of `role`,
+    // which would leave `role` partially moved by the time the
+    // envelope-assembly call runs. The clone is cheap (one
+    // role, a few `Sourced<T>` fields) and confines the move
+    // discipline to two adjacent lines.
+    let role_for_envelope = role.clone();
     let system_prompt = role.system_prompt.value;
     let tool_allowlist: Option<std::collections::BTreeSet<String>> =
         match role.tool_allowlist.value {
@@ -891,48 +998,63 @@ async fn run_async(
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
-    // The CLI is the most-trusted channel on the box; the agent gets
-    // a broad capability set so chat-only turns don't get denied for
-    // scopes they never actually request. The `fs.*` scopes are
-    // rooted at the canonicalized sandbox path so the scope-derivation
-    // path in `FsReadTool::required_scope` lines up exactly with a
-    // held capability. The three `memory.*` scopes are granted
-    // **unqualified**: by D4 Rule 2 an unqualified held scope grants
-    // any qualified needed scope with the same base, so the per-topic
-    // scopes each `Memory*Tool::required_scope` returns
-    // (`memory.read:topic:<topic>`, etc.) are all covered. Per-topic
-    // attenuation becomes interesting the moment Phase 7+ introduces
-    // a non-Trusted channel for the memory tools; Trusted CLI gets
-    // the full family by default per D4's tier table.
-    let mut scopes: Vec<Scope> = vec![
+    // Phase 13 Task 2 — capability assembly is now role-driven.
+    // The hard-coded vector below is the **backcompat floor**
+    // (Q6): it represents the capabilities the binary used to
+    // grant unconditionally before Phase 13 introduced per-role
+    // envelopes, and it is now used **only** for roles whose
+    // declared `capability_scopes` list is empty. A role that
+    // declares any non-empty `capability_scopes` set in TOML
+    // bypasses this floor entirely and runs with exactly its
+    // declared envelope, walked through its inheritance chain
+    // by `assemble_role_envelope` per PRODUCT.md P7's
+    // attenuation rule.
+    //
+    // The fs.* scopes are still rooted at the canonicalized
+    // sandbox path so `FsReadTool::required_scope` lines up
+    // exactly with the held capability — that's a per-process
+    // anchor, not a per-role decision, so it stays inside the
+    // floor. The three `memory.*` scopes remain unqualified
+    // (D4 Rule 2 — unqualified held grants any qualified
+    // needed). `shell.exec` is appended only on the Local
+    // branch because the tool itself is absent from the
+    // SemiTrusted dispatch registry. `net.fetch` is granted
+    // unqualified for both tiers; the turn loop's ceiling
+    // intersection narrows it for SemiTrusted via
+    // `CEILING_SEMITRUSTED`.
+    let mut backcompat_floor: Vec<Scope> = vec![
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
         Scope::parse("memory.forget").unwrap(),
         fs_read_scope,
         fs_write_scope,
-        // Phase 12 Task 2 — unqualified `net.fetch` for the
-        // broad operator-held capability set. D4 Rule 2:
-        // unqualified held grants any qualified needed with
-        // the same base, so the per-URL
-        // `net.fetch:<url>` that `WebFetchTool::required_scope`
-        // emits is always granted for the Local CLI. The
-        // SemiTrusted Telegram path gets the same unqualified
-        // scope via this one insert, and the turn loop's
-        // ceiling intersection narrows it on the Telegram
-        // side using `CEILING_SEMITRUSTED` — which is also
-        // `net.fetch` unqualified, so both tiers get the same
-        // broad grant here and per-role attenuation happens
-        // via `tool_allowlist` + per-role capability files.
         Scope::parse("net.fetch").unwrap(),
     ];
-    // Only the Local (Trusted) branch ever holds this scope — the
-    // tool itself is absent from the registry on SemiTrusted
-    // channels, so the scope is useless there anyway and we elide
-    // it to keep the audited capability footprint tight.
     if let Some(s) = shell_exec_scope {
-        scopes.push(s);
+        backcompat_floor.push(s);
     }
-    let capabilities = CapabilitySet::from_scopes(scopes);
+
+    // Walk the active role's inheritance chain, intersecting
+    // declared scopes leaf-to-root. Empty levels substitute the
+    // floor. This is the new primary code path for any operator
+    // who has written a `[[role]]` entry; the floor is consulted
+    // only as a per-empty-level fallback.
+    let role_envelope = assemble_role_envelope(&role_for_envelope, &roles, &backcompat_floor);
+
+    // Q3 — apply the role's declared `trust_ceiling` as a
+    // second intersection layer. This composes with the turn
+    // loop's existing per-turn `channel.tier().default_ceiling()`
+    // intersection (Phase 11) to give the effective ceiling
+    // `min(channel_tier, role_tier)` per `default_ceiling`'s
+    // tier-table entries. A role declaring `Trusted` on a
+    // SemiTrusted channel still runs at SemiTrusted (the
+    // channel layer wins); a role declaring `SemiTrusted` on
+    // a Trusted channel runs at SemiTrusted (the role layer
+    // chooses to run more restrictively). Both directions
+    // resolve to the more-restrictive tier, which is the
+    // structural-impossibility rule from P1+P7.
+    let role_tier_ceiling = role_for_envelope.trust_ceiling.value.default_ceiling();
+    let capabilities = role_envelope.intersect(role_tier_ceiling);
 
     // ---- Channel branch ----------------------------------------------
     // Phase 8 Task 4 — fork here on `channel_kind`. Everything upstream
@@ -1268,5 +1390,209 @@ mod tests {
         let tool = build_web_fetch_for_channel(ChannelKind::Telegram)
             .expect("telegram branch must build web.fetch cleanly");
         assert_eq!(tool.name(), "web.fetch");
+    }
+
+    // ================================================================
+    // Phase 13 Task 2 — `assemble_role_envelope` regression tests
+    // ================================================================
+    //
+    // These tests pin the leaf-to-root inheritance walk + the
+    // empty-level floor substitution rule. They build `Role`
+    // fixtures by hand (the `Role` struct is `pub` with `pub`
+    // fields per `aivyx-config`'s
+    // `role_struct_is_constructible_and_matchable_from_outside`
+    // test) so they exercise the assembly fn without booting any
+    // of the rest of `run()`'s startup machinery.
+
+    use aivyx_config::{FieldSource, Sourced, ToolAllowlist};
+
+    /// Build a minimal `Role` fixture with the given name,
+    /// declared scopes, and parent. Other fields land at their
+    /// default-source values — they are not load-bearing for
+    /// envelope assembly tests.
+    fn make_role(name: &str, scopes: Vec<&str>, parent: Option<&str>) -> Role {
+        Role {
+            name: Sourced::new(name.to_string(), FieldSource::Default),
+            system_prompt: Sourced::new(String::new(), FieldSource::Default),
+            tool_allowlist: Sourced::new(ToolAllowlist::AllowAll, FieldSource::Default),
+            memory_topic_prefix: Sourced::new(None, FieldSource::Default),
+            capability_scopes: Sourced::new(
+                scopes
+                    .into_iter()
+                    .map(|s| Scope::parse(s).unwrap_or_else(|| panic!("bad scope: {s}")))
+                    .collect(),
+                FieldSource::Default,
+            ),
+            trust_ceiling: Sourced::new(
+                aivyx_capability::TrustTier::Trusted,
+                FieldSource::Default,
+            ),
+            parent_role: Sourced::new(parent.map(String::from), FieldSource::Default),
+        }
+    }
+
+    fn floor() -> Vec<Scope> {
+        vec![
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+            Scope::parse("net.fetch").unwrap(),
+        ]
+    }
+
+    /// A role that declares one capability scope and has no
+    /// parent runs with exactly that scope and **bypasses the
+    /// floor entirely**. This is the core P9 promise: declare
+    /// what you want, get what you declared.
+    #[test]
+    fn role_with_declared_scope_runs_only_that_scope_not_floor() {
+        let role = make_role("solo", vec!["fs.read:/tmp/**"], None);
+        let mut roles = BTreeMap::new();
+        roles.insert("solo".to_string(), role.clone());
+
+        let envelope = assemble_role_envelope(&role, &roles, &floor());
+        let scope_strings: Vec<&str> = envelope.iter().map(|s| s.as_str()).collect();
+        assert_eq!(scope_strings, vec!["fs.read:/tmp/**"]);
+    }
+
+    /// A role with empty `capability_scopes` and no parent runs
+    /// with the backcompat floor. This is the Phase 1–10
+    /// zero-config path: a synthesized `default` (or any
+    /// operator-declared role with no scopes) inherits the
+    /// hard-coded vector that Phase 13 Task 2 demoted from
+    /// "primary code path" to "fallback for empty roles."
+    #[test]
+    fn empty_role_inherits_backcompat_floor_verbatim() {
+        let role = make_role("empty", vec![], None);
+        let mut roles = BTreeMap::new();
+        roles.insert("empty".to_string(), role.clone());
+
+        let envelope = assemble_role_envelope(&role, &roles, &floor());
+        let scope_strings: Vec<&str> = envelope.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            scope_strings,
+            vec!["memory.read", "memory.write", "net.fetch"]
+        );
+    }
+
+    /// A child with a narrower declared scope and an empty
+    /// parent runs the **intersection** of the child's
+    /// declaration with the parent's substituted floor. The
+    /// floor grants `memory.read` unqualified, the child
+    /// declares `memory.read:topic:secrets`, and intersection
+    /// keeps the narrower child scope (D4 Rule 2 — unqualified
+    /// held grants any qualified needed with the same base, so
+    /// the child scope is granted by the parent's floor and
+    /// survives intersection). This pins that the floor
+    /// substitution composes correctly with child attenuation,
+    /// not just at root level.
+    #[test]
+    fn child_attenuates_parents_substituted_floor_at_runtime() {
+        let parent = make_role("parent", vec![], None);
+        let child = make_role(
+            "child",
+            vec!["memory.read:topic:secrets"],
+            Some("parent"),
+        );
+        let mut roles = BTreeMap::new();
+        roles.insert("parent".to_string(), parent);
+        roles.insert("child".to_string(), child.clone());
+
+        let envelope = assemble_role_envelope(&child, &roles, &floor());
+        let scope_strings: Vec<&str> = envelope.iter().map(|s| s.as_str()).collect();
+        // Intersection keeps only `memory.read:topic:secrets` —
+        // the child's narrow scope is granted by the parent's
+        // floor `memory.read`, and the parent's other floor
+        // scopes (`memory.write`, `net.fetch`) are NOT granted
+        // by the child's narrow set, so they drop out.
+        assert_eq!(scope_strings, vec!["memory.read:topic:secrets"]);
+    }
+
+    /// A two-level inheritance walk where both levels declare
+    /// non-empty scopes and the child's declarations are a
+    /// proper subset of the parent's. Pins that
+    /// `assemble_role_envelope` walks the chain and that
+    /// intersection at each step preserves the child's
+    /// narrower scopes intact.
+    #[test]
+    fn multi_level_inheritance_preserves_child_attenuation() {
+        let parent = make_role("parent", vec!["fs.read", "fs.write"], None);
+        let child = make_role(
+            "child",
+            vec!["fs.read:/etc/**"],
+            Some("parent"),
+        );
+        let mut roles = BTreeMap::new();
+        roles.insert("parent".to_string(), parent);
+        roles.insert("child".to_string(), child.clone());
+
+        let envelope = assemble_role_envelope(&child, &roles, &floor());
+        let scope_strings: Vec<&str> = envelope.iter().map(|s| s.as_str()).collect();
+        // Child declared `fs.read:/etc/**`; parent declared
+        // `fs.read` (which grants the child's qualified scope
+        // by D4 Rule 2) and `fs.write` (no overlap with the
+        // child's set). Intersection keeps only the child's
+        // narrower scope.
+        assert_eq!(scope_strings, vec!["fs.read:/etc/**"]);
+    }
+
+    /// `trust_ceiling` intersection at the call site (not in
+    /// `assemble_role_envelope`, which deliberately stays
+    /// scope-only). A role declaring `SemiTrusted` runs with
+    /// the `CEILING_SEMITRUSTED` set even on a Trusted channel
+    /// — the role chooses to run more restrictively. Verified
+    /// by composing the same intersection step the binary
+    /// does. `Untrusted` would be the strictest test, but its
+    /// ceiling is so narrow (`memory.read:scope:public:*` +
+    /// `audit.read:public`) that no realistic role envelope
+    /// survives it; `SemiTrusted` is the right "more
+    /// restrictive than channel but still functional" demo
+    /// and matches the Telegram-channel attenuation the
+    /// binary does in production.
+    #[test]
+    fn role_declared_trust_ceiling_attenuates_envelope_below_channel_tier() {
+        // A role that declares `net.fetch` (which SemiTrusted
+        // tier permits) and `shell.exec` (which SemiTrusted
+        // strips per the D5 ⊘ list).
+        let role = Role {
+            name: Sourced::new("locked".to_string(), FieldSource::Default),
+            system_prompt: Sourced::new(String::new(), FieldSource::Default),
+            tool_allowlist: Sourced::new(ToolAllowlist::AllowAll, FieldSource::Default),
+            memory_topic_prefix: Sourced::new(None, FieldSource::Default),
+            capability_scopes: Sourced::new(
+                vec![
+                    Scope::parse("net.fetch").unwrap(),
+                    Scope::parse("shell.exec").unwrap(),
+                ],
+                FieldSource::Default,
+            ),
+            trust_ceiling: Sourced::new(
+                aivyx_capability::TrustTier::SemiTrusted,
+                FieldSource::Default,
+            ),
+            parent_role: Sourced::new(None, FieldSource::Default),
+        };
+        let mut roles = BTreeMap::new();
+        roles.insert("locked".to_string(), role.clone());
+
+        // Compose the same two-step assembly the binary does.
+        let envelope = assemble_role_envelope(&role, &roles, &floor());
+        let role_tier_ceiling = role.trust_ceiling.value.default_ceiling();
+        let capabilities = envelope.intersect(role_tier_ceiling);
+
+        // `net.fetch` survives — `CEILING_SEMITRUSTED` includes
+        // network reads. `shell.exec` is stripped — SemiTrusted
+        // never gets shell execution per D5. The role declared
+        // `SemiTrusted` so this attenuation happens *here*, not
+        // in the per-turn channel ceiling intersection.
+        let scope_strings: Vec<&str> =
+            capabilities.iter().map(|s| s.as_str()).collect();
+        assert!(
+            scope_strings.contains(&"net.fetch"),
+            "net.fetch must survive SemiTrusted ceiling: {scope_strings:?}"
+        );
+        assert!(
+            !scope_strings.contains(&"shell.exec"),
+            "shell.exec must be stripped by SemiTrusted ceiling: {scope_strings:?}"
+        );
     }
 }

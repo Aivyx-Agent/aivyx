@@ -821,3 +821,237 @@ crates/aivyx-core/src/lib.rs | wc -l` returning `0`.
 - **Worked-example `examples/aivyx.toml`.** Task 3 ships
   this; recorded only because it's the natural exercising
   surface for Task 1's new fields.
+
+---
+
+## Task 2 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed.** The Task 2 plan said "walk
+the inheritance chain, intersect declared sets, fold
+`trust_ceiling` per Q3, and let Q5 (the empty-Vec
+semantics on the consumer side) resolve itself when the
+binary-side rewrite happens." The draft left two design
+holes that the implementation had to fill before any
+code could land:
+
+1. **Where does child→parent attenuation get enforced?**
+   The draft punted this to "the validator at load time
+   or the assembly fn at runtime — pick one when you get
+   there." Both were live options at the start of the
+   session.
+2. **Against *declared* sets or *effective* sets?** A
+   role with no declared `capability_scopes` is the
+   unconstrained sentinel. If attenuation is checked
+   against the effective set (the runtime substitution
+   of the backcompat floor), the validator has to
+   *know about* the floor — which means the floor
+   bleeds out of the binary and into `aivyx-config`.
+
+**What the implementation actually shipped.** Q5
+resolved as a two-part rule:
+
+1. **Attenuation is enforced at config-load time, in
+   `validate_role_inheritance`, against *declared* sets
+   only.** A role's declared `capability_scopes` must
+   each be `is_granted_by` some scope in its nearest
+   constraining ancestor's declared set, where
+   "constraining ancestor" means the nearest parent
+   walking up the chain that itself has a *non-empty*
+   declared set. Empty `capability_scopes` is the
+   unconstrained sentinel: a role with no declared
+   scopes adds no constraint, so the validator walks
+   *through* it to the next ancestor. If no constraining
+   ancestor exists in the chain, the role is its own
+   ceiling at config-load time and the runtime
+   substitution (the binary's backcompat floor) is what
+   it intersects against at the call site. The
+   `aivyx-config` crate does not learn about the floor;
+   the binary does the substitution.
+2. **The attenuation walk skips through empty
+   ancestors.** A naïve "check immediate parent only"
+   rule would let a config like `grandparent =
+   ["fs.read"] → parent = [] → child = ["net.fetch"]`
+   pass the validator (because `child`'s immediate
+   parent has no constraints) and then mysteriously
+   widen `grandparent`'s envelope at runtime. The walk
+   keeps climbing until it finds the nearest non-empty
+   ancestor or runs out of chain.
+
+**Why declared-only and not effective.** Three reasons,
+in order of weight:
+
+- The backcompat floor is a *binary-side*
+  implementation detail. Phase 14 might replace it; the
+  validator should not need to be re-verified against
+  every binary-side rewrite.
+- Declared-set enforcement gives operators a config
+  that is "honest about what it constrains" —
+  attenuation errors point at scope strings the
+  operator actually wrote, not at strings the binary
+  inserted on their behalf.
+- It composes with Q6 cleanly: the hard-coded vector
+  survives as the runtime floor (per-empty-level), and
+  the validator simply doesn't see it.
+
+**Operational consequence — recorded for Task 3.** The
+implicit-floor path is now exactly *one level deep*. A
+role with no declared scopes gets the floor; its
+children that *do* declare scopes are checked against
+the floor at runtime (via intersection at the call
+site) but not at load time (because the validator
+walks past empty ancestors). Two-level inheritance
+where the operator wants real attenuation requires the
+operator to declare the parent's scopes explicitly. The
+worked example `examples/aivyx.toml` (Task 3) is the
+right place to demonstrate this so operators don't get
+surprised.
+
+**Q3 implementation note — two sequential
+intersections.** The "min(channel_tier, role_tier)"
+ceiling rule is not a tier comparison; it is two
+sequential `CapabilitySet::intersect` calls. The binary
+applies the role-tier intersection at the role-envelope
+assembly site (here, Task 2). The turn loop's existing
+per-turn channel-tier intersection then composes
+naturally on top, with no explicit `min`-of-tiers
+logic anywhere.
+
+**Production-core byte-identity:** Task 2 is
+structurally above `aivyx-core` and does not touch
+`lib.rs`. The streak baseline at `16e618c` (Phase 12
+exit) is preserved through this task. Verified post-
+Task-2 with `git diff 16e618c --
+crates/aivyx-core/src/lib.rs | wc -l` returning `0`.
+
+---
+
+## Task 2 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **Invariant 5 added to `validate_role_inheritance`**
+   in `crates/aivyx-config/src/lib.rs`. The
+   child→parent attenuation walk: for each role with a
+   non-empty declared `capability_scopes`, walk up the
+   `parent_role` chain *through* empty ancestors until
+   finding the nearest non-empty constraining ancestor
+   (or running out). For each child scope, verify it is
+   granted by *some* scope in that ancestor's declared
+   set via `Scope::is_granted_by` (the same D4
+   prefix-attenuation rule the runtime check uses). On
+   failure: `ConfigError::RoleInheritance` with the
+   child role name, the offending scope string, the
+   ancestor name, and the ancestor's full declared scope
+   list. The `RoleInheritance` docstring grew a fourth
+   bullet for the widening case.
+2. **`assemble_role_envelope` free function** added to
+   `crates/aivyx-channel/src/bin/aivyx.rs` before
+   `fn main()`. Signature: `fn assemble_role_envelope(
+   active: &Role, roles: &BTreeMap<String, Role>,
+   backcompat_floor: &[Scope]) -> CapabilitySet`. Walks
+   leaf-to-root through `parent_role`, substituting the
+   backcompat floor *per-empty-level* (not just at the
+   root), and intersects every level into the running
+   `CapabilitySet`. Depth-bounded at 64 hops as a
+   defense-in-depth guard against any cycle that
+   slipped past the validator.
+3. **Capabilities binding rewritten** at the role-resolution
+   site. The hard-coded scope vector that previously built
+   `Capabilities` directly is now the `backcompat_floor`
+   passed into `assemble_role_envelope`. The role tier
+   intersection (`role_for_envelope.trust_ceiling.value
+   .default_ceiling()`) folds in immediately after, so the
+   final `capabilities` binding is `role_envelope.intersect(
+   role_tier_ceiling)`. The turn loop's per-turn
+   channel-tier intersection composes on top unchanged.
+4. **`role_for_envelope = role.clone()` introduced at the
+   role lookup** to avoid a partial-move error: the
+   downstream code destructures `system_prompt`,
+   `tool_allowlist`, and `memory_topic_prefix` out of
+   `role`, but the new envelope-assembly call site needs
+   `role` whole. A clone is the right answer here —
+   `Role` is small and a one-time per-startup cost.
+5. **Three new attenuation tests** in
+   `crates/aivyx-config/src/tests.rs`:
+   - `child_role_widening_parent_envelope_fails_at_load_time`
+     — `default = ["fs.read"]`, `rogue = ["fs.read",
+     "shell.exec"]`, expects `RoleInheritance` naming
+     `rogue`, `shell.exec`, and `default`.
+   - `attenuation_walk_skips_empty_parent_to_grandparent`
+     — three-level chain `grandparent = ["fs.read"]` →
+     empty `parent` → `child = ["net.fetch"]`, pins the
+     "walk through empty ancestors" rule.
+   - `child_qualifier_under_unqualified_parent_loads_cleanly`
+     — `default = ["fs.read", "fs.write"]`, `narrow =
+     ["fs.read:/etc/**"]`, exercises D4 Rule 2
+     (unqualified-held grants qualified-needed) at
+     load time.
+6. **Five new envelope-assembly tests** in the
+   `aivyx.rs` `#[cfg(test)] mod tests` block, with
+   `make_role` and `floor` helpers:
+   - `role_with_declared_scope_runs_only_that_scope_not_floor`
+     — declared scope wins over floor when present.
+   - `empty_role_inherits_backcompat_floor_verbatim` —
+     empty role with no parent gets exactly the floor.
+   - `child_attenuates_parents_substituted_floor_at_runtime`
+     — empty parent (substituted floor at runtime),
+     child declares one narrow scope, intersection
+     keeps only the narrow scope.
+   - `multi_level_inheritance_preserves_child_attenuation`
+     — declared parent + declared child, child's
+     narrowing survives.
+   - `role_declared_trust_ceiling_attenuates_envelope_below_channel_tier`
+     — role declares `["net.fetch", "shell.exec"]` with
+     `SemiTrusted` ceiling; `net.fetch` survives,
+     `shell.exec` is stripped (because `shell.exec` is
+     a ⊘ row in `CEILING_SEMITRUSTED`). Picked
+     `SemiTrusted` rather than `Untrusted` because
+     `CEILING_UNTRUSTED` is just `memory.read:scope:public:*`
+     + `audit.read:public` — too narrow for any
+     realistic role envelope to survive, so the test
+     would be vacuous against `Untrusted`.
+
+**Exit criteria — all met.**
+
+- ✅ Invariant 5 lives in `validate_role_inheritance`,
+  enforces declared-set-only attenuation, walks
+  through empty ancestors.
+- ✅ `assemble_role_envelope` consumes the role tree;
+  the binary no longer hard-codes a scope set into
+  `Capabilities` directly.
+- ✅ Q3 trust-ceiling layering implemented as two
+  sequential intersections (role tier here; channel
+  tier in the turn loop, unchanged).
+- ✅ Q5 resolved (declared-set enforcement,
+  walk-through-empty, recorded in correction block
+  above).
+- ✅ Q6 honored — hard-coded vector survives as the
+  per-empty-level backcompat floor, *not* a top-level
+  default.
+- ✅ Eight new regression tests (3 attenuation +
+  5 envelope-assembly), against a draft target of ≥+5.
+- ✅ `cargo test --workspace` green: **460 → 468
+  passed**, delta **+8** for Task 2.
+- ✅ `cargo clippy --workspace --all-targets -- -D
+  warnings` clean.
+- ✅ **Production-core `lib.rs` byte-identity streak
+  preserved.** `git diff 16e618c --
+  crates/aivyx-core/src/lib.rs | wc -l` returns `0`.
+- ✅ **DESIGN.md + PRODUCT.md byte-identity preserved.**
+  `git diff 80189b4 -- DESIGN.md PRODUCT.md | wc -l`
+  returns `0`. Dual-contract streak intact.
+
+**Deferred (recorded so the backlog doesn't silently grow).**
+
+- **Worked example `examples/aivyx.toml`.** Task 3
+  ships this. The Task 2 correction block above flagged
+  the "implicit-floor path is exactly one level deep"
+  consequence — Task 3's example is the right place to
+  show operators a multi-level inheritance with
+  *explicit* parent scopes so the attenuation walk has
+  something real to bite on.
+- **Per-channel default `capability_scopes` envelopes.**
+  PRODUCT.md P9 mentions per-channel ceilings as future
+  work. Task 2 leaves the channel-tier intersection in
+  the turn loop (where it already is); Phase 14 may
+  fold a per-channel scope envelope alongside it.
