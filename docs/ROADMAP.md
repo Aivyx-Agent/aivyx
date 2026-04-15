@@ -100,28 +100,43 @@ core `aivyx-core/src/lib.rs` streak re-establishes to
 two (first re-established production-core streak since
 Phase 10/11 held and Phase 12 broke it).
 
-## Phase 14 — shape TBD at Phase 14 open
+## Phase 14 — Sub-Agent Role-Switching (first P1 delivery)
 
-The Phase 11 + 12 + 13 triplet validated three distinct
-phase shapes: product phase, product phase, config-
-substrate phase. Phase 14's shape is decided at
-Phase 14 open informed by what Phase 13 uncovered
-(cleanly; no deferrals block a specific follow-up).
-Candidates from `PRODUCT_ROADMAP.md`: **Daemon
-Migration keystone start** (the largest forward
-reshape, now unblocked because Role-Config Migration
-has landed), **Mission Primitive** (couples to both
-Daemon Migration and Role-Config Migration, smaller if
-only the approval-gate `StreamEvent` lands), or **Sub-
-Agent Role-Switching** (smallest of the three,
-consumes Role-Config Migration directly — Phase 13's
-`assemble_role_envelope` walker is the substrate it
-would plug into). The backlog carries ten items after
-Phase 13 exit (seven inherited from Phase 12 minus
-the `default role config file` item Task 3 closed,
-plus three net-new Phase 13 items: lift
-`assemble_role_envelope` into the lib, per-tier
-worked examples, `CapabilitySet::grants` reflexivity
-investigation), so a consolidation sub-phase remains
-possible if the foundation backlog grows sharper
-design pressure than a keystone does.
+**Active — see [PHASE_14.md](PHASE_14.md).** Opened
+2026-04-15. Phase 14 is the first phase to deliver on
+**PRODUCT.md P1 — Sub-Agent Mode via Role-Switching**. It
+consumes the per-role capability envelope substrate Phase
+13 shipped (`assemble_role_envelope`, the worked example,
+`--print-role`) by wiring a real second caller into it:
+the turn loop. Task 1 lifts `assemble_role_envelope` from
+the `aivyx-channel` binary into its lib (closing the first
+net-new Phase 13 deferral). Task 2 adds a `role.switch`
+capability scope with a `target-role` qualifier and
+registers a `role.switch` tool. Task 3 integrates the tool
+with the session layer via **sub-session nesting** — the
+child opens, runs to completion under its own envelope,
+and stack-pops back to the parent, respecting the
+`Agent::turn(&self, ...)` immutability invariant and the
+P1.3 "structural impossibility of escalation" rule. Task 4
+is the working-session slot; Task 5 is exit freeze with
+optional cleanup lifting `render_role_envelope` + helpers.
+The production-core `aivyx-core/src/lib.rs` byte-identity
+streak is aspirationally preserved (would extend to three
+consecutive phases); the fallback path if inline sub-
+session nesting hits a re-entrancy wall is one additive
+`TurnOutcome::SwitchRoleRequested` variant, same shape as
+Phase 12 Task 1's streak break.
+
+## Phase 15 — shape TBD at Phase 14 exit
+
+Phase 14's clean exit and whatever it uncovers will shape
+Phase 15. Candidates from `PRODUCT_ROADMAP.md` remain
+**Daemon Migration keystone start** (unblocked by Phase
+13, still the largest forward reshape), **Mission
+Primitive** (approval-gate half without durability, or
+full with daemon coupling), or a **consolidation sub-
+phase** if the foundation backlog grows sharper design
+pressure during Phase 14 than a keystone does. Phase 14's
+P1 delivery makes Sub-Agent Role-Switching a resolved
+milestone in the PRODUCT_ROADMAP — the Mission Primitive
+is the next keystone that couples to it.
