@@ -37,6 +37,17 @@ toml = "0.8"
 # than a `&mut` reference so tests can hand in a mock cheaply.
 aivyx-storage = { path = "../aivyx-storage" }
 
+# Phase 13 Task 1 — per-role capability envelope fields. `Role` gains
+# `capability_scopes: Sourced<Vec<Scope>>` and `trust_ceiling:
+# Sourced<TrustTier>`, both of which need the real `Scope` / `TrustTier`
+# types from `aivyx-capability`. Q2 resolution: parse scope strings at
+# config-load time (not opaque-string-and-parse-later) so scope typos
+# surface with TOML file+line context. `aivyx-capability` is a narrow
+# leaf crate (two deps: serde + globset) so this is a one-way workspace
+# edge — `aivyx-capability` does not and will not depend on
+# `aivyx-config`.
+aivyx-capability = { path = "../aivyx-capability" }
+
 # `async_trait` is not strictly required (the one async method lives
 # directly on `AivyxConfig`, not on a trait), but keeping it aligned
 # with the rest of the workspace avoids an odd-crate-out flag later.

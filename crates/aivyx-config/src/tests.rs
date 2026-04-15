@@ -1193,8 +1193,15 @@ name = "bare"
 /// outside `aivyx-config`. Task 4 will consume these via the
 /// `aivyx-channel` binary; this test proves the API surface supports
 /// that consumption pattern without any unexposed internals.
+///
+/// Phase 13 Task 1 extended `Role` with three more fields
+/// (`capability_scopes`, `trust_ceiling`, `parent_role`). This test
+/// now constructs them inline as well, asserting the whole struct
+/// remains exhaustively literal-constructible from outside the crate.
 #[test]
 fn role_struct_is_constructible_and_matchable_from_outside() {
+    use aivyx_capability::TrustTier;
+
     let role = Role {
         name: crate::Sourced::new("test".to_string(), FieldSource::Default),
         system_prompt: crate::Sourced::new("sp".to_string(), FieldSource::Default),
@@ -1203,6 +1210,9 @@ fn role_struct_is_constructible_and_matchable_from_outside() {
             FieldSource::Default,
         ),
         memory_topic_prefix: crate::Sourced::new(Some("x/".to_string()), FieldSource::Default),
+        capability_scopes: crate::Sourced::new(Vec::new(), FieldSource::Default),
+        trust_ceiling: crate::Sourced::new(TrustTier::Trusted, FieldSource::Default),
+        parent_role: crate::Sourced::new(None, FieldSource::Default),
     };
     // The match is exhaustive against the public enum — if Task 3 or
     // a later task ever adds a variant, this test exists to catch
@@ -1214,4 +1224,419 @@ fn role_struct_is_constructible_and_matchable_from_outside() {
     };
     assert_eq!(behavior, "filtered");
     assert_eq!(role.name.value, "test");
+    assert!(role.capability_scopes.value.is_empty());
+    assert_eq!(role.trust_ceiling.value, TrustTier::Trusted);
+    assert!(role.parent_role.value.is_none());
+}
+
+// ====================================================================
+// Phase 13 Task 1 — per-role capability envelope fields
+// ====================================================================
+//
+// These tests exercise the three fields added to `Role` in Phase 13
+// Task 1 (`capability_scopes`, `trust_ceiling`, `parent_role`) plus
+// the single-inheritance tree validator that runs at config-load
+// time. Each test names the invariant it locks in so a future
+// refactor that breaks one knows which contract it just violated.
+
+/// Phase 11 backcompat — a TOML file with one explicit `[[role]]`
+/// entry that touches none of the three new Phase 13 fields still
+/// loads. The new fields populate from their absent-key defaults:
+/// empty `capability_scopes`, `Trusted` ceiling, and `parent_role =
+/// None` (because no `default` role exists in the same file to
+/// implicit-parent against — Q4's "implicit-from-default only when
+/// default is declared" rule).
+#[test]
+fn legacy_role_loads_with_default_capability_envelope() {
+    use aivyx_capability::TrustTier;
+
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13-legacy-role");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "coder"
+system_prompt = "You are a pair-programmer."
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "coder");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    let role = cfg.roles.get("coder").expect("coder role present");
+    assert!(
+        role.capability_scopes.value.is_empty(),
+        "absent capability_scopes key → empty Vec"
+    );
+    assert_eq!(role.capability_scopes.source, FieldSource::Default);
+    assert_eq!(role.trust_ceiling.value, TrustTier::Trusted);
+    assert_eq!(role.trust_ceiling.source, FieldSource::Default);
+    assert!(
+        role.parent_role.value.is_none(),
+        "no `default` role declared → this role is its own tree root"
+    );
+    assert_eq!(role.parent_role.source, FieldSource::Default);
+
+    drop(env);
+}
+
+/// An explicit `capability_scopes = ["fs.read", "shell.exec:git"]`
+/// list parses through `Scope::parse` and lands as
+/// `Sourced::new(Vec<Scope>, FieldSource::Toml)`. Locks in (a) the
+/// scope-string-parsing-at-config-load-time decision from Q2,
+/// (b) the `FieldSource::Toml` provenance for explicit lists, and
+/// (c) the round-trip through `Scope::as_str` so the in-memory
+/// `Scope` holds the original string verbatim.
+#[test]
+fn explicit_capability_scopes_parse_at_load_time() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13-scopes");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "shellrunner"
+system_prompt = "shell role"
+capability_scopes = ["fs.read", "shell.exec:git", "memory.write"]
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "shellrunner");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    let role = cfg.roles.get("shellrunner").unwrap();
+    assert_eq!(role.capability_scopes.source, FieldSource::Toml);
+    let scope_strings: Vec<&str> = role
+        .capability_scopes
+        .value
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    assert_eq!(scope_strings, vec!["fs.read", "shell.exec:git", "memory.write"]);
+
+    drop(env);
+}
+
+/// An unknown scope base in `capability_scopes` (not in
+/// `KNOWN_BASES`) fails loudly at config-load time, not at
+/// capability-check time later. The error message names the role
+/// and the bad scope string so the operator can grep their TOML.
+#[test]
+fn unknown_capability_scope_fails_loudly_at_load_time() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13-bad-scope");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "broken"
+system_prompt = "broken"
+capability_scopes = ["fs.read", "this.is.not.a.real.base"]
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "broken");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("unknown scope should fail load");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "role.capability_scopes");
+            assert!(reason.contains("broken"), "mentions role name: {reason}");
+            assert!(
+                reason.contains("this.is.not.a.real.base"),
+                "mentions bad scope: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+/// All four `TrustTier` variants parse from TOML strings (via
+/// `serde::Deserialize` derived on `TrustTier` in
+/// `aivyx-capability`), and an unknown variant fails with a
+/// `TomlParse` error pointing at the offending file. Locks in that
+/// trust-tier validation is a TOML-parse-time concern, not a
+/// post-parse loader concern — typos surface with file+line context.
+#[test]
+fn trust_ceiling_parses_all_four_tiers_and_rejects_garbage() {
+    use aivyx_capability::TrustTier;
+
+    let env = EnvScope::new();
+    for (tier_str, expected) in [
+        ("Kernel", TrustTier::Kernel),
+        ("Trusted", TrustTier::Trusted),
+        ("SemiTrusted", TrustTier::SemiTrusted),
+        ("Untrusted", TrustTier::Untrusted),
+    ] {
+        let tmp = TempDir::new(&format!("phase13-tier-{tier_str}"));
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            format!(
+                r#"
+[[role]]
+name = "tiered"
+system_prompt = "tier check"
+trust_ceiling = "{tier_str}"
+"#
+            ),
+        )
+        .unwrap();
+        env.set("AIVYX_ROLE", "tiered");
+
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            role_override: None,
+        };
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts)
+            .unwrap_or_else(|e| panic!("load {tier_str}: {e:?}"));
+        let role = cfg.roles.get("tiered").unwrap();
+        assert_eq!(role.trust_ceiling.value, expected);
+        assert_eq!(role.trust_ceiling.source, FieldSource::Toml);
+    }
+
+    // Garbage tier name surfaces as a TomlParse error (serde
+    // rejects the unknown variant during `toml::from_str`).
+    let tmp = TempDir::new("phase13-tier-garbage");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "tiered"
+system_prompt = "tier check"
+trust_ceiling = "Goat"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "tiered");
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("garbage tier should fail");
+    assert!(
+        matches!(err, ConfigError::TomlParse { .. }),
+        "expected TomlParse, got {err:?}"
+    );
+
+    drop(env);
+}
+
+/// `parent_role` must name an existing role. A typo (or a renamed
+/// role that some other entry still points at) fails loudly with
+/// `RoleInheritance`, naming the offending role *and* the missing
+/// parent string.
+#[test]
+fn parent_role_pointing_at_unknown_role_fails_loudly() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13-parent-typo");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "default"
+system_prompt = "root"
+
+[[role]]
+name = "child"
+system_prompt = "child"
+parent_role = "no-such-role"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "child");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("unknown parent should fail");
+    match err {
+        ConfigError::RoleInheritance { reason } => {
+            assert!(reason.contains("child"), "mentions child: {reason}");
+            assert!(
+                reason.contains("no-such-role"),
+                "mentions missing parent: {reason}"
+            );
+        }
+        other => panic!("expected RoleInheritance, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+/// A `parent_role` cycle (A → B → A) is detected at load time and
+/// surfaces as `RoleInheritance`. Locks in invariant 3 of the
+/// single-inheritance tree validator. Includes a self-cycle as a
+/// sub-case because self-cycles are the degenerate path through
+/// the same code.
+#[test]
+fn parent_role_cycle_is_detected_at_load_time() {
+    // --- self-cycle (A → A) ---
+    {
+        let env = EnvScope::new();
+        let tmp = TempDir::new("phase13-self-cycle");
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[[role]]
+name = "selfish"
+system_prompt = "self-loop"
+parent_role = "selfish"
+"#,
+        )
+        .unwrap();
+        env.set("AIVYX_ROLE", "selfish");
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            role_override: None,
+        };
+        let err = AivyxConfig::load_from_env_and_toml(&opts)
+            .expect_err("self-cycle should fail");
+        match err {
+            ConfigError::RoleInheritance { reason } => {
+                assert!(reason.contains("selfish"), "mentions role: {reason}");
+                assert!(
+                    reason.contains("self-cycle") || reason.contains("itself"),
+                    "names the failure mode: {reason}"
+                );
+            }
+            other => panic!("expected RoleInheritance, got {other:?}"),
+        }
+        drop(env);
+    }
+
+    // --- two-hop cycle (A → B → A) ---
+    {
+        let env = EnvScope::new();
+        let tmp = TempDir::new("phase13-two-hop-cycle");
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[[role]]
+name = "a"
+system_prompt = "a"
+parent_role = "b"
+
+[[role]]
+name = "b"
+system_prompt = "b"
+parent_role = "a"
+"#,
+        )
+        .unwrap();
+        env.set("AIVYX_ROLE", "a");
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            role_override: None,
+        };
+        let err = AivyxConfig::load_from_env_and_toml(&opts)
+            .expect_err("two-hop cycle should fail");
+        match err {
+            ConfigError::RoleInheritance { reason } => {
+                assert!(reason.contains("cycle"), "mentions cycle: {reason}");
+            }
+            other => panic!("expected RoleInheritance, got {other:?}"),
+        }
+        drop(env);
+    }
+}
+
+/// Q4 ergonomic — when an explicit `default` role is declared
+/// alongside other roles, those other roles implicitly inherit
+/// from `default` (with `FieldSource::Default` provenance, since
+/// no operator wrote `parent_role = "default"` literally).
+/// This locks in the "implicit-from-default *when default exists*"
+/// half of Q4 — the other half (no-default → root) is locked in
+/// by `legacy_role_loads_with_default_capability_envelope`.
+#[test]
+fn implicit_parent_default_kicks_in_when_default_role_is_declared() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase13-implicit-parent");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "default"
+system_prompt = "root prompt"
+
+[[role]]
+name = "coder"
+system_prompt = "coder prompt"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "coder");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    let default_role = cfg.roles.get("default").unwrap();
+    assert!(
+        default_role.parent_role.value.is_none(),
+        "default role is its own root"
+    );
+
+    let coder = cfg.roles.get("coder").unwrap();
+    assert_eq!(
+        coder.parent_role.value.as_deref(),
+        Some("default"),
+        "coder implicitly inherits from default"
+    );
+    assert_eq!(
+        coder.parent_role.source,
+        FieldSource::Default,
+        "implicit parent has Default source — no operator typed it"
+    );
+
+    drop(env);
 }

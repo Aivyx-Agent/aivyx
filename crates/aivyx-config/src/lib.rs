@@ -92,6 +92,7 @@ use std::sync::Arc;
 use secrecy::SecretString;
 use serde::Deserialize;
 
+use aivyx_capability::{Scope, TrustTier};
 use aivyx_storage::{KeyDomain, Storage};
 
 // --------------------------------------------------------------------
@@ -289,6 +290,31 @@ pub enum ConfigError {
         name: String,
         known: Vec<String>,
     },
+
+    /// The `parent_role` graph declared by one or more `[[role]]`
+    /// entries does not form a valid single-inheritance tree. Phase
+    /// 13 Task 1 added this variant to enforce **PRODUCT.md P7**'s
+    /// structural guarantee at config-load time.
+    ///
+    /// Reasons this variant fires:
+    /// - A role's `parent_role` names a role that does not exist in
+    ///   the loaded config (typo, renamed role, etc.).
+    /// - A role names itself as its own `parent_role` (self-cycle).
+    /// - A chain of `parent_role` references forms a cycle (A → B →
+    ///   A, or longer).
+    /// - Every role has a `parent_role`, leaving the tree without a
+    ///   terminating root. Multi-root configs (a forest of disjoint
+    ///   trees) are *legal* — PRODUCT.md P7's single-inheritance
+    ///   rule is "no role has more than one parent," which a forest
+    ///   satisfies — so this variant only fires when *zero* roots
+    ///   exist, not when there are two or more.
+    ///
+    /// The `reason` field carries a human-readable explanation that
+    /// includes the offending role name(s) and, where applicable,
+    /// the cycle path. Sufficient to write a precise error message
+    /// without needing to re-walk the graph from the caller side.
+    #[error("role inheritance invalid: {reason}")]
+    RoleInheritance { reason: String },
 }
 
 impl From<ConfigError> for String {
@@ -479,10 +505,9 @@ pub struct AivyxConfig {
     pub warnings: Vec<String>,
 }
 
-/// A named bundle of `(system_prompt, tool_allowlist,
-/// memory_topic_prefix)` loaded from a single `[[role]]` entry in the
-/// config file, or synthesized from legacy top-level fields for
-/// backwards compatibility.
+/// A named bundle of role-scoped configuration loaded from a single
+/// `[[role]]` entry in the config file, or synthesized from legacy
+/// top-level fields for backwards compatibility.
 ///
 /// Roles are **user-defined** — there is no fixed enum of role names
 /// in the codebase. The set of valid roles is whatever the operator
@@ -490,9 +515,20 @@ pub struct AivyxConfig {
 /// via [`Sourced`] so the startup banner can render provenance for
 /// individual role properties independently of the role as a whole.
 ///
-/// Phase 11 Task 1 added the type. Task 2 wires
-/// [`Self::memory_topic_prefix`] into every `memory.*` tool dispatch.
-/// Task 4 wires [`Self::system_prompt`] into the LLM planner, wires
+/// Phase 11 Task 1 added the type with three fields: `system_prompt`,
+/// `tool_allowlist`, `memory_topic_prefix`. Phase 13 Task 1 adds
+/// three more — `capability_scopes`, `trust_ceiling`, `parent_role` —
+/// so each role can declare its **complete capability envelope**
+/// directly in config per **PRODUCT.md P9**, and inherit that envelope
+/// from a parent role per the single-inheritance rule in **PRODUCT.md
+/// P7**. Phase 13 Task 2 consumes those three fields in
+/// `aivyx-channel/src/bin/aivyx.rs` to construct the binary's
+/// `CapabilitySet` from the active role's declared envelope instead
+/// of from a hard-coded `Vec<Scope>`.
+///
+/// Phase 11 wiring: Task 2 wires [`Self::memory_topic_prefix`] into
+/// every `memory.*` tool dispatch; Task 4 wires
+/// [`Self::system_prompt`] into the LLM planner, wires
 /// [`Self::tool_allowlist`] into the tool-advertisement filter, and
 /// wires the `--role` CLI flag into [`LoadOptions::role_override`].
 #[derive(Debug, Clone)]
@@ -525,6 +561,94 @@ pub struct Role {
     /// is invisible to the model — it still writes to `"notes"` in
     /// the tool call. Dispatch-layer injection is Phase 11 Task 2.
     pub memory_topic_prefix: Sourced<Option<String>>,
+    /// Capability scopes declared by this role **in addition to**
+    /// whatever it inherits from its parent. Phase 13 Task 1.
+    ///
+    /// An absent `capability_scopes` key in TOML (or the synthesized
+    /// `default` role's no-legacy-scope path) maps to an **empty
+    /// `Vec`** with [`FieldSource::Default`] — meaning "this role
+    /// adds no scopes beyond what its parent already holds." An
+    /// explicit empty list (`capability_scopes = []`) maps to an
+    /// empty `Vec` with [`FieldSource::Toml`] — same value, different
+    /// provenance, so a startup-banner consumer can still tell the
+    /// two apart. Unlike [`ToolAllowlist`], there is no behavioral
+    /// difference between absent and empty for this field: "no
+    /// additional scopes" is the same whether you say so explicitly
+    /// or leave the key out. The provenance distinction exists for
+    /// banner-reading and audit clarity, nothing more.
+    ///
+    /// Scope strings are parsed at config-load time via
+    /// [`Scope::parse`]. A string that does not parse (unknown base,
+    /// per the `KNOWN_BASES` check in `aivyx-capability`) fails the
+    /// load with [`ConfigError::Invalid`] pointing at the role name
+    /// and the bad string. This is Q2's resolution (config-time
+    /// parsing, one-way dep on `aivyx-capability`) — the alternative
+    /// of storing opaque strings and parsing lazily at role-activation
+    /// time was rejected because it hides typos until the operator
+    /// tries to use a role that's been broken for weeks.
+    ///
+    /// Phase 13 Task 2 consumes this field in
+    /// `aivyx-channel/src/bin/aivyx.rs` by walking the role's
+    /// inheritance chain (via [`Self::parent_role`]) and unioning
+    /// each ancestor's scopes into the effective envelope. The
+    /// resulting [`aivyx_capability::CapabilitySet`] is then passed
+    /// through the existing registration-time per-tool gate and the
+    /// turn loop's ceiling intersection from Phase 11 — Phase 13 is
+    /// a config-substrate phase, not a capability-layer rewrite.
+    pub capability_scopes: Sourced<Vec<Scope>>,
+    /// Maximum trust tier this role may run at. Phase 13 Task 1.
+    ///
+    /// An absent `trust_ceiling` key maps to
+    /// `Sourced::new(TrustTier::Trusted, FieldSource::Default)` —
+    /// matching Phase 11's de-facto Trusted default on the Local
+    /// channel. An explicit `trust_ceiling = "SemiTrusted"` maps to
+    /// `Sourced::new(TrustTier::SemiTrusted, FieldSource::Toml)`.
+    ///
+    /// Phase 13 Task 2 folds this value into the existing channel-
+    /// tier intersection in the binary: the **effective** ceiling is
+    /// `min(channel_tier, role_declared_ceiling)`. A role declaring
+    /// `Trusted` on a Telegram (`SemiTrusted`) channel still runs
+    /// `SemiTrusted` because the channel tier dominates downward. A
+    /// role declaring `SemiTrusted` on a Local (`Trusted`) channel
+    /// runs `SemiTrusted` because the role is choosing to run more
+    /// restrictively than the channel would allow. This matches Q3's
+    /// resolution — the role-declared ceiling is an additional input
+    /// to the existing intersection, not a replacement for it.
+    pub trust_ceiling: Sourced<TrustTier>,
+    /// The role this role inherits from. Phase 13 Task 1.
+    ///
+    /// `None` means "this role is the root of its inheritance tree."
+    /// Multiple roles may carry `None` — a forest of disjoint trees
+    /// is legal. PRODUCT.md P7's single-inheritance rule forbids
+    /// *multi-parent*, not multi-root.
+    ///
+    /// An absent `parent_role` key in TOML maps in two ways:
+    ///
+    /// - If the same TOML file declares an explicit `default` role
+    ///   alongside this one, this role implicitly inherits from
+    ///   `default`: `Sourced::new(Some("default"), FieldSource::
+    ///   Default)`. This is Q4's "implicit-from-default" ergonomic.
+    /// - If no `default` role is declared in the same file, this
+    ///   role is its own tree root: `Sourced::new(None, FieldSource::
+    ///   Default)`. This preserves Phase 11 backcompat for fixtures
+    ///   that defined a single non-`default` role and never touched
+    ///   inheritance.
+    ///
+    /// An explicit `parent_role = "coder"` maps to `Sourced::new(
+    /// Some("coder"), FieldSource::Toml)` and is honored regardless
+    /// of whether `default` exists.
+    ///
+    /// **Tree-shape invariant.** At config-load time the loader
+    /// validates that the `parent_role` graph (a) names only
+    /// existing roles, (b) has no self-references, (c) has no
+    /// cycles, and (d) terminates somewhere — i.e. at least one
+    /// role has `parent_role = None`. Violations surface as
+    /// [`ConfigError::RoleInheritance`] at `load_from_env_and_toml`
+    /// return time. This is the **structural** enforcement of
+    /// **PRODUCT.md P7** — multi-parent inheritance is not a
+    /// forward commitment and the config layer refuses to represent
+    /// it.
+    pub parent_role: Sourced<Option<String>>,
 }
 
 /// Tool-allowlist policy for a [`Role`]. Distinguishes "the config
@@ -614,6 +738,20 @@ struct RawToml {
 /// `Some(vec)` maps to [`ToolAllowlist::Only`]. This is the Q3
 /// resolution from the Phase 11 plan — "absent" and "empty" have
 /// opposite meanings and must not collapse.
+///
+/// Phase 13 Task 1 adds three mirror fields for the per-role
+/// capability envelope: `capability_scopes`, `trust_ceiling`, and
+/// `parent_role`. The `capability_scopes` field is a
+/// `Vec<String>` at the raw layer — the loader parses each string
+/// into a [`Scope`] via [`Scope::parse`] and fails with
+/// [`ConfigError::Invalid`] on any unknown scope base. `trust_
+/// ceiling` deserializes into the real [`TrustTier`] enum directly
+/// because `aivyx-capability` derives `Deserialize` on it — a
+/// typo'd tier surfaces as a TOML parse error at `load_toml` time,
+/// not as a config-load error, which is fine for operator
+/// ergonomics (the error message still includes the file path).
+/// `parent_role` is `Option<String>` with the usual absent-vs-
+/// explicit distinction.
 #[derive(Debug, Default, Deserialize)]
 struct RawRole {
     name: String,
@@ -623,6 +761,12 @@ struct RawRole {
     tool_allowlist: Option<Vec<String>>,
     #[serde(default)]
     memory_topic_prefix: Option<String>,
+    #[serde(default)]
+    capability_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    trust_ceiling: Option<TrustTier>,
+    #[serde(default)]
+    parent_role: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -887,6 +1031,23 @@ impl AivyxConfig {
             // active-role resolution below will fail with
             // `UnknownRole` for any active-role selection, which is
             // the correct "your config defined zero roles" surface.
+            //
+            // Phase 13 Task 1: Q4 resolution — implicit `parent_role`
+            // for non-`default` roles only kicks in **when an explicit
+            // `default` role is present** in the same TOML file. This
+            // keeps the loader transparent: nothing appears in
+            // `cfg.roles` that the operator did not write themselves,
+            // and a Phase 11 fixture like `[[role]] name = "coder"`
+            // (no `default` declared) continues to load with that one
+            // role as its own tree root. The day an operator adds a
+            // `default` alongside `coder`, `coder` starts implicitly
+            // inheriting from it — which is the inheritance ergonomics
+            // promise from PRODUCT.md P7 without secretly fabricating
+            // a phantom default that operators never see.
+            let has_explicit_default = raw_roles
+                .iter()
+                .any(|r| r.name == DEFAULT_ROLE_NAME);
+
             for raw in raw_roles {
                 let name = Sourced::new(raw.name.clone(), FieldSource::Toml);
                 let role_system_prompt = match raw.system_prompt.clone() {
@@ -904,6 +1065,63 @@ impl AivyxConfig {
                     Some(v) => Sourced::new(Some(v), FieldSource::Toml),
                     None => Sourced::new(None, FieldSource::Default),
                 };
+                // --- Phase 13 Task 1 — capability_scopes ----------
+                // Parse each raw scope string via `Scope::parse`.
+                // Unknown bases fail loudly here with the offending
+                // role name + the bad string in the error message.
+                // `FieldSource::Toml` for explicit (even empty)
+                // lists; `FieldSource::Default` only when the key
+                // was absent from the TOML.
+                let capability_scopes = match raw.capability_scopes.clone() {
+                    Some(raw_scopes) => {
+                        let mut parsed: Vec<Scope> = Vec::with_capacity(raw_scopes.len());
+                        for raw_scope in &raw_scopes {
+                            let scope = Scope::parse(raw_scope).ok_or_else(|| {
+                                ConfigError::Invalid {
+                                    field: "role.capability_scopes",
+                                    reason: format!(
+                                        "role `{}`: scope string {:?} does not parse \
+                                         (unknown base or malformed qualifier — see \
+                                         aivyx-capability::KNOWN_BASES)",
+                                        raw.name, raw_scope
+                                    ),
+                                }
+                            })?;
+                            parsed.push(scope);
+                        }
+                        Sourced::new(parsed, FieldSource::Toml)
+                    }
+                    None => Sourced::new(Vec::new(), FieldSource::Default),
+                };
+                // --- Phase 13 Task 1 — trust_ceiling --------------
+                // `TrustTier` derives `Deserialize` in
+                // `aivyx-capability`, so a typo'd tier is already
+                // caught at TOML-parse time in `load_toml`. Here we
+                // only need to apply the absent-key default.
+                let trust_ceiling = match raw.trust_ceiling {
+                    Some(tier) => Sourced::new(tier, FieldSource::Toml),
+                    None => Sourced::new(TrustTier::Trusted, FieldSource::Default),
+                };
+                // --- Phase 13 Task 1 — parent_role ----------------
+                // Q4 resolution: a non-`default` role with no
+                // explicit `parent_role` implicitly inherits from
+                // `default` *only if an explicit `default` role is
+                // declared in the same file*. Without that anchor,
+                // the role is its own tree root — which preserves
+                // Phase 11's "single role, no default" backcompat
+                // path. An explicit `parent_role = "name"` is always
+                // honored regardless of whether `default` exists.
+                let parent_role = match raw.parent_role.clone() {
+                    Some(name) => Sourced::new(Some(name), FieldSource::Toml),
+                    None if raw.name == DEFAULT_ROLE_NAME => {
+                        Sourced::new(None, FieldSource::Default)
+                    }
+                    None if has_explicit_default => Sourced::new(
+                        Some(DEFAULT_ROLE_NAME.to_string()),
+                        FieldSource::Default,
+                    ),
+                    None => Sourced::new(None, FieldSource::Default),
+                };
                 roles.insert(
                     raw.name.clone(),
                     Role {
@@ -911,6 +1129,9 @@ impl AivyxConfig {
                         system_prompt: role_system_prompt,
                         tool_allowlist,
                         memory_topic_prefix,
+                        capability_scopes,
+                        trust_ceiling,
+                        parent_role,
                     },
                 );
             }
@@ -944,13 +1165,40 @@ impl AivyxConfig {
             // "env" / "toml" / "default" for the synthesized role's
             // system_prompt. Every pre-Phase-11 config file hits this
             // branch and behaves exactly as it did before.
+            //
+            // Phase 13 Task 1: the three new fields populate from
+            // their "absent key" defaults — empty `capability_scopes`
+            // (the binary-side fallback in Phase 13 Task 2 supplies
+            // the actual substrate scopes when no config is present),
+            // `Trusted` ceiling (matches Phase 11's Local-channel
+            // behavior), and `None` parent (the synthesized `default`
+            // is its own root).
             let default_role = Role {
                 name: Sourced::new(DEFAULT_ROLE_NAME.to_string(), FieldSource::Default),
                 system_prompt: system_prompt.clone(),
                 tool_allowlist: Sourced::new(ToolAllowlist::AllowAll, FieldSource::Default),
                 memory_topic_prefix: Sourced::new(None, FieldSource::Default),
+                capability_scopes: Sourced::new(Vec::new(), FieldSource::Default),
+                trust_ceiling: Sourced::new(TrustTier::Trusted, FieldSource::Default),
+                parent_role: Sourced::new(None, FieldSource::Default),
             };
             roles.insert(DEFAULT_ROLE_NAME.to_string(), default_role);
+        }
+
+        // --- Phase 13 Task 1 — single-inheritance tree validation -
+        // Validate that the `parent_role` graph forms a tree: every
+        // referenced parent exists, no self-cycles, no longer
+        // cycles, and exactly one root (a role with `parent_role =
+        // None`). This is the structural enforcement of PRODUCT.md
+        // P7 — multi-parent is not a forward commitment and the
+        // config layer refuses to represent it at load time.
+        //
+        // Runs only when there is actually a tree to validate: a
+        // zero-role config (the `role = []` edge case in the
+        // explicit branch) has nothing to check and will already
+        // fail with `UnknownRole` at the active-role check below.
+        if !roles.is_empty() {
+            validate_role_inheritance(&roles)?;
         }
 
         // --- active_role -------------------------------------------
@@ -1112,6 +1360,133 @@ fn env_secret(var: &str) -> Option<SecretString> {
 /// Read an env var as a `PathBuf`, same empty-is-unset rule.
 fn env_path(var: &str) -> Option<PathBuf> {
     env_string(var).map(PathBuf::from)
+}
+
+/// Phase 13 Task 1 — validate the `parent_role` graph.
+///
+/// Enforces four invariants, all of which together mean "the
+/// `parent_role` edges form a tree with exactly one root":
+///
+/// 1. **Every referenced parent exists.** A role with
+///    `parent_role = Some("researhcer")` must have `"researhcer"`
+///    actually present in the `roles` map. A typo here is usually
+///    the reason this function fires, so the error message names
+///    both the child and the bad parent.
+/// 2. **No self-reference.** A role may not name itself as its own
+///    parent. (This is technically a degenerate 1-cycle and would
+///    be caught by the cycle check below, but catching it first
+///    gives a clearer error message.)
+/// 3. **No cycles.** For each role, walk up its `parent_role`
+///    chain until either the root (`None`) is reached or a
+///    previously-visited role shows up again. The latter is a
+///    cycle and is rejected with the full offending path in the
+///    error message.
+/// 4. **At least one root.** Some role must have `parent_role =
+///    None`. Zero roots means every chain cycles (already caught
+///    by invariant 3, but the explicit check gives a clearer error
+///    if cycle detection ever drifts). PRODUCT.md P7 commits to
+///    single-inheritance — *no role has more than one parent* —
+///    which is satisfied by a forest of disjoint trees as well as
+///    by a single rooted tree, so we deliberately tolerate
+///    multi-root configs (Phase 11 fixtures with two sibling roles
+///    and no `default` are the canonical example).
+///
+/// Does not mutate `roles`. On success returns `Ok(())`; on any
+/// violation returns `Err(ConfigError::RoleInheritance { reason })`
+/// with a human-readable message.
+///
+/// The walk is `O(N * depth)` where `N` is the number of roles and
+/// `depth` is the longest inheritance chain. Realistic configs
+/// have at most a handful of roles and depth 2–3, so this is
+/// cheap. A `HashSet` is created per role for cycle detection;
+/// could be hoisted out for a pathological config with thousands
+/// of roles, but we do not design for that today.
+fn validate_role_inheritance(roles: &BTreeMap<String, Role>) -> Result<(), ConfigError> {
+    use std::collections::HashSet;
+
+    // Invariant 1 + 2: every `parent_role = Some(name)` must refer
+    // to an existing, non-self role.
+    for (name, role) in roles {
+        if let Some(parent_name) = role.parent_role.value.as_ref() {
+            if parent_name == name {
+                return Err(ConfigError::RoleInheritance {
+                    reason: format!(
+                        "role `{name}` names itself as its own `parent_role` \
+                         (self-cycle) — a role cannot inherit from itself"
+                    ),
+                });
+            }
+            if !roles.contains_key(parent_name) {
+                let mut known: Vec<&str> = roles.keys().map(String::as_str).collect();
+                known.sort();
+                return Err(ConfigError::RoleInheritance {
+                    reason: format!(
+                        "role `{name}` has `parent_role = {parent_name:?}` \
+                         but `{parent_name}` is not a known role \
+                         (known roles: {known:?})"
+                    ),
+                });
+            }
+        }
+    }
+
+    // Invariant 3: no cycles. For each role, walk its parent chain
+    // and bail on a repeat visit. Uses a per-role `HashSet<&str>`
+    // of names seen on the current walk.
+    for start in roles.keys() {
+        let mut seen: HashSet<&str> = HashSet::new();
+        seen.insert(start.as_str());
+        let mut current = start.as_str();
+        while let Some(parent) = roles
+            .get(current)
+            .and_then(|r| r.parent_role.value.as_deref())
+        {
+            if !seen.insert(parent) {
+                // Cycle detected. Render the path as a chain from
+                // `start` through the repeat.
+                let mut path: Vec<&str> = Vec::new();
+                path.push(start.as_str());
+                let mut cursor = start.as_str();
+                while let Some(p) = roles
+                    .get(cursor)
+                    .and_then(|r| r.parent_role.value.as_deref())
+                {
+                    path.push(p);
+                    if p == parent && path.len() > 1 {
+                        break;
+                    }
+                    cursor = p;
+                }
+                return Err(ConfigError::RoleInheritance {
+                    reason: format!(
+                        "cycle detected in `parent_role` graph starting at \
+                         role `{start}`: {} (role `{parent}` is already in \
+                         the chain)",
+                        path.join(" -> ")
+                    ),
+                });
+            }
+            current = parent;
+        }
+    }
+
+    // Invariant 4: at least one root. A root is a role whose
+    // `parent_role` is `None`. Zero roots means every chain cycles
+    // (already caught above; the explicit check is belt-and-braces
+    // and gives a clearer error message if invariant 3 ever drifts).
+    // Multiple roots are *legal* — PRODUCT.md P7's single-inheritance
+    // rule is "no role has more than one parent," which a forest
+    // satisfies just as well as a single rooted tree.
+    let has_root = roles.values().any(|r| r.parent_role.value.is_none());
+    if !has_root {
+        return Err(ConfigError::RoleInheritance {
+            reason: "no root role found (every role has a `parent_role`) — \
+                     at least one role must have `parent_role = None` for \
+                     the tree to terminate"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Load and parse the TOML file at `path`, if any.

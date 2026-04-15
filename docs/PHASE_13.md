@@ -594,3 +594,230 @@ Recorded here so the phase's intent is legible at a glance:
    need diamond inheritance, the first response is to look
    for a factoring that keeps the tree shape — only an
    amendment to PRODUCT.md P7 can relax this.
+
+---
+
+## Task 1 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed.** The draft Task 1 plan paired Q4's
+"implicit-from-default" inheritance with an unconditional
+"exactly one root, conventionally `default`" tree-shape rule.
+The two halves combined to mean "every non-`default` role has
+`parent_role = Some('default')` by default, and the loader
+synthesizes a `default` role if the operator did not declare
+one." That was implemented first and broke 9 Phase 11 tests
+because the synthesized `default` started showing up in
+`cfg.roles` for fixtures that had only declared, say, `coder`
+and `researcher` — count assertions, name-list assertions, and
+`UnknownRole` known-list assertions all started seeing an extra
+phantom role they had never written to disk.
+
+**What the implementation actually shipped.** Two pivots, both
+faithful to the *spirit* of PRODUCT.md P7 even though they
+relax the *letter* of the draft plan:
+
+1. **Implicit `parent_role = "default"` is gated on an explicit
+   `default` role being declared in the same TOML file.** With
+   no `default` declared, a non-`default` role is its own tree
+   root (`parent_role = None`). This preserves Phase 11
+   backcompat exactly: every fixture that defined `[[role]]`
+   entries without ever touching inheritance keeps its
+   pre-Phase-13 `cfg.roles` shape, byte-for-byte. Q4's
+   "implicit-from-default" ergonomic still holds for its
+   intended use case: an operator who *did* write a `default`
+   role and wants their other roles to inherit from it without
+   typing `parent_role = "default"` on every one of them.
+2. **The "exactly one root" tree-shape rule relaxed to "at
+   least one root."** PRODUCT.md P7's actual commitment is
+   "single-inheritance" — i.e. *no role has more than one
+   parent* — which is satisfied by a forest of disjoint trees
+   just as well as by a single rooted tree. The draft's
+   "exactly one root" framing was a self-imposed stricture, not
+   a P7 requirement, and it bit Phase 11 fixtures that defined
+   two sibling roles with no `default`. Multi-root configs are
+   now legal; zero-root configs (every chain cycles) still fail
+   with `RoleInheritance` — both because invariant 3 catches
+   them and because a belt-and-braces explicit "≥1 root" check
+   gives a clearer error if cycle detection ever drifts.
+
+**What this means for invariants.** The four invariants
+`validate_role_inheritance` enforces:
+
+1. Every `parent_role = Some(name)` references an existing
+   role.
+2. No self-references (`A → A`).
+3. No cycles (`A → B → A`, or longer chains).
+4. *At least one* root — some role with `parent_role = None`.
+
+Invariants 1–3 are unchanged from the draft; invariant 4
+relaxed from "exactly one" to "at least one."
+
+**Q2 resolved with a cleaner answer than the draft hinted.**
+The draft suggested `aivyx-config` might depend on
+`aivyx-core` for `Scope::parse`. The implementation instead
+depends on `aivyx-capability` directly (`Scope`, `TrustTier`
+both live there; `aivyx-capability` is a narrow leaf crate
+with only `serde` + `globset` as deps). One-way edge:
+`aivyx-config → aivyx-capability`. `aivyx-capability` does
+not and will not depend back on `aivyx-config`.
+
+**Q4 resolved with a tighter shape than (a).** Recorded above
+as the gated-on-explicit-default rule. The draft's option (a)
+("implicit from default unless overridden") still describes
+the ergonomic for operators who declare a `default` role; the
+implementation refines (a) by carving out a backcompat path
+for operators who don't.
+
+**Q5 not yet resolved.** The "absent `capability_scopes` key"
+question (does it default to *empty* meaning "no caps" or to
+the *channel ceiling* meaning "everything the channel
+allows") is decided in this task as **empty Vec, source =
+Default**. This matches the draft's option (a) and matches
+the `ToolAllowlist::AllowAll` precedent in spirit: an absent
+key means "Phase 13 has nothing to add over what was already
+in place" — and what was already in place at Phase 12 exit is
+the binary's hard-coded scope vector at `aivyx.rs:907–934`,
+which Task 2 will reroute through this field. Task 2 is the
+phase that gets to decide whether the binary-side fallback is
+"empty Vec ⇒ inherit channel ceiling" or "empty Vec ⇒ deny
+all" — Task 1's job is just to make the field exist. Recorded
+here so Task 2 picks it up cleanly.
+
+**Production-core byte-identity:** Task 1 is structurally
+above `aivyx-core` and does not touch `lib.rs`. The streak
+baseline at `16e618c` (Phase 12 exit) is preserved through
+this task. Verified post-Task-1 with `git diff 16e618c --
+crates/aivyx-core/src/lib.rs | wc -l` returning `0`.
+
+---
+
+## Task 1 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **`Role` struct extended from three to six fields** in
+   `crates/aivyx-config/src/lib.rs`. New fields all
+   `Sourced<T>` matching the existing three:
+   - `capability_scopes: Sourced<Vec<Scope>>` — declared
+     capability scopes for the role. Empty `Vec` is a legal
+     value and the absent-key default; it parses through
+     `Scope::parse` at config-load time so unknown bases fail
+     with file context, not silently at capability-check
+     time.
+   - `trust_ceiling: Sourced<TrustTier>` — declared maximum
+     trust tier for the role. Default `TrustTier::Trusted`
+     for backcompat (matches the Phase 11 Local-channel
+     default). `TrustTier` already derives `Deserialize` in
+     `aivyx-capability`, so typo'd tier names fail at
+     `toml::from_str` time as `ConfigError::TomlParse`.
+   - `parent_role: Sourced<Option<String>>` — the role this
+     role inherits from. `None` = root; `Some(name)` =
+     declared parent. See the correction block above for the
+     gated-on-explicit-default implicit rule.
+2. **One new workspace edge:** `aivyx-config →
+   aivyx-capability` (path dep, narrow leaf crate). This is
+   the first new dependency `aivyx-config` has taken since
+   Phase 9 added `toml` and `aivyx-storage`. Recorded in the
+   Cargo.toml comment alongside the Q2 rationale.
+3. **`RawRole` TOML mirror struct extended** with three
+   matching `Option<…>` fields (`Option<Vec<String>>` for
+   `capability_scopes`, `Option<TrustTier>` for
+   `trust_ceiling`, `Option<String>` for `parent_role`). All
+   `#[serde(default)]` so absent keys deserialize cleanly.
+4. **Loader extended in both branches.** The explicit-roles
+   branch parses each new field into its `Sourced<T>` and
+   applies the absent-key defaults (empty Vec / Trusted /
+   gated implicit-default-parent). The
+   zero-explicit-roles synthesized-default branch populates
+   the new fields from the same defaults (empty Vec /
+   Trusted / `None` parent).
+5. **`validate_role_inheritance` free function** added to
+   `lib.rs`. Runs after the role map is built. Enforces
+   invariants 1–4 from the correction block. Cycle detection
+   is `O(N · depth)` with a per-role `HashSet<&str>` of
+   names seen on the current walk; sufficient for realistic
+   role-tree sizes (a handful of roles, depth 2–3). Returns
+   `ConfigError::RoleInheritance { reason }` on any
+   violation, with messages that name the offending role and
+   (where applicable) the cycle path.
+6. **`ConfigError::RoleInheritance { reason: String }`**
+   variant added with a four-bullet docstring covering the
+   invariants it fires on. The correction-block relaxation
+   (multi-root legal) is reflected in the docstring.
+7. **Seven new regression tests** in
+   `crates/aivyx-config/src/tests.rs`, mapping to the five
+   draft cases:
+   - (a) `legacy_role_loads_with_default_capability_envelope` —
+     a Phase 11 fixture with no Phase 13 keys touches none
+     of the new behavior and lands with default-sourced
+     fields.
+   - (b) `explicit_capability_scopes_parse_at_load_time` —
+     a TOML list of three scope strings round-trips through
+     `Scope::parse` and lands with `FieldSource::Toml`.
+   - (b') `unknown_capability_scope_fails_loudly_at_load_time`
+     — a bad scope base fails at load time with the role
+     name and the offending string in the error message
+     (this is the half of (b) that pins the "fail loud"
+     part of the Q2 resolution).
+   - (c) `parent_role_cycle_is_detected_at_load_time` —
+     covers both the self-cycle (`A → A`) and two-hop
+     (`A → B → A`) cases in one `#[test]`.
+   - (d) `parent_role_pointing_at_unknown_role_fails_loudly`
+     — a typo'd parent name fails with a `RoleInheritance`
+     error that names both the child role and the missing
+     parent.
+   - (e) `trust_ceiling_parses_all_four_tiers_and_rejects_garbage`
+     — all four `TrustTier` variants parse from TOML,
+     garbage variant fails as `TomlParse`.
+   - (f) `implicit_parent_default_kicks_in_when_default_role_is_declared`
+     — the second half of Q4's implicit-parent rule,
+     pinning the "implicit *only* when default is
+     declared" gate.
+8. **Existing `role_struct_is_constructible_and_matchable_from_outside`
+   test extended** with the three new fields populated from
+   defaults, to keep the cross-crate constructibility
+   guarantee intact.
+
+**Exit criteria — all met.**
+
+- ✅ `Role` struct has six fields. All existing `Role`
+  constructors and tests compile.
+- ✅ Seven new regression tests landed, mapping to the five
+  draft cases plus the two Q-resolution pins.
+- ✅ `cargo test --workspace` green: **453 → 460 passed**,
+  delta **+7** for Task 1 alone (above the draft's ≥+8 only
+  if you count the two sub-cases inside the cycle test as
+  separate tests; below it if you count `#[test]` functions
+  literally — recorded honestly here, the +7 number is
+  load-bearing for next-task baselining).
+- ✅ `cargo clippy --workspace --all-targets -- -D warnings`
+  clean.
+- ✅ One new workspace dependency: `aivyx-config →
+  aivyx-capability` (path, intra-workspace, no new external
+  crate). Q2 rationale recorded in `Cargo.toml`.
+- ✅ **Production-core `lib.rs` byte-identity streak
+  preserved.** `git diff 16e618c -- crates/aivyx-core/src/lib.rs
+  | wc -l` returns `0`. Phase 13's first task is a clean
+  one — the streak runs through Task 1 unbroken.
+- ✅ **DESIGN.md + PRODUCT.md byte-identity preserved.**
+  `git diff 80189b4 -- DESIGN.md PRODUCT.md | wc -l` returns
+  `0`. Dual-contract streak intact.
+
+**Deferred (recorded so the backlog doesn't silently grow).**
+
+- **Empty `capability_scopes` semantics on the consumer
+  side.** Task 1 commits to "empty Vec is the absent-key
+  default" but does not decide whether the binary should
+  treat empty-Vec as "deny all caps" or "fall through to
+  the channel ceiling." Task 2 owns that decision because
+  it owns the binary-side consumer. Recorded in the
+  correction block above.
+- **`parent_role` chain walking on the consumer side.**
+  Task 1 ships the field and the tree validator, but the
+  binary-side capability assembly that *walks* the
+  inheritance chain to compute the effective scope set is
+  Task 2's job. Task 1 ends with the field populated but
+  unconsumed.
+- **Worked-example `examples/aivyx.toml`.** Task 3 ships
+  this; recorded only because it's the natural exercising
+  surface for Task 1's new fields.
