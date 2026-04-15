@@ -1,17 +1,31 @@
 # Aivyx Docs
 
 This directory holds **phase records** and **amendments**. It is
-deliberately separate from `DESIGN.md` in the repo root:
+deliberately separate from the two contract documents in the repo
+root:
 
-- **`DESIGN.md`** is the **contract document** — the locked decisions
-  that every phase must respect. It is edited rarely, and only through
-  the amendment process described below.
+- **`DESIGN.md`** is the **technical contract** — the locked
+  architectural decisions ("how the agent works") that every phase
+  must respect. It is edited rarely, and only through the amendment
+  process described below.
+- **`PRODUCT.md`** is the **product contract** — the locked
+  product-shape decisions ("who the agent is for, what it commits
+  to do, where the line is") that every phase must respect. It is
+  the sibling of `DESIGN.md`, edited under the same amendment
+  process. Drafted at the Phase 12.5 product-shape review.
 - **`docs/PHASE_N.md`** are **phase journals** — working documents for
   one phase at a time. They churn freely during the phase and are
   frozen at phase exit.
+- **`docs/ROADMAP.md`** is the **technical roadmap** — one-paragraph
+  intents for upcoming numbered phases.
+- **`docs/PRODUCT_ROADMAP.md`** is the **product roadmap** — the
+  sibling of `ROADMAP.md`, listing forward product-shape milestones
+  derived from `PRODUCT.md`'s commitments. Milestones are named, not
+  numbered, and may span one or more technical phases.
 - **`docs/amendments/`** (created when first needed) holds one file per
   contract change. An amendment is the *only* legal way to modify a
-  locked `DESIGN.md` decision from inside a later phase.
+  locked `DESIGN.md` *or* `PRODUCT.md` decision from inside a later
+  phase.
 
 ## Why the split?
 
@@ -22,9 +36,11 @@ in another, any such edit shows up as a `DESIGN.md` diff in a phase
 commit, which is an obvious review flag.
 
 Rule of thumb: if you're writing something that future-you in a fresh
-session needs to rely on, it goes in `DESIGN.md`. If it's a decision
-log, task list, or "why we chose A over B today," it goes in the phase
-doc.
+session needs to rely on, it goes in `DESIGN.md` (technical) or
+`PRODUCT.md` (product). If it's a decision log, task list, or "why we
+chose A over B today," it goes in the phase doc. If it's a one-paragraph
+intent for a future phase or milestone, it goes in `ROADMAP.md` or
+`PRODUCT_ROADMAP.md`.
 
 ## Cross-phase reference docs
 
