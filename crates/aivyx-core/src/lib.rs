@@ -41,7 +41,7 @@ pub use llm_planner::{LlmPlanner, LlmPlannerConfig};
 pub use planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner, VecPlanner};
 pub use tools::{
     FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig, ShellExecTool,
-    ShellExecToolConfig,
+    ShellExecToolConfig, WebFetchTool, WebFetchToolConfig,
 };
 
 use std::sync::Arc;

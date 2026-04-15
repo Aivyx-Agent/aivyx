@@ -27,6 +27,8 @@
 
 pub mod fs;
 pub mod shell;
+pub mod web_fetch;
 
 pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
+pub use web_fetch::{WebFetchTool, WebFetchToolConfig};

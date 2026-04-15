@@ -716,6 +716,211 @@ for Phase 12 and is a later-phase concern.
 
 ---
 
+## Task 2 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed:** Task 2's scope shape would be
+`web.fetch:url-prefix:<URL>`, implying a new `web.fetch` base
+in `KNOWN_BASES` alongside the existing `net.fetch`.
+
+**What the code actually shows:** `net.fetch` is already in
+`KNOWN_BASES` (`aivyx-capability/src/lib.rs:42`), already
+dispatches URL-prefix matching via `QualifierKind::UrlPrefix`
+(`lib.rs:181-195`), and is already a member of both
+`CEILING_TRUSTED` and `CEILING_SEMITRUSTED`. Adding a
+separate `web.fetch` base would duplicate all three and leave
+the existing `net.fetch` base orphaned (no consumer outside
+tests). So the Task 2 scope shape is **`net.fetch:<URL>`**,
+not `web.fetch:url-prefix:<URL>`. The **tool name** remains
+`web.fetch` (the user-facing convention from the draft —
+tool name and scope base are independent identifiers).
+
+**Q4 resolved against real code.** The existing
+`QualifierKind::UrlPrefix` matcher uses raw
+`needed_q.starts_with(held_q)`
+(`aivyx-capability/src/lib.rs:195`). That is exactly the
+classic-string-prefix bug the Task 2 acceptance test is
+supposed to catch: held `net.fetch:https://example.com/`
+incorrectly grants needed `net.fetch:https://example.com.evil.com/`
+because the needed string literally starts with the held
+string. The existing `rule3_url_prefix_match` test at
+`lib.rs:469` only covers `api.example.com/v1/users` vs
+`api.example.com/` and never exercises the hostile-suffix
+case.
+
+**Fix in Task 2:** replace the `starts_with` body of
+`QualifierKind::UrlPrefix::check` with a URL-aware matcher
+that parses both sides via `url::Url` (transitively in tree
+through `reqwest`) and returns `true` iff (scheme, host, port,
+is_default_port) exactly match AND the canonicalized path of
+`needed` starts at a **component boundary** under the
+canonicalized path of `held`. "Component boundary" means
+path-prefix via `std::path::Path::starts_with`-style
+segment comparison, not byte-prefix, so
+`/users/` does not admit `/users2/`. Trailing-slash
+normalization: `/foo` and `/foo/` are treated as the same
+directory for the purposes of prefix matching (a held
+`example.com/api` grants needed `example.com/api/v1/users`).
+
+**Blast radius of the capability-layer fix.** Grep for
+`net.fetch:` across the workspace shows only in-crate test
+fixtures in `aivyx-capability/src/lib.rs`. No agent config,
+no production ceiling derivation, no audit fixture holds a
+qualified `net.fetch:` scope. So the matcher rewrite is a
+pure capability-layer edit with its own regression test
+(hostile suffix denied, legitimate subpath still granted)
+and a keep-green run of `rule3_url_prefix_match` +
+`dispatch_url_with_comma_in_query_stays_url`.
+
+**Production-core lib.rs streak:** still at risk. The tool
+registration shape mirrors `ShellExecTool`'s
+(`pub use tools::web_fetch::...` re-export at crate root),
+so `lib.rs` gains at least one `pub use` line and the
+byte-identity streak breaks for Task 2 as Task 1 already
+broke it. Re-baseline at exit.
+
+**Untouched Task 2 shape otherwise:** GET-only, body streamed
+through `StreamEvent::ToolOutput`, 10 MiB hard body cap,
+`reqwest::redirect::Policy::none()`, return value
+`{status, body}` (headers audit-log-only). All the other
+acceptance tests in the draft still apply verbatim — the
+only drift is the scope base name and the URL-matching
+fix.
+
+---
+
+## Task 2 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **`WebFetchTool`** under `crates/aivyx-core/src/tools/web_fetch.rs`
+   — mirrors the `ShellExecTool` layout: `WebFetchToolConfig::new().build()`
+   returns a ready-to-register tool carrying an `Arc<reqwest::Client>`
+   configured with `redirect::Policy::none()` + 10-second
+   connect timeout. Input schema is flat (`{url, timeout_ms?}`),
+   no nested-validator dependency. Name is `web.fetch`; scope
+   base is `net.fetch` (see the mid-implementation correction
+   block above for why).
+2. **GET-only, UTF-8 body, 10 MiB hard cap.** Body is streamed
+   through `StreamEvent::ToolOutput` as UTF-8 chunks arrive
+   (chunks that fail the per-chunk UTF-8 check are skipped
+   from streaming but still included in the aggregated body
+   the planner sees), and a size check before every
+   `extend_from_slice` rejects oversize responses as
+   `ToolOutcome::Failed` rather than truncating or OOMing.
+3. **Capability-layer hardening (Q4 resolution).** The existing
+   `QualifierKind::UrlPrefix` matcher at
+   `aivyx-capability/src/lib.rs` was using raw
+   `needed_q.starts_with(held_q)`, which admitted the classic
+   hostile-suffix attack (held `https://example.com/` grants
+   needed `https://example.com.evil.com/`). Replaced with a
+   hand-rolled origin-aware matcher `url_prefix_grants` +
+   `parse_scope_url` helper, covering:
+   - (scheme, host, port) exact match with default-port
+     normalization (80/443) and ASCII-case-insensitive host
+     compare.
+   - Path-prefix on component boundaries — trailing-slash
+     equivalence (`/api` and `/api/` are the same directory)
+     but rejecting non-boundary prefixes (`/users` does NOT
+     grant `/users2`).
+   - Query and fragment are stripped from the needed URL
+     before matching.
+   - Zero new workspace dependencies — the full parser is
+     `&str` arithmetic with a couple of `split_once`s.
+4. **Registration wiring.** New helper
+   `build_web_fetch_for_channel(channel_kind) -> Result<Arc<dyn Tool>, String>`
+   in `crates/aivyx-channel/src/bin/aivyx.rs`, returning the
+   tool unconditionally for both `ChannelKind::Local` and
+   `ChannelKind::Telegram`. Registered into the shared
+   `tool_list` after `build_shell_exec_for_channel`. The
+   binary's operator-held capability set gains an unqualified
+   `net.fetch` scope so D4 Rule 2 grants all per-URL
+   `net.fetch:<url>` requests by default on the Trusted CLI;
+   ceiling intersection on Telegram narrows it via
+   `CEILING_SEMITRUSTED` (which also holds unqualified
+   `net.fetch`).
+5. **Regression tests.** 22 new tests across two crates:
+   - `aivyx-capability/src/lib.rs`: 9 URL-matcher regression
+     tests — hostile-suffix hostname (×2), non-boundary path
+     prefix, scheme mismatch, default-port normalization,
+     case-insensitive host, trailing-slash equivalence,
+     query-string ignored, malformed-denied.
+   - `aivyx-core/src/tools/web_fetch.rs`: 12 tool tests —
+     scope derivation (happy path + four deny-scope paths:
+     missing URL, empty URL, `file://`, `ftp://`), capability
+     integration (origin grants subpath, different-host
+     denial, hostile-suffix denial — the tool-level
+     regression for the same security property), schema
+     shape, and three execute-path error tests (malformed
+     URL, missing URL, unresolvable `.invalid` host).
+   - `aivyx-channel/src/bin/aivyx.rs`: 2 binary gate tests —
+     `channel_local_receives_web_fetch` and
+     `channel_telegram_receives_web_fetch`, symmetric
+     counterparts to the Phase 11 Task 3 shell.exec gate
+     pins.
+
+**Exit criteria — all met.**
+
+- ✅ `web.fetch` registered for Trusted and SemiTrusted tiers,
+  not for Untrusted/Kernel (which aren't wired in the binary
+  anyway — the `ChannelKind` enum only covers `Local` and
+  `Telegram`).
+- ✅ Scope base correction recorded mid-implementation (tool
+  name `web.fetch`, scope base `net.fetch`).
+- ✅ Hostile-suffix regression test (`url_prefix_rejects_hostile_
+  suffix_hostname` + `held_origin_does_not_grant_hostile_
+  suffix_host`) asserts Q4 resolution is implemented
+  correctly at both the capability-layer and tool-integration
+  layers.
+- ✅ Response body size limit (`MAX_BODY_BYTES = 10 MiB`)
+  surfaces as `ToolOutcome::Failed` before exceeding memory.
+- ✅ `cargo test --workspace` green: **451 passed, 0 failed**
+  (429 → 451, delta **+22**, acceptance ≥+10).
+- ✅ `cargo clippy --workspace --all-targets -- -D warnings`
+  clean (needless-borrow regression on the strip_suffix
+  `unwrap_or` spotted by clippy and fixed before landing).
+- ✅ Zero new workspace dependencies. `reqwest`, `bytes`,
+  `futures-util` were already in `[workspace.dependencies]`
+  (via `aivyx-llm`) — Task 2 just promoted them to direct
+  deps of `aivyx-core`.
+- ⚠ **Production-core `lib.rs` byte-identity streak:
+  broken** (47-line diff vs Phase 11 exit `16422e2`). The
+  `pub use tools::web_fetch::...` re-export is the only
+  change, and it was forced by the one-re-export-site
+  convention. Will re-baseline at the Phase 12 exit commit.
+  Task 1's identical break has already been recorded; this
+  is the second break this phase, but the same "new tool
+  touches the re-export surface" cause.
+- ⚠ **Task 4 candidate changed.** The draft expected Task 4
+  to be most likely "audit-payload widening for response
+  headers." Task 2 settled that question by punting: the
+  tool's return value is `{url, status, body}` with no
+  headers, and no header propagation reaches the audit
+  layer. So Task 4's most-likely candidate is now the URL
+  canonicalization deep-dive (candidate #2 in the draft) —
+  if indeed anything rolls up to Task 4 at all.
+
+**Deferred to later phases (recorded here so the backlog
+doesn't silently grow).**
+
+- **Response headers in audit payload.** The Q3 pin said
+  "audit-log-only, not model-visible." Task 2 ships the
+  "not model-visible" half; the "audit-log-only" half is
+  deferred because the existing audit payload has no header
+  field and adding one spans `aivyx-audit` +
+  `aivyx-core::ToolCallFinished` + at least one audit bridge
+  — out of scope for a single task. Recorded as a Phase 12
+  deferral and a backlog item for Phase 13+.
+- **Non-GET verbs (POST/PUT/DELETE).** Pinned Q1 — deferred
+  indefinitely.
+- **Redirect following with per-hop scope re-check.** Pinned
+  Q5 `Policy::none()` — deferred indefinitely.
+- **Binary response bodies / non-UTF-8.** Task 2 fails loudly
+  (`"response body from <url> is not valid UTF-8"`) rather
+  than lossy-decoding. A later phase that needs binary can
+  add a base64 encoding option to the return payload.
+
+---
+
 *(Task ship records land below as Phase 12 progresses. Follow
 the Phase 11 shape: one `## Task N — shipped (YYYY-MM-DD)`
 block per task, terminal exit-criteria checklist at the very

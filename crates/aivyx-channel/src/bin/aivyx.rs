@@ -112,7 +112,7 @@ use aivyx_channel::{run_session, LocalChannel, SessionConfig};
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::{
     AuditHook, CancellationToken, FsReadToolConfig, FsWriteToolConfig,
-    ShellExecToolConfig, Tool, ToolRegistry,
+    ShellExecToolConfig, Tool, ToolRegistry, WebFetchToolConfig,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -182,6 +182,40 @@ fn build_shell_exec_for_channel(
         }
         ChannelKind::Telegram => Ok(None),
     }
+}
+
+/// Phase 12 Task 2 — registration-time gate for `web.fetch`.
+///
+/// Unlike `shell.exec`, `web.fetch` is registered for **both**
+/// `Trusted` (Local) and `SemiTrusted` (Telegram) channels —
+/// network reads are inside the SemiTrusted default ceiling
+/// (see `CEILING_SEMITRUSTED` in `aivyx-capability`) and a
+/// Telegram-attached `researcher` agent should be able to
+/// fetch URLs. `Untrusted` and `Kernel` channels do not exist
+/// in the binary's CLI surface today, so the function only
+/// needs to discriminate the two `ChannelKind`s it knows
+/// about — both get the tool.
+///
+/// Returns `Ok(Some(tool))`. A helper rather than inline
+/// code for two reasons: (1) symmetry with
+/// `build_shell_exec_for_channel` so future readers find the
+/// tier-gate decisions together, and (2) so the
+/// `channel_{local,telegram}_receives_web_fetch` tests below
+/// can pin the property without re-constructing the whole
+/// `run()` startup chain.
+///
+/// The function does not return a scope because Phase 12 ships
+/// `web.fetch` with a **narrow** capability grant configured
+/// per-role, not with a broad operator-held scope. The
+/// registration helper's job is "construct the tool"; the
+/// grants are decided by `aivyx-config` based on role.
+fn build_web_fetch_for_channel(
+    _channel_kind: ChannelKind,
+) -> Result<Arc<dyn Tool>, String> {
+    let tool = WebFetchToolConfig::new()
+        .build()
+        .map_err(|e| format!("failed to build web.fetch tool: {e}"))?;
+    Ok(Arc::new(tool) as Arc<dyn Tool>)
 }
 
 fn main() -> ExitCode {
@@ -846,6 +880,14 @@ async fn run_async(
             }
             None => None,
         };
+    // Phase 12 Task 2 — `web.fetch` is registered for both
+    // channel kinds (Trusted and SemiTrusted). Unlike
+    // `shell.exec`, no operator-scoped capability is appended
+    // at this site: role-scoped capability grants from
+    // `aivyx-config` decide which URLs a given role may fetch,
+    // and the broad `net.fetch` held by the Local CLI
+    // (granted below) covers the Trusted-tier catch-all.
+    tool_list.push(build_web_fetch_for_channel(channel_kind)?);
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
@@ -868,6 +910,20 @@ async fn run_async(
         Scope::parse("memory.forget").unwrap(),
         fs_read_scope,
         fs_write_scope,
+        // Phase 12 Task 2 — unqualified `net.fetch` for the
+        // broad operator-held capability set. D4 Rule 2:
+        // unqualified held grants any qualified needed with
+        // the same base, so the per-URL
+        // `net.fetch:<url>` that `WebFetchTool::required_scope`
+        // emits is always granted for the Local CLI. The
+        // SemiTrusted Telegram path gets the same unqualified
+        // scope via this one insert, and the turn loop's
+        // ceiling intersection narrows it on the Telegram
+        // side using `CEILING_SEMITRUSTED` — which is also
+        // `net.fetch` unqualified, so both tiers get the same
+        // broad grant here and per-role attenuation happens
+        // via `tool_allowlist` + per-role capability files.
+        Scope::parse("net.fetch").unwrap(),
     ];
     // Only the Local (Trusted) branch ever holds this scope — the
     // tool itself is absent from the registry on SemiTrusted
@@ -1180,5 +1236,37 @@ mod tests {
             "Telegram channel must NOT receive shell.exec; \
              this is the registration-time gate"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 12 Task 2 — registration-time gate for `web.fetch`.
+    //
+    // These are the symmetric counterparts to the `shell.exec` gate
+    // tests above. The property Phase 12 pins: `web.fetch` is
+    // registered for BOTH `Local` (Trusted) and `Telegram`
+    // (SemiTrusted) channels. If a future refactor accidentally
+    // restricts the tool to one tier, these tests break loudly.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn channel_local_receives_web_fetch() {
+        let tool = build_web_fetch_for_channel(ChannelKind::Local)
+            .expect("local branch must build web.fetch cleanly");
+        assert_eq!(tool.name(), "web.fetch");
+    }
+
+    #[test]
+    fn channel_telegram_receives_web_fetch() {
+        // The opposite property from shell.exec: Telegram MUST
+        // receive web.fetch. Network reads are inside the
+        // SemiTrusted default ceiling and a researcher agent
+        // attached to Telegram should be able to fetch URLs.
+        // If this test ever fails, it means web.fetch has been
+        // accidentally restricted to Trusted-only — which
+        // would silently regress the Phase 12 "Telegram
+        // researcher can fetch" goal.
+        let tool = build_web_fetch_for_channel(ChannelKind::Telegram)
+            .expect("telegram branch must build web.fetch cleanly");
+        assert_eq!(tool.name(), "web.fetch");
     }
 }

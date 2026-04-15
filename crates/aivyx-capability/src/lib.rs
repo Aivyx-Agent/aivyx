@@ -192,7 +192,7 @@ impl QualifierKind {
     /// Returns `true` iff `held_q` grants `needed_q` under this kind.
     fn check(self, needed_q: &str, held_q: &str) -> bool {
         match self {
-            QualifierKind::UrlPrefix => needed_q.starts_with(held_q),
+            QualifierKind::UrlPrefix => url_prefix_grants(held_q, needed_q),
             QualifierKind::PathGlob => glob_matches(held_q, needed_q),
             QualifierKind::Allowlist => {
                 let held: Vec<&str> = held_q.split(',').map(str::trim).collect();
@@ -203,6 +203,141 @@ impl QualifierKind {
             }
             QualifierKind::SimpleGlob => glob_matches(held_q, needed_q),
         }
+    }
+}
+
+/// Decide whether a held URL-prefix qualifier grants a needed one.
+///
+/// ## Why not `starts_with`
+///
+/// Naive raw-byte prefix matching admits the classic attack:
+/// held `https://example.com/` would grant needed
+/// `https://example.com.evil.com/` because the needed string
+/// literally starts with the held string. Phase 12 Task 2 replaces
+/// the byte-prefix with an origin-aware matcher: the (scheme, host,
+/// port) origin of `held` and `needed` must match exactly, and
+/// `needed`'s path must start at a **component boundary** under
+/// `held`'s path.
+///
+/// ## Rules
+///
+/// 1. **Origin match** — scheme, host, and port must be equal. A
+///    missing port in either URL is normalized to its scheme's
+///    default (80 for `http`, 443 for `https`). The host compare
+///    is ASCII-lowercase (RFC 3986 §3.2.2: hosts are
+///    case-insensitive).
+/// 2. **Path prefix** — after trimming any trailing `/`, the held
+///    path must equal `needed`'s path (exact match) OR the needed
+///    path must start with `held + "/"` (subpath match). This
+///    rejects `/users2/` under a held `/users` grant.
+/// 3. **Query and fragment are ignored.** A held prefix grants any
+///    query string; authorization is on the resource, not on how
+///    it is parametrized.
+///
+/// ## Non-goals
+///
+/// - Not a general URL parser. This is a minimal scope-matching
+///   primitive — no percent-decoding, no IDN, no userinfo. If an
+///   attacker can insert `@` in the authority they've already
+///   gotten past upstream input validation.
+/// - Not `url`-crate-backed. Adding a new workspace dep just for
+///   scope matching would break the zero-new-dep streak the
+///   project has held since Phase 1. Every piece of the matcher
+///   is `&str` arithmetic.
+///
+/// Returns `false` if either side fails to parse — a malformed
+/// qualifier cannot grant anything, same invariant as
+/// `glob_matches`.
+fn url_prefix_grants(held: &str, needed: &str) -> bool {
+    let Some(h) = parse_scope_url(held) else {
+        return false;
+    };
+    let Some(n) = parse_scope_url(needed) else {
+        return false;
+    };
+    if h.scheme != n.scheme || h.host != n.host || h.port != n.port {
+        return false;
+    }
+    // Path-prefix on component boundaries. Trim one trailing `/`
+    // from the held path so `/api` and `/api/` are equivalent
+    // directory prefixes; a `/foo/bar` held path never admits
+    // `/foo/barbaz` because the boundary check fires.
+    let held_path = h.path.strip_suffix('/').unwrap_or(h.path);
+    let needed_path = n.path.strip_suffix('/').unwrap_or(n.path);
+    if needed_path == held_path {
+        return true;
+    }
+    if let Some(rest) = needed_path.strip_prefix(held_path) {
+        rest.starts_with('/')
+    } else {
+        false
+    }
+}
+
+/// Minimal scope-URL parser: scheme, lowercased host, effective
+/// port, path. Anything after `?` or `#` is discarded. Returns
+/// `None` on any structural problem.
+struct ScopeUrl<'a> {
+    scheme: &'a str,
+    host: String,
+    port: u16,
+    path: &'a str,
+}
+
+fn parse_scope_url(s: &str) -> Option<ScopeUrl<'_>> {
+    let (scheme, rest) = s.split_once("://")?;
+    if scheme.is_empty() {
+        return None;
+    }
+    // Strip query/fragment — scope matching is on the resource path,
+    // not on call-site parametrization.
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    // Authority ends at the first `/` (which then starts the path)
+    // or the end of string.
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    // Reject userinfo (`user@host`) — the scope-base matcher is not
+    // a full URL parser and should not silently accept a shape it
+    // does not validate.
+    if authority.contains('@') {
+        return None;
+    }
+    let (host_part, port) = match authority.rfind(':') {
+        Some(i) => {
+            // IPv6 literal `[::1]:8080` — the colon we want is the
+            // one outside the brackets. If the authority starts
+            // with `[`, the port colon must be after `]`.
+            let colon_in_v6 = authority.starts_with('[') && !authority[..i].ends_with(']');
+            if colon_in_v6 {
+                (authority, default_port(scheme)?)
+            } else {
+                let p: u16 = authority[i + 1..].parse().ok()?;
+                (&authority[..i], p)
+            }
+        }
+        None => (authority, default_port(scheme)?),
+    };
+    if host_part.is_empty() {
+        return None;
+    }
+    Some(ScopeUrl {
+        scheme,
+        host: host_part.to_ascii_lowercase(),
+        port,
+        path,
+    })
+}
+
+fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
     }
 }
 
@@ -471,6 +606,107 @@ mod tests {
             .is_granted_by(&s("net.fetch:https://api.example.com/")));
         assert!(!s("net.fetch:https://evil.example.com/")
             .is_granted_by(&s("net.fetch:https://api.example.com/")));
+    }
+
+    // ---- Phase 12 Task 2: URL-prefix hardening -----------------------
+
+    // Classic hostile-suffix attack. Byte-prefix `starts_with` admits
+    // `example.com.evil.com` because the needed string literally
+    // starts with the held string; the origin-aware matcher must
+    // reject it because the hosts differ.
+    #[test]
+    fn url_prefix_rejects_hostile_suffix_hostname() {
+        assert!(
+            !s("net.fetch:https://example.com.evil.com/")
+                .is_granted_by(&s("net.fetch:https://example.com/")),
+            "held example.com MUST NOT grant needed example.com.evil.com"
+        );
+        assert!(
+            !s("net.fetch:https://example.com.evil.com/login")
+                .is_granted_by(&s("net.fetch:https://example.com/")),
+            "hostile suffix with path must also be denied"
+        );
+    }
+
+    // Path-segment boundary, not byte boundary. A held `/users`
+    // grant cannot leak into `/users2` — otherwise any path prefix
+    // accidentally admits an adjacent path.
+    #[test]
+    fn url_prefix_rejects_non_boundary_path_prefix() {
+        assert!(
+            !s("net.fetch:https://api.example.com/users2/list")
+                .is_granted_by(&s("net.fetch:https://api.example.com/users")),
+            "path /users2 must not match held /users — no segment boundary"
+        );
+        // But the same held scope does grant a real sub-path.
+        assert!(s("net.fetch:https://api.example.com/users/42")
+            .is_granted_by(&s("net.fetch:https://api.example.com/users")));
+    }
+
+    // Schemes must match exactly. A held `https://` grant does not
+    // cover plain `http://` — that would be a downgrade attack.
+    #[test]
+    fn url_prefix_rejects_scheme_mismatch() {
+        assert!(
+            !s("net.fetch:http://api.example.com/")
+                .is_granted_by(&s("net.fetch:https://api.example.com/")),
+            "http must not be granted by https hold"
+        );
+    }
+
+    // Default-port normalization: `https://host` and
+    // `https://host:443` are the same origin and grant each other.
+    #[test]
+    fn url_prefix_normalizes_default_ports() {
+        assert!(s("net.fetch:https://api.example.com/")
+            .is_granted_by(&s("net.fetch:https://api.example.com:443/")));
+        assert!(s("net.fetch:https://api.example.com:443/")
+            .is_granted_by(&s("net.fetch:https://api.example.com/")));
+        // A non-default port is its own origin — 8443 does NOT
+        // match the default 443.
+        assert!(!s("net.fetch:https://api.example.com:8443/")
+            .is_granted_by(&s("net.fetch:https://api.example.com/")));
+    }
+
+    // Host compare is ASCII case-insensitive (RFC 3986).
+    #[test]
+    fn url_prefix_host_compare_is_case_insensitive() {
+        assert!(s("net.fetch:https://API.Example.Com/path")
+            .is_granted_by(&s("net.fetch:https://api.example.com/path")));
+    }
+
+    // Trailing-slash equivalence. Held `/api` and held `/api/` both
+    // cover needed `/api/v1`.
+    #[test]
+    fn url_prefix_trailing_slash_equivalence() {
+        assert!(s("net.fetch:https://api.example.com/api/v1")
+            .is_granted_by(&s("net.fetch:https://api.example.com/api")));
+        assert!(s("net.fetch:https://api.example.com/api/v1")
+            .is_granted_by(&s("net.fetch:https://api.example.com/api/")));
+    }
+
+    // Query-string in needed is ignored — authorization is on the
+    // resource path, not on how the call parametrizes it.
+    #[test]
+    fn url_prefix_query_string_is_ignored() {
+        assert!(s("net.fetch:https://api.example.com/search?q=hello")
+            .is_granted_by(&s("net.fetch:https://api.example.com/search")));
+    }
+
+    // Malformed qualifier denies — same invariant as glob_matches.
+    #[test]
+    fn url_prefix_malformed_denies() {
+        // `is_granted_by` never reaches the URL matcher for these
+        // because Scope::parse accepts any known base — so the
+        // malformed check is on the matcher itself. Use a held
+        // scope that's well-formed and a needed scope that
+        // technically parses (known base) but has no `://`. The
+        // dispatch would not route this through UrlPrefix, so we
+        // instead test the matcher directly via a URL-shaped
+        // needed with a broken authority.
+        assert!(!s("net.fetch:https:///no-host/path")
+            .is_granted_by(&s("net.fetch:https://example.com/")),
+            "empty authority must be rejected by the parser");
     }
 
     #[test]

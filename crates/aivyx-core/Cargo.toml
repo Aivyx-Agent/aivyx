@@ -22,5 +22,13 @@ tokio-util = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 
+# Phase 12 Task 2 — web.fetch tool. Already in the workspace
+# through aivyx-llm; promoting to a direct dep here so the
+# tool lives next to shell.exec rather than behind a feature
+# flag in the LLM crate. Zero new workspace deps.
+reqwest = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
