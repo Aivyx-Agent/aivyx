@@ -62,6 +62,40 @@ const KNOWN_BASES: &[&str] = &[
     "config.write",
     // role allowlist (synthetic — Phase 11 Task 4)
     "tool.allowlist",
+    // Phase 14 Task 2 — Sub-Agent Role-Switching (PRODUCT.md P1).
+    // `role.switch` gates the `role.switch` tool that opens a
+    // bounded sub-session under a child role's attenuated
+    // envelope. The qualifier (if present) is a role-name string
+    // identifying the switch target: `role.switch:researcher`
+    // grants switching into the `researcher` role specifically,
+    // while unqualified `role.switch` is the "any target"
+    // wildcard (subject to parent-chain attenuation — the
+    // assemble_role_envelope walker ensures a child cannot
+    // switch into a role the parent chain did not transitively
+    // grant it).
+    //
+    // **Dispatch shape.** Role names are bare identifiers — no
+    // `/`, no `://`, no `,` — so under `QualifierKind::of` they
+    // fall through to `SimpleGlob`, which delegates to
+    // `glob_matches`. For a glob-metacharacter-free needle like
+    // `"researcher"`, `glob_matches("researcher", "researcher")`
+    // is the degenerate exact-string-equality case. **No new
+    // `QualifierKind` variant is needed**; the existing dispatch
+    // already produces the right semantics. The Phase 14 plan
+    // (PHASE_14.md Task 2 cut) anticipated a new qualifier kind;
+    // the implementation correction is that the existing
+    // `SimpleGlob` arm already matches role-name identifiers as
+    // exact strings. This lets Task 2 ship a new scope base
+    // without touching `QualifierKind` at all.
+    //
+    // **Wildcard form.** `role.switch:*` is deliberately
+    // rejected by `Scope::parse` — the unqualified form already
+    // is the wildcard under Rule 2 (held unqualified grants
+    // anything same-base), so a literal `:*` qualifier is
+    // redundant at best and ambiguous at worst (would it mean
+    // "any role named `*`" or "any role"?). Reject at parse
+    // time, not check time, per the v1 scope registry rule.
+    "role.switch",
 ];
 
 // ---------------------------------------------------------------------------
@@ -87,11 +121,22 @@ impl Scope {
     /// Parse a scope string. Returns `None` if the base is not a known v1
     /// scope, per D4: "unknown scopes fail at parse time, not check time."
     pub fn parse(s: &str) -> Option<Self> {
-        let base = match s.find(':') {
-            Some(idx) => &s[..idx],
-            None => s,
+        let (base, qualifier) = match s.find(':') {
+            Some(idx) => (&s[..idx], Some(&s[idx + 1..])),
+            None => (s, None),
         };
         if !KNOWN_BASES.contains(&base) {
+            return None;
+        }
+        // Phase 14 Task 2 — `role.switch:*` is rejected at parse
+        // time. The unqualified form (`role.switch` with no
+        // qualifier) already is the wildcard under Rule 2, so a
+        // literal `:*` qualifier is redundant and ambiguous. See
+        // the `role.switch` entry in `KNOWN_BASES` for the full
+        // rationale. This is the only base with this restriction
+        // today — every other base accepts `:*` as a legal (if
+        // unusual) qualifier.
+        if base == "role.switch" && qualifier == Some("*") {
             return None;
         }
         Some(Scope(s.to_string()))
@@ -472,6 +517,15 @@ static CEILING_KERNEL: LazyLock<CapabilitySet> = LazyLock::new(|| {
 });
 
 /// Tier 1 — Trusted. Near-total. Every v1 scope granted unqualified.
+///
+/// Phase 14 Task 2 added `role.switch` here (and only here among the
+/// real tiers) because sub-agent role-switching is a Trusted-tier
+/// primitive per PRODUCT.md P1. A SemiTrusted Telegram user must not
+/// be able to escalate capability envelopes by switching into a
+/// different role — omitting `role.switch` from `CEILING_SEMITRUSTED`
+/// makes that impossible at the ceiling intersection step, before
+/// the tool dispatch gate is even consulted. Kernel gets it
+/// automatically via the `KNOWN_BASES` iteration below.
 static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
     caps(&[
         "fs.read",
@@ -493,6 +547,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "audit.read",
         "config.read",
         "config.write",
+        "role.switch",
     ])
 });
 
@@ -947,6 +1002,134 @@ mod tests {
              synthetic one, per the ceiling-kernel-grants-everything \
              invariant"
         );
+    }
+
+    // ---- Phase 14 Task 2: `role.switch` scope base ----
+
+    #[test]
+    fn role_switch_parses_bare_and_qualified_forms() {
+        let bare = Scope::parse("role.switch").expect("bare form must parse");
+        assert_eq!(bare.base(), "role.switch");
+        assert_eq!(bare.qualifier(), None);
+
+        let qualified =
+            Scope::parse("role.switch:researcher").expect("qualified form must parse");
+        assert_eq!(qualified.base(), "role.switch");
+        assert_eq!(qualified.qualifier(), Some("researcher"));
+    }
+
+    #[test]
+    fn role_switch_rejects_wildcard_qualifier() {
+        // `role.switch:*` is redundant — the unqualified form
+        // already is the wildcard under Rule 2. Reject at parse
+        // time per the Phase 14 Task 2 design note.
+        assert!(
+            Scope::parse("role.switch:*").is_none(),
+            "role.switch:* must be rejected; use bare role.switch \
+             for the any-target wildcard"
+        );
+    }
+
+    #[test]
+    fn role_switch_unqualified_grants_qualified_target() {
+        // Rule 2 (unqualified held grants qualified needed) works
+        // for role.switch for free — no dispatch changes needed.
+        assert!(s("role.switch:researcher").is_granted_by(&s("role.switch")));
+        assert!(s("role.switch:coder").is_granted_by(&s("role.switch")));
+    }
+
+    #[test]
+    fn role_switch_qualified_does_not_grant_unqualified() {
+        // Rule 4: a role holding only `role.switch:researcher`
+        // cannot claim unqualified switch rights. This is the
+        // structural guarantee behind PRODUCT.md P1.3 — a child
+        // role attenuated down to a single target cannot widen
+        // back to all targets by dropping the qualifier.
+        assert!(!s("role.switch").is_granted_by(&s("role.switch:researcher")));
+    }
+
+    #[test]
+    fn role_switch_qualified_grants_same_target_only() {
+        // Rule 3 via SimpleGlob dispatch. Role-name qualifiers
+        // contain no `/`, no `,`, no `://`, so they fall through
+        // to the SimpleGlob arm — and glob_matches of two equal
+        // glob-metacharacter-free strings is trivially true.
+        assert!(s("role.switch:researcher").is_granted_by(&s("role.switch:researcher")));
+        assert!(!s("role.switch:researcher").is_granted_by(&s("role.switch:coder")));
+    }
+
+    #[test]
+    fn role_switch_reflexive_grants_itself_in_a_capset() {
+        // The Phase 13 Task 4 url-prefix reflexivity bug is a
+        // known hazard the Phase 14 Non-goals block names. For
+        // `role.switch` specifically, reflexivity goes through
+        // `SimpleGlob → glob_matches(q, q)`, which has no URL
+        // parser and no asymmetric component — so the hazard
+        // class does not transfer. This test pins that claim:
+        // a CapabilitySet containing `role.switch:researcher`
+        // must `grants` itself.
+        let held = CapabilitySet::from_scopes([s("role.switch:researcher")]);
+        assert!(
+            held.grants(&s("role.switch:researcher")),
+            "role.switch:researcher must self-grant; if this fails \
+             the Phase 13 Task 4 url-prefix reflexivity bug has \
+             leaked into SimpleGlob dispatch"
+        );
+    }
+
+    #[test]
+    fn role_switch_intersection_with_unqualified_holder_keeps_qualified() {
+        // An agent declaring the qualified form whose parent
+        // chain holds the unqualified form: after intersection,
+        // the qualified form survives. This is what
+        // `assemble_role_envelope` produces for a coder role
+        // declaring `role.switch:researcher` under a default
+        // root declaring unqualified `role.switch`.
+        let coder = CapabilitySet::from_scopes([s("role.switch:researcher")]);
+        let default = CapabilitySet::from_scopes([s("role.switch")]);
+        let effective = coder.intersect(&default);
+        assert!(effective.grants(&s("role.switch:researcher")));
+        assert!(
+            !effective.grants(&s("role.switch")),
+            "bare role.switch must NOT survive intersection with a \
+             qualified coder set — the intersection narrows to the \
+             qualified form"
+        );
+        // And the coder role cannot switch into a sibling it did
+        // not declare: `coder` asking for `role.switch:scribe`
+        // is denied because its own declared set has only
+        // `role.switch:researcher`, and the intersection's
+        // SimpleGlob-equality check rejects the name mismatch.
+        assert!(!effective.grants(&s("role.switch:scribe")));
+    }
+
+    #[test]
+    fn role_switch_is_in_trusted_ceiling_only() {
+        // Trusted holds it unqualified so a role declaring
+        // `role.switch:*` under a Trusted tier survives the
+        // ceiling intersection. SemiTrusted and Untrusted both
+        // omit it — role-switching is a Trusted-tier primitive
+        // per PRODUCT.md P1, and a SemiTrusted Telegram user
+        // must not be able to escalate via a switch.
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s("role.switch")));
+        assert!(TrustTier::Trusted
+            .default_ceiling()
+            .grants(&s("role.switch:researcher")));
+
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("role.switch")));
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("role.switch:researcher")));
+
+        assert!(!TrustTier::Untrusted
+            .default_ceiling()
+            .grants(&s("role.switch")));
+
+        // Kernel holds every KNOWN_BASES entry including this
+        // one — the `ceiling_kernel_grants_everything` invariant.
+        assert!(TrustTier::Kernel.default_ceiling().grants(&s("role.switch")));
     }
 
     // ---- End-to-end: D1 scenario 3 ("rm -rf from Telegram") ----

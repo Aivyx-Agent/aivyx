@@ -26,9 +26,11 @@
 //! or propose an amendment with real evidence behind it.
 
 pub mod fs;
+pub mod role_switch;
 pub mod shell;
 pub mod web_fetch;
 
 pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
+pub use role_switch::RoleSwitchTool;
 pub use shell::{ShellExecTool, ShellExecToolConfig};
 pub use web_fetch::{WebFetchTool, WebFetchToolConfig};

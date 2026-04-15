@@ -1972,10 +1972,17 @@ mod tests {
 
     /// `coder` declares its own attenuation of `default` and runs
     /// at `Trusted`. The example file's comment block claims the
-    /// runtime envelope is exactly the six scopes coder declared
+    /// runtime envelope is exactly the seven scopes coder declared
     /// (since each is granted by `default`'s unqualified
     /// counterpart and `Trusted`'s ceiling keeps everything). This
     /// test pins that claim.
+    ///
+    /// Phase 14 Task 2 widened the documented set from six to
+    /// seven: coder now declares `role.switch:researcher` as well,
+    /// which survives intersection with `default`'s unqualified
+    /// `role.switch` (Rule 2) and with CEILING_TRUSTED's
+    /// unqualified `role.switch` (also Rule 2). No scope is
+    /// dropped on this path — the widening is additive.
     #[test]
     fn example_aivyx_toml_coder_envelope_matches_documented_set() {
         let cfg = load_example_config();
@@ -1995,12 +2002,14 @@ mod tests {
             "memory.write",
             "memory.forget",
             "shell.exec",
+            "role.switch:researcher",
         ];
         expected.sort();
         assert_eq!(
             got, expected,
             "coder runtime envelope (after role-tier intersection at Trusted) \
-             must be exactly the documented six scopes"
+             must be exactly the documented seven scopes, including \
+             role.switch:researcher from Phase 14 Task 2"
         );
     }
 
@@ -2220,6 +2229,15 @@ mod tests {
         );
         for scope in &[
             "fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec",
+            // Phase 14 Task 2 — `coder`'s declared envelope now
+            // includes `role.switch:researcher` so the worked
+            // example demonstrates the sub-agent role-switching
+            // primitive from PRODUCT.md P1. The scope survives
+            // intersection with `default`'s unqualified
+            // `role.switch` (Rule 2) and with CEILING_TRUSTED's
+            // unqualified `role.switch` (Rule 2 again), so it
+            // must appear in the rendered effective envelope.
+            "role.switch:researcher",
         ] {
             assert!(
                 rendered.contains(scope),

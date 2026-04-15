@@ -111,6 +111,15 @@
 [[role]]
 name = "default"
 system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+# Phase 14 Task 2 adds unqualified `role.switch` to `default`'s
+# declared envelope. Unqualified means "any target" under D4 Rule
+# 2, and the root declaring it is what lets descendants (e.g.
+# `coder` below) declare the qualified form `role.switch:<name>`
+# and have it load cleanly through the assemble_role_envelope
+# walker. A child declaring a qualifier the parent chain does not
+# transitively grant would fail the config-load-time attenuation
+# check, which is exactly the PRODUCT.md P1.3 "structurally
+# impossible escalation" guarantee working.
 capability_scopes = [
   "memory.read",
   "memory.write",
@@ -119,6 +128,7 @@ capability_scopes = [
   "fs.write",
   "net.fetch",
   "shell.exec",
+  "role.switch",
 ]
 trust_ceiling = "Trusted"
 
@@ -141,8 +151,24 @@ trust_ceiling = "Trusted"
 [[role]]
 name = "coder"
 system_prompt = "You are a pair-programmer. Reach for tests first."
-tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec"]
+# Phase 14 Task 2 adds `role.switch` to the allowlist so the
+# `role.switch` tool is dispatch-layer-reachable. The allowlist
+# gate and the capability gate are independent surfaces: an
+# allowlist-only restriction would still need the role.switch
+# capability scope below to pass the scope gate.
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec", "role.switch"]
 memory_topic_prefix = "coder/"
+# `role.switch:researcher` is a **qualified** switch grant — this
+# coder can switch into the `researcher` role for sub-session
+# work (per PRODUCT.md P1), but cannot switch into any other
+# target (say, back into `default` or into `junior_researcher`).
+# This qualified form is granted by `default`'s unqualified
+# `role.switch` under D4 Rule 2, so the assemble_role_envelope
+# walker lets it through at config-load time. After intersection
+# with the parent chain, `coder`'s effective envelope holds
+# `role.switch:researcher` (narrowed) rather than unqualified
+# `role.switch` (widened) — the qualified form wins because
+# intersection under D4 keeps the narrower scope.
 capability_scopes = [
   "fs.read",
   "fs.write",
@@ -150,6 +176,7 @@ capability_scopes = [
   "memory.write",
   "memory.forget",
   "shell.exec",
+  "role.switch:researcher",
 ]
 trust_ceiling = "Trusted"
 parent_role = "default"
