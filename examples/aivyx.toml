@@ -1,0 +1,285 @@
+# Aivyx — worked example config (Phase 13 Task 3)
+#
+# This file is the canonical worked example for the per-role
+# capability envelope shipped in PRODUCT.md P9 / Phase 13. Every
+# concept that touches inheritance, attenuation, trust ceilings,
+# and the backcompat floor shows up at least once. It is meant
+# to be copied, edited, and used as a real config — not just
+# read.
+#
+# The example also deliberately includes the **empty-child
+# surprise** case (`junior_researcher` below) so operators see
+# the floor-substitution behavior in a controlled setting
+# instead of discovering it in production.
+#
+# ----------------------------------------------------------------
+# Required top-level sections (minimal — no real secrets)
+# ----------------------------------------------------------------
+#
+# A real deployment supplies `[anthropic] api_key`, `[fs] root`,
+# `[storage] path`, `[aivyx] passphrase`, etc. They are omitted
+# here so the file can be loaded by tests via `LoadOptions`
+# with `require_api_key = false`. Copy this file and add those
+# fields before pointing a live binary at it.
+#
+# ----------------------------------------------------------------
+# Schema for `[[role]]` entries (Phase 11 + Phase 13)
+# ----------------------------------------------------------------
+#
+# Each `[[role]]` table-array entry adds one role to the
+# `cfg.roles` map. Required key:
+#
+#   name = "<string>"        Role identifier. Must be unique.
+#
+# Phase 11 keys (legacy, still respected):
+#
+#   system_prompt        = "..."         Per-role prompt override
+#   tool_allowlist       = ["fs.read"]   Which tool names may run
+#   memory_topic_prefix  = "coder/"      Memory-topic namespace
+#
+# Phase 13 keys (new):
+#
+#   capability_scopes    = ["fs.read"]   Declared capability
+#                                        envelope. The list of
+#                                        scope strings the role
+#                                        is allowed to *want*.
+#                                        Parsed at config-load
+#                                        time, so unknown bases
+#                                        fail loudly with file
+#                                        context.
+#
+#   trust_ceiling        = "Trusted"     Maximum trust tier this
+#                                        role is allowed to run
+#                                        at. Composes with the
+#                                        channel's tier as a
+#                                        second intersection
+#                                        (the more-restrictive
+#                                        of role / channel wins).
+#                                        Valid values: Kernel,
+#                                        Trusted, SemiTrusted,
+#                                        Untrusted. Default:
+#                                        Trusted.
+#
+#   parent_role          = "default"     Single-inheritance
+#                                        parent. None = root.
+#                                        Cycles + dangling
+#                                        parents fail at load
+#                                        time. A child's
+#                                        declared scopes must
+#                                        each be granted by some
+#                                        scope on its nearest
+#                                        constraining ancestor's
+#                                        declared set (the
+#                                        validator walks past
+#                                        empty ancestors).
+#
+# Absent vs empty (the same rule that `tool_allowlist` already
+# follows in Phase 11):
+#
+#   key absent           Treated as "Phase 13 has nothing to add."
+#                        For `capability_scopes`: empty Vec, source
+#                        = Default, and the *runtime* assembler
+#                        substitutes the binary's hard-coded
+#                        backcompat floor for that level.
+#
+#   key = []             Same as absent for `capability_scopes`.
+#                        The validator skips empty levels when
+#                        walking child→parent attenuation.
+#
+# Caveat: an *empty* `capability_scopes` is the unconstrained
+# sentinel at config-load time, but at *runtime* it gets the
+# backcompat floor injected per-empty-level. See the
+# `junior_researcher` case below for what this means in
+# practice.
+#
+# ----------------------------------------------------------------
+# Worked roles
+# ----------------------------------------------------------------
+
+# `default` is the root of the inheritance forest. It declares
+# the broadest envelope the operator wants any role in this
+# config to be able to attenuate against. The unqualified
+# scopes here let children declare *qualified* forms (e.g.
+# `net.fetch:url-prefix:...`) and have them load cleanly under
+# D4 Rule 2 (unqualified-held grants qualified-needed).
+#
+# Note `default` declares scopes that match the binary's
+# backcompat floor in *shape* — but the floor uses a
+# path-qualified `fs.read:<sandbox>/**` because the canonical
+# sandbox path is only known at startup. Declaring `fs.read`
+# unqualified here keeps the example file portable.
+[[role]]
+name = "default"
+system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+capability_scopes = [
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "fs.read",
+  "fs.write",
+  "net.fetch",
+  "shell.exec",
+]
+trust_ceiling = "Trusted"
+
+# `coder` inherits from `default` and *attenuates* it: drops
+# `net.fetch` (a coder doesn't fetch URLs in this profile).
+# Every declared scope is granted by `default`'s declared set
+# (trivially, since each is the unqualified form), so the
+# config-load-time attenuation walk passes.
+#
+# Effective runtime envelope (when activated):
+#   coder_declared ∩ default_declared
+#     = [memory.read, memory.write, memory.forget, fs.read,
+#        fs.write, shell.exec]
+#
+# Trust ceiling intersection then folds in: `Trusted` keeps
+# `shell.exec` (it is in CEILING_TRUSTED's set). The channel
+# layer applies its own ceiling on top in the turn loop —
+# `coder` on a SemiTrusted channel will lose `shell.exec` at
+# dispatch time even though the role declared `Trusted`.
+[[role]]
+name = "coder"
+system_prompt = "You are a pair-programmer. Reach for tests first."
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec"]
+memory_topic_prefix = "coder/"
+capability_scopes = [
+  "fs.read",
+  "fs.write",
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "shell.exec",
+]
+trust_ceiling = "Trusted"
+parent_role = "default"
+
+# `researcher` inherits from `default` and attenuates it
+# differently: drops `fs.write` and `shell.exec`, narrows
+# `net.fetch` to a single URL prefix. The qualified
+# `net.fetch:url-prefix:https://httpbin.org/` is granted by
+# `default.net.fetch` (unqualified) at config-load time via
+# D4 Rule 2.
+#
+# Trust ceiling note: `researcher` runs at `Trusted` here so
+# the `fs.read` and `memory.forget` scopes survive the
+# ceiling intersection — `CEILING_SEMITRUSTED` deliberately
+# omits the *unqualified* `fs.read` / `fs.write` /
+# `memory.forget` rows (they are "▲ rows" in the
+# `aivyx-capability` ceiling table), so a SemiTrusted
+# researcher would lose all three. A real deployment that
+# wants a SemiTrusted researcher needs to declare
+# *path-qualified* fs scopes (e.g. `fs.read:/notes/**`)
+# rather than the unqualified base. That is a deliberate
+# asymmetry in the capability layer: SemiTrusted forces
+# qualifier discipline on filesystem access. The example
+# stays at `Trusted` here so the "child attenuates parent
+# scopes" teaching point isn't tangled up with the "ceiling
+# strips unqualified bases" teaching point.
+#
+# Effective runtime envelope (when activated):
+#   researcher_declared ∩ default_declared ∩ CEILING_TRUSTED
+#     = [fs.read, memory.read, memory.write, memory.forget,
+#        net.fetch:url-prefix:https://httpbin.org/]
+[[role]]
+name = "researcher"
+system_prompt = "You are a careful note-taker. Cite sources."
+tool_allowlist = ["fs.read", "memory.read", "memory.write", "memory.forget", "web.fetch"]
+memory_topic_prefix = "researcher/"
+capability_scopes = [
+  "fs.read",
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "net.fetch:url-prefix:https://httpbin.org/",
+]
+trust_ceiling = "Trusted"
+parent_role = "default"
+
+# `junior_researcher` is the **empty-child surprise** case.
+#
+# The operator's mental model: "junior_researcher inherits
+# everything researcher has, but I haven't declared any of my
+# own constraints, so it gets researcher's envelope verbatim."
+#
+# The *actual* runtime behavior under Phase 13's Q5
+# resolution: an empty `capability_scopes` is the
+# unconstrained sentinel at config-load time, and the runtime
+# assembler substitutes the binary's **backcompat floor** for
+# this level (NOT researcher's declared set). The walk then
+# intersects the floor against researcher's envelope upward,
+# with the path-qualified fs.read scope from the floor
+# *narrowing* researcher's unqualified fs.read.
+#
+# Effective runtime envelope (when activated, on a Local
+# channel where the floor includes `shell.exec`):
+#   floor ∩ researcher_declared ∩ default_declared ∩ CEILING_TRUSTED
+#
+# Where `floor` is roughly:
+#   [memory.read, memory.write, memory.forget,
+#    fs.read:<sandbox>/**, fs.write:<sandbox>/**, net.fetch,
+#    shell.exec]
+#
+# Working through the intersection (step 1 — `floor ∩
+# researcher_declared`, which is where the surprise lives):
+#   - memory.{read,write,forget}: kept (granted on both sides)
+#   - fs.read:<sandbox>/** (from floor): granted by
+#     researcher.fs.read (unqualified) via Rule 2, so it
+#     survives in the path-qualified form
+#   - researcher.fs.read (unqualified): NOT granted by
+#     floor.fs.read:<sandbox>/** under Rule 4, so dropped
+#     (the path-qualified form has *replaced* the
+#     unqualified one)
+#   - fs.write:<sandbox>/**: researcher has no fs.write at
+#     all, so dropped
+#   - floor.net.fetch (unqualified): NOT granted by
+#     researcher.net.fetch:url-prefix:https://httpbin.org/
+#     under Rule 4, so dropped
+#   - researcher.net.fetch:url-prefix:https://httpbin.org/:
+#     granted by floor.net.fetch via Rule 2, kept
+#   - shell.exec: researcher has no shell.exec, dropped
+#
+# Step 2: intersect with `default_declared`. Default's
+# unqualified `fs.read` grants the path-qualified form
+# (Rule 2), and the rest carry through unchanged.
+#
+# Step 3: intersect with `CEILING_TRUSTED`. CEILING_TRUSTED
+# is broad — it includes `fs.read`, `memory.forget`, and
+# `net.fetch` as unqualified bases, all of which grant the
+# qualified forms in our running set. Everything survives.
+#
+# Final junior_researcher envelope:
+#   [memory.read, memory.write, memory.forget,
+#    fs.read:<sandbox>/**,
+#    net.fetch:url-prefix:https://httpbin.org/]
+#
+# Compare to `researcher`'s envelope, which is:
+#   [memory.read, memory.write, memory.forget,
+#    fs.read,                                       <-- unqualified
+#    net.fetch:url-prefix:https://httpbin.org/]
+#
+# **The two roles produce different envelopes** even though
+# `junior_researcher` declared an empty `capability_scopes`
+# and an operator's mental model would expect them
+# identical. `researcher` keeps an unqualified `fs.read`
+# (and so could read any path under its tier ceiling);
+# `junior_researcher` is silently narrowed to `fs.read`
+# under the binary's startup-canonicalized sandbox path —
+# because the *floor*, not `researcher`'s declared set, is
+# what got substituted in for the empty level.
+#
+# The fix, if you want junior_researcher to inherit
+# researcher's declared envelope verbatim: declare scopes on
+# junior_researcher explicitly. The implicit-floor path is
+# exactly **one level deep** — no transitive inheritance
+# through empty ancestors. Phase 13 Task 2's correction
+# block in `docs/PHASE_13.md` records this design
+# constraint with rationale.
+[[role]]
+name = "junior_researcher"
+system_prompt = "You are a junior researcher. Ask for help when uncertain."
+tool_allowlist = ["fs.read", "memory.read", "memory.write", "memory.forget", "web.fetch"]
+memory_topic_prefix = "junior_researcher/"
+capability_scopes = []
+trust_ceiling = "Trusted"
+parent_role = "researcher"

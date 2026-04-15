@@ -1595,4 +1595,222 @@ mod tests {
             "shell.exec must be stripped by SemiTrusted ceiling: {scope_strings:?}"
         );
     }
+
+    // ----------------------------------------------------------------
+    // Phase 13 Task 3 — `examples/aivyx.toml` worked-case regression
+    // ----------------------------------------------------------------
+    //
+    // These tests load the canonical worked example from
+    // `examples/aivyx.toml` (resolved via `CARGO_MANIFEST_DIR`) and
+    // pin the runtime envelopes for each of the four declared roles.
+    // The example file is a teaching artifact; these tests are the
+    // mechanical guarantee that the file's claims about each role's
+    // envelope are still true. If a Phase 14 capability-layer change
+    // shifts the math, the test breaks loud and the operator-facing
+    // doc gets updated alongside it.
+    //
+    // The test deliberately lives inside `aivyx.rs`'s `mod tests`
+    // (not in `crates/aivyx-channel/tests/`) because
+    // `assemble_role_envelope` is a binary-private free fn and Rust
+    // integration tests cannot reach binary internals. Lifting the
+    // fn into `aivyx-channel/src/lib.rs` would be a structural shift
+    // beyond Task 3's scope; keeping the test binary-internal is the
+    // smaller move and the Task 3 plan explicitly allowed "or an
+    // appropriate location."
+
+    /// Build the runtime backcompat floor the binary uses on a
+    /// `Local` channel. The path-qualified `fs.read`/`fs.write`
+    /// scopes mirror the production code's startup canonicalization
+    /// (using `/tmp/sandbox` as a stand-in for the real
+    /// `fs_root`), so the `junior_researcher` test below sees the
+    /// same floor shape that a real Local-channel session would.
+    fn local_channel_floor_with_sandbox(sandbox: &str) -> Vec<Scope> {
+        vec![
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+            Scope::parse("memory.forget").unwrap(),
+            Scope::parse(&format!("fs.read:{sandbox}/**")).unwrap(),
+            Scope::parse(&format!("fs.write:{sandbox}/**")).unwrap(),
+            Scope::parse("net.fetch").unwrap(),
+            Scope::parse("shell.exec").unwrap(),
+        ]
+    }
+
+    /// Load `examples/aivyx.toml` from the repo root. Returns the
+    /// loaded `AivyxConfig` with no env vars set; the example is
+    /// designed to load without secrets via `require_api_key:
+    /// false`.
+    fn load_example_config() -> AivyxConfig {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let example_path = PathBuf::from(manifest_dir)
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("aivyx.toml");
+        assert!(
+            example_path.exists(),
+            "examples/aivyx.toml must exist at {example_path:?}"
+        );
+        // We need to pick *some* role for `LoadOptions` to succeed;
+        // the example file declares all four roles and the active
+        // role gets picked here only to satisfy the loader. Each
+        // test re-resolves the role it actually wants from
+        // `cfg.roles` directly.
+        let opts = LoadOptions {
+            toml_path: Some(example_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            role_override: Some("default".to_string()),
+        };
+        AivyxConfig::load_from_env_and_toml(&opts).expect("examples/aivyx.toml must load cleanly")
+    }
+
+    /// `coder` declares its own attenuation of `default` and runs
+    /// at `Trusted`. The example file's comment block claims the
+    /// runtime envelope is exactly the six scopes coder declared
+    /// (since each is granted by `default`'s unqualified
+    /// counterpart and `Trusted`'s ceiling keeps everything). This
+    /// test pins that claim.
+    #[test]
+    fn example_aivyx_toml_coder_envelope_matches_documented_set() {
+        let cfg = load_example_config();
+        let coder = cfg.roles.get("coder").expect("coder role declared");
+        let floor = local_channel_floor_with_sandbox("/tmp/sandbox");
+
+        let envelope = assemble_role_envelope(coder, &cfg.roles, &floor);
+        let role_tier_ceiling = coder.trust_ceiling.value.default_ceiling();
+        let effective = envelope.intersect(role_tier_ceiling);
+
+        let mut got: Vec<&str> = effective.iter().map(|s| s.as_str()).collect();
+        got.sort();
+        let mut expected = vec![
+            "fs.read",
+            "fs.write",
+            "memory.read",
+            "memory.write",
+            "memory.forget",
+            "shell.exec",
+        ];
+        expected.sort();
+        assert_eq!(
+            got, expected,
+            "coder runtime envelope (after role-tier intersection at Trusted) \
+             must be exactly the documented six scopes"
+        );
+    }
+
+    /// `researcher` attenuates `default` differently — drops
+    /// `fs.write` and `shell.exec`, narrows `net.fetch` to a URL
+    /// prefix — and runs at `Trusted` (deliberately, so `fs.read`
+    /// and `memory.forget` survive the ceiling intersection;
+    /// CEILING_SEMITRUSTED omits the unqualified `fs.read` and
+    /// `memory.forget` rows by design and would strip them). The
+    /// envelope is `researcher_declared ∩ default_declared ∩
+    /// CEILING_TRUSTED`, which under D4 reduces to exactly what
+    /// `researcher` declared.
+    #[test]
+    fn example_aivyx_toml_researcher_envelope_matches_documented_set() {
+        let cfg = load_example_config();
+        let researcher = cfg.roles.get("researcher").expect("researcher role declared");
+        let floor = local_channel_floor_with_sandbox("/tmp/sandbox");
+
+        let envelope = assemble_role_envelope(researcher, &cfg.roles, &floor);
+        let role_tier_ceiling = researcher.trust_ceiling.value.default_ceiling();
+        let effective = envelope.intersect(role_tier_ceiling);
+
+        let mut got: Vec<&str> = effective.iter().map(|s| s.as_str()).collect();
+        got.sort();
+        let mut expected = vec![
+            "fs.read",
+            "memory.read",
+            "memory.write",
+            "memory.forget",
+            "net.fetch:url-prefix:https://httpbin.org/",
+        ];
+        expected.sort();
+        assert_eq!(
+            got, expected,
+            "researcher runtime envelope (after Trusted ceiling) must be \
+             exactly the documented five scopes — note unqualified fs.read \
+             survives because Trusted ceiling includes the fs.read base"
+        );
+    }
+
+    /// `junior_researcher` is the **empty-child surprise** case.
+    /// Its `capability_scopes` is `[]`, so the assembler
+    /// substitutes the binary's backcompat floor for that level.
+    /// The envelope is then `floor ∩ researcher_declared ∩
+    /// default_declared ∩ CEILING_TRUSTED`. Crucially, the
+    /// floor's path-qualified `fs.read:<sandbox>/**` is what
+    /// makes it through, NOT `researcher`'s unqualified `fs.read`
+    /// (because Rule 4 forbids qualified-held from granting
+    /// unqualified-needed). Likewise `floor.net.fetch`
+    /// (unqualified) gets dropped because `researcher`'s
+    /// qualified URL-prefix scope cannot grant it back, but
+    /// `researcher`'s qualified URL-prefix scope itself survives
+    /// (granted by `floor.net.fetch` via Rule 2). The Trusted
+    /// ceiling then keeps everything that survived intersection.
+    ///
+    /// This is the entire point of the example file: a config
+    /// that *looks* like simple inheritance silently produces a
+    /// runtime envelope shaped by the backcompat floor, not the
+    /// declared parent. The test pins the behavior so future
+    /// refactors of either the floor shape or the assembler walk
+    /// trigger a loud failure here, with the example-file
+    /// docstring as the natural place to update the operator-
+    /// facing explanation.
+    #[test]
+    fn example_aivyx_toml_junior_researcher_envelope_demonstrates_floor_substitution() {
+        let cfg = load_example_config();
+        let junior = cfg.roles.get("junior_researcher").expect("junior_researcher role declared");
+        let floor = local_channel_floor_with_sandbox("/tmp/sandbox");
+
+        let envelope = assemble_role_envelope(junior, &cfg.roles, &floor);
+        let role_tier_ceiling = junior.trust_ceiling.value.default_ceiling();
+        let effective = envelope.intersect(role_tier_ceiling);
+
+        let mut got: Vec<&str> = effective.iter().map(|s| s.as_str()).collect();
+        got.sort();
+        let mut expected = vec![
+            "fs.read:/tmp/sandbox/**",
+            "memory.read",
+            "memory.write",
+            "memory.forget",
+            "net.fetch:url-prefix:https://httpbin.org/",
+        ];
+        expected.sort();
+        assert_eq!(
+            got, expected,
+            "junior_researcher runtime envelope demonstrates the \
+             backcompat-floor substitution: path-qualified fs.read survives, \
+             researcher's unqualified fs.read does NOT, the qualified \
+             net.fetch URL-prefix survives but the floor's unqualified \
+             net.fetch does NOT, and shell.exec is gone (not in \
+             researcher's declared set)"
+        );
+
+        // Also pin the divergence from `researcher`'s envelope to
+        // make the surprise mechanically visible: the two roles
+        // produce *different* runtime sets, even though
+        // junior_researcher declared an empty `capability_scopes`
+        // and an operator's mental model would expect them
+        // identical. The specific diff: junior has
+        // `fs.read:/tmp/sandbox/**` (path-qualified); researcher
+        // has `fs.read` (unqualified). Same base, same tier
+        // ceiling, but different envelopes — entirely because the
+        // floor was substituted in for junior's empty level.
+        let researcher = cfg.roles.get("researcher").expect("researcher role declared");
+        let researcher_envelope = assemble_role_envelope(researcher, &cfg.roles, &floor)
+            .intersect(researcher.trust_ceiling.value.default_ceiling());
+        let mut researcher_strs: Vec<&str> =
+            researcher_envelope.iter().map(|s| s.as_str()).collect();
+        researcher_strs.sort();
+        assert_ne!(
+            got, researcher_strs,
+            "junior_researcher and researcher must produce DIFFERENT runtime \
+             envelopes: that divergence is the empty-child surprise the \
+             example file documents (junior gets fs.read path-qualified by \
+             the floor; researcher keeps it unqualified)"
+        );
+    }
 }

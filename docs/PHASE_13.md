@@ -1055,3 +1055,216 @@ crates/aivyx-core/src/lib.rs | wc -l` returning `0`.
   work. Task 2 leaves the channel-tier intersection in
   the turn loop (where it already is); Phase 14 may
   fold a per-channel scope envelope alongside it.
+
+---
+
+## Task 3 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed.** The Task 3 plan said
+`researcher` would declare `trust_ceiling = "SemiTrusted"`
+to demonstrate "child role narrows trust ceiling below
+parent's default `Trusted`." The intuition: a researcher
+is doing read-only work and shouldn't have the broader
+ceiling.
+
+**What broke when I wrote the regression test.** The
+runtime envelope under `CEILING_SEMITRUSTED` does not
+contain what an operator would intuitively expect.
+Walking the math:
+
+- `researcher_declared = [fs.read, memory.{read,write,
+  forget}, net.fetch:url-prefix:https://httpbin.org/]`
+- `researcher_declared ∩ default_declared` keeps all of
+  the above (default's broader unqualified set grants
+  each)
+- Then `∩ CEILING_SEMITRUSTED`. CEILING_SEMITRUSTED
+  contains `[fs.metadata, net.fetch, net.dns, llm.call,
+  llm.embed, memory.read, memory.write, config.read]`
+  — note what's **missing**: `fs.read`, `fs.write`,
+  `memory.forget`, and `audit.read`.
+- The capability layer's docstring calls these "▲
+  rows" — bases that are deliberately omitted from the
+  unqualified ceiling so a SemiTrusted agent must
+  present a *path-qualified* form (e.g.
+  `fs.read:/notes/**`) rather than the bare base.
+  Holding bare `fs.read` on a SemiTrusted channel
+  gets you nothing; holding `fs.read:/notes/**` gets
+  you exactly the qualified set. This is by design —
+  PRODUCT.md / DESIGN.md push qualifier discipline at
+  the SemiTrusted boundary.
+
+So a `researcher` declaring `["fs.read", ...]` with
+`trust_ceiling = "SemiTrusted"` produces a runtime
+envelope of `[memory.read, memory.write,
+net.fetch:url-prefix:https://httpbin.org/]` — three
+scopes, no fs access at all. The example role would
+silently lose `fs.read` and `memory.forget` and look
+broken to anyone copying it.
+
+**What the implementation actually shipped.** Bumped
+`researcher` from `SemiTrusted → Trusted` in the
+example file, with a long inline comment explaining
+the ▲ rows asymmetry and pointing operators at the
+"declare path-qualified forms if you want SemiTrusted
+fs access" mitigation. The "child narrows trust
+ceiling" teaching point becomes a *forward-pointing
+note* in the comment block instead of a live role —
+the cost is one less demonstrated concept; the
+benefit is an example file that doesn't silently
+mislead.
+
+**Junior_researcher stays at `Trusted` for the same
+reason.** The empty-child surprise envelope is more
+honest at `Trusted` because both `fs.read:<sandbox>/**`
+and `memory.forget` survive the ceiling. Under
+`SemiTrusted` they would also be stripped, and the
+"surprise" would compound from "floor leaks in" to
+"floor leaks in AND ceiling strips most of what
+leaked" — too much going on at once for an example
+file's job of teaching one thing crisply.
+
+**Test-location concession recorded.** The Task 3
+plan said "regression test in `crates/aivyx-channel/
+tests/` or an appropriate location." The
+implementation chose **binary-internal unit tests
+inside `aivyx.rs`'s `mod tests`** because
+`assemble_role_envelope` is a binary-private free fn
+and Rust integration tests cannot reach binary
+internals. Lifting the fn into `aivyx-channel/src/
+lib.rs` would be a structural shift beyond Task 3's
+scope; the binary-internal location is the smaller
+move and uses the loader (`AivyxConfig::
+load_from_env_and_toml`) the same way an integration
+test would. Recorded so a future task that *does*
+move the fn into the lib doesn't read this as a
+mistake to clean up — it was a deliberate scope
+boundary at Task 3 time.
+
+**Production-core byte-identity:** Task 3 is
+structurally above `aivyx-core` and does not touch
+`lib.rs`. The streak baseline at `16e618c` (Phase 12
+exit) is preserved through this task. Verified post-
+Task-3 with `git diff 16e618c -- crates/aivyx-core/
+src/lib.rs | wc -l` returning `0`.
+
+---
+
+## Task 3 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **`examples/aivyx.toml`** — new file at repo root
+   (`examples/` directory previously did not exist).
+   Four `[[role]]` entries:
+   - `default` — root role declaring the broad unqualified
+     envelope `[memory.{read,write,forget}, fs.read,
+     fs.write, net.fetch, shell.exec]` at `Trusted`. Mirrors
+     the binary's backcompat floor in *shape* but uses
+     unqualified `fs.read`/`fs.write` (because the
+     canonical sandbox path is only known at startup, so
+     it cannot be hardcoded into a portable example file).
+   - `coder` — declares its own attenuation of `default`
+     (drops `net.fetch`), `parent_role = "default"`,
+     `trust_ceiling = "Trusted"`. Demonstrates the
+     happy-path child-attenuation.
+   - `researcher` — drops `fs.write` and `shell.exec`,
+     narrows `net.fetch` to a URL prefix, runs at
+     `Trusted` (see correction block above for why not
+     `SemiTrusted`). Demonstrates D4 Rule 2 (unqualified-
+     held grants qualified-needed) at config-load time.
+   - `junior_researcher` — empty `capability_scopes`,
+     `parent_role = "researcher"`, `trust_ceiling =
+     "Trusted"`. The deliberate "empty-child surprise"
+     case the Task 2 correction block flagged: at runtime
+     the assembler substitutes the backcompat floor for
+     the empty level (NOT `researcher`'s declared set),
+     so the runtime envelope ends up with
+     `fs.read:<sandbox>/**` (path-qualified) instead of
+     `researcher`'s unqualified `fs.read`. The two roles
+     produce *different* runtime envelopes despite the
+     mental-model expectation that a child with no
+     declared scopes "inherits everything" from its
+     parent.
+2. **Top-of-file comment block** in `examples/aivyx.toml`
+   — explains the schema (`name`, `system_prompt`,
+   `tool_allowlist`, `memory_topic_prefix`,
+   `capability_scopes`, `trust_ceiling`, `parent_role`),
+   the absent-vs-empty distinction, and a per-role
+   walkthrough of the runtime envelope math. The
+   `junior_researcher` block in particular includes a
+   step-by-step intersection trace that an operator
+   can read top-down to understand exactly what they
+   get.
+3. **Three new binary-internal regression tests** in
+   `crates/aivyx-channel/src/bin/aivyx.rs` (in `mod
+   tests`, after the existing five envelope-assembly
+   tests):
+   - `example_aivyx_toml_coder_envelope_matches_documented_set`
+   - `example_aivyx_toml_researcher_envelope_matches_documented_set`
+   - `example_aivyx_toml_junior_researcher_envelope_demonstrates_floor_substitution`
+4. **Two new test helper fns** in the same `mod tests`:
+   - `local_channel_floor_with_sandbox(sandbox: &str)
+     -> Vec<Scope>` — builds a representative
+     backcompat floor with `/tmp/sandbox` as the
+     stand-in canonical path, mirroring the production
+     code's startup canonicalization (the example file
+     and the test agree on this stand-in path).
+   - `load_example_config() -> AivyxConfig` — loads
+     `examples/aivyx.toml` via `AivyxConfig::load_from_
+     env_and_toml` with `CARGO_MANIFEST_DIR`-relative
+     path resolution. Same loader the binary uses.
+5. **`junior_researcher` test pins both the absolute
+   envelope and the divergence from `researcher`.** The
+   `assert_eq!` locks the exact five-scope set; the
+   `assert_ne!` against `researcher`'s envelope locks
+   the surprise itself — if a future capability-layer
+   change accidentally aligned the two envelopes, this
+   test would break, prompting a re-read of both the
+   correction block above and the example file's
+   comment.
+6. **Phase 12 Task 3 deferral closed.** The "default
+   role config file" deferral from Phase 12 Task 3 is
+   now superseded by `examples/aivyx.toml` — recorded
+   in the deferrals block at Phase 13 exit (Task 5).
+
+**Exit criteria — all met.**
+
+- ✅ `examples/aivyx.toml` exists at repo root, parses
+  cleanly via `AivyxConfig::load_from_env_and_toml`.
+- ✅ Three regression tests load the sample and verify
+  all three operator-relevant role envelopes (the
+  fourth role, `default`, is the parent and is
+  exercised transitively through the other three).
+- ✅ `cargo test --workspace` green: **468 → 471
+  passed**, delta **+3** for Task 3 alone (matching
+  the draft's ≥+3 acceptance exactly).
+- ✅ `cargo clippy --workspace --all-targets -- -D
+  warnings` clean.
+- ✅ **Production-core `lib.rs` byte-identity streak
+  preserved.** `git diff 16e618c -- crates/aivyx-core/
+  src/lib.rs | wc -l` returns `0`.
+- ✅ **DESIGN.md + PRODUCT.md byte-identity preserved.**
+  `git diff 80189b4 -- DESIGN.md PRODUCT.md | wc -l`
+  returns `0`.
+- ✅ Phase 12 Task 3 deferral (`default role config
+  file`) explicitly closed; recorded for the Phase 13
+  exit deferrals block.
+
+**Deferred (recorded so the backlog doesn't silently grow).**
+
+- **Lift `assemble_role_envelope` into `aivyx-channel/
+  src/lib.rs`.** Task 3 chose binary-internal unit
+  tests (correction block above). A future task that
+  wants the example file exercised by a true
+  *integration* test under `crates/aivyx-channel/
+  tests/` should lift the fn into the lib first. The
+  fn has no binary-specific state — the lift would be
+  a clean cut, not a refactor.
+- **Per-tier worked examples.** The example file
+  demonstrates `Trusted` thoroughly. A SemiTrusted-
+  channel-focused example (with path-qualified
+  fs scopes that survive `CEILING_SEMITRUSTED`) is
+  worth shipping in a future phase, alongside an
+  Untrusted example for completeness — but Phase 13's
+  one-file-fits-all approach is sufficient for the
+  P9 exit criterion.
