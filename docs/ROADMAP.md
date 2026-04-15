@@ -128,20 +128,46 @@ integration tests against narrowed-caps child snapshots
 impossibility test, which read from the same
 `assemble_role_envelope`-produced `CapabilitySet`.
 
-## Phase 15 — shape TBD at Phase 14 exit
+## Phase 15 — Channel-Lib Consolidation (active)
 
-Phase 14's clean exit and whatever it uncovers will shape
-Phase 15. Candidates from `PRODUCT_ROADMAP.md` remain
-**Daemon Migration keystone start** (unblocked by Phases
-13 and 14, still the largest forward reshape), **Mission
-Primitive** (approval-gate half without durability, or
-full with daemon coupling — couples to P1 which Phase 14
-just delivered), **multi-level sub-agent nesting** (the
-single net-new Phase 14 deferral, low-urgency because the
-no-op-by-default failure mode is already correct), or a
-**consolidation sub-phase** if the foundation backlog
-grows sharper design pressure than a keystone does. Phase
-14's P1 delivery makes Sub-Agent Role-Switching a
-resolved milestone in the PRODUCT_ROADMAP at one level of
-nesting; the Mission Primitive is the next keystone that
-couples to it.
+**Active — see [PHASE_15.md](PHASE_15.md).** Opened
+2026-04-16 as the first non-product-shape sub-phase in
+project history. Three concrete outcomes: (a) close the
+Phase 13 Task 3 deferral by writing the cross-crate
+integration test the Phase 14 Task 1 lift of
+`assemble_role_envelope` into `aivyx-channel` unblocked,
+(b) pick up the Phase 14 Task 5 optional cleanup by
+lifting `render_role_envelope` + `drop_reason_for` +
+`build_display_floor` out of `crates/aivyx-channel/src/bin/
+aivyx.rs` into a new `crates/aivyx-channel/src/role_render.rs`
+module, and (c) reset the rolling-deferral age clock by
+closing two directly-tagged deferrals in the same phase.
+Non-goals: no Daemon Migration work, no multi-level sub-
+agent nesting, no `aivyx-core/src/lib.rs` edits. Streaks
+at risk are the lowest of any phase since the streak
+discipline began — all three (DESIGN.md 14, PRODUCT.md 2,
+production-core `aivyx-core/src/lib.rs` 3) are predicted
+to extend, with production-core the single streak most
+mechanically shielded by the phase shape. The load-
+bearing decision for the lift is whether
+`render_role_envelope` becomes `pub` on the channel lib
+or stays crate-private behind a new entry point —
+deferred to Task 3 open.
+
+## Phase 16 — shape TBD at Phase 15 exit
+
+Phase 15's consolidation outcome will shape Phase 16. If
+Phase 15 closes cleanly with all three streaks extending
+and the rolling-deferral age clock reset, the most likely
+Phase 16 shape is **Daemon Migration keystone start**
+(still the largest forward reshape on the product
+roadmap, unblocked since Phase 13), followed by **Mission
+Primitive** as an alternative if daemon work looks too
+large for a single phase. **Multi-level sub-agent
+nesting** remains on the candidate list as a light
+follow-up to Phase 14's net-new deferral but carries no
+urgency because the no-op-by-default failure mode is
+already correct. If Phase 15 turns up surprising
+foundation pressure (e.g., the lift reveals a broken
+abstraction), a second consolidation sub-phase is also
+legitimate — Phase 15 establishes that phase shape.
