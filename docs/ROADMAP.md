@@ -79,21 +79,6 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 12 — Second product phase (candidate: web.fetch + role polish)
+## Phase 12 — `web.fetch` + streaming tool output (second product phase)
 
-The strongest Phase 12 candidate is the **second product tool**, to
-exercise the Phase 11 role+allowlist seam under a non-`shell.exec`
-workload. `web.fetch` is the leading candidate: it's the next tool
-most useful to the `researcher` role shipped in Phase 11, it's
-structurally distinct from `shell.exec` (network I/O rather than
-process spawn, URL-prefix scopes rather than `cwd:`-prefix scopes),
-and it's the tool that would justify promoting Phase 11's deferred
-**streaming tool output via `StreamEvent::ToolOutput`** from
-deferral to primary task — the design pressure for the streaming
-variant is "one more streaming-output tool away," and `web.fetch`
-is that tool. Secondary goals likely to bundle with it: a forensic
-`ToolOutcome::NotInRole` variant if the `tool.allowlist:<name>`
-synthetic-scope routing surfaces as insufficient for audit walkers
-(Phase 11 Q1 deferral), and any role-primitive polish that Phase
-11 post-exit use reveals. Scope to be refined at phase open based
-on what the first weeks of Phase 11 use surface.
+*Active — see [PHASE_12.md](PHASE_12.md).*
