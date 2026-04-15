@@ -32,8 +32,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AivyxConfig, ConfigError, FieldSource, LoadOptions, DEFAULT_MEMORY_MAX_PER_TOPIC,
-    DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT,
+    AivyxConfig, ConfigError, FieldSource, LoadOptions, Role, ToolAllowlist,
+    DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -77,6 +77,10 @@ impl EnvScope {
             "AIVYX_PASSPHRASE",
             "AIVYX_TELEGRAM_TOKEN",
             "AIVYX_TELEGRAM_CHAT_ID",
+            // Phase 11 Task 1: scope the role override env var into
+            // the env-guard so role-tests don't leak state across
+            // parallel cargo-test runs.
+            "AIVYX_ROLE",
         ];
         let saved: Vec<_> = vars
             .iter()
@@ -240,6 +244,28 @@ fn env_only_populates_every_field_with_env_source() {
     assert_eq!(chat.source, FieldSource::Env);
     assert_eq!(chat.value, 42);
 
+    // Phase 11 Task 1: with no `[[role]]` entries and no AIVYX_ROLE
+    // override, the backwards-compat bridge must synthesize an
+    // implicit `default` role whose system_prompt mirrors the
+    // legacy env-sourced value. The test does not set AIVYX_ROLE, so
+    // the active role falls through to DEFAULT_ROLE_NAME.
+    assert_eq!(cfg.roles.len(), 1, "exactly one synthesized role");
+    let default_role = cfg
+        .roles
+        .get(DEFAULT_ROLE_NAME)
+        .expect("default role synthesized");
+    // The synthesized role's prompt carries the original env source,
+    // not `FieldSource::Default` — pre-Phase-11 provenance preserved.
+    assert_eq!(default_role.system_prompt.source, FieldSource::Env);
+    assert_eq!(default_role.system_prompt.value, "env prompt");
+    assert_eq!(cfg.active_role.value, DEFAULT_ROLE_NAME);
+    assert_eq!(cfg.active_role.source, FieldSource::Default);
+    assert!(
+        cfg.warnings.is_empty(),
+        "no warning when config has no explicit roles: {:?}",
+        cfg.warnings
+    );
+
     drop(env);
 }
 
@@ -300,6 +326,7 @@ passphrase = "toml-passphrase"
         toml_path: Some(toml_path.clone()),
         require_api_key: false,
         require_telegram_token: false,
+        role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
 
@@ -352,6 +379,7 @@ chat_id = 1
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
 
@@ -405,6 +433,28 @@ fn defaults_win_when_no_source_supplies_value() {
     );
     assert!(cfg.passphrase.is_none());
     assert!(cfg.telegram.is_none());
+
+    // Phase 11 Task 1: the synthesized `default` role's system_prompt
+    // should inherit `FieldSource::Default` from the legacy field —
+    // a brand-new config with no prompt source should fall through
+    // to DEFAULT_SYSTEM_PROMPT wrapped inside the synthesized role.
+    let default_role = cfg
+        .roles
+        .get(DEFAULT_ROLE_NAME)
+        .expect("default role synthesized");
+    assert_eq!(default_role.system_prompt.source, FieldSource::Default);
+    assert_eq!(default_role.system_prompt.value, DEFAULT_SYSTEM_PROMPT);
+    // The synthesized `default` role uses AllowAll so pre-Phase-11
+    // behavior is preserved: every registered tool is available.
+    assert!(matches!(
+        default_role.tool_allowlist.value,
+        crate::ToolAllowlist::AllowAll
+    ));
+    // No prefix in the backwards-compat path → identical memory
+    // layout to Phase 8–10.
+    assert!(default_role.memory_topic_prefix.value.is_none());
+    assert_eq!(cfg.active_role.value, DEFAULT_ROLE_NAME);
+    assert!(cfg.warnings.is_empty());
 
     drop(env);
 }
@@ -492,6 +542,7 @@ fn malformed_toml_is_typed_parse_error() {
         toml_path: Some(toml_path.clone()),
         require_api_key: false,
         require_telegram_token: false,
+        role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("should fail");
     match err {
@@ -512,6 +563,7 @@ fn missing_toml_file_is_not_an_error() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts)
         .expect("missing TOML file should load cleanly");
@@ -532,6 +584,7 @@ fn validate_errors_when_required_api_key_missing() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        role_override: None,
     };
     let err = cfg.validate(&opts).expect_err("should require api key");
     match err {
@@ -552,6 +605,7 @@ fn validate_errors_when_required_telegram_token_missing() {
         toml_path: None,
         require_api_key: false,
         require_telegram_token: true,
+        role_override: None,
     };
     let err = cfg.validate(&opts).expect_err("should require token");
     match err {
@@ -572,6 +626,7 @@ fn validate_succeeds_when_everything_required_is_set() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: true,
+        role_override: None,
     };
     cfg.validate(&opts).expect("should validate cleanly");
 
@@ -638,6 +693,7 @@ async fn encrypted_store_hydrates_missing_api_key() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        role_override: None,
     };
     cfg.validate(&opts).expect("api key present after hydration");
 
@@ -708,4 +764,454 @@ async fn non_utf8_secret_in_store_is_typed_error() {
     }
 
     drop(env);
+}
+
+// ------------------------------------------------------------------
+// Phase 11 Task 1 — Role primitive
+// ------------------------------------------------------------------
+//
+// These tests cover the new `Role` / `ToolAllowlist` types, the
+// `[[role]]` TOML schema, the implicit-`default`-role backwards-
+// compatibility bridge, active-role resolution priority, and the
+// `UnknownRole` / Q4 warning error-handling paths.
+//
+// The decisions pinned by these tests:
+//   - Q3 resolution: absent `tool_allowlist` → `AllowAll`,
+//     explicit empty `tool_allowlist = []` → `Only(vec![])` (deny all).
+//   - Q4 resolution (Option B): a config with both legacy
+//     `system_prompt` *and* explicit `[[role]]` entries loads
+//     successfully with a non-fatal warning on `AivyxConfig::warnings`.
+//   - Active-role priority: `LoadOptions::role_override` > `AIVYX_ROLE`
+//     env var > `DEFAULT_ROLE_NAME`.
+//   - Backwards compat: zero `[[role]]` entries synthesize an implicit
+//     `default` role that inherits the legacy `system_prompt`'s
+//     original `FieldSource` so provenance rendering is preserved.
+
+/// Two explicit `[[role]]` entries in the TOML file load into the
+/// `roles` map, keyed by name. Each field is parsed into the runtime
+/// types with `FieldSource::Toml` wrappers; absent fields fall back
+/// to defaults. Also checks the deterministic `BTreeMap` ordering
+/// that the module docstring promises.
+#[test]
+fn explicit_roles_from_toml_parse_into_role_map() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("roles-toml");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "coder"
+system_prompt = "You are a pair-programmer."
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "shell.exec"]
+memory_topic_prefix = "coder/"
+
+[[role]]
+name = "researcher"
+system_prompt = "You are a careful note-taker."
+tool_allowlist = ["fs.read", "memory.read", "memory.write"]
+memory_topic_prefix = "researcher/"
+"#,
+    )
+    .unwrap();
+
+    // Select `coder` explicitly via env var so the load succeeds;
+    // neither `coder` nor `researcher` is the default role name so
+    // omitting the selector would fail `UnknownRole`.
+    env.set("AIVYX_ROLE", "coder");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.roles.len(), 2);
+    let coder = cfg.roles.get("coder").expect("coder role present");
+    assert_eq!(coder.name.value, "coder");
+    assert_eq!(coder.name.source, FieldSource::Toml);
+    assert_eq!(coder.system_prompt.source, FieldSource::Toml);
+    assert_eq!(coder.system_prompt.value, "You are a pair-programmer.");
+    match &coder.tool_allowlist.value {
+        ToolAllowlist::Only(tools) => {
+            assert_eq!(
+                tools,
+                &vec![
+                    "fs.read".to_string(),
+                    "fs.write".to_string(),
+                    "memory.read".to_string(),
+                    "memory.write".to_string(),
+                    "shell.exec".to_string(),
+                ]
+            );
+        }
+        other => panic!("expected Only(_), got {other:?}"),
+    }
+    assert_eq!(coder.memory_topic_prefix.value.as_deref(), Some("coder/"));
+
+    let researcher = cfg
+        .roles
+        .get("researcher")
+        .expect("researcher role present");
+    assert_eq!(researcher.name.value, "researcher");
+    match &researcher.tool_allowlist.value {
+        ToolAllowlist::Only(tools) => assert_eq!(tools.len(), 3),
+        other => panic!("expected Only(_), got {other:?}"),
+    }
+    assert_eq!(
+        researcher.memory_topic_prefix.value.as_deref(),
+        Some("researcher/")
+    );
+
+    // BTreeMap ordering — iteration is alphabetical by key.
+    let names: Vec<&str> = cfg.roles.keys().map(String::as_str).collect();
+    assert_eq!(names, vec!["coder", "researcher"]);
+
+    // Active role reflects the AIVYX_ROLE env var.
+    assert_eq!(cfg.active_role.value, "coder");
+    assert_eq!(cfg.active_role.source, FieldSource::Env);
+
+    drop(env);
+}
+
+/// Q3 resolution — a `[[role]]` entry with no `tool_allowlist` key
+/// at all maps to `ToolAllowlist::AllowAll` (no filter, every
+/// registered tool available).
+#[test]
+fn role_without_tool_allowlist_key_is_allow_all() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-allow-all");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "open"
+system_prompt = "no allowlist key at all"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "open");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let role = cfg.roles.get("open").unwrap();
+    assert_eq!(role.tool_allowlist.value, ToolAllowlist::AllowAll);
+    // `AllowAll` came from the default branch (field absent), not
+    // from TOML-supplied source.
+    assert_eq!(role.tool_allowlist.source, FieldSource::Default);
+
+    drop(env);
+}
+
+/// Q3 resolution — a `[[role]]` entry with `tool_allowlist = []`
+/// (explicit empty list) maps to `ToolAllowlist::Only(vec![])`,
+/// meaning "deny every tool." This is a legal configuration
+/// distinct from an absent field.
+#[test]
+fn role_with_empty_tool_allowlist_is_deny_all() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-deny-all");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "locked"
+system_prompt = "deny-all role"
+tool_allowlist = []
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "locked");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let role = cfg.roles.get("locked").unwrap();
+    match &role.tool_allowlist.value {
+        ToolAllowlist::Only(v) => assert!(v.is_empty(), "explicit empty list"),
+        other => panic!("expected Only(empty), got {other:?}"),
+    }
+    // An explicit empty list is `Toml`-sourced, not `Default`.
+    assert_eq!(role.tool_allowlist.source, FieldSource::Toml);
+
+    drop(env);
+}
+
+/// Active-role priority: `LoadOptions::role_override` beats the
+/// `AIVYX_ROLE` env var.
+#[test]
+fn role_override_beats_env_var() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-override");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "first"
+system_prompt = "first"
+
+[[role]]
+name = "second"
+system_prompt = "second"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "first");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        // Override wins even though the env var says "first".
+        role_override: Some("second".to_string()),
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.active_role.value, "second");
+
+    drop(env);
+}
+
+/// Active-role priority: when `LoadOptions::role_override` is `None`
+/// the `AIVYX_ROLE` env var is honored.
+#[test]
+fn env_var_sets_active_role_when_no_override() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-env");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "primary"
+system_prompt = "primary"
+
+[[role]]
+name = "secondary"
+system_prompt = "secondary"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "secondary");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.active_role.value, "secondary");
+    assert_eq!(cfg.active_role.source, FieldSource::Env);
+
+    drop(env);
+}
+
+/// Selecting an active role that doesn't exist in the loaded config
+/// is a typed `UnknownRole` error; the error includes the list of
+/// known role names so operators can diagnose the typo.
+#[test]
+fn active_role_not_in_config_is_typed_unknown_role_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-unknown");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "real-role"
+system_prompt = "real"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "ghost-role");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("ghost-role should fail active-role validation");
+    match err {
+        ConfigError::UnknownRole { name, known } => {
+            assert_eq!(name, "ghost-role");
+            assert_eq!(known, vec!["real-role".to_string()]);
+        }
+        other => panic!("expected UnknownRole, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+/// Q4 resolution — a config with both a legacy env-sourced
+/// `system_prompt` *and* an explicit `[[role]]` entry loads
+/// successfully. `AivyxConfig::warnings` accumulates a clear
+/// message; the runtime behavior prefers the explicit role.
+#[test]
+fn legacy_system_prompt_with_explicit_roles_warns_but_loads() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-legacy-conflict");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "explicit"
+system_prompt = "from the explicit role"
+"#,
+    )
+    .unwrap();
+    // Legacy env-level prompt — user forgot to remove it when
+    // adopting roles.
+    env.set("AIVYX_SYSTEM_PROMPT", "legacy value that will be shadowed");
+    env.set("AIVYX_ROLE", "explicit");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load with conflict");
+    // Legacy field is still populated for the banner's sake.
+    assert_eq!(
+        cfg.system_prompt.value,
+        "legacy value that will be shadowed"
+    );
+    // The explicit role's prompt is what Task 4 will consume.
+    let role = cfg.roles.get("explicit").unwrap();
+    assert_eq!(role.system_prompt.value, "from the explicit role");
+    // Exactly one warning was emitted, and it mentions the legacy
+    // field so the operator can find it.
+    assert_eq!(
+        cfg.warnings.len(),
+        1,
+        "one warning about the legacy field: got {:?}",
+        cfg.warnings
+    );
+    assert!(cfg.warnings[0].contains("system_prompt"));
+
+    drop(env);
+}
+
+/// Q4 refinement — when the legacy `system_prompt` is sourced from
+/// `FieldSource::Default` (no user source supplied it), adding an
+/// explicit `[[role]]` entry must **not** fire the warning. A brand-
+/// new role-using config should be silent.
+#[test]
+fn explicit_role_with_default_legacy_prompt_emits_no_warning() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-silent");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "alpha"
+system_prompt = "brand new role, no legacy baggage"
+"#,
+    )
+    .unwrap();
+    // Deliberately DO NOT set AIVYX_SYSTEM_PROMPT. The legacy field
+    // falls through to DEFAULT_SYSTEM_PROMPT with source `Default`,
+    // which must not trip the warning.
+    env.set("AIVYX_ROLE", "alpha");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.system_prompt.source, FieldSource::Default);
+    assert!(
+        cfg.warnings.is_empty(),
+        "no warning when legacy prompt source is Default: {:?}",
+        cfg.warnings
+    );
+
+    drop(env);
+}
+
+/// A `Role` parsed from TOML that omits both `system_prompt` and
+/// `memory_topic_prefix` still loads. The omitted fields fall
+/// through to `Default`-sourced values on the runtime `Role`.
+#[test]
+fn role_with_only_name_populates_defaults_for_optional_fields() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("role-minimal");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[role]]
+name = "bare"
+"#,
+    )
+    .unwrap();
+    env.set("AIVYX_ROLE", "bare");
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let role = cfg.roles.get("bare").unwrap();
+    assert_eq!(role.system_prompt.source, FieldSource::Default);
+    assert_eq!(role.system_prompt.value, DEFAULT_SYSTEM_PROMPT);
+    assert!(matches!(
+        role.tool_allowlist.value,
+        ToolAllowlist::AllowAll
+    ));
+    assert_eq!(role.tool_allowlist.source, FieldSource::Default);
+    assert!(role.memory_topic_prefix.value.is_none());
+    assert_eq!(role.memory_topic_prefix.source, FieldSource::Default);
+
+    drop(env);
+}
+
+/// Public-API smoke test: the `Role` struct's fields are all public
+/// and the `ToolAllowlist` variants are all constructible from
+/// outside `aivyx-config`. Task 4 will consume these via the
+/// `aivyx-channel` binary; this test proves the API surface supports
+/// that consumption pattern without any unexposed internals.
+#[test]
+fn role_struct_is_constructible_and_matchable_from_outside() {
+    let role = Role {
+        name: crate::Sourced::new("test".to_string(), FieldSource::Default),
+        system_prompt: crate::Sourced::new("sp".to_string(), FieldSource::Default),
+        tool_allowlist: crate::Sourced::new(
+            ToolAllowlist::Only(vec!["fs.read".to_string()]),
+            FieldSource::Default,
+        ),
+        memory_topic_prefix: crate::Sourced::new(Some("x/".to_string()), FieldSource::Default),
+    };
+    // The match is exhaustive against the public enum — if Task 3 or
+    // a later task ever adds a variant, this test exists to catch
+    // the surface change at the `_ => unreachable!()` alternative
+    // missing.
+    let behavior = match &role.tool_allowlist.value {
+        ToolAllowlist::AllowAll => "no filter",
+        ToolAllowlist::Only(_) => "filtered",
+    };
+    assert_eq!(behavior, "filtered");
+    assert_eq!(role.name.value, "test");
 }

@@ -85,6 +85,7 @@
 // narrow allow is the lesser evil.
 #![deny(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -189,6 +190,18 @@ pub const DEFAULT_SYSTEM_PROMPT: &str =
 /// exposes the drift.
 pub const DEFAULT_MEMORY_MAX_PER_TOPIC: usize = 10_000;
 
+/// Name of the implicit role synthesized when a loaded config has no
+/// explicit `[[role]]` entries. Task 1 of Phase 11 introduced the
+/// [`Role`] primitive; the backwards-compatibility bridge synthesizes
+/// a single role under this name from the legacy top-level
+/// [`AivyxConfig::system_prompt`] field so existing config files keep
+/// working with zero edits.
+///
+/// Also the fall-through default for [`AivyxConfig::active_role`] when
+/// neither [`LoadOptions::role_override`] nor the `AIVYX_ROLE` env var
+/// supplies a value.
+pub const DEFAULT_ROLE_NAME: &str = "default";
+
 // --------------------------------------------------------------------
 // ConfigError
 // --------------------------------------------------------------------
@@ -262,6 +275,20 @@ pub enum ConfigError {
     /// or mis-written row.
     #[error("secret `{field}` in encrypted store is not valid UTF-8")]
     NonUtf8Secret { field: &'static str },
+
+    /// The caller selected an active role (via
+    /// [`LoadOptions::role_override`] or the `AIVYX_ROLE` env var) that
+    /// was not present in the loaded [`AivyxConfig::roles`] map. The
+    /// error lists every known role name so the operator can see what
+    /// was actually loaded alongside what was requested.
+    #[error(
+        "active role `{name}` is not defined in config \
+         (known roles: {known:?})"
+    )]
+    UnknownRole {
+        name: String,
+        known: Vec<String>,
+    },
 }
 
 impl From<ConfigError> for String {
@@ -298,6 +325,26 @@ pub struct LoadOptions {
     /// `telegram.token` is still `None`. Set to `true` by
     /// `--channel telegram`, `false` otherwise.
     pub require_telegram_token: bool,
+    /// Caller-supplied override for which role should be activated at
+    /// load time. Highest priority in the active-role resolution
+    /// chain:
+    ///
+    /// 1. `LoadOptions::role_override` (this field) — typically populated
+    ///    from a future `--role <name>` CLI flag.
+    /// 2. `AIVYX_ROLE` environment variable.
+    /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
+    ///
+    /// An override that does not match any role loaded from config
+    /// surfaces as [`ConfigError::UnknownRole`] at
+    /// [`AivyxConfig::load_from_env_and_toml`] time — the error
+    /// includes the list of known role names so the operator can
+    /// see what was actually loaded.
+    ///
+    /// Task 1 of Phase 11 added the field; the `--role` CLI flag that
+    /// populates it lands in Task 4. Until then the binary always
+    /// leaves this as `None` and the env-var path is the only user-
+    /// facing surface.
+    pub role_override: Option<String>,
 }
 
 impl LoadOptions {
@@ -308,6 +355,7 @@ impl LoadOptions {
             toml_path: None,
             require_api_key: false,
             require_telegram_token: false,
+            role_override: None,
         }
     }
 }
@@ -336,8 +384,28 @@ pub struct AivyxConfig {
     /// Model id. Always populated — falls through to [`DEFAULT_MODEL`]
     /// if no source supplied one (tagged [`FieldSource::Default`]).
     pub model: Sourced<String>,
-    /// System prompt. Always populated with the same default semantics
-    /// as [`Self::model`].
+    /// Legacy top-level system prompt. Always populated with the same
+    /// default semantics as [`Self::model`].
+    ///
+    /// As of Phase 11 Task 1 this field is **no longer** the canonical
+    /// source of the agent's system prompt at run time — that role
+    /// belongs to `roles[active_role.value()].system_prompt`. The
+    /// field stays here for three reasons:
+    ///
+    /// 1. Backwards compatibility — configs that predate Phase 11 and
+    ///    set `[agent] system_prompt = "..."` (or `AIVYX_SYSTEM_PROMPT`)
+    ///    continue to work because the loader synthesizes an implicit
+    ///    `"default"` role whose `system_prompt` is sourced from this
+    ///    field.
+    /// 2. The startup banner in `aivyx-channel/src/bin/aivyx.rs` still
+    ///    renders this field directly; demoting it to a role-only
+    ///    field would be a Task 4 concern. Task 1 leaves the banner
+    ///    untouched.
+    /// 3. It's the fixture the `FieldSource::Default` fall-through
+    ///    path uses so a brand-new config with no explicit roles and
+    ///    no legacy `system_prompt` still produces a functional agent
+    ///    with the Phase 3 default prompt wrapped inside the
+    ///    synthesized `default` role.
     pub system_prompt: Sourced<String>,
     /// Filesystem sandbox root for `fs.read` / `fs.write` tools.
     /// Resolution order: `AIVYX_FS_ROOT` → TOML `fs.root` →
@@ -362,6 +430,131 @@ pub struct AivyxConfig {
     /// any Telegram fields are set, so the startup banner can warn
     /// about orphan config.
     pub telegram: Option<TelegramConfig>,
+    /// All roles defined in this config, keyed by role name.
+    ///
+    /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
+    /// populates this map from either (a) the `[[role]]` table-array
+    /// in the loaded TOML file, or (b) a synthesized implicit
+    /// `"default"` role built from the legacy top-level fields when
+    /// no explicit roles are configured.
+    ///
+    /// Invariant: always non-empty, and always contains at least one
+    /// key (`active_role.value()`). `BTreeMap` (not `HashMap`) so
+    /// iteration order is stable — matters for the startup banner's
+    /// role-summary line and for any future `--list-roles` surface.
+    pub roles: BTreeMap<String, Role>,
+    /// Name of the currently active role.
+    ///
+    /// Resolution priority at load time (highest first):
+    /// 1. [`LoadOptions::role_override`] (populated by the future
+    ///    `--role <name>` CLI flag landing in Phase 11 Task 4).
+    /// 2. `AIVYX_ROLE` environment variable.
+    /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
+    ///
+    /// The loader validates at load time that `self.roles` contains
+    /// a matching entry; if not, it returns
+    /// [`ConfigError::UnknownRole`]. This means every downstream
+    /// consumer can safely `self.roles.get(self.active_role.value())
+    /// .expect("validated at load")` without re-checking.
+    pub active_role: Sourced<String>,
+    /// Non-fatal warnings accumulated by the loader.
+    ///
+    /// Phase 11 Task 1 introduced this field so the loader can
+    /// surface "your config is probably a typo but it still loaded"
+    /// conditions without writing to stderr from inside a library
+    /// crate (the crate's module docstring explicitly forbids
+    /// terminal I/O). The binary's startup banner prints each entry
+    /// after the config table.
+    ///
+    /// Current emitters:
+    /// - Both a legacy top-level `[agent] system_prompt` and one or
+    ///   more explicit `[[role]]` entries are present in the same
+    ///   config. The explicit roles win at run time and the legacy
+    ///   field is ignored; the warning tells the operator to move
+    ///   the prompt into the role they want to use. Only fires when
+    ///   the legacy `system_prompt` actually came from Env or TOML,
+    ///   not from the hard-coded default, so a brand-new config
+    ///   that defines one role but inherits `DEFAULT_SYSTEM_PROMPT`
+    ///   doesn't get a spurious warning.
+    pub warnings: Vec<String>,
+}
+
+/// A named bundle of `(system_prompt, tool_allowlist,
+/// memory_topic_prefix)` loaded from a single `[[role]]` entry in the
+/// config file, or synthesized from legacy top-level fields for
+/// backwards compatibility.
+///
+/// Roles are **user-defined** — there is no fixed enum of role names
+/// in the codebase. The set of valid roles is whatever the operator
+/// wrote into their config. Every field carries its [`FieldSource`]
+/// via [`Sourced`] so the startup banner can render provenance for
+/// individual role properties independently of the role as a whole.
+///
+/// Phase 11 Task 1 added the type. Task 2 wires
+/// [`Self::memory_topic_prefix`] into every `memory.*` tool dispatch.
+/// Task 4 wires [`Self::system_prompt`] into the LLM planner, wires
+/// [`Self::tool_allowlist`] into the tool-advertisement filter, and
+/// wires the `--role` CLI flag into [`LoadOptions::role_override`].
+#[derive(Debug, Clone)]
+pub struct Role {
+    /// The role's unique name as written in the TOML `name = "..."`
+    /// field. Also the key under which the role lives in
+    /// [`AivyxConfig::roles`]. `Sourced<String>` so the banner can
+    /// show whether the name came from TOML or from the implicit
+    /// `default` synthesis.
+    pub name: Sourced<String>,
+    /// System prompt used when this role is active. For the
+    /// synthesized `default` role this is sourced from the legacy
+    /// top-level [`AivyxConfig::system_prompt`] (preserving its
+    /// original `FieldSource`, so a banner-reader can still tell
+    /// whether the default role's prompt came from env, TOML, or the
+    /// hard-coded [`DEFAULT_SYSTEM_PROMPT`]).
+    pub system_prompt: Sourced<String>,
+    /// Which tools this role is allowed to call. See [`ToolAllowlist`]
+    /// for the absent-vs-empty distinction — omitting the
+    /// `tool_allowlist` key entirely means "no filter, allow every
+    /// registered tool," while setting it to an empty list means
+    /// "deny every tool." Tool-catalog filtering is Phase 11 Task 4.
+    pub tool_allowlist: Sourced<ToolAllowlist>,
+    /// Optional prefix prepended to every `memory.*` topic when this
+    /// role is active. `None` means "no prefix — topics used bare,
+    /// identical to Phase 8–10 behavior." A value like
+    /// `Some("coder/")` means that when the active role is this role,
+    /// a `memory.write` to topic `"notes"` is stored under
+    /// `"coder/notes"` from the substrate's perspective. The prefix
+    /// is invisible to the model — it still writes to `"notes"` in
+    /// the tool call. Dispatch-layer injection is Phase 11 Task 2.
+    pub memory_topic_prefix: Sourced<Option<String>>,
+}
+
+/// Tool-allowlist policy for a [`Role`]. Distinguishes "the config
+/// key was absent" from "the config key was present and empty" —
+/// these two states have **opposite** meanings and collapsing them
+/// would be a silent footgun.
+///
+/// - [`ToolAllowlist::AllowAll`] — the `tool_allowlist` key was not
+///   present in the role's TOML entry at all. The role inherits
+///   every registered tool with no filter. This is also the value
+///   used for the synthesized `default` role in the backwards-
+///   compatibility path, so pre-Phase-11 configs see zero behavior
+///   change.
+/// - [`ToolAllowlist::Only`] — the `tool_allowlist` key was present
+///   and holds a list (possibly empty). The role can call exactly
+///   the listed tools and nothing else. An explicit empty list
+///   (`tool_allowlist = []`) means "this role can call no tools" —
+///   probably a user error, but a legal configuration.
+///
+/// Phase 11 Task 4 consumes this enum to filter the tool catalog
+/// before it's advertised to the LLM planner. Task 1 (this task)
+/// only loads and stores the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolAllowlist {
+    /// Field absent in config → no filtering, every registered tool
+    /// is available to the role.
+    AllowAll,
+    /// Field present in config → only the named tools are available.
+    /// An empty vec here means "deny all tools for this role."
+    Only(Vec<String>),
 }
 
 /// Telegram-specific configuration loaded as a sub-object.
@@ -400,6 +593,36 @@ struct RawToml {
     telegram: RawTelegram,
     #[serde(default)]
     aivyx: RawAivyx,
+    /// `[[role]]` table-array. One entry per role. Unset in the TOML
+    /// → `None`, which triggers the implicit-`default`-role synthesis
+    /// in the loader. `Some(vec)` (including `Some(vec![])` for a
+    /// TOML file with `role = []`) means the operator is opting in
+    /// to explicit roles; the loader will not synthesize anything
+    /// and will instead require `active_role` to match one of the
+    /// entries.
+    #[serde(default, rename = "role")]
+    roles: Option<Vec<RawRole>>,
+}
+
+/// One `[[role]]` entry in the TOML file. Mirrors the runtime
+/// [`Role`] shape but uses raw types ready for deserialization —
+/// the [`AivyxConfig::load_from_env_and_toml`] loader maps each
+/// `RawRole` to a [`Role`] with proper [`Sourced`] wrappers.
+///
+/// `tool_allowlist` is `Option<Vec<String>>` on purpose: `None`
+/// (key absent) maps to [`ToolAllowlist::AllowAll`], while
+/// `Some(vec)` maps to [`ToolAllowlist::Only`]. This is the Q3
+/// resolution from the Phase 11 plan — "absent" and "empty" have
+/// opposite meanings and must not collapse.
+#[derive(Debug, Default, Deserialize)]
+struct RawRole {
+    name: String,
+    #[serde(default)]
+    system_prompt: Option<String>,
+    #[serde(default)]
+    tool_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    memory_topic_prefix: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -485,6 +708,10 @@ const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_MEMORY_MAX_PER_TOPIC";
 const ENV_PASSPHRASE: &str = "AIVYX_PASSPHRASE";
 const ENV_TELEGRAM_TOKEN: &str = "AIVYX_TELEGRAM_TOKEN";
 const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
+/// Env-var override for the active role name, second-priority in the
+/// active-role resolution chain (below [`LoadOptions::role_override`]
+/// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
+const ENV_ROLE: &str = "AIVYX_ROLE";
 
 // --------------------------------------------------------------------
 // Loader
@@ -641,6 +868,123 @@ impl AivyxConfig {
             None
         };
 
+        // --- roles -------------------------------------------------
+        // Phase 11 Task 1. Either the TOML file defined one or more
+        // `[[role]]` entries (explicit roles, each lifted into the
+        // runtime `Role` type with `FieldSource::Toml` wrappers), or
+        // the file defined zero roles and we synthesize an implicit
+        // `default` role from the legacy top-level fields. The two
+        // branches are mutually exclusive — a config with both
+        // legacy `system_prompt` and explicit roles accumulates a
+        // warning below and the explicit roles win.
+        let mut warnings: Vec<String> = Vec::new();
+        let mut roles: BTreeMap<String, Role> = BTreeMap::new();
+
+        if let Some(raw_roles) = toml.roles.as_ref() {
+            // Explicit-roles branch. Any `[[role]]` entries land here.
+            // An empty `Some(vec![])` — e.g. `role = []` in TOML — is
+            // structurally legal but produces no usable role; the
+            // active-role resolution below will fail with
+            // `UnknownRole` for any active-role selection, which is
+            // the correct "your config defined zero roles" surface.
+            for raw in raw_roles {
+                let name = Sourced::new(raw.name.clone(), FieldSource::Toml);
+                let role_system_prompt = match raw.system_prompt.clone() {
+                    Some(v) => Sourced::new(v, FieldSource::Toml),
+                    None => Sourced::new(
+                        DEFAULT_SYSTEM_PROMPT.to_string(),
+                        FieldSource::Default,
+                    ),
+                };
+                let tool_allowlist = match raw.tool_allowlist.clone() {
+                    Some(v) => Sourced::new(ToolAllowlist::Only(v), FieldSource::Toml),
+                    None => Sourced::new(ToolAllowlist::AllowAll, FieldSource::Default),
+                };
+                let memory_topic_prefix = match raw.memory_topic_prefix.clone() {
+                    Some(v) => Sourced::new(Some(v), FieldSource::Toml),
+                    None => Sourced::new(None, FieldSource::Default),
+                };
+                roles.insert(
+                    raw.name.clone(),
+                    Role {
+                        name,
+                        system_prompt: role_system_prompt,
+                        tool_allowlist,
+                        memory_topic_prefix,
+                    },
+                );
+            }
+
+            // Q4 resolution (Option B — non-fatal warning accumulated
+            // on the config, not stderr). Only fire when the legacy
+            // `system_prompt` came from a real source (Env or TOML);
+            // the hard-coded `FieldSource::Default` case is silent so
+            // a brand-new role-using config doesn't eat a spurious
+            // warning every load.
+            if matches!(
+                system_prompt.source,
+                FieldSource::Env | FieldSource::Toml
+            ) {
+                warnings.push(
+                    "both a legacy `[agent] system_prompt` (or \
+                     AIVYX_SYSTEM_PROMPT env var) and one or more \
+                     explicit `[[role]]` entries are present in this \
+                     config. The explicit roles win at run time and \
+                     the legacy prompt is ignored — move the prompt \
+                     into a role's `system_prompt` field to silence \
+                     this warning."
+                        .to_string(),
+                );
+            }
+        } else {
+            // Implicit-default-role branch. Zero explicit roles → we
+            // synthesize a single `default` role whose fields come
+            // from the legacy top-level values, preserving their
+            // original `FieldSource` so the banner can still show
+            // "env" / "toml" / "default" for the synthesized role's
+            // system_prompt. Every pre-Phase-11 config file hits this
+            // branch and behaves exactly as it did before.
+            let default_role = Role {
+                name: Sourced::new(DEFAULT_ROLE_NAME.to_string(), FieldSource::Default),
+                system_prompt: system_prompt.clone(),
+                tool_allowlist: Sourced::new(ToolAllowlist::AllowAll, FieldSource::Default),
+                memory_topic_prefix: Sourced::new(None, FieldSource::Default),
+            };
+            roles.insert(DEFAULT_ROLE_NAME.to_string(), default_role);
+        }
+
+        // --- active_role -------------------------------------------
+        // Priority: LoadOptions::role_override > AIVYX_ROLE env var >
+        // DEFAULT_ROLE_NAME. At this point `roles` is non-empty — the
+        // explicit branch only lands here on behalf of the loader
+        // (even an explicit `role = []` is a user error that surfaces
+        // as `UnknownRole` below rather than a load-time panic).
+        //
+        // `role_override` tags the source as `Env` because the
+        // existing `FieldSource` enum has no "cli-override" variant
+        // and the binary-caller path is morally equivalent to an env
+        // var in the startup-banner display. If Task 4 (the task that
+        // actually adds the `--role` CLI flag) wants cli/env to
+        // display differently in the banner it can either add a
+        // `FieldSource::Cli` variant then, or leave this as-is. The
+        // env-var branch below is tagged `Env` unambiguously.
+        let active_role = if let Some(name) = opts.role_override.clone() {
+            Sourced::new(name, FieldSource::Env)
+        } else if let Some(name) = env_string(ENV_ROLE) {
+            Sourced::new(name, FieldSource::Env)
+        } else {
+            Sourced::new(DEFAULT_ROLE_NAME.to_string(), FieldSource::Default)
+        };
+
+        if !roles.contains_key(active_role.value.as_str()) {
+            let mut known: Vec<String> = roles.keys().cloned().collect();
+            known.sort();
+            return Err(ConfigError::UnknownRole {
+                name: active_role.value.clone(),
+                known,
+            });
+        }
+
         Ok(Self {
             anthropic_api_key,
             model,
@@ -650,6 +994,9 @@ impl AivyxConfig {
             memory_max_per_topic,
             passphrase,
             telegram,
+            roles,
+            active_role,
+            warnings,
         })
     }
 

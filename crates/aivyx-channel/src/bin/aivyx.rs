@@ -170,6 +170,11 @@ fn run() -> Result<(), String> {
         toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
         require_api_key: !verify_only,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram),
+        // Phase 11 Task 1 added `role_override`; Task 4 will wire it
+        // to a `--role <name>` CLI flag. Until then the binary leaves
+        // it `None` and users select non-default roles via the
+        // `AIVYX_ROLE` env var only.
+        role_override: None,
     };
     let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
 
@@ -364,6 +369,24 @@ fn print_config_banner(config: &AivyxConfig) {
                 None => "<any>".to_string(),
             }
         );
+    }
+    // Phase 11 Task 1 — render the active role and any load-time
+    // warnings the config layer accumulated. Role rendering stays
+    // deliberately minimal at Task 1: just the active-role name and
+    // its source. Task 4 (which actually wires roles through the
+    // turn loop) will decide whether the banner should also show the
+    // resolved system_prompt and tool_allowlist for the active role.
+    eprintln!(
+        "  active_role       = {:?} ({})",
+        config.active_role.value,
+        source_label(config.active_role.source),
+    );
+    if !config.warnings.is_empty() {
+        eprintln!();
+        eprintln!("config warnings:");
+        for warning in &config.warnings {
+            eprintln!("  - {warning}");
+        }
     }
 }
 
@@ -599,6 +622,24 @@ async fn run_async(
         memory_max_per_topic,
         passphrase: _,
         telegram,
+        // Phase 11 Task 1 added the `Role` primitive. Task 4 is where
+        // this binary actually starts consuming `roles` and
+        // `active_role` — filtering the advertised tool catalog
+        // against the active role's allowlist and sourcing the system
+        // prompt from the active role rather than the legacy top-
+        // level `system_prompt` field above. Task 1 silences the
+        // pattern's unused-binding warning with `_ =` and does
+        // nothing else with the fields; every behavior a pre-Phase-11
+        // user depended on is still driven by the legacy fields
+        // because the Task 1 backwards-compat bridge copies them into
+        // the synthesized `default` role.
+        roles: _,
+        active_role: _,
+        // `warnings` is rendered by the banner in `print_startup_banner`
+        // directly from `&config.warnings` before the destructure; by
+        // the time we land here the banner has already printed any
+        // load-time warnings, so we drop the field on the floor.
+        warnings: _,
     } = config;
     let api_key = anthropic_api_key
         .expect("anthropic_api_key validated non-None before run_async")
