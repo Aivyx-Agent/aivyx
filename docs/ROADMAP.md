@@ -100,43 +100,48 @@ core `aivyx-core/src/lib.rs` streak re-establishes to
 two (first re-established production-core streak since
 Phase 10/11 held and Phase 12 broke it).
 
-## Phase 14 — Sub-Agent Role-Switching (first P1 delivery)
+## Phase 14 — Sub-Agent Role-Switching (shipped)
 
-**Active — see [PHASE_14.md](PHASE_14.md).** Opened
-2026-04-15. Phase 14 is the first phase to deliver on
-**PRODUCT.md P1 — Sub-Agent Mode via Role-Switching**. It
-consumes the per-role capability envelope substrate Phase
-13 shipped (`assemble_role_envelope`, the worked example,
-`--print-role`) by wiring a real second caller into it:
-the turn loop. Task 1 lifts `assemble_role_envelope` from
-the `aivyx-channel` binary into its lib (closing the first
-net-new Phase 13 deferral). Task 2 adds a `role.switch`
-capability scope with a `target-role` qualifier and
-registers a `role.switch` tool. Task 3 integrates the tool
-with the session layer via **sub-session nesting** — the
-child opens, runs to completion under its own envelope,
-and stack-pops back to the parent, respecting the
-`Agent::turn(&self, ...)` immutability invariant and the
-P1.3 "structural impossibility of escalation" rule. Task 4
-is the working-session slot; Task 5 is exit freeze with
-optional cleanup lifting `render_role_envelope` + helpers.
-The production-core `aivyx-core/src/lib.rs` byte-identity
-streak is aspirationally preserved (would extend to three
-consecutive phases); the fallback path if inline sub-
-session nesting hits a re-entrancy wall is one additive
-`TurnOutcome::SwitchRoleRequested` variant, same shape as
-Phase 12 Task 1's streak break.
+**Frozen — see [PHASE_14.md](PHASE_14.md).** Opened and
+exited 2026-04-16. Delivered the first concrete piece of
+**PRODUCT.md P1 — Sub-Agent Mode via Role-Switching** in
+four tasks: lift `assemble_role_envelope` from the
+binary into `aivyx-channel/src/role_envelope.rs` (Task
+1, `96814e7`, closing the first net-new Phase 13
+deferral), add a `role.switch` capability scope with a
+target-role `QualifierKind` plus `RoleSwitchTool`
+registration in the core tool registry (Task 2,
+`7364504`), wire sub-session nesting via an inline child
+agent constructed by an `OnceLock`-backed factory closure
+on `RoleSwitchTool` (Task 3, `74883e2`), and extend
+`--print-role` with a mechanical reachable-switch-target
+enumerator (Task 4, `91053ec`). Workspace tests rolled
+480 → 509 (+29). All three byte-identity streaks held:
+DESIGN.md → fourteen consecutive phases, PRODUCT.md →
+two, production-core `aivyx-core/src/lib.rs` → three
+(the at-risk streak the phase-open doc flagged for
+Task 3 survived via an inline factory-closure path that
+required zero `lib.rs` edits). The P1.3 "structural
+impossibility of escalation" guarantee is pinned by
+integration tests against narrowed-caps child snapshots
+*and* by the debug-surface enumerator's structural-
+impossibility test, which read from the same
+`assemble_role_envelope`-produced `CapabilitySet`.
 
 ## Phase 15 — shape TBD at Phase 14 exit
 
 Phase 14's clean exit and whatever it uncovers will shape
 Phase 15. Candidates from `PRODUCT_ROADMAP.md` remain
-**Daemon Migration keystone start** (unblocked by Phase
-13, still the largest forward reshape), **Mission
+**Daemon Migration keystone start** (unblocked by Phases
+13 and 14, still the largest forward reshape), **Mission
 Primitive** (approval-gate half without durability, or
-full with daemon coupling), or a **consolidation sub-
-phase** if the foundation backlog grows sharper design
-pressure during Phase 14 than a keystone does. Phase 14's
-P1 delivery makes Sub-Agent Role-Switching a resolved
-milestone in the PRODUCT_ROADMAP — the Mission Primitive
-is the next keystone that couples to it.
+full with daemon coupling — couples to P1 which Phase 14
+just delivered), **multi-level sub-agent nesting** (the
+single net-new Phase 14 deferral, low-urgency because the
+no-op-by-default failure mode is already correct), or a
+**consolidation sub-phase** if the foundation backlog
+grows sharper design pressure than a keystone does. Phase
+14's P1 delivery makes Sub-Agent Role-Switching a
+resolved milestone in the PRODUCT_ROADMAP at one level of
+nesting; the Mission Primitive is the next keystone that
+couples to it.

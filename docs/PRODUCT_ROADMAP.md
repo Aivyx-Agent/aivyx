@@ -126,7 +126,7 @@ itself (button? text command? structured tool call?) is the
 load-bearing question and is deliberately deferred to milestone
 open.
 
-## Milestone — Sub-Agent Role-Switching
+## Milestone — Sub-Agent Role-Switching (shipped in Phase 14)
 
 **Forward commitment:** [`PRODUCT.md` P1](../PRODUCT.md). **Couples to:**
 Role-Config Migration.
@@ -144,6 +144,57 @@ possibly shared) but it has to land *after* role-config
 migration and *before* the mission primitive, because a
 mission's approval gate may want to spawn a constrained
 sub-task as part of how it checkpoints progress.
+
+**Landed shape (Phase 14, 2026-04-16):** a `role.switch`
+capability scope with a target-role `QualifierKind` in
+`aivyx-capability` (parses as either bare `role.switch` or
+`role.switch:<target>`; rejected `role.switch:*` because the
+unqualified form is already the wildcard), a `RoleSwitchTool`
+registered in the core tool registry, and an inline sub-
+session dispatcher implemented as an `OnceLock`-backed factory
+closure on the tool. The factory is constructed in
+`crates/aivyx-channel/src/bin/aivyx.rs`'s startup path and
+captures the provider, audit hook, tool registry, role table,
+backcompat floor, and model — *without* extending
+`ToolContext`'s shape, which keeps `aivyx-core/src/lib.rs`
+byte-identical and the production-core streak intact at three
+phases. The factory closure has exactly one `CapabilitySet`-
+producing call: `assemble_role_envelope(&target_role, &roles,
+&backcompat_floor)`. There is no second route. **P1.3
+"structural impossibility of escalation" is a documentation
+property pinned by integration tests** rather than a
+type-system property in the strict sense — the documentation
+property is stronger in practice because the call site is
+auditable and the tests verify the invariant directly. The
+sub-session is one level deep (the child cannot itself invoke
+`role.switch` unless its own role declares the scope, which
+no role in `examples/aivyx.toml` does); multi-level nesting
+is the single net-new Phase 14 deferral, with no urgency
+because the no-op-by-default failure mode is already correct.
+**P1.4 "each turn tagged by role active at turn-start" is
+satisfied** through distinct `TurnId` values across the
+parent and child `TurnStarted` audit events — no dedicated
+audit tag was added (the `aivyx-audit` chain walker can
+reconstruct the boundary from the role-name transition). The
+clean-slate child conversation history (Q2) and per-role
+memory-topic prefix (Q3) were both pinned at implementation
+time. The `--print-role` debug flag gained a mechanical
+"reachable role.switch targets" enumerator that reads from
+the same `assemble_role_envelope`-produced `CapabilitySet`
+the production dispatcher reads from, so the operator's
+debug-time view of sub-session reachability is guaranteed to
+agree with the runtime's dispatch-time view by construction.
+See [`docs/PHASE_14.md`](PHASE_14.md) for the full phase
+record.
+
+The Mission Primitive is now the next keystone that couples
+to this milestone — its approval-gate's "spawn a constrained
+sub-task" pattern can compose directly against `role.switch`
+without needing additional primitive work. The one remaining
+sub-phase candidate for P1 itself is multi-level nesting,
+which is recorded as a Phase 14 deferral and gated on a
+concrete recursive-role-switching use case rather than a
+forward-commitment requirement.
 
 ## Milestone — Reflection Layer
 
@@ -240,4 +291,26 @@ in the sequence.
 
 ## Delivered
 
-(Empty until the first product-shape milestone ships.)
+- **Role-Config Migration** — shipped in Phase 13
+  (2026-04-15, exit commit `25a09de`). Per-role
+  capability envelope in a single TOML file with
+  single-inheritance, declared-set attenuation, worked
+  example, and `--print-role` debug flag. Delivered
+  **PRODUCT.md P9 — Per-Role Full Capability
+  Declaration** in full. (Backfilled into this section
+  by Phase 14's exit freeze; the Phase 13 freeze did
+  not populate the Delivered section, recorded as a
+  Phase 13 oversight rather than a Phase 14 scope
+  expansion.)
+- **Sub-Agent Role-Switching** — shipped in Phase 14
+  (2026-04-16, exit commit TBD-backfilled). Inline
+  sub-session nesting via an `OnceLock`-backed
+  `RoleSwitchTool` factory closure, one level deep,
+  with structural-impossibility-of-escalation pinned
+  by integration tests against narrowed-caps child
+  snapshots and by the `--print-role` reachable-
+  targets enumerator reading from the same envelope
+  source as the production dispatcher. Delivered the
+  in-process portion of **PRODUCT.md P1 — Sub-Agent
+  Mode via Role-Switching**. Multi-level nesting is
+  the single net-new Phase 14 deferral, low-urgency.

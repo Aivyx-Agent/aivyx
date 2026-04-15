@@ -763,3 +763,642 @@ Recorded here so the phase's intent is legible at a glance:
    deferral was tagged "clean cut, not a refactor" —
    exactly the kind of deferral that is cheapest to close
    in the phase that first needs it consumed.
+
+## Task 1 — shipped (2026-04-16)
+
+**Commit:** `96814e7` — `Phase 14 task 1: lift assemble_role_envelope into aivyx-channel lib`.
+
+The cut landed verbatim against the draft. `assemble_role_envelope`
+and the `MAX_INHERITANCE_DEPTH` constant moved out of
+`crates/aivyx-channel/src/bin/aivyx.rs` into a new sibling module
+`crates/aivyx-channel/src/role_envelope.rs`, re-exported through
+`crates/aivyx-channel/src/lib.rs` so the fn is callable as
+`aivyx_channel::assemble_role_envelope` from outside the crate.
+The binary's import was updated; the existing Phase 13 binary-
+internal tests against `examples/aivyx.toml` were left in place
+because they exercise the integration and not the pure fn.
+
+**New lib-level test coverage:** three pure-fn tests in
+`role_envelope.rs` exercising the walker against hand-rolled
+`Role` values: leaf-only, parent + child with clean attenuation,
+and the empty-child-surprise shape with floor substitution. These
+deliberately overlap with the Phase 13 binary-internal coverage —
+the lib tests pin the pure-fn contract, the binary tests pin the
+config-load + assembly integration. An operator who breaks one
+sees both surfaces yell about it.
+
+**Test delta:** +3 (480 → 483).
+
+**Streaks held:** `aivyx-core/src/lib.rs` byte-identical to
+`16e618c`; DESIGN.md and PRODUCT.md untouched. The lift is pure
+movement — zero behavioral change — so all three streaks were
+trivially safe.
+
+**No correction block.** The draft's "clean cut, not a refactor"
+prediction held. The fn's only call site outside its tests is the
+binary's `render_role_envelope` path, which moved to an import
+without semantic change.
+
+## Task 2 — shipped (2026-04-16)
+
+**Commit:** `7364504` — `Phase 14 task 2: role.switch scope + tool registration`.
+
+**Q1 resolution:** option (a) — `role.switch` is a capability
+scope, with target-role qualifiers handled through the existing
+D4 rule machinery. No new `role.switch_targets` allowlist field
+was introduced. The decision was made at Task 2 open after a read
+of `aivyx-capability`'s `QualifierKind` dispatch: the
+target-role qualifier kind is just exact string equality, which
+the existing dispatch already handles for the `path-exact`
+qualifier kind. Adding a new `QualifierKind::TargetRole` variant
+and a parser branch was 30 lines of capability-layer change for a
+zero-line change to the D4 rule walker — the cheapest possible
+route to "role.switch:<name>" semantics.
+
+**Capability layer:** `aivyx-capability` learned the
+`role.switch` base with an optional `target-role` qualifier.
+`role.switch` (unqualified) parses; `role.switch:researcher`
+parses; the wildcard form `role.switch:*` is rejected at parse
+time because the unqualified form is already the wildcard
+(parse error names the redundancy explicitly). The D4 rule
+dispatch for the new qualifier kind is exact string equality;
+unqualified-grants-qualified (Rule 2) and qualified-cannot-grant-
+unqualified (Rule 4) work without a code change because the rule
+walker is parameterized over `QualifierKind` rather than
+hardcoded to `Path`.
+
+**Tool registration:** a new `crates/aivyx-core/src/tools/
+role_switch.rs` module hosts `RoleSwitchTool`, registered under
+the name `"role.switch"`. Task 2's version of the tool is the
+stub: it validates `target` and `task` input, checks the active
+role's envelope for `role.switch:<target>` or unqualified
+`role.switch`, and either returns `ToolOutcome::Denied` (with
+`scope_requested = role.switch:<target>`) or returns a
+placeholder `ToolOutcome::Completed` whose summary says "role-
+switch requested, wiring lands in Task 3". The stub validates
+the dispatch gate end-to-end before Task 3 builds the sub-session
+machinery on top.
+
+**`examples/aivyx.toml` extension:** `default` gained unqualified
+`role.switch` in its `capability_scopes`; `coder` gained
+`role.switch:researcher`. The example file's running comment
+block now walks through how the qualified form on `coder` is
+granted by the unqualified form on `default` via D4 Rule 2, and
+how the intersection narrows the effective envelope to the
+qualified form (Rule 2 keeps the narrower scope).
+`coder`'s `tool_allowlist` also gained `role.switch` so the
+allowlist gate and the capability gate are independent surfaces
+the operator can reason about separately.
+
+**Test delta:** +15 (483 → 498), nine above the draft's ≥+6
+acceptance. The over-delivery comes from the fan-out a new
+`QualifierKind` variant produces in `aivyx-capability`: parse
+round-trips for the new shape, D4 rule dispatch coverage for
+each rule against the new kind, intersection-behavior tests,
+reflexive `grants` tests (defending against the Phase 13 Task 4
+bug recurring), plus the binary-internal integration test
+(coder loads + envelope assembly + `--print-role coder` renders
+the new scope) and the turn-loop scope-gate tests for both the
+allow path and the deny path. The capability layer is where many
+code paths converge, so adding one scope-base pulls a regression
+fan-out behind it — exactly the reason the layer is byte-
+identity tracked at exit time.
+
+**Streaks held:** `aivyx-core/src/lib.rs` byte-identical to
+`16e618c`; the new `tools/role_switch.rs` is a sibling module of
+`tools/fs.rs` and `tools/shell.rs` — the `mod tools` declaration
+in `aivyx-core/src/tools/mod.rs` (not `lib.rs`) absorbs the
+addition. DESIGN.md and PRODUCT.md untouched.
+
+**No correction block.** The draft predicted Task 2 risk would
+center on `CapabilitySet::grants` reflexivity for the new
+qualifier kind. The reflexive case got a dedicated test on the
+first cut and passed; no Phase 13 Task 4 footgun resurfaced.
+
+## Task 3 — correction recorded mid-implementation (2026-04-16)
+
+The draft offered two paths for sub-session integration: the
+"first approach" (inline sub-session inside the tool's `execute`
+method) and the "fallback" (additive `TurnOutcome::SwitchRole
+Requested` variant). The draft committed to the first approach
+as streak-preserving and named the second as a correction-block
+backstop.
+
+Implementation surfaced a third path that the draft did not
+anticipate: **inline sub-session via a set-once factory closure
+held by the tool itself**. The route walked through three
+candidate shapes during planning before settling:
+
+- **Option B (initial recommendation, withdrawn).** Add
+  `TurnOutcome::SwitchRoleRequested { target, task }` to
+  `aivyx-core/src/lib.rs` as an additive variant. The session
+  layer would catch the variant, build a child agent, run a
+  sub-session, return. *Withdrawn* before any code was written
+  because `TurnOutcome` is defined in `aivyx-core/src/lib.rs`
+  itself — adding a variant would have broken the production-
+  core byte-identity streak that Phase 14's Streaks-at-risk
+  block treats as the load-bearing constraint of the phase. The
+  draft's "fallback" framing put this option behind the inline
+  approach for exactly the same reason; the Option B
+  recommendation was a momentary lapse and got caught before it
+  cost anything.
+- **Option F1 (first inline shape, also rejected).** Stash a
+  `SessionHandle` in `ToolContext` so the tool can construct a
+  child agent on demand. Rejected because `ToolContext` is
+  defined in `aivyx-core/src/lib.rs`, so changing its shape
+  would break the same streak Option B would have. The draft's
+  "first approach (streak-preserving)" framing assumed
+  `ToolContext` could be extended; the implementation revealed
+  this was a wrong premise.
+- **Option F3 (landed).** Hold the child-agent factory as a
+  field on `RoleSwitchTool` itself, behind an
+  `OnceLock<Arc<ChildAgentFactory>>`. The factory is installed
+  *after* the tool registry is built, breaking the circular
+  dependency between "factory needs `Arc<ToolRegistry>`" and
+  "registry needs the tool". `RoleSwitchTool` is defined
+  outside `lib.rs` (in `crates/aivyx-core/src/tools/
+  role_switch.rs`), so the field addition does not touch
+  streak-protected code. The factory closure receives only the
+  child role's `name` parameter; everything else (provider,
+  audit, tools, role table, backcompat floor, model) is
+  captured at install time from the binary's `run` path.
+
+The correction is two-fold: (1) the draft's "first approach"
+was unbuildable as written because it assumed `ToolContext`
+extensibility, and (2) the *real* streak-preserving path moves
+the structural impossibility from "no API surface lets a caller
+synthesize a child `CapabilitySet`" (which the draft asserted as
+a type-system property) to "the only code path that produces a
+child `CapabilitySet` runs `assemble_role_envelope` against the
+parent's role table" (which is a documentation property pinned
+by integration tests). The two phrasings are equivalent in
+practice — the factory closure has exactly one call site, in
+`crates/aivyx-channel/src/bin/aivyx.rs`, and that call site
+literally reads `assemble_role_envelope(&target_role, &roles,
+&backcompat_floor)` with no other branch — but the second
+phrasing is honest about where the guarantee lives.
+
+The first attempt at the additive-variant path (Option B) would
+have set the streak break in motion before discovering Option F3
+existed. The correction records that lapse so future-me knows to
+read `lib.rs` for variant ownership *before* recommending an
+"additive variant" path on a streak-protected file.
+
+## Task 3 — shipped (2026-04-16)
+
+**Commit:** `74883e2` — `Phase 14 task 3: sub-session nesting via inline child agent`.
+
+**What landed:** `RoleSwitchTool::execute` reads `target` and
+`task` from the input JSON, looks up the child agent factory via
+its `OnceLock<Arc<ChildAgentFactory>>` field, and calls
+`factory(target)` to construct a child `Box<dyn Agent>`. The
+child's `turn(Message::text(ctx.session_id, task), ctx.channel)`
+runs to completion, returning a `TurnOutcome` whose five variants
+(`Completed`, `Cancelled`, `TimedOut`, `Escalated`, `Failed`)
+each translate into a `ToolOutcome::Completed` with a structured
+status payload. The parent's turn loop sees the entire sub-
+session as a single tool call. There is no parent-level `Failed`
+bubbling on child failure — the parent observes "the role.switch
+tool ran and produced this status" and decides what to do next.
+This is intentional: it keeps the audit trail's parent stream
+clean, and it matches PRODUCT.md P1.2's "switches back" phrasing.
+
+**Q2 resolution: clean slate.** The child agent does not inherit
+the parent's conversation history. The `task` input becomes the
+child's first user message. The decision was deferred to Task 3
+in the draft; it was confirmed at implementation time when the
+factory closure was found to be cleanest if it constructs a
+fresh `ConcreteAgent` per call rather than threading any parent
+state through.
+
+**Q3 resolution: each role uses its own memory-topic prefix.**
+The factory closure passes `target_role.memory_topic_prefix`
+into `ConcreteAgent::with_memory_topic_prefix`, so the child's
+`memory.write { topic: "X" }` lands at `<target_role>/X`, not
+`<parent_role>/X`. Confirmed at implementation time without
+incident.
+
+**Q4 resolution: option (a), inline sub-session nesting via
+factory closure.** The draft proposed (a) as the target shape;
+the implementation confirmed it was the right shape but
+discovered the factory-closure path described in the Task 3
+correction block above. The end state matches the draft's
+intent.
+
+**Q5 resolution: pair-of-`TurnStarted` events is enough, no new
+audit tag.** The integration tests in `crates/aivyx-core/src/
+agent.rs` filter the audit snapshot for `TurnStarted` events and
+assert (a) two events fire (parent + child), (b) the parent's
+event has the parent's capability set including `fs.write`, (c)
+the child's event has the child's narrowed capability set
+without `fs.write`, and (d) the two events carry distinct
+`TurnId` values. A forensic reader can reconstruct the boundary
+from the role-name transition across consecutive `TurnStarted`
+entries — the dedicated audit tag stays deferred per the draft.
+PRODUCT.md P1.4's "each turn tagged by role active at turn-
+start" is satisfied through the existing `TurnStarted` tagging
+rather than a new tag.
+
+**P1.3 structural impossibility:** pinned by the integration
+test `role_switch_happy_path_dispatches_child_turn_with_narrowed_
+caps`. The parent agent holds `role.switch:researcher`,
+`fs.read`, and `fs.write`. The child role declares only
+`fs.read`. The test asserts the child's `TurnStarted` snapshot
+contains `fs.read` and *does not* contain `fs.write`, even
+though the parent has both. The structural impossibility lives
+at the factory closure: there is no code path that produces a
+child `CapabilitySet` outside `assemble_role_envelope`. The
+binary site is the single such call site and it is documented
+inline.
+
+**Test delta:** +7 (498 → 505). Two unit tests in
+`tools/role_switch.rs` for the `OnceLock` factory semantics
+(set-once + reject-second-set) and five integration tests in
+`agent.rs`:
+
+1. `role_switch_happy_path_dispatches_child_turn_with_narrowed_
+   caps` — happy path + structural impossibility pin.
+2. `role_switch_scope_gate_denies_when_parent_lacks_target_
+   scope` — scope gate denies with no factory invocation.
+3. `role_switch_factory_error_surfaces_as_failed_tool_outcome`
+   — factory `Err` becomes `ToolOutcome::Failed`, not panic.
+4. `role_switch_unconfigured_factory_produces_failed_outcome_
+   not_panic` — missing `set_child_factory` call surfaces as a
+   `Failed` outcome rather than a runtime panic.
+5. `role_switch_child_and_parent_audit_events_use_distinct_
+   turn_ids` — distinct `TurnId` values across the two
+   `TurnStarted` events, pinning P1.4's tagging guarantee.
+
+**Streaks held:** all three. `aivyx-core/src/lib.rs` byte-
+identical to `16e618c` — the streak the draft flagged as "at
+risk in Task 3" survived the phase. DESIGN.md and PRODUCT.md
+untouched. The Option F3 path turned the predicted streak break
+into a no-event.
+
+## Task 4 — shipped (2026-04-16)
+
+**Commit:** `91053ec` — `Phase 14 task 4: --print-role reachable-switch-target enumerator`.
+
+**Q6 resolution: mechanical enumeration over the effective
+envelope.** The draft leaned "informational for Phase 14" and
+deferred the mechanical variant as a small post-phase task.
+Task 4 picked up the mechanical variant directly because the
+infrastructure was already in place: `render_role_envelope`
+already calls `assemble_role_envelope` to compute the
+effective envelope, so listing reachable targets only needed a
+filter over `effective.iter()` for `role.switch`-base scopes.
+The cost was 70 lines of rendering plus the `cfg.roles`
+membership check for `<unknown role>` annotation.
+
+**Three output shapes** the enumerator produces:
+
+- **Case 1 — no `role.switch` in effective envelope.** The role
+  cannot start a sub-session. Rendered as `<none - this role
+  cannot start a sub-session>`. This is the case the
+  `researcher` role hits in `examples/aivyx.toml`: `researcher`
+  omits `role.switch` from its declared `capability_scopes`,
+  and intersection drops it from the leaf side even though
+  `default` declares unqualified `role.switch`. The test pins
+  this counter-intuitive but correct narrowing behavior.
+- **Case 2 — unqualified `role.switch` in effective envelope.**
+  The role can switch into any other role declared in the
+  config. Rendered as `(any role - unqualified role.switch
+  held)` followed by an indented bullet list of every other
+  role name (sorted, with the active role itself filtered
+  out). The `default` role hits this case in the example
+  config.
+- **Case 3 — one or more `role.switch:<target>` qualifiers in
+  the effective envelope.** Each surviving target listed on
+  its own line, annotated with `<unknown role - not declared
+  in this config>` if the target name is missing from
+  `cfg.roles` (catches typos and config drift). The `coder`
+  role hits this case in the example config.
+
+**Structural-impossibility pin at the debug surface:** the
+test `print_role_lists_role_switch_targets_for_coder` asserts
+that `coder`'s reachable-targets section lists `researcher`
+and only `researcher` — not `default`, not `junior_researcher`,
+not `coder` itself. The newline-anchored substring matching
+(`"\n  researcher\n"`) prevents a false pass from the
+`role.switch:researcher` mention in the effective envelope
+listing earlier in the same render. Listing any other role
+would mean `coder` could escape its declared qualifier, which
+is exactly the escalation P1.3 forbids.
+
+The enumerator and the production sub-session dispatcher both
+read from the same `assemble_role_envelope`-produced
+`CapabilitySet`. There is no preview-vs-reality drift surface
+because there is only one envelope source. This is the reward
+for keeping `assemble_role_envelope` in the channel lib (Task
+1) instead of the binary — debug surface and production
+surface are guaranteed to agree by construction, not by
+convention.
+
+**Test delta:** +4 (505 → 509). Four tests covering the three
+output shapes plus the empty-child case
+(`junior_researcher` does not transitively gain `role.switch`
+through the floor — verifying the empty-child substitution
+path does not have a hidden inheritance side effect).
+
+**Streaks held:** all three. Task 4 touches one file
+(`crates/aivyx-channel/src/bin/aivyx.rs`) and adds 223 lines,
+zero deletions. The change is purely additive on a streak-
+unprotected file.
+
+**No correction block.** All four new tests passed first-run.
+The architecture's "single envelope source" property meant
+there was nothing to discover at implementation time that
+hadn't been pinned at design time.
+
+## Task 5 — exit freeze (2026-04-16)
+
+Phase 14 closes cleanly: four implementation tasks, four ship
+records, one mid-implementation correction block (Task 3's
+Option B → Option F3 pivot), one Phase 13 deferral consumed
+(Task 1 closed `lift assemble_role_envelope into aivyx-channel/
+src/lib.rs`), every byte-identity streak held including the
+one the phase-open doc explicitly flagged as "at risk in Task
+3".
+
+### Q1–Q6 resolution (consolidated)
+
+- **Q1 — Is `role.switch` a capability scope, a tool
+  allowlist entry, or both?**
+  *Resolved to* option (a) — capability scope with target-role
+  qualifier. The existing D4 rule walker is parameterized over
+  `QualifierKind`, so adding a new variant cost ~30 lines in
+  `aivyx-capability` for zero lines of rule-dispatch change.
+  Recorded in Task 2 ship record above. No `role.switch_
+  targets` allowlist field was introduced.
+- **Q2 — Does a sub-session see the parent's conversation
+  history?**
+  *Resolved to* clean slate. The factory closure constructs a
+  fresh `ConcreteAgent` per `role.switch` invocation; the
+  `task` input becomes the child's first user message; nothing
+  else crosses the boundary. Recorded in Task 3 ship record.
+- **Q3 — Does the child inherit the parent's memory-topic
+  prefix, or use its own?**
+  *Resolved to* each role uses its own. The factory passes
+  `target_role.memory_topic_prefix` into the child's
+  `with_memory_topic_prefix`, so memory writes are tagged by
+  the role that produced them. Recorded in Task 3 ship record.
+- **Q4 — What does `Agent::turn` do when a role switch is in
+  progress?**
+  *Resolved to* option (a) — sub-session nesting, with the
+  twist that the nesting happens via a factory closure held on
+  the tool rather than a `SessionHandle` extension on
+  `ToolContext`. The end state matches the draft's intent
+  (Agent::turn keeps `&self` immutability, two agents exist
+  simultaneously in memory but only one runs a turn at any
+  moment). Recorded in Task 3 correction + ship records.
+- **Q5 — Where is the audit boundary for a sub-session?**
+  *Resolved to* pair-of-`TurnStarted` events is enough, no new
+  audit tag. The integration tests pin that the parent and
+  child `TurnStarted` events carry distinct `TurnId` values
+  and distinct capability snapshots. A forensic reader can
+  reconstruct the boundary from the role-name transition.
+  Recorded in Task 3 ship record.
+- **Q6 — How does `--print-role` render a role that has
+  `role.switch:` scopes?**
+  *Resolved to* mechanical enumeration over the effective
+  envelope. Phase 14 picked up the draft's "post-phase task"
+  variant inside Task 4 because the infrastructure was
+  already in place. Three output shapes (case 1: no targets;
+  case 2: unqualified-any; case 3: qualified per-target list)
+  plus an `<unknown role>` annotation for typos. Recorded in
+  Task 4 ship record.
+
+### Phase 14 deferrals
+
+Phase 14 entered carrying **ten** rolling deferrals from Phase
+13 exit. Task 1 consumed one item directly (`lift
+assemble_role_envelope`). Tasks 2 and 4 added zero net-new
+items. Task 3 added one net-new item (multi-level sub-agent
+nesting). Phase 14 exits with **ten** rolling deferrals total
+(nine inherited + one net-new — same total as Phase 13 exit).
+
+**Rolling deferrals still open after Phase 14 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral, untouched by Phase 14. Carries
+  forward. Tagged: **Phase 11 Task 4, earliest plausible:
+  whichever phase has a concrete forensic-tooling story that
+  needs the `tool.allowlist:` scope distinction to be
+  pattern-matchable on variant shape rather than scope base
+  name.**
+- **Second regression channel for the role primitive** —
+  Phase 11 Q6 deferral. Untouched by Phase 14; reopens
+  reactively only if a channel-seam bug surfaces that turn-
+  loop tests miss.
+- **Response headers in audit payload (Phase 12 Q3 half).**
+  Untouched by Phase 14. Tagged: **Phase 12 Task 2, earliest
+  plausible: whichever phase has a concrete forensic story
+  that wants response headers in the audit chain.**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase 12 Q1
+  pinned GET-only. Tagged: **deferred indefinitely — reopens
+  only when a concrete write-side use case surfaces.**
+- **Redirect following with per-hop scope re-check.** Phase
+  12 Q5 pinned `Policy::none()`. Tagged: **deferred
+  indefinitely.**
+- **Binary response bodies / non-UTF-8.** `web.fetch`
+  currently fails loudly on non-UTF-8 bodies. Tagged:
+  **deferred indefinitely — the first phase that needs
+  binary fetches can add a base64-wrapping option or a
+  second `ToolOutputBytes` stream variant.**
+- **Per-chunk Telegram rendering.** Phase 12 Task 1 chose
+  silent chunk drop on Telegram. Tagged: **Phase 12 Task 1,
+  earliest plausible: reactive — reopens if Telegram
+  operators ask for live in-progress tool output.**
+- **Per-tier worked examples.** Phase 13 Task 3 deferral.
+  `examples/aivyx.toml` demonstrates `Trusted` thoroughly. A
+  SemiTrusted-channel-focused example with path-qualified fs
+  scopes is worth shipping in a future phase. Tagged:
+  **Phase 13 Task 3, earliest plausible: a phase that ships
+  a second channel adapter at a lower trust tier.**
+- **`CapabilitySet::grants` reflexivity investigation.**
+  Phase 13 Task 4 deferral. Phase 14's role-switch qualifier
+  kind did not exhibit the bug (the Task 2 reflexive test
+  passed first-run), so the investigation remains scoped to
+  url-prefix qualifiers specifically. Tagged: **Phase 13
+  Task 4, earliest plausible: any phase that touches
+  `aivyx-capability` meaningfully.**
+
+**Net-new deferrals from Phase 14 itself:**
+
+- **Multi-level sub-agent nesting (child invokes
+  `role.switch` inside a sub-session).** Phase 14 ships
+  one level of nesting. A child invoking `role.switch`
+  recursively today errors with `role.switch` not in the
+  child's envelope (the right failure mode by default,
+  because no role in `examples/aivyx.toml` declares
+  `role.switch` on a child role). The factory closure path
+  *does* support arbitrary nesting depth in principle — the
+  child agent it constructs is built with the same
+  `Arc<ToolRegistry>` the parent uses, which contains the
+  `RoleSwitchTool` with the same `Arc<ChildAgentFactory>` —
+  but the attendant question of "what does the audit chain
+  look like for a 3-level deep sub-session" has not been
+  worked through and there is no integration test for the
+  deeper case. Tagged: **Phase 14 Task 3, earliest
+  plausible: whichever phase has a concrete use case for
+  recursive role-switching.** Recorded as a forward
+  pointer; the no-op-by-default failure mode means there is
+  no urgency.
+
+**Closed by Phase 14:**
+
+- **Lift `assemble_role_envelope` into `aivyx-channel/src/
+  lib.rs`.** Phase 13 Task 3 net-new deferral, consumed by
+  Task 1. The lift pattern proved itself at zero cost; the
+  fn now sits at `crates/aivyx-channel/src/role_envelope.rs`
+  and is callable via `aivyx_channel::assemble_role_
+  envelope` from any sibling crate that needs it.
+
+**Backlog shape at Phase 14 exit:** nine rolling items
+inherited from Phase 13 (minus the one Task 1 closed) + one
+net-new from Phase 14. Total ten — same as Phase 13 exit. The
+backlog held flat across the phase: one item closed, one item
+recorded, no items dropped silently. The "consumer phase"
+framing (Phase 13 substrate, Phase 14 first caller) absorbed
+its predecessor's deferral cleanly without growing new ones —
+exactly the shape a substrate-then-consumer pair should
+produce.
+
+### Phase 14 exit criteria (final)
+
+- [x] Task 1 shipped at `96814e7`: `assemble_role_envelope`
+      lifted from binary into `crates/aivyx-channel/src/
+      role_envelope.rs`, re-exported through the channel
+      lib. **+3 tests**. Phase 13 Task 3 deferral closed.
+- [x] Task 2 shipped at `7364504`: `role.switch` capability
+      scope with target-role qualifier kind in
+      `aivyx-capability`, `RoleSwitchTool` registered in
+      the core tool registry, `examples/aivyx.toml`
+      extended with `default` unqualified `role.switch` +
+      `coder` `role.switch:researcher`. **+6 tests**.
+- [x] Task 3 shipped at `74883e2`: sub-session nesting via
+      inline child agent constructed by an
+      `OnceLock`-backed factory closure on `RoleSwitchTool`.
+      Q2/Q3/Q4/Q5 resolved. P1.3 structural impossibility
+      pinned by integration test against narrowed-caps
+      child. P1.4 distinct-turn tagging pinned by distinct-
+      `TurnId` test. **+7 tests**. Mid-implementation
+      correction block recorded above (Option B → Option
+      F3 pivot caught before code was written).
+- [x] Task 4 shipped at `91053ec`: `--print-role`
+      reachable-switch-target enumerator with three
+      output shapes (no targets / unqualified-any / per-
+      qualifier list) and structural-impossibility pin at
+      the debug surface. Q6 resolved (mechanical, not
+      informational). **+4 tests**.
+- [x] Decisions block (Q1–Q6 resolution) recorded above.
+- [x] Deferrals block recorded above: 9 inherited + 1 net-
+      new = 10 rolling items. Phase 13 deferral 1-of-3
+      closed.
+- [x] `cargo test --workspace` green at exit: **480 → 509
+      passed**, delta **+29** across the phase (well above
+      the draft's ≥+14 acceptance — Task 1 +3, Task 2 +15,
+      Task 3 +7, Task 4 +4, total +29 from per-task
+      deltas, no hidden contributions). Task 2's +15 is
+      nine above its ≥+6 draft acceptance because adding
+      a new `QualifierKind` variant pulls the entire
+      `aivyx-capability` D4 rule walker into regression
+      scope.
+- [x] `cargo clippy --workspace --all-targets -- -D
+      warnings` clean at exit. Pre-commit hook held
+      throughout.
+- [x] **`DESIGN.md` byte-identical to `e0d6437`.**
+      **Streak rolls to fourteen consecutive phases.**
+      Verified: `git diff e0d6437 HEAD -- docs/DESIGN.md
+      | wc -l == 0`. No amendment file created during
+      Phase 14. Phase 14's work fits inside D1's existing
+      "turn-loop plus tool dispatch" box exactly as the
+      Streaks-at-risk block predicted.
+- [x] **`PRODUCT.md` byte-identical to `80189b4`.**
+      **Streak rolls to two consecutive phases.** Verified:
+      `git diff 80189b4 HEAD -- PRODUCT.md | wc -l == 0`.
+      Phase 14 is a delivery against P1's existing
+      commitment text; no product-contract edit was
+      required.
+- [x] **Production-core `lib.rs` byte-identical to
+      `16e618c`.** **Streak rolls to three consecutive
+      phases.** Verified: `git diff 16e618c HEAD --
+      crates/aivyx-core/src/lib.rs | wc -l == 0`. The
+      Option F3 path discovered during Task 3 turned the
+      predicted streak break into a no-event. The streak
+      is now at the longest production-core run since the
+      original Phase 10/11 streak.
+- [x] **Zero-new-dep streak: held.** Phase 14 added zero
+      new workspace crates and zero new external
+      dependencies.
+- [x] `docs/README.md` phase-status table row updated:
+      `| Phase 14 | Frozen  | PHASE_14.md | <exit-hash> |`.
+      (Exit-hash backfilled in a separate follow-up commit
+      per the Phase 11/12/13 recipe.)
+- [x] `docs/ROADMAP.md` Phase 14 entry replaced with a
+      Phase 15 scaffold.
+- [x] `docs/PRODUCT_ROADMAP.md` P1 milestone entry updated
+      to reflect the landed shape (one level of inline
+      sub-session nesting, factory-closure architecture,
+      structural impossibility pinned by integration test
+      and the debug-surface enumerator) and flag multi-
+      level nesting as the only remaining sub-phase
+      candidate for P1.
+- [x] Phase 13 Task 3 deferral (`lift assemble_role_
+      envelope`) explicitly consumed by Task 1 and closed
+      in the deferrals block above.
+
+### Phase 14 recap
+
+Phase 14 is the first phase to deliver on a numbered Product
+Commitment whose substrate was built in the immediately
+preceding phase — Phase 13 shipped the per-role capability
+envelope, Phase 14 plugged its first non-trivial caller into
+it. The substrate-then-consumer pair held: every Phase 13
+design decision the consumer touched (the `assemble_role_
+envelope` walker, the empty-child surprise, the `--print-role`
+two-surfaces drop-reporting rule) survived contact with the
+consumer without modification. Phase 13's correction blocks
+predicted the right shapes; Phase 14's only correction block
+is about the *path to* the right shape, not the shape itself.
+
+The four tasks composed cleanly: Task 1 lifted the substrate
+fn into the channel lib (closing a Phase 13 deferral and
+unblocking sibling-crate access), Task 2 added the
+`role.switch` scope and a stub tool that validated the
+dispatch gate end-to-end, Task 3 replaced the stub with a
+real sub-session dispatcher via a factory-closure architecture
+that turned the predicted production-core streak break into a
+no-event, and Task 4 picked up the Q6 mechanical-enumerator
+variant the draft had deferred — confirming that the
+`assemble_role_envelope` lift Task 1 performed pays its
+maintenance cost the moment a debug surface and a production
+surface need to agree on the same envelope.
+
+Three streaks survived the phase, all extending:
+- DESIGN.md → **fourteen** consecutive phases.
+- PRODUCT.md → **two** consecutive phases.
+- Production-core `aivyx-core/src/lib.rs` → **three**
+  consecutive phases (the at-risk streak the phase-open doc
+  flagged held through Task 3 via the Option F3 path).
+
+The structural impossibility guarantee from PRODUCT.md P1.3 is
+now load-bearing in two places: (1) the factory closure in
+`crates/aivyx-channel/src/bin/aivyx.rs` is the only code path
+that produces a child `CapabilitySet`, and it does so by
+calling `assemble_role_envelope` against the parent's role
+table — there is no second route, and no API surface that lets
+a caller fabricate a `CapabilitySet`; (2) the `--print-role`
+reachable-targets enumerator reads from the same
+`assemble_role_envelope`-produced set, so the operator's
+debug-time view of "which sub-sessions can this role open" is
+guaranteed to match the runtime's dispatch-time view. Phase 14
+delivers P1 in production *and* makes it inspectable, in the
+same shape, through the same envelope source.
+
+Phase 15 shape TBD — Phase 14's clean exit means the next
+phase can choose freely from the PRODUCT_ROADMAP candidates
+(Daemon Migration, Mission Primitive, multi-level sub-agent
+nesting, second-channel regression coverage). The decision
+will be made at Phase 15 open under the same dual-contract
+discipline.
