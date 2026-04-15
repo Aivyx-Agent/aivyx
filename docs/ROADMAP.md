@@ -79,31 +79,41 @@ the individual adapter crates. It runs when the Phase sequence
 is complete enough that operator verification is worth the
 setup cost, which is a judgement call to be made at the time.
 
-## Phase 13 — consolidation phase (shape TBD at open)
+## Phase 13 — Role-Config Migration (first product-shape keystone)
 
-The three product phases (11, 12, and whatever Phase 13
-eventually looks like) share one pattern: ship one dangerous
-tool plus whatever infrastructure that tool justifies, then
-freeze. Phase 12 confirmed the pattern generalizes — the
-Phase 11 seams (role allowlist gate, trust-tier ceilings,
-registration-time per-tool gate, `ToolContext.channel.
-stream_event` seam) were reused with **zero** design rework
-for a structurally distinct second tool. Phase 13's shape is
-therefore open: it could be a third product phase (candidate
-tools include `git.clone`/`git.fetch` — a long-running
-streaming-output tool that would exercise the Task 1
-`StreamEvent::ToolOutput` primitive a second time — or a
-tool that needs to write to disk under an attenuated
-`fs.write:` scope), or it could be a consolidation phase
-that works through the eight-item foundation backlog
-(response headers in audit payload, forensic
-`ToolOutcome::NotInRole` variant, per-chunk Telegram
-rendering, default role config file, and the rolling-
-deferral items carried from earlier phases). The decision
-is made at Phase 13 open, informed by whichever item has
-the sharpest design pressure by then — not pre-committed
-here. If Phase 13 turns out to be a product phase, the
-Phase 12 pattern says Phase 11's infrastructure is enough
-and the backlog keeps rolling; if Phase 13 is a
-consolidation phase, the product-phase cadence resumes at
-Phase 14.
+**Active — see [PHASE_13.md](PHASE_13.md).** Opened 2026-04-15.
+Phase 13 is the first phase written under the dual-contract
+regime (DESIGN.md + PRODUCT.md, both LOCKED), and delivers the
+first numbered Product Commitment directly: **P9 — Per-Role
+Full Capability Declaration**. The goal is to move every
+capability grant currently inlined in
+`crates/aivyx-channel/src/bin/aivyx.rs:907–934` into per-role
+config — each role declaring its complete envelope
+(`capability_scopes`, `trust_ceiling`, `parent_role` per
+**P7**'s single-inheritance rule). Phase 13 is a
+config-substrate phase, not a capability-layer rewrite; the
+existing capability layer gets *consumed* by the new config
+fields rather than modified. Ships a worked-example
+`examples/aivyx.toml` in the same phase to close the Phase 12
+Task 3 deferral and prove the inheritance primitive against a
+non-trivial multi-level role tree. Task count: 5, same cadence
+as Phase 11 and 12.
+
+## Phase 14 — shape TBD at Phase 13 exit
+
+The Phase 11 + 12 + 13 triplet will have validated three
+distinct phase shapes: product phase, product phase again,
+config-substrate phase. Phase 14's shape is decided at Phase
+13 exit informed by what Phase 13 uncovered. Candidates from
+`PRODUCT_ROADMAP.md`: **Daemon Migration keystone start**
+(the largest forward reshape, now unblocked because Role-
+Config Migration has landed first), **Mission Primitive**
+(couples to both Daemon Migration and Role-Config
+Migration, smaller if only the approval-gate `StreamEvent`
+lands), or **Sub-Agent Role-Switching** (smallest of the
+three, consumes Role-Config Migration directly). The backlog
+still carries seven items after Phase 13 closes the
+`default role config file` deferral, so a consolidation
+sub-phase is also possible if the foundation backlog grows
+sharper design pressure during Phase 13 than a keystone
+does.
