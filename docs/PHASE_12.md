@@ -788,6 +788,90 @@ fix.
 
 ---
 
+## Task 3 — correction recorded mid-implementation (2026-04-15)
+
+**What the draft assumed:** Task 3 would update a shipped
+"default config file" (an `examples/aivyx.toml` or
+equivalent) to add `web.fetch` to the `researcher` role's
+`tool_allowlist` and grant one narrow `net.fetch:...` scope
+to that role.
+
+**What the code actually shows:** there is no shipped default
+config file. `aivyx-config` synthesizes a **single** implicit
+role named `"default"` (see `DEFAULT_ROLE_NAME` at
+`crates/aivyx-config/src/lib.rs:193`) with
+`ToolAllowlist::AllowAll`, built from legacy top-level fields
+for backwards compatibility when a loaded config defines zero
+roles. The `coder` and `researcher` role names appear only as
+**test fixtures** inside `aivyx-config/src/tests.rs:802` —
+they are not compiled-in defaults, not shipped in a TOML
+file, and not referenced anywhere in the binary's runtime
+code path. A `Glob **/aivyx.toml*` across the tree returns
+zero matches.
+
+**Scope change.** Task 3 does NOT create a new
+`examples/aivyx.toml`. Creating a shipped default file would
+introduce a fresh surface (docs touch-up, loader branch
+coverage, operator-discoverability decisions) that Phase 12
+does not need and was not scoped for. The phase-level
+property Task 3 pins is "roles actually work for real
+product tools, not just for shell.exec" — and that property
+is provable at the **agent layer** with
+`FakeTool`/`VecPlanner`/`RecordingAudit`, the same harness
+Phase 11 Task 4's allowlist tests use. Task 3 therefore ships
+exactly one thing: **a cross-role regression test** at
+`crates/aivyx-core/src/agent.rs` that drives the *same tool
+registry* twice through the agent layer with two different
+`with_tool_allowlist` configurations (`coder` = shell.exec,
+`researcher` = web.fetch) and asserts:
+
+1. The `coder` agent calling `web.fetch` is denied at the
+   allowlist gate with scope `tool.allowlist:web.fetch`,
+   emits no `ToolCall` audit event, and routes through
+   `ToolOutcome::Denied`.
+2. The `researcher` agent calling `shell.exec` is denied
+   at the allowlist gate with scope
+   `tool.allowlist:shell.exec`, symmetrically.
+3. Each agent's *in-role* call (`coder` → `shell.exec`,
+   `researcher` → `web.fetch`) succeeds and emits a
+   normal `ToolCall` audit event.
+
+The three-assertion shape gives cross-role coverage without
+any config-file infrastructure. If a later phase ships a
+default TOML file, the agent-layer regression stays
+load-bearing — config parsing cares about what's *in* the
+file; agent-layer regression cares about what happens *after*
+the file is parsed.
+
+**What this means for the draft bullets:**
+- "Default `researcher` role's `tool_allowlist` gains
+  `web.fetch`" — **N/A**, no default role to update.
+- "Default `researcher` role gets one `web.fetch:url-prefix:`
+  capability grant in the default `aivyx.toml`" — **N/A**,
+  no default TOML.
+- "Cross-role regression test: same physical TOML config
+  produces two working agents" — **amended**: same physical
+  **tool registry** produces two working agents via two
+  distinct `with_tool_allowlist` calls. The phase-level
+  property (roles actually work for product tools) is
+  unchanged; only the test's level changes from
+  binary-through-TOML to agent-through-fixture.
+- "Possibly a small docs touch-up to the Phase 11 example
+  config" — **N/A**, no example config.
+
+**Task 4 / Task 5 implications:** Task 4's "default config
+file" candidate, if anyone had one, is now dead. Task 5 exit
+freeze proceeds as normal.
+
+**Production-core byte-identity:** Task 3 is pure additions
+to the `#[cfg(test)]` block of `agent.rs` — zero production
+surface change, zero `lib.rs` touch. The byte-identity
+streak (already broken in Tasks 1 and 2) is not further
+broken here; `lib.rs` stays identical to its post-Task-2
+state.
+
+---
+
 ## Task 2 — shipped (2026-04-15)
 
 **What landed.**
@@ -918,6 +1002,101 @@ doesn't silently grow).**
   (`"response body from <url> is not valid UTF-8"`) rather
   than lossy-decoding. A later phase that needs binary can
   add a base64 encoding option to the return payload.
+
+---
+
+## Task 3 — shipped (2026-04-15)
+
+**What landed.**
+
+1. **Cross-role regression test at the agent layer.** Per the
+   mid-implementation correction block above, Task 3 ships zero
+   production surface change. Everything is additive inside
+   `#[cfg(test)] mod tests` in `crates/aivyx-core/src/agent.rs`
+   (+317 lines, no touches outside the test module).
+2. **`run_single_tool_turn_with_allowlist` helper.** Small
+   harness that wraps `ConcreteAgent::new` + `VecPlanner` +
+   `FakeChannel` + `RecordingAudit` and returns
+   `(TurnOutcome, Vec<AuditTag>)`. Lets each test scenario read
+   one line instead of re-scaffolding an agent for every role.
+3. **Test 1 — `cross_role_same_registry_different_allowlists_
+   produce_asymmetric_access`.** Builds **one** `FakeTool`
+   instance per tool (`shell.exec` and `web.fetch`) and
+   `Arc::clone`s both into two separate
+   `with_tool_allowlist` configurations (`coder` →
+   `["shell.exec"]`, `researcher` → `["web.fetch"]`). Runs the
+   four cross-product scenarios:
+   - `coder` calling `web.fetch` → `ToolOutcome::Denied` with
+     scope `tool.allowlist:web.fetch`, no `ToolCall` audit.
+   - `researcher` calling `shell.exec` → `ToolOutcome::Denied`
+     with scope `tool.allowlist:shell.exec`, no `ToolCall`
+     audit.
+   - `coder` calling `shell.exec` → success, `ToolCall` audit
+     emitted.
+   - `researcher` calling `web.fetch` → success, `ToolCall`
+     audit emitted.
+   The `Arc::clone` matters: it proves the asymmetry comes
+   from the *allowlist view*, not from the two agents
+   accidentally holding distinct tool registries.
+4. **Test 2 — `cross_role_allowlist_gate_precedes_real_tool_
+   execution`.** Stronger assertion: uses a `PanicOnExecute`
+   fake whose `execute()` unconditionally panics. The test
+   runs a role that is denied the tool and asserts the turn
+   completes with `ToolOutcome::Denied` *without* the panic
+   firing — proving dispatch short-circuits at the allowlist
+   gate before ever reaching `execute`. This is the load-bearing
+   invariant: a refactor that reordered the gate after execute
+   would pass a plain-denied assertion but fail this one.
+
+**Exit criteria — all met.**
+
+- ✅ Cross-role regression test exists and passes, covering
+  both "in-role succeeds" and "out-of-role denied" for two
+  roles against the same shared tool registry.
+- ✅ Allowlist-gate-before-execute invariant pinned by a
+  `PanicOnExecute` fake (guards against silent reordering).
+- ✅ Mid-implementation correction block recorded above
+  (no shipped default TOML; no `examples/aivyx.toml` touch;
+  scope change from binary-through-TOML to
+  agent-through-fixture).
+- ✅ `cargo test --workspace` green: **453 passed, 0 failed**
+  (451 → 453, delta **+2**, acceptance ≥+2).
+- ✅ `cargo clippy --workspace --all-targets -- -D warnings`
+  clean.
+- ✅ Zero new workspace dependencies. The test reuses the
+  existing `FakeTool`/`VecPlanner`/`RecordingAudit`/
+  `FakeChannel` harness already living in the same test
+  module since Phase 11 Task 4.
+- ✅ **Production-core `lib.rs` byte-identity: preserved**
+  relative to post-Task-2 state. Task 3 touches only
+  `agent.rs` (inside `#[cfg(test)]`) and `PHASE_12.md`; the
+  existing break in `lib.rs` (from Tasks 1 and 2's
+  `pub use` re-exports) is not widened.
+- ⚠ **Task 4 is now pure slack.** Task 2's ship record
+  already killed the "audit-payload widening" candidate,
+  and Task 3's correction block killed the "default TOML
+  file" candidate. The remaining Task 4 candidates from the
+  draft are URL canonicalization deep-dive (slow, not
+  load-bearing) and nothing else concrete. Most likely
+  outcome: Task 4 is skipped outright and Phase 12 exits at
+  Task 5 with three shipped tasks, same pattern as a couple
+  of prior phases.
+
+**Deferred to later phases (recorded here so the backlog
+doesn't silently grow).**
+
+- **Default role config file / `examples/aivyx.toml`.**
+  Recorded in detail in the correction block above. If a
+  future phase ships operator-facing configuration samples,
+  the cross-role agent-layer regression stays load-bearing
+  and the new binary-through-TOML test becomes additive, not
+  a replacement.
+- **Capability-side role scoping.** Task 3 pins the
+  *allowlist* half of the "roles actually work" property; the
+  *capability-set-per-role* half is already covered by the
+  existing per-role `OperatorCapabilitySet`-through-config
+  pathway from Phase 11 and needs no additional regression
+  at this phase boundary.
 
 ---
 

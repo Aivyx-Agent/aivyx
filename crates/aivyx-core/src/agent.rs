@@ -2077,6 +2077,323 @@ mod tests {
     }
 
     // =====================================================================
+    // Phase 12 Task 3 — cross-role regression
+    // =====================================================================
+    //
+    // The phase-level property: two agents built from the *same* tool
+    // registry, differing only in `with_tool_allowlist`, produce the
+    // asymmetric "roles actually work for product tools" behavior
+    // promised in the Phase 12 entry criteria. A `coder` agent whose
+    // allowlist includes `shell.exec` but not `web.fetch` is denied
+    // `web.fetch`; a `researcher` agent whose allowlist includes
+    // `web.fetch` but not `shell.exec` is denied `shell.exec`. Each
+    // agent's in-role tool succeeds.
+    //
+    // Task 3's draft assumed the test would run through a real
+    // TOML config file — but there is no shipped default TOML, so
+    // the regression lives here at the agent layer instead (see the
+    // Task 3 correction block in PHASE_12.md for the full
+    // rationale). The agent-layer property is the load-bearing one
+    // regardless of whether a config file is later added: config
+    // parsing cares what's *in* the file; this test cares what
+    // happens *after* parsing, at dispatch time.
+    //
+    // The test uses `Arc::clone` to share the same physical tool
+    // instances across both agents — proving that the asymmetry is
+    // a property of the allowlist view, not of two separate
+    // registries that happened to contain different tools.
+
+    /// Helper: drive one turn with a scripted single-tool plan and
+    /// return `(final outcome, captured audit events)`. Centralizes
+    /// the `ConcreteAgent::new` + `VecPlanner` + `FakeChannel` scaffolding
+    /// so the cross-role test below stays about the allowlist seam.
+    async fn run_single_tool_turn_with_allowlist(
+        tools: Vec<Arc<dyn Tool>>,
+        caps: CapabilitySet,
+        target: ToolId,
+        allowlist: BTreeSet<String>,
+    ) -> (TurnOutcome, Vec<AuditTag>) {
+        let audit = RecordingAudit::new();
+        let registry = Arc::new(ToolRegistry::new(tools));
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: target,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "go");
+        let outcome = agent.turn(message, &channel).await;
+        let events = audit.snapshot();
+        (outcome, events)
+    }
+
+    #[tokio::test]
+    async fn cross_role_same_registry_different_allowlists_produce_asymmetric_access() {
+        // One physical registry, shared across both agent
+        // instances via Arc::clone. This is the invariant that
+        // matters: two `--role` invocations of the same binary see
+        // the same tool set, and the asymmetry comes from the
+        // allowlist applied at agent construction.
+        let shell: Arc<dyn Tool> =
+            Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let web: Arc<dyn Tool> =
+            Arc::new(FakeTool::new_bare("web.fetch", "net.fetch"));
+        let shell_id = shell.id();
+        let web_id = web.id();
+        let shared_tools: Vec<Arc<dyn Tool>> =
+            vec![Arc::clone(&shell), Arc::clone(&web)];
+
+        // Both agents hold the same broad capability set. The
+        // allowlist is the ONLY thing that differs between them —
+        // so any asymmetric outcome is provably attributable to
+        // the allowlist, not to a capability difference.
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("shell.exec").unwrap(),
+            Scope::parse("net.fetch").unwrap(),
+        ]);
+
+        // ---- Scenario 1: coder (shell.exec only) calling web.fetch ----
+        let (coder_web_outcome, coder_web_events) =
+            run_single_tool_turn_with_allowlist(
+                shared_tools.clone(),
+                caps.clone(),
+                web_id,
+                allowlist(&["shell.exec"]),
+            )
+            .await;
+        // Turn completes (the planner's final message still fires)
+        // but the tool call was denied — and the denial's audit
+        // scope_requested must be `tool.allowlist:web.fetch`, the
+        // distinguishing signal for a role-allowlist rejection
+        // versus a capability rejection.
+        assert!(
+            matches!(coder_web_outcome, TurnOutcome::Completed { .. }),
+            "coder turn should complete (allowlist denial is a \
+             per-tool-call denial, not a turn failure): \
+             {coder_web_outcome:?}"
+        );
+        let coder_denial = coder_web_events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied { scope_requested, .. } => {
+                    Some(scope_requested)
+                }
+                _ => None,
+            })
+            .expect("coder calling web.fetch must emit ScopeDenied");
+        assert_eq!(
+            coder_denial.base(),
+            "tool.allowlist",
+            "coder's web.fetch denial must be a role-allowlist denial, \
+             not a capability denial"
+        );
+        assert_eq!(
+            coder_denial.qualifier(),
+            Some("web.fetch"),
+            "qualifier must name the rejected tool"
+        );
+        assert!(
+            !coder_web_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "coder's denied web.fetch call must NOT emit ToolCall audit event"
+        );
+
+        // ---- Scenario 2: researcher (web.fetch only) calling shell.exec ----
+        let (researcher_shell_outcome, researcher_shell_events) =
+            run_single_tool_turn_with_allowlist(
+                shared_tools.clone(),
+                caps.clone(),
+                shell_id,
+                allowlist(&["web.fetch"]),
+            )
+            .await;
+        assert!(
+            matches!(researcher_shell_outcome, TurnOutcome::Completed { .. }),
+            "researcher turn should complete: {researcher_shell_outcome:?}"
+        );
+        let researcher_denial = researcher_shell_events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied { scope_requested, .. } => {
+                    Some(scope_requested)
+                }
+                _ => None,
+            })
+            .expect("researcher calling shell.exec must emit ScopeDenied");
+        assert_eq!(
+            researcher_denial.base(),
+            "tool.allowlist",
+            "researcher's shell.exec denial must be a role-allowlist denial"
+        );
+        assert_eq!(
+            researcher_denial.qualifier(),
+            Some("shell.exec"),
+            "qualifier must name the rejected tool"
+        );
+        assert!(
+            !researcher_shell_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "researcher's denied shell.exec call must NOT emit ToolCall"
+        );
+
+        // ---- Scenario 3: coder's in-role call (shell.exec) succeeds ----
+        let (coder_shell_outcome, coder_shell_events) =
+            run_single_tool_turn_with_allowlist(
+                shared_tools.clone(),
+                caps.clone(),
+                shell_id,
+                allowlist(&["shell.exec"]),
+            )
+            .await;
+        match coder_shell_outcome {
+            TurnOutcome::Completed { tool_calls_made, .. } => {
+                assert_eq!(
+                    tool_calls_made, 1,
+                    "coder's in-role shell.exec call should execute"
+                );
+            }
+            other => panic!("expected coder Completed, got {other:?}"),
+        }
+        assert!(
+            coder_shell_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "coder's in-role call must emit a ToolCall audit event"
+        );
+        assert!(
+            !coder_shell_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "coder's in-role call must NOT emit ScopeDenied"
+        );
+
+        // ---- Scenario 4: researcher's in-role call (web.fetch) succeeds ----
+        let (researcher_web_outcome, researcher_web_events) =
+            run_single_tool_turn_with_allowlist(
+                shared_tools.clone(),
+                caps.clone(),
+                web_id,
+                allowlist(&["web.fetch"]),
+            )
+            .await;
+        match researcher_web_outcome {
+            TurnOutcome::Completed { tool_calls_made, .. } => {
+                assert_eq!(
+                    tool_calls_made, 1,
+                    "researcher's in-role web.fetch call should execute"
+                );
+            }
+            other => panic!("expected researcher Completed, got {other:?}"),
+        }
+        assert!(
+            researcher_web_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "researcher's in-role call must emit a ToolCall audit event"
+        );
+        assert!(
+            !researcher_web_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "researcher's in-role call must NOT emit ScopeDenied"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_role_allowlist_gate_precedes_real_tool_execution() {
+        // Complement to the scenario above: a role-denied call
+        // must never reach `Tool::execute` at all. We prove this
+        // with a FakeTool whose `execute` would panic — if the
+        // allowlist gate is working, the panic never fires
+        // because dispatch short-circuits at ScopeDenied.
+        //
+        // A panic-on-execute fake is a common safety pattern in
+        // the agent-layer tests; if some future change threaded
+        // the denied call past the allowlist gate, this test
+        // would immediately surface it as a test panic rather
+        // than as a silently passing "Denied" assertion.
+        struct PanicOnExecute {
+            id: ToolId,
+            name: &'static str,
+            schema: Value,
+            scope: Scope,
+        }
+        #[async_trait]
+        impl Tool for PanicOnExecute {
+            fn id(&self) -> ToolId {
+                self.id
+            }
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn description(&self) -> &str {
+                "panic-on-execute fake — must never run if allowlist gate works"
+            }
+            fn input_schema(&self) -> &Value {
+                &self.schema
+            }
+            fn required_scope(&self, _input: &Value) -> Scope {
+                self.scope.clone()
+            }
+            async fn execute(
+                &self,
+                _input: Value,
+                _ctx: &ToolContext<'_>,
+            ) -> ToolOutcome {
+                panic!(
+                    "allowlist gate failed — {} reached execute despite being \
+                     out-of-role",
+                    self.name
+                );
+            }
+        }
+
+        let web_panic: Arc<dyn Tool> = Arc::new(PanicOnExecute {
+            id: ToolId::new(),
+            name: "web.fetch",
+            schema: json!({}),
+            scope: Scope::parse("net.fetch").unwrap(),
+        });
+        let web_id = web_panic.id();
+        let caps =
+            CapabilitySet::from_scopes([Scope::parse("net.fetch").unwrap()]);
+
+        let (outcome, events) = run_single_tool_turn_with_allowlist(
+            vec![web_panic],
+            caps,
+            web_id,
+            // `coder` allowlist — web.fetch is NOT included.
+            allowlist(&["shell.exec", "fs.read"]),
+        )
+        .await;
+
+        // If we reach this assertion without a panic, the
+        // allowlist gate correctly short-circuited before
+        // `execute` fired.
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "expected a ScopeDenied audit event"
+        );
+    }
+
+    // =====================================================================
     // Phase 11 Task 4 — `LlmPlannerConfig::tool_allowlist` catalog filter
     // =====================================================================
     //
