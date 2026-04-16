@@ -191,6 +191,13 @@ and returns `DaemonStatusInfo { running, version }`.
 `daemon_stop` connects, reads `DaemonReady`, sends `Shutdown`,
 and waits for `ShuttingDown`.
 
+**Decision 5 (Q2→moot): Banner parity needs no IPC change.**
+`canonical_root` and `verified_event_count` are already in scope
+at the daemon banner construction site in `run_async` — the
+frontend computes them from the store before the daemon session
+starts. The fix is a pure format-string edit. Q2 options (a)–(c)
+are all unnecessary.
+
 ## Open questions
 
 **Q1 — Should `daemon stop` be graceful-only or support
@@ -209,7 +216,8 @@ sent immediately after `SessionStarted`.
 (c) Add optional fields to `DaemonReady` (the lifecycle
 event already sent on connection).
 
-**Recommendation: (a).** Deferred to Task 5.
+**Recommendation: (a).** → **Moot — resolved without IPC change
+(see Decision 5).**
 
 ## Task 2 ship record
 
@@ -293,6 +301,28 @@ rejected (those modes don't use the daemon at all).
 threshold; the overshoot is entirely parser test code — the
 `#[cfg(test)]` module starts at line 1641, so production
 code is 1641 lines, well under threshold).
+**All three byte-identity streaks held.**
+
+## Task 5 ship record
+
+**Design decision: No IPC protocol change needed (Decision 5).**
+The daemon banner is constructed on the frontend side in
+`run_async`, where `canonical_root` and `verified_event_count`
+are already in scope from the store setup. Q2 options (a)–(c)
+— extending `SessionStarted`, adding `ServerInfo`, or extending
+`DaemonReady` — were all unnecessary. The fix is a pure
+format-string edit adding the three missing fields (`fs sandbox`,
+`memory`, `audit`) to both daemon banners.
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+10): Local daemon
+  banner and Telegram daemon banner extended with `fs sandbox`,
+  `memory: live`, and `audit: persistent (N events verified
+  from disk)` fields — matching the in-process banners.
+
+**Test delta:** 568 → 568 (no new tests — format-string change
+only, covered by existing integration tests).
+**Binary line count:** 2453 → 2463.
 **All three byte-identity streaks held.**
 
 ## Deferrals targeted for closure

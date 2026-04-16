@@ -1456,9 +1456,14 @@ async fn run_async(
                             "aivyx {} (daemon) — type a message, ctrl-C to cancel, \
                              ctrl-D to exit.\n\
                              daemon: {}\n\
+                             fs sandbox: {}\n\
+                             memory: live (recall persists across restarts)\n\
+                             audit: persistent ({} events verified from disk)\n\
                              active role: {}",
                             env!("CARGO_PKG_VERSION"),
                             sp.display(),
+                            canonical_root.display(),
+                            verified_event_count,
                             active_role_name,
                         )),
                         cancel_flag: Some(cancelled_once),
@@ -1573,10 +1578,15 @@ async fn run_async(
                 eprintln!(
                     "aivyx {} (daemon) — telegram bot live\n\
                      {}\n\
-                     daemon: {}",
+                     daemon: {}\n\
+                     fs sandbox: {}\n\
+                     memory: live (recall persists across restarts)\n\
+                     audit: persistent ({} events verified from disk)",
                     env!("CARGO_PKG_VERSION"),
                     chat_scope_label,
                     sp.display(),
+                    canonical_root.display(),
+                    verified_event_count,
                 );
 
                 match run_telegram_daemon_multi_session(
