@@ -758,3 +758,250 @@ Workspace test count: **542** (entry baseline 533).
   holds. No trait changes needed — `DaemonSession` and
   auto-spawn are purely client-library concerns.
 - Zero-new-dep streak holds.
+
+## Ship records
+
+### Task 1 — Open commit
+
+- **Commit:** `360584e`
+- **Shape:** `docs/PHASE_17.md` (this document), `docs/README.md`
+  Phase 17 row Active, `docs/ROADMAP.md` Phase 17 entry updated
+  from scaffold to active description, `docs/PRODUCT_ROADMAP.md`
+  Phase 17 forward pointer added.
+- **Test delta:** +0 (no code, no tests).
+
+### Task 2 — Multi-turn daemon + graceful shutdown
+
+- **Commit:** `c40908f`
+- **Shape:** `daemon_server.rs` rewritten from 281-line single-turn
+  PoC to 307-line multi-turn production server. `run_daemon<C>`
+  with `CancellationToken` parameter, `run_poc_daemon<C>` backward-
+  compatible alias, `send_shutting_down` helper, `format_outcome`
+  helper. Three new e2e tests: `multi_turn_session_streams_both_turns`,
+  `graceful_shutdown_sends_shutting_down`,
+  `frontend_disconnect_stops_daemon_cleanly`.
+- **Test delta:** +3 (workspace 533 → 536).
+- **Decisions:** Q1→(a), Q4→(a).
+
+### Task 3 — CLI integration (`daemon run` subcommand)
+
+- **Commit:** `445a727`
+- **Shape:** `aivyx.rs` gains `CliMode` enum (`Session | VerifyOnly |
+  PrintRole(String) | DaemonRun`), `daemon run` subcommand parsing,
+  full agent-stack wiring in daemon branch with `tokio::signal::ctrl_c`
+  → `CancellationToken` → `run_daemon`. Binary 2072 → 2159 lines
+  (+87). Four new CLI parsing tests.
+- **Test delta:** +4 (workspace 536 → 540).
+- **Decisions:** Q2→(a), Q3→(b), Q5→(a).
+
+### Task 4 — Auto-spawn + multi-turn client library
+
+- **Commit:** `2b435b3`
+- **Shape:** `daemon_client.rs` rewritten from 147-line single-turn
+  PoC to 267-line multi-turn client library. `DaemonSession` struct
+  with `connect`/`submit_input`/`disconnect`, `daemon_is_running`
+  utility, `spawn_daemon_and_wait` with exponential backoff,
+  `run_poc_client` reimplemented on `DaemonSession`. Two new e2e
+  tests.
+- **Test delta:** +2 (workspace 540 → 542).
+- **Decisions:** Q6→(c+).
+
+### Task 5 — Exit freeze (this section)
+
+- **Commit:** this commit.
+- **Shape:** PHASE_17.md exit sections (ship records, deferrals,
+  prediction-vs-reality, exit criteria), `docs/README.md` Phase 17
+  row flipped to Frozen, `docs/ROADMAP.md` Phase 17 entry replaced
+  with frozen summary, `docs/PRODUCT_ROADMAP.md` Daemon Migration
+  milestone updated.
+- **Test delta:** +0 (docs only).
+
+## Deferrals
+
+**Rolling deferrals still open after Phase 17 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral, untouched by Phase 17.
+  Carries forward. Tagged: **Phase 11 Task 4,
+  earliest plausible: whichever phase has a concrete
+  forensic-tooling story.**
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched by
+  Phase 17.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched by Phase 17.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Deferred indefinitely.
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Deferred
+  indefinitely.
+- **Binary response bodies / non-UTF-8.** Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering.** Phase 12 Task 1.
+  Deferred reactively.
+- **`CapabilitySet::grants` reflexivity
+  investigation.** Phase 13 Task 4 deferral.
+  Untouched by Phase 17.
+- **Misleading `CEILING_SEMITRUSTED` ▲-row doc
+  comment.** Phase 15 Task 4. Composes with the
+  reflexivity investigation.
+- **Multi-level sub-agent nesting.** Phase 14 Task 3.
+  Untouched by Phase 17.
+- **Telegram-over-daemon port.** Phase 16 net-new.
+  Untouched by Phase 17. Tagged: **earliest
+  plausible: Phase 18 or later.**
+
+**Inherited deferrals closed by Phase 17:**
+
+- **Production-ready daemon lifecycle.** Phase 16
+  net-new. **Closed by Task 2** — multi-turn sessions,
+  graceful shutdown via `CancellationToken`, and
+  `Disconnect` handling. Crash recovery and turn-replay
+  remain forward concerns but are not load-bearing
+  for the LocalChannel production path.
+- **Auto-spawn (Q6).** Phase 16 net-new. **Closed by
+  Task 4** — `spawn_daemon_and_wait()` with exponential
+  backoff and `daemon_is_running()` check.
+- **`daemon` subcommand / `--daemon` flag in binary.**
+  Phase 16 net-new. **Closed by Task 3** — `daemon run`
+  subcommand with full agent-stack wiring.
+
+**Net-new deferrals from Phase 17 itself:**
+
+- **LocalChannel regression-test rewrite over IPC.**
+  Phase 16 net-new, carried forward to Phase 17 but
+  not completed. The six daemon e2e tests provide
+  representative coverage; a full rewrite of all nine
+  in-process test files to also run over IPC was not
+  needed. Tagged: **Q6→(c+), earliest plausible:
+  reactive — reopens if an IPC-boundary-specific bug
+  surfaces that the in-process tests miss.**
+- **`daemon status` / `daemon stop` subcommands.**
+  Natural CLI extensions for daemon lifecycle queries.
+  Not needed for the auto-spawn path (which only needs
+  `daemon run` and socket-presence checking). Tagged:
+  **earliest plausible: whichever phase adds operator-
+  facing daemon management UX.**
+- **PID file at `$XDG_RUNTIME_DIR/aivyx/daemon.pid`.**
+  The Task 3 draft plan included a PID file for
+  liveness checking; actual implementation uses socket-
+  probe (`daemon_is_running`) instead, which is more
+  reliable. PID file can be added later for
+  `daemon status` support. Tagged: **earliest
+  plausible: same phase as `daemon status`.**
+- **REPL-mode frontend over IPC.** The default `aivyx`
+  invocation should auto-spawn, connect, and enter an
+  interactive REPL loop rendering `StreamEvent`s via
+  `render_for_cli()`. The substrate is in place
+  (`DaemonSession`, auto-spawn, `render_for_cli`); the
+  wiring into the binary's session-mode dispatch is the
+  remaining work. Tagged: **earliest plausible: Phase
+  18 or whenever the default path switches from in-
+  process to daemon-backed.**
+
+**Backlog shape at Phase 17 exit:** ten rolling items
+inherited from Phase 16 (fifteen inherited, three closed
+by Phase 17) + four net-new from Phase 17 itself — but
+one of the four (LocalChannel regression-test rewrite)
+was already a Phase 16 net-new that Phase 17 carried
+forward rather than closed, so the net new items are
+three. Total **fifteen** (net: −3 closed, +3 genuinely
+new, +1 carried forward). The backlog is expected to
+shrink at Phase 18 if the Telegram port closes the
+Telegram-over-daemon item and the REPL-mode frontend
+lands.
+
+## Prediction versus reality
+
+The Phase 17 open doc made four explicit streak-risk
+predictions. This block reckons with each.
+
+### Prediction 1: "DESIGN.md streak low risk"
+
+**Reality: streak held.** Neither multi-turn sessions,
+graceful shutdown, auto-spawn, nor the `daemon run`
+subcommand required a D1 amendment. The `IpcChannelBridge`
+pattern that Phase 16 proved for single-turn extends
+cleanly to multi-turn — the daemon's dispatch loop manages
+session state in its own local variables, and the
+`ChannelContext` trait sees one `Message` per turn exactly
+as before. DESIGN.md byte-identical to `e0d6437`, streak
+at **seventeen consecutive phases.**
+
+### Prediction 2: "PRODUCT.md streak not at risk"
+
+**Reality: correct.** P4's deliberate-silence clause
+continues to absorb all daemon implementation decisions.
+Phase 17 hardened what Phase 16 settled; no new product-
+shape decision was needed. PRODUCT.md byte-identical to
+`80189b4`, streak at **five consecutive phases.**
+
+### Prediction 3: "Production-core streak genuinely at risk"
+
+**Reality: streak held — prediction was conservatively
+wrong (again).** The open doc named three specific
+mechanisms that could break the streak:
+
+1. **Multi-turn session state** — resolved by managing
+   session lifecycle in the daemon's dispatch loop (Q1→a),
+   not in `ChannelContext`. No trait method added.
+2. **Auto-spawn lifecycle signaling** — resolved by using
+   `DaemonLifecycleEvent` messages (already defined in the
+   Phase 16 protocol) for spawn status. `StreamEvent` enum
+   untouched.
+3. **Graceful shutdown propagation** — resolved by the
+   existing `CancellationToken` pattern on `ChannelContext`
+   plus `DaemonLifecycleEvent::ShuttingDown`. No new
+   `ChannelContext` method needed.
+
+All three mitigations held. `aivyx-core/src/lib.rs`
+byte-identical to `ba9a724`, streak at **six consecutive
+phases** — now the longest production-core streak in
+project history. The Phase 16 open doc predicted the
+streak would "probably break"; Phase 16's exit doc
+reckoned that the prediction was wrong. Phase 17's open
+doc scaled the prediction back to "genuinely at risk" but
+still flagged the mechanisms. Two consecutive phases where
+the production-core streak was expected to face its
+strongest test and survived cleanly suggests the
+`IpcChannelBridge` pattern and the dispatch-loop-manages-
+state principle are architecturally sound, not merely
+lucky.
+
+### Prediction 4: "Zero-new-dep streak low risk"
+
+**Reality: correct.** No new workspace dependencies. All
+functionality (`tokio::process`, `tokio::signal`,
+`UnixStream`, `CancellationToken`) was already available
+through existing tokio features and `aivyx-core` re-exports.
+
+## Exit criteria
+
+- [x] All task ship records in this document (Tasks 1–5).
+- [x] All six Q-block questions resolved and recorded:
+      Q1→(a), Q2→(a), Q3→(b), Q4→(a), Q5→(a), Q6→(c+).
+- [x] `cargo test --workspace` green: **542 tests** (entry
+      baseline 533, phase delta **+9**, target was ≥ +7).
+- [x] `cargo clippy --workspace --tests -- -D warnings`
+      clean.
+- [x] DESIGN.md byte-identical to `e0d6437`. Streak at
+      **seventeen consecutive phases.**
+- [x] PRODUCT.md byte-identical to `80189b4`. Streak at
+      **five consecutive phases.**
+- [x] `aivyx-core/src/lib.rs` byte-identical to `ba9a724`.
+      Streak at **six consecutive phases** (longest in
+      project history).
+- [x] Zero-new-dep streak holds.
+- [x] `docs/README.md` phase-status table reflects exit.
+- [x] `docs/ROADMAP.md` Phase 17 frozen, Phase 18 scaffold
+      refined.
+- [x] `docs/PRODUCT_ROADMAP.md` Daemon Migration milestone
+      updated.
+- [x] Prediction-versus-reality block recorded.
+- [x] Deferrals block recorded: fifteen items inherited,
+      three closed, four net-new (one carried forward from
+      Phase 16). Backlog at fifteen items.
+- [x] Phase 16 net-new deferral closure: 3 of 5 closed
+      (production lifecycle, auto-spawn, `daemon`
+      subcommand). Remaining 2 (Telegram port, regression-
+      test rewrite) carry forward.

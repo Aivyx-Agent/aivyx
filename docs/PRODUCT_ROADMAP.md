@@ -65,11 +65,20 @@ carries one turn end-to-end. All byte-identity streaks held; six
 architectural questions resolved with streak-preserving options.
 See [`docs/PHASE_16.md`](PHASE_16.md).
 
-**Phase 17 (Production Hardening):** converts the PoC into a
-production-ready daemon — lifecycle hardening, auto-spawn (P4.5),
-CLI integration, and regression-test rewrite over IPC. Subsequent
-phases port `aivyx-telegram` and any other shipped adapters behind
-the IPC boundary.
+**Phase 17 (Production Hardening, 2026-04-16):** converted
+the PoC into a production-ready daemon substrate: multi-turn
+session server with graceful shutdown via `CancellationToken`,
+`daemon run` subcommand with full agent-stack wiring (CliMode
+enum refactor), and a multi-turn client library (`DaemonSession`)
+with `spawn_daemon_and_wait` auto-spawn logic. Closed 3 of 5
+Phase 16 net-new deferrals. All byte-identity streaks held;
+production-core streak at six consecutive phases (longest in
+project history). See [`docs/PHASE_17.md`](PHASE_17.md).
+
+**Next:** REPL-mode frontend wiring (default `aivyx` invocation
+auto-spawns and connects via `DaemonSession`), then Telegram
+adapter port behind the IPC boundary. Subsequent phases
+complete the migration for all shipped adapters.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 

@@ -192,43 +192,53 @@ that the production-core streak would "probably break"
 was wrong; every mitigation argument held. Test delta
 +14 (519→533). Zero new workspace dependencies.
 
-## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N) (active)
+## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N) (frozen)
 
-**Active — see [PHASE_17.md](PHASE_17.md).** Opened
-2026-04-16 as the second phase of the **Daemon
-Migration keystone**. Converts the Phase 16 PoC
-daemon into a production-ready daemon: multi-turn
-session support, graceful shutdown on signal, auto-
-spawn (P4.5), `daemon` subcommand in the binary, and
-a representative subset of the existing integration
-tests rewritten to run over the IPC boundary. Targets
-closing at least three of Phase 16's five net-new
-deferrals (production lifecycle, auto-spawn, CLI
-integration). The production-core streak faces its
-strongest test — multi-turn session management and
-auto-spawn lifecycle are the most likely mechanisms
-for a trait-level `ChannelContext` change, but the
-Phase 16 `IpcChannelBridge` pattern provides strong
-mitigation. Q-block (Q1–Q6) settles production
-concerns (session management, multi-connection,
-auto-spawn mechanics, graceful shutdown, CLI surface,
-test strategy) rather than protocol concerns.
+**Frozen — see [PHASE_17.md](PHASE_17.md).** Opened
+and exited 2026-04-16 as the second phase of the
+**Daemon Migration keystone**. Delivered: (1) multi-
+turn daemon server with graceful shutdown via
+`CancellationToken` (`daemon_server.rs`, Task 2);
+(2) `daemon run` subcommand with `CliMode` enum
+refactor and full agent-stack wiring (`aivyx.rs`,
+Task 3); (3) multi-turn client library with
+`DaemonSession` struct, `daemon_is_running` utility,
+and `spawn_daemon_and_wait` auto-spawn logic
+(`daemon_client.rs`, Task 4). All six Q-block
+questions resolved: Q1→(a), Q2→(a), Q3→(b), Q4→(a),
+Q5→(a), Q6→(c+). Closed 3 of 5 Phase 16 net-new
+deferrals (production lifecycle, auto-spawn, `daemon`
+subcommand). **All four byte-identity streaks held**
+— the production-core streak at six consecutive
+phases is the longest in project history. Test delta
++9 (533→542). Zero new workspace dependencies.
 
-## Phase 18 — shape TBD at Phase 17 exit
+## Phase 18 — shape TBD
 
-Phase 18's shape depends on Phase 17 outcomes. Three
-likely candidates: (a) **Daemon Migration phase 3 of
-N — Telegram adapter port**: move `aivyx-telegram`
-behind the IPC boundary, proving the protocol works
-for a non-interactive channel adapter. This is the
-default path if Phase 17 exits with a production-
-ready LocalChannel-over-daemon. (b) **Mission
-Primitive (P2)**: if the daemon is stable enough,
-the mission primitive becomes unblocked and may be
-more valuable than the Telegram port. (c) **A lighter
-phase** (capability-hygiene, rolling-deferral cleanup)
-if Phase 17 surfaces unexpected complexity that needs
-a cool-down before the next keystone phase.
+Phase 17 exited with a production-ready daemon
+substrate (multi-turn, graceful shutdown, auto-spawn,
+CLI entry point). Four likely candidates for Phase 18:
+
+(a) **Daemon Migration phase 3 of N — REPL-mode
+frontend over IPC**: wire the default `aivyx`
+invocation to auto-spawn a daemon, connect via
+`DaemonSession`, and enter an interactive REPL
+loop rendering `StreamEvent`s via `render_for_cli()`.
+This is the minimal remaining work to make the
+daemon path the default LocalChannel experience.
+
+(b) **Daemon Migration phase 3 of N — Telegram
+adapter port**: move `aivyx-telegram` behind the
+IPC boundary, proving the protocol works for a
+non-interactive channel adapter.
+
+(c) **Mission Primitive (P2)**: the daemon substrate
+is now stable enough to support long-running work
+items. May be more valuable than the Telegram port.
+
+(d) **A lighter phase** (capability-hygiene,
+rolling-deferral cleanup, `daemon status`/`stop`)
+if a cool-down is needed before the next keystone.
 
 **Multi-level sub-agent nesting** and the
 `CapabilitySet::grants` reflexivity + ▲-row doc-
