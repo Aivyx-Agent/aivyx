@@ -170,75 +170,65 @@ case (635 lines vs. 130); "lift private fns from
 the binary into the channel lib" is a confirmed
 reusable pattern rather than a one-shot trick.
 
-## Phase 16 — Daemon Migration: Protocol Settlement (phase 1 of N) (active)
+## Phase 16 — Daemon Migration: Protocol Settlement (phase 1 of N) (frozen)
 
-**Active — see [PHASE_16.md](PHASE_16.md).** Opened
-2026-04-16 as the first phase of the **Daemon
-Migration keystone** — the largest forward reshape
-on the product roadmap (P4 Daemon-Default
-Architecture), unblocked since Phase 13 and picked
-up from Phase 15 exit's conservative-scope
-recommendation rather than an aggressive "daemon
-end-to-end in one phase" shape. Goal is threefold:
-(1) settle the load-bearing IPC protocol shape in
-prose before any task hardens production code
-around a provisional choice (transport, wire
-format, framing, auth, auto-spawn), (2) land a PoC
-daemon + PoC LocalChannel-as-frontend with one
-roundtrip integration test proving the protocol
-round-trips a real turn, (3) pin Phase 17 scope
-from the observed PoC outcomes. Phase 16 is the
-**first phase in project history where the open
-doc explicitly names a streak break as an expected
-outcome** — the production-core `aivyx-core/src/
-lib.rs` streak is genuinely at risk for the first
-time since Phase 12, via three enumerated
-mechanisms (ChannelContext transport edits,
-StreamEvent daemon-lifecycle variant, ToolContext
-tool-IPC edits). DESIGN.md is at risk via D1
-(channel abstraction) and D3 (streaming); PRODUCT.
-md is **not** at risk by design because P4's
-load-bearing deliberate-silence on protocol choice
-is what Phase 16 exists to resolve in prose. The
-Q-block (Q1–Q6) is the phase's primary deliverable,
-with initial leans pinned at open time and
-resolved through Tasks 2–3.
+**Frozen — see [PHASE_16.md](PHASE_16.md).** Opened
+and closed 2026-04-16 as the first phase of the
+**Daemon Migration keystone** (P4 Daemon-Default
+Architecture). Delivered: (1) `docs/DAEMON_IPC.md`
+— the load-bearing IPC protocol specification
+(length-prefixed JSON over Unix domain sockets,
+`DaemonLifecycleEvent` as a separate message type,
+OS-user auth per P4.4); (2) a PoC daemon server
+(`daemon_server.rs`) + PoC client (`daemon_client.rs`)
++ one round-trip integration test proving the protocol
+carries one turn end-to-end over a real Unix socket;
+(3) three forward-investment helpers (`PROTOCOL_VERSION`
+constant, `default_socket_path()`, `render_for_cli()`).
+All six Q-block questions resolved: Q1→(a), Q2→(a),
+Q3→(a), Q4→(a), Q5→(a), Q6→(b). **All four byte-
+identity streaks held** — the open doc's prediction
+that the production-core streak would "probably break"
+was wrong; every mitigation argument held. Test delta
++14 (519→533). Zero new workspace dependencies.
 
-## Phase 17 — shape TBD at Phase 16 exit
+## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N)
 
-Phase 17's shape depends entirely on what the
-Phase 16 PoC uncovers about the IPC protocol
-choice. Three likely shapes, in order of
-expectation: (a) **Daemon Migration phase 2 of N —
-production hardening**: convert the PoC daemon to
-a real daemon lifecycle, port the Telegram
-adapter behind the IPC boundary, and settle any
-protocol footguns the PoC surfaced. This is the
-default path if Phase 16 exits with a working
-PoC and a roughly-right protocol shape. (b)
-**Protocol rework**: if the PoC reveals that the
-initial protocol lean was wrong (e.g. length-
-prefixed JSON fails under a streaming-tokens load
-that MessagePack would handle, or auto-spawn
-semantics require a lifecycle primitive the
-initial shape can't express), Phase 17 revisits
-the shape with the PoC as evidence before any
-production hardening. (c) **Mission Primitive**
-as a genuine alternative if Phase 16 exits with
-"the protocol question is settled but the
-Daemon Migration delivery is bigger than a
-second phase can hold, and we should ship
-something smaller to keep the streak discipline
-healthy." **Multi-level sub-agent nesting**
-remains on the candidate list as a light
-follow-up to Phase 14's net-new deferral but
-carries no urgency because the no-op-by-default
-failure mode is already correct. Any phase that
-picks up the Phase 13 Task 4 `CapabilitySet::
-grants` reflexivity investigation should also
-absorb Phase 15's net-new ▲-row doc-comment
-rewrite — the two items live in the same file
-and share the same "clarify D4/D5 corner cases"
-motivation, and scheduling them together saves
-one round of `aivyx-capability` regression
-scope.
+Phase 16 exited with a working PoC and a settled
+protocol shape — path (a) from the Phase 16 open
+doc's three-way scaffold. Phase 17 converts the PoC
+into a production-ready daemon. Likely scope:
+
+- **Daemon lifecycle hardening.** Graceful shutdown
+  on signal, crash detection from the frontend,
+  multi-connection support, in-flight turn replay
+  after restart.
+- **Auto-spawn (P4.5).** The frontend detects no
+  running daemon, spawns one transparently, and
+  connects. Phase 16 deferred this as Q6→(b).
+- **`daemon` subcommand + `--daemon` flag in the
+  binary.** The Phase 16 PoC lives at the library
+  level; Phase 17 wires it into the CLI.
+- **LocalChannel regression-test rewrite over IPC.**
+  The existing integration tests continue in-process
+  in Phase 16; Phase 17 rewrites them to run over
+  the daemon IPC boundary.
+
+Phase 17 is where the production-core streak faces
+its strongest test — multi-connection dispatch may
+require a transport-aware `ChannelContext` method
+(Q2 mechanism #1), and auto-spawn may require
+lifecycle primitives that the `StreamEvent` enum
+cannot carry without a new variant (Q4 mechanism #2).
+Phase 17's open doc should name these risks with the
+same honesty Phase 16's open doc did, and the same
+mitigation-first approach.
+
+**Multi-level sub-agent nesting** remains on the
+candidate list as a light follow-up to Phase 14's
+deferral but carries no urgency. Any phase that picks
+up the Phase 13 Task 4 `CapabilitySet::grants`
+reflexivity investigation should also absorb Phase 15's
+▲-row doc-comment rewrite — the two items live in the
+same file and scheduling them together saves one round
+of `aivyx-capability` regression scope.

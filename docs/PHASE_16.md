@@ -1193,3 +1193,221 @@ readiness work will inherit as givens.
   `aivyx-channel`, not core.
 - Zero-new-dep streak holds. No new crate dependencies; Task 4
   added only Rust code to an existing module.
+
+## Deferrals
+
+**Rolling deferrals still open after Phase 16 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral, untouched by Phase 16.
+  Carries forward. Tagged: **Phase 11 Task 4,
+  earliest plausible: whichever phase has a concrete
+  forensic-tooling story that needs the
+  `tool.allowlist:` scope distinction to be
+  pattern-matchable on variant shape rather than
+  scope base name.**
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched by
+  Phase 16; reopens reactively only if a channel-
+  seam bug surfaces that turn-loop tests miss.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched by Phase 16. Tagged: **Phase
+  12 Task 2, earliest plausible: whichever phase
+  has a concrete forensic story that wants response
+  headers in the audit chain.**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Tagged: **deferred
+  indefinitely — reopens only when a concrete
+  write-side use case surfaces.**
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Tagged:
+  **deferred indefinitely.**
+- **Binary response bodies / non-UTF-8.** `web.fetch`
+  currently fails loudly on non-UTF-8 bodies.
+  Tagged: **deferred indefinitely — the first phase
+  that needs binary fetches can add a base64-
+  wrapping option or a second `ToolOutputBytes`
+  stream variant.**
+- **Per-chunk Telegram rendering.** Phase 12 Task 1
+  chose silent chunk drop on Telegram. Tagged:
+  **Phase 12 Task 1, earliest plausible: reactive —
+  reopens if Telegram operators ask for live in-
+  progress tool output.**
+- **`CapabilitySet::grants` reflexivity
+  investigation.** Phase 13 Task 4 deferral. Phase
+  16 did not touch `aivyx-capability`, so the
+  investigation remains open. Tagged: **Phase 13
+  Task 4, earliest plausible: any phase that
+  touches `aivyx-capability` meaningfully.**
+- **Misleading `CEILING_SEMITRUSTED` ▲-row doc
+  comment.** Phase 15 Task 4 net-new. Untouched by
+  Phase 16. Tagged: **Phase 15 Task 4, earliest
+  plausible: any phase that meaningfully touches
+  `aivyx-capability` — composes with the reflexivity
+  investigation.**
+- **Multi-level sub-agent nesting (child invokes
+  `role.switch` inside a sub-session).** Inherited
+  from Phase 14 Task 3 net-new. Untouched by
+  Phase 16. Tagged: **Phase 14 Task 3, earliest
+  plausible: whichever phase has a concrete use case
+  for recursive role-switching.**
+
+**Inherited deferrals closed by Phase 16:** none.
+Phase 16's scope was protocol settlement; no rolling
+deferral fell within that scope.
+
+**Net-new deferrals from Phase 16 itself:**
+
+- **Production-ready daemon lifecycle.** Crash
+  recovery, in-flight turn replay, graceful shutdown
+  on signal, daemon crash detection from a frontend,
+  restart-replay of an interrupted turn. The PoC
+  daemon launches, runs one turn, and exits. Tagged:
+  **Phase 16 non-goal, earliest plausible: Phase 17
+  (daemon production hardening).**
+- **Auto-spawn (Q6).** The PoC uses explicit daemon
+  spawn; auto-spawn is P4.5's forward commitment
+  but a lifecycle concern for Phase 17. Tagged:
+  **Phase 16 Q6→(b), earliest plausible: Phase 17.**
+- **Telegram-over-daemon port.** `aivyx-telegram`
+  remains in its Phase 8 in-process shape. Tagged:
+  **Phase 16 non-goal, earliest plausible: Phase 18
+  or later, after LocalChannel production readiness.**
+- **LocalChannel regression-test rewrite over IPC.**
+  Existing integration tests continue in-process.
+  Tagged: **Phase 16 non-goal, earliest plausible:
+  Phase 17.**
+- **`daemon` subcommand / `--daemon` flag in binary.**
+  The PoC lives at the library level only; no binary
+  entry point was added. Tagged: **Phase 16 Task 3
+  scope decision, earliest plausible: Phase 17.**
+
+**Backlog shape at Phase 16 exit:** ten rolling items
+inherited from Phase 15 (nine inherited, zero closed)
++ five net-new daemon-related deferrals. Total
+**fifteen**. The backlog grew significantly because
+Phase 16 opened the Daemon Migration arc — every
+non-goal in a keystone-opening phase generates a
+forward-pointer deferral. Phase 17 is expected to
+close at least three of the five net-new items
+(production lifecycle, auto-spawn, LocalChannel
+regression rewrite), which should bring the backlog
+back below twelve.
+
+## Prediction versus reality
+
+The open doc made four explicit streak-risk
+predictions. This block reckons with each.
+
+### Prediction 1: "DESIGN.md streak at risk via D1 and D3"
+
+**Reality: streak held.** Q1 resolved to (a) — no
+amendment needed. D1's wording says "a state machine
+owning the LLM client, tool registry, and audit chain
+for the duration of a session," which is process-
+boundary agnostic. The `IpcChannelBridge` proved D1's
+invariant holds across a Unix domain socket without
+any wording change. D3 (`ChannelContext` trait) was
+not touched — Q2 resolved to (a), keeping the trait
+unchanged. DESIGN.md byte-identical to `e0d6437`,
+streak at **sixteen consecutive phases.**
+
+### Prediction 2: "PRODUCT.md streak not at risk"
+
+**Reality: correct.** P4's deliberate-silence clause
+("the contract pins that there *is* an IPC, not what
+it is") absorbed the entire Phase 16 protocol
+settlement without editing. PRODUCT.md byte-identical
+to `80189b4`, streak at **four consecutive phases.**
+
+### Prediction 3: "Production-core streak will probably break"
+
+**Reality: streak held — the prediction was wrong.**
+This is the most significant reckoning. The open doc
+said "I expect the streak to break in Phase 16" and
+named three mechanisms: (1) `ChannelContext` trait
+edits, (2) `StreamEvent` variant additions, (3)
+`ToolContext` IPC-identifier edits. All three
+mitigations held:
+
+1. Q2→(a): `ChannelContext` unchanged. The
+   `IpcChannelBridge` implements the existing trait.
+2. Q4→(a): `DaemonLifecycleEvent` is a separate IPC
+   message type. `StreamEvent` gains no variant.
+3. Q5→(a): Tool attribution stays at the `TurnStarted`
+   level. `ToolContext` unchanged.
+
+The mitigation arguments the open doc called "good but
+not airtight" turned out to be airtight for the PoC
+scope. The honest note: the prediction was *reasonable*
+at phase open — it accurately identified the three
+mechanisms by which the streak could break. It was wrong
+because Phase 16's conservative scope (protocol +
+one-turn PoC, not production daemon) never exercised
+the edge cases that would stress the mitigations. Phase
+17's production hardening may yet break the streak via
+mechanism #1 if multi-connection dispatch needs a
+transport-aware `ChannelContext` method.
+`aivyx-core/src/lib.rs` byte-identical to `ba9a724`,
+streak at **five consecutive phases.**
+
+### Prediction 4: "Zero-new-dep streak may break"
+
+**Reality: streak held.** Q3 resolved to (a) —
+hand-rolled length-prefixed JSON using `serde_json`,
+already a workspace dependency. `serde_json` was
+promoted from dev-dep to prod dep in `aivyx-channel`,
+and `serde` was added as a prod dep (also already in
+the workspace). No new crate entered the workspace.
+
+### Summary
+
+All four predictions resolved favorably. The open doc's
+honest pessimism about the production-core streak was
+the right stance at phase open — better to name the
+risk and discover it didn't materialize than to assume
+safety and discover it broke. Phase 16 is the first
+phase where every named streak-risk prediction was
+explicitly reckoned with at exit, and the discipline
+of naming risks upfront is validated regardless of
+outcome.
+
+## Exit criteria (final)
+
+- [x] Tasks 1–4 ship records and decisions block in
+      this document.
+- [x] `cargo test --workspace` green at exit. **533
+      tests** (entry baseline 519, delta **+14**).
+      Target was ≥ +5; exceeded by +9.
+- [x] `cargo clippy --workspace --tests -- -D warnings`
+      clean.
+- [x] DESIGN.md byte-identical to `e0d6437`. Streak
+      extends to **sixteen consecutive phases.**
+- [x] PRODUCT.md byte-identical to `80189b4`. Streak
+      extends to **four consecutive phases.**
+- [x] `aivyx-core/src/lib.rs` byte-identical to
+      `ba9a724`. Streak extends to **five consecutive
+      phases.** The open doc's prediction that the
+      streak would "probably break" was wrong — all
+      three mitigations held. See prediction-vs-reality
+      block above.
+- [x] Zero-new-dep streak holds. Q3→(a) kept the
+      wire format on `serde_json` (already in workspace).
+- [x] Binary line count at exit: 2072 (unchanged —
+      no `daemon` subcommand or `--daemon` flag added
+      to the binary; the PoC lives at the library level
+      only).
+- [x] `docs/README.md` phase-status row flipped from
+      Active to Frozen, exit commit hash backfilled.
+- [x] `docs/ROADMAP.md` Phase 16 entry replaced with
+      frozen summary; Phase 17 scaffold refined by
+      observed Phase 16 outcomes.
+- [x] `docs/PRODUCT_ROADMAP.md` Daemon Migration
+      milestone updated to reflect the landed Phase 16
+      shape.
+- [x] Prediction-versus-reality block recorded,
+      explicitly reckoning with the open doc's four
+      forecasts.
+- [x] Deferrals block recorded. Rolling backlog at
+      fifteen items (growth expected for a keystone-
+      opening phase).

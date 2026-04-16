@@ -51,14 +51,25 @@ runs as a one-shot per-channel process; the daemon milestone moves
 state ownership (redb, audit chain, role registry, capability
 ceiling) into a long-lived background process and reshapes every
 existing channel adapter into a thin frontend that auto-attaches
-to the running daemon over a local IPC socket. The migration is
-expected to span one or more dedicated phases — the first phase
-likely lands the daemon process and a single auto-attaching
-frontend (probably `LocalChannel`), with subsequent phases
-porting `aivyx-telegram` and any other shipped adapters. The
-shape of the IPC protocol is the load-bearing design decision
-this milestone has to settle, because P5 (channel SDK) and P12
-(tool IPC) both consume it.
+to the running daemon over a local IPC socket. The migration spans
+multiple dedicated phases. The shape of the IPC protocol is the
+load-bearing design decision this milestone had to settle first,
+because P5 (channel SDK) and P12 (tool IPC) both consume it.
+
+**Phase 16 (Protocol Settlement, 2026-04-16):** settled the IPC
+protocol shape — length-prefixed JSON frames over Unix domain
+sockets, `DaemonLifecycleEvent` as a separate message type from
+`StreamEvent`, OS-user auth per P4.4. Landed a PoC daemon server +
+client + one round-trip integration test proving the protocol
+carries one turn end-to-end. All byte-identity streaks held; six
+architectural questions resolved with streak-preserving options.
+See [`docs/PHASE_16.md`](PHASE_16.md).
+
+**Phase 17 (Production Hardening):** converts the PoC into a
+production-ready daemon — lifecycle hardening, auto-spawn (P4.5),
+CLI integration, and regression-test rewrite over IPC. Subsequent
+phases port `aivyx-telegram` and any other shipped adapters behind
+the IPC boundary.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 
