@@ -38,6 +38,7 @@ mod render;
 mod role_envelope;
 mod role_render;
 mod session;
+pub mod telegram_daemon_frontend;
 
 pub use local::LocalChannel;
 pub use render::{render_finalize, render_stream_event, RenderMode};

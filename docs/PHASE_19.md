@@ -580,3 +580,26 @@ Same shape as Phase 14–18 exit freezes:
     correct platform and trust tier.
 - **Test count:** 550 (548 + 2 new). Target met.
 - **Clippy:** clean.
+
+## Task 4 ship record
+
+Task 4 used the working-session slot for **binary line-count
+management** — the triggered candidate (2521 > 2400 threshold).
+
+- **Extracted:** `TelegramDaemonChannel`, `run_telegram_daemon_
+  multi_session`, `run_telegram_daemon_chat_task`, and
+  `render_events_for_telegram` from `aivyx.rs` into a new
+  `aivyx-channel/src/telegram_daemon_frontend.rs` (285 lines).
+- **Binary:** 2521 → 2262 lines (259 lines removed, under the
+  2400 threshold).
+- **Library module:** `telegram_daemon_frontend` registered in
+  `lib.rs` as `pub mod`, re-exported `TelegramDaemonChannel`
+  and `run_telegram_daemon_multi_session`.
+- **No new tests.** Pure extraction — same 550 tests pass, same
+  clippy clean.
+- **Other candidates reviewed and deferred:**
+  - Trust-tier enforcement: already covered by
+    `mixed_local_and_telegram_frontends_on_same_daemon` e2e test
+    + `ConcreteAgent::turn` line 176 intersection.
+  - Edge cases: connection crash cleanup covered by EOF check;
+    session ID isolation proven by `two_concurrent_connections`.
