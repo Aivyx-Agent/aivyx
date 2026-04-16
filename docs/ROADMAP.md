@@ -235,27 +235,38 @@ six, production-core at seven (longest in project
 history), zero-new-dep. Test delta +4 (542→546).
 Closed the REPL-mode-over-IPC deferral from Phase 17.
 
-## Phase 19 — shape TBD at Phase 18 exit
+## Phase 19 — Daemon Migration: Multi-Connection + Telegram Port (phase 4 of N) (active)
 
-Phase 18 closed the REPL-mode frontend wiring. The
-daemon is now the default LocalChannel path with
-in-process fallback. Three likely candidates for
-Phase 19:
+**Active — see [PHASE_19.md](PHASE_19.md).** Opened
+2026-04-16 as the fourth phase of the **Daemon
+Migration keystone**. Upgrades the daemon from single-
+connection to multi-connection (task-per-connection),
+then ports the Telegram adapter behind the IPC
+boundary. By Phase 19 exit, the daemon accepts
+concurrent frontends (CLI + Telegram) and
+`aivyx --channel telegram` auto-attaches to the daemon
+the same way `aivyx --channel local` does. Q-block
+(Q1–Q5) settles multi-connection dispatch, Telegram
+turn submission, event rendering, frontend-type
+awareness, and per-connection channel construction.
 
-(a) **Daemon Migration phase 4 of N — Telegram
-adapter port**: move `aivyx-telegram` behind the
-IPC boundary, proving the protocol works for a
-non-interactive, long-polling channel adapter.
+## Phase 20 — shape TBD at Phase 19 exit
 
-(b) **Mission Primitive (P2)**: once the daemon is the
-default local path, long-running work items become
+Phase 19 ports the second adapter behind the daemon.
+Likely candidates for Phase 20:
+
+(a) **Mission Primitive (P2)**: with both adapters
+behind the daemon, long-running work items become
 the natural next product-shape primitive.
 
-(c) **A lighter phase** (capability-hygiene,
+(b) **A lighter phase** (capability-hygiene,
 rolling-deferral cleanup, `daemon status`/`stop`,
-multi-connection, daemon-mode banner parity) if the
-sixteen-item deferral backlog warrants a dedicated
-cleanup pass.
+daemon-mode banner parity) if the deferral backlog
+warrants a dedicated cleanup pass.
+
+(c) **Channel SDK Surface (P5)**: with two adapters
+behind the daemon, the adapter surface is concrete
+enough to extract into a documented SDK contract.
 
 **Multi-level sub-agent nesting** and the
 `CapabilitySet::grants` reflexivity + ▲-row doc-
