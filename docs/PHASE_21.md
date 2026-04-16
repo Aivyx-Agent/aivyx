@@ -224,6 +224,30 @@ Update `docs/DAEMON_IPC.md` with the new message types.
 **Estimated streak risk:** DESIGN.md — low (IPC extensions
 are additive). Production-core — none.
 
+## Task 5 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_ipc.rs` (+55):
+  `FrontendMessage::ResolveGate` variant,
+  `DaemonMessage::MissionCreated` / `MissionStateChanged` /
+  `GateResolved` variants,
+  `StreamEventPayload::ApprovalGate` variant with
+  `render_for_cli` implementation,
+  `DaemonEnvelope` mission variants,
+  round-trip test cases for all new variants (within existing
+  test functions), 2 new `render_for_cli` tests.
+- `crates/aivyx-channel/src/daemon_server.rs` (+3):
+  `ResolveGate` stub arm in `handle_connection` (wired in
+  Task 6).
+- `crates/aivyx-channel/src/telegram_daemon_frontend.rs` (+10):
+  `ApprovalGate` rendering arm in Telegram message builder.
+- `docs/DAEMON_IPC.md` (+5): `ResolveGate`, `MissionCreated`,
+  `MissionStateChanged`, `GateResolved`, `ApprovalGate`
+  documented in protocol spec tables.
+
+**Test delta:** 590 → 592 (+2).
+**All three byte-identity streaks held.**
+
 ### Task 6 — `MissionCreateTool` + daemon mission registry
 
 Implement `MissionCreateTool` as an infrastructure tool in

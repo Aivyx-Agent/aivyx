@@ -74,6 +74,7 @@ JSON object with a `"type"` discriminator field.
 | `StartSession`   | `role: Option<String>`          | Request a new session under the named role (or default).  |
 | `SubmitInput`    | `session_id: String`, `text: String` | Send one user input line to the named session.       |
 | `CancelTurn`     | `session_id: String`            | Request cancellation of the in-flight turn.              |
+| `ResolveGate`    | `mission_id: String`, `gate_id: String`, `approved: bool` | Operator resolves a pending mission approval gate. |
 | `Disconnect`     | *(none)*                        | Graceful frontend disconnect. Daemon may keep the session alive. |
 
 #### `DaemonMessage` (daemon → frontend)
@@ -84,6 +85,9 @@ JSON object with a `"type"` discriminator field.
 | `StreamEvent`     | `session_id: String`, `event: StreamEventPayload` | One streamed event from the turn loop.          |
 | `TurnComplete`    | `session_id: String`, `outcome: String` | Terminal frame for a turn. `outcome` is human-readable.    |
 | `Error`           | `code: String`, `message: String`     | Protocol-level or session-level error.                       |
+| `MissionCreated`  | `mission_id: String`                  | Acknowledges mission creation.                               |
+| `MissionStateChanged` | `mission_id: String`, `state: String` | Mission transitioned to a new state.                      |
+| `GateResolved`    | `mission_id: String`, `gate_id: String`, `approved: bool` | Gate resolution confirmed.                    |
 
 #### `DaemonLifecycleEvent` (daemon → frontend, separate from `DaemonMessage`)
 
@@ -116,6 +120,7 @@ that converts to/from the core type at the process boundary.
 | `ToolCallStarted`    | `tool_id: String`, `tool_name: String`, `input: Value` |
 | `ToolCallFinished`   | `tool_id: String`, `tool_name: String`, `outcome_summary: String` |
 | `ToolOutput`         | `tool_id: String`, `tool_name: String`, `chunk: String` |
+| `ApprovalGate`       | `mission_id: String`, `gate_id: String`, `reason: String`, `scope: Option<String>` |
 
 `Attachment` is excluded from the Phase 16 PoC. Binary payloads
 over JSON require base64 encoding; the complexity is deferred to a

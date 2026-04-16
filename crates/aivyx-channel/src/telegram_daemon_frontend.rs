@@ -274,6 +274,19 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
                 buf.push('\n');
             }
             StreamEventPayload::ToolOutput { .. } => {}
+            StreamEventPayload::ApprovalGate {
+                mission_id,
+                gate_id,
+                reason,
+                ..
+            } => {
+                if !buf.is_empty() && !buf.ends_with('\n') {
+                    buf.push('\n');
+                }
+                buf.push_str(&format!(
+                    "⚑ APPROVAL GATE [{mission_id}/{gate_id}]: {reason}\n"
+                ));
+            }
         }
     }
 

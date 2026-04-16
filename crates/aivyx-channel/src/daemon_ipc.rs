@@ -82,6 +82,11 @@ pub enum FrontendMessage {
     CancelTurn {
         session_id: String,
     },
+    ResolveGate {
+        mission_id: String,
+        gate_id: String,
+        approved: bool,
+    },
     Disconnect,
     Shutdown,
 }
@@ -107,6 +112,18 @@ pub enum DaemonMessage {
     Error {
         code: String,
         message: String,
+    },
+    MissionCreated {
+        mission_id: String,
+    },
+    MissionStateChanged {
+        mission_id: String,
+        state: String,
+    },
+    GateResolved {
+        mission_id: String,
+        gate_id: String,
+        approved: bool,
     },
 }
 
@@ -149,6 +166,12 @@ pub enum StreamEventPayload {
         tool_name: String,
         chunk: String,
     },
+    ApprovalGate {
+        mission_id: String,
+        gate_id: String,
+        reason: String,
+        scope: Option<String>,
+    },
 }
 
 impl StreamEventPayload {
@@ -173,6 +196,21 @@ impl StreamEventPayload {
                 ..
             } => format!("  ← {tool_name} {outcome_summary}\n"),
             StreamEventPayload::ToolOutput { chunk, .. } => chunk.clone(),
+            StreamEventPayload::ApprovalGate {
+                mission_id,
+                gate_id,
+                reason,
+                scope,
+            } => {
+                let scope_str = scope
+                    .as_deref()
+                    .map(|s| format!(" (scope: {s})"))
+                    .unwrap_or_default();
+                format!(
+                    "\n  ⚑ APPROVAL GATE [{mission_id}/{gate_id}]: \
+                     {reason}{scope_str}\n"
+                )
+            }
         }
     }
 }
@@ -267,6 +305,19 @@ pub enum DaemonEnvelope {
         code: String,
         message: String,
     },
+    // Mission variants (Phase 21)
+    MissionCreated {
+        mission_id: String,
+    },
+    MissionStateChanged {
+        mission_id: String,
+        state: String,
+    },
+    GateResolved {
+        mission_id: String,
+        gate_id: String,
+        approved: bool,
+    },
     // DaemonLifecycleEvent variants
     DaemonReady {
         version: String,
@@ -304,6 +355,16 @@ mod tests {
             },
             FrontendMessage::CancelTurn {
                 session_id: "abc-123".into(),
+            },
+            FrontendMessage::ResolveGate {
+                mission_id: "m-001".into(),
+                gate_id: "g-001".into(),
+                approved: true,
+            },
+            FrontendMessage::ResolveGate {
+                mission_id: "m-001".into(),
+                gate_id: "g-002".into(),
+                approved: false,
             },
             FrontendMessage::Disconnect,
             FrontendMessage::Shutdown,
@@ -346,6 +407,18 @@ mod tests {
             DaemonMessage::Error {
                 code: "internal".into(),
                 message: "something broke".into(),
+            },
+            DaemonMessage::MissionCreated {
+                mission_id: "m-001".into(),
+            },
+            DaemonMessage::MissionStateChanged {
+                mission_id: "m-001".into(),
+                state: "Running".into(),
+            },
+            DaemonMessage::GateResolved {
+                mission_id: "m-001".into(),
+                gate_id: "g-001".into(),
+                approved: true,
             },
         ];
         for msg in cases {
@@ -462,6 +535,18 @@ mod tests {
                 tool_name: "web.fetch".into(),
                 chunk: "<html>...".into(),
             },
+            StreamEventPayload::ApprovalGate {
+                mission_id: "m-001".into(),
+                gate_id: "g-001".into(),
+                reason: "deploy to production?".into(),
+                scope: Some("shell.exec".into()),
+            },
+            StreamEventPayload::ApprovalGate {
+                mission_id: "m-002".into(),
+                gate_id: "g-010".into(),
+                reason: "proceed with analysis?".into(),
+                scope: None,
+            },
         ];
         for payload in cases {
             let json = serde_json::to_string(&payload).expect("serialize");
@@ -548,5 +633,33 @@ mod tests {
         let rendered = payload.render_for_cli();
         assert!(rendered.starts_with("  ← memory.read"), "got: {rendered}");
         assert!(rendered.contains("3 entries"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_for_cli_approval_gate_with_scope() {
+        let payload = StreamEventPayload::ApprovalGate {
+            mission_id: "m-001".into(),
+            gate_id: "g-001".into(),
+            reason: "deploy to production?".into(),
+            scope: Some("shell.exec".into()),
+        };
+        let rendered = payload.render_for_cli();
+        assert!(rendered.contains("APPROVAL GATE"), "got: {rendered}");
+        assert!(rendered.contains("m-001/g-001"), "got: {rendered}");
+        assert!(rendered.contains("deploy to production?"), "got: {rendered}");
+        assert!(rendered.contains("scope: shell.exec"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_for_cli_approval_gate_without_scope() {
+        let payload = StreamEventPayload::ApprovalGate {
+            mission_id: "m-002".into(),
+            gate_id: "g-010".into(),
+            reason: "proceed?".into(),
+            scope: None,
+        };
+        let rendered = payload.render_for_cli();
+        assert!(rendered.contains("m-002/g-010"), "got: {rendered}");
+        assert!(!rendered.contains("scope:"), "got: {rendered}");
     }
 }
