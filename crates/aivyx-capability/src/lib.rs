@@ -551,13 +551,20 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
     ])
 });
 
-/// Tier 2 — SemiTrusted. Per D5 table: ▲ rows are omitted from the unqualified
-/// ceiling; an agent holding the corresponding *qualified* scope will still
-/// match via intersection, but holding bare `fs.write` will not.
+/// Tier 2 — SemiTrusted. Per D5 table:
 ///
-/// ⊘ rows: fs.delete, shell.exec, shell.spawn, config.write
-/// ▲ rows (omitted from unqualified ceiling): fs.read, fs.write, net.post,
-/// memory.forget, channel.send, channel.receive, audit.read
+/// **⊘ rows** (hard-denied — no form survives intersection):
+/// `fs.delete`, `shell.exec`, `shell.spawn`, `config.write`, `role.switch`.
+///
+/// **▲ rows** (conditionally granted — the *unqualified* form is omitted from
+/// this ceiling, so a held *unqualified* scope like bare `fs.write` is denied.
+/// A held *qualified* scope like `fs.write:/sandbox/**` survives intersection
+/// only if the ceiling also holds a pattern that grants it per D4 rules 1–4.
+/// Since this ceiling carries no entry for the ▲ bases at all, qualified forms
+/// also fail intersection — the ▲ scopes are effectively denied unless a
+/// future ceiling revision adds narrow qualified grants here):
+/// `fs.read`, `fs.write`, `net.post`, `memory.forget`, `channel.send`,
+/// `channel.receive`, `audit.read`.
 static CEILING_SEMITRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
     caps(&[
         "fs.metadata",
@@ -1130,6 +1137,29 @@ mod tests {
         // Kernel holds every KNOWN_BASES entry including this
         // one — the `ceiling_kernel_grants_everything` invariant.
         assert!(TrustTier::Kernel.default_ceiling().grants(&s("role.switch")));
+    }
+
+    // ---- Reflexivity: grants(&self, &self) ----
+
+    #[test]
+    fn grants_is_reflexive_for_all_practical_scope_forms() {
+        let cases = [
+            "fs.read",
+            "fs.write:/home/julian/**",
+            "net.fetch:https://example.com/api",
+            "shell.exec:git,ls,cat",
+            "memory.read:scope:public:*",
+            "llm.call",
+            "audit.read:public",
+        ];
+        for raw in &cases {
+            let scope = s(raw);
+            let set = CapabilitySet::from_scopes([scope.clone()]);
+            assert!(
+                set.grants(&scope),
+                "grants must be reflexive for {raw}",
+            );
+        }
     }
 
     // ---- End-to-end: D1 scenario 3 ("rm -rf from Telegram") ----

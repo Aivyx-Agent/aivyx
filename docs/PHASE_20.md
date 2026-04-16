@@ -325,6 +325,39 @@ only, covered by existing integration tests).
 **Binary line count:** 2453 → 2463.
 **All three byte-identity streaks held.**
 
+## Task 6 ship record
+
+**Reflexivity finding: `grants(&self, &self)` is reflexive for
+all practically-occurring scopes.** The proof walks five
+qualifier dispatch paths: unqualified (rule 2, trivially true),
+URL prefix (same origin + same path), path glob (`glob_matches`
+with identical pattern/candidate), allowlist (same set is a
+subset of itself), and simple glob. One theoretical counter-
+example exists: a qualifier containing glob metacharacters
+intended literally (e.g. `fs.read:/home/[user]/**`) would fail
+because `globset` interprets `[user]` as a character class that
+does not match the literal string `[user]`. No real tool or role
+definition produces such a scope, so reflexivity holds in
+practice. Pinned with a 7-case test.
+
+**Doc-comment fix:** Rewrote the `CEILING_SEMITRUSTED` doc
+comment. The old phrasing ("an agent holding the corresponding
+qualified scope will still match via intersection") was
+misleading — it implied qualified ▲-row scopes survive
+intersection, when in fact they do not because the ceiling
+carries no entry for ▲ bases at all. The rewrite separates
+⊘ rows (hard-denied) from ▲ rows (conditionally granted) and
+explains precisely how each interacts with D4 rules 1–4.
+
+**Files modified:**
+- `crates/aivyx-capability/src/lib.rs` (+27): Rewritten
+  `CEILING_SEMITRUSTED` doc comment (⊘ vs ▲ semantics),
+  `grants_is_reflexive_for_all_practical_scope_forms` test
+  covering 7 qualifier forms.
+
+**Test delta:** 568 → 569 (+1).
+**All three byte-identity streaks held.**
+
 ## Deferrals targeted for closure
 
 | # | Item | Origin | Target task |
