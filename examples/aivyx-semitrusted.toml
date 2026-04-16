@@ -1,0 +1,228 @@
+# Aivyx — SemiTrusted-focused worked example (Phase 15 Task 4)
+#
+# This is the companion to `examples/aivyx.toml`, which teaches
+# the **Trusted-tier** attenuation story. This file teaches the
+# **SemiTrusted-tier ▲-row footgun**: what happens to roles that
+# declare `fs.read` / `fs.write` (bare or path-qualified) when
+# they run under `CEILING_SEMITRUSTED`. It is meant to be
+# copied, edited, and pointed at a real Telegram (or future
+# lower-tier) channel once those adapters land.
+#
+# ----------------------------------------------------------------
+# Why a separate file instead of extending aivyx.toml
+# ----------------------------------------------------------------
+#
+# The Trusted example (aivyx.toml) is a role tree teaching
+# D4 Rule 2 (unqualified-held grants qualified-needed): a
+# `default` root declaring unqualified `fs.read` lets children
+# declare qualified `fs.read:<path>` forms that survive the
+# config-load-time attenuation check. That teaching point
+# requires every descendant to run at `Trusted` so the ceiling
+# doesn't interfere with the inheritance story.
+#
+# This file teaches the opposite path: **D4 Rule 1 ("bases
+# must match exactly") combined with the SemiTrusted ceiling's
+# missing ▲-row bases**. The two teaching points compose badly
+# in one file (the SemiTrusted ceiling's harsh base absence
+# would shadow the Trusted inheritance teaching), so they live
+# in two files that can be run through `--print-role`
+# independently.
+#
+# ----------------------------------------------------------------
+# Required top-level sections (minimal — no real secrets)
+# ----------------------------------------------------------------
+#
+# Loads via `LoadOptions { require_api_key: false,
+# require_telegram_token: false, .. }`, same shape as
+# `aivyx.toml`. The path-qualified fs scopes below use
+# `/tmp/notes` as a stand-in; a real deployment would point at
+# whatever directory a Telegram-attached note-taker should be
+# allowed to touch, under the operator's
+# `AIVYX_FS_ROOT`/`fs.root` setting.
+#
+# ----------------------------------------------------------------
+# The ▲-row footgun, concretely
+# ----------------------------------------------------------------
+#
+# `CEILING_SEMITRUSTED` in `crates/aivyx-capability/src/lib.rs`
+# holds only these eight bases:
+#
+#   fs.metadata, net.fetch, net.dns,
+#   llm.call, llm.embed,
+#   memory.read, memory.write,
+#   config.read
+#
+# Notice what's missing: **`fs.read`, `fs.write`, `net.post`,
+# `memory.forget`, `channel.send`, `channel.receive`, and
+# `audit.read`**. These are the ▲-rows from the D5 table —
+# bases the tier *may* grant, but only under an explicit
+# operator override, not by default.
+#
+# The footgun is D4 Rule 1 ("bases must match exactly"). When a
+# role declares `fs.read:/tmp/notes/**`, the intersection walk
+# looks for any ceiling scope with base `fs.read`. The
+# SemiTrusted ceiling has none. Rule 1 short-circuits the check
+# before the qualifier rules (Rule 2, Rule 3, Rule 4) even run.
+# `fs.metadata` is a *different base*, not a parent of `fs.read`,
+# so it does not rescue the scope either.
+#
+# The practical consequence: **path-qualification does not rescue
+# fs.read/fs.write at SemiTrusted.** The scope is dropped whether
+# declared as bare `fs.read`, `fs.read:/tmp/notes/**`, or any
+# other qualifier shape. The only ways to grant fs access to a
+# SemiTrusted role are:
+#
+#   1. Move the role up to `Trusted` (probably wrong — defeats
+#      the point of the lower tier).
+#   2. Declare an operator ceiling override that adds `fs.read`
+#      to the SemiTrusted ceiling for *this* specific
+#      deployment. (Override syntax is deferred to a future
+#      phase — not yet in the config schema.)
+#
+# Both example roles below run at SemiTrusted. Both lose their
+# filesystem surface. The difference between them is
+# `telegram_researcher` still declares a `net.fetch` scope and
+# keeps its web-fetch allowance (because `net.fetch` *is* in the
+# ceiling unqualified, so D4 Rule 2 lets the qualified form
+# through); `telegram_footgun` declares no net.fetch at all and
+# ends up with only memory scopes. Running `--print-role`
+# against either role surfaces the missing fs scopes in the
+# "dropped" section so the operator discovers the surprise
+# before they discover it in production.
+#
+# The Phase 15 Task 4 integration test at
+# `crates/aivyx-channel/tests/semitrusted_example_e2e.rs` pins
+# all of this mechanically: if a future ceiling edit ever adds
+# `fs.read` or `fs.write` back to `CEILING_SEMITRUSTED`, the
+# test fails loud and the teaching comments here need a rewrite.
+
+# ----------------------------------------------------------------
+# Worked roles
+# ----------------------------------------------------------------
+
+# `default` is the root of the inheritance forest. It runs at
+# `Trusted` — a common operator pattern is "my default role is
+# trusted for local use, and I declare lower-tier children that
+# override the ceiling for their specific channel." Declaring
+# unqualified fs scopes here is *safe* because the Trusted
+# ceiling holds both bases unqualified, so every declared scope
+# survives intersection. The trouble only starts when a child
+# at a lower tier tries to inherit them.
+[[role]]
+name = "default"
+system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+capability_scopes = [
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "fs.read",
+  "fs.write",
+  "net.fetch",
+]
+trust_ceiling = "Trusted"
+
+# `telegram_researcher` is the **declared-carefully** SemiTrusted
+# role. An operator migrating from the Trusted example would
+# reach for path-qualification here, following the shape that
+# works in `aivyx.toml`:
+#
+#   fs.read:/tmp/notes/**   ← "narrow grant, should survive"
+#
+# It does not survive. `CEILING_SEMITRUSTED` has no `fs.read`
+# base at any qualifier form, so D4 Rule 1 short-circuits the
+# intersection before the qualifier rules run. The same fate
+# applies to `fs.write:/tmp/notes/**`.
+#
+# What **does** survive the intersection (pinned in
+# `semitrusted_example_e2e.rs::semitrusted_example_telegram_
+# researcher_envelope_demonstrates_base_absence`):
+#
+#   telegram_researcher_declared
+#     ∩ default_declared
+#     ∩ CEILING_SEMITRUSTED
+#   =
+#     [memory.read,
+#      memory.write,
+#      net.fetch:url-prefix:https://en.wikipedia.org/]
+#
+# The `net.fetch:...` scope survives because the ceiling holds
+# unqualified `net.fetch`, so D4 Rule 2 (unqualified-held grants
+# qualified-needed, same base) lets the qualified form through.
+# The `memory.read`/`memory.write` scopes survive for the
+# simpler reason that both are held unqualified on the ceiling
+# side and declared (unqualified) on the role side.
+#
+# What *does not* survive:
+# - `fs.read:/tmp/notes/**` — base absent from the ceiling.
+# - `fs.write:/tmp/notes/**` — base absent from the ceiling.
+# - `memory.forget` — not declared on this role at all (the
+#   role is deliberately append-only at the lower tier).
+# - `shell.exec` — ⊘ row: absent from the ceiling *and* the
+#   role never declared it.
+#
+# The name "telegram_researcher" is aspirational: if you
+# genuinely need path-qualified fs access at SemiTrusted, the
+# answer is a ceiling override (future schema), not a cleverer
+# qualifier string. The path-qualified declaration is still
+# **documentation-valuable** — it records the operator's
+# intent, and a future override-aware loader can honour it.
+[[role]]
+name = "telegram_researcher"
+system_prompt = "You are a careful note-taker on a shared Telegram bot. Cite sources."
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "web.fetch"]
+memory_topic_prefix = "telegram_researcher/"
+capability_scopes = [
+  "memory.read",
+  "memory.write",
+  "fs.read:/tmp/notes/**",
+  "fs.write:/tmp/notes/**",
+  "net.fetch:url-prefix:https://en.wikipedia.org/",
+]
+trust_ceiling = "SemiTrusted"
+parent_role = "default"
+
+# `telegram_footgun` is the **declared-naively** SemiTrusted
+# role. It declares bare unqualified `fs.read` and `fs.write` —
+# the exact shape that works perfectly at `Trusted` — but runs
+# at `SemiTrusted`. The config-load-time attenuation walk
+# passes (default declares both unqualified), but the runtime
+# ceiling intersection silently strips both bases: same base-
+# absence reason as `telegram_researcher`.
+#
+# It also declares **no `net.fetch`** at all, so unlike
+# `telegram_researcher` it has no web-fetch allowance to keep.
+# The effective envelope collapses to the two memory scopes:
+#
+#   telegram_footgun_declared
+#     ∩ default_declared
+#     ∩ CEILING_SEMITRUSTED
+#   =
+#     [memory.read, memory.write]
+#
+# Everything the operator likely cared about — the fs access
+# they thought they were granting — is gone. The `--print-role
+# telegram_footgun` rendering surfaces this in the "dropped"
+# section, with both `fs.read` and `fs.write` shown under
+# `[active role telegram_footgun]`. The operator discovers the
+# surprise before they discover it in production.
+#
+# The "fix" is not a config-file edit. It's one of:
+#   - Run the role at `Trusted` on a channel that actually
+#     deserves Trusted (probably not a public Telegram bot).
+#   - Wait for the operator ceiling-override schema and grant
+#     fs.read explicitly for this deployment.
+#   - Accept that SemiTrusted roles are memory/net only, and
+#     rewrite the role to match.
+[[role]]
+name = "telegram_footgun"
+system_prompt = "You are a junior bot operator. This role is deliberately misconfigured as a teaching example."
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write"]
+memory_topic_prefix = "telegram_footgun/"
+capability_scopes = [
+  "memory.read",
+  "memory.write",
+  "fs.read",
+  "fs.write",
+]
+trust_ceiling = "SemiTrusted"
+parent_role = "default"
