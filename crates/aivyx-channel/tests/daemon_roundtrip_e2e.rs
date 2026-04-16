@@ -1171,3 +1171,97 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 20 Task 2 — daemon_stop triggers graceful shutdown
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn daemon_stop_triggers_graceful_shutdown() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-stop-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        daemon_is_running(&socket_path).await,
+        "daemon must be running before stop"
+    );
+
+    let reason = aivyx_channel::daemon_client::daemon_stop(&socket_path)
+        .await
+        .expect("daemon_stop must succeed");
+    assert!(
+        reason.contains("operator requested"),
+        "shutdown reason must mention operator: {reason}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must exit within 5s after stop")
+        .expect("daemon task must not panic");
+}
+
+#[tokio::test]
+async fn daemon_status_reports_running_daemon() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-status-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
+    assert!(info.running, "daemon must report as running");
+    assert_eq!(
+        info.version.as_deref(),
+        Some("0.1"),
+        "daemon must report protocol version 0.1"
+    );
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[tokio::test]
+async fn daemon_status_reports_not_running_for_absent_socket() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
+    assert!(!info.running, "daemon must report as not running");
+    assert!(info.version.is_none(), "version must be None when not running");
+}

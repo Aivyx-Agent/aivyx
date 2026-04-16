@@ -166,24 +166,35 @@ PRODUCT_ROADMAP updates.
 
 ## Decisions
 
-(Populated as tasks are worked.)
+**Decision 1 (Q1→(a)): `daemon stop` is graceful-only.**
+The `Shutdown` message cancels the server's `CancellationToken`;
+the daemon finishes in-flight turns via the existing graceful
+shutdown path. No `--force` flag, no PID-based SIGTERM. If the
+daemon is unresponsive, the operator uses `kill` directly.
+
+**Decision 2: `FrontendMessage::Shutdown` is the IPC mechanism.**
+A new variant in the `FrontendMessage` enum, handled in
+`handle_connection` by sending `ShuttingDown` and cancelling the
+server-level `CancellationToken`. This composes with the existing
+ctrl-C shutdown path (both cancel the same token).
+
+**Decision 3: `daemon status` and `daemon stop` use a lightweight
+`current_thread` runtime.** They dispatch before the config/store
+stack via `run_daemon_management`, so no API key, passphrase, or
+TOML config is required. A `current_thread` runtime is cheaper than
+the multi-threaded runtime the session path uses.
+
+**Decision 4: `daemon_status` and `daemon_stop` are standalone
+client functions.** Not methods on `DaemonSession` — they don't
+need a session. `daemon_status` connects, reads `DaemonReady`,
+and returns `DaemonStatusInfo { running, version }`.
+`daemon_stop` connects, reads `DaemonReady`, sends `Shutdown`,
+and waits for `ShuttingDown`.
 
 ## Open questions
 
 **Q1 — Should `daemon stop` be graceful-only or support
-`--force`?**
-
-(a) Graceful only — send `Shutdown` over IPC, let the
-daemon finish in-flight turns. If the daemon doesn't
-respond, the operator uses `kill`.
-
-(b) Add `--force` that sends `Shutdown` and then
-`kill(pid, SIGTERM)` after a timeout using the PID file.
-
-**Recommendation: (a).** Keep it simple. `--force` adds
-complexity (timeout logic, SIGTERM, race conditions) for a
-scenario the operator can handle with standard Unix tools.
-Revisit if real usage shows graceful-only is insufficient.
+`--force`?** → **(a), resolved in Decision 1.**
 
 **Q2 — Should `SessionStarted` carry server metadata (for
 banner parity), or should there be a separate `ServerInfo`
@@ -198,12 +209,32 @@ sent immediately after `SessionStarted`.
 (c) Add optional fields to `DaemonReady` (the lifecycle
 event already sent on connection).
 
-**Recommendation: (a).** `SessionStarted` is the natural
-place — the frontend needs this information at session
-start to render the banner. Adding a separate message type
-for three fields is over-engineering. `DaemonReady` is a
-connection-level event, not a session-level event, so (c)
-would conflate the two.
+**Recommendation: (a).** Deferred to Task 5.
+
+## Task 2 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_ipc.rs` (+2): `FrontendMessage::Shutdown`
+  variant + round-trip test case.
+- `crates/aivyx-channel/src/daemon_server.rs` (+5):
+  `FrontendMessage::Shutdown` handler — sends `ShuttingDown`,
+  cancels server `CancellationToken`.
+- `crates/aivyx-channel/src/daemon_client.rs` (+78):
+  `DaemonStatusInfo` struct, `daemon_status()` probe,
+  `daemon_stop()` graceful-shutdown client.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+115):
+  `CliMode::DaemonStatus` + `CliMode::DaemonStop`, parser
+  refactored to recognize `daemon status|stop|run` uniformly,
+  `run_daemon_management` async dispatcher with lightweight
+  `current_thread` runtime, 5 parser tests.
+- `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs` (+93):
+  3 integration tests — `daemon_stop_triggers_graceful_shutdown`,
+  `daemon_status_reports_running_daemon`,
+  `daemon_status_reports_not_running_for_absent_socket`.
+
+**Test delta:** 550 → 558 (+8).
+**Binary line count:** 2262 → 2377 (under 2400 threshold).
+**All three byte-identity streaks held.**
 
 ## Deferrals targeted for closure
 

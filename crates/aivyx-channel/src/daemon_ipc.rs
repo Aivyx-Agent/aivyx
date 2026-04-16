@@ -75,6 +75,7 @@ pub enum FrontendMessage {
         session_id: String,
     },
     Disconnect,
+    Shutdown,
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +298,7 @@ mod tests {
                 session_id: "abc-123".into(),
             },
             FrontendMessage::Disconnect,
+            FrontendMessage::Shutdown,
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");

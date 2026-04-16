@@ -216,6 +216,11 @@ async fn handle_connection(
                             // the channel bridge; the turn loop checks it between
                             // LLM steps.
                         }
+                        FrontendMessage::Shutdown => {
+                            send_shutting_down(&mut writer, "operator requested via daemon stop").await;
+                            shutdown.cancel();
+                            return Ok(());
+                        }
                     }
                 }
                 Err(FrameError::IncompleteBuf) => break,

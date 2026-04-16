@@ -272,6 +272,17 @@ fn run() -> Result<(), String> {
         role: role_override,
     } = parse_cli_args()?;
 
+    // ---- Lightweight daemon management subcommands ----------------------
+    // These need only the socket path — no API key, no config, no store.
+    // A minimal tokio runtime is spun up just for the IPC round-trip.
+    if matches!(mode, CliMode::DaemonStatus | CliMode::DaemonStop) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(run_daemon_management(mode));
+    }
+
     let verify_only = mode == CliMode::VerifyOnly;
     let print_role = match &mode {
         CliMode::PrintRole(name) => Some(name.clone()),
@@ -464,6 +475,47 @@ fn run() -> Result<(), String> {
     })
 }
 
+async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    match mode {
+        CliMode::DaemonStatus => {
+            let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
+            if info.running {
+                let version = info.version.as_deref().unwrap_or("unknown");
+                eprintln!(
+                    "aivyx daemon: running (protocol {version})\n  socket: {}",
+                    socket_path.display(),
+                );
+            } else {
+                eprintln!(
+                    "aivyx daemon: not running\n  socket: {} (not listening)",
+                    socket_path.display(),
+                );
+            }
+        }
+        CliMode::DaemonStop => {
+            if !aivyx_channel::daemon_client::daemon_is_running(&socket_path).await {
+                eprintln!(
+                    "aivyx daemon: not running — nothing to stop.\n  socket: {}",
+                    socket_path.display(),
+                );
+                return Ok(());
+            }
+            match aivyx_channel::daemon_client::daemon_stop(&socket_path).await {
+                Ok(reason) => {
+                    eprintln!("aivyx daemon: stopped ({reason})");
+                }
+                Err(e) => {
+                    eprintln!("aivyx daemon: stop failed — {e}");
+                    return Err(e);
+                }
+            }
+        }
+        _ => unreachable!("run_daemon_management called with non-management mode"),
+    }
+    Ok(())
+}
+
 /// Print a one-block summary of every [`AivyxConfig`] field plus its
 /// [`FieldSource`] tag. Secrets are redacted; paths and scalars are
 /// shown verbatim because that's the useful debugging signal.
@@ -604,6 +656,10 @@ enum CliMode {
     PrintRole(String),
     /// `aivyx daemon run`: launch the daemon in the foreground.
     DaemonRun,
+    /// `aivyx daemon status`: check whether a daemon is running.
+    DaemonStatus,
+    /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
+    DaemonStop,
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -637,17 +693,28 @@ fn parse_cli_args() -> Result<CliArgs, String> {
 
 /// Testable core of [`parse_cli_args`].
 fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
-    // Phase 17 Task 3: check for `daemon run` subcommand first.
-    if args.len() >= 2 && args[0] == "daemon" && args[1] == "run" {
+    // Check for `daemon <subcommand>` first.
+    if args.len() >= 2 && args[0] == "daemon" {
+        let (mode, subcmd) = match args[1].as_str() {
+            "run" => (CliMode::DaemonRun, "daemon run"),
+            "status" => (CliMode::DaemonStatus, "daemon status"),
+            "stop" => (CliMode::DaemonStop, "daemon stop"),
+            other => {
+                return Err(format!(
+                    "unrecognized daemon subcommand: `{other}`. \
+                     Supported: daemon run, daemon status, daemon stop"
+                ));
+            }
+        };
         if args.len() > 2 {
             return Err(format!(
-                "unrecognized argument after `daemon run`: `{}`. \
-                 `daemon run` takes no additional flags.",
+                "unrecognized argument after `{subcmd}`: `{}`. \
+                 `{subcmd}` takes no additional flags.",
                 args[2]
             ));
         }
         return Ok(CliArgs {
-            mode: CliMode::DaemonRun,
+            mode,
             channel: ChannelKind::Local,
             role: None,
         });
@@ -702,13 +769,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "daemon" => {
                 return Err(
-                    "unrecognized subcommand. Did you mean `daemon run`?".to_string()
+                    "unrecognized subcommand. Did you mean `daemon run`, `daemon status`, or `daemon stop`?".to_string()
                 );
             }
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, daemon run"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, daemon run|status|stop"
                 ));
             }
         }
@@ -2257,6 +2324,54 @@ mod tests {
     fn daemon_run_is_not_combinable_with_channel_flag() {
         let err = parse_cli_args_from(&argv(&["--channel", "telegram", "daemon", "run"]));
         assert!(err.is_err(), "`--channel telegram daemon run` must error");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 20 Task 2 — `daemon status` and `daemon stop` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn daemon_status_parses_to_daemon_status_mode() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "status"]))
+            .expect("`daemon status` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonStatus);
+    }
+
+    #[test]
+    fn daemon_stop_parses_to_daemon_stop_mode() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "stop"]))
+            .expect("`daemon stop` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonStop);
+    }
+
+    #[test]
+    fn daemon_status_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["daemon", "status", "--verbose"]))
+            .expect_err("`daemon status --verbose` must error");
+        assert!(
+            err.contains("unrecognized"),
+            "error must mention unrecognized: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_stop_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["daemon", "stop", "--force"]))
+            .expect_err("`daemon stop --force` must error");
+        assert!(
+            err.contains("unrecognized"),
+            "error must mention unrecognized: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_unknown_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["daemon", "restart"]))
+            .expect_err("`daemon restart` must error");
+        assert!(
+            err.contains("daemon run") && err.contains("daemon status") && err.contains("daemon stop"),
+            "error must list all subcommands: {err}"
+        );
     }
 
 }

@@ -237,6 +237,84 @@ pub async fn daemon_is_running(socket_path: &Path) -> bool {
     UnixStream::connect(socket_path).await.is_ok()
 }
 
+/// Result of a `daemon status` probe.
+#[derive(Debug)]
+pub struct DaemonStatusInfo {
+    pub running: bool,
+    pub version: Option<String>,
+}
+
+/// Probe a running daemon: connect, read `DaemonReady`, disconnect.
+/// Returns status info without starting a session.
+pub async fn daemon_status(socket_path: &Path) -> DaemonStatusInfo {
+    let stream = match UnixStream::connect(socket_path).await {
+        Ok(s) => s,
+        Err(_) => return DaemonStatusInfo { running: false, version: None },
+    };
+    let (mut reader, _writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    if read_more(&mut reader, &mut buf).await.is_err() {
+        return DaemonStatusInfo { running: true, version: None };
+    }
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { version }, _)) => {
+            DaemonStatusInfo { running: true, version: Some(version) }
+        }
+        _ => DaemonStatusInfo { running: true, version: None },
+    }
+}
+
+/// Send `Shutdown` to a running daemon and wait for the `ShuttingDown`
+/// lifecycle event. Returns the shutdown reason on success.
+pub async fn daemon_stop(socket_path: &Path) -> Result<String, String> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .map_err(|e| format!("failed to connect to daemon at {}: {e}", socket_path.display()))?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+
+    // Read DaemonReady.
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(format!("expected DaemonReady, got {other:?}"));
+        }
+        Err(e) => {
+            return Err(format!("failed to read DaemonReady: {e}"));
+        }
+    }
+
+    // Send Shutdown.
+    let frame = encode_frame(&FrontendMessage::Shutdown)
+        .map_err(|e| format!("encode Shutdown: {e}"))?;
+    writer
+        .write_all(&frame)
+        .await
+        .map_err(|e| format!("write Shutdown: {e}"))?;
+
+    // Wait for ShuttingDown.
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::ShuttingDown { reason }, _)) => {
+                return Ok(reason);
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(format!("expected ShuttingDown, got {other:?}"));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => {
+                return Err(format!("frame decode error: {e}"));
+            }
+        }
+    }
+}
+
 /// Spawn a daemon process in the background and wait for its socket
 /// to appear. Returns the socket path on success.
 ///
