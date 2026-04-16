@@ -249,26 +249,20 @@ identity streaks held (DESIGN.md at 19, PRODUCT.md at
 (546→550). Closed the Telegram-over-daemon deferral
 from Phase 16.
 
-## Phase 20 — shape TBD at Phase 19 exit
+## Phase 20 — Daemon Management + Deferral Cleanup (active)
 
-Both adapters (Local + Telegram) now route through the
-daemon. Likely candidates for Phase 20:
+**Active — see [PHASE_20.md](PHASE_20.md).** Non-product-
+shape cleanup phase targeting six of sixteen rolling
+deferrals: `daemon status`/`stop` subcommands, PID file,
+`--no-daemon` flag, daemon-mode banner parity, and the
+`CapabilitySet::grants` reflexivity + `CEILING_SEMITRUSTED`
+doc-comment pair. Rolling backlog 16 → 10 at exit.
 
-(a) **Mission Primitive (P2)**: with both adapters
-behind the daemon, long-running work items become
-the natural next product-shape primitive.
+## Phase 21 — shape TBD at Phase 20 exit
 
-(b) **A lighter phase** (capability-hygiene,
-rolling-deferral cleanup, `daemon status`/`stop`,
-daemon-mode banner parity, per-chat
-`session_partition` in daemon mode) if the deferral
-backlog warrants a dedicated cleanup pass.
-
-(c) **Channel SDK Surface (P5)**: with two adapters
-behind the daemon, the adapter surface is concrete
-enough to extract into a documented SDK contract.
-
-**Multi-level sub-agent nesting** and the
-`CapabilitySet::grants` reflexivity + ▲-row doc-
-comment pair remain on the candidate list with no
-urgency.
+Likely candidate: **Mission Primitive (P2)**, the next
+product-shape keystone. Both prerequisites are complete
+(daemon holds live state via P4, role-config declares
+capability envelopes via P9). Alternative candidates:
+Channel SDK Surface (P5), or another lightweight phase
+if deferral pressure warrants it.
