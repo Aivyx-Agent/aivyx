@@ -10,6 +10,8 @@
 //! in the background daemon process rather than in-process.
 
 use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession};
@@ -23,6 +25,11 @@ pub struct DaemonSessionConfig {
     pub role: Option<String>,
     pub prompt: String,
     pub banner: Option<String>,
+    /// Shared flag for the signal handler's "already cancelled this turn"
+    /// state. The REPL loop resets this to `false` before each
+    /// `submit_input` so that the first ctrl-C of a new turn always
+    /// sends `CancelTurn` instead of exiting.
+    pub cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 /// Drive a daemon-backed CLI session to completion.
@@ -51,7 +58,7 @@ where
         }
     };
 
-    run_daemon_session_inner(session, config.prompt, config.banner, reader, writer).await
+    run_daemon_session_inner(session, config.prompt, config.banner, config.cancel_flag, reader, writer).await
 }
 
 /// Run a daemon-backed REPL with an already-connected session.
@@ -65,13 +72,14 @@ where
     R: BufRead,
     W: Write,
 {
-    run_daemon_session_inner(session, config.prompt, config.banner, reader, writer).await
+    run_daemon_session_inner(session, config.prompt, config.banner, config.cancel_flag, reader, writer).await
 }
 
 async fn run_daemon_session_inner<R, W>(
     mut session: DaemonSession,
     prompt: String,
     banner: Option<String>,
+    cancel_flag: Option<Arc<AtomicBool>>,
     mut reader: R,
     mut writer: W,
 ) -> Result<SessionReport, String>
@@ -107,6 +115,10 @@ where
         let input = line.trim();
         if input.is_empty() {
             continue;
+        }
+
+        if let Some(ref flag) = cancel_flag {
+            flag.store(false, Ordering::Relaxed);
         }
 
         let (events, outcome) = session.submit_input(input.to_string()).await?;

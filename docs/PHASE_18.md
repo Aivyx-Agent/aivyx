@@ -538,3 +538,41 @@ propagates it to the agent's cancellation token.
   holds. No trait changes — `TurnOutcome` variants read but
   not modified.
 - Zero-new-dep streak holds.
+
+### Task 4 — cancel-flag reset bug fix
+
+**Bug discovered:** the daemon-mode ctrl-C signal handler
+used a local `mut bool` (`cancelled_once`) captured by move
+into `tokio::spawn`. Once the operator cancelled a turn, the
+flag stayed `true` permanently — the next turn's first ctrl-C
+would exit the process instead of sending `CancelTurn`. The
+in-process path avoids this by rotating `CancellationToken`s
+each turn, which implicitly resets the "already cancelled"
+state.
+
+**Fix:** replaced the local `bool` with a shared
+`Arc<AtomicBool>`. Added `cancel_flag: Option<Arc<AtomicBool>>`
+to `DaemonSessionConfig`. The REPL loop in
+`run_daemon_session_inner` resets the flag to `false` (via
+`Relaxed` store) before each `submit_input` call. The binary
+creates the `AtomicBool`, shares one `Arc` with the signal
+handler task and another with the config. Tests that don't
+need cancellation pass `cancel_flag: None`.
+
+**One new integration test** in `daemon_roundtrip_e2e.rs`:
+
+- **`cancel_flag_resets_between_turns`** — sets cancel flag to
+  `true` (simulating a prior cancel), runs a two-turn session
+  via `run_daemon_session_connected`, asserts the flag is
+  `false` after the session completes (proving the REPL reset
+  it before each turn).
+
+**Test delta:** +1 (workspace 545 → 546).
+
+**Streak status after Task 4:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak holds.
+- PRODUCT.md byte-identical to `80189b4`. Streak holds.
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  holds.
+- Zero-new-dep streak holds.

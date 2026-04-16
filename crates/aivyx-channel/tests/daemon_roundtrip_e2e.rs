@@ -514,6 +514,7 @@ async fn run_daemon_session_renders_two_turns() {
         role: None,
         prompt: "> ".into(),
         banner: Some("test banner".into()),
+        cancel_flag: None,
     };
 
     // Two input lines, then EOF.
@@ -587,6 +588,7 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
         role: None,
         prompt: "> ".into(),
         banner: Some("daemon-mode banner".into()),
+        cancel_flag: None,
     };
 
     // Empty input — immediate EOF.
@@ -657,6 +659,7 @@ async fn run_daemon_session_connected_with_cancel_handle() {
         role: None,
         prompt: "> ".into(),
         banner: Some("pre-connected test".into()),
+        cancel_flag: None,
     };
 
     let input = std::io::Cursor::new(b"hello\n");
@@ -672,6 +675,67 @@ async fn run_daemon_session_connected_with_cancel_handle() {
     assert!(output_str.contains("pre-connected test"));
     assert!(output_str.contains("Hello "));
     assert!(output_str.contains("from daemon!"));
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+#[tokio::test]
+async fn cancel_flag_resets_between_turns() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let session = DaemonSession::connect(&socket_path, None)
+        .await
+        .expect("connect must succeed");
+
+    // Simulate a prior cancel: flag starts true.
+    let cancel_flag = Arc::new(AtomicBool::new(true));
+
+    let config = DaemonSessionConfig {
+        socket_path: socket_path.clone(),
+        role: None,
+        prompt: "> ".into(),
+        banner: Some("flag-reset test".into()),
+        cancel_flag: Some(Arc::clone(&cancel_flag)),
+    };
+
+    let input = std::io::Cursor::new(b"turn1\nturn2\n");
+    let mut output = Vec::<u8>::new();
+
+    let report = run_daemon_session_connected(session, config, input, &mut output)
+        .await
+        .expect("session must succeed");
+
+    assert_eq!(report.turns_run, 2);
+    // After the last turn completes, the flag should still be false
+    // (the REPL resets it before each submit_input).
+    assert!(!cancel_flag.load(Ordering::Relaxed));
 
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await

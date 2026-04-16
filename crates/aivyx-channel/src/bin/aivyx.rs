@@ -1310,16 +1310,21 @@ async fn run_async(
 
                 if let Ok(session) = session {
                     let cancel_handle = session.cancel_handle();
-                    let mut cancelled_once = false;
+                    let cancelled_once = std::sync::Arc::new(
+                        std::sync::atomic::AtomicBool::new(false),
+                    );
+                    let flag_for_signal = std::sync::Arc::clone(&cancelled_once);
 
                     // Signal task (daemon mode): first ctrl-C sends
-                    // CancelTurn; second ctrl-C exits.
+                    // CancelTurn; second ctrl-C exits. The REPL loop
+                    // resets `cancelled_once` to false before each turn
+                    // via `DaemonSessionConfig::cancel_flag`.
                     tokio::spawn(async move {
                         loop {
                             if tokio::signal::ctrl_c().await.is_err() {
                                 std::process::exit(130);
                             }
-                            if cancelled_once {
+                            if flag_for_signal.load(std::sync::atomic::Ordering::Relaxed) {
                                 eprintln!("\naivyx: interrupted, exiting.");
                                 std::process::exit(130);
                             }
@@ -1327,7 +1332,7 @@ async fn run_async(
                                 "\naivyx: cancelling in-flight turn (ctrl-C again to exit)."
                             );
                             cancel_handle.cancel().await;
-                            cancelled_once = true;
+                            flag_for_signal.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                     });
 
@@ -1344,6 +1349,7 @@ async fn run_async(
                             sp.display(),
                             active_role_name,
                         )),
+                        cancel_flag: Some(cancelled_once),
                     };
 
                     let stdin = io::stdin();
