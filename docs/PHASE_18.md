@@ -576,3 +576,209 @@ need cancellation pass `cancel_flag: None`.
 - `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
   holds.
 - Zero-new-dep streak holds.
+
+## Ship records
+
+### Task 1 — Open commit
+
+- **Commit:** `b7c6fc2`
+- **Shape:** `docs/PHASE_18.md` (this document), `docs/README.md`
+  phase-status flip, `docs/ROADMAP.md` Phase 18 entry update.
+- **Test delta:** +0 (542 → 542).
+
+### Task 2 — Daemon-backed REPL loop
+
+- **Commit:** `d91ac64`
+- **Shape:** new `daemon_session.rs` module (136 lines) with
+  `DaemonSessionConfig`, `run_daemon_session`, and
+  `outcome_str_to_turn_outcome`. Two new e2e tests
+  (`run_daemon_session_renders_two_turns`,
+  `run_daemon_session_with_no_input_prints_banner_only`).
+- **Decisions:** Q1→variant of (b) try-connect-then-spawn,
+  Q2→(a) `render_for_cli()` directly to writer.
+- **Test delta:** +2 (542 → 544).
+
+### Task 3 — Binary dispatch wiring + ctrl-C cancellation
+
+- **Commit:** `66018dc`
+- **Shape:** `daemon_client.rs` writer refactored to
+  `Arc<Mutex<OwnedWriteHalf>>`, `DaemonCancelHandle` struct,
+  `cancel_turn` and `cancel_handle` methods. `daemon_session.rs`
+  split into three functions (`run_daemon_session`,
+  `run_daemon_session_connected`, `run_daemon_session_inner`).
+  `aivyx.rs` `ChannelKind::Local` branch wired to daemon-first
+  dispatch with ctrl-C signal handler. One new e2e test
+  (`run_daemon_session_connected_with_cancel_handle`).
+- **Decisions:** Q3→(a) frontend prints own banner, Q4→(a) first
+  ctrl-C sends `CancelTurn` via `DaemonCancelHandle`, second exits.
+- **Test delta:** +1 (544 → 545).
+
+### Task 4 — Cancel-flag reset bug fix
+
+- **Commit:** `1a24b64`
+- **Shape:** replaced local `bool` with `Arc<AtomicBool>` shared
+  between signal handler and REPL loop. Added `cancel_flag` field
+  to `DaemonSessionConfig`. REPL loop resets flag before each
+  `submit_input`. One new e2e test (`cancel_flag_resets_between_turns`).
+- **Bug fixed:** `cancelled_once` flag never reset between turns —
+  after cancelling one turn, next turn's first ctrl-C exited instead
+  of cancelling.
+- **Test delta:** +1 (545 → 546).
+
+### Task 5 — Exit freeze (this section)
+
+- **Commit:** this commit.
+- **Shape:** ship records, deferrals, prediction-vs-reality, exit
+  criteria in this document. `docs/README.md` phase-status flip.
+  `docs/ROADMAP.md` Phase 18 frozen, Phase 19 scaffold.
+  `docs/PRODUCT_ROADMAP.md` milestone update.
+- **Test delta:** +0 (546 → 546).
+
+**Phase test delta: +4** (542 → 546), meeting the ≥ +4 target.
+
+## Deferrals
+
+**Rolling deferrals still open after Phase 18 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral, untouched by Phase 18.
+  Carries forward. Tagged: **Phase 11 Task 4,
+  earliest plausible: whichever phase has a concrete
+  forensic-tooling story.**
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched by
+  Phase 18.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched by Phase 18.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Deferred indefinitely.
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Deferred
+  indefinitely.
+- **Binary response bodies / non-UTF-8.** Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering.** Phase 12 Task 1.
+  Deferred reactively.
+- **`CapabilitySet::grants` reflexivity
+  investigation.** Phase 13 Task 4 deferral.
+  Untouched by Phase 18.
+- **Misleading `CEILING_SEMITRUSTED` ▲-row doc
+  comment.** Phase 15 Task 4. Composes with the
+  reflexivity investigation.
+- **Multi-level sub-agent nesting.** Phase 14 Task 3.
+  Untouched by Phase 18.
+- **Telegram-over-daemon port.** Phase 16 net-new.
+  Untouched by Phase 18. Tagged: **earliest
+  plausible: Phase 19 or later.**
+- **LocalChannel regression-test rewrite over IPC.**
+  Phase 17 Q6→(c+). Untouched by Phase 18. Tagged:
+  **reactive — reopens if an IPC-boundary-specific
+  bug surfaces that the in-process tests miss.**
+- **`daemon status` / `daemon stop` subcommands.**
+  Phase 17 net-new. Untouched by Phase 18.
+- **PID file at `$XDG_RUNTIME_DIR/aivyx/daemon.pid`.**
+  Phase 17 net-new. Untouched by Phase 18.
+
+**Inherited deferrals closed by Phase 18:**
+
+- **REPL-mode frontend over IPC.** Phase 17 net-new.
+  **Closed by Tasks 2–3** — `run_daemon_session` and
+  `run_daemon_session_connected` deliver the REPL loop
+  over IPC, and the binary's `ChannelKind::Local`
+  branch wires daemon-first dispatch with fallback.
+
+**Net-new deferrals from Phase 18 itself:**
+
+- **`--no-daemon` flag for local mode.** Listed as a
+  non-goal in the phase open doc. The in-process path
+  is reachable as a fallback on daemon connection
+  failure, but there is no explicit operator flag to
+  force it. Tagged: **earliest plausible: reactive —
+  adds if operators ask for it.**
+- **Daemon-mode banner parity with in-process banner.**
+  The daemon-mode banner reports version, socket path,
+  and active role. The in-process banner additionally
+  reports fs sandbox path, memory status, and audit
+  event count. Parity deferred because the daemon-mode
+  banner meets the operator's immediate need ("am I
+  connected?") and full parity would require either
+  protocol extension or local recalculation. Tagged:
+  **earliest plausible: reactive.**
+
+**Backlog shape at Phase 18 exit:** fourteen rolling items
+inherited (fifteen inherited, one closed by Phase 18) +
+two net-new from Phase 18 itself. Total **sixteen**. The
+REPL-mode frontend deferral — the primary target of
+Phase 18 — is closed.
+
+## Prediction versus reality
+
+The Phase 18 open doc made four explicit streak-risk
+predictions. This block reckons with each.
+
+### Prediction 1: "DESIGN.md streak (17 → 18, not at risk)"
+
+**Reality: correct.** No trait, no architectural decision,
+no protocol change. The daemon-backed REPL is pure wiring
+of existing library code. DESIGN.md byte-identical to
+`e0d6437`, streak at **eighteen consecutive phases.**
+
+### Prediction 2: "PRODUCT.md streak (5 → 6, not at risk)"
+
+**Reality: correct.** P4's deliberate-silence clause
+continues to absorb all daemon frontend wiring decisions.
+PRODUCT.md byte-identical to `80189b4`, streak at **six
+consecutive phases.**
+
+### Prediction 3: "Production-core aivyx-core/src/lib.rs streak (6 → 7, not at risk)"
+
+**Reality: correct.** All changes were in `daemon_client.rs`,
+`daemon_session.rs`, `aivyx.rs`, and the e2e test file.
+`TurnOutcome` variants were read (in `outcome_str_to_turn_outcome`)
+but not modified. `aivyx-core/src/lib.rs` byte-identical to
+`ba9a724`, streak at **seven consecutive phases** (longest
+production-core streak in project history, extending Phase
+17's record).
+
+### Prediction 4: "Zero-new-dep streak (not at risk)"
+
+**Reality: correct.** No new workspace dependencies added.
+All pieces (`tokio`, `tokio::signal`, `std::sync::atomic`)
+were already in the workspace.
+
+### Phase open "honest position" assessment
+
+The open doc called Phase 18 "the lowest-streak-risk phase
+in the entire daemon arc." This proved correct — all four
+predictions held, and the only surprise was the `cancelled_once`
+bug discovered in Task 4, which was a local state-management
+issue in the binary, not an architectural concern. The
+discovery-and-fix pattern validated the Task 4 working-session
+slot: the reserve capacity absorbed a real bug rather than
+going unused.
+
+## Exit criteria
+
+- [x] All task ship records in this document (Tasks 1–4
+      above, Task 5 is this section).
+- [x] Decisions block: Q1→variant of (b), Q2→(a), Q3→(a),
+      Q4→(a). All four recorded in "Decisions made during
+      implementation" above.
+- [x] `cargo test --workspace` — **546 green**. Test delta
+      **+4** against 542-test entry baseline, meeting the
+      ≥ +4 target.
+- [x] `cargo clippy --workspace --tests -- -D warnings`
+      clean.
+- [x] DESIGN.md byte-identical to `e0d6437`. **Streak at
+      eighteen consecutive phases.**
+- [x] PRODUCT.md byte-identical to `80189b4`. **Streak at
+      six consecutive phases.**
+- [x] `aivyx-core/src/lib.rs` byte-identical to `ba9a724`.
+      **Streak at seven consecutive phases.**
+- [x] Zero-new-dep streak holds.
+- [x] `docs/README.md` phase-status table reflects exit.
+- [x] `docs/ROADMAP.md` Phase 18 frozen, Phase 19 scaffold.
+- [x] `docs/PRODUCT_ROADMAP.md` updated.
+- [x] Prediction-versus-reality block recorded.
+- [x] Deferrals block recorded. Rolling backlog at sixteen
+      items (one closed, two net-new).

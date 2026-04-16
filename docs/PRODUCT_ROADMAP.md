@@ -75,10 +75,21 @@ Phase 16 net-new deferrals. All byte-identity streaks held;
 production-core streak at six consecutive phases (longest in
 project history). See [`docs/PHASE_17.md`](PHASE_17.md).
 
-**Next:** REPL-mode frontend wiring (default `aivyx` invocation
-auto-spawns and connects via `DaemonSession`), then Telegram
-adapter port behind the IPC boundary. Subsequent phases
-complete the migration for all shipped adapters.
+**Phase 18 (Frontend Wiring, 2026-04-16):** wired the default
+`aivyx` invocation to auto-spawn a daemon, connect via
+`DaemonSession`, and run a REPL loop rendering `StreamEventPayload`s
+via `render_for_cli()`. Daemon-first dispatch with in-process
+fallback. `DaemonCancelHandle` for ctrl-C cancellation over IPC
+(first ctrl-C sends `CancelTurn`, second exits). Discovered and
+fixed a cancel-flag reset bug between turns. All byte-identity
+streaks held; production-core at seven consecutive phases (longest
+in project history). Closed the REPL-mode-over-IPC deferral.
+See [`docs/PHASE_18.md`](PHASE_18.md).
+
+**Next:** Telegram adapter port behind the IPC boundary, or
+Mission Primitive (P2), or a lighter deferral-cleanup phase.
+Subsequent phases complete the migration for all shipped
+adapters.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 

@@ -213,27 +213,34 @@ subcommand). **All four byte-identity streaks held**
 phases is the longest in project history. Test delta
 +9 (533→542). Zero new workspace dependencies.
 
-## Phase 18 — Daemon Migration: Frontend Wiring (phase 3 of N) (active)
+## Phase 18 — Daemon Migration: Frontend Wiring (phase 3 of N) (frozen)
 
-**Active — see [PHASE_18.md](PHASE_18.md).** Opened
-2026-04-16 as the third phase of the **Daemon
-Migration keystone**. Wires the default `aivyx`
-invocation to auto-spawn a daemon, connect via
-`DaemonSession`, and run an interactive REPL loop
-rendering `StreamEventPayload`s via `render_for_cli()`.
-By Phase 18 exit, `aivyx --channel local` (the
-default path) runs over the daemon transparently.
-The in-process `run_session` path is retained as a
-fallback. Q-block (Q1–Q4) settles UX and dispatch
-mechanics: daemon-vs-in-process dispatch strategy,
-streaming rendering approach, banner shape, and
-ctrl-C cancellation over IPC.
+**Frozen — see [PHASE_18.md](PHASE_18.md).** Opened
+and exited 2026-04-16 as the third phase of the
+**Daemon Migration keystone**. Delivered: (1) daemon-
+backed REPL loop (`run_daemon_session` +
+`run_daemon_session_connected` in `daemon_session.rs`)
+with try-connect-then-spawn auto-attach and
+`render_for_cli()` streaming output (Task 2);
+(2) binary dispatch wiring — `ChannelKind::Local`
+tries daemon mode first, falls back to in-process
+— with `DaemonCancelHandle` for ctrl-C cancellation
+over IPC (Task 3); (3) cancel-flag reset bug fix
+replacing a local `bool` with a shared `Arc<AtomicBool>`
+that the REPL loop resets before each turn (Task 4).
+All four Q-block questions resolved: Q1→variant of (b),
+Q2→(a), Q3→(a), Q4→(a). **All four byte-identity
+streaks held** — DESIGN.md at eighteen, PRODUCT.md at
+six, production-core at seven (longest in project
+history), zero-new-dep. Test delta +4 (542→546).
+Closed the REPL-mode-over-IPC deferral from Phase 17.
 
 ## Phase 19 — shape TBD at Phase 18 exit
 
-Phase 18 delivers the frontend wiring that makes the
-daemon the default LocalChannel experience. Three
-likely candidates for Phase 19:
+Phase 18 closed the REPL-mode frontend wiring. The
+daemon is now the default LocalChannel path with
+in-process fallback. Three likely candidates for
+Phase 19:
 
 (a) **Daemon Migration phase 4 of N — Telegram
 adapter port**: move `aivyx-telegram` behind the
@@ -246,8 +253,9 @@ the natural next product-shape primitive.
 
 (c) **A lighter phase** (capability-hygiene,
 rolling-deferral cleanup, `daemon status`/`stop`,
-multi-connection) if Phase 18 surfaces edge cases
-that need a polish pass.
+multi-connection, daemon-mode banner parity) if the
+sixteen-item deferral backlog warrants a dedicated
+cleanup pass.
 
 **Multi-level sub-agent nesting** and the
 `CapabilitySet::grants` reflexivity + ▲-row doc-
