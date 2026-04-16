@@ -59,55 +59,282 @@ P1).
 
 ## Tasks
 
-### Task 1 — Phase open (this commit)
+### Task 1 — Phase open (shipped in prior commit)
 
 Scaffold `docs/PHASE_21.md`. Update `docs/README.md`
 phase-status table (Phase 21 → Open). Update
 `docs/ROADMAP.md` Phase 21 entry.
 
-### Tasks 2+ — TBD
+### Task 2 — Mission primitive design (this commit)
 
-Mission primitive design and implementation tasks to be
-scoped after the phase-open commit, based on investigation
-of the approval-gate shape, mission storage model, and
-daemon integration surface.
+Resolve Q1–Q3. Record decisions. Scope Tasks 3–8.
+
+Investigated the existing composition surfaces:
+- **Storage:** `KeyDomain` enum in `aivyx-storage` (5 domains,
+  redb-backed, AEAD-encrypted per domain). Missions need a
+  sixth domain.
+- **Daemon IPC:** `FrontendMessage` (5 variants),
+  `DaemonMessage` (4 variants), `StreamEventPayload`
+  (5 variants). Missions need new variants in all three.
+- **Agent turn loop:** `ToolOutcome::RequiresEscalation` and
+  `TurnOutcome::Escalated` were forward-invested in Phase 1
+  but never wired to any tool. These are the natural seam for
+  approval gates.
+- **Tool registration:** `Tool` trait + `ToolRegistry` in
+  `aivyx-core`. Mission tools are infrastructure tools per
+  PRODUCT.md P10's classification.
+- **Capability scopes:** `KNOWN_BASES` in `aivyx-capability`
+  (21 bases). Mission needs two new bases.
+
+### Task 3 — `KeyDomain::Missions` + mission state model
+
+Add `KeyDomain::Missions` variant to `aivyx-storage`. Define
+the `MissionRecord` struct in a new `aivyx-channel/src/
+mission.rs` module:
+
+```
+MissionRecord {
+    mission_id: String,
+    role_name: String,
+    description: String,
+    state: MissionState,       // Created | Running | GatePending | Completed | Failed | Cancelled
+    gates: Vec<GateRecord>,    // history of all gates, each with resolution
+    created_at: u64,           // unix millis
+    updated_at: u64,
+}
+
+GateRecord {
+    gate_id: String,
+    reason: String,
+    scope: Option<String>,     // capability scope that triggered the gate, if any
+    state: GateState,          // Pending | Approved | Rejected
+    created_at: u64,
+    resolved_at: Option<u64>,
+}
+```
+
+Storage CRUD: `create_mission`, `get_mission`,
+`update_mission_state`, `list_missions`, `add_gate`,
+`resolve_gate`. All via `DomainHandle` under the new
+`Missions` domain.
+
+Unit tests for serialization round-trip and state
+transitions.
+
+**Estimated streak risk:** DESIGN.md — none (storage domain
+addition is plumbing). Production-core — none (model lives
+in `aivyx-channel`).
+
+### Task 4 — `mission.create` + `mission.gate` capability scopes
+
+Add `mission.create` and `mission.gate` to `KNOWN_BASES` in
+`aivyx-capability/src/lib.rs`. Update tier ceilings:
+
+- **Kernel:** both bases granted unqualified.
+- **Trusted:** `mission.create` granted unqualified;
+  `mission.gate` granted unqualified (operator can resolve
+  any gate).
+- **SemiTrusted:** `mission.create` as ▲ row (omitted from
+  unqualified ceiling — a SemiTrusted channel can only create
+  missions if the role explicitly declares the scope).
+  `mission.gate` omitted entirely (⊘ row — SemiTrusted
+  channels cannot resolve gates).
+- **Untrusted:** both omitted (⊘).
+
+Tests: parse round-trip, tier ceiling grants/denials for
+both bases.
+
+**Estimated streak risk:** DESIGN.md — none.
+Production-core — none (capability crate is independent).
+
+### Task 5 — IPC protocol extensions
+
+Extend the daemon IPC vocabulary:
+
+**`StreamEventPayload` (new variant):**
+```
+ApprovalGate {
+    mission_id: String,
+    gate_id: String,
+    reason: String,
+    scope: Option<String>,
+}
+```
+
+**`FrontendMessage` (new variant):**
+```
+ResolveGate {
+    mission_id: String,
+    gate_id: String,
+    approved: bool,
+}
+```
+
+**`DaemonMessage` (new variants):**
+```
+MissionCreated { mission_id: String }
+MissionStateChanged { mission_id: String, state: String }
+GateResolved { mission_id: String, gate_id: String, approved: bool }
+```
+
+Update `DaemonEnvelope` to include the new `DaemonMessage`
+variants. Round-trip serialization tests for all new variants.
+Update `docs/DAEMON_IPC.md` with the new message types.
+
+**Estimated streak risk:** DESIGN.md — low (IPC extensions
+are additive). Production-core — none.
+
+### Task 6 — `MissionCreateTool` + daemon mission registry
+
+Implement `MissionCreateTool` as an infrastructure tool in
+`aivyx-channel` (not `aivyx-core` — it needs storage access):
+
+- `required_scope`: `Scope::parse("mission.create").unwrap()`
+- `execute`: creates a `MissionRecord` in redb, returns
+  `ToolOutcome::Completed` with the `mission_id`.
+- The tool is registered in the binary's tool-registry
+  construction, same pattern as `RoleSwitchTool`.
+
+Daemon mission registry in `daemon_server.rs`:
+- A `HashMap<String, MissionRecord>` (or similar) held at
+  the daemon level (not per-connection).
+- On `SubmitInput` for a mission turn, the daemon checks
+  whether the mission is in `GatePending` state and rejects
+  input until the gate is resolved.
+- On a tool returning `ToolOutcome::RequiresEscalation`, the
+  daemon: (1) persists a `GateRecord` to redb, (2) transitions
+  the mission to `GatePending`, (3) emits `ApprovalGate` to
+  the connected frontend, (4) the turn ends with
+  `TurnOutcome::Escalated`.
+- On `ResolveGate`, the daemon: (1) updates the `GateRecord`
+  in redb, (2) transitions the mission back to `Running`,
+  (3) if approved, starts a new turn with the approval context
+  as input; if rejected, transitions to `Failed`.
+
+Integration tests: create a mission, trigger a gate, resolve
+the gate, verify state transitions.
+
+**Estimated streak risk:** DESIGN.md — medium (the mission
+registry may represent a new architectural primitive).
+Production-core — medium (may need `ToolContext` extension
+for storage access, or may use the same `OnceLock` factory
+pattern as `RoleSwitchTool`).
+
+### Task 7 — Frontend rendering (CLI + Telegram)
+
+**CLI:** When `ApprovalGate` arrives in the REPL loop,
+render a distinctive prompt:
+```
+[MISSION GATE] mission-abc: reason text
+  Approve? [y/N]:
+```
+Read operator input, send `ResolveGate`.
+
+**Telegram:** Render the gate as a message with inline
+keyboard buttons (Approve / Reject). On callback, send
+`ResolveGate`. (If inline keyboards are deferred, render
+as a text message with `/approve mission-abc gate-xyz`
+command syntax.)
+
+**Estimated streak risk:** Production-core — none (frontend
+code lives in `aivyx-channel`).
+
+### Task 8 — Exit freeze
+
+Standard exit procedure: deferrals block, prediction-vs-
+reality, exit criteria checklist, docs flips, ROADMAP +
+PRODUCT_ROADMAP updates.
 
 ## Decisions
 
-(None yet.)
+**Decision 1 (Q1→(a)): A mission is a redb row with a state
+machine.** States: `Created → Running → GatePending →
+Completed | Failed | Cancelled`. The daemon drives state
+transitions. Each mission is tied to a role name for envelope
+lookup. This composes with the existing storage layer (new
+`KeyDomain::Missions` domain) and survives restarts because
+redb is persistent. Alternatives (b) and (c) were rejected:
+(b) ties missions to connection lifetime, making restart
+survival complex; (c) over-structures the primitive before
+a concrete recursive use case exists.
+
+**Decision 2 (Q2): Approval gates are `StreamEventPayload`
+variants resolved by a `FrontendMessage`.** The gate lifecycle:
+a tool returns `ToolOutcome::RequiresEscalation` → daemon
+persists a `GateRecord` to redb → daemon emits
+`StreamEventPayload::ApprovalGate` to the frontend → frontend
+renders distinctively and collects operator decision →
+frontend sends `FrontendMessage::ResolveGate` → daemon
+updates redb and resumes (approved) or fails (rejected) the
+mission. This reuses the Phase 1 forward-invested escalation
+path that has been dormant for twenty phases.
+
+**Decision 3 (Q3): Two new capability bases — `mission.create`
+and `mission.gate`.** `mission.create` gates who can initiate
+missions; `mission.gate` gates who can resolve approval gates.
+Both are infrastructure tools per PRODUCT.md P10's
+classification (the agent uses them to manage itself). Tier
+placement: Trusted gets both unqualified, SemiTrusted gets
+`mission.create` as ▲ (conditionally granted) and
+`mission.gate` as ⊘ (denied), Untrusted gets neither.
+
+**Decision 4: Gate suspension is turn-boundary, not
+coroutine-based.** When a mission hits a gate, the current
+turn ends with `TurnOutcome::Escalated`. The gate is
+persisted to redb. When the gate is resolved, a *new* turn
+begins with the approval context injected as the input
+message. This avoids suspending async tasks across process
+restarts — the mission is a sequence of turns with gate-checks
+between them. The trade-off is that the agent loses in-flight
+context at each gate boundary, but the mission record and
+gate history provide the context the agent needs to resume
+coherently.
+
+**Decision 5: `MissionCreateTool` lives in `aivyx-channel`,
+not `aivyx-core`.** It needs storage access (`DomainHandle`
+for the `Missions` domain), which is not available through
+`ToolContext`. Same architectural pattern as `RoleSwitchTool`:
+an `OnceLock`-backed factory closure constructed in the
+binary's startup path, capturing the storage handle. This
+preserves the production-core streak if no `ToolContext`
+extension is needed.
 
 ## Open questions
 
-**Q1 — What is a mission, concretely?** The product contract
-deliberately does not pin the shape: "a row in redb, a long-
-lived turn, a tree of sub-sessions" are all options. This
-question must be resolved before Task 2 can be scoped.
+**Q1 — What is a mission, concretely?** → **(a), resolved
+in Decision 1.**
 
-(a) A mission is a redb row with a state machine
-(created → running → gate-pending → completed/failed).
-The daemon drives the state machine; each gate is a
-`StreamEvent` the frontend renders.
+**Q2 — What is the shape of an approval gate?** →
+**Resolved in Decision 2.**
 
-(b) A mission is a long-lived `DaemonSession` with special
-lifecycle semantics — it persists across frontend
-disconnects and reconnects.
+**Q3 — Does the mission primitive need new capability
+scopes?** → **Yes, resolved in Decision 3.**
 
-(c) A mission is a tree of sub-sessions (like P1's
-`role.switch` but multi-turn and persistent).
+**Q4 — Should `MissionCreateTool` extend `ToolContext` or
+use the `OnceLock` factory pattern?**
 
-**Recommendation: TBD — investigate in Task 2.**
+(a) Extend `ToolContext` with an optional `&dyn MissionStore`
+field. Clean access pattern but breaks the production-core
+streak.
 
-**Q2 — What is the shape of an approval gate?** The product
-contract says gates are "operator-controlled, not agent-
-controlled" and that the agent "identifies decision points
-where it judges operator approval is warranted." The gate
-UX must work across both Local CLI and Telegram frontends.
+(b) Use the `OnceLock` factory pattern from `RoleSwitchTool`
+(Phase 14). The tool captures the storage handle at
+construction time. Preserves the streak but adds another
+factory closure.
 
-**Recommendation: TBD — investigate in Task 2.**
+**Recommendation: (b).** The factory pattern is validated
+(Phase 14) and the production-core streak at nine consecutive
+phases is worth preserving. Deferred to Task 6.
 
-**Q3 — Does the mission primitive need new capability scopes?**
-PRODUCT.md mentions `mission.create` as a possible
-infrastructure-tool capability base. If so, it needs to be
-added to `KNOWN_BASES` and the tier ceilings.
+**Q5 — Should the Telegram gate UX use inline keyboards or
+text commands?**
 
-**Recommendation: TBD — investigate in Task 2.**
+(a) Inline keyboards (`InlineKeyboardMarkup` with Approve /
+Reject buttons). Richer UX but requires Telegram callback
+query handling not yet in the codebase.
+
+(b) Text commands (`/approve mission-abc gate-xyz`). Simpler,
+works with the existing message-based Telegram adapter.
+
+**Recommendation: (b) for Phase 21, defer (a) as a net-new
+item.** Deferred to Task 7.
