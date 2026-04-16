@@ -129,6 +129,7 @@ use aivyx_memory::{
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+use aivyx_telegram::transport::{OutgoingMessage, ReqwestTransport, TelegramTransport};
 use aivyx_telegram::{run_telegram_multi_session, TelegramSessionConfig};
 
 const DEFAULT_MAX_TOKENS: u32 = 1024;
@@ -1262,8 +1263,15 @@ async fn run_async(
             .with_memory_topic_prefix(memory_topic_prefix),
         );
 
-        let channel_factory: ChannelFactory = Arc::new(|_frontend_type| {
-            Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()))
+        let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
+            match frontend_type {
+                aivyx_channel::daemon_ipc::FrontendType::Telegram => {
+                    Arc::new(TelegramDaemonChannel::new())
+                }
+                aivyx_channel::daemon_ipc::FrontendType::Local => {
+                    Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()))
+                }
+            }
         });
 
         let shutdown = CancellationToken::new();
@@ -1429,11 +1437,6 @@ async fn run_async(
         }
 
         ChannelKind::Telegram => {
-            // Unwrap chain is safe: `run()` set `require_telegram_token
-            // = true` for this channel, so `validate()` already
-            // rejected a `None` token, and the `telegram` field is
-            // `Some` because the loader constructs it whenever any
-            // telegram source fires.
             let tg = telegram
                 .expect("telegram config validated for ChannelKind::Telegram");
             let token_secret = tg
@@ -1442,14 +1445,6 @@ async fn run_async(
                 .value;
             let chat_filter: Option<i64> = tg.chat_filter.map(|c| c.value);
 
-            // Signal handler (telegram): a single `shutdown`
-            // CancellationToken the signal task cancels on first
-            // ctrl-C. The session loop checks this at the top of each
-            // iteration and exits cleanly — we don't need the "cancel
-            // one turn, exit on second ctrl-C" staging that the local
-            // path uses, because a Telegram session is expected to be
-            // long-running and the only legitimate interrupt is
-            // "bring the bot down."
             let shutdown = CancellationToken::new();
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
@@ -1460,17 +1455,52 @@ async fn run_async(
                 shutdown_for_signal.cancel();
             });
 
-            // Startup message: print to stderr (not the Telegram
-            // chat) so an operator running the bot in a terminal sees
-            // confirmation it's alive. The Telegram chat itself gets
-            // nothing at startup — the first user message is the
-            // implicit "session started" affordance.
             let chat_scope_label: String = match chat_filter {
                 Some(chat_id) => format!("chat_id: {chat_id} (single-chat mode)"),
                 None => "chat_id: <any> (multi-chat mode)".to_string(),
             };
+
+            use secrecy::ExposeSecret;
+            let token_str = token_secret.expose_secret();
+
+            // Phase 19 Task 3: daemon-first, in-process fallback —
+            // same pattern as the Local branch.
+            if let Ok(sp) = default_socket_path() {
+                let transport = Arc::new(ReqwestTransport::new(token_str));
+
+                eprintln!(
+                    "aivyx {} (daemon) — telegram bot live\n\
+                     {}\n\
+                     daemon: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    chat_scope_label,
+                    sp.display(),
+                );
+
+                match run_telegram_daemon_multi_session(
+                    transport,
+                    chat_filter,
+                    sp.clone(),
+                    Some(active_role_name.clone()),
+                    shutdown.clone(),
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx: daemon telegram session failed ({e}), \
+                             falling back to in-process."
+                        );
+                    }
+                }
+            } else {
+                eprintln!("aivyx: no socket path available, using in-process mode.");
+            }
+
+            // In-process fallback (original Phase 8 path).
             eprintln!(
-                "aivyx {} — telegram bot live\n\
+                "aivyx {} — telegram bot live (in-process)\n\
                  {}\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
@@ -1481,12 +1511,6 @@ async fn run_async(
                 verified_event_count,
             );
 
-            // `SecretString` exposes the inner string via
-            // `secrecy::ExposeSecret`. We pull it out here at the
-            // last moment before handing it to `ReqwestTransport`,
-            // which owns the `frankenstein::Bot` and never logs the
-            // token.
-            use secrecy::ExposeSecret;
             let telegram_config = TelegramSessionConfig {
                 model,
                 system_prompt,
@@ -1499,7 +1523,7 @@ async fn run_async(
             };
             run_telegram_multi_session(
                 "aivyx-telegram",
-                token_secret.expose_secret(),
+                token_str,
                 chat_filter,
                 telegram_config,
                 provider,
@@ -1510,6 +1534,268 @@ async fn run_async(
             .map(|_report| ())
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// TelegramDaemonChannel — identity stub for the daemon's ChannelFactory
+// ---------------------------------------------------------------------------
+
+struct TelegramDaemonChannel {
+    session: aivyx_core::SessionId,
+    token: aivyx_core::CancellationToken,
+}
+
+impl TelegramDaemonChannel {
+    fn new() -> Self {
+        TelegramDaemonChannel {
+            session: aivyx_core::SessionId::new(),
+            token: aivyx_core::CancellationToken::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl aivyx_core::ChannelContext for TelegramDaemonChannel {
+    fn channel_name(&self) -> &str {
+        "aivyx-telegram-daemon"
+    }
+
+    fn platform(&self) -> aivyx_core::ChannelPlatform {
+        aivyx_core::ChannelPlatform::Telegram
+    }
+
+    fn trust_tier(&self) -> aivyx_capability::TrustTier {
+        aivyx_capability::TrustTier::SemiTrusted
+    }
+
+    fn session_id(&self) -> aivyx_core::SessionId {
+        self.session
+    }
+
+    async fn stream_event(
+        &self,
+        _event: aivyx_core::StreamEvent<'_>,
+    ) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+
+    async fn finalize(
+        &self,
+        _outcome: &aivyx_core::TurnOutcome,
+    ) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+
+    fn cancellation_token(&self) -> aivyx_core::CancellationToken {
+        self.token.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Daemon-mode Telegram multi-chat pump — Phase 19 Task 3
+// ---------------------------------------------------------------------------
+
+const TELEGRAM_LONG_POLL_TIMEOUT_SECS: u32 = 25;
+
+/// Drive a multi-chat Telegram frontend over the daemon IPC channel.
+///
+/// Outer `get_updates` loop retains the same structure as the in-process
+/// `run_telegram_multi_session`: one cursor, per-chat routing, lazy spawn
+/// of inner tasks. But each inner task submits turns through a
+/// `DaemonSession` instead of constructing an agent — the daemon owns
+/// the agent stack, memory, and audit chain.
+///
+/// Streamed `StreamEventPayload` events are accumulated per turn and
+/// sent as a single Telegram message at `TurnComplete` (Q3→(b)).
+/// `/cancel` is forwarded as `CancelTurn` over IPC.
+async fn run_telegram_daemon_multi_session(
+    transport: Arc<ReqwestTransport>,
+    chat_filter: Option<i64>,
+    socket_path: std::path::PathBuf,
+    role: Option<String>,
+    shutdown: CancellationToken,
+) -> Result<(), String> {
+    use std::collections::HashMap;
+
+    struct ChatRoute {
+        sender: tokio::sync::mpsc::Sender<aivyx_telegram::transport::IncomingMessage>,
+        handle: tokio::task::JoinHandle<Result<(), String>>,
+    }
+
+    let mut routes: HashMap<i64, ChatRoute> = HashMap::new();
+    let mut offset: i64 = 0;
+
+    loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        let updates = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            res = transport.get_updates(offset, TELEGRAM_LONG_POLL_TIMEOUT_SECS) => match res {
+                Ok(batch) => batch,
+                Err(e) => {
+                    eprintln!("aivyx-telegram(daemon): get_updates failed ({e}); backing off 1s");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+        };
+
+        if updates.is_empty() {
+            continue;
+        }
+
+        for msg in updates {
+            offset = offset.max(msg.update_id + 1);
+
+            if let Some(allowed) = chat_filter {
+                if msg.chat_id != allowed {
+                    continue;
+                }
+            }
+
+            let chat_id = msg.chat_id;
+
+            let route = routes.entry(chat_id).or_insert_with(|| {
+                let (tx, rx) = tokio::sync::mpsc::channel(32);
+                let transport_clone = Arc::clone(&transport);
+                let sp = socket_path.clone();
+                let role_clone = role.clone();
+                let shutdown_clone = shutdown.clone();
+                let handle = tokio::spawn(async move {
+                    run_telegram_daemon_chat_task(
+                        transport_clone,
+                        chat_id,
+                        sp,
+                        role_clone,
+                        rx,
+                        shutdown_clone,
+                    )
+                    .await
+                });
+                ChatRoute { sender: tx, handle }
+            });
+
+            if let Err(e) = route.sender.send(msg).await {
+                eprintln!(
+                    "aivyx-telegram(daemon): chat {chat_id} mailbox send failed ({e}); dropping route"
+                );
+                routes.remove(&chat_id);
+            }
+        }
+    }
+
+    let drained: Vec<(i64, ChatRoute)> = routes.drain().collect();
+    for (_chat_id, ChatRoute { sender, handle }) in drained {
+        drop(sender);
+        match handle.await {
+            Ok(Err(e)) => eprintln!("aivyx-telegram(daemon): inner task error: {e}"),
+            Err(e) => eprintln!("aivyx-telegram(daemon): inner task join failed: {e}"),
+            Ok(Ok(())) => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Per-chat inner task for the daemon-mode Telegram pump.
+///
+/// Connects a `DaemonSession`, then loops: receive messages from the
+/// outer multiplexer's mailbox, submit each as a turn, accumulate
+/// streamed events, and send the accumulated text as one Telegram
+/// message per turn. `/cancel` messages fire `CancelTurn` over IPC.
+async fn run_telegram_daemon_chat_task(
+    transport: Arc<ReqwestTransport>,
+    chat_id: i64,
+    socket_path: std::path::PathBuf,
+    role: Option<String>,
+    mut mailbox: tokio::sync::mpsc::Receiver<aivyx_telegram::transport::IncomingMessage>,
+    shutdown: CancellationToken,
+) -> Result<(), String> {
+    let mut session = DaemonSession::connect(
+        &socket_path,
+        role,
+        Some(aivyx_channel::daemon_ipc::FrontendType::Telegram),
+    )
+    .await?;
+
+    loop {
+        let msg = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            maybe_msg = mailbox.recv() => match maybe_msg {
+                Some(m) => m,
+                None => break,
+            }
+        };
+
+        if msg.text.trim() == "/cancel" {
+            let _ = session.cancel_turn().await;
+            continue;
+        }
+
+        let (events, _outcome) = session.submit_input(msg.text).await?;
+
+        let mut buf = String::new();
+        for event in &events {
+            match event {
+                aivyx_channel::daemon_ipc::StreamEventPayload::Text { text } => {
+                    buf.push_str(text);
+                }
+                aivyx_channel::daemon_ipc::StreamEventPayload::Status { status } => {
+                    if !buf.is_empty() && !buf.ends_with('\n') {
+                        buf.push('\n');
+                    }
+                    buf.push_str("… ");
+                    buf.push_str(status);
+                    buf.push('\n');
+                }
+                aivyx_channel::daemon_ipc::StreamEventPayload::ToolCallStarted {
+                    tool_name,
+                    ..
+                } => {
+                    if !buf.is_empty() && !buf.ends_with('\n') {
+                        buf.push('\n');
+                    }
+                    buf.push_str("→ ");
+                    buf.push_str(tool_name);
+                    buf.push('\n');
+                }
+                aivyx_channel::daemon_ipc::StreamEventPayload::ToolCallFinished {
+                    tool_name,
+                    outcome_summary,
+                    ..
+                } => {
+                    if !buf.is_empty() && !buf.ends_with('\n') {
+                        buf.push('\n');
+                    }
+                    buf.push_str("← ");
+                    buf.push_str(tool_name);
+                    buf.push(' ');
+                    buf.push_str(outcome_summary);
+                    buf.push('\n');
+                }
+                aivyx_channel::daemon_ipc::StreamEventPayload::ToolOutput { .. } => {}
+            }
+        }
+
+        if buf.trim().is_empty() {
+            buf = "(no reply)".to_string();
+        }
+
+        transport
+            .send_message(OutgoingMessage {
+                chat_id,
+                text: buf,
+            })
+            .await
+            .map_err(|e| format!("send_message to chat {chat_id}: {e}"))?;
+    }
+
+    let _ = session.disconnect().await;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -72,7 +72,7 @@
 // The type is imported directly from `telegram_channel` in the tests
 // module; no re-export at the lib root is needed yet.
 mod telegram_channel;
-mod transport;
+pub mod transport;
 
 // Phase 8 Task 4 — the Telegram analogue of
 // `aivyx_channel::run_session`. Owns its own long-poll loop.

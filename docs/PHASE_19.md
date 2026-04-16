@@ -518,3 +518,65 @@ Same shape as Phase 14–18 exit freezes:
   `two_concurrent_connections`, `connection_after_disconnect`.
 - **Test count:** 548 (546 entry + 2 new). Target met.
 - **Clippy:** clean.
+
+## Decisions made at Task 3
+
+10. **Q2 → (b) variant: daemon-mode pump in the binary.** The
+    Telegram frontend retains the outer `get_updates` loop and
+    per-chat routing, but each inner task submits turns through
+    a `DaemonSession` instead of constructing an agent. The
+    pump lives in the binary (not `aivyx-telegram`) because the
+    dependency cycle constraint forbids `aivyx-telegram` from
+    importing `DaemonSession`. Transport types
+    (`TelegramTransport`, `ReqwestTransport`, `IncomingMessage`,
+    `OutgoingMessage`, `TransportError`) widened from
+    `pub(crate)` to `pub` so the binary can access them.
+11. **Q3 → (b) accumulate per turn, send one message.** Streamed
+    `StreamEventPayload` events are accumulated into a `String`
+    buffer per turn. On `TurnComplete`, the buffer is sent as a
+    single Telegram message via `transport.send_message()`.
+    Matches the in-process Telegram path's one-message-per-turn
+    behavior (Phase 8's `TelegramChannel::finalize`).
+12. **Daemon-first + in-process fallback for Telegram.** Same
+    pattern as the Local branch (Phase 18 Task 3). If a daemon
+    is listening, Telegram turns route through IPC; on failure,
+    falls back to the original `run_telegram_multi_session`
+    in-process path.
+13. **`TelegramDaemonChannel` identity stub.** The daemon's
+    `ChannelFactory` now dispatches on `FrontendType`: `Local`
+    returns `LocalChannel`, `Telegram` returns a lightweight
+    `TelegramDaemonChannel` that reports `SemiTrusted` trust
+    tier and `Telegram` platform. The stub's `stream_event` and
+    `finalize` are no-ops — the `IpcChannelBridge` handles
+    those.
+
+## Task 3 ship record
+
+- **Cut:** `aivyx-telegram/src/transport.rs`: widened
+  `OutgoingMessage`, `IncomingMessage`, `TransportError`,
+  `TelegramTransport`, `ReqwestTransport` from `pub(crate)` to
+  `pub`. Removed stale `#[allow(dead_code)]` annotations.
+- **Cut:** `aivyx-telegram/src/lib.rs`: `transport` module
+  visibility widened from `mod` to `pub mod`.
+- **Cut:** `aivyx.rs` (+210 lines):
+  - `TelegramDaemonChannel` identity stub for `ChannelFactory`.
+  - `run_telegram_daemon_multi_session` — outer `get_updates`
+    loop with per-chat routing, `DaemonSession` per inner task.
+  - `run_telegram_daemon_chat_task` — per-chat inner task:
+    connect, submit turns, accumulate events, send one Telegram
+    message per turn, forward `/cancel` as `CancelTurn`.
+  - `ChannelKind::Telegram` branch updated with daemon-first +
+    in-process fallback.
+  - Daemon-run `channel_factory` dispatches on `FrontendType`.
+- **Cut:** `daemon_roundtrip_e2e.rs` (+150 lines):
+  - `PlatformEchoAgent` — echoes channel platform and trust
+    tier in turn outcome.
+  - `TestTelegramChannel` — test-local identity stub.
+  - `telegram_frontend_type_gets_telegram_channel` — proves
+    `FrontendType::Telegram` dispatches through factory to
+    `SemiTrusted`/`Telegram` channel.
+  - `mixed_local_and_telegram_frontends_on_same_daemon` — two
+    clients (Local + Telegram) on one daemon, each getting the
+    correct platform and trust tier.
+- **Test count:** 550 (548 + 2 new). Target met.
+- **Clippy:** clean.

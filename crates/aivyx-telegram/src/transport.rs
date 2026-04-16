@@ -1,4 +1,4 @@
-//! Private transport seam between [`TelegramChannel`](super::TelegramChannel)
+//! Transport seam between [`TelegramChannel`](super::TelegramChannel)
 //! and the Bot API.
 //!
 //! The real implementation ([`ReqwestTransport`]) is a thin wrapper
@@ -33,7 +33,7 @@ use thiserror::Error;
 /// makes the scripted transport's capture buffer directly inspectable
 /// in tests without pulling `frankenstein` types into assertion code.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutgoingMessage {
+pub struct OutgoingMessage {
     pub chat_id: i64,
     pub text: String,
 }
@@ -50,9 +50,8 @@ pub(crate) struct OutgoingMessage {
 /// (also `#[allow(dead_code)]` until task 2). The #[allow] is the
 /// minimum scoped annotation so clippy's -D warnings still catches
 /// anything newly orphaned elsewhere in the module.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IncomingMessage {
+pub struct IncomingMessage {
     pub update_id: i64,
     pub chat_id: i64,
     pub user_id: i64,
@@ -60,7 +59,7 @@ pub(crate) struct IncomingMessage {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum TransportError {
+pub enum TransportError {
     /// A Telegram API call failed — network error, 4xx from Bot API,
     /// deserialization mismatch, or a platform-side rate-limit. The
     /// string is diagnostic only; callers treat it as opaque.
@@ -69,7 +68,7 @@ pub(crate) enum TransportError {
 }
 
 #[async_trait]
-pub(crate) trait TelegramTransport: Send + Sync {
+pub trait TelegramTransport: Send + Sync {
     /// Long-poll the Bot API for new updates. The `offset` is the
     /// "all updates with id >= offset" cursor — callers pass the
     /// last-seen `update_id + 1` to acknowledge everything before it.
@@ -81,7 +80,6 @@ pub(crate) trait TelegramTransport: Send + Sync {
     /// loop is where this becomes load-bearing. The allow is on the
     /// trait method because the test `ScriptedTransport::get_updates`
     /// impl is also currently unused at runtime.
-    #[allow(dead_code)]
     async fn get_updates(
         &self,
         offset: i64,
@@ -108,13 +106,12 @@ pub(crate) trait TelegramTransport: Send + Sync {
 /// catches "we're importing a crate we don't actually use" at build
 /// time rather than at phase exit. A later Task 7 smoke test against
 /// a real bot token is what actually covers this code path.
-pub(crate) struct ReqwestTransport {
+pub struct ReqwestTransport {
     bot: frankenstein::client_reqwest::Bot,
 }
 
 impl ReqwestTransport {
-    #[allow(dead_code)] // exercised by the Task 4 binary wiring, not by Task 1 tests
-    pub(crate) fn new(token: &str) -> Self {
+    pub fn new(token: &str) -> Self {
         ReqwestTransport {
             bot: frankenstein::client_reqwest::Bot::new(token),
         }

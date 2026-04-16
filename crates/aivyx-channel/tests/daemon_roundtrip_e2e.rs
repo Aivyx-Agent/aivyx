@@ -24,7 +24,8 @@ use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSess
 use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
-use aivyx_channel::daemon_server::{run_daemon_compat, run_poc_daemon};
+use aivyx_channel::daemon_ipc::FrontendType;
+use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory};
 use aivyx_channel::LocalChannel;
 use aivyx_core::{
     Agent, AgentId, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome,
@@ -925,4 +926,248 @@ async fn collect_turn_events(
             Err(e) => panic!("decode error: {e}"),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// PlatformEchoAgent — echoes the channel's platform in the turn outcome.
+// ---------------------------------------------------------------------------
+
+struct PlatformEchoAgent {
+    id: AgentId,
+    caps: CapabilitySet,
+}
+
+#[async_trait]
+impl Agent for PlatformEchoAgent {
+    fn id(&self) -> AgentId {
+        self.id
+    }
+
+    fn capabilities(&self) -> &CapabilitySet {
+        &self.caps
+    }
+
+    async fn turn(
+        &self,
+        _message: Message,
+        channel: &dyn ChannelContext,
+    ) -> TurnOutcome {
+        let platform = format!("{:?}", channel.platform());
+        let tier = format!("{:?}", channel.trust_tier());
+        let text = format!("platform={platform} tier={tier}");
+        let _ = channel.stream_event(StreamEvent::Text(&text)).await;
+
+        TurnOutcome::Completed {
+            final_message: text,
+            tool_calls_made: 0,
+            duration: Duration::from_millis(1),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TelegramDaemonChannel — identity stub for Telegram frontend type tests.
+// ---------------------------------------------------------------------------
+
+struct TestTelegramChannel {
+    session: aivyx_core::SessionId,
+    token: CancellationToken,
+}
+
+impl TestTelegramChannel {
+    fn new() -> Self {
+        TestTelegramChannel {
+            session: aivyx_core::SessionId::new(),
+            token: CancellationToken::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChannelContext for TestTelegramChannel {
+    fn channel_name(&self) -> &str {
+        "test-telegram-daemon"
+    }
+
+    fn platform(&self) -> aivyx_core::ChannelPlatform {
+        aivyx_core::ChannelPlatform::Telegram
+    }
+
+    fn trust_tier(&self) -> aivyx_capability::TrustTier {
+        aivyx_capability::TrustTier::SemiTrusted
+    }
+
+    fn session_id(&self) -> aivyx_core::SessionId {
+        self.session
+    }
+
+    async fn stream_event(
+        &self,
+        _event: StreamEvent<'_>,
+    ) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+
+    async fn finalize(
+        &self,
+        _outcome: &TurnOutcome,
+    ) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+
+    fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 19 Task 3 — Telegram frontend type dispatches through ChannelFactory.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn telegram_frontend_type_gets_telegram_channel() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(PlatformEchoAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let factory: ChannelFactory = Arc::new(|ft| match ft {
+        FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
+        FrontendType::Local => Arc::new(LocalChannel::new("test-local", Vec::<u8>::new())),
+    });
+
+    let shutdown = CancellationToken::new();
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut session = DaemonSession::connect(
+        &socket_path,
+        None,
+        Some(FrontendType::Telegram),
+    )
+    .await
+    .expect("connect must succeed");
+
+    let (events, outcome) = session
+        .submit_input("hello".to_string())
+        .await
+        .expect("submit must succeed");
+
+    assert!(
+        outcome.contains("Telegram"),
+        "outcome must report Telegram platform: {outcome}"
+    );
+    assert!(
+        outcome.contains("SemiTrusted"),
+        "outcome must report SemiTrusted tier: {outcome}"
+    );
+    assert!(
+        !events.is_empty(),
+        "must receive at least one stream event"
+    );
+
+    let _ = session.disconnect().await;
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[tokio::test]
+async fn mixed_local_and_telegram_frontends_on_same_daemon() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(PlatformEchoAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let factory: ChannelFactory = Arc::new(|ft| match ft {
+        FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
+        FrontendType::Local => Arc::new(LocalChannel::new("test-local", Vec::<u8>::new())),
+    });
+
+    let shutdown = CancellationToken::new();
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Connect a Local frontend.
+    let mut local_session = DaemonSession::connect(
+        &socket_path,
+        None,
+        Some(FrontendType::Local),
+    )
+    .await
+    .expect("local connect must succeed");
+
+    // Connect a Telegram frontend.
+    let mut tg_session = DaemonSession::connect(
+        &socket_path,
+        None,
+        Some(FrontendType::Telegram),
+    )
+    .await
+    .expect("telegram connect must succeed");
+
+    // Submit turns on both.
+    let (_local_events, local_outcome) = local_session
+        .submit_input("hi".to_string())
+        .await
+        .expect("local submit must succeed");
+
+    let (_tg_events, tg_outcome) = tg_session
+        .submit_input("hi".to_string())
+        .await
+        .expect("telegram submit must succeed");
+
+    // Local should report Local platform + Trusted tier.
+    assert!(
+        local_outcome.contains("Local"),
+        "local outcome must report Local platform: {local_outcome}"
+    );
+    assert!(
+        local_outcome.contains("Trusted"),
+        "local outcome must report Trusted tier: {local_outcome}"
+    );
+
+    // Telegram should report Telegram platform + SemiTrusted tier.
+    assert!(
+        tg_outcome.contains("Telegram"),
+        "telegram outcome must report Telegram platform: {tg_outcome}"
+    );
+    assert!(
+        tg_outcome.contains("SemiTrusted"),
+        "telegram outcome must report SemiTrusted tier: {tg_outcome}"
+    );
+
+    // Different session IDs.
+    assert_ne!(
+        local_session.session_id, tg_session.session_id,
+        "different frontends must get different session IDs"
+    );
+
+    let _ = local_session.disconnect().await;
+    let _ = tg_session.disconnect().await;
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }
