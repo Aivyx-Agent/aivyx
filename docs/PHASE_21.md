@@ -337,6 +337,27 @@ command syntax.)
 **Estimated streak risk:** Production-core — none (frontend
 code lives in `aivyx-channel`).
 
+## Task 7 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_client.rs` (+43):
+  `DaemonSession::resolve_gate` method — sends
+  `FrontendMessage::ResolveGate`, waits for
+  `DaemonEnvelope::GateResolved` or `Error`.
+- `crates/aivyx-channel/src/daemon_session.rs` (+23):
+  CLI REPL gate handling — after rendering events, scans for
+  `ApprovalGate`, prompts `Approve? [y/N]:`, reads operator
+  input, calls `session.resolve_gate(...)`, prints status.
+- `crates/aivyx-channel/src/telegram_daemon_frontend.rs` (+68):
+  Gate command parser (`/approve mission-id gate-id` and
+  `/reject mission-id gate-id`). Gate rendering includes
+  reply hint text. 4 unit tests: parse approve, parse reject,
+  unknown command returns none, approval gate renders with
+  reply hint.
+
+**Test delta:** 594 → 598 (+4).
+**All three byte-identity streaks held.**
+
 ### Task 8 — Exit freeze
 
 Standard exit procedure: deferrals block, prediction-vs-

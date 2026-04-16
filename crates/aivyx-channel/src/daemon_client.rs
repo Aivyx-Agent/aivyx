@@ -189,6 +189,52 @@ impl DaemonSession {
         Ok(())
     }
 
+    /// Send `ResolveGate` and wait for `GateResolved` (or `Error`).
+    pub async fn resolve_gate(
+        &mut self,
+        mission_id: String,
+        gate_id: String,
+        approved: bool,
+    ) -> Result<(), String> {
+        let msg = FrontendMessage::ResolveGate {
+            mission_id,
+            gate_id,
+            approved,
+        };
+        let frame = encode_frame(&msg).map_err(|e| format!("encode ResolveGate: {e}"))?;
+        {
+            let mut w = self.writer.lock().await;
+            w.write_all(&frame)
+                .await
+                .map_err(|e| format!("write ResolveGate: {e}"))?;
+        }
+
+        loop {
+            match decode_frame::<DaemonEnvelope>(&self.buf) {
+                Ok((DaemonEnvelope::GateResolved { .. }, consumed)) => {
+                    self.buf.drain(..consumed);
+                    return Ok(());
+                }
+                Ok((DaemonEnvelope::Error { code, message }, _)) => {
+                    return Err(format!("gate resolve error ({code}): {message}"));
+                }
+                Ok((DaemonEnvelope::ShuttingDown { reason }, _)) => {
+                    return Err(format!("daemon shutting down: {reason}"));
+                }
+                Err(FrameError::IncompleteBuf) => {
+                    read_more(&mut self.reader, &mut self.buf).await?;
+                }
+                Ok((other, consumed)) => {
+                    self.buf.drain(..consumed);
+                    return Err(format!("unexpected message during ResolveGate: {other:?}"));
+                }
+                Err(e) => {
+                    return Err(format!("frame decode error: {e}"));
+                }
+            }
+        }
+    }
+
     /// Return a cloneable cancel handle for use from a signal handler.
     pub fn cancel_handle(&self) -> DaemonCancelHandle {
         DaemonCancelHandle {

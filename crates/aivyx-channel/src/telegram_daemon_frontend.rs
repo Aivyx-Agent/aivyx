@@ -215,6 +215,24 @@ async fn run_telegram_daemon_chat_task(
             continue;
         }
 
+        if let Some(gate_cmd) = parse_gate_command(msg.text.trim()) {
+            let result = session
+                .resolve_gate(gate_cmd.mission_id, gate_cmd.gate_id, gate_cmd.approved)
+                .await;
+            let reply = match result {
+                Ok(()) => {
+                    let status = if gate_cmd.approved { "approved" } else { "rejected" };
+                    format!("✓ Gate {status}.")
+                }
+                Err(e) => format!("✗ Gate resolve failed: {e}"),
+            };
+            transport
+                .send_message(OutgoingMessage { chat_id, text: reply })
+                .await
+                .map_err(|e| format!("send_message to chat {chat_id}: {e}"))?;
+            continue;
+        }
+
         let (events, _outcome) = session.submit_input(msg.text).await?;
 
         let buf = render_events_for_telegram(&events);
@@ -284,7 +302,9 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
                     buf.push('\n');
                 }
                 buf.push_str(&format!(
-                    "⚑ APPROVAL GATE [{mission_id}/{gate_id}]: {reason}\n"
+                    "⚑ APPROVAL GATE [{mission_id}/{gate_id}]: {reason}\n\
+                     Reply /approve {mission_id} {gate_id}\n\
+                     or    /reject  {mission_id} {gate_id}\n"
                 ));
             }
         }
@@ -294,5 +314,71 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
         "(no reply)".to_string()
     } else {
         buf
+    }
+}
+
+struct GateCommand {
+    mission_id: String,
+    gate_id: String,
+    approved: bool,
+}
+
+fn parse_gate_command(text: &str) -> Option<GateCommand> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let approved = match parts[0] {
+        "/approve" => true,
+        "/reject" => false,
+        _ => return None,
+    };
+    Some(GateCommand {
+        mission_id: parts[1].to_string(),
+        gate_id: parts[2].to_string(),
+        approved,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon_ipc::StreamEventPayload;
+
+    #[test]
+    fn parse_approve_command() {
+        let cmd = parse_gate_command("/approve m-001 g-abc").unwrap();
+        assert!(cmd.approved);
+        assert_eq!(cmd.mission_id, "m-001");
+        assert_eq!(cmd.gate_id, "g-abc");
+    }
+
+    #[test]
+    fn parse_reject_command() {
+        let cmd = parse_gate_command("/reject m-002 g-xyz").unwrap();
+        assert!(!cmd.approved);
+        assert_eq!(cmd.mission_id, "m-002");
+        assert_eq!(cmd.gate_id, "g-xyz");
+    }
+
+    #[test]
+    fn parse_unknown_command_returns_none() {
+        assert!(parse_gate_command("/cancel").is_none());
+        assert!(parse_gate_command("/approve m-001").is_none());
+        assert!(parse_gate_command("hello world").is_none());
+    }
+
+    #[test]
+    fn approval_gate_renders_with_reply_hint() {
+        let events = vec![StreamEventPayload::ApprovalGate {
+            mission_id: "m-001".into(),
+            gate_id: "g-abc".into(),
+            reason: "deploy?".into(),
+            scope: None,
+        }];
+        let rendered = render_events_for_telegram(&events);
+        assert!(rendered.contains("APPROVAL GATE"));
+        assert!(rendered.contains("/approve m-001 g-abc"));
+        assert!(rendered.contains("/reject  m-001 g-abc"));
     }
 }

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession};
-use crate::daemon_ipc::FrontendType;
+use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::session::SessionReport;
 
 const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -132,6 +132,40 @@ where
             write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
         }
         writer.flush().map_err(|e| format!("render flush: {e}"))?;
+
+        for event in &events {
+            if let StreamEventPayload::ApprovalGate {
+                mission_id,
+                gate_id,
+                ..
+            } = event
+            {
+                write!(writer, "  Approve? [y/N]: ")
+                    .map_err(|e| format!("gate prompt write: {e}"))?;
+                writer.flush().map_err(|e| format!("gate prompt flush: {e}"))?;
+                let mut gate_line = String::new();
+                match reader.read_line(&mut gate_line) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => return Err(format!("gate input read: {e}")),
+                }
+                let approved = matches!(
+                    gate_line.trim().to_lowercase().as_str(),
+                    "y" | "yes"
+                );
+                session
+                    .resolve_gate(
+                        mission_id.clone(),
+                        gate_id.clone(),
+                        approved,
+                    )
+                    .await?;
+                let status = if approved { "approved" } else { "rejected" };
+                writeln!(writer, "  Gate {status}.")
+                    .map_err(|e| format!("gate status write: {e}"))?;
+                writer.flush().map_err(|e| format!("gate status flush: {e}"))?;
+            }
+        }
 
         turns_run += 1;
         last_outcome_str = Some(outcome);
