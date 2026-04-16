@@ -249,20 +249,33 @@ identity streaks held (DESIGN.md at 19, PRODUCT.md at
 (546→550). Closed the Telegram-over-daemon deferral
 from Phase 16.
 
-## Phase 20 — Daemon Management + Deferral Cleanup (active)
+## Phase 20 — Daemon Management + Deferral Cleanup (frozen)
 
-**Active — see [PHASE_20.md](PHASE_20.md).** Non-product-
-shape cleanup phase targeting six of sixteen rolling
-deferrals: `daemon status`/`stop` subcommands, PID file,
-`--no-daemon` flag, daemon-mode banner parity, and the
-`CapabilitySet::grants` reflexivity + `CEILING_SEMITRUSTED`
-doc-comment pair. Rolling backlog 16 → 10 at exit.
+**Frozen — see [PHASE_20.md](PHASE_20.md).** Non-product-
+shape cleanup phase (same category as Phase 15). Closed
+six of sixteen rolling deferrals: `daemon status`/`stop`
+subcommands (Phase 17), PID file (Phase 17), `--no-daemon`
+flag (Phase 18), daemon-mode banner parity (Phase 18),
+`CapabilitySet::grants` reflexivity investigation (Phase 13),
+and `CEILING_SEMITRUSTED` ▲-row doc-comment rewrite
+(Phase 15). Rolling backlog 16 → 10. Zero net-new deferrals.
+Test delta +19 (550→569). All three byte-identity streaks
+held: DESIGN.md at twenty, PRODUCT.md at eight, production-
+core at nine (new record).
 
-## Phase 21 — shape TBD at Phase 20 exit
+## Phase 21 — Mission Primitive (P2) (active)
 
-Likely candidate: **Mission Primitive (P2)**, the next
-product-shape keystone. Both prerequisites are complete
-(daemon holds live state via P4, role-config declares
-capability envelopes via P9). Alternative candidates:
-Channel SDK Surface (P5), or another lightweight phase
-if deferral pressure warrants it.
+**Active — see [PHASE_21.md](PHASE_21.md).** The next
+product-shape keystone. Both prerequisites are complete:
+daemon holds live state (P4, Phases 16–19), role-config
+declares capability envelopes (P9, Phase 13). This phase
+introduces the long-running work item as a first-class
+primitive — one that survives across process restarts, runs
+under a specific role's envelope, and emits operator-visible
+approval gates as `StreamEvent`s.
+
+## Phase 22 — shape TBD at Phase 21 exit
+
+Likely candidates: Channel SDK Surface (P5), Reflection
+Layer (P8), or another deferral cleanup pass if backlog
+pressure warrants it.

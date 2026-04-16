@@ -369,4 +369,108 @@ explains precisely how each interacts with D4 rules 1–4.
 | 5 | `CapabilitySet::grants` reflexivity | Phase 13 | Task 6 |
 | 6 | `CEILING_SEMITRUSTED` ▲-row doc | Phase 15 | Task 6 |
 
-Rolling backlog: 16 → 10 at exit (if all six close).
+Rolling backlog: 16 → 10 at exit (all six closed).
+
+## Deferrals
+
+**Inherited deferrals closed by Phase 20:**
+
+- **`daemon status` / `daemon stop` subcommands.** Phase 17
+  net-new. **Closed by Task 2** — `CliMode::DaemonStatus` and
+  `CliMode::DaemonStop` with lightweight `current_thread` runtime,
+  `FrontendMessage::Shutdown` variant, `daemon_status()` and
+  `daemon_stop()` standalone client functions.
+- **PID file at `$XDG_RUNTIME_DIR/aivyx/daemon.pid`.** Phase 17
+  net-new. **Closed by Task 3** — `PidGuard` with `Drop` impl,
+  `read_pid_file()` utility, PID displayed in `daemon status`.
+- **`--no-daemon` flag for local mode.** Phase 18 net-new.
+  **Closed by Task 4** — `no_daemon: bool` in `CliArgs`, let-chain
+  guards on both Local and Telegram daemon-first blocks.
+- **Daemon-mode banner parity with in-process banner.** Phase 18
+  net-new. **Closed by Task 5** — format-string edit only, no IPC
+  protocol change needed (Decision 5).
+- **`CapabilitySet::grants` reflexivity investigation.** Phase 13
+  Task 4 deferral. **Closed by Task 6** — reflexive for all
+  practically-occurring scopes; theoretical counter-example
+  (glob metacharacters as literals) cannot arise from real
+  tool/role definitions. Pinned with a 7-case test.
+- **Misleading `CEILING_SEMITRUSTED` ▲-row doc comment.** Phase 15
+  Task 4. **Closed by Task 6** — rewritten to distinguish ⊘ rows
+  (hard-denied) from ▲ rows (conditionally granted) with precise
+  D4 rule interaction semantics.
+
+**Rolling deferrals still open after Phase 20 (inherited,
+untouched):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral. Untouched by Phase 20.
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Deferred indefinitely.
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Deferred
+  indefinitely.
+- **Binary response bodies / non-UTF-8.** Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering.** Phase 12 Task 1.
+  Deferred reactively.
+- **Multi-level sub-agent nesting.** Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC.**
+  Phase 17 Q6→(c+). Untouched. Tagged: **reactive.**
+- **Telegram-specific protocol extensions
+  (attachment delivery, inline keyboards, etc.).**
+  Phase 19 net-new. Untouched.
+
+**Net-new deferrals from Phase 20 itself:**
+
+None.
+
+**Backlog shape at Phase 20 exit:** sixteen inherited, six
+closed, zero net-new. Total **ten**.
+
+## Prediction vs. reality
+
+- **DESIGN.md** — Predicted: streak extends to twenty.
+  **Reality: streak holds at twenty.** ✓
+- **PRODUCT.md** — Predicted: streak extends to eight.
+  **Reality: streak holds at eight.** ✓
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak extends to nine (new record). **Reality: streak
+  holds at nine (new record).** ✓
+
+All three predictions correct. Phase 20 continues the
+streak of accurate streak predictions established in
+Phase 16.
+
+## Exit criteria
+
+- [x] All six targeted deferrals closed.
+- [x] `daemon status` and `daemon stop` subcommands ship
+      with parser tests and integration tests.
+- [x] PID file written on daemon start, removed on clean
+      shutdown via `PidGuard` Drop guard.
+- [x] `--no-daemon` flag skips daemon dispatch for both
+      Local and Telegram channels.
+- [x] Daemon-mode banners match in-process banners
+      (fs sandbox, memory status, audit event count).
+- [x] `CEILING_SEMITRUSTED` doc comment rewritten with
+      precise ⊘/▲ semantics.
+- [x] `grants` reflexivity investigated, documented, and
+      pinned with a test.
+- [x] Test count: 550 → 569 (+19).
+- [x] All three byte-identity streaks held:
+      DESIGN.md (`e0d6437`, 20 phases),
+      PRODUCT.md (`80189b4`, 8 phases),
+      `aivyx-core/src/lib.rs` (`ba9a724`, 9 phases — new record).
+- [x] Zero net-new deferrals.
+- [x] Rolling backlog: 16 → 10.
+- [x] Deferrals block recorded.
+- [x] Prediction-versus-reality block recorded.
+- [x] `docs/README.md` phase-status table reflects exit.
+- [x] `docs/ROADMAP.md` Phase 20 frozen, Phase 21 scaffold.
+- [x] `docs/PRODUCT_ROADMAP.md` Daemon Migration milestone
+      updated with Phase 20 cleanup record.

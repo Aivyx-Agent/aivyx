@@ -98,10 +98,23 @@ streaks held; production-core at eight consecutive phases.
 Closed the Telegram-over-daemon deferral from Phase 16.
 See [`docs/PHASE_19.md`](PHASE_19.md).
 
-**Next:** both adapters now route through the daemon. Likely
-candidates: Mission Primitive (P2), deferral cleanup pass,
-or Channel SDK Surface (P5). Subsequent phases complete the
-migration for future adapters.
+**Phase 20 (Daemon Management + Deferral Cleanup, 2026-04-16):**
+non-product-shape cleanup phase closing six daemon-management
+and capability-system deferrals accumulated during the migration:
+`daemon status`/`stop` subcommands with `FrontendMessage::Shutdown`
+IPC, PID file with `Drop` guard, `--no-daemon` flag for in-process-
+only mode, daemon-mode banner parity (no IPC change needed —
+metadata already in scope on the frontend side), `CapabilitySet::
+grants` reflexivity investigation (reflexive for all practical
+scopes), and `CEILING_SEMITRUSTED` doc-comment rewrite. Rolling
+backlog 16 → 10. All byte-identity streaks held; production-core
+at nine consecutive phases (new record). See
+[`docs/PHASE_20.md`](PHASE_20.md).
+
+**Next:** Mission Primitive (P2) — the first product-shape keystone
+after the daemon migration. Both prerequisites complete (P4 daemon,
+P9 role-config). The mission phase introduces long-running work
+items that survive across restarts and emit operator approval gates.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 
