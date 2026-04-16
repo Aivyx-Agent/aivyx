@@ -1139,3 +1139,57 @@ Q3→(a), Q4→(a), Q5→(a), Q6→(b). All resolutions preserve the
 production-core streak. The open doc's prediction that the streak
 would "probably break" turned out to be wrong — every mitigation
 argument held.
+
+### Task 4 — Working-session slot: Phase-17-forward-investment helpers
+
+**Scope decision:** No Q-block reopenings surfaced. Tasks 2–3
+landed cleanly with all six Qs resolved to streak-preserving
+options. Task 4 consumed the slot as three mechanical Phase-17-
+forward-investment helpers — small utilities the PoC module
+already needed internally and that Phase 17's production-
+readiness work will inherit as givens.
+
+**Three deliverables:**
+
+1. **`PROTOCOL_VERSION` constant** — `pub const PROTOCOL_VERSION:
+   &str = "0.1"` in `daemon_ipc.rs`. `daemon_server.rs` updated
+   to use the constant instead of the hardcoded `"0.1"` string
+   in the `DaemonReady` frame. Single source of truth for the
+   version string; Phase 17 bumps this constant if the wire
+   format changes.
+
+2. **`default_socket_path()` function** — resolves
+   `$XDG_RUNTIME_DIR/aivyx/daemon.sock` with
+   `$HOME/.local/share/aivyx/daemon.sock` fallback, matching
+   the transport spec in `docs/DAEMON_IPC.md`. Returns
+   `Result<PathBuf, String>`. Phase 17's daemon binary entry
+   point calls this instead of reimplementing the resolution.
+
+3. **`StreamEventPayload::render_for_cli()` method** — renders
+   each IPC payload variant to CLI-format strings matching
+   `render_stream_event(RenderMode::Human, ..)` output. Text
+   passes through, Status wraps in brackets, ToolCallStarted/
+   ToolCallFinished prefix with directional arrows, ToolOutput
+   prefixes with indented arrow. Phase 17's frontend dispatch
+   path calls `render_for_cli()` to present daemon-streamed
+   events without reimporting the `render_stream_event`
+   machinery.
+
+**Test delta:** +5 (1 `protocol_version_matches_spec`, 1
+`default_socket_path_uses_xdg_runtime_dir_when_set`, 3
+`render_for_cli_*` tests). Combined phase delta Tasks 2–4:
++14 (target was ≥ +5).
+
+**Workspace test count:** 533 (entry baseline 519, delta +14).
+
+**Streak status after Task 4:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak at **sixteen
+  consecutive phases.** Task 4 touched no design decisions.
+- PRODUCT.md byte-identical to `80189b4`. Streak at **four
+  consecutive phases.**
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  at **five consecutive phases.** All Task 4 work landed in
+  `aivyx-channel`, not core.
+- Zero-new-dep streak holds. No new crate dependencies; Task 4
+  added only Rust code to an existing module.

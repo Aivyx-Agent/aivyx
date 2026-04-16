@@ -19,7 +19,7 @@ use aivyx_core::{Agent, ChannelContext, Message, StreamEvent, TurnOutcome};
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
-    StreamEventPayload,
+    StreamEventPayload, PROTOCOL_VERSION,
 };
 
 /// Run a single-connection PoC daemon server.
@@ -63,7 +63,7 @@ pub async fn run_poc_daemon<C: ChannelContext>(
 
     // Send DaemonReady lifecycle event.
     let ready = DaemonLifecycleEvent::DaemonReady {
-        version: "0.1".into(),
+        version: PROTOCOL_VERSION.into(),
     };
     let frame = encode_frame(&ready).map_err(|e| format!("encode DaemonReady: {e}"))?;
     writer

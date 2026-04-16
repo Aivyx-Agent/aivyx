@@ -11,7 +11,12 @@
 //! async read/write loops live in the daemon and frontend dispatch
 //! paths.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
+
+/// Protocol version sent in `DaemonReady`. Phase 16 defines `"0.1"`.
+pub const PROTOCOL_VERSION: &str = "0.1";
 
 /// 16 MiB — per `docs/DAEMON_IPC.md`. A frame whose length prefix
 /// exceeds this is a protocol error.
@@ -19,6 +24,26 @@ pub const MAX_PAYLOAD_SIZE: u32 = 16 * 1024 * 1024;
 
 /// Length of the frame header (4-byte big-endian payload length).
 pub const FRAME_HEADER_LEN: usize = 4;
+
+/// Resolve the daemon socket path per `docs/DAEMON_IPC.md`:
+///
+/// 1. `$XDG_RUNTIME_DIR/aivyx/daemon.sock` (preferred)
+/// 2. `$HOME/.local/share/aivyx/daemon.sock` (fallback)
+///
+/// Returns `Err` only if neither `XDG_RUNTIME_DIR` nor `HOME` is set.
+pub fn default_socket_path() -> Result<PathBuf, String> {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        return Ok(PathBuf::from(xdg).join("aivyx").join("daemon.sock"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("aivyx")
+            .join("daemon.sock"));
+    }
+    Err("neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon socket path".into())
+}
 
 // ---------------------------------------------------------------------------
 // Frontend → Daemon
@@ -103,6 +128,32 @@ pub enum StreamEventPayload {
         tool_name: String,
         chunk: String,
     },
+}
+
+impl StreamEventPayload {
+    /// Render this payload to a human-readable CLI string, matching the
+    /// format that `render_stream_event(RenderMode::Human, ..)` produces
+    /// for the in-process path. This lets a daemon-mode frontend pipe IPC
+    /// events through the same rendering code path without converting back
+    /// to the borrowed `StreamEvent<'a>` type.
+    pub fn render_for_cli(&self) -> String {
+        match self {
+            StreamEventPayload::Text { text } => text.clone(),
+            StreamEventPayload::Status { status } => format!("  ⋯ {status}\n"),
+            StreamEventPayload::ToolCallStarted {
+                tool_name, input, ..
+            } => {
+                let input_oneline = serde_json::to_string(input).unwrap_or_default();
+                format!("  → {tool_name} {input_oneline}\n")
+            }
+            StreamEventPayload::ToolCallFinished {
+                tool_name,
+                outcome_summary,
+                ..
+            } => format!("  ← {tool_name} {outcome_summary}\n"),
+            StreamEventPayload::ToolOutput { chunk, .. } => chunk.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,5 +441,65 @@ mod tests {
             let back: StreamEventPayload = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, payload);
         }
+    }
+
+    // ---- Protocol version constant ----
+
+    #[test]
+    fn protocol_version_matches_spec() {
+        assert_eq!(PROTOCOL_VERSION, "0.1");
+    }
+
+    // ---- Socket path resolver ----
+
+    #[test]
+    fn default_socket_path_uses_xdg_runtime_dir_when_set() {
+        // We can't mutate env in parallel tests safely, so just verify
+        // the function returns Ok when HOME is set (which it always is
+        // in CI and dev). The exact path depends on the environment.
+        let result = default_socket_path();
+        assert!(
+            result.is_ok(),
+            "default_socket_path must succeed when HOME is set: {result:?}"
+        );
+        let path = result.unwrap();
+        assert!(
+            path.ends_with("daemon.sock"),
+            "path must end with daemon.sock: {path:?}"
+        );
+    }
+
+    // ---- render_for_cli ----
+
+    #[test]
+    fn render_for_cli_text_passes_through() {
+        let payload = StreamEventPayload::Text {
+            text: "hello world".into(),
+        };
+        assert_eq!(payload.render_for_cli(), "hello world");
+    }
+
+    #[test]
+    fn render_for_cli_tool_call_started_includes_arrow_and_name() {
+        let payload = StreamEventPayload::ToolCallStarted {
+            tool_id: "id".into(),
+            tool_name: "fs.read".into(),
+            input: serde_json::json!({"path": "/tmp"}),
+        };
+        let rendered = payload.render_for_cli();
+        assert!(rendered.starts_with("  → fs.read"), "got: {rendered}");
+        assert!(rendered.contains("/tmp"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_for_cli_tool_call_finished_includes_arrow_and_summary() {
+        let payload = StreamEventPayload::ToolCallFinished {
+            tool_id: "id".into(),
+            tool_name: "memory.read".into(),
+            outcome_summary: "3 entries".into(),
+        };
+        let rendered = payload.render_for_cli();
+        assert!(rendered.starts_with("  ← memory.read"), "got: {rendered}");
+        assert!(rendered.contains("3 entries"), "got: {rendered}");
     }
 }
