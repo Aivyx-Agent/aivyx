@@ -192,43 +192,45 @@ that the production-core streak would "probably break"
 was wrong; every mitigation argument held. Test delta
 +14 (519→533). Zero new workspace dependencies.
 
-## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N)
+## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N) (active)
 
-Phase 16 exited with a working PoC and a settled
-protocol shape — path (a) from the Phase 16 open
-doc's three-way scaffold. Phase 17 converts the PoC
-into a production-ready daemon. Likely scope:
+**Active — see [PHASE_17.md](PHASE_17.md).** Opened
+2026-04-16 as the second phase of the **Daemon
+Migration keystone**. Converts the Phase 16 PoC
+daemon into a production-ready daemon: multi-turn
+session support, graceful shutdown on signal, auto-
+spawn (P4.5), `daemon` subcommand in the binary, and
+a representative subset of the existing integration
+tests rewritten to run over the IPC boundary. Targets
+closing at least three of Phase 16's five net-new
+deferrals (production lifecycle, auto-spawn, CLI
+integration). The production-core streak faces its
+strongest test — multi-turn session management and
+auto-spawn lifecycle are the most likely mechanisms
+for a trait-level `ChannelContext` change, but the
+Phase 16 `IpcChannelBridge` pattern provides strong
+mitigation. Q-block (Q1–Q6) settles production
+concerns (session management, multi-connection,
+auto-spawn mechanics, graceful shutdown, CLI surface,
+test strategy) rather than protocol concerns.
 
-- **Daemon lifecycle hardening.** Graceful shutdown
-  on signal, crash detection from the frontend,
-  multi-connection support, in-flight turn replay
-  after restart.
-- **Auto-spawn (P4.5).** The frontend detects no
-  running daemon, spawns one transparently, and
-  connects. Phase 16 deferred this as Q6→(b).
-- **`daemon` subcommand + `--daemon` flag in the
-  binary.** The Phase 16 PoC lives at the library
-  level; Phase 17 wires it into the CLI.
-- **LocalChannel regression-test rewrite over IPC.**
-  The existing integration tests continue in-process
-  in Phase 16; Phase 17 rewrites them to run over
-  the daemon IPC boundary.
+## Phase 18 — shape TBD at Phase 17 exit
 
-Phase 17 is where the production-core streak faces
-its strongest test — multi-connection dispatch may
-require a transport-aware `ChannelContext` method
-(Q2 mechanism #1), and auto-spawn may require
-lifecycle primitives that the `StreamEvent` enum
-cannot carry without a new variant (Q4 mechanism #2).
-Phase 17's open doc should name these risks with the
-same honesty Phase 16's open doc did, and the same
-mitigation-first approach.
+Phase 18's shape depends on Phase 17 outcomes. Three
+likely candidates: (a) **Daemon Migration phase 3 of
+N — Telegram adapter port**: move `aivyx-telegram`
+behind the IPC boundary, proving the protocol works
+for a non-interactive channel adapter. This is the
+default path if Phase 17 exits with a production-
+ready LocalChannel-over-daemon. (b) **Mission
+Primitive (P2)**: if the daemon is stable enough,
+the mission primitive becomes unblocked and may be
+more valuable than the Telegram port. (c) **A lighter
+phase** (capability-hygiene, rolling-deferral cleanup)
+if Phase 17 surfaces unexpected complexity that needs
+a cool-down before the next keystone phase.
 
-**Multi-level sub-agent nesting** remains on the
-candidate list as a light follow-up to Phase 14's
-deferral but carries no urgency. Any phase that picks
-up the Phase 13 Task 4 `CapabilitySet::grants`
-reflexivity investigation should also absorb Phase 15's
-▲-row doc-comment rewrite — the two items live in the
-same file and scheduling them together saves one round
-of `aivyx-capability` regression scope.
+**Multi-level sub-agent nesting** and the
+`CapabilitySet::grants` reflexivity + ▲-row doc-
+comment pair remain on the candidate list with no
+urgency.
