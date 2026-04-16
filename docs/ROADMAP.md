@@ -128,46 +128,77 @@ integration tests against narrowed-caps child snapshots
 impossibility test, which read from the same
 `assemble_role_envelope`-produced `CapabilitySet`.
 
-## Phase 15 — Channel-Lib Consolidation (active)
+## Phase 15 — Channel-Lib Consolidation (shipped)
 
-**Active — see [PHASE_15.md](PHASE_15.md).** Opened
-2026-04-16 as the first non-product-shape sub-phase in
-project history. Three concrete outcomes: (a) close the
-Phase 13 Task 3 deferral by writing the cross-crate
-integration test the Phase 14 Task 1 lift of
-`assemble_role_envelope` into `aivyx-channel` unblocked,
-(b) pick up the Phase 14 Task 5 optional cleanup by
-lifting `render_role_envelope` + `drop_reason_for` +
-`build_display_floor` out of `crates/aivyx-channel/src/bin/
-aivyx.rs` into a new `crates/aivyx-channel/src/role_render.rs`
-module, and (c) reset the rolling-deferral age clock by
-closing two directly-tagged deferrals in the same phase.
-Non-goals: no Daemon Migration work, no multi-level sub-
-agent nesting, no `aivyx-core/src/lib.rs` edits. Streaks
-at risk are the lowest of any phase since the streak
-discipline began — all three (DESIGN.md 14, PRODUCT.md 2,
-production-core `aivyx-core/src/lib.rs` 3) are predicted
-to extend, with production-core the single streak most
-mechanically shielded by the phase shape. The load-
-bearing decision for the lift is whether
-`render_role_envelope` becomes `pub` on the channel lib
-or stays crate-private behind a new entry point —
-deferred to Task 3 open.
+**Frozen — see [PHASE_15.md](PHASE_15.md).** Opened
+and exited 2026-04-16 as the **first non-product-shape
+sub-phase** in project history. Five tasks: open
+commit (Task 1, `2d97cfd`), cross-crate integration
+test against `examples/aivyx.toml` closing the Phase
+13 Task 3 cross-crate half (Task 2, `1cc94d6`),
+renderer lift into `crates/aivyx-channel/src/role_
+render.rs` picking up the Phase 14 Task 5 optional
+cleanup and shrinking the binary 2706 → 2071 (−635)
+(Task 3, `8afa00a`), per-tier worked example
+`examples/aivyx-semitrusted.toml` +
+`semitrusted_example_e2e.rs` closing the Phase 13
+Task 3 per-tier-example half with a mechanical
+teaching-comment correction caught inside the task
+(D4 Rule 1 short-circuits before qualifier rules —
+the original prediction that path-qualified
+`fs.read:/tmp/notes/**` would survive
+`CEILING_SEMITRUSTED` was wrong; the ceiling omits
+the `fs.read` *base* entirely) (Task 4, `02d658d`),
+and exit freeze (Task 5). Workspace tests rolled
+509 → 519 (+10). All three byte-identity streaks
+held, all extending: DESIGN.md → fifteen consecutive
+phases, PRODUCT.md → three, production-core
+`aivyx-core/src/lib.rs` → four (the longest
+production-core run in project history, exceeding
+the original Phase 10/11 baseline at its re-
+establishment point). Phase 13 Task 3's three-part
+deferral is now fully closed across Phase 14 Task 1
+(lift), Phase 15 Task 2 (cross-crate test), and
+Phase 15 Task 4 (per-tier example). Rolling backlog
+10 → 8 items at exit. Only net-new deferral is a
+~5-line doc-comment rewrite on
+`CEILING_SEMITRUSTED`'s ▲-row wording (tagged with
+the Phase 13 Task 4 reflexivity investigation as
+the natural co-home). The lift pattern from Phase
+14 Task 1 is now validated at a second, much larger
+case (635 lines vs. 130); "lift private fns from
+the binary into the channel lib" is a confirmed
+reusable pattern rather than a one-shot trick.
 
 ## Phase 16 — shape TBD at Phase 15 exit
 
-Phase 15's consolidation outcome will shape Phase 16. If
-Phase 15 closes cleanly with all three streaks extending
-and the rolling-deferral age clock reset, the most likely
-Phase 16 shape is **Daemon Migration keystone start**
+Phase 15 exited cleanly with all three streaks
+extending, the rolling backlog smaller, the binary
+669 lines below where Phase 14 *found* it, and the
+lift pattern validated at scale — every condition
+the Phase 16 shape decision was meant to depend on
+is now known. The most likely Phase 16 shape is
+therefore **Daemon Migration keystone start**
 (still the largest forward reshape on the product
-roadmap, unblocked since Phase 13), followed by **Mission
-Primitive** as an alternative if daemon work looks too
-large for a single phase. **Multi-level sub-agent
-nesting** remains on the candidate list as a light
-follow-up to Phase 14's net-new deferral but carries no
-urgency because the no-op-by-default failure mode is
-already correct. If Phase 15 turns up surprising
-foundation pressure (e.g., the lift reveals a broken
-abstraction), a second consolidation sub-phase is also
-legitimate — Phase 15 establishes that phase shape.
+roadmap, unblocked since Phase 13, and now
+starting from a meaningfully smaller binary),
+followed by **Mission Primitive** as an alternative
+if Daemon Migration looks too large for a single
+phase. **Multi-level sub-agent nesting** remains on
+the candidate list as a light follow-up to Phase
+14's net-new deferral but carries no urgency
+because the no-op-by-default failure mode is
+already correct. A **second consolidation sub-
+phase** is no longer a foreground candidate — the
+rolling backlog is small enough and the binary
+line count low enough that another hygiene pass
+before the next keystone would have to justify
+itself against a much thinner backlog of directly-
+tagged items. Any phase that picks up the Phase
+13 Task 4 `CapabilitySet::grants` reflexivity
+investigation should also absorb Phase 15's
+net-new ▲-row doc-comment rewrite — the two
+items live in the same file and share the same
+"clarify D4/D5 corner cases" motivation, and
+scheduling them together saves one round of
+`aivyx-capability` regression scope.
