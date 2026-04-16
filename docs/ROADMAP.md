@@ -170,35 +170,75 @@ case (635 lines vs. 130); "lift private fns from
 the binary into the channel lib" is a confirmed
 reusable pattern rather than a one-shot trick.
 
-## Phase 16 — shape TBD at Phase 15 exit
+## Phase 16 — Daemon Migration: Protocol Settlement (phase 1 of N) (active)
 
-Phase 15 exited cleanly with all three streaks
-extending, the rolling backlog smaller, the binary
-669 lines below where Phase 14 *found* it, and the
-lift pattern validated at scale — every condition
-the Phase 16 shape decision was meant to depend on
-is now known. The most likely Phase 16 shape is
-therefore **Daemon Migration keystone start**
-(still the largest forward reshape on the product
-roadmap, unblocked since Phase 13, and now
-starting from a meaningfully smaller binary),
-followed by **Mission Primitive** as an alternative
-if Daemon Migration looks too large for a single
-phase. **Multi-level sub-agent nesting** remains on
-the candidate list as a light follow-up to Phase
-14's net-new deferral but carries no urgency
-because the no-op-by-default failure mode is
-already correct. A **second consolidation sub-
-phase** is no longer a foreground candidate — the
-rolling backlog is small enough and the binary
-line count low enough that another hygiene pass
-before the next keystone would have to justify
-itself against a much thinner backlog of directly-
-tagged items. Any phase that picks up the Phase
-13 Task 4 `CapabilitySet::grants` reflexivity
-investigation should also absorb Phase 15's
-net-new ▲-row doc-comment rewrite — the two
-items live in the same file and share the same
-"clarify D4/D5 corner cases" motivation, and
-scheduling them together saves one round of
-`aivyx-capability` regression scope.
+**Active — see [PHASE_16.md](PHASE_16.md).** Opened
+2026-04-16 as the first phase of the **Daemon
+Migration keystone** — the largest forward reshape
+on the product roadmap (P4 Daemon-Default
+Architecture), unblocked since Phase 13 and picked
+up from Phase 15 exit's conservative-scope
+recommendation rather than an aggressive "daemon
+end-to-end in one phase" shape. Goal is threefold:
+(1) settle the load-bearing IPC protocol shape in
+prose before any task hardens production code
+around a provisional choice (transport, wire
+format, framing, auth, auto-spawn), (2) land a PoC
+daemon + PoC LocalChannel-as-frontend with one
+roundtrip integration test proving the protocol
+round-trips a real turn, (3) pin Phase 17 scope
+from the observed PoC outcomes. Phase 16 is the
+**first phase in project history where the open
+doc explicitly names a streak break as an expected
+outcome** — the production-core `aivyx-core/src/
+lib.rs` streak is genuinely at risk for the first
+time since Phase 12, via three enumerated
+mechanisms (ChannelContext transport edits,
+StreamEvent daemon-lifecycle variant, ToolContext
+tool-IPC edits). DESIGN.md is at risk via D1
+(channel abstraction) and D3 (streaming); PRODUCT.
+md is **not** at risk by design because P4's
+load-bearing deliberate-silence on protocol choice
+is what Phase 16 exists to resolve in prose. The
+Q-block (Q1–Q6) is the phase's primary deliverable,
+with initial leans pinned at open time and
+resolved through Tasks 2–3.
+
+## Phase 17 — shape TBD at Phase 16 exit
+
+Phase 17's shape depends entirely on what the
+Phase 16 PoC uncovers about the IPC protocol
+choice. Three likely shapes, in order of
+expectation: (a) **Daemon Migration phase 2 of N —
+production hardening**: convert the PoC daemon to
+a real daemon lifecycle, port the Telegram
+adapter behind the IPC boundary, and settle any
+protocol footguns the PoC surfaced. This is the
+default path if Phase 16 exits with a working
+PoC and a roughly-right protocol shape. (b)
+**Protocol rework**: if the PoC reveals that the
+initial protocol lean was wrong (e.g. length-
+prefixed JSON fails under a streaming-tokens load
+that MessagePack would handle, or auto-spawn
+semantics require a lifecycle primitive the
+initial shape can't express), Phase 17 revisits
+the shape with the PoC as evidence before any
+production hardening. (c) **Mission Primitive**
+as a genuine alternative if Phase 16 exits with
+"the protocol question is settled but the
+Daemon Migration delivery is bigger than a
+second phase can hold, and we should ship
+something smaller to keep the streak discipline
+healthy." **Multi-level sub-agent nesting**
+remains on the candidate list as a light
+follow-up to Phase 14's net-new deferral but
+carries no urgency because the no-op-by-default
+failure mode is already correct. Any phase that
+picks up the Phase 13 Task 4 `CapabilitySet::
+grants` reflexivity investigation should also
+absorb Phase 15's net-new ▲-row doc-comment
+rewrite — the two items live in the same file
+and share the same "clarify D4/D5 corner cases"
+motivation, and scheduling them together saves
+one round of `aivyx-capability` regression
+scope.
