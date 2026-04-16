@@ -1011,3 +1011,50 @@ glance:
    its plate with the Q-block alone. Deferred to
    whichever future phase meaningfully touches
    `aivyx-capability`.
+
+## Decisions made during implementation
+
+### Task 2 — Q3 resolution: hand-rolled length-prefixed JSON (option a)
+
+**Resolved:** option **(a)**, hand-rolled length-prefixed JSON
+frames using `serde_json` (already in workspace). See
+[`docs/DAEMON_IPC.md`](DAEMON_IPC.md) for the full specification.
+
+**Rationale:** Phase 16 is a protocol-settlement phase, not a
+throughput-optimization phase. The PoC runs exactly one turn;
+JSON's overhead is irrelevant at this scale. Debuggability (hex
+dump, `socat`) is genuinely valuable for PoC failure diagnosis.
+The wire format can be upgraded in Phase 17 without touching the
+transport/framing/auth decisions. Zero-new-dep streak holds —
+`serde_json` was promoted from dev-dep to prod dep in
+`aivyx-channel`, but it was already a workspace dependency.
+
+### Task 2 — Q4 resolution: separate lifecycle message type (option a)
+
+**Resolved:** option **(a)**, `DaemonLifecycleEvent` is a separate
+`#[serde(tag = "type")]` enum from `DaemonMessage`. The frontend's
+IPC receive loop demuxes on the `"type"` discriminator field into
+turn-loop traffic (`DaemonMessage`) vs. lifecycle signals
+(`DaemonLifecycleEvent`). A `DaemonEnvelope` union type is provided
+for frontends that want a single `decode_frame` call site.
+
+**Streak impact:** `aivyx-core/src/lib.rs` is untouched. The
+`StreamEvent` enum gains no variant. Production-core streak holds
+through Task 2 as predicted.
+
+### Task 2 — implementation shape
+
+The IPC parsing module landed at `crates/aivyx-channel/src/
+daemon_ipc.rs` (not a new crate). `serde_json` promoted from
+dev-dep to prod dep in `aivyx-channel/Cargo.toml`; `serde` added
+as prod dep (both already workspace deps). Module is `pub` from
+`aivyx_channel::daemon_ipc` so the PoC daemon (Task 3) and future
+phases can import the types.
+
+**Test delta:** +8 (3 round-trip tests for the three message
+envelopes, 1 oversized-encode rejection, 1 oversized-decode
+rejection, 1 incomplete-buffer test, 1 `DaemonEnvelope` demux
+test, 1 `StreamEventPayload` all-variant round-trip). Target
+was ≥ +4; delivered +8.
+
+**Workspace test count:** 527 (entry baseline 519, delta +8).

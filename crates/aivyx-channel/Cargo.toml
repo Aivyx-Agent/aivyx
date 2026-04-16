@@ -25,6 +25,12 @@ aivyx-capability = { path = "../aivyx-capability" }
 # touched.
 aivyx-config = { path = "../aivyx-config" }
 async-trait = { workspace = true }
+# Phase 16 Task 2 — promoted from dev-dep to prod dep because
+# `daemon_ipc.rs` uses serde_json for the IPC wire format
+# (length-prefixed JSON frames per docs/DAEMON_IPC.md). Already a
+# workspace dep via aivyx-core, aivyx-audit, aivyx-llm, aivyx-memory.
+serde_json = { workspace = true }
+serde = { workspace = true }
 
 # Phase 5 task 3 — the passphrase module derives a MasterKey via
 # aivyx-crypto's Argon2id entry and tests the full passphrase →

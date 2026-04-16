@@ -28,6 +28,7 @@ pub use aivyx_core::{
     AttachmentKind, ChannelContext, ChannelError, ChannelPlatform, StreamEvent,
 };
 
+pub mod daemon_ipc;
 mod local;
 pub mod passphrase;
 mod render;
