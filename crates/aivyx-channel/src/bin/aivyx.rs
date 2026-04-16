@@ -128,7 +128,8 @@ use aivyx_memory::{
 };
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::LlmProvider;
-use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+use aivyx_channel::mission_tool::MissionCreateTool;
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1126,6 +1127,9 @@ async fn run_async(
     let role_switch_tool: Arc<RoleSwitchTool> = Arc::new(RoleSwitchTool::new());
     tool_list.push(Arc::clone(&role_switch_tool) as Arc<dyn Tool>);
 
+    let mission_create_tool: Arc<MissionCreateTool> = Arc::new(MissionCreateTool::new());
+    tool_list.push(Arc::clone(&mission_create_tool) as Arc<dyn Tool>);
+
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
@@ -1330,6 +1334,21 @@ async fn run_async(
                 .to_string()
         })?;
 
+    mission_create_tool
+        .set_mission_store(storage.domain(KeyDomain::Missions))
+        .map_err(|_| {
+            "mission.create store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    mission_create_tool
+        .set_role_name(active_role_name.clone())
+        .map_err(|_| {
+            "mission.create role_name was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
     // ---- Phase 17 Task 3: daemon-run branch ----------------------------
     // If the operator invoked `aivyx daemon run`, launch the daemon
     // server in the foreground. The daemon reuses the same agent,
@@ -1390,7 +1409,13 @@ async fn run_async(
             socket_path.display(),
         );
 
-        return run_daemon(&socket_path, agent, channel_factory, shutdown)
+        return run_daemon(
+            &socket_path,
+            agent,
+            channel_factory,
+            shutdown,
+            Some(storage.domain(KeyDomain::Missions)),
+        )
             .await;
     }
 

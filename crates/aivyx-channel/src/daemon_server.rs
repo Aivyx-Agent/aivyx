@@ -18,10 +18,13 @@ use tokio::net::UnixListener;
 
 use aivyx_core::{Agent, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome};
 
+use aivyx_storage::DomainHandle;
+
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
     FrontendType, StreamEventPayload, PROTOCOL_VERSION,
 };
+use crate::mission;
 
 /// Channel factory: given a `FrontendType`, returns the appropriate
 /// `ChannelContext` implementation for that frontend. The binary
@@ -47,6 +50,7 @@ pub async fn run_daemon(
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
     shutdown: CancellationToken,
+    mission_store: Option<DomainHandle>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -69,6 +73,7 @@ pub async fn run_daemon(
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
 
+    let mission_store = mission_store.map(Arc::new);
     let mut handles = Vec::new();
 
     loop {
@@ -90,9 +95,10 @@ pub async fn run_daemon(
         let agent = Arc::clone(&agent);
         let factory = Arc::clone(&channel_factory);
         let conn_shutdown = shutdown.clone();
+        let conn_mission_store = mission_store.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, agent, factory, conn_shutdown).await {
+            if let Err(e) = handle_connection(stream, agent, factory, conn_shutdown, conn_mission_store).await {
                 eprintln!("aivyx daemon: connection handler error: {e}");
             }
         });
@@ -111,6 +117,7 @@ async fn handle_connection(
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
     shutdown: CancellationToken,
+    mission_store: Option<Arc<DomainHandle>>,
 ) -> Result<(), String> {
     let (mut reader, mut writer) = stream.into_split();
 
@@ -219,8 +226,54 @@ async fn handle_connection(
                             // the channel bridge; the turn loop checks it between
                             // LLM steps.
                         }
-                        FrontendMessage::ResolveGate { .. } => {
-                            // Phase 21 Task 6 will wire this to the mission registry.
+                        FrontendMessage::ResolveGate {
+                            mission_id,
+                            gate_id,
+                            approved,
+                        } => {
+                            let Some(store) = &mission_store else {
+                                let err = DaemonMessage::Error {
+                                    code: "no_mission_store".into(),
+                                    message: "ResolveGate received but no mission store configured".into(),
+                                };
+                                let frame = encode_frame(&err).unwrap_or_default();
+                                let _ = writer.write_all(&frame).await;
+                                continue;
+                            };
+                            let result = async {
+                                let mut record = mission::get_mission(store, &mission_id)
+                                    .await
+                                    .map_err(|e| format!("get mission: {e}"))?
+                                    .ok_or_else(|| format!("mission {mission_id} not found"))?;
+                                mission::resolve_gate(&mut record, &gate_id, approved)?;
+                                mission::update_mission(store, &record)
+                                    .await
+                                    .map_err(|e| format!("persist mission: {e}"))?;
+                                Ok::<(), String>(())
+                            }.await;
+                            match result {
+                                Ok(()) => {
+                                    let resp = DaemonMessage::GateResolved {
+                                        mission_id,
+                                        gate_id,
+                                        approved,
+                                    };
+                                    let frame = encode_frame(&resp)
+                                        .map_err(|e| format!("encode GateResolved: {e}"))?;
+                                    writer
+                                        .write_all(&frame)
+                                        .await
+                                        .map_err(|e| format!("write GateResolved: {e}"))?;
+                                }
+                                Err(e) => {
+                                    let err = DaemonMessage::Error {
+                                        code: "gate_resolve_failed".into(),
+                                        message: format!("failed to resolve gate: {e}"),
+                                    };
+                                    let frame = encode_frame(&err).unwrap_or_default();
+                                    let _ = writer.write_all(&frame).await;
+                                }
+                            }
                         }
                         FrontendMessage::Shutdown => {
                             send_shutting_down(&mut writer, "operator requested via daemon stop").await;
@@ -289,7 +342,7 @@ async fn run_single_connection_daemon(
         .map_err(|e| format!("failed to accept connection: {e}"))?;
 
     let shutdown = CancellationToken::new();
-    handle_connection(stream, agent, channel_factory, shutdown).await
+    handle_connection(stream, agent, channel_factory, shutdown, None).await
 }
 
 /// Backward-compatible single-channel daemon with shutdown token.
@@ -301,7 +354,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown).await
+    run_daemon(socket_path, agent, factory, shutdown, None).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {

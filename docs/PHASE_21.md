@@ -284,6 +284,40 @@ Production-core — medium (may need `ToolContext` extension
 for storage access, or may use the same `OnceLock` factory
 pattern as `RoleSwitchTool`).
 
+## Task 6 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/mission_tool.rs` (+189, new file):
+  `MissionCreateTool` struct with `OnceLock<DomainHandle>` +
+  `OnceLock<String>` for role name. `set_mission_store` and
+  `set_role_name` initializers. `Tool` impl: `name()` →
+  `"mission.create"`, `required_scope` → `mission.create`,
+  `execute` generates UUID-based `mission_id`, creates
+  `MissionRecord`, persists via `mission::create_mission`.
+  `mission_create_input_schema()` helper. 2 unit tests.
+- `crates/aivyx-channel/src/lib.rs` (+1): `pub mod mission_tool`
+  registration.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+18):
+  `MissionCreateTool` import, construction alongside
+  `RoleSwitchTool`, push to `tool_list`, `set_mission_store`
+  with `storage.domain(KeyDomain::Missions)`,
+  `set_role_name(active_role_name)`. `run_daemon` call updated
+  with mission store handle.
+- `crates/aivyx-channel/src/daemon_server.rs` (+45):
+  `run_daemon` gains `mission_store: Option<DomainHandle>`
+  parameter. `handle_connection` receives `Arc<DomainHandle>`.
+  `ResolveGate` handler: loads mission from redb, calls
+  `mission::resolve_gate`, persists back, sends
+  `DaemonMessage::GateResolved` on success or
+  `DaemonMessage::Error` on failure. `run_daemon_compat` and
+  `run_single_connection_daemon` pass `None`.
+- `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs` (+3):
+  Three direct `run_daemon` call sites updated with trailing
+  `None` argument for mission store.
+
+**Test delta:** 592 → 594 (+2).
+**All three byte-identity streaks held.**
+
 ### Task 7 — Frontend rendering (CLI + Telegram)
 
 **CLI:** When `ApprovalGate` arrives in the REPL loop,
