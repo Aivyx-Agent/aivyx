@@ -1058,3 +1058,84 @@ test, 1 `StreamEventPayload` all-variant round-trip). Target
 was ≥ +4; delivered +8.
 
 **Workspace test count:** 527 (entry baseline 519, delta +8).
+
+### Task 3 — Q1 resolution: no DESIGN.md amendment (option a)
+
+**Resolved:** option **(a)**. D1's key-commitments bullets describe
+the turn loop as a state machine owning the LLM client, tool
+registry, and audit chain "for the duration of a session." The
+daemon migration shifts the process boundary — the turn loop now
+runs inside the daemon's address space — without changing the
+state-machine shape. D1's wording does not say "in-process"; it
+says "a state machine owning" those resources. The
+`IpcChannelBridge` in `daemon_server.rs` implements `ChannelContext`
+by forwarding `StreamEvent`s over IPC, proving the turn loop
+does not know it's talking to a remote frontend. **DESIGN.md
+streak extends to sixteen consecutive phases.**
+
+### Task 3 — Q2 resolution: ChannelContext unchanged (option a)
+
+**Resolved:** option **(a)**. The daemon constructs an
+`IpcChannelBridge<C>` that wraps any existing `ChannelContext` and
+implements the `ChannelContext` trait by serializing each
+`stream_event` call into a `DaemonMessage::StreamEvent` IPC frame.
+The turn loop calls the bridge exactly as it would call an
+in-process `LocalChannel`. No methods or associated types were
+added to `ChannelContext`. **Production-core streak holds.**
+
+### Task 3 — Q5 resolution: no ToolContext changes (option a)
+
+**Resolved:** option **(a)**. Tool invocations are attributed to
+the daemon process and the `TurnId`. The `TurnStarted` audit event
+already carries `ChannelPlatform` (since Phase 11). No new field
+was needed on `ToolContext`. The Phase 16 PoC has exactly one
+frontend and one daemon connection, and the PoC's
+`FakeStreamingAgent` does not exercise tools. **Production-core
+streak holds.**
+
+### Task 3 — Q6 resolution: explicit daemon spawn in test (option b)
+
+**Resolved:** option **(b)**. The integration test spawns the
+daemon server on a background tokio task, waits 50ms for the
+socket to appear, then connects the client. Auto-spawn is a
+lifecycle concern for Phase 17. The Phase 16 PoC exits cleanly
+after one turn; the test verifies the full `DaemonReady` →
+`SessionStarted` → `StreamEvent` × 2 → `TurnComplete` sequence.
+
+### Task 3 — implementation shape
+
+Three new files in `crates/aivyx-channel/src/`:
+
+- **`daemon_server.rs`** — `run_poc_daemon` function: binds Unix
+  socket, sends `DaemonReady`, reads `StartSession` +
+  `SubmitInput`, dispatches one turn through `Agent::turn` via an
+  `IpcChannelBridge` that forwards `StreamEvent`s over IPC, sends
+  `TurnComplete`, exits. The `IpcChannelBridge` is the Q2
+  resolution in code: it implements `ChannelContext` by serializing
+  to `DaemonMessage::StreamEvent` frames.
+
+- **`daemon_client.rs`** — `run_poc_client` function: connects to
+  the socket, reads `DaemonReady`, sends `StartSession` +
+  `SubmitInput`, collects `StreamEvent` frames until
+  `TurnComplete`, returns a `DaemonTurnResult`.
+
+- **`tests/daemon_roundtrip_e2e.rs`** — integration test with a
+  `FakeStreamingAgent` that streams two text chunks. Verifies
+  version, session_id, event count, event content, and outcome
+  string. Uses a real Unix domain socket in `$TMPDIR`.
+
+**Tokio features added:** `net`, `io-util`, `sync`, `time` in
+`aivyx-channel/Cargo.toml` (both prod and dev deps). These are
+feature flags on the existing `tokio` workspace dep, not new crate
+dependencies.
+
+**Test delta:** +1 (one integration test). Combined phase delta
+Tasks 2 + 3: +9 (target was ≥ +5).
+
+**Workspace test count:** 528 (entry baseline 519, delta +9).
+
+**All six Q-block questions are now resolved.** Q1→(a), Q2→(a),
+Q3→(a), Q4→(a), Q5→(a), Q6→(b). All resolutions preserve the
+production-core streak. The open doc's prediction that the streak
+would "probably break" turned out to be wrong — every mitigation
+argument held.

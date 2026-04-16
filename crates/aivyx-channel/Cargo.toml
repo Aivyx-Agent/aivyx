@@ -88,7 +88,9 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 # regression test still passes an empty registry and constructs
 # SessionConfig without a Memory handle).
 aivyx-memory = { path = "../aivyx-memory" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal"] }
+# Phase 16 Task 3 — added "net" and "io-util" for daemon_server.rs and
+# daemon_client.rs (UnixListener, UnixStream, AsyncReadExt, AsyncWriteExt).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal", "net", "io-util", "sync"] }
 secrecy = { workspace = true }
 # Salt bytes for the passphrase module — uuid::Uuid::new_v4() is the
 # workspace standard entropy source, same choice aivyx-storage makes
@@ -99,7 +101,8 @@ uuid = { workspace = true }
 # LocalChannel unit tests exercise the async ChannelContext surface
 # against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and
 # serde_json builds the tool-call inputs the tests feed in.
-tokio = { workspace = true, features = ["macros", "rt"] }
+# Phase 16 Task 3 — added "net", "time" for the daemon_roundtrip_e2e integration test.
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 serde_json = { workspace = true }
 
 [[bin]]
