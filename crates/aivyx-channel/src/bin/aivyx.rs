@@ -110,9 +110,10 @@ use aivyx_capability::Scope;
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::daemon_server::run_daemon;
+use aivyx_channel::daemon_client::DaemonSession;
 use aivyx_channel::{
-    assemble_role_envelope, render_role_envelope, run_session, ChannelKind, LocalChannel,
-    SessionConfig,
+    assemble_role_envelope, render_role_envelope, run_daemon_session_connected, run_session,
+    ChannelKind, DaemonSessionConfig, LocalChannel, SessionConfig,
 };
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
@@ -1299,14 +1300,79 @@ async fn run_async(
     // reports `SemiTrusted` and `shell.exec` would be stripped.
     match channel_kind {
         ChannelKind::Local => {
+            // Phase 18 Task 3: try daemon-backed REPL first, fall back
+            // to in-process if the daemon path fails.
+            if let Ok(sp) = default_socket_path() {
+                let session = DaemonSession::connect(
+                    &sp,
+                    Some(active_role_name.clone()),
+                ).await;
+
+                if let Ok(session) = session {
+                    let cancel_handle = session.cancel_handle();
+                    let mut cancelled_once = false;
+
+                    // Signal task (daemon mode): first ctrl-C sends
+                    // CancelTurn; second ctrl-C exits.
+                    tokio::spawn(async move {
+                        loop {
+                            if tokio::signal::ctrl_c().await.is_err() {
+                                std::process::exit(130);
+                            }
+                            if cancelled_once {
+                                eprintln!("\naivyx: interrupted, exiting.");
+                                std::process::exit(130);
+                            }
+                            eprintln!(
+                                "\naivyx: cancelling in-flight turn (ctrl-C again to exit)."
+                            );
+                            cancel_handle.cancel().await;
+                            cancelled_once = true;
+                        }
+                    });
+
+                    let daemon_config = DaemonSessionConfig {
+                        socket_path: sp.clone(),
+                        role: Some(active_role_name.clone()),
+                        prompt: PROMPT.to_string(),
+                        banner: Some(format!(
+                            "aivyx {} (daemon) — type a message, ctrl-C to cancel, \
+                             ctrl-D to exit.\n\
+                             daemon: {}\n\
+                             active role: {}",
+                            env!("CARGO_PKG_VERSION"),
+                            sp.display(),
+                            active_role_name,
+                        )),
+                    };
+
+                    let stdin = io::stdin();
+                    let reader = stdin.lock();
+                    match run_daemon_session_connected(
+                        session, daemon_config, reader, io::stdout(),
+                    ).await {
+                        Ok(_report) => return Ok(()),
+                        Err(e) => {
+                            eprintln!(
+                                "aivyx: daemon session failed ({e}), \
+                                 falling back to in-process."
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "aivyx: no daemon at {}, using in-process mode.",
+                        sp.display(),
+                    );
+                }
+            } else {
+                eprintln!("aivyx: no socket path available, using in-process mode.");
+            }
+
+            // In-process fallback (original Phase 3 path).
             let channel = LocalChannel::new("aivyx-cli", io::stdout());
             let token_slot = channel.token_slot();
 
-            // Signal task (local): first ctrl-C during a turn cancels
-            // the turn; a second ctrl-C exits the process. We re-read
-            // the current token from the slot on every ctrl-C so that
-            // turn-N+1 sees a fresh token after turn-N's
-            // reset_cancellation() call (inside `run_session`).
             tokio::spawn(async move {
                 loop {
                     if tokio::signal::ctrl_c().await.is_err() {

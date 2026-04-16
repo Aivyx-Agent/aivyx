@@ -458,3 +458,83 @@ needed.
 - `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
   holds. No trait changes.
 - Zero-new-dep streak holds.
+
+### Task 3 — Q3 resolution: frontend prints own daemon-mode banner (option a)
+
+**Resolved:** option **(a)**. The frontend constructs a
+daemon-mode banner from locally available information and
+passes it to `DaemonSessionConfig.banner`. This avoids
+protocol changes to `SessionStarted` and keeps the daemon
+stateless with respect to presentation. The daemon-mode
+banner is set by the binary's dispatch code, same as the
+in-process path sets its own banner.
+
+### Task 3 — Q4 resolution: first ctrl-C sends CancelTurn, second exits (option a)
+
+**Resolved:** option **(a)**. The binary's daemon-mode
+dispatch path spawns a `tokio::spawn` signal handler that:
+
+1. On **first ctrl-C**: sends `CancelTurn` to the daemon via
+   a `DaemonCancelHandle` (a cloneable handle wrapping
+   `Arc<tokio::sync::Mutex<OwnedWriteHalf>>` + session ID).
+   Prints a notice: "cancelling in-flight turn (ctrl-C again
+   to exit)."
+2. On **second ctrl-C**: exits the frontend with status 130.
+
+This mirrors the in-process path's `CancellationToken`
+rotation UX. The `CancelTurn` message was already defined
+in the Phase 16 protocol; the daemon's `IpcChannelBridge`
+propagates it to the agent's cancellation token.
+
+### Task 3 — implementation shape
+
+**`daemon_client.rs` changes** (267 → 318 lines):
+
+- **Writer refactored to `Arc<tokio::sync::Mutex<OwnedWriteHalf>>`.**
+  All write methods (`connect`, `submit_input`, `disconnect`)
+  updated to lock the mutex. This enables shared access between
+  the REPL loop and the signal handler without `&mut` exclusivity.
+- **`cancel_turn(&mut self)` method** — sends `CancelTurn`
+  for the current session.
+- **`cancel_handle(&self) -> DaemonCancelHandle`** — returns
+  a cloneable handle for use from signal handlers.
+- **`DaemonCancelHandle` struct** — `Clone`, wraps
+  `Arc<Mutex<OwnedWriteHalf>>` + session ID, has a
+  `cancel(&self)` method that encodes and sends `CancelTurn`.
+
+**`daemon_session.rs` changes** (136 → 167 lines):
+
+- Split into three functions:
+  - `run_daemon_session` — auto-connecting (try-connect-then-spawn).
+  - `run_daemon_session_connected` — accepts a pre-connected
+    `DaemonSession`, for callers that need to extract a
+    `cancel_handle` before entering the REPL loop.
+  - `run_daemon_session_inner` — shared implementation.
+
+**`aivyx.rs` changes** (2159 → 2225 lines):
+
+- `ChannelKind::Local` branch: tries daemon mode first via
+  `DaemonSession::connect`. On success, extracts a cancel
+  handle, spawns a ctrl-C signal handler task, runs
+  `run_daemon_session_connected`. On failure, falls back
+  silently to in-process `run_session` (existing Phase 3
+  code path).
+
+**One new integration test** in `daemon_roundtrip_e2e.rs`:
+
+- **`run_daemon_session_connected_with_cancel_handle`** —
+  pre-connects a `DaemonSession`, extracts a cancel handle,
+  verifies the handle is `Clone`, runs one turn through
+  `run_daemon_session_connected`, asserts events and turn
+  count.
+
+**Test delta:** +1 (workspace 544 → 545).
+
+**Streak status after Task 3:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak holds.
+- PRODUCT.md byte-identical to `80189b4`. Streak holds.
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  holds. No trait changes — `TurnOutcome` variants read but
+  not modified.
+- Zero-new-dep streak holds.

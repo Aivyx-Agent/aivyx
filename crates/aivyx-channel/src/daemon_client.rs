@@ -16,6 +16,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
+use std::sync::Arc;
+
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
@@ -34,7 +36,7 @@ pub struct DaemonTurnResult {
 /// interaction. Created by [`DaemonSession::connect`].
 pub struct DaemonSession {
     reader: tokio::net::unix::OwnedReadHalf,
-    writer: tokio::net::unix::OwnedWriteHalf,
+    writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
     buf: Vec<u8>,
     pub session_id: String,
     pub daemon_version: Option<String>,
@@ -56,7 +58,7 @@ impl DaemonSession {
                     socket_path.display()
                 )
             })?;
-        let (mut reader, mut writer) = stream.into_split();
+        let (mut reader, writer) = stream.into_split();
         let mut buf = Vec::with_capacity(4096);
 
         // Read DaemonReady.
@@ -79,10 +81,13 @@ impl DaemonSession {
         let start = FrontendMessage::StartSession { role };
         let frame =
             encode_frame(&start).map_err(|e| format!("encode StartSession: {e}"))?;
-        writer
-            .write_all(&frame)
-            .await
-            .map_err(|e| format!("write StartSession: {e}"))?;
+        let writer = Arc::new(tokio::sync::Mutex::new(writer));
+        {
+            let mut w = writer.lock().await;
+            w.write_all(&frame)
+                .await
+                .map_err(|e| format!("write StartSession: {e}"))?;
+        }
 
         // Read SessionStarted.
         let session_id: String = loop {
@@ -130,10 +135,12 @@ impl DaemonSession {
         };
         let frame =
             encode_frame(&submit).map_err(|e| format!("encode SubmitInput: {e}"))?;
-        self.writer
-            .write_all(&frame)
-            .await
-            .map_err(|e| format!("write SubmitInput: {e}"))?;
+        {
+            let mut w = self.writer.lock().await;
+            w.write_all(&frame)
+                .await
+                .map_err(|e| format!("write SubmitInput: {e}"))?;
+        }
 
         let mut events = Vec::new();
         loop {
@@ -166,15 +173,59 @@ impl DaemonSession {
         }
     }
 
+    /// Send `CancelTurn` to request cancellation of the in-flight turn.
+    pub async fn cancel_turn(&mut self) -> Result<(), String> {
+        let cancel = FrontendMessage::CancelTurn {
+            session_id: self.session_id.clone(),
+        };
+        let frame =
+            encode_frame(&cancel).map_err(|e| format!("encode CancelTurn: {e}"))?;
+        let mut w = self.writer.lock().await;
+        w.write_all(&frame)
+            .await
+            .map_err(|e| format!("write CancelTurn: {e}"))?;
+        Ok(())
+    }
+
+    /// Return a cloneable cancel handle for use from a signal handler.
+    pub fn cancel_handle(&self) -> DaemonCancelHandle {
+        DaemonCancelHandle {
+            writer: Arc::clone(&self.writer),
+            session_id: self.session_id.clone(),
+        }
+    }
+
     /// Send `Disconnect` and drop the connection cleanly.
-    pub async fn disconnect(mut self) -> Result<(), String> {
+    pub async fn disconnect(self) -> Result<(), String> {
         let frame = encode_frame(&FrontendMessage::Disconnect)
             .map_err(|e| format!("encode Disconnect: {e}"))?;
-        self.writer
-            .write_all(&frame)
+        let mut w = self.writer.lock().await;
+        w.write_all(&frame)
             .await
             .map_err(|e| format!("write Disconnect: {e}"))?;
         Ok(())
+    }
+}
+
+/// A cloneable handle for sending `CancelTurn` from a signal handler
+/// without holding `&mut DaemonSession`. Created by
+/// [`DaemonSession::cancel_handle`].
+#[derive(Clone)]
+pub struct DaemonCancelHandle {
+    writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    session_id: String,
+}
+
+impl DaemonCancelHandle {
+    /// Send `CancelTurn` to the daemon. Safe to call from any task.
+    pub async fn cancel(&self) {
+        let cancel = FrontendMessage::CancelTurn {
+            session_id: self.session_id.clone(),
+        };
+        if let Ok(frame) = encode_frame(&cancel) {
+            let mut w = self.writer.lock().await;
+            let _ = w.write_all(&frame).await;
+        }
     }
 }
 

@@ -20,7 +20,7 @@ use tokio::net::UnixStream;
 
 use aivyx_capability::CapabilitySet;
 use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
-use aivyx_channel::{run_daemon_session, DaemonSessionConfig};
+use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
 use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
@@ -605,6 +605,73 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
         output_str.contains("daemon-mode banner"),
         "output must contain banner, got: {output_str}"
     );
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 18 Task 3 — run_daemon_session_connected (pre-connected) test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_daemon_session_connected_with_cancel_handle() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Pre-connect (as the binary does in daemon mode).
+    let session = DaemonSession::connect(&socket_path, None)
+        .await
+        .expect("connect must succeed");
+
+    let cancel_handle = session.cancel_handle();
+    assert!(!session.session_id.is_empty());
+
+    // Verify the cancel handle is cloneable and has the right session ID.
+    let _handle2 = cancel_handle.clone();
+
+    let config = DaemonSessionConfig {
+        socket_path: socket_path.clone(),
+        role: None,
+        prompt: "> ".into(),
+        banner: Some("pre-connected test".into()),
+    };
+
+    let input = std::io::Cursor::new(b"hello\n");
+    let mut output = Vec::<u8>::new();
+
+    let report = run_daemon_session_connected(session, config, input, &mut output)
+        .await
+        .expect("run_daemon_session_connected must succeed");
+
+    assert_eq!(report.turns_run, 1);
+
+    let output_str = String::from_utf8(output).expect("valid UTF-8");
+    assert!(output_str.contains("pre-connected test"));
+    assert!(output_str.contains("Hello "));
+    assert!(output_str.contains("from daemon!"));
 
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await

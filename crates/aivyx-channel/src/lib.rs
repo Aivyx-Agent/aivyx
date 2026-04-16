@@ -43,5 +43,5 @@ pub use local::LocalChannel;
 pub use render::{render_finalize, render_stream_event, RenderMode};
 pub use role_envelope::{assemble_role_envelope, MAX_INHERITANCE_DEPTH};
 pub use role_render::{render_role_envelope, ChannelKind};
-pub use daemon_session::{run_daemon_session, DaemonSessionConfig};
+pub use daemon_session::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
 pub use session::{run_session, SessionConfig, SessionReport};

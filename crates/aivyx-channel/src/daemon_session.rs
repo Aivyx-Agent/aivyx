@@ -36,17 +36,14 @@ pub struct DaemonSessionConfig {
 /// the spawn and the connect fail.
 pub async fn run_daemon_session<R, W>(
     config: DaemonSessionConfig,
-    mut reader: R,
-    mut writer: W,
+    reader: R,
+    writer: W,
 ) -> Result<SessionReport, String>
 where
     R: BufRead,
     W: Write,
 {
-    // Try to connect directly. If the connect fails (no daemon
-    // listening), auto-spawn and retry. This avoids a probe connection
-    // that would consume the daemon's single-connection slot.
-    let mut session = match DaemonSession::connect(&config.socket_path, config.role.clone()).await {
+    let session = match DaemonSession::connect(&config.socket_path, config.role.clone()).await {
         Ok(s) => s,
         Err(_) => {
             spawn_daemon_and_wait(&config.socket_path, AUTO_SPAWN_TIMEOUT).await?;
@@ -54,8 +51,36 @@ where
         }
     };
 
+    run_daemon_session_inner(session, config.prompt, config.banner, reader, writer).await
+}
+
+/// Run a daemon-backed REPL with an already-connected session.
+pub async fn run_daemon_session_connected<R, W>(
+    session: DaemonSession,
+    config: DaemonSessionConfig,
+    reader: R,
+    writer: W,
+) -> Result<SessionReport, String>
+where
+    R: BufRead,
+    W: Write,
+{
+    run_daemon_session_inner(session, config.prompt, config.banner, reader, writer).await
+}
+
+async fn run_daemon_session_inner<R, W>(
+    mut session: DaemonSession,
+    prompt: String,
+    banner: Option<String>,
+    mut reader: R,
+    mut writer: W,
+) -> Result<SessionReport, String>
+where
+    R: BufRead,
+    W: Write,
+{
     // Banner.
-    if let Some(banner) = config.banner.as_deref() {
+    if let Some(banner) = banner.as_deref() {
         writeln!(writer, "{banner}").map_err(|e| format!("banner write: {e}"))?;
         writer.flush().map_err(|e| format!("banner flush: {e}"))?;
     }
@@ -67,8 +92,8 @@ where
 
     loop {
         // Prompt.
-        if !config.prompt.is_empty() {
-            write!(writer, "{}", config.prompt).map_err(|e| format!("prompt write: {e}"))?;
+        if !prompt.is_empty() {
+            write!(writer, "{}", prompt).map_err(|e| format!("prompt write: {e}"))?;
             writer.flush().map_err(|e| format!("prompt flush: {e}"))?;
         }
 
