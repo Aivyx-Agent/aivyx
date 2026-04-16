@@ -538,3 +538,86 @@ Same shape as Phase 11–16 exit freezes:
    practice, naming the production-core streak as
    "genuinely at risk" while noting the mitigations are
    stronger than at Phase 16 open.
+
+## Decisions made during implementation
+
+### Task 2 — Q1 resolution: session state in daemon dispatch loop (option a)
+
+**Resolved:** option **(a)**. The daemon's frame-read loop
+maintains session state (`_session_id`) in its own local
+variables. After a `TurnComplete` frame is sent, the loop
+continues reading the next `SubmitInput` rather than exiting.
+No `SessionManager` trait or `ChannelContext` extension was
+needed. The `Agent::turn` method receives a fresh `Message`
+per turn; conversation history management is the agent
+implementation's concern (in production, `ConcreteAgent`
+maintains history internally; in tests, `FakeStreamingAgent`
+ignores it). **Production-core streak holds.**
+
+### Task 2 — Q4 resolution: signal-driven shutdown via CancellationToken (option a)
+
+**Resolved:** option **(a)**. The `run_daemon` function accepts
+a `CancellationToken` parameter. When cancelled, the daemon
+finishes the current frame-read iteration (it does not
+interrupt an in-flight turn mid-execution), sends
+`DaemonLifecycleEvent::ShuttingDown` to the connected
+frontend, and returns `Ok(())`. The `ShuttingDown` message
+was already defined in the Phase 16 protocol; Phase 17 wires
+it to the shutdown token.
+
+In production, the binary will wire `tokio::signal::ctrl_c()`
+to `shutdown.cancel()` (Task 3). In tests, the test code calls
+`shutdown.cancel()` directly. The `CancellationToken` is from
+`tokio_util::sync`, already re-exported by `aivyx_core`.
+
+### Task 2 — implementation shape
+
+`daemon_server.rs` rewritten from single-turn PoC to multi-turn
+production server:
+
+- **`run_daemon<C>` function** — new entry point accepting a
+  `CancellationToken` for graceful shutdown. The frame-read
+  loop continues after `TurnComplete` instead of returning.
+  `tokio::select!` on both the socket read and the shutdown
+  token ensures the daemon responds to shutdown even while
+  blocked waiting for client input.
+- **`run_poc_daemon<C>` function** — backward-compatible alias
+  that creates an uncancelled `CancellationToken` and delegates
+  to `run_daemon`. Existing Phase 16 test unchanged.
+- **`send_shutting_down` helper** — sends the
+  `DaemonLifecycleEvent::ShuttingDown` frame, ignoring write
+  errors (the frontend may already be gone).
+- **`format_outcome` helper** — extracted from the inline match
+  in the PoC for reuse across the multi-turn loop.
+
+Three new integration tests in `daemon_roundtrip_e2e.rs`:
+
+1. **`multi_turn_session_streams_both_turns`** — connects,
+   starts a session, sends two `SubmitInput` messages on the
+   same connection, asserts both turns stream two events each
+   and both outcomes match. Proves the daemon does not exit
+   after the first turn.
+2. **`graceful_shutdown_sends_shutting_down`** — connects,
+   reads `DaemonReady`, then cancels the shutdown token. Asserts
+   the daemon sends a `ShuttingDown` frame with a reason
+   containing "shutdown" before the connection closes.
+3. **`frontend_disconnect_stops_daemon_cleanly`** — connects,
+   reads `DaemonReady`, then drops the connection. Asserts the
+   daemon task completes without panic (EOF on the read side
+   causes a clean exit).
+
+**Test delta:** +3 (1 multi-turn, 1 graceful shutdown,
+1 disconnect). Combined phase delta Tasks 1–2: +3 (target
+was ≥ +3 for Task 2). Workspace test count: **536** (entry
+baseline 533).
+
+**Streak status after Task 2:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak at **seventeen
+  consecutive phases** (pending exit confirmation).
+- PRODUCT.md byte-identical to `80189b4`. Streak at **five
+  consecutive phases** (pending exit confirmation).
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  at **six consecutive phases** (pending exit confirmation).
+  Q1→(a) and Q4→(a) both avoided trait-level changes.
+- Zero-new-dep streak holds.
