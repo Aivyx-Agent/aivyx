@@ -691,3 +691,70 @@ daemon subcommand + CliMode refactor + 4 tests).
 - `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
   holds. No trait changes.
 - Zero-new-dep streak holds.
+
+### Task 4 — Q6 resolution: multi-turn client library + auto-spawn, not full test rewrite (option c+)
+
+**Resolved:** a shape between **(b)** and **(c)**. Task 4 used
+the working-session slot for the auto-spawn + multi-turn client
+library that Task 3 deferred, plus two new integration tests
+exercising the client library directly. A full test rewrite
+(option a) or representative subset rewrite (option b) was not
+needed: the six daemon e2e tests already cover multi-turn,
+graceful shutdown, and disconnect from both the raw-IPC and
+client-library perspectives. The remaining in-process tests
+continue validating the Telegram adapter's execution model.
+
+### Task 4 — implementation shape
+
+**`daemon_client.rs` rewritten** from 147-line single-turn PoC
+to ~267-line multi-turn client library:
+
+- **`DaemonSession` struct** — holds the split `UnixStream`
+  (reader + writer), a frame buffer, and the negotiated
+  `session_id` and `daemon_version`. Created by
+  `DaemonSession::connect()`, which reads `DaemonReady`, sends
+  `StartSession`, reads `SessionStarted`, and returns the handle.
+- **`DaemonSession::submit_input()`** — sends `SubmitInput`,
+  collects `StreamEvent`s in a loop until `TurnComplete`.
+  Returns the events and outcome string. The connection stays
+  open for the next turn.
+- **`DaemonSession::disconnect()`** — sends `Disconnect` and
+  consumes `self` (the connection drops on return).
+- **`daemon_is_running()`** — async function that attempts a
+  `UnixStream::connect` and returns `true`/`false`. Used by
+  auto-spawn logic to check whether a daemon is already
+  listening.
+- **`spawn_daemon_and_wait()`** — spawns `aivyx daemon run` via
+  `tokio::process::Command`, then polls `daemon_is_running()`
+  with exponential backoff (20ms → 500ms cap) until the socket
+  appears or the timeout expires. Returns the socket path on
+  success.
+- **`run_poc_client()`** — reimplemented on top of
+  `DaemonSession` for backward compatibility with the existing
+  Phase 16 e2e test.
+
+**Two new integration tests** in `daemon_roundtrip_e2e.rs`:
+
+1. **`daemon_session_multi_turn_via_client_library`** — uses
+   `DaemonSession::connect`, two `submit_input` calls, and
+   `disconnect`. Proves the client library supports multi-turn
+   without manual frame manipulation.
+2. **`daemon_is_running_returns_false_for_absent_socket`** —
+   verifies the utility function returns `false` when no daemon
+   is listening at the socket path.
+
+**Test delta:** +2 (1 multi-turn client library, 1 utility).
+Combined phase delta Tasks 1–4: +9 (target was ≥ +7).
+Workspace test count: **542** (entry baseline 533).
+
+**`DaemonTurnResult`** retained for backward compat with
+`run_poc_client`. New code should use `DaemonSession` directly.
+
+**Streak status after Task 4:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak holds.
+- PRODUCT.md byte-identical to `80189b4`. Streak holds.
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  holds. No trait changes needed — `DaemonSession` and
+  auto-spawn are purely client-library concerns.
+- Zero-new-dep streak holds.

@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use aivyx_capability::CapabilitySet;
-use aivyx_channel::daemon_client::run_poc_client;
+use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
 use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
@@ -403,6 +403,80 @@ async fn frontend_disconnect_stops_daemon_cleanly() {
         .await
         .expect("daemon must finish within 5s after frontend disconnect")
         .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17 Task 4 — DaemonSession multi-turn test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn daemon_session_multi_turn_via_client_library() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut session = DaemonSession::connect(&socket_path, None)
+        .await
+        .expect("DaemonSession::connect must succeed");
+
+    assert_eq!(session.daemon_version.as_deref(), Some("0.1"));
+    assert!(!session.session_id.is_empty());
+
+    // Turn 1.
+    let (events_1, outcome_1) = session
+        .submit_input("first turn".into())
+        .await
+        .expect("turn 1 must succeed");
+    assert_eq!(events_1.len(), 2, "turn 1 events: {events_1:?}");
+    assert!(outcome_1.contains("Hello from daemon!"));
+
+    // Turn 2.
+    let (events_2, outcome_2) = session
+        .submit_input("second turn".into())
+        .await
+        .expect("turn 2 must succeed");
+    assert_eq!(events_2.len(), 2, "turn 2 events: {events_2:?}");
+    assert!(outcome_2.contains("Hello from daemon!"));
+
+    session.disconnect().await.expect("disconnect must succeed");
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17 Task 4 — daemon_is_running utility test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn daemon_is_running_returns_false_for_absent_socket() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    assert!(
+        !daemon_is_running(&socket_path).await,
+        "daemon_is_running must return false when no daemon is listening"
+    );
 }
 
 // ---------------------------------------------------------------------------
