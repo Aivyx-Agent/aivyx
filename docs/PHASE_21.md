@@ -364,6 +364,102 @@ Standard exit procedure: deferrals block, prediction-vs-
 reality, exit criteria checklist, docs flips, ROADMAP +
 PRODUCT_ROADMAP updates.
 
+## Deferrals
+
+**Rolling deferrals still open after Phase 21 (inherited,
+untouched):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral. Untouched.
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Deferred indefinitely.
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Deferred
+  indefinitely.
+- **Binary response bodies / non-UTF-8.** Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering.** Phase 12 Task 1.
+  Deferred reactively.
+- **Multi-level sub-agent nesting.** Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC.**
+  Phase 17 Q6→(c+). Untouched. Tagged: **reactive.**
+- **Telegram-specific protocol extensions
+  (attachment delivery, inline keyboards, etc.).**
+  Phase 19 net-new. Untouched. (Inline keyboard gate
+  UX folded into this item per Q5→(b).)
+
+**Net-new deferrals from Phase 21:**
+
+- **Escalation→gate turn-loop wiring.** The daemon
+  receives `TurnOutcome::Escalated` from the agent turn
+  loop but does not yet create a `GateRecord`, transition
+  the mission to `GatePending`, or emit `ApprovalGate`.
+  The full escalation→gate→resume loop described in
+  Task 6's spec is deferred to the phase that introduces
+  a tool returning `RequiresEscalation`. All IPC, storage,
+  and state-machine primitives are in place; the missing
+  piece is the daemon-side orchestration between
+  `TurnOutcome::Escalated` and `mission::add_gate`.
+- **`mission.list` / `mission.status` read-only tools.**
+  No listing or status query tool was implemented. The
+  storage CRUD (`list_missions`, `get_mission`) is ready;
+  the tools are deferred until an agent or operator UX
+  needs them.
+
+**Rolling backlog: 10 → 12 (+2 net-new).**
+
+## Prediction vs. reality
+
+- **DESIGN.md** — Predicted: streak **may break** at
+  twenty-one if an amendment is needed. **Reality: streak
+  held at twenty-one consecutive phases.** The mission
+  shape composed cleanly within existing design decisions
+  (new `KeyDomain` domain, new capability bases, additive
+  IPC variants). No amendment needed.
+- **PRODUCT.md** — Predicted: streak extends to **nine
+  consecutive phases**. **Reality: correct.** P2 is an
+  existing commitment; advancing it required no product
+  contract edits.
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **may break** at ten. **Reality: streak held at
+  ten consecutive phases.** Decision 5 (OnceLock factory
+  pattern, not `ToolContext` extension) was the critical
+  choice. `MissionCreateTool` lives entirely in
+  `aivyx-channel`; zero `aivyx-core/src/lib.rs` edits.
+
+## Exit criteria
+
+- [x] Mission state model shipped (`MissionRecord`,
+  `MissionState`, `GateRecord`, `GateState`, storage
+  CRUD, state transitions, 16 unit tests).
+- [x] `KeyDomain::Missions` wired end-to-end in storage.
+- [x] `mission.create` and `mission.gate` capability
+  scopes in `KNOWN_BASES` with correct tier ceilings.
+- [x] IPC protocol extended: `ResolveGate`,
+  `MissionCreated`, `MissionStateChanged`, `GateResolved`,
+  `ApprovalGate` — all documented in `DAEMON_IPC.md`.
+- [x] `MissionCreateTool` registered in binary, storage
+  handle + role name injected via OnceLock at startup.
+- [x] Daemon `ResolveGate` handler wired (load → mutate →
+  persist → respond).
+- [x] CLI approval gate prompt (`Approve? [y/N]:`) in
+  daemon REPL loop.
+- [x] Telegram `/approve` + `/reject` text commands with
+  reply hint rendering.
+- [x] All five Q-block questions resolved.
+- [x] Five design decisions recorded.
+- [x] All three byte-identity streaks held (DESIGN.md at
+  21, PRODUCT.md at 9, production-core at 10).
+- [x] Test delta: 569 → 598 (+29 across Tasks 3–7).
+- [x] Deferrals block recorded (2 net-new).
+- [x] Prediction-vs-reality block recorded (all three
+  correct or better).
+
 ## Decisions
 
 **Decision 1 (Q1→(a)): A mission is a redb row with a state
@@ -430,30 +526,11 @@ in Decision 1.**
 scopes?** → **Yes, resolved in Decision 3.**
 
 **Q4 — Should `MissionCreateTool` extend `ToolContext` or
-use the `OnceLock` factory pattern?**
-
-(a) Extend `ToolContext` with an optional `&dyn MissionStore`
-field. Clean access pattern but breaks the production-core
-streak.
-
-(b) Use the `OnceLock` factory pattern from `RoleSwitchTool`
-(Phase 14). The tool captures the storage handle at
-construction time. Preserves the streak but adds another
-factory closure.
-
-**Recommendation: (b).** The factory pattern is validated
-(Phase 14) and the production-core streak at nine consecutive
-phases is worth preserving. Deferred to Task 6.
+use the `OnceLock` factory pattern?** → **(b), resolved in
+Decision 5.** OnceLock factory pattern reused from Phase 14.
+Production-core streak preserved.
 
 **Q5 — Should the Telegram gate UX use inline keyboards or
-text commands?**
-
-(a) Inline keyboards (`InlineKeyboardMarkup` with Approve /
-Reject buttons). Richer UX but requires Telegram callback
-query handling not yet in the codebase.
-
-(b) Text commands (`/approve mission-abc gate-xyz`). Simpler,
-works with the existing message-based Telegram adapter.
-
-**Recommendation: (b) for Phase 21, defer (a) as a net-new
-item.** Deferred to Task 7.
+text commands?** → **(b), resolved in Task 7.** Text commands
+(`/approve`, `/reject`) shipped. Inline keyboards folded into
+the existing Phase 19 Telegram-specific extensions deferral.

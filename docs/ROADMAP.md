@@ -263,19 +263,26 @@ Test delta +19 (550→569). All three byte-identity streaks
 held: DESIGN.md at twenty, PRODUCT.md at eight, production-
 core at nine (new record).
 
-## Phase 21 — Mission Primitive (P2) (active)
+## Phase 21 — Mission Primitive (P2) (frozen)
 
-**Active — see [PHASE_21.md](PHASE_21.md).** The next
-product-shape keystone. Both prerequisites are complete:
-daemon holds live state (P4, Phases 16–19), role-config
-declares capability envelopes (P9, Phase 13). This phase
-introduces the long-running work item as a first-class
-primitive — one that survives across process restarts, runs
-under a specific role's envelope, and emits operator-visible
-approval gates as `StreamEvent`s.
+**Frozen — see [PHASE_21.md](PHASE_21.md).** Delivered the
+first concrete piece of **PRODUCT.md P2 — Mission Primitive**
+in eight tasks: mission state model with six-state machine +
+16 unit tests (Task 3), `mission.create` and `mission.gate`
+capability scopes with tier ceilings (Task 4), IPC protocol
+extensions for gates and mission lifecycle (Task 5),
+`MissionCreateTool` with OnceLock factory pattern + daemon
+`ResolveGate` handler (Task 6), CLI interactive gate prompt
+and Telegram `/approve`/`/reject` text commands (Task 7).
+Five design decisions, five Q-block questions resolved. All
+three byte-identity streaks held: DESIGN.md at twenty-one,
+PRODUCT.md at nine, production-core at ten (new record). Test
+delta +29 (569→598). Rolling backlog 10 → 12 (+2 net-new:
+escalation→gate turn-loop wiring, mission list/status tools).
 
 ## Phase 22 — shape TBD at Phase 21 exit
 
-Likely candidates: Channel SDK Surface (P5), Reflection
-Layer (P8), or another deferral cleanup pass if backlog
-pressure warrants it.
+Likely candidates: escalation→gate turn-loop wiring (Phase 21
+deferral — completes the mission approval-gate loop), Channel
+SDK Surface (P5), Reflection Layer (P8), or a deferral cleanup
+pass if backlog pressure warrants it.

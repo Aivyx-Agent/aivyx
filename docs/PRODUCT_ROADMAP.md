@@ -111,10 +111,27 @@ backlog 16 → 10. All byte-identity streaks held; production-core
 at nine consecutive phases (new record). See
 [`docs/PHASE_20.md`](PHASE_20.md).
 
-**Next:** Mission Primitive (P2) — the first product-shape keystone
-after the daemon migration. Both prerequisites complete (P4 daemon,
-P9 role-config). The mission phase introduces long-running work
-items that survive across restarts and emit operator approval gates.
+**Phase 21 (Mission Primitive, 2026-04-17):** delivered the first
+concrete piece of **P2 — Mission Primitive** as a product-shape
+phase. Mission state model with six-state machine (`Created →
+Running → GatePending → Completed | Failed | Cancelled`) persisted
+to redb under `KeyDomain::Missions`. Two new capability bases
+(`mission.create`, `mission.gate`) with tier ceilings. IPC protocol
+extended with `ApprovalGate`, `ResolveGate`, `MissionCreated`,
+`MissionStateChanged`, `GateResolved`. `MissionCreateTool` with
+OnceLock factory pattern (preserving production-core streak).
+Daemon `ResolveGate` handler wired end-to-end. CLI interactive
+gate prompt (`Approve? [y/N]:`) and Telegram `/approve`/`/reject`
+text commands. Five design decisions, five Q-block questions
+resolved. All byte-identity streaks held; production-core at ten
+consecutive phases (new record). Test delta +29 (569→598). See
+[`docs/PHASE_21.md`](PHASE_21.md).
+
+**Next:** Escalation→gate turn-loop wiring (daemon-side
+orchestration between `TurnOutcome::Escalated` and
+`mission::add_gate`), completing the full approval-gate lifecycle.
+All primitives in place; the missing piece is the daemon's
+turn-boundary gate creation logic.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 
