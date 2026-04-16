@@ -171,6 +171,22 @@ both bases.
 **Estimated streak risk:** DESIGN.md — none.
 Production-core — none (capability crate is independent).
 
+## Task 4 ship record
+
+**Files modified:**
+- `crates/aivyx-capability/src/lib.rs` (+47):
+  `mission.create` and `mission.gate` added to `KNOWN_BASES`
+  (23 bases total). Both added to `CEILING_TRUSTED`
+  (unqualified). Both omitted from `CEILING_SEMITRUSTED`
+  (⊘ — added to the doc comment's ⊘ list) and
+  `CEILING_UNTRUSTED` (⊘). Kernel gets them automatically
+  via `KNOWN_BASES` iteration. 5 new tests: parse round-trip,
+  Kernel/Trusted/SemiTrusted/Untrusted ceiling behaviour.
+  Reflexivity test extended with 2 mission scope cases.
+
+**Test delta:** 585 → 590 (+5).
+**All three byte-identity streaks held.**
+
 ### Task 5 — IPC protocol extensions
 
 Extend the daemon IPC vocabulary:

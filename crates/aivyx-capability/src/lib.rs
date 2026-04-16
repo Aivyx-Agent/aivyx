@@ -62,6 +62,9 @@ const KNOWN_BASES: &[&str] = &[
     "config.write",
     // role allowlist (synthetic — Phase 11 Task 4)
     "tool.allowlist",
+    // mission (Phase 21 — PRODUCT.md P2)
+    "mission.create",
+    "mission.gate",
     // Phase 14 Task 2 — Sub-Agent Role-Switching (PRODUCT.md P1).
     // `role.switch` gates the `role.switch` tool that opens a
     // bounded sub-session under a child role's attenuated
@@ -547,6 +550,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "audit.read",
         "config.read",
         "config.write",
+        "mission.create",
+        "mission.gate",
         "role.switch",
     ])
 });
@@ -554,7 +559,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
 /// Tier 2 — SemiTrusted. Per D5 table:
 ///
 /// **⊘ rows** (hard-denied — no form survives intersection):
-/// `fs.delete`, `shell.exec`, `shell.spawn`, `config.write`, `role.switch`.
+/// `fs.delete`, `shell.exec`, `shell.spawn`, `config.write`,
+/// `mission.create`, `mission.gate`, `role.switch`.
 ///
 /// **▲ rows** (conditionally granted — the *unqualified* form is omitted from
 /// this ceiling, so a held *unqualified* scope like bare `fs.write` is denied.
@@ -965,6 +971,48 @@ mod tests {
         assert!(u.grants(&s("memory.read:scope:public:feed")));
     }
 
+    // ---- Phase 21: mission capability scopes ----
+
+    #[test]
+    fn mission_scopes_parse() {
+        assert!(Scope::parse("mission.create").is_some());
+        assert!(Scope::parse("mission.gate").is_some());
+        assert!(Scope::parse("mission.create:my-mission").is_some());
+        assert!(Scope::parse("mission.gate:gate-001").is_some());
+    }
+
+    #[test]
+    fn mission_scopes_kernel_grants() {
+        let kernel = TrustTier::Kernel.default_ceiling();
+        assert!(kernel.grants(&s("mission.create")));
+        assert!(kernel.grants(&s("mission.gate")));
+    }
+
+    #[test]
+    fn mission_scopes_trusted_grants() {
+        let trusted = TrustTier::Trusted.default_ceiling();
+        assert!(trusted.grants(&s("mission.create")));
+        assert!(trusted.grants(&s("mission.gate")));
+        assert!(trusted.grants(&s("mission.create:my-mission")));
+        assert!(trusted.grants(&s("mission.gate:gate-001")));
+    }
+
+    #[test]
+    fn mission_scopes_semitrusted_denies() {
+        let semi = TrustTier::SemiTrusted.default_ceiling();
+        assert!(!semi.grants(&s("mission.create")));
+        assert!(!semi.grants(&s("mission.gate")));
+        assert!(!semi.grants(&s("mission.create:my-mission")));
+        assert!(!semi.grants(&s("mission.gate:gate-001")));
+    }
+
+    #[test]
+    fn mission_scopes_untrusted_denies() {
+        let untrusted = TrustTier::Untrusted.default_ceiling();
+        assert!(!untrusted.grants(&s("mission.create")));
+        assert!(!untrusted.grants(&s("mission.gate")));
+    }
+
     // ---- Phase 11 Task 4: synthetic `tool.allowlist` base ----
 
     #[test]
@@ -1151,6 +1199,8 @@ mod tests {
             "memory.read:scope:public:*",
             "llm.call",
             "audit.read:public",
+            "mission.create",
+            "mission.gate:gate-001",
         ];
         for raw in &cases {
             let scope = s(raw);
