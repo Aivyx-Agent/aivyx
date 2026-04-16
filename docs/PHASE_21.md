@@ -125,6 +125,30 @@ transitions.
 addition is plumbing). Production-core — none (model lives
 in `aivyx-channel`).
 
+## Task 3 ship record
+
+**Files modified:**
+- `crates/aivyx-storage/src/lib.rs` (+12): `KeyDomain::Missions`
+  variant, `as_bytes` → `b"missions"`, `table_name` →
+  `aivyx_missions_v1`, `ALL` array `[5]` → `[6]`,
+  `derive_all_subkeys` `[SubKey; 5]` → `[SubKey; 6]`,
+  `subkey_for` match arm, struct field `[SubKey; 5]` →
+  `[SubKey; 6]`, exhaustiveness test arm, doc comment update.
+- `crates/aivyx-channel/src/mission.rs` (+313, new file):
+  `MissionState` (6 variants), `GateState` (3 variants),
+  `GateRecord`, `MissionRecord` with `new()`, `pending_gate()`,
+  `is_terminal()`. Storage CRUD: `create_mission`,
+  `get_mission`, `update_mission`, `list_missions`,
+  `delete_mission`. State transitions: `transition_to_running`,
+  `add_gate`, `resolve_gate`, `complete_mission`,
+  `cancel_mission`. 16 unit tests covering full lifecycle,
+  edge cases, and serde round-trip.
+- `crates/aivyx-channel/src/lib.rs` (+1): `pub mod mission`
+  registration.
+
+**Test delta:** 569 → 585 (+16).
+**All three byte-identity streaks held.**
+
 ### Task 4 — `mission.create` + `mission.gate` capability scopes
 
 Add `mission.create` and `mission.gate` to `KNOWN_BASES` in

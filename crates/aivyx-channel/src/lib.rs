@@ -31,6 +31,7 @@ pub use aivyx_core::{
 pub mod daemon_client;
 pub mod daemon_ipc;
 pub mod daemon_server;
+pub mod mission;
 mod daemon_session;
 mod local;
 pub mod passphrase;

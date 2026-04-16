@@ -1,7 +1,7 @@
 //! # aivyx-storage
 //!
 //! Encrypted redb-based storage for Aivyx, with HKDF-derived subkeys
-//! per data domain (Sessions, Memory, Audit, Secrets, ChannelState).
+//! per data domain (Sessions, Memory, Audit, Secrets, ChannelState, Missions).
 //!
 //! See DESIGN.md Deliverable 7 for the storage stack commitment:
 //!
@@ -95,6 +95,8 @@ pub enum KeyDomain {
     Secrets,
     /// Per-channel persistent state (Matrix sync tokens, etc.).
     ChannelState,
+    /// Mission records — long-running work items with approval gates (Phase 21).
+    Missions,
 }
 
 impl KeyDomain {
@@ -111,6 +113,7 @@ impl KeyDomain {
             KeyDomain::Audit => b"audit",
             KeyDomain::Secrets => b"secrets",
             KeyDomain::ChannelState => b"channel-state",
+            KeyDomain::Missions => b"missions",
         }
     }
 
@@ -126,17 +129,19 @@ impl KeyDomain {
             KeyDomain::Audit => "aivyx_audit_v1",
             KeyDomain::Secrets => "aivyx_secrets_v1",
             KeyDomain::ChannelState => "aivyx_channel_state_v1",
+            KeyDomain::Missions => "aivyx_missions_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 5] = [
+    pub const ALL: [KeyDomain; 6] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
         KeyDomain::Secrets,
         KeyDomain::ChannelState,
+        KeyDomain::Missions,
     ];
 }
 
@@ -322,7 +327,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 5],
+    subkeys: [SubKey; 6],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -399,7 +404,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 5], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 6], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -409,6 +414,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Audit.as_bytes())?,
             master.derive_subkey(KeyDomain::Secrets.as_bytes())?,
             master.derive_subkey(KeyDomain::ChannelState.as_bytes())?,
+            master.derive_subkey(KeyDomain::Missions.as_bytes())?,
         ])
     }
 
@@ -422,6 +428,7 @@ impl RedbStorage {
             KeyDomain::Audit => &self.subkeys[2],
             KeyDomain::Secrets => &self.subkeys[3],
             KeyDomain::ChannelState => &self.subkeys[4],
+            KeyDomain::Missions => &self.subkeys[5],
         }
     }
 }
@@ -832,7 +839,8 @@ mod tests {
                 | KeyDomain::Memory
                 | KeyDomain::Audit
                 | KeyDomain::Secrets
-                | KeyDomain::ChannelState => {}
+                | KeyDomain::ChannelState
+                | KeyDomain::Missions => {}
             }
         }
     }
