@@ -20,6 +20,7 @@ use tokio::net::UnixStream;
 
 use aivyx_capability::CapabilitySet;
 use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
+use aivyx_channel::{run_daemon_session, DaemonSessionConfig};
 use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
@@ -477,6 +478,138 @@ async fn daemon_is_running_returns_false_for_absent_socket() {
         !daemon_is_running(&socket_path).await,
         "daemon_is_running must return false when no daemon is listening"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 18 Task 2 — run_daemon_session REPL integration test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_daemon_session_renders_two_turns() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let config = DaemonSessionConfig {
+        socket_path: socket_path.clone(),
+        role: None,
+        prompt: "> ".into(),
+        banner: Some("test banner".into()),
+    };
+
+    // Two input lines, then EOF.
+    let input = std::io::Cursor::new(b"first turn\nsecond turn\n");
+    let mut output = Vec::<u8>::new();
+
+    let report = run_daemon_session(config, input, &mut output)
+        .await
+        .expect("run_daemon_session must succeed");
+
+    assert_eq!(report.turns_run, 2, "must run exactly 2 turns");
+    assert!(report.last_outcome.is_some(), "must have a last outcome");
+
+    let output_str = String::from_utf8(output).expect("output must be valid UTF-8");
+    assert!(
+        output_str.contains("test banner"),
+        "output must contain banner, got: {output_str}"
+    );
+    assert!(
+        output_str.contains("Hello "),
+        "output must contain streamed text, got: {output_str}"
+    );
+    assert!(
+        output_str.contains("from daemon!"),
+        "output must contain streamed text, got: {output_str}"
+    );
+    // Three prompts: before turn 1, before turn 2, before the EOF read.
+    assert_eq!(
+        output_str.matches("> ").count(),
+        3,
+        "must have exactly 3 prompts in output, got: {output_str}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 18 Task 2 — run_daemon_session banner-only test (empty input)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_daemon_session_with_no_input_prints_banner_only() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let config = DaemonSessionConfig {
+        socket_path: socket_path.clone(),
+        role: None,
+        prompt: "> ".into(),
+        banner: Some("daemon-mode banner".into()),
+    };
+
+    // Empty input — immediate EOF.
+    let input = std::io::Cursor::new(b"");
+    let mut output = Vec::<u8>::new();
+
+    let report = run_daemon_session(config, input, &mut output)
+        .await
+        .expect("run_daemon_session must succeed");
+
+    assert_eq!(report.turns_run, 0, "no turns should run on empty input");
+    assert!(report.last_outcome.is_none(), "no outcome on empty input");
+
+    let output_str = String::from_utf8(output).expect("output must be valid UTF-8");
+    assert!(
+        output_str.contains("daemon-mode banner"),
+        "output must contain banner, got: {output_str}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
 }
 
 // ---------------------------------------------------------------------------

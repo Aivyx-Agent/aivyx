@@ -394,3 +394,67 @@ Same shape as Phase 14–17 exit freezes:
    implement multi-connection. It does none of these. The
    single deliverable is: `aivyx` auto-spawns and connects
    to a daemon for local mode.
+
+## Decisions made during implementation
+
+### Task 2 — Q1 resolution: try-connect-then-spawn (variant of option b)
+
+**Resolved:** a variant of **(b)** (sit alongside with
+auto-detection), but with a connect-first strategy instead
+of a probe-first strategy. The `run_daemon_session` function
+attempts `DaemonSession::connect` directly; if the connect
+fails (no daemon listening), it calls `spawn_daemon_and_wait`
+and retries the connect. This avoids the architectural problem
+discovered during implementation: `daemon_is_running()` opens
+a probe connection that consumes the daemon's single-connection
+slot, causing the subsequent `DaemonSession::connect` to find
+no listener accepting.
+
+The in-process `run_session` remains in the codebase. The
+binary dispatch wiring (Task 3) will choose between
+`run_daemon_session` and `run_session` at runtime.
+
+### Task 2 — Q2 resolution: render_for_cli() directly to writer (option a)
+
+**Resolved:** option **(a)**. The `run_daemon_session` function
+calls `StreamEventPayload::render_for_cli()` for each received
+event and writes the result to the provided `Write` sink. The
+`render_for_cli()` helper was purpose-built in Phase 16 for
+exactly this use case. No conversion back to `StreamEvent` is
+needed.
+
+### Task 2 — implementation shape
+
+**New module `daemon_session.rs`** (136 lines) in
+`crates/aivyx-channel/src/`:
+
+- **`DaemonSessionConfig` struct** — socket path, role, prompt
+  string, optional banner.
+- **`run_daemon_session<R, W>` function** — generic over `BufRead`
+  and `Write` (same pattern as `run_session`). Connects to
+  daemon (with try-connect-then-spawn fallback), prints banner,
+  enters read-line / `submit_input` / `render_for_cli` loop,
+  returns `SessionReport`.
+- **`outcome_str_to_turn_outcome` helper** — best-effort parse
+  of the daemon's `format_outcome` string back into a
+  `TurnOutcome` (lossy — recovers variant and message but not
+  metadata like duration or tool count).
+
+**Two new integration tests** in `daemon_roundtrip_e2e.rs`:
+
+1. **`run_daemon_session_renders_two_turns`** — spawns a daemon
+   with `FakeStreamingAgent`, feeds two input lines, asserts
+   banner, streamed text, prompt count, and turn count.
+2. **`run_daemon_session_with_no_input_prints_banner_only`** —
+   empty input (immediate EOF), asserts banner printed and
+   zero turns run.
+
+**Test delta:** +2 (workspace 542 → 544).
+
+**Streak status after Task 2:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak holds.
+- PRODUCT.md byte-identical to `80189b4`. Streak holds.
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  holds. No trait changes.
+- Zero-new-dep streak holds.
