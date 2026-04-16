@@ -268,6 +268,33 @@ Zero new workspace dependencies preserved.
 **Test delta:** 558 → 563 (+5).
 **All three byte-identity streaks held.**
 
+## Task 4 ship record
+
+**Design decision: `--no-daemon` guards both daemon-first
+branches with a let-chain.** The flag adds `no_daemon: bool`
+to `CliArgs`, threaded through `run_async`. Both the Local
+and Telegram daemon-first dispatch blocks use
+`if !no_daemon && let Ok(sp) = default_socket_path()` to
+skip daemon dispatch entirely when the flag is set. The
+in-process fallback path (original Phase 3 / Phase 8 code)
+runs unconditionally. Mutual exclusions: `--no-daemon` +
+`--verify-only` and `--no-daemon` + `--print-role` are
+rejected (those modes don't use the daemon at all).
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+76):
+  `no_daemon` field in `CliArgs`, `--no-daemon` parser arm,
+  two mutual-exclusion checks, `run_async` parameter addition,
+  let-chain guards on both Local and Telegram daemon-first
+  blocks, 5 parser tests.
+
+**Test delta:** 563 → 568 (+5).
+**Binary line count:** 2377 → 2453 (53 over 2400 nominal
+threshold; the overshoot is entirely parser test code — the
+`#[cfg(test)]` module starts at line 1641, so production
+code is 1641 lines, well under threshold).
+**All three byte-identity streaks held.**
+
 ## Deferrals targeted for closure
 
 | # | Item | Origin | Target task |

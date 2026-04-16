@@ -270,6 +270,7 @@ fn run() -> Result<(), String> {
         mode,
         channel: channel_kind,
         role: role_override,
+        no_daemon,
     } = parse_cli_args()?;
 
     // ---- Lightweight daemon management subcommands ----------------------
@@ -470,6 +471,7 @@ fn run() -> Result<(), String> {
             audit_chain_key,
             channel_kind,
             mode,
+            no_daemon,
         )
         .await
     })
@@ -673,6 +675,7 @@ struct CliArgs {
     mode: CliMode,
     channel: ChannelKind,
     role: Option<String>,
+    no_daemon: bool,
 }
 
 /// Parse the CLI arg surface.
@@ -720,6 +723,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             mode,
             channel: ChannelKind::Local,
             role: None,
+            no_daemon: false,
         });
     }
 
@@ -727,6 +731,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut channel = ChannelKind::Local;
     let mut role: Option<String> = None;
     let mut print_role: Option<String> = None;
+    let mut no_daemon = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -770,6 +775,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 print_role = Some(value.clone());
                 i += 2;
             }
+            "--no-daemon" => {
+                no_daemon = true;
+                i += 1;
+            }
             "daemon" => {
                 return Err(
                     "unrecognized subcommand. Did you mean `daemon run`, `daemon status`, or `daemon stop`?".to_string()
@@ -778,7 +787,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, daemon run|status|stop"
                 ));
             }
         }
@@ -800,6 +809,22 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         );
     }
 
+    if no_daemon && verify_only {
+        return Err(
+            "`--no-daemon` and `--verify-only` cannot be combined. \
+             `--verify-only` does not use the daemon."
+                .to_string(),
+        );
+    }
+
+    if no_daemon && print_role.is_some() {
+        return Err(
+            "`--no-daemon` and `--print-role` cannot be combined. \
+             `--print-role` does not use the daemon."
+                .to_string(),
+        );
+    }
+
     let mode = if verify_only {
         CliMode::VerifyOnly
     } else if let Some(name) = print_role {
@@ -812,6 +837,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         mode,
         channel,
         role,
+        no_daemon,
     })
 }
 
@@ -897,6 +923,7 @@ async fn run_async(
     audit_chain_key: [u8; 32],
     channel_kind: ChannelKind,
     mode: CliMode,
+    no_daemon: bool,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -1385,7 +1412,8 @@ async fn run_async(
         ChannelKind::Local => {
             // Phase 18 Task 3: try daemon-backed REPL first, fall back
             // to in-process if the daemon path fails.
-            if let Ok(sp) = default_socket_path() {
+            // Phase 20 Task 4: `--no-daemon` skips daemon dispatch entirely.
+            if !no_daemon && let Ok(sp) = default_socket_path() {
                 let session = DaemonSession::connect(
                     &sp,
                     Some(active_role_name.clone()),
@@ -1538,7 +1566,8 @@ async fn run_async(
 
             // Phase 19 Task 3: daemon-first, in-process fallback —
             // same pattern as the Local branch.
-            if let Ok(sp) = default_socket_path() {
+            // Phase 20 Task 4: `--no-daemon` skips daemon dispatch entirely.
+            if !no_daemon && let Ok(sp) = default_socket_path() {
                 let transport = Arc::new(ReqwestTransport::new(token_str));
 
                 eprintln!(
@@ -2375,6 +2404,50 @@ mod tests {
             err.contains("daemon run") && err.contains("daemon status") && err.contains("daemon stop"),
             "error must list all subcommands: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 20 Task 4 — `--no-daemon` flag parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn no_daemon_flag_sets_no_daemon_true() {
+        let parsed = parse_cli_args_from(&argv(&["--no-daemon"]))
+            .expect("`--no-daemon` must parse");
+        assert!(parsed.no_daemon, "no_daemon must be true");
+        assert_eq!(parsed.mode, CliMode::Session);
+    }
+
+    #[test]
+    fn no_daemon_combines_with_channel_and_role() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--no-daemon", "--channel", "telegram", "--role", "coder",
+        ]))
+        .expect("orthogonal flags must compose");
+        assert!(parsed.no_daemon);
+        assert_eq!(parsed.channel, ChannelKind::Telegram);
+        assert_eq!(parsed.role.as_deref(), Some("coder"));
+    }
+
+    #[test]
+    fn no_daemon_with_verify_only_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--no-daemon", "--verify-only"]))
+            .expect_err("`--no-daemon --verify-only` must error");
+        assert!(err.contains("--no-daemon"), "error must mention flag: {err}");
+    }
+
+    #[test]
+    fn no_daemon_with_print_role_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--no-daemon", "--print-role", "coder"]))
+            .expect_err("`--no-daemon --print-role` must error");
+        assert!(err.contains("--no-daemon"), "error must mention flag: {err}");
+    }
+
+    #[test]
+    fn default_args_have_no_daemon_false() {
+        let parsed = parse_cli_args_from(&argv(&[]))
+            .expect("empty argv must parse");
+        assert!(!parsed.no_daemon, "no_daemon must default to false");
     }
 
 }
