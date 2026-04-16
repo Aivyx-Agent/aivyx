@@ -621,3 +621,73 @@ baseline 533).
   at **six consecutive phases** (pending exit confirmation).
   Q1→(a) and Q4→(a) both avoided trait-level changes.
 - Zero-new-dep streak holds.
+
+### Task 3 — Q2 resolution: no ChannelContext changes for multi-connection (option a)
+
+**Resolved:** option **(a)**. Each connection gets its own
+`IpcChannelBridge` instance. The daemon currently accepts one
+connection (Task 2 scope); multi-connection support is a
+Phase 18+ concern. The `ChannelContext` trait is unchanged.
+**Production-core streak holds.**
+
+### Task 3 — Q3 resolution: Command spawn for auto-spawn (option b)
+
+**Resolved:** option **(b)** is the target shape. Phase 17
+Task 3 lands the `daemon run` foreground entry point that
+auto-spawn will invoke. The actual auto-spawn logic (detect
+no socket → spawn `aivyx daemon run` → wait for socket →
+connect) is **deferred to Task 4** as a working-session-slot
+candidate. Task 3 delivers the daemon subcommand and the
+CLI surface; auto-spawn wiring is the natural follow-up.
+
+### Task 3 — Q5 resolution: `daemon run` subcommand (option a)
+
+**Resolved:** option **(a)**. The CLI gains a `daemon run`
+subcommand that launches the daemon in the foreground. The
+existing `--verify-only`, `--print-role`, and default session
+modes are refactored into a `CliMode` enum: `Session`,
+`VerifyOnly`, `PrintRole(String)`, `DaemonRun`. The parser
+checks for `daemon run` as a positional subcommand before
+falling into the flag-parsing loop.
+
+### Task 3 — implementation shape
+
+**Binary changes (`aivyx.rs`):**
+
+- **`CliMode` enum** — replaces the previous `verify_only: bool`
+  + `print_role: Option<String>` fields with a single
+  discriminated enum. Four variants: `Session`, `VerifyOnly`,
+  `PrintRole(String)`, `DaemonRun`. All existing tests updated.
+- **`daemon run` subcommand parsing** — detected as a positional
+  pair before the flag loop. `daemon` alone (without `run`)
+  gives a helpful "did you mean `daemon run`?" error.
+  Extra args after `daemon run` are rejected.
+- **`run_async` daemon branch** — when `mode == DaemonRun`, the
+  function builds a `ConcreteAgent` with the full provider/audit/
+  tool/capability stack (identical to the in-process path), wires
+  `tokio::signal::ctrl_c()` to a `CancellationToken`, and calls
+  `run_daemon` from `daemon_server.rs`. The daemon listens on
+  `default_socket_path()`.
+
+**No new library files.** All changes are in the binary. The
+daemon server (`daemon_server.rs`) is consumed as-is from
+Task 2.
+
+**Test delta:** +4 (4 CLI arg parsing tests:
+`daemon_run_parses_to_daemon_mode`,
+`daemon_without_run_is_an_error`,
+`daemon_run_rejects_extra_args`,
+`daemon_run_is_not_combinable_with_channel_flag`).
+Combined phase delta Tasks 1–3: +7 (target was ≥ +7).
+Workspace test count: **540** (entry baseline 533).
+
+**Binary line count:** 2159 (up from 2072, net +87 for
+daemon subcommand + CliMode refactor + 4 tests).
+
+**Streak status after Task 3:**
+
+- DESIGN.md byte-identical to `e0d6437`. Streak holds.
+- PRODUCT.md byte-identical to `80189b4`. Streak holds.
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`. Streak
+  holds. No trait changes.
+- Zero-new-dep streak holds.

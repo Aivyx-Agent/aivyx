@@ -108,6 +108,8 @@ use std::sync::Arc;
 use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::Scope;
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
+use aivyx_channel::daemon_ipc::default_socket_path;
+use aivyx_channel::daemon_server::run_daemon;
 use aivyx_channel::{
     assemble_role_envelope, render_role_envelope, run_session, ChannelKind, LocalChannel,
     SessionConfig,
@@ -259,16 +261,17 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    // ---- CLI args -----------------------------------------------------
-    // Phase 8 Task 4 extended the arg parser to accept
-    // `--channel local|telegram` in addition to `--verify-only`.
-    // Unknown flags still fail fast with a clear error.
     let CliArgs {
-        verify_only,
+        mode,
         channel: channel_kind,
         role: role_override,
-        print_role,
     } = parse_cli_args()?;
+
+    let verify_only = mode == CliMode::VerifyOnly;
+    let print_role = match &mode {
+        CliMode::PrintRole(name) => Some(name.clone()),
+        _ => None,
+    };
 
     // ---- Config -------------------------------------------------------
     // Phase 9 Task 3 — the whole "read ten env vars by hand" block that
@@ -450,6 +453,7 @@ fn run() -> Result<(), String> {
             storage,
             audit_chain_key,
             channel_kind,
+            mode,
         )
         .await
     })
@@ -584,32 +588,27 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
 // itself is library-side so `aivyx_channel::render_role_envelope`
 // and any future IPC frontends share one discriminator.
 
+/// Phase 17 Task 3 — the binary's primary mode of operation.
+#[derive(Debug, PartialEq)]
+enum CliMode {
+    /// Default: interactive REPL session (in-process or over daemon).
+    Session,
+    /// `--verify-only`: forensic audit-chain verification, no session.
+    VerifyOnly,
+    /// `--print-role <name>`: render a role's capability envelope.
+    PrintRole(String),
+    /// `aivyx daemon run`: launch the daemon in the foreground.
+    DaemonRun,
+}
+
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
 /// new argument lands here, so the parser's failure mode is
 /// "unrecognized argument" rather than "silently ignored flag."
 #[derive(Debug)]
 struct CliArgs {
-    verify_only: bool,
+    mode: CliMode,
     channel: ChannelKind,
-    /// Phase 11 Task 4 — `--role <name>`. Highest-priority source for
-    /// `LoadOptions::role_override`; beats `AIVYX_ROLE` env var, the
-    /// `aivyx.active_role` TOML field, and the implicit `"default"`
-    /// fallback. `None` means "no override — fall back to the env var
-    /// and config-layer resolution chain."
     role: Option<String>,
-    /// Phase 13 Task 4 — `--print-role <name>`. A debug-mode flag
-    /// that loads the config, walks the named role's inheritance
-    /// chain, and prints a structured rendering of the effective
-    /// capability envelope (declared scopes per level, the
-    /// substituted backcompat floor, the final intersected set,
-    /// and a "dropped" diff explaining which scopes were removed
-    /// at each layer and why). Exits without starting a session,
-    /// without deriving the master key, and without opening the
-    /// encrypted store. `None` means "no print mode — run a normal
-    /// session." `Some(name)` means "render this role and exit."
-    /// Composes with `--channel` (the floor differs per channel),
-    /// is mutually exclusive with `--verify-only`.
-    print_role: Option<String>,
 }
 
 /// Parse the CLI arg surface.
@@ -617,52 +616,38 @@ struct CliArgs {
 /// Recognized forms:
 ///
 /// - `aivyx` — local REPL, fresh session (default).
-/// - `aivyx --verify-only` — forensic verification path; skips
-///   session bring-up and exits after replaying the audit chain.
+/// - `aivyx --verify-only` — forensic verification path.
 /// - `aivyx --channel local` — explicit form of the default.
 /// - `aivyx --channel telegram` — Phase 8 Task 4 Telegram bot mode.
-///   Requires `AIVYX_TELEGRAM_TOKEN` and `AIVYX_TELEGRAM_CHAT_ID`
-///   env vars at `run_async` time.
-/// - `aivyx --role <name>` — Phase 11 Task 4. Highest-priority
-///   source for the active-role selection. Overrides `AIVYX_ROLE`
-///   env var, the `aivyx.active_role` TOML field, and the implicit
-///   `"default"` fallback. An unknown name fails at
-///   `AivyxConfig::validate` with a typed error listing the roles
-///   the config knows about.
-/// - `aivyx --print-role <name>` — Phase 13 Task 4. Debug-mode
-///   flag. Loads the config, renders the named role's capability
-///   envelope (declared scopes per inheritance level, the
-///   substituted backcompat floor, the final intersected set, and
-///   a "dropped" diff with reasons), then exits. Does not derive
-///   the master key, open the encrypted store, or start a session.
-///   Composes with `--channel local|telegram` to render the floor
-///   the matching session would use. Mutually exclusive with
-///   `--verify-only` (different exit modes).
+/// - `aivyx --role <name>` — Phase 11 Task 4.
+/// - `aivyx --print-role <name>` — Phase 13 Task 4.
+/// - `aivyx daemon run` — Phase 17 Task 3 daemon foreground mode.
 ///
-/// `--verify-only` and `--channel` are mutually exclusive: verify
-/// mode is a read-only forensic surface and has nothing to do with
-/// which channel the live session would run on. Combining them is
-/// an operator error we flag explicitly rather than picking a
-/// silent winner.
-///
-/// `--verify-only` and `--print-role` are also mutually exclusive
-/// for the same structural reason: each is its own exit mode.
-/// `--print-role` and `--channel` *do* compose — channel selection
-/// determines which floor is shown.
-///
-/// Rejecting unknown args early keeps typos like `--verify_only` or
-/// `--chanel telegram` from silently falling through into normal
-/// session bring-up.
+/// Mutual exclusions: `--verify-only` vs `--channel`, `--verify-only`
+/// vs `--print-role`, `daemon run` vs all other modes.
 fn parse_cli_args() -> Result<CliArgs, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     parse_cli_args_from(&args)
 }
 
-/// Testable core of [`parse_cli_args`]. Split out so tests can drive
-/// it with a synthetic argv without touching the real process
-/// arguments. `parse_cli_args` itself is a one-line shim that hands
-/// `std::env::args().skip(1)` to this function.
+/// Testable core of [`parse_cli_args`].
 fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
+    // Phase 17 Task 3: check for `daemon run` subcommand first.
+    if args.len() >= 2 && args[0] == "daemon" && args[1] == "run" {
+        if args.len() > 2 {
+            return Err(format!(
+                "unrecognized argument after `daemon run`: `{}`. \
+                 `daemon run` takes no additional flags.",
+                args[2]
+            ));
+        }
+        return Ok(CliArgs {
+            mode: CliMode::DaemonRun,
+            channel: ChannelKind::Local,
+            role: None,
+        });
+    }
+
     let mut verify_only = false;
     let mut channel = ChannelKind::Local;
     let mut role: Option<String> = None;
@@ -710,10 +695,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 print_role = Some(value.clone());
                 i += 2;
             }
+            "daemon" => {
+                return Err(
+                    "unrecognized subcommand. Did you mean `daemon run`?".to_string()
+                );
+            }
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported flags: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, daemon run"
                 ));
             }
         }
@@ -735,11 +725,18 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         );
     }
 
+    let mode = if verify_only {
+        CliMode::VerifyOnly
+    } else if let Some(name) = print_role {
+        CliMode::PrintRole(name)
+    } else {
+        CliMode::Session
+    };
+
     Ok(CliArgs {
-        verify_only,
+        mode,
         channel,
         role,
-        print_role,
     })
 }
 
@@ -824,6 +821,7 @@ async fn run_async(
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
     channel_kind: ChannelKind,
+    mode: CliMode,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -1230,6 +1228,61 @@ async fn run_async(
                 .to_string()
         })?;
 
+    // ---- Phase 17 Task 3: daemon-run branch ----------------------------
+    // If the operator invoked `aivyx daemon run`, launch the daemon
+    // server in the foreground. The daemon reuses the same agent,
+    // provider, audit, and capability stack as the in-process path.
+    if mode == CliMode::DaemonRun {
+        let socket_path = default_socket_path()?;
+        let channel: Arc<LocalChannel<io::Stdout>> =
+            Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()));
+
+        let daemon_tool_allowlist = tool_allowlist.clone();
+        let planner_config = LlmPlannerConfig::new(model.clone())
+            .with_system_prompt(system_prompt)
+            .with_max_tokens(DEFAULT_MAX_TOKENS)
+            .with_tool_allowlist(tool_allowlist);
+        let planner_provider = Arc::clone(&provider);
+        let planner_tools = Arc::clone(&tools);
+        let planner_factory = move || {
+            Box::new(LlmPlanner::new(
+                Arc::clone(&planner_provider),
+                Arc::clone(&planner_tools),
+                planner_config.clone(),
+            )) as Box<dyn aivyx_core::TurnPlanner>
+        };
+        let agent: Arc<dyn Agent> = Arc::new(
+            ConcreteAgent::new(
+                AgentId::new(),
+                capabilities,
+                tools,
+                audit,
+                planner_factory,
+            )
+            .with_tool_allowlist(daemon_tool_allowlist)
+            .with_memory_topic_prefix(memory_topic_prefix),
+        );
+
+        let shutdown = CancellationToken::new();
+        let shutdown_for_signal = shutdown.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_err() {
+                std::process::exit(130);
+            }
+            eprintln!("\naivyx daemon: shutting down.");
+            shutdown_for_signal.cancel();
+        });
+
+        eprintln!(
+            "aivyx daemon {} — listening on {}",
+            env!("CARGO_PKG_VERSION"),
+            socket_path.display(),
+        );
+
+        return run_daemon(&socket_path, agent, channel, shutdown)
+            .await;
+    }
+
     // ---- Channel branch ----------------------------------------------
     // Phase 8 Task 4 — fork here on `channel_kind`. Everything upstream
     // of this point is shared: same provider, same audit, same memory
@@ -1243,9 +1296,7 @@ async fn run_async(
     // Phase 4 turn loop intersects it with the channel's
     // `trust_tier().default_ceiling()` on every turn. LocalChannel
     // reports `Trusted` and the intersection is a no-op; TelegramChannel
-    // reports `SemiTrusted` and `shell.exec` would be stripped. The
-    // Task 3 pin test at `aivyx-telegram/src/tests.rs` verifies that
-    // attenuation through a real `TelegramChannel`.
+    // reports `SemiTrusted` and `shell.exec` would be stripped.
     match channel_kind {
         ChannelKind::Local => {
             let channel = LocalChannel::new("aivyx-cli", io::stdout());
@@ -1472,7 +1523,7 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["--role", "researcher"]))
             .expect("`--role researcher` must parse");
         assert_eq!(parsed.role.as_deref(), Some("researcher"));
-        assert!(!parsed.verify_only);
+        assert_eq!(parsed.mode, CliMode::Session);
         assert_eq!(parsed.channel, ChannelKind::Local);
     }
 
@@ -2020,8 +2071,7 @@ mod tests {
     fn print_role_flag_parses_into_cli_args() {
         let parsed = parse_cli_args_from(&argv(&["--print-role", "junior_researcher"]))
             .expect("`--print-role junior_researcher` must parse");
-        assert_eq!(parsed.print_role.as_deref(), Some("junior_researcher"));
-        assert!(!parsed.verify_only);
+        assert_eq!(parsed.mode, CliMode::PrintRole("junior_researcher".into()));
     }
 
     #[test]
@@ -2066,7 +2116,44 @@ mod tests {
         ]))
         .expect("orthogonal flags must compose");
         assert_eq!(parsed.channel, ChannelKind::Telegram);
-        assert_eq!(parsed.print_role.as_deref(), Some("researcher"));
+        assert_eq!(parsed.mode, CliMode::PrintRole("researcher".into()));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 17 Task 3 — `daemon run` subcommand parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn daemon_run_parses_to_daemon_mode() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
+            .expect("`daemon run` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonRun);
+    }
+
+    #[test]
+    fn daemon_without_run_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["daemon"]))
+            .expect_err("`daemon` alone must error");
+        assert!(
+            err.contains("daemon run"),
+            "error must suggest `daemon run`: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_run_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["daemon", "run", "--verbose"]))
+            .expect_err("`daemon run --verbose` must error");
+        assert!(
+            err.contains("unrecognized"),
+            "error must mention unrecognized: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_run_is_not_combinable_with_channel_flag() {
+        let err = parse_cli_args_from(&argv(&["--channel", "telegram", "daemon", "run"]));
+        assert!(err.is_err(), "`--channel telegram daemon run` must error");
     }
 
 }
