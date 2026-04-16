@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession};
+use crate::daemon_ipc::FrontendType;
 use crate::session::SessionReport;
 
 const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,6 +31,9 @@ pub struct DaemonSessionConfig {
     /// `submit_input` so that the first ctrl-C of a new turn always
     /// sends `CancelTurn` instead of exiting.
     pub cancel_flag: Option<Arc<AtomicBool>>,
+    /// Frontend type sent in `StartSession` so the daemon can construct
+    /// the appropriate `ChannelContext` per connection.
+    pub frontend_type: Option<FrontendType>,
 }
 
 /// Drive a daemon-backed CLI session to completion.
@@ -50,11 +54,11 @@ where
     R: BufRead,
     W: Write,
 {
-    let session = match DaemonSession::connect(&config.socket_path, config.role.clone()).await {
+    let session = match DaemonSession::connect(&config.socket_path, config.role.clone(), config.frontend_type).await {
         Ok(s) => s,
         Err(_) => {
             spawn_daemon_and_wait(&config.socket_path, AUTO_SPAWN_TIMEOUT).await?;
-            DaemonSession::connect(&config.socket_path, config.role).await?
+            DaemonSession::connect(&config.socket_path, config.role, config.frontend_type).await?
         }
     };
 

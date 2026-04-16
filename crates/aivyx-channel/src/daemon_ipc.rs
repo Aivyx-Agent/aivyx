@@ -46,6 +46,16 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Frontend type — identifies the connecting adapter.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FrontendType {
+    Local,
+    Telegram,
+}
+
+// ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
 
@@ -54,6 +64,8 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
 pub enum FrontendMessage {
     StartSession {
         role: Option<String>,
+        #[serde(default)]
+        frontend_type: Option<FrontendType>,
     },
     SubmitInput {
         session_id: String,
@@ -270,8 +282,13 @@ mod tests {
         let cases = vec![
             FrontendMessage::StartSession {
                 role: Some("coder".into()),
+                frontend_type: Some(FrontendType::Local),
             },
-            FrontendMessage::StartSession { role: None },
+            FrontendMessage::StartSession { role: None, frontend_type: None },
+            FrontendMessage::StartSession {
+                role: None,
+                frontend_type: Some(FrontendType::Telegram),
+            },
             FrontendMessage::SubmitInput {
                 session_id: "abc-123".into(),
                 text: "hello world".into(),

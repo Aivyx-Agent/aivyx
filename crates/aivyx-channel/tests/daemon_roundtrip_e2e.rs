@@ -24,7 +24,7 @@ use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSess
 use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
-use aivyx_channel::daemon_server::{run_daemon, run_poc_daemon};
+use aivyx_channel::daemon_server::{run_daemon_compat, run_poc_daemon};
 use aivyx_channel::LocalChannel;
 use aivyx_core::{
     Agent, AgentId, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome,
@@ -202,7 +202,7 @@ async fn multi_turn_session_streams_both_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -224,7 +224,7 @@ async fn multi_turn_session_streams_both_turns() {
     assert!(matches!(envelope, DaemonEnvelope::DaemonReady { .. }));
 
     // StartSession.
-    let frame = encode_frame(&FrontendMessage::StartSession { role: None }).unwrap();
+    let frame = encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
     writer.write_all(&frame).await.unwrap();
 
     let sid: String = loop {
@@ -272,6 +272,7 @@ async fn multi_turn_session_streams_both_turns() {
     let frame = encode_frame(&FrontendMessage::Disconnect).unwrap();
     writer.write_all(&frame).await.unwrap();
 
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")
@@ -300,7 +301,7 @@ async fn graceful_shutdown_sends_shutting_down() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -381,7 +382,7 @@ async fn frontend_disconnect_stops_daemon_cleanly() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -399,10 +400,12 @@ async fn frontend_disconnect_stops_daemon_cleanly() {
         // Connection drops here when `stream` (via reader/_writer) goes out of scope.
     }
 
-    // The daemon should exit cleanly when the frontend disconnects.
+    // The handler task exits on disconnect; cancel the daemon's
+    // accept loop so the daemon itself shuts down.
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
-        .expect("daemon must finish within 5s after frontend disconnect")
+        .expect("daemon must finish within 5s after shutdown")
         .expect("daemon task must not panic");
 }
 
@@ -428,14 +431,14 @@ async fn daemon_session_multi_turn_via_client_library() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let mut session = DaemonSession::connect(&socket_path, None)
+    let mut session = DaemonSession::connect(&socket_path, None, None)
         .await
         .expect("DaemonSession::connect must succeed");
 
@@ -460,6 +463,7 @@ async fn daemon_session_multi_turn_via_client_library() {
 
     session.disconnect().await.expect("disconnect must succeed");
 
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")
@@ -502,7 +506,7 @@ async fn run_daemon_session_renders_two_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -515,6 +519,7 @@ async fn run_daemon_session_renders_two_turns() {
         prompt: "> ".into(),
         banner: Some("test banner".into()),
         cancel_flag: None,
+        frontend_type: None,
     };
 
     // Two input lines, then EOF.
@@ -548,6 +553,7 @@ async fn run_daemon_session_renders_two_turns() {
         "must have exactly 3 prompts in output, got: {output_str}"
     );
 
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")
@@ -576,7 +582,7 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -589,6 +595,7 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
         prompt: "> ".into(),
         banner: Some("daemon-mode banner".into()),
         cancel_flag: None,
+        frontend_type: None,
     };
 
     // Empty input — immediate EOF.
@@ -608,6 +615,7 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
         "output must contain banner, got: {output_str}"
     );
 
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")
@@ -636,7 +644,7 @@ async fn run_daemon_session_connected_with_cancel_handle() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
@@ -644,7 +652,7 @@ async fn run_daemon_session_connected_with_cancel_handle() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Pre-connect (as the binary does in daemon mode).
-    let session = DaemonSession::connect(&socket_path, None)
+    let session = DaemonSession::connect(&socket_path, None, None)
         .await
         .expect("connect must succeed");
 
@@ -660,6 +668,7 @@ async fn run_daemon_session_connected_with_cancel_handle() {
         prompt: "> ".into(),
         banner: Some("pre-connected test".into()),
         cancel_flag: None,
+        frontend_type: None,
     };
 
     let input = std::io::Cursor::new(b"hello\n");
@@ -676,6 +685,7 @@ async fn run_daemon_session_connected_with_cancel_handle() {
     assert!(output_str.contains("Hello "));
     assert!(output_str.contains("from daemon!"));
 
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")
@@ -703,14 +713,14 @@ async fn cancel_flag_resets_between_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
             .await
             .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let session = DaemonSession::connect(&socket_path, None)
+    let session = DaemonSession::connect(&socket_path, None, None)
         .await
         .expect("connect must succeed");
 
@@ -723,6 +733,7 @@ async fn cancel_flag_resets_between_turns() {
         prompt: "> ".into(),
         banner: Some("flag-reset test".into()),
         cancel_flag: Some(Arc::clone(&cancel_flag)),
+        frontend_type: None,
     };
 
     let input = std::io::Cursor::new(b"turn1\nturn2\n");
@@ -737,6 +748,138 @@ async fn cancel_flag_resets_between_turns() {
     // (the REPL resets it before each submit_input).
     assert!(!cancel_flag.load(Ordering::Relaxed));
 
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 19 Task 2 — two concurrent connections
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn two_concurrent_connections() {
+    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory};
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let channel_for_factory: Arc<dyn aivyx_core::ChannelContext + Send + Sync> = channel;
+    let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_factory = Arc::clone(&factory);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(&daemon_socket, daemon_agent, daemon_factory, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Connect two clients concurrently.
+    let mut session_a = DaemonSession::connect(&socket_path, None, None)
+        .await
+        .expect("connection A must succeed");
+    let mut session_b = DaemonSession::connect(&socket_path, None, None)
+        .await
+        .expect("connection B must succeed");
+
+    // Both sessions should have different session IDs.
+    assert_ne!(session_a.session_id, session_b.session_id);
+
+    // Submit turns on both connections.
+    let (events_a, outcome_a) = session_a
+        .submit_input("from A".into())
+        .await
+        .expect("turn A must succeed");
+    let (events_b, outcome_b) = session_b
+        .submit_input("from B".into())
+        .await
+        .expect("turn B must succeed");
+
+    assert_eq!(events_a.len(), 2);
+    assert_eq!(events_b.len(), 2);
+    assert!(outcome_a.contains("Hello from daemon!"));
+    assert!(outcome_b.contains("Hello from daemon!"));
+
+    let _ = session_a.disconnect().await;
+    let _ = session_b.disconnect().await;
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must finish within 5s")
+        .expect("daemon task must not panic");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 19 Task 2 — connection after disconnect
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn connection_after_disconnect() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // First connection: one turn, then disconnect.
+    let mut session_1 = DaemonSession::connect(&socket_path, None, None)
+        .await
+        .expect("connection 1 must succeed");
+    let (events_1, _) = session_1
+        .submit_input("first".into())
+        .await
+        .expect("turn 1 must succeed");
+    assert_eq!(events_1.len(), 2);
+    let _ = session_1.disconnect().await;
+
+    // Small delay to let the handler task finish.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Second connection: the daemon should still be accepting.
+    let mut session_2 = DaemonSession::connect(&socket_path, None, None)
+        .await
+        .expect("connection 2 must succeed after first disconnected");
+    let (events_2, _) = session_2
+        .submit_input("second".into())
+        .await
+        .expect("turn 2 must succeed");
+    assert_eq!(events_2.len(), 2);
+    let _ = session_2.disconnect().await;
+
+    shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)
         .await
         .expect("daemon must finish within 5s")

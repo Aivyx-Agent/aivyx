@@ -19,7 +19,8 @@ use tokio::net::UnixStream;
 use std::sync::Arc;
 
 use crate::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
+    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
+    StreamEventPayload,
 };
 
 /// Result of a single PoC daemon turn (Phase 16 shape, kept for
@@ -49,6 +50,7 @@ impl DaemonSession {
     pub async fn connect(
         socket_path: &Path,
         role: Option<String>,
+        frontend_type: Option<FrontendType>,
     ) -> Result<Self, String> {
         let stream = UnixStream::connect(socket_path)
             .await
@@ -78,7 +80,7 @@ impl DaemonSession {
             };
 
         // Send StartSession.
-        let start = FrontendMessage::StartSession { role };
+        let start = FrontendMessage::StartSession { role, frontend_type };
         let frame =
             encode_frame(&start).map_err(|e| format!("encode StartSession: {e}"))?;
         let writer = Arc::new(tokio::sync::Mutex::new(writer));
@@ -286,7 +288,7 @@ pub async fn run_poc_client(
     role: Option<String>,
     input_text: String,
 ) -> Result<DaemonTurnResult, String> {
-    let mut session = DaemonSession::connect(socket_path, role).await?;
+    let mut session = DaemonSession::connect(socket_path, role, None).await?;
     let daemon_version = session.daemon_version.clone();
     let session_id = session.session_id.clone();
 

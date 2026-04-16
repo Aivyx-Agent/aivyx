@@ -459,3 +459,62 @@ Same shape as Phase 14–18 exit freezes:
    nesting, or deferral cleanup. It does none of these.
    The deliverable is: the daemon accepts multiple
    frontends and Telegram is the second.
+
+## Decisions made at Task 2
+
+5. **Q1 → (a) task-per-connection.** `run_daemon` refactored
+   to accept in a loop and `tokio::spawn` a handler task per
+   connection. The shared `Arc<dyn Agent>` and a cloned
+   `ChannelFactory` are moved into each task. The daemon's
+   `CancellationToken` is propagated per-connection for
+   graceful shutdown. The `IpcChannelBridge` is per-connection,
+   not shared.
+6. **Q4 → (b) `StartSession` gains `frontend_type`.** A new
+   `FrontendType` enum (`Local`, `Telegram`) is added to
+   `daemon_ipc.rs`. `StartSession` carries an optional
+   `frontend_type` field (defaults to `Local` for backward
+   compat). The daemon dispatches through the channel factory
+   using this value.
+7. **Q5 → (a) channel factory closure.** A new type alias
+   `ChannelFactory = Arc<dyn Fn(FrontendType) -> Arc<dyn
+   ChannelContext + Send + Sync> + Send + Sync>` is the
+   daemon's per-connection channel constructor. The binary
+   constructs this closure at startup, matching `FrontendType`
+   to the appropriate `ChannelContext` impl. The existing
+   `planner_factory` pattern on `ConcreteAgent` is the
+   precedent.
+8. **`IpcChannelBridge` de-genericized.** Changed from
+   `IpcChannelBridge<C: ChannelContext>` to trait-object
+   `Arc<dyn ChannelContext + Send + Sync>` as the inner
+   channel, so different channel types can coexist across
+   connections in the same daemon.
+9. **Backward-compat surface preserved.** `run_poc_daemon`
+   (single-connection, no shutdown token — used by Phase 16
+   PoC test) delegates to a new private
+   `run_single_connection_daemon`. `run_daemon_compat`
+   (multi-connection with shutdown — used by Phase 17–18
+   tests) wraps a single channel in a `ChannelFactory` and
+   delegates to `run_daemon`.
+
+## Task 2 ship record
+
+- **Cut:** `daemon_server.rs` rewritten (~410 lines):
+  multi-connection accept loop, `ChannelFactory` type,
+  `handle_connection` per-task handler,
+  `run_single_connection_daemon`, `run_daemon_compat`,
+  de-genericized `IpcChannelBridge`.
+- **Cut:** `daemon_ipc.rs` (+30 lines): `FrontendType` enum,
+  `frontend_type` field on `StartSession`, IPC round-trip
+  test updated.
+- **Cut:** `daemon_client.rs`: `DaemonSession::connect` gains
+  `frontend_type` parameter, propagated through `StartSession`.
+- **Cut:** `daemon_session.rs`: `DaemonSessionConfig` gains
+  `frontend_type` field.
+- **Cut:** `aivyx.rs`: daemon-run branch uses `ChannelFactory`;
+  CLI frontend passes `FrontendType::Local`.
+- **Cut:** `daemon_roundtrip_e2e.rs`: all 10 existing tests
+  updated for new signatures; `shutdown.cancel()` added for
+  clean daemon exit; 2 new tests:
+  `two_concurrent_connections`, `connection_after_disconnect`.
+- **Test count:** 548 (546 entry + 2 new). Target met.
+- **Clippy:** clean.

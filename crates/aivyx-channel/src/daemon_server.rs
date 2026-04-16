@@ -1,14 +1,14 @@
-//! Production daemon server — Phase 17 Task 2.
+//! Production daemon server — Phase 17 Task 2, Phase 19 Task 2.
 //!
 //! Listens on a Unix domain socket, accepts connections, reads IPC
 //! frames, dispatches turns through the provided agent, and streams
-//! `DaemonMessage` frames back. Supports multi-turn sessions (the
-//! connection stays open across turns) and graceful shutdown via a
+//! `DaemonMessage` frames back. Supports multi-turn sessions and
+//! concurrent connections (Phase 19), with graceful shutdown via a
 //! `CancellationToken`.
 //!
-//! Phase 16 shipped the single-turn PoC; Phase 17 Task 2 extends it
-//! to multi-turn with graceful shutdown. Auto-spawn, CLI integration,
-//! and multi-connection are Phase 17 Task 3 concerns.
+//! Phase 16 shipped the single-turn PoC; Phase 17 Task 2 extended to
+//! multi-turn with graceful shutdown; Phase 19 Task 2 upgrades to
+//! multi-connection with per-connection channel construction.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -20,23 +20,32 @@ use aivyx_core::{Agent, CancellationToken, ChannelContext, Message, StreamEvent,
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
-    StreamEventPayload, PROTOCOL_VERSION,
+    FrontendType, StreamEventPayload, PROTOCOL_VERSION,
 };
+
+/// Channel factory: given a `FrontendType`, returns the appropriate
+/// `ChannelContext` implementation for that frontend. The binary
+/// constructs this closure at startup, capturing the resources each
+/// channel type needs (stdout handle for Local, transport for Telegram).
+pub type ChannelFactory =
+    Arc<dyn Fn(FrontendType) -> Arc<dyn ChannelContext + Send + Sync> + Send + Sync>;
 
 /// Run the daemon server.
 ///
-/// Binds the Unix socket at `socket_path`, accepts one connection,
-/// and serves turns in a loop until the frontend disconnects or
-/// `shutdown` is cancelled. Sends `DaemonReady` on connect,
-/// `ShuttingDown` on graceful shutdown.
+/// Binds the Unix socket at `socket_path`, accepts connections in a
+/// loop, and spawns a handler task per connection. Each handler reads
+/// `FrontendMessage` frames and dispatches turns through the shared
+/// `agent`. The `channel_factory` constructs a per-connection
+/// `ChannelContext` based on the frontend type sent in `StartSession`.
 ///
 /// The `shutdown` token allows external code (signal handlers, tests)
-/// to trigger a graceful shutdown. When cancelled, the daemon finishes
-/// any in-flight turn, sends `ShuttingDown`, and returns.
-pub async fn run_daemon<C: ChannelContext>(
+/// to trigger a graceful shutdown. When cancelled, the daemon stops
+/// accepting new connections; in-flight handler tasks complete their
+/// current turn and exit.
+pub async fn run_daemon(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
-    channel: Arc<C>,
+    channel_factory: ChannelFactory,
     shutdown: CancellationToken,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
@@ -57,15 +66,49 @@ pub async fn run_daemon<C: ChannelContext>(
             .map_err(|e| format!("failed to set socket permissions: {e}"))?;
     }
 
-    // Accept one connection (multi-connection is Task 3 scope).
-    let (stream, _addr) = tokio::select! {
-        result = listener.accept() => {
-            result.map_err(|e| format!("failed to accept connection: {e}"))?
-        }
-        _ = shutdown.cancelled() => {
-            return Ok(());
-        }
-    };
+    let mut handles = Vec::new();
+
+    loop {
+        let (stream, _addr) = tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        eprintln!("aivyx daemon: accept error: {e}");
+                        continue;
+                    }
+                }
+            }
+            _ = shutdown.cancelled() => {
+                break;
+            }
+        };
+
+        let agent = Arc::clone(&agent);
+        let factory = Arc::clone(&channel_factory);
+        let conn_shutdown = shutdown.clone();
+
+        let handle = tokio::spawn(async move {
+            if let Err(e) = handle_connection(stream, agent, factory, conn_shutdown).await {
+                eprintln!("aivyx daemon: connection handler error: {e}");
+            }
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        let _ = h.await;
+    }
+
+    Ok(())
+}
+
+async fn handle_connection(
+    stream: tokio::net::UnixStream,
+    agent: Arc<dyn Agent>,
+    channel_factory: ChannelFactory,
+    shutdown: CancellationToken,
+) -> Result<(), String> {
     let (mut reader, mut writer) = stream.into_split();
 
     let ready = DaemonLifecycleEvent::DaemonReady {
@@ -79,9 +122,9 @@ pub async fn run_daemon<C: ChannelContext>(
 
     let mut buf = Vec::with_capacity(4096);
     let mut _session_id: Option<String> = None;
+    let mut channel: Option<Arc<dyn ChannelContext + Send + Sync>> = None;
 
     loop {
-        // Check shutdown between loop iterations.
         if shutdown.is_cancelled() {
             send_shutting_down(&mut writer, "shutdown requested").await;
             return Ok(());
@@ -107,7 +150,10 @@ pub async fn run_daemon<C: ChannelContext>(
                 Ok((msg, consumed)) => {
                     buf.drain(..consumed);
                     match msg {
-                        FrontendMessage::StartSession { role: _ } => {
+                        FrontendMessage::StartSession { role: _, frontend_type } => {
+                            let ft = frontend_type.unwrap_or(FrontendType::Local);
+                            channel = Some(channel_factory(ft));
+
                             let sid = aivyx_core::SessionId::new().to_string();
                             _session_id = Some(sid.clone());
                             let resp = DaemonMessage::SessionStarted { session_id: sid };
@@ -122,10 +168,23 @@ pub async fn run_daemon<C: ChannelContext>(
                             session_id: sid,
                             text,
                         } => {
+                            let ch = match &channel {
+                                Some(c) => Arc::clone(c),
+                                None => {
+                                    let err = DaemonMessage::Error {
+                                        code: "no_session".into(),
+                                        message: "SubmitInput before StartSession".into(),
+                                    };
+                                    let frame = encode_frame(&err).unwrap_or_default();
+                                    let _ = writer.write_all(&frame).await;
+                                    continue;
+                                }
+                            };
+
                             let msg = Message::text(aivyx_core::SessionId::new(), text);
 
                             let bridge = IpcChannelBridge {
-                                inner: Arc::clone(&channel),
+                                inner: ch,
                                 writer: Arc::new(tokio::sync::Mutex::new(writer)),
                                 session_id: sid.clone(),
                             };
@@ -148,8 +207,6 @@ pub async fn run_daemon<C: ChannelContext>(
                                 .write_all(&frame)
                                 .await
                                 .map_err(|e| format!("write TurnComplete: {e}"))?;
-
-                            // Multi-turn: continue the loop instead of returning.
                         }
                         FrontendMessage::Disconnect => {
                             return Ok(());
@@ -157,9 +214,7 @@ pub async fn run_daemon<C: ChannelContext>(
                         FrontendMessage::CancelTurn { session_id: _sid } => {
                             // Cancellation wired through CancellationToken on
                             // the channel bridge; the turn loop checks it between
-                            // LLM steps. For now, cancellation is a no-op at the
-                            // daemon dispatch level — the bridge's inner channel
-                            // already exposes the token.
+                            // LLM steps.
                         }
                     }
                 }
@@ -180,14 +235,62 @@ pub async fn run_daemon<C: ChannelContext>(
     Ok(())
 }
 
-/// Backward-compatible alias for Phase 16 tests.
-pub async fn run_poc_daemon<C: ChannelContext>(
+/// Backward-compatible single-connection daemon for tests that don't
+/// need multi-connection or channel-factory semantics. Accepts one
+/// connection, serves it to completion, then returns.
+pub async fn run_poc_daemon<C: ChannelContext + Send + Sync + 'static>(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
     channel: Arc<C>,
 ) -> Result<(), String> {
+    let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
+    let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
+    run_single_connection_daemon(socket_path, agent, factory).await
+}
+
+/// Accept exactly one connection, serve it to completion, then return.
+/// Used by `run_poc_daemon` and tests that need deterministic shutdown.
+async fn run_single_connection_daemon(
+    socket_path: &Path,
+    agent: Arc<dyn Agent>,
+    channel_factory: ChannelFactory,
+) -> Result<(), String> {
+    let _ = std::fs::remove_file(socket_path);
+
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create socket parent dir: {e}"))?;
+    }
+
+    let listener = UnixListener::bind(socket_path)
+        .map_err(|e| format!("failed to bind daemon socket at {}: {e}", socket_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(socket_path, perms)
+            .map_err(|e| format!("failed to set socket permissions: {e}"))?;
+    }
+
+    let (stream, _addr) = listener.accept()
+        .await
+        .map_err(|e| format!("failed to accept connection: {e}"))?;
+
     let shutdown = CancellationToken::new();
-    run_daemon(socket_path, agent, channel, shutdown).await
+    handle_connection(stream, agent, channel_factory, shutdown).await
+}
+
+/// Backward-compatible single-channel daemon with shutdown token.
+pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
+    socket_path: &Path,
+    agent: Arc<dyn Agent>,
+    channel: Arc<C>,
+    shutdown: CancellationToken,
+) -> Result<(), String> {
+    let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
+    let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
+    run_daemon(socket_path, agent, factory, shutdown).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
@@ -217,14 +320,14 @@ fn format_outcome(outcome: &TurnOutcome) -> String {
 // IpcChannelBridge — forwards StreamEvents over IPC
 // ---------------------------------------------------------------------------
 
-struct IpcChannelBridge<C: ChannelContext> {
-    inner: Arc<C>,
+struct IpcChannelBridge {
+    inner: Arc<dyn ChannelContext + Send + Sync>,
     writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
     session_id: String,
 }
 
 #[async_trait::async_trait]
-impl<C: ChannelContext> ChannelContext for IpcChannelBridge<C> {
+impl ChannelContext for IpcChannelBridge {
     fn channel_name(&self) -> &str {
         self.inner.channel_name()
     }

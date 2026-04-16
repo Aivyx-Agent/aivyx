@@ -109,7 +109,7 @@ use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::Scope;
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::daemon_server::run_daemon;
+use aivyx_channel::daemon_server::{run_daemon, ChannelFactory};
 use aivyx_channel::daemon_client::DaemonSession;
 use aivyx_channel::{
     assemble_role_envelope, render_role_envelope, run_daemon_session_connected, run_session,
@@ -1235,8 +1235,6 @@ async fn run_async(
     // provider, audit, and capability stack as the in-process path.
     if mode == CliMode::DaemonRun {
         let socket_path = default_socket_path()?;
-        let channel: Arc<LocalChannel<io::Stdout>> =
-            Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()));
 
         let daemon_tool_allowlist = tool_allowlist.clone();
         let planner_config = LlmPlannerConfig::new(model.clone())
@@ -1264,6 +1262,10 @@ async fn run_async(
             .with_memory_topic_prefix(memory_topic_prefix),
         );
 
+        let channel_factory: ChannelFactory = Arc::new(|_frontend_type| {
+            Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()))
+        });
+
         let shutdown = CancellationToken::new();
         let shutdown_for_signal = shutdown.clone();
         tokio::spawn(async move {
@@ -1280,7 +1282,7 @@ async fn run_async(
             socket_path.display(),
         );
 
-        return run_daemon(&socket_path, agent, channel, shutdown)
+        return run_daemon(&socket_path, agent, channel_factory, shutdown)
             .await;
     }
 
@@ -1306,6 +1308,7 @@ async fn run_async(
                 let session = DaemonSession::connect(
                     &sp,
                     Some(active_role_name.clone()),
+                    Some(aivyx_channel::daemon_ipc::FrontendType::Local),
                 ).await;
 
                 if let Ok(session) = session {
@@ -1350,6 +1353,7 @@ async fn run_async(
                             active_role_name,
                         )),
                         cancel_flag: Some(cancelled_once),
+                        frontend_type: Some(aivyx_channel::daemon_ipc::FrontendType::Local),
                     };
 
                     let stdin = io::stdin();
