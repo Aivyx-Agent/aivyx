@@ -338,13 +338,16 @@ fn cross_crate_junior_researcher_envelope_diverges_from_researcher() {
 /// should not require a test edit.
 #[test]
 fn cross_crate_max_inheritance_depth_is_reachable_via_public_api() {
-    assert!(
-        MAX_INHERITANCE_DEPTH > 0,
-        "MAX_INHERITANCE_DEPTH must be a positive sanity bound"
-    );
-    assert!(
+    // `const`-eval the bound so clippy does not flag the check
+    // as a tautological runtime assertion. The real purpose of
+    // this test is not the numerical inequality — it is the
+    // fact that the reference compiles at all, which proves
+    // `MAX_INHERITANCE_DEPTH` is reachable through
+    // `aivyx_channel`'s public API. Without the re-export in
+    // `lib.rs`, the `use` at the top of the file would fail.
+    const _: () = assert!(
         MAX_INHERITANCE_DEPTH >= 8,
-        "MAX_INHERITANCE_DEPTH must comfortably exceed realistic role \
-         tree depth (2-3 levels in practice); got {MAX_INHERITANCE_DEPTH}"
+        "MAX_INHERITANCE_DEPTH must comfortably exceed realistic role tree depth"
     );
+    let _ = MAX_INHERITANCE_DEPTH;
 }
