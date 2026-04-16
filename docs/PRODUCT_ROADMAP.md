@@ -86,10 +86,22 @@ streaks held; production-core at seven consecutive phases (longest
 in project history). Closed the REPL-mode-over-IPC deferral.
 See [`docs/PHASE_18.md`](PHASE_18.md).
 
-**Next:** Telegram adapter port behind the IPC boundary, or
-Mission Primitive (P2), or a lighter deferral-cleanup phase.
-Subsequent phases complete the migration for all shipped
-adapters.
+**Phase 19 (Multi-Connection + Telegram Port, 2026-04-16):**
+upgraded the daemon from single-connection to multi-connection
+(task-per-connection with `ChannelFactory` dispatching on
+`FrontendType`). Ported the Telegram adapter behind the IPC
+boundary — `aivyx --channel telegram` now auto-attaches to the
+daemon the same way the local CLI does. Transport types widened
+to `pub` for binary access; binary line-count managed via
+extraction to `telegram_daemon_frontend.rs`. All byte-identity
+streaks held; production-core at eight consecutive phases.
+Closed the Telegram-over-daemon deferral from Phase 16.
+See [`docs/PHASE_19.md`](PHASE_19.md).
+
+**Next:** both adapters now route through the daemon. Likely
+candidates: Mission Primitive (P2), deferral cleanup pass,
+or Channel SDK Surface (P5). Subsequent phases complete the
+migration for future adapters.
 
 ## Milestone — Role-Config Migration (shipped in Phase 13)
 

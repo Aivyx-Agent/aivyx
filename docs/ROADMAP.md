@@ -235,25 +235,24 @@ six, production-core at seven (longest in project
 history), zero-new-dep. Test delta +4 (542→546).
 Closed the REPL-mode-over-IPC deferral from Phase 17.
 
-## Phase 19 — Daemon Migration: Multi-Connection + Telegram Port (phase 4 of N) (active)
+## Phase 19 — Daemon Migration: Multi-Connection + Telegram Port (phase 4 of N) (frozen)
 
-**Active — see [PHASE_19.md](PHASE_19.md).** Opened
-2026-04-16 as the fourth phase of the **Daemon
-Migration keystone**. Upgrades the daemon from single-
-connection to multi-connection (task-per-connection),
-then ports the Telegram adapter behind the IPC
-boundary. By Phase 19 exit, the daemon accepts
-concurrent frontends (CLI + Telegram) and
-`aivyx --channel telegram` auto-attaches to the daemon
-the same way `aivyx --channel local` does. Q-block
-(Q1–Q5) settles multi-connection dispatch, Telegram
-turn submission, event rendering, frontend-type
-awareness, and per-connection channel construction.
+Daemon Migration phase 4. Multi-connection daemon
+server (task-per-connection with `ChannelFactory`),
+`FrontendType` enum + `StartSession` protocol
+extension, Telegram adapter ported behind IPC boundary
+with daemon-first + in-process fallback. Transport
+types widened to `pub`. Binary line-count extraction
+into `telegram_daemon_frontend.rs`. All three byte-
+identity streaks held (DESIGN.md at 19, PRODUCT.md at
+7, production-core at 8). Zero-new-dep. Test delta +4
+(546→550). Closed the Telegram-over-daemon deferral
+from Phase 16.
 
 ## Phase 20 — shape TBD at Phase 19 exit
 
-Phase 19 ports the second adapter behind the daemon.
-Likely candidates for Phase 20:
+Both adapters (Local + Telegram) now route through the
+daemon. Likely candidates for Phase 20:
 
 (a) **Mission Primitive (P2)**: with both adapters
 behind the daemon, long-running work items become
@@ -261,8 +260,9 @@ the natural next product-shape primitive.
 
 (b) **A lighter phase** (capability-hygiene,
 rolling-deferral cleanup, `daemon status`/`stop`,
-daemon-mode banner parity) if the deferral backlog
-warrants a dedicated cleanup pass.
+daemon-mode banner parity, per-chat
+`session_partition` in daemon mode) if the deferral
+backlog warrants a dedicated cleanup pass.
 
 (c) **Channel SDK Surface (P5)**: with two adapters
 behind the daemon, the adapter surface is concrete

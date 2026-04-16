@@ -603,3 +603,140 @@ management** — the triggered candidate (2521 > 2400 threshold).
     + `ConcreteAgent::turn` line 176 intersection.
   - Edge cases: connection crash cleanup covered by EOF check;
     session ID isolation proven by `two_concurrent_connections`.
+
+## Deferrals
+
+**Rolling deferrals still open after Phase 19 (inherited):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1 deferral. Untouched by Phase 19.
+- **Second regression channel for the role
+  primitive** — Phase 11 Q6 deferral. Untouched.
+- **Response headers in audit payload** (Phase 12
+  Q3 half). Untouched.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE).** Phase
+  12 Q1 pinned GET-only. Deferred indefinitely.
+- **Redirect following with per-hop scope re-check.**
+  Phase 12 Q5 pinned `Policy::none()`. Deferred
+  indefinitely.
+- **Binary response bodies / non-UTF-8.** Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering.** Phase 12 Task 1.
+  Deferred reactively.
+- **`CapabilitySet::grants` reflexivity
+  investigation.** Phase 13 Task 4 deferral.
+  Untouched.
+- **Misleading `CEILING_SEMITRUSTED` ▲-row doc
+  comment.** Phase 15 Task 4. Composes with the
+  reflexivity investigation.
+- **Multi-level sub-agent nesting.** Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC.**
+  Phase 17 Q6→(c+). Untouched. Tagged: **reactive.**
+- **`daemon status` / `daemon stop` subcommands.**
+  Phase 17 net-new. Untouched.
+- **PID file at `$XDG_RUNTIME_DIR/aivyx/daemon.pid`.**
+  Phase 17 net-new. Untouched.
+- **`--no-daemon` flag for local mode.** Phase 18
+  net-new. Untouched.
+- **Daemon-mode banner parity with in-process banner.**
+  Phase 18 net-new. Untouched.
+
+**Inherited deferrals closed by Phase 19:**
+
+- **Telegram-over-daemon port.** Phase 16 net-new.
+  **Closed by Task 3** — `run_telegram_daemon_multi_
+  session` drives the Telegram frontend over IPC, and
+  the binary's `ChannelKind::Telegram` branch wires
+  daemon-first dispatch with in-process fallback.
+
+**Net-new deferrals from Phase 19 itself:**
+
+- **Telegram-specific protocol extensions
+  (attachments, inline keyboards, edit-message
+  streaming).** The daemon-mode Telegram path sends
+  one plain-text message per turn. Rich media and
+  edit-for-streaming require protocol additions.
+  Tagged: **earliest plausible: reactive — adds when
+  a concrete use case demands it.**
+- **Per-chat `session_partition` in daemon mode.**
+  The in-process Telegram path returns
+  `Some(chat_id)` from `session_partition()` to
+  namespace memory per chat. The daemon-mode
+  `TelegramDaemonChannel` stub returns `None`
+  (default). Namespaced memory per Telegram chat
+  through the daemon requires threading `chat_id`
+  through the IPC protocol into the channel factory.
+  Tagged: **earliest plausible: Phase 20 or later.**
+
+**Backlog shape at Phase 19 exit:** fourteen rolling items
+inherited (fifteen inherited, one closed by Phase 19) +
+two net-new from Phase 19 itself. Total **sixteen**. The
+Telegram-over-daemon deferral — the primary target of
+Phase 19 — is closed.
+
+## Prediction versus reality
+
+The Phase 19 open doc made three explicit streak-risk
+predictions. This block reckons with each.
+
+1. **DESIGN.md streak (predicted: low risk).** Held.
+   The multi-connection model was "accept in a loop"
+   rather than a structural redesign. The
+   `IpcChannelBridge` pattern absorbed per-connection
+   dispatch without needing a new trait or architectural
+   invariant. Streak extends to **nineteen consecutive
+   phases** untouched.
+
+2. **PRODUCT.md streak (predicted: not at risk).**
+   Held. P4's deliberate-silence clause absorbed the
+   Telegram-over-daemon wiring. Streak extends to
+   **seven consecutive phases.**
+
+3. **Production-core `aivyx-core/src/lib.rs` streak
+   (predicted: low risk).** Held. The Telegram
+   adapter's `ChannelContext` impl already existed in
+   `aivyx-telegram`; hosting it behind the daemon's
+   `IpcChannelBridge` required no core-type changes.
+   Streak extends to **eight consecutive phases**
+   (longest in project history).
+
+**Unpredicted outcomes:**
+
+- The binary line-count threshold (2400) was crossed
+  at 2521 after Task 3, triggering the Task 4
+  extraction. This was anticipated as a candidate but
+  not a certainty.
+- Transport visibility widening (`pub(crate)` → `pub`)
+  was not predicted at phase open. It was the simplest
+  resolution of the dependency-cycle constraint that
+  forbids `aivyx-telegram` from importing
+  `aivyx-channel`.
+
+## Exit criteria
+
+- [x] All task ship records in this document (Tasks 1–4).
+- [x] All decisions recorded (Q1–Q5 settled across
+      Tasks 2–3; decisions 5–13).
+- [x] `cargo test --workspace` green at exit. **550
+      tests** (546 entry + 4 new). Test delta **+4**
+      against the 546-test entry baseline. Target
+      (≥ +4) met.
+- [x] `cargo clippy --workspace --tests -- -D warnings`
+      clean at exit.
+- [x] `DESIGN.md` byte-identical to `e0d6437`. **Streak
+      at nineteen consecutive phases.**
+- [x] `PRODUCT.md` byte-identical to `80189b4`. **Streak
+      at seven consecutive phases.**
+- [x] `aivyx-core/src/lib.rs` byte-identical to
+      `ba9a724`. **Streak at eight consecutive phases**
+      (longest in project history).
+- [x] Zero-new-dep streak holds.
+- [x] Deferrals block recorded. Rolling backlog at
+      sixteen items (one closed, two net-new).
+- [x] Prediction-versus-reality block recorded.
+- [x] `docs/README.md` phase-status table reflects exit.
+- [x] `docs/ROADMAP.md` Phase 19 frozen, Phase 20
+      scaffold.
+- [x] `docs/PRODUCT_ROADMAP.md` Daemon Migration
+      milestone updated.

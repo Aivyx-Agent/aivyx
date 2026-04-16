@@ -76,7 +76,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 16 | Frozen  | [PHASE_16.md](PHASE_16.md) | `1ed3f90` |
 | Phase 17 | Frozen  | [PHASE_17.md](PHASE_17.md) | `277d910` |
 | Phase 18 | Frozen  | [PHASE_18.md](PHASE_18.md) | `6dd4f23` |
-| Phase 19 | Active  | [PHASE_19.md](PHASE_19.md) | —         |
+| Phase 19 | Frozen  | [PHASE_19.md](PHASE_19.md) | `PENDING` |
 | Phase 20+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
 Frozen means the phase doc is no longer edited except through commits
