@@ -1,0 +1,396 @@
+# Phase 18 — Daemon Migration: Frontend Wiring (phase 3 of N)
+
+Phase journals are working documents. They churn freely
+during the phase and freeze at exit under a final Exit criteria
+block. For the locked technical contract see
+[`../DESIGN.md`](../DESIGN.md); for the locked product contract
+see [`../PRODUCT.md`](../PRODUCT.md).
+
+## Goal
+
+Wire the default `aivyx` invocation to auto-spawn a daemon
+(if none is running), connect via `DaemonSession`, and run an
+interactive REPL loop that renders `StreamEventPayload`s via
+`render_for_cli()`. By Phase 18 exit, `aivyx --channel local`
+(the default path) runs over the daemon transparently — the
+operator sees the same banner, prompt, and streaming output
+they saw before, but the turn loop runs in a background daemon
+process.
+
+Phase 18 is **Daemon Migration phase 3 of N**. Phase 16
+settled the protocol; Phase 17 hardened the daemon and built
+the client library. Phase 18 closes the loop: the frontend
+binary becomes a thin IPC client that auto-attaches to the
+daemon.
+
+## Why now
+
+1. **The substrate is complete.** Phase 17 delivered
+   `DaemonSession` (multi-turn client), `spawn_daemon_and_wait`
+   (auto-spawn with exponential backoff), `daemon_is_running`
+   (socket-presence check), `daemon run` (foreground daemon
+   entry point), and `render_for_cli` (IPC-side stream-event
+   rendering). The only remaining work is wiring these pieces
+   into the binary's session-mode dispatch path.
+
+2. **Phase 17's REPL-mode-over-IPC deferral is the natural
+   next step.** It was tagged "earliest plausible: Phase 18 or
+   whenever the default path switches from in-process to
+   daemon-backed." Phase 18 is that phase.
+
+3. **P4.5 ("if no daemon is running, the frontend spawns one
+   transparently") is the last undelivered P4 commitment
+   that Phase 18 can close.** Once the default `aivyx`
+   invocation auto-spawns and connects, the operator experience
+   matches P4.5's promise. The Telegram port (P4 for non-
+   local adapters) is a separate phase.
+
+4. **The in-process path remains as a fallback.** Phase 18
+   does not delete the in-process `run_session` code path —
+   it adds a daemon-backed alternative that becomes the
+   default. The in-process path stays for tests, for the
+   Telegram adapter (which hasn't been ported yet), and as
+   a `--no-daemon` fallback if the daemon fails to start.
+
+## Non-goals
+
+- **No Telegram-over-daemon port.** Same as Phase 17.
+  `aivyx-telegram` remains in its Phase 8 in-process shape.
+- **No multi-connection daemon.** Phase 18's daemon still
+  accepts one connection at a time. Multi-connection dispatch
+  is a forward concern for the phase that needs it.
+- **No `daemon status` / `daemon stop` subcommands.** These
+  are Phase 17 deferrals with no urgency. The auto-spawn
+  path only needs `daemon run` and socket-presence checking.
+- **No wire-format upgrade.** Same as Phase 17.
+- **No `--no-daemon` flag.** The in-process path remains
+  reachable through tests and the Telegram branch, but
+  Phase 18 does not add a user-facing flag to force it for
+  local mode. That's a forward concern if operators ask for
+  it.
+- **No DESIGN.md or PRODUCT.md edits.** Same discipline as
+  Phases 16–17: amendments only if an implementation decision
+  genuinely requires one.
+
+## Entry criteria (all met from Phase 17 exit)
+
+- [x] Phase 17 frozen at exit commit `277d910` + hash
+      backfill `64446f5`. See PHASE_17.md.
+- [x] `cargo test --workspace` is **542 green** (verified
+      at Phase 17 exit, baseline for Phase 18's delta math).
+- [x] `cargo clippy --workspace --tests -- -D warnings`
+      clean at Phase 17 exit.
+- [x] `crates/aivyx-core/src/lib.rs` byte-identical to
+      `ba9a724`. **Streak at six consecutive phases.**
+- [x] `docs/DESIGN.md` byte-identical to `e0d6437`.
+      **Streak at seventeen consecutive phases.**
+- [x] `PRODUCT.md` byte-identical to `80189b4`. **Streak
+      at five consecutive phases.**
+- [x] Phase 17 daemon substrate in place:
+      - `daemon_server.rs` (307 lines) — multi-turn server
+        with `CancellationToken` shutdown.
+      - `daemon_client.rs` (267 lines) — `DaemonSession`,
+        `daemon_is_running`, `spawn_daemon_and_wait`.
+      - `daemon_ipc.rs` (505 lines) — protocol types,
+        `render_for_cli()`.
+      - `daemon_roundtrip_e2e.rs` (521 lines) — 6 e2e tests.
+      - `aivyx.rs` (2159 lines) — `CliMode::DaemonRun` branch
+        with full agent-stack wiring.
+- [x] Rolling deferral backlog at fifteen items (see
+      PHASE_17.md deferrals block). Phase 18 targets closing
+      the REPL-mode-over-IPC deferral.
+
+## Streaks at risk
+
+- **DESIGN.md streak (17 → 18, not at risk).** Phase 18
+  wires existing library code into the binary's dispatch
+  path. No new trait, no new architectural decision. D1's
+  "turn loop as state machine" invariant is upheld by the
+  daemon; D3's `ChannelContext` trait is not touched. This
+  is the lowest-risk phase for DESIGN.md in the daemon arc.
+
+- **PRODUCT.md streak (5 → 6, not at risk).** Same
+  protection as Phases 16–17: P4's deliberate-silence clause
+  absorbs frontend wiring decisions.
+
+- **Production-core `aivyx-core/src/lib.rs` streak (6 →
+  7, not at risk).** Phase 18's changes are entirely in the
+  binary (`aivyx.rs`) and possibly `daemon_client.rs`. No
+  trait-level or core-type changes are anticipated. The six-
+  phase streak should extend to seven by construction.
+
+- **Zero-new-dep streak (not at risk).** All pieces are
+  already in the workspace.
+
+**Honest position:** Phase 18 is the lowest-streak-risk
+phase in the entire daemon arc. The load-bearing
+architectural decisions were made in Phases 16–17; Phase 18
+is wiring.
+
+## Open questions
+
+### Q1 — Does the daemon-backed REPL replace or sit alongside the in-process path?
+
+The binary currently has one local-mode path: `CliMode::Session`
+→ `run_session` (in-process). Phase 18 introduces a second
+path: auto-spawn daemon → connect via `DaemonSession` → REPL
+over IPC.
+
+- **(a) Replace.** `CliMode::Session` with `--channel local`
+  always goes through the daemon. The in-process
+  `run_session` remains in the codebase but is only called
+  by tests and the Telegram branch (which has its own
+  session function).
+- **(b) Sit alongside with auto-detection.** `CliMode::Session`
+  tries the daemon path first; if `spawn_daemon_and_wait`
+  fails (e.g., socket path is on a read-only filesystem),
+  falls back to in-process `run_session` silently or with a
+  warning.
+- **(c) Sit alongside with a `--no-daemon` flag.** Like (b)
+  but the operator can force in-process mode explicitly.
+
+Initial lean: **(b)**. Silent fallback with a warning is the
+most operator-friendly shape for a first release. The daemon
+path is the happy path; the in-process path is the degraded
+fallback. A `--no-daemon` flag is a Phase 19+ concern if
+operators ask for it.
+
+### Q2 — How does the daemon-backed REPL render streaming output?
+
+The in-process REPL renders via `LocalChannel`'s writer handle
+(which wraps `io::Stdout`). The daemon-backed REPL receives
+`StreamEventPayload` frames over IPC.
+
+- **(a) `render_for_cli()` directly to stdout.** The frontend
+  calls `StreamEventPayload::render_for_cli()` for each
+  received event and writes the result to stdout. Simple;
+  matches the existing rendering fidelity.
+- **(b) Convert `StreamEventPayload` back to `StreamEvent`
+  and route through the existing rendering pipeline.** More
+  complex; higher rendering fidelity if the in-process
+  pipeline has features `render_for_cli` doesn't replicate.
+- **(c) A new `DaemonFrontendChannel` implementing
+  `ChannelContext`.** The frontend constructs a channel
+  whose `stream_event` writes to stdout. The daemon sends
+  events, the frontend's channel renders them. Most
+  architecturally clean but may be over-engineered for
+  Phase 18.
+
+Initial lean: **(a)**. `render_for_cli()` was purpose-built
+in Phase 16 for exactly this use case. The in-process
+rendering pipeline and `render_for_cli` produce equivalent
+output for all current `StreamEvent` variants.
+
+### Q3 — How does the banner work in daemon mode?
+
+The in-process REPL prints a banner before the first prompt
+(version, fs sandbox path, memory status, audit event count,
+active role). In daemon mode, some of this information lives
+in the daemon's address space (audit event count, role) and
+some in the frontend's (version for display purposes).
+
+- **(a) Frontend prints its own banner from locally available
+  information.** The frontend knows the version, the socket
+  path, and can get the daemon version from `DaemonReady`.
+  It constructs a daemon-mode banner that reports these plus
+  "connected to daemon at <path>."
+- **(b) Daemon sends a banner in `SessionStarted`.** The
+  `SessionStarted` message gains an optional `banner` field
+  that the daemon populates with the same information the
+  in-process banner reports. The frontend renders it
+  verbatim.
+- **(c) No banner in daemon mode.** Simplest; the prompt
+  alone indicates readiness.
+
+Initial lean: **(a)**. A local banner avoids protocol
+changes and keeps `SessionStarted` simple. The daemon-mode
+banner doesn't need to match the in-process banner exactly —
+it just needs to tell the operator "you're connected to a
+daemon."
+
+### Q4 — How does ctrl-C cancellation work in daemon mode?
+
+The in-process REPL uses `CancellationToken` rotation:
+first ctrl-C cancels the in-flight turn, second ctrl-C
+exits the process. In daemon mode, the turn runs in the
+daemon's address space.
+
+- **(a) Frontend sends `CancelTurn` over IPC.** First ctrl-C
+  sends `FrontendMessage::CancelTurn`; the daemon's
+  `IpcChannelBridge` propagates the cancellation to the
+  agent's `CancellationToken`. Second ctrl-C exits the
+  frontend process. The `CancelTurn` message is already
+  defined in the Phase 16 protocol.
+- **(b) Frontend just disconnects on second ctrl-C.** No
+  explicit cancellation; the daemon detects the broken
+  connection and cleans up. Simpler but worse UX — the
+  first ctrl-C doesn't cancel the turn, it kills the
+  frontend.
+- **(c) Defer cancellation.** Phase 18 doesn't implement
+  turn cancellation in daemon mode. First ctrl-C exits the
+  frontend; the daemon finishes the turn to nobody and the
+  next connection picks up a clean state.
+
+Initial lean: **(a)**. `CancelTurn` is already in the
+protocol; wiring it to ctrl-C is straightforward. The
+double-ctrl-C UX mirrors the in-process path.
+
+## Draft task breakdown
+
+Five tasks, same cadence as Phases 14–17. Task 4 is the
+working-session slot; Task 5 is exit freeze.
+
+### Task 1 — Open commit (this document)
+
+The phase's first commit is this doc, the `docs/README.md`
+row flip from Frozen (Phase 17) to Active (Phase 18), and
+the `docs/ROADMAP.md` Phase 18 entry update. No code, no
+tests, no test-delta requirement.
+
+**Acceptance:**
+
+- `docs/PHASE_18.md` exists with the structure of this
+  document.
+- `docs/README.md` phase-status table has a Phase 18 row
+  marked Active.
+- `docs/ROADMAP.md` Phase 18 entry updated from scaffold
+  to active description.
+- Commit message: `docs(phase-18): open — Daemon Migration
+  Frontend Wiring phase 3 of N`.
+
+### Task 2 — Daemon-backed REPL loop
+
+**Delivers:** a `run_daemon_session` function (or equivalent)
+in the binary that auto-spawns a daemon, connects via
+`DaemonSession`, reads lines from stdin, calls `submit_input`
+for each, and renders `StreamEventPayload`s to stdout via
+`render_for_cli()`.
+
+**Cut:**
+
+- New function in the binary (or a library module if size
+  warrants it) that implements the daemon-backed REPL loop.
+- The function prints a daemon-mode banner, then enters
+  a read-line / submit / render loop identical in UX to
+  `run_session`.
+- Auto-spawn: if `daemon_is_running` returns false, call
+  `spawn_daemon_and_wait` before connecting.
+- On `DaemonSession::connect` failure after auto-spawn,
+  fall back to in-process `run_session` with a warning.
+- Rendering: `render_for_cli()` output written to stdout.
+
+**Test count target:** +2 (daemon-backed REPL integration
+test with `FakeStreamingAgent`, fallback-to-in-process test
+or banner-content test).
+
+**Acceptance:**
+
+- The daemon-backed REPL loop works end-to-end in a test.
+- `render_for_cli()` output matches expected format.
+- Q1 and Q2 resolved and recorded.
+
+### Task 3 — Binary dispatch wiring + ctrl-C
+
+**Delivers:** the binary's `CliMode::Session` path wired to
+the daemon-backed REPL as the default local-mode path, with
+ctrl-C cancellation via `CancelTurn`.
+
+**Cut:**
+
+- The `CliMode::Session` + `ChannelKind::Local` branch in
+  `run_async` calls the daemon-backed REPL function instead
+  of (or before falling back to) `run_session`.
+- ctrl-C handling: first ctrl-C sends `CancelTurn` over IPC
+  (via a new `DaemonSession::cancel_turn` method or by
+  sending the frame directly); second ctrl-C exits the
+  frontend.
+- Banner for daemon mode (Q3).
+
+**Test count target:** +2 (ctrl-C cancellation test if
+testable without real signals, CLI dispatch test showing
+daemon path is the default).
+
+**Acceptance:**
+
+- `aivyx` (default invocation) auto-spawns and connects to
+  a daemon for local mode.
+- ctrl-C cancels an in-flight turn in daemon mode.
+- Q3 and Q4 resolved and recorded.
+
+### Task 4 — Working-session slot
+
+Reserved for mid-implementation correction. Candidates:
+
+- **Edge cases and polish.** Daemon startup failure UX,
+  fallback messaging, socket-path edge cases (read-only
+  filesystem, missing `$XDG_RUNTIME_DIR`).
+- **Session marker in daemon mode.** The in-process path
+  writes a session marker to redb for cross-restart
+  continuity. The daemon-backed path may need equivalent
+  marker handling.
+- **Binary line-count management.** If the binary grows
+  past 2300 lines, lift daemon-frontend dispatch code
+  into a library module.
+
+None is pre-committed. Task 4 opens with a review of
+what Tasks 2–3 surfaced.
+
+### Task 5 — Exit freeze
+
+Same shape as Phase 14–17 exit freezes:
+
+- Ship records for Tasks 1–3 (and Task 4 if used).
+- Decisions block recording how Q1–Q4 resolved.
+- Deferrals block.
+- Final Exit criteria checklist.
+- `docs/README.md` phase-status row flipped.
+- `docs/ROADMAP.md` Phase 18 entry replaced with frozen
+  summary; Phase 19 scaffold.
+- `docs/PRODUCT_ROADMAP.md` Daemon Migration milestone
+  updated.
+- Prediction-versus-reality block.
+
+**Acceptance:**
+
+- All task ship records and decisions block in this
+  document.
+- `cargo test --workspace` green at exit. Test delta
+  across the full phase **≥ +4** against the 542-test
+  entry baseline.
+- `cargo clippy --workspace --tests -- -D warnings`
+  clean.
+- DESIGN.md byte-identical to `e0d6437` **or** a
+  documented amendment. Streak either extends to
+  eighteen consecutive phases or breaks with reason.
+- PRODUCT.md byte-identical to `80189b4`. Streak
+  extends to **six consecutive phases.**
+- `aivyx-core/src/lib.rs` byte-identical to `ba9a724`.
+  Streak extends to **seven consecutive phases.**
+- Zero-new-dep streak holds.
+- `docs/README.md` phase-status table reflects exit.
+- `docs/ROADMAP.md` Phase 18 frozen, Phase 19 scaffold.
+- `docs/PRODUCT_ROADMAP.md` updated.
+- Prediction-versus-reality block recorded.
+
+## Decisions made at phase open
+
+1. **Phase 18 is Daemon Migration phase 3 of N.** The
+   scope is frontend wiring only — connecting the existing
+   daemon substrate to the binary's default local-mode
+   dispatch path. No new protocol messages, no new daemon
+   features, no new library crates.
+2. **The in-process path is retained as fallback.** Phase 18
+   does not delete `run_session` or the in-process
+   `CliMode::Session` → `ChannelKind::Local` path. It adds
+   a daemon-backed alternative that becomes the default,
+   with silent fallback to in-process on failure.
+3. **The Q-block is small (four questions) because the
+   architectural decisions are already made.** Unlike
+   Phases 16 (protocol) and 17 (production hardening),
+   Phase 18's questions are about UX and dispatch mechanics,
+   not architecture.
+4. **Conservative scope continues.** Phase 18 could try to
+   also port Telegram, add `daemon status`/`stop`, or
+   implement multi-connection. It does none of these. The
+   single deliverable is: `aivyx` auto-spawns and connects
+   to a daemon for local mode.

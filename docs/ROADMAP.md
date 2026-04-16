@@ -213,32 +213,41 @@ subcommand). **All four byte-identity streaks held**
 phases is the longest in project history. Test delta
 +9 (533→542). Zero new workspace dependencies.
 
-## Phase 18 — shape TBD
+## Phase 18 — Daemon Migration: Frontend Wiring (phase 3 of N) (active)
 
-Phase 17 exited with a production-ready daemon
-substrate (multi-turn, graceful shutdown, auto-spawn,
-CLI entry point). Four likely candidates for Phase 18:
-
-(a) **Daemon Migration phase 3 of N — REPL-mode
-frontend over IPC**: wire the default `aivyx`
+**Active — see [PHASE_18.md](PHASE_18.md).** Opened
+2026-04-16 as the third phase of the **Daemon
+Migration keystone**. Wires the default `aivyx`
 invocation to auto-spawn a daemon, connect via
-`DaemonSession`, and enter an interactive REPL
-loop rendering `StreamEvent`s via `render_for_cli()`.
-This is the minimal remaining work to make the
-daemon path the default LocalChannel experience.
+`DaemonSession`, and run an interactive REPL loop
+rendering `StreamEventPayload`s via `render_for_cli()`.
+By Phase 18 exit, `aivyx --channel local` (the
+default path) runs over the daemon transparently.
+The in-process `run_session` path is retained as a
+fallback. Q-block (Q1–Q4) settles UX and dispatch
+mechanics: daemon-vs-in-process dispatch strategy,
+streaming rendering approach, banner shape, and
+ctrl-C cancellation over IPC.
 
-(b) **Daemon Migration phase 3 of N — Telegram
+## Phase 19 — shape TBD at Phase 18 exit
+
+Phase 18 delivers the frontend wiring that makes the
+daemon the default LocalChannel experience. Three
+likely candidates for Phase 19:
+
+(a) **Daemon Migration phase 4 of N — Telegram
 adapter port**: move `aivyx-telegram` behind the
 IPC boundary, proving the protocol works for a
-non-interactive channel adapter.
+non-interactive, long-polling channel adapter.
 
-(c) **Mission Primitive (P2)**: the daemon substrate
-is now stable enough to support long-running work
-items. May be more valuable than the Telegram port.
+(b) **Mission Primitive (P2)**: once the daemon is the
+default local path, long-running work items become
+the natural next product-shape primitive.
 
-(d) **A lighter phase** (capability-hygiene,
-rolling-deferral cleanup, `daemon status`/`stop`)
-if a cool-down is needed before the next keystone.
+(c) **A lighter phase** (capability-hygiene,
+rolling-deferral cleanup, `daemon status`/`stop`,
+multi-connection) if Phase 18 surfaces edge cases
+that need a polish pass.
 
 **Multi-level sub-agent nesting** and the
 `CapabilitySet::grants` reflexivity + ▲-row doc-
