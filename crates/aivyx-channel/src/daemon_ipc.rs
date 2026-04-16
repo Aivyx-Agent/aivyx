@@ -45,6 +45,14 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
     Err("neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon socket path".into())
 }
 
+/// Resolve the daemon PID file path — sibling of the socket file.
+///
+/// `$XDG_RUNTIME_DIR/aivyx/daemon.pid` (preferred) or
+/// `$HOME/.local/share/aivyx/daemon.pid` (fallback).
+pub fn default_pid_path() -> Result<PathBuf, String> {
+    default_socket_path().map(|p| p.with_extension("pid"))
+}
+
 // ---------------------------------------------------------------------------
 // Frontend type — identifies the connecting adapter.
 // ---------------------------------------------------------------------------
@@ -485,6 +493,26 @@ mod tests {
         assert!(
             path.ends_with("daemon.sock"),
             "path must end with daemon.sock: {path:?}"
+        );
+    }
+
+    #[test]
+    fn default_pid_path_is_sibling_of_socket_path() {
+        let pid = default_pid_path();
+        assert!(
+            pid.is_ok(),
+            "default_pid_path must succeed when HOME is set: {pid:?}"
+        );
+        let path = pid.unwrap();
+        assert!(
+            path.ends_with("daemon.pid"),
+            "path must end with daemon.pid: {path:?}"
+        );
+        let sock = default_socket_path().unwrap();
+        assert_eq!(
+            path.parent(),
+            sock.parent(),
+            "pid and socket paths must share the same parent directory"
         );
     }
 

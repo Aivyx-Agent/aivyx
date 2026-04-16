@@ -236,6 +236,38 @@ event already sent on connection).
 **Binary line count:** 2262 → 2377 (under 2400 threshold).
 **All three byte-identity streaks held.**
 
+## Task 3 ship record
+
+**Design decision: PID file is a `Drop` guard sibling of the
+socket file.** `PidGuard` writes `std::process::id()` to
+`<socket_path>.with_extension("pid")` on daemon start and
+removes it on drop. The guard composes with all exit paths
+(graceful shutdown, `daemon stop`, early errors) without
+explicit cleanup code. No `libc` dependency for
+`kill(pid, 0)` — the PID is informational in `daemon status`
+output; the socket probe remains the primary liveness check.
+Zero new workspace dependencies preserved.
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_ipc.rs` (+10):
+  `default_pid_path()` function + test.
+- `crates/aivyx-channel/src/daemon_server.rs` (+22):
+  `PidGuard` struct with `Drop` impl, PID file write in
+  `run_daemon`.
+- `crates/aivyx-channel/src/daemon_client.rs` (+22):
+  `read_pid_file()` utility, `DaemonStatusInfo.pid` field,
+  `daemon_status()` reads PID file.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+4): `daemon
+  status` output includes PID when available.
+- `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs` (+90):
+  4 tests — `pid_file_appears_on_daemon_start_and_disappears_
+  on_stop`, `daemon_status_includes_pid_from_pid_file`,
+  `read_pid_file_returns_none_for_missing_file`,
+  `read_pid_file_returns_none_for_non_numeric_content`.
+
+**Test delta:** 558 → 563 (+5).
+**All three byte-identity streaks held.**
+
 ## Deferrals targeted for closure
 
 | # | Item | Origin | Target task |

@@ -482,8 +482,11 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
             let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
             if info.running {
                 let version = info.version.as_deref().unwrap_or("unknown");
+                let pid_str = info.pid
+                    .map(|p| format!("  pid: {p}\n"))
+                    .unwrap_or_default();
                 eprintln!(
-                    "aivyx daemon: running (protocol {version})\n  socket: {}",
+                    "aivyx daemon: running (protocol {version})\n  socket: {}\n{pid_str}",
                     socket_path.display(),
                 );
             } else {

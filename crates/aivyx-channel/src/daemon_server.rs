@@ -10,7 +10,7 @@
 //! multi-turn with graceful shutdown; Phase 19 Task 2 upgrades to
 //! multi-connection with per-connection channel construction.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -65,6 +65,9 @@ pub async fn run_daemon(
         std::fs::set_permissions(socket_path, perms)
             .map_err(|e| format!("failed to set socket permissions: {e}"))?;
     }
+
+    let pid_path = socket_path.with_extension("pid");
+    let _pid_guard = PidGuard::write(&pid_path)?;
 
     let mut handles = Vec::new();
 
@@ -318,6 +321,29 @@ fn format_outcome(outcome: &TurnOutcome) -> String {
         TurnOutcome::Escalated { reason, .. } => {
             format!("escalated: {reason}")
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PidGuard — writes PID file on create, removes on drop
+// ---------------------------------------------------------------------------
+
+struct PidGuard {
+    path: PathBuf,
+}
+
+impl PidGuard {
+    fn write(path: &Path) -> Result<Self, String> {
+        let pid = std::process::id();
+        std::fs::write(path, pid.to_string())
+            .map_err(|e| format!("failed to write PID file at {}: {e}", path.display()))?;
+        Ok(PidGuard { path: path.to_path_buf() })
+    }
+}
+
+impl Drop for PidGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 

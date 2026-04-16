@@ -242,25 +242,39 @@ pub async fn daemon_is_running(socket_path: &Path) -> bool {
 pub struct DaemonStatusInfo {
     pub running: bool,
     pub version: Option<String>,
+    pub pid: Option<u32>,
+}
+
+/// Read the PID from a daemon PID file, if it exists and contains a
+/// valid u32. Returns `None` if the file is missing, empty, or
+/// contains non-numeric data.
+pub fn read_pid_file(pid_path: &Path) -> Option<u32> {
+    std::fs::read_to_string(pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }
 
 /// Probe a running daemon: connect, read `DaemonReady`, disconnect.
-/// Returns status info without starting a session.
+/// Returns status info without starting a session. The PID is read
+/// from the sibling `.pid` file if it exists.
 pub async fn daemon_status(socket_path: &Path) -> DaemonStatusInfo {
+    let pid_path = socket_path.with_extension("pid");
+    let pid = read_pid_file(&pid_path);
+
     let stream = match UnixStream::connect(socket_path).await {
         Ok(s) => s,
-        Err(_) => return DaemonStatusInfo { running: false, version: None },
+        Err(_) => return DaemonStatusInfo { running: false, version: None, pid },
     };
     let (mut reader, _writer) = stream.into_split();
     let mut buf = Vec::with_capacity(4096);
     if read_more(&mut reader, &mut buf).await.is_err() {
-        return DaemonStatusInfo { running: true, version: None };
+        return DaemonStatusInfo { running: true, version: None, pid };
     }
     match decode_frame::<DaemonEnvelope>(&buf) {
         Ok((DaemonEnvelope::DaemonReady { version }, _)) => {
-            DaemonStatusInfo { running: true, version: Some(version) }
+            DaemonStatusInfo { running: true, version: Some(version), pid }
         }
-        _ => DaemonStatusInfo { running: true, version: None },
+        _ => DaemonStatusInfo { running: true, version: None, pid },
     }
 }
 

@@ -1265,3 +1265,115 @@ async fn daemon_status_reports_not_running_for_absent_socket() {
     assert!(!info.running, "daemon must report as not running");
     assert!(info.version.is_none(), "version must be None when not running");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 20 Task 3 — PID file lifecycle
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pid_file_appears_on_daemon_start_and_disappears_on_stop() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let pid_path = socket_path.with_extension("pid");
+
+    assert!(
+        !pid_path.exists(),
+        "PID file must not exist before daemon start"
+    );
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("pid-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(pid_path.exists(), "PID file must exist while daemon runs");
+    let pid_content = std::fs::read_to_string(&pid_path)
+        .expect("PID file must be readable");
+    let pid: u32 = pid_content.trim().parse()
+        .expect("PID file must contain a valid u32");
+    assert!(pid > 0, "PID must be positive");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), daemon_handle)
+        .await
+        .expect("daemon must exit within 5s")
+        .expect("daemon task must not panic");
+
+    assert!(
+        !pid_path.exists(),
+        "PID file must be removed after daemon shutdown"
+    );
+}
+
+#[tokio::test]
+async fn daemon_status_includes_pid_from_pid_file() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("pid-status-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
+    assert!(info.running, "daemon must report as running");
+    assert!(info.pid.is_some(), "daemon status must include PID");
+    assert!(info.pid.unwrap() > 0, "PID must be positive");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[test]
+fn read_pid_file_returns_none_for_missing_file() {
+    let result = aivyx_channel::daemon_client::read_pid_file(
+        std::path::Path::new("/nonexistent/daemon.pid")
+    );
+    assert!(result.is_none());
+}
+
+#[test]
+fn read_pid_file_returns_none_for_non_numeric_content() {
+    let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let path = std::path::PathBuf::from(dir)
+        .join(format!("aivyx-pid-test-{pid}-{nanos}.pid"));
+    std::fs::write(&path, "not-a-number").expect("write test PID file");
+    let result = aivyx_channel::daemon_client::read_pid_file(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(result.is_none());
+}
