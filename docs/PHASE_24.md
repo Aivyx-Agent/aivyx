@@ -1,0 +1,115 @@
+# Phase 24 — MCP Integration: Config + Binary Wiring
+
+Phase journals are working documents. They churn freely
+during the phase and freeze at exit under a final Exit criteria
+block. For the locked technical contract see
+[`../DESIGN.md`](../DESIGN.md); for the locked product contract
+see [`../PRODUCT.md`](../PRODUCT.md).
+
+## Goal
+
+Wire MCP server discovery into the daemon startup path so
+operators can declare MCP servers in `aivyx.toml` and have
+their tools available to agents automatically. This is the
+second phase of the **MCP Integration** milestone identified
+in `PRODUCT_ROADMAP.md`.
+
+Phase 24 is a **continuation phase** — it extends the
+`aivyx-mcp` foundation from Phase 23 into production use.
+
+## Why now
+
+1. **The MCP adapter is built but not wired.** Phase 23
+   shipped `McpServerBridge` + `McpToolProxy` with a
+   programmatic API and 8 passing tests. But no operator can
+   use it yet — there's no config surface and no daemon-side
+   lifecycle management.
+
+2. **Config wiring is the smallest step to production use.**
+   `[[mcp_server]]` TOML entries + daemon-side bridge
+   lifecycle is a focused, targeted task that makes MCP
+   tools available end-to-end.
+
+3. **The PRODUCT_ROADMAP identifies MCP Integration as the
+   highest-leverage milestone.** One config entry unlocks
+   the entire MCP ecosystem for an operator.
+
+## Streak predictions
+
+- **DESIGN.md** — Low risk. The workspace layout amendment
+  (A4) may need an addendum for the 11th crate, but that's
+  a minor edit if needed at all.
+
+- **PRODUCT.md** — Not at risk. No product commitment edits
+  expected.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Low risk.
+  Config wiring lives in `aivyx-config` and `aivyx-channel`.
+  Prediction: streak **extends to fourteen**.
+
+## Tasks
+
+### Task 1 — Open commit + PHASE_24.md scaffold
+
+This file. Update `docs/README.md` to show Phase 24 as Open.
+
+### Task 2 — `[[mcp_server]]` config entries in `aivyx-config`
+
+Add `McpServerConfig` struct and `[[mcp_server]]` TOML array
+support to `aivyx-config`. Fields: `name` (server identifier
+used in scope qualifiers), `command` (executable path),
+`args` (argument list), `enabled` (default true).
+
+### Task 3 — Daemon-side MCP bridge lifecycle
+
+Wire `McpServerBridge::start` into daemon startup:
+- Read `[[mcp_server]]` entries from config
+- Start bridges, call `discover_tools`
+- Merge discovered tools into `ToolRegistry`
+- Shutdown bridges at daemon exit
+
+### Task 4+ — Scope TBD at Task 3 exit
+
+Candidates: SSE transport, amendment for 11-crate workspace,
+binary-level `--mcp-server` CLI flag.
+
+## Deferrals
+
+**Rolling deferrals carried from Phase 23 (13 items):**
+
+- **Forensic `ToolOutcome::NotInRole` variant** —
+  Phase 11 Q1. Untouched.
+- **Second regression channel for the role primitive** —
+  Phase 11 Q6. Untouched.
+- **Response headers in audit payload** — Phase 12 Q3 half.
+  Untouched.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE)** — Phase 12 Q1.
+  Deferred indefinitely.
+- **Redirect following with per-hop scope re-check** —
+  Phase 12 Q5. Deferred indefinitely.
+- **Binary response bodies / non-UTF-8** — Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering** — Phase 12 Task 1.
+  Deferred reactively.
+- **Multi-level sub-agent nesting** — Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC** —
+  Phase 17 Q6→(c+). Tagged: **reactive.**
+- **Telegram-specific protocol extensions (attachment
+  delivery, inline keyboards, etc.)** — Phase 19. Untouched.
+- **`mission.list` / `mission.status` read-only tools** —
+  Phase 21. Untouched.
+- **MCP config surface (`[[mcp_server]]` in `aivyx.toml`)** —
+  Phase 23. **Targeted by Task 2.**
+- **MCP SSE transport** — Phase 23. Untouched.
+
+## Open questions
+
+**Q1 — Should MCP bridges be started eagerly at daemon boot
+or lazily on first tool call?** Leaning (a) eagerly — the
+`tools/list` discovery must happen before tool registration,
+and lazy init would require a mutable tool registry.
+
+**Q2 — Should MCP tool names be prefixed with the server
+name to avoid collisions?** Leaning (a) yes — e.g.,
+`github__create_issue` to match MCP convention.
