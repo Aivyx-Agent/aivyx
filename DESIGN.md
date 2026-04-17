@@ -1054,6 +1054,13 @@ each one has an empty `[dependencies]` section.
 edition 2024 in ~0.03s. The skeleton is the minimum artifact that
 proves the design is buildable — it is not an implementation.
 
+> **Amendment (2026-04-17):** The workspace has grown from 9
+> to 10 crates (adding `aivyx-telegram` in Phase 8), and
+> `aivyx-channel` has expanded into the platform's integration
+> hub with 15 modules. See amendment
+> [`docs/amendments/2026-04-17-workspace-layout.md`](docs/amendments/2026-04-17-workspace-layout.md)
+> for the full current layout and module map.
+
 ### Phase 1 entry criterion
 
 Phase 1 begins from this commit. The first Phase 1 task is to wire
