@@ -99,6 +99,10 @@ const KNOWN_BASES: &[&str] = &[
     // "any role named `*`" or "any role"?). Reject at parse
     // time, not check time, per the v1 scope registry rule.
     "role.switch",
+    // schedule (Phase 26 — PRODUCT.md G5)
+    "schedule.create",
+    "schedule.list",
+    "schedule.delete",
     // MCP bridge (Phase 23 Task 3 — PRODUCT_ROADMAP.md MCP Integration).
     // `mcp.call` gates invocation of tools discovered from MCP servers.
     // Qualifier format: `<server_name>:<tool_name>` — e.g.,
@@ -560,6 +564,9 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "config.write",
         "mission.create",
         "mission.gate",
+        "schedule.create",
+        "schedule.list",
+        "schedule.delete",
         "role.switch",
         "mcp.call",
     ])

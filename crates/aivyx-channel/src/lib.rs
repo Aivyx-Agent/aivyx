@@ -35,6 +35,7 @@ pub mod daemon_server;
 pub mod mission;
 pub mod mission_tool;
 pub mod schedule;
+pub mod schedule_tool;
 mod daemon_session;
 mod local;
 pub mod passphrase;

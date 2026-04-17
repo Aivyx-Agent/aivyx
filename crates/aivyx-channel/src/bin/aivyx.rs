@@ -132,6 +132,7 @@ use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_channel::mission_tool::MissionCreateTool;
+use aivyx_channel::schedule_tool::{ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool};
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1249,6 +1250,13 @@ async fn run_async(
     let mission_create_tool: Arc<MissionCreateTool> = Arc::new(MissionCreateTool::new());
     tool_list.push(Arc::clone(&mission_create_tool) as Arc<dyn Tool>);
 
+    let schedule_create_tool: Arc<ScheduleCreateTool> = Arc::new(ScheduleCreateTool::new());
+    tool_list.push(Arc::clone(&schedule_create_tool) as Arc<dyn Tool>);
+    let schedule_list_tool: Arc<ScheduleListTool> = Arc::new(ScheduleListTool::new());
+    tool_list.push(Arc::clone(&schedule_list_tool) as Arc<dyn Tool>);
+    let schedule_delete_tool: Arc<ScheduleDeleteTool> = Arc::new(ScheduleDeleteTool::new());
+    tool_list.push(Arc::clone(&schedule_delete_tool) as Arc<dyn Tool>);
+
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
         let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
@@ -1502,6 +1510,28 @@ async fn run_async(
         .set_role_name(active_role_name.clone())
         .map_err(|_| {
             "mission.create role_name was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
+    schedule_create_tool
+        .set_schedule_store(storage.domain(KeyDomain::Schedules))
+        .map_err(|_| {
+            "schedule.create store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    schedule_list_tool
+        .set_schedule_store(storage.domain(KeyDomain::Schedules))
+        .map_err(|_| {
+            "schedule.list store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    schedule_delete_tool
+        .set_schedule_store(storage.domain(KeyDomain::Schedules))
+        .map_err(|_| {
+            "schedule.delete store was already set — startup path \
              bug, should be called exactly once"
                 .to_string()
         })?;

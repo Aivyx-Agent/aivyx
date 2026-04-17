@@ -164,6 +164,34 @@ Agent-facing tool surface so the LLM can create, list, and
 delete schedules within a turn. Capability scope:
 `schedule.create`, `schedule.list`, `schedule.delete`.
 
+**Ship record — Task 4**
+
+| Artefact | What changed |
+|---|---|
+| `crates/aivyx-channel/src/schedule_tool.rs` | **New.** Three tools: `ScheduleCreateTool` (cron + prompt → persisted schedule), `ScheduleListTool` (returns all schedules with next-fire-time), `ScheduleDeleteTool` (by ID with not-found handling). `OnceLock`-factory pattern per `MissionCreateTool`. 6 tests |
+| `crates/aivyx-channel/src/lib.rs` | `pub mod schedule_tool;` |
+| `crates/aivyx-channel/src/bin/aivyx.rs` | Tool registration + `set_schedule_store` wiring for all three tools |
+| `crates/aivyx-capability/src/lib.rs` | Added `schedule.create`, `schedule.list`, `schedule.delete` to `KNOWN_BASES` and `CEILING_TRUSTED` (omitted from `CEILING_SEMITRUSTED` — schedule management is a Trusted-tier operation) |
+
+Design decisions:
+
+- **Trusted-tier only.** Schedule tools are in `CEILING_TRUSTED`
+  but not `CEILING_SEMITRUSTED`. Creating/deleting cron schedules
+  is an operator-level action — a SemiTrusted channel (Telegram)
+  should not be able to create unattended daemon turns.
+- **`schedule.delete` returns `deleted: false`** for unknown IDs
+  rather than failing, matching the idempotent pattern.
+- **`schedule.list` includes `next_fire`** (RFC 3339) so the LLM
+  can reason about upcoming fires without parsing cron.
+
+Streak check:
+
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+Test delta: 658 pass, 0 fail. +6 new schedule tool tests.
+
 ### Task 5+ — Scope TBD at Task 4 exit
 
 Candidates: `[[schedule]]` TOML config surface (if not done
