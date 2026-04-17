@@ -48,8 +48,14 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
+pub mod transport;
+
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
+
+#[cfg(feature = "provider-openai")]
+pub mod openai;
 
 // ---------------------------------------------------------------------------
 // Conversation messages

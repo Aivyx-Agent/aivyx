@@ -20,6 +20,12 @@ provider-anthropic = [
     "dep:futures-util",
     "dep:bytes",
 ]
+provider-openai = [
+    "dep:reqwest",
+    "dep:secrecy",
+    "dep:futures-util",
+    "dep:bytes",
+]
 
 [dependencies]
 # Protocol-only core — no dependency on aivyx-core. The LlmProvider

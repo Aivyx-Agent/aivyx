@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 
 use crate::LlmError;
 
-use super::transport::ByteStream;
+use crate::transport::ByteStream;
 
 /// One parsed SSE event. Anthropic always sends both the `event:` line
 /// and a `data:` line, so both fields are required. `data` is the raw

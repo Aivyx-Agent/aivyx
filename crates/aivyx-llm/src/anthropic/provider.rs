@@ -36,7 +36,7 @@ use crate::{
 };
 
 use super::sse::{SseEvent, SseReader};
-use super::transport::{HttpTransport, ReqwestTransport};
+use crate::transport::{HttpTransport, ReqwestTransport};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -491,7 +491,7 @@ mod tests {
     use futures_util::stream;
     use std::sync::Mutex;
 
-    use crate::anthropic::transport::{ByteStream, HttpTransport};
+    use crate::transport::{ByteStream, HttpTransport};
 
     // -----------------------------------------------------------------------
     // FakeTransport: replays canned SSE bytes.

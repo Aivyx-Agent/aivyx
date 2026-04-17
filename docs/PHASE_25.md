@@ -62,6 +62,32 @@ Target: OpenAI chat completions API with streaming
 (`/v1/chat/completions`). Fields: `api_key`, `model`,
 `base_url` (for Ollama/custom endpoints).
 
+**Task 2 ship record**
+
+- `provider-openai` feature added to `crates/aivyx-llm/Cargo.toml`
+  with the same dependency set as `provider-anthropic`.
+- `OpenAiProvider` implements `LlmProvider::stream_turn` targeting
+  `/v1/chat/completions` with streaming.
+- `OpenAiConfig { api_key, base_url }` — base_url defaults to
+  `https://api.openai.com`, overridable for Ollama/local endpoints.
+- Wire-format mapping: system prompt as first message (not top-level
+  field), tools wrapped in `{"type":"function","function":{…}}`,
+  `stream_options.include_usage` for token counts.
+- Data-only SSE parser: no `event:` lines in OpenAI format; `[DONE]`
+  sentinel terminates the stream.
+- Tool call argument accumulation: incremental string concat across
+  delta chunks, assembled into `LlmStepEnd::ToolCall` on
+  `finish_reason: "tool_calls"`.
+- `transport.rs` lifted from `anthropic/` to crate root with
+  `#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]`
+  gating — shared `HttpTransport` seam for both providers.
+- 7 new tests (text streaming, tool call assembly, request body
+  structure, tool result mapping, assistant round-trip).
+- Workspace: 617 tests pass, 0 failures. Production-core streak
+  extends to **fifteen** (hash `d8ab203f…`).
+- Q1 resolved: **No core type changes needed.** The provider
+  translates between OpenAI and internal formats internally.
+
 ### Task 3 — Config + CLI wiring
 
 `[provider]` section in `aivyx.toml` or `--provider` CLI

@@ -53,10 +53,7 @@ use aivyx_core::{
     StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, TurnOutcomeSummary,
     Verification,
 };
-use aivyx_llm::anthropic::{
-    transport::{ByteStream, HttpTransport},
-    AnthropicConfig, AnthropicProvider,
-};
+use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider, ByteStream, HttpTransport};
 use aivyx_llm::{LlmError, LlmProvider};
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,6 @@
 
 pub mod provider;
 pub mod sse;
-pub mod transport;
 
+pub use crate::transport::{ByteStream, HttpTransport, ReqwestTransport};
 pub use provider::{AnthropicConfig, AnthropicProvider};
-pub use transport::{ByteStream, HttpTransport, ReqwestTransport};
