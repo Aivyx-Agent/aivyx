@@ -144,9 +144,32 @@ and DESIGN.md to reflect the 11-crate workspace.
 **Test delta:** +0 (610 → 610).
 **Production-core streak:** extends to fourteen (hash unchanged).
 
-### Task 5+ — Scope TBD at Task 4 exit
+### Task 5 — `--mcp-server` CLI flag
 
-Candidates: SSE transport, binary-level `--mcp-server` CLI flag.
+Add a repeatable `--mcp-server name:command[:arg1,arg2,...]`
+CLI flag for quick MCP server testing without editing config
+files. CLI entries merge with `[[mcp_server]]` TOML entries.
+
+## Task 5 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx.rs`: added `CliMcpServer`
+  struct, `mcp_servers: Vec<CliMcpServer>` to `CliArgs`,
+  `--mcp-server` parser arm with `splitn(3, ':')` format
+  (`name:command` or `name:command:arg1,arg2,...`), merge of
+  CLI entries into config `mcp_servers` vec before bridge
+  startup, `cli_mcp_servers` parameter threaded through `run()`
+  → `run_async()`. Seven new parser tests covering basic
+  parsing, args, repeatability, missing value, malformed value,
+  empty name, and default empty vec.
+- `docs/PHASE_24.md`: task scaffold and ship record.
+
+**Test delta:** +7 (610 → 617).
+**Production-core streak:** extends to fourteen (hash unchanged).
+
+### Task 6+ — Scope TBD at Task 5 exit
+
+Candidates: SSE transport.
 
 ## Deferrals
 

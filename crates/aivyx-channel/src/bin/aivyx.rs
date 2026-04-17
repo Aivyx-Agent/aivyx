@@ -272,6 +272,7 @@ fn run() -> Result<(), String> {
         channel: channel_kind,
         role: role_override,
         no_daemon,
+        mcp_servers: cli_mcp_servers,
     } = parse_cli_args()?;
 
     // ---- Lightweight daemon management subcommands ----------------------
@@ -473,6 +474,7 @@ fn run() -> Result<(), String> {
             channel_kind,
             mode,
             no_daemon,
+            cli_mcp_servers,
         )
         .await
     })
@@ -677,6 +679,14 @@ struct CliArgs {
     channel: ChannelKind,
     role: Option<String>,
     no_daemon: bool,
+    mcp_servers: Vec<CliMcpServer>,
+}
+
+#[derive(Debug)]
+struct CliMcpServer {
+    name: String,
+    command: String,
+    args: Vec<String>,
 }
 
 /// Parse the CLI arg surface.
@@ -725,6 +735,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
+            mcp_servers: Vec::new(),
         });
     }
 
@@ -733,6 +744,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut role: Option<String> = None;
     let mut print_role: Option<String> = None;
     let mut no_daemon = false;
+    let mut mcp_servers: Vec<CliMcpServer> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -780,6 +792,33 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 no_daemon = true;
                 i += 1;
             }
+            "--mcp-server" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| {
+                        "`--mcp-server` requires a value in the format \
+                         `name:command` or `name:command:arg1,arg2,...`"
+                            .to_string()
+                    })?;
+                let parts: Vec<&str> = value.splitn(3, ':').collect();
+                if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
+                    return Err(format!(
+                        "`--mcp-server` value `{value}` is malformed. \
+                         Expected `name:command` or `name:command:arg1,arg2,...`"
+                    ));
+                }
+                let cli_args = if parts.len() == 3 && !parts[2].is_empty() {
+                    parts[2].split(',').map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                };
+                mcp_servers.push(CliMcpServer {
+                    name: parts[0].to_string(),
+                    command: parts[1].to_string(),
+                    args: cli_args,
+                });
+                i += 2;
+            }
             "daemon" => {
                 return Err(
                     "unrecognized subcommand. Did you mean `daemon run`, `daemon status`, or `daemon stop`?".to_string()
@@ -788,7 +827,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --mcp-server <name:command[:args]>, daemon run|status|stop"
                 ));
             }
         }
@@ -839,6 +878,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         channel,
         role,
         no_daemon,
+        mcp_servers,
     })
 }
 
@@ -925,6 +965,7 @@ async fn run_async(
     channel_kind: ChannelKind,
     mode: CliMode,
     no_daemon: bool,
+    cli_mcp_servers: Vec<CliMcpServer>,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -961,8 +1002,16 @@ async fn run_async(
         // the time we land here the banner has already printed any
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
-        mcp_servers,
+        mut mcp_servers,
     } = config;
+    for cli in cli_mcp_servers {
+        mcp_servers.push(aivyx_config::McpServerConfig {
+            name: cli.name,
+            command: cli.command,
+            args: cli.args,
+            enabled: true,
+        });
+    }
     let api_key = anthropic_api_key
         .expect("anthropic_api_key validated non-None before run_async")
         .value;
@@ -2527,6 +2576,76 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&[]))
             .expect("empty argv must parse");
         assert!(!parsed.no_daemon, "no_daemon must default to false");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 24 Task 5 — `--mcp-server` flag parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn mcp_server_flag_parses_name_and_command() {
+        let parsed = parse_cli_args_from(&argv(&["--mcp-server", "github:npx"]))
+            .expect("`--mcp-server github:npx` must parse");
+        assert_eq!(parsed.mcp_servers.len(), 1);
+        assert_eq!(parsed.mcp_servers[0].name, "github");
+        assert_eq!(parsed.mcp_servers[0].command, "npx");
+        assert!(parsed.mcp_servers[0].args.is_empty());
+    }
+
+    #[test]
+    fn mcp_server_flag_parses_with_args() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--mcp-server",
+            "github:npx:-y,@modelcontextprotocol/server-github",
+        ]))
+        .expect("--mcp-server with args must parse");
+        assert_eq!(parsed.mcp_servers[0].name, "github");
+        assert_eq!(parsed.mcp_servers[0].command, "npx");
+        assert_eq!(
+            parsed.mcp_servers[0].args,
+            vec!["-y", "@modelcontextprotocol/server-github"]
+        );
+    }
+
+    #[test]
+    fn mcp_server_flag_repeatable() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--mcp-server", "a:cmd-a",
+            "--mcp-server", "b:cmd-b:arg1,arg2",
+        ]))
+        .expect("repeated --mcp-server must parse");
+        assert_eq!(parsed.mcp_servers.len(), 2);
+        assert_eq!(parsed.mcp_servers[0].name, "a");
+        assert_eq!(parsed.mcp_servers[1].name, "b");
+        assert_eq!(parsed.mcp_servers[1].args, vec!["arg1", "arg2"]);
+    }
+
+    #[test]
+    fn mcp_server_flag_missing_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--mcp-server"]))
+            .expect_err("`--mcp-server` with no value must error");
+        assert!(err.contains("--mcp-server"), "error must mention flag: {err}");
+    }
+
+    #[test]
+    fn mcp_server_flag_malformed_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--mcp-server", "nocolon"]))
+            .expect_err("`--mcp-server nocolon` must error");
+        assert!(err.contains("malformed"), "error must say malformed: {err}");
+    }
+
+    #[test]
+    fn mcp_server_flag_empty_name_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["--mcp-server", ":npx"]))
+            .expect_err("`--mcp-server :npx` must error");
+        assert!(err.contains("malformed"), "error must say malformed: {err}");
+    }
+
+    #[test]
+    fn default_args_have_empty_mcp_servers() {
+        let parsed = parse_cli_args_from(&argv(&[]))
+            .expect("empty argv must parse");
+        assert!(parsed.mcp_servers.is_empty());
     }
 
 }
