@@ -280,9 +280,30 @@ PRODUCT.md at nine, production-core at ten (new record). Test
 delta +29 (569→598). Rolling backlog 10 → 12 (+2 net-new:
 escalation→gate turn-loop wiring, mission list/status tools).
 
-## Phase 22 — shape TBD at Phase 21 exit
+## Phase 22 — Contract Refresh (frozen)
 
-Likely candidates: escalation→gate turn-loop wiring (Phase 21
-deferral — completes the mission approval-gate loop), Channel
-SDK Surface (P5), Reflection Layer (P8), or a deferral cleanup
-pass if backlog pressure warrants it.
+**Frozen — see [PHASE_22.md](PHASE_22.md).** Opened and
+exited 2026-04-17. First-ever contract amendment batch: four
+amendments to `DESIGN.md` (Daemon IPC Protocol, Mission State
+Machine, Capability Taxonomy Growth, Workspace Layout),
+Delivery Status section for `PRODUCT.md` mapping all 12
+commitments to implementation state, and milestone refresh
+for `PRODUCT_ROADMAP.md` adding four new milestones (MCP
+Integration, Multi-Provider, Web UI Channel, Scheduled
+Execution). **Docs-only phase — zero code changes.** Both
+long-running byte-identity streaks intentionally ended through
+the formal amendment process: DESIGN.md at twenty-one phases,
+PRODUCT.md at nine. Production-core streak extended to eleven
+(new record). Test count unchanged at 598. Three Q-block
+questions resolved. Zero net-new deferrals.
+
+## Phase 23 — Escalation→Gate Wiring + MCP Foundation
+
+Escalation→gate turn-loop wiring (Phase 21 deferral —
+completes the P2 mission approval-gate lifecycle end-to-end),
+potentially paired with MCP client adapter foundation work if
+the gate wiring lands quickly. The gate wiring is targeted:
+daemon-side orchestration between `TurnOutcome::Escalated`
+and `mission::add_gate`, with integration tests. MCP
+integration is the highest-leverage single effort identified
+in the Phase 22 gap analysis.
