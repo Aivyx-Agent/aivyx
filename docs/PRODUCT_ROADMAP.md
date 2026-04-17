@@ -41,10 +41,13 @@ For numbered technical phases, see [`ROADMAP.md`](ROADMAP.md).
   it — the phase doc carries the task list, the milestone entry
   carries the intent.
 
-## Milestone — Daemon Migration
+## Milestone — Daemon Migration (architecturally complete)
 
 **Forward commitment:** [`PRODUCT.md` P4](../PRODUCT.md). **Keystone:** unlocks
-P5, P12, P2, P1.
+P5, P12, P2, P1. **Status:** Architecturally complete after
+five dedicated phases (16–20). Remaining daemon work is
+incremental (crash recovery, in-flight turn replay) rather
+than architectural.
 
 The single biggest reshape on the product roadmap. Today's binary
 runs as a one-shot per-channel process; the daemon milestone moves
@@ -291,6 +294,15 @@ reflection loop must itself be auditable — every proposed
 edit, every approval/rejection, every applied change is an
 audit event under the operator's chain.
 
+**Phase 21 note (2026-04-17):** The mission gate primitive
+now provides the approval-gate substrate the reflection loop's
+second half needs. Gate rendering (CLI prompt, Telegram
+`/approve`/`/reject`) is operational. The escalation→gate
+turn-loop wiring (Phase 22 Task 8) will complete the daemon-
+side orchestration, at which point the reflection loop can
+compose directly against the existing gate machinery for
+surfacing proposed self-modifications to the operator.
+
 ## Milestone — Channel SDK Surface
 
 **Forward commitment:** [`PRODUCT.md` P5](../PRODUCT.md). **Couples to:**
@@ -344,23 +356,94 @@ SDK and Tool Process IPC milestones have landed) and dresses
 them as a publishable contract. Expected to be one phase, late
 in the sequence.
 
-## Sequencing notes (subject to revision)
+## Milestone — MCP Integration
 
-- **Daemon Migration is the first keystone.** Almost everything
-  else couples to it. The first product-shape phase after
-  Phase 13 is most likely a Daemon Migration phase.
-- **Role-Config Migration is the second keystone.** It can run
-  in parallel with the Daemon Migration only if the two
-  milestones don't both touch the same files — likely they will,
-  so they probably sequence rather than parallelize.
-- **Reflection is the most ambitious milestone and the most
-  likely to slip.** It depends on outcome history exposure plus
-  the approval-gate primitive plus runtime role mutation, all
-  of which are themselves forward commitments. Expect Reflection
-  to land last and to take more than one phase.
-- **The SDK Documentation milestone is deliberately last.** No
-  point publishing a contract until the in-tree adopters have
-  shaken it out.
+**Forward commitment candidate:** not yet locked (requires
+product-shape review). **Couples to:** P11 (SDK Contract),
+P12 (Tool Process IPC), Daemon Migration.
+
+The `Tool` trait's shape (`name`, `description`,
+`input_schema`, `required_scope`, `execute`) maps near-1:1
+to MCP's tool interface. This milestone adds an MCP client
+adapter that bridges external MCP servers into Aivyx's tool
+registry. Each MCP tool gets a declared scope in the
+capability system, audit logging as a standard tool call,
+and role allowlisting through the existing config surface.
+The load-bearing design decision is whether MCP tools register
+as third-party tools under P12's process model or as a new
+"bridge" category that runs in-process but delegates execution
+over MCP's protocol. Expected to be 1–2 phases. **Highest-
+leverage single integration effort** identified in the Phase
+21 gap analysis — one adapter unlocks the entire MCP ecosystem.
+
+## Milestone — Multi-Provider Support
+
+**Forward commitment candidate:** not yet locked. **Couples
+to:** `LlmProvider` trait (Phase 1).
+
+The `LlmProvider` trait is already provider-agnostic. This
+milestone adds an OpenAI-compatible adapter covering GPT-4,
+Ollama, and any OpenAI-API-compatible endpoint. The load-
+bearing decision is how to handle capability differences
+between providers (some support tool calling natively, some
+require prompt-based tool emulation). Expected to be 1 phase.
+Quick win given the existing trait shape.
+
+## Milestone — Web UI Channel
+
+**Forward commitment candidate:** not yet locked. **Couples
+to:** P4 (Daemon), P5 (Channel SDK).
+
+A `127.0.0.1`-only web interface that connects to the daemon
+over the existing IPC protocol. The daemon architecture makes
+this cheap — the frontend is a thin client rendering
+`StreamEventPayload` events. First phase: minimal chat UI
+with the same rendering as the CLI REPL. Second phase: mission
+management, gate resolution buttons, audit inspection surface.
+The `FrontendType` enum already has the extension point
+(`FrontendType::Web`).
+
+## Milestone — Scheduled Execution
+
+**Forward commitment:** [`PRODUCT.md` G5](../PRODUCT.md).
+**Couples to:** Daemon Migration, Mission Primitive.
+
+G5 commits to autonomous and scheduled execution. The daemon
+substrate exists and missions survive restarts. This milestone
+adds cron-like timer primitives, webhook trigger endpoints
+(localhost-only per P6), and file-change watchers. Each
+trigger creates a daemon turn attributed to the operator's
+identity. Expected to be 1–2 phases. The load-bearing
+decision is whether triggers create missions (long-running,
+gate-structured) or bounded tasks (single-turn, fire-and-
+forget).
+
+## Sequencing notes (revised at Phase 22 entry, 2026-04-17)
+
+The first two keystones (Daemon Migration, Role-Config
+Migration) are **both delivered**. The sequencing picture is
+now driven by leverage and coupling rather than by prerequisite
+chains.
+
+- **Escalation→gate wiring (Phase 22 Task 8)** completes P2's
+  approval-gate lifecycle. Short, targeted.
+- **MCP Integration is the highest-leverage next milestone.**
+  One adapter unlocks the entire MCP ecosystem. Couples to
+  the `Tool` trait (already stable) and the daemon (delivered).
+  Expected ~2 phases.
+- **Multi-Provider is a quick win.** The `LlmProvider` trait
+  is ready. ~1 phase.
+- **Web UI Channel is high impact.** Daemon IPC makes it
+  cheap. ~2 phases.
+- **Scheduled Execution realizes G5.** Daemon + mission
+  substrate both exist. ~2 phases.
+- **Reflection Layer is the most ambitious and most
+  consequential.** Now unblocked by the mission gate primitive
+  from Phase 21. ~2–3 phases.
+- **Channel SDK Surface + Tool Process IPC** are documentation
+  and protocol phases. Best done after MCP Integration
+  validates the extension surface. ~1–2 phases each.
+- **SDK Documentation Surface is deliberately last.** ~1 phase.
 
 ## Delivered
 
