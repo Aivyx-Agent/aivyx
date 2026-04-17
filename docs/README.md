@@ -80,7 +80,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 20 | Frozen  | [PHASE_20.md](PHASE_20.md) | `8e77075` |
 | Phase 21 | Frozen  | [PHASE_21.md](PHASE_21.md) | `05cc349` |
 | Phase 22 | Frozen  | [PHASE_22.md](PHASE_22.md) | `549bc6e` |
-| Phase 23 | Frozen  | [PHASE_23.md](PHASE_23.md) | `_TBD_`   |
+| Phase 23 | Frozen  | [PHASE_23.md](PHASE_23.md) | `8f104e8` |
 | Phase 24 | **Open** | [PHASE_24.md](PHASE_24.md) | —         |
 | Phase 25+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
