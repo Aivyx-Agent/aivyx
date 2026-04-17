@@ -171,9 +171,29 @@ files. CLI entries merge with `[[mcp_server]]` TOML entries.
 
 Candidates: SSE transport.
 
+## Prediction vs. reality
+
+- **DESIGN.md** — Predicted: **low risk**, amendment addendum
+  may be needed. **Reality: correct.** DESIGN.md was edited in
+  Task 4 to update the A4 workspace layout amendment inline
+  reference (10→11 crates, added `aivyx-mcp` to crate tree).
+  This was an addendum to an existing amendment, not a new
+  architectural decision. New hash:
+  `ceb538604bfac34a07a4cdb47b4777d6ab96c1c3891f6bc3246a3d3faf75a403`.
+
+- **PRODUCT.md** — Predicted: **not at risk**.
+  **Reality: correct.** Hash unchanged:
+  `478cab6aa07ec94b49c1bfdf17619568cc66d6ccd8ca98dd93ef97de9a3ea1cf`.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to fourteen**. **Reality: correct.** All
+  five tasks composed against existing trait shapes without
+  modifying `lib.rs`. Hash unchanged:
+  `d8ab203fc98c89b01a3dc7bd56653132786d4875fd912cfe11b47e22085eeb77`.
+
 ## Deferrals
 
-**Rolling deferrals carried from Phase 23 (13 items):**
+**Rolling deferrals at exit (12 items, -1 closed):**
 
 - **Forensic `ToolOutcome::NotInRole` variant** —
   Phase 11 Q1. Untouched.
@@ -197,9 +217,14 @@ Candidates: SSE transport.
   delivery, inline keyboards, etc.)** — Phase 19. Untouched.
 - **`mission.list` / `mission.status` read-only tools** —
   Phase 21. Untouched.
+- **MCP SSE transport** — Phase 23. Untouched.
+
+**Closed in Phase 24 (1 item):**
+
 - **MCP config surface (`[[mcp_server]]` in `aivyx.toml`)** —
   Phase 23. **Closed by Task 2.**
-- **MCP SSE transport** — Phase 23. Untouched.
+
+**Rolling backlog: 13 → 12 (−1 closed, 0 net-new).**
 
 ## Open questions
 
@@ -215,3 +240,30 @@ No prefix needed at the `name()` level — `ToolRegistry`
 looks up by `ToolId` (UUID), not name. The scope system
 (`mcp.call:<server>:<tool>`) disambiguates at the capability
 layer. Tool names shown to the LLM are the raw MCP names.
+
+## Exit criteria
+
+- [x] `[[mcp_server]]` config entries shipped (Task 2,
+  `b8228e8`): `McpServerConfig` struct, `RawMcpServer`
+  deserialization, loader mapping with disabled-server
+  filtering, 2 tests.
+- [x] Phase 23 MCP config surface deferral closed.
+- [x] Daemon-side MCP bridge lifecycle shipped (Task 3,
+  `b847bb5`): eager startup, `discover_tools`, tool
+  registration into `tool_list`, `kill_on_drop` safety net,
+  explicit shutdown on daemon path.
+- [x] Workspace layout amendment addendum shipped (Task 4,
+  `d226ad1`): DESIGN.md + A4 amendment updated for 11-crate
+  workspace, 24 known bases.
+- [x] `--mcp-server` CLI flag shipped (Task 5, `53ce7bc`):
+  repeatable flag, `splitn(3, ':')` format, merge with
+  config entries, 7 parser tests.
+- [x] Production-core streak extends to fourteen consecutive
+  phases (hash unchanged).
+- [x] PRODUCT.md unchanged (streak not tracked post-Phase-22
+  amendment, but hash preserved).
+- [x] Test count: 608 → 617 (+9, across Tasks 2 and 5).
+- [x] Two Q-block questions resolved.
+- [x] Prediction-vs-reality block recorded (all three
+  correct).
+- [x] Deferrals block recorded (−1 closed, 0 net-new).

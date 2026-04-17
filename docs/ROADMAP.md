@@ -311,14 +311,32 @@ to thirteen (new record). Test delta +10 (598→608). Rolling
 backlog 12→13 (−1 closed, +2 net-new: MCP config surface,
 MCP SSE transport).
 
-## Phase 24 — MCP Integration: Config + Binary Wiring
+## Phase 24 — MCP Integration: Config + Binary Wiring (frozen)
 
-Wire MCP server discovery into the daemon startup path so
-operators can declare MCP servers in `aivyx.toml` and have
-their tools available to agents automatically. Expected scope:
-`[[mcp_server]]` TOML config entries in `aivyx-config`,
-daemon-side `McpServerBridge` lifecycle management (start at
-daemon boot, shutdown at daemon exit), tool registration into
-`ToolRegistry`, and an amendment to DESIGN.md if the workspace
-layout or capability taxonomy changes warrant one. SSE
-transport may also land if the config wiring is small.
+**Frozen — see [PHASE_24.md](PHASE_24.md).** Opened and
+exited 2026-04-17 as the second MCP Integration phase.
+Five tasks: `[[mcp_server]]` TOML config entries with
+`McpServerConfig` struct + disabled-server filtering (Task 2,
+`b8228e8`), daemon-side MCP bridge lifecycle with eager
+startup + `kill_on_drop` safety net (Task 3, `b847bb5`),
+workspace layout amendment addendum for the 11-crate reality
+(Task 4, `d226ad1`), and `--mcp-server` repeatable CLI flag
+with `splitn(3, ':')` format (Task 5, `53ce7bc`). Closed the
+Phase 23 MCP config surface deferral. DESIGN.md edited for
+amendment addendum (A4 workspace layout: 10→11 crates, 23→24
+known bases). PRODUCT.md unchanged. Production-core streak
+extends to fourteen consecutive phases (new record). Test
+delta +9 (608→617). Rolling backlog 13→12 (−1 closed, 0
+net-new). Two Q-block questions resolved.
+
+## Phase 25 — Multi-Provider Support
+
+Add an OpenAI-compatible `LlmProvider` adapter so operators
+can use GPT-4, Ollama, or any OpenAI-API-compatible endpoint
+alongside the Anthropic provider. The `LlmProvider` trait is
+already provider-agnostic; this phase delivers the second
+concrete implementation. Expected scope: new
+`provider-openai` feature in `aivyx-llm`, `--provider` CLI
+flag or `[provider]` TOML config, and any trait extensions
+needed for capability differences (tool calling shape, token
+counting). Light phase — the trait shape is settled.

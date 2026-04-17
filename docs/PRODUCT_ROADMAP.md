@@ -356,7 +356,7 @@ SDK and Tool Process IPC milestones have landed) and dresses
 them as a publishable contract. Expected to be one phase, late
 in the sequence.
 
-## Milestone — MCP Integration
+## Milestone — MCP Integration (stdio shipped, SSE deferred)
 
 **Forward commitment candidate:** not yet locked (requires
 product-shape review). **Couples to:** P11 (SDK Contract),
@@ -369,12 +369,23 @@ adapter that bridges external MCP servers into Aivyx's tool
 registry. Each MCP tool gets a declared scope in the
 capability system, audit logging as a standard tool call,
 and role allowlisting through the existing config surface.
-The load-bearing design decision is whether MCP tools register
-as third-party tools under P12's process model or as a new
-"bridge" category that runs in-process but delegates execution
-over MCP's protocol. Expected to be 1–2 phases. **Highest-
-leverage single integration effort** identified in the Phase
-21 gap analysis — one adapter unlocks the entire MCP ecosystem.
+The load-bearing design decision — bridge category vs P12
+process model — was resolved in Phase 23 in favor of bridge
+(in-process `McpToolProxy` delegating over stdio JSON-RPC).
+
+**Phase 23 (MCP Foundation, 2026-04-17):** new `aivyx-mcp`
+crate (11th workspace member), stdio transport,
+`McpServerBridge` + `McpToolProxy`, `mcp.call` scope base
+in `aivyx-capability`. 8 tests. Programmatic API only.
+
+**Phase 24 (Config + Binary Wiring, 2026-04-17):**
+`[[mcp_server]]` TOML config entries, daemon-side bridge
+lifecycle (eager startup, tool registration, `kill_on_drop`
+shutdown), workspace layout amendment addendum, `--mcp-server`
+CLI flag. Closed the MCP config surface deferral. 9 tests.
+
+**Remaining:** SSE transport for remote MCP servers (deferred
+from Phase 23).
 
 ## Milestone — Multi-Provider Support
 
