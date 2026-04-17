@@ -312,6 +312,22 @@ trust_ceiling = "Trusted"
 parent_role = "researcher"
 
 # ----------------------------------------------------------------
+# Provider selection (Phase 25)
+# ----------------------------------------------------------------
+#
+# `[agent] provider` selects the LLM backend. Default: "anthropic".
+# Set to "openai" for OpenAI, Ollama, or any OpenAI-compatible
+# endpoint. Can also be overridden via `AIVYX_PROVIDER` env var
+# or `--provider` CLI flag.
+#
+# [agent]
+# provider = "openai"
+#
+# [openai]
+# api_key = "sk-..."
+# base_url = "http://localhost:11434/v1"   # Ollama example
+
+# ----------------------------------------------------------------
 # MCP server entries (Phase 24)
 # ----------------------------------------------------------------
 #

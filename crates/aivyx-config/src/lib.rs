@@ -203,6 +203,24 @@ pub const DEFAULT_MEMORY_MAX_PER_TOPIC: usize = 10_000;
 /// supplies a value.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 
+/// Which LLM provider backend to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    Anthropic,
+    #[serde(alias = "openai")]
+    OpenAi,
+}
+
+impl std::fmt::Display for ProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderKind::Anthropic => f.write_str("anthropic"),
+            ProviderKind::OpenAi => f.write_str("openai"),
+        }
+    }
+}
+
 // --------------------------------------------------------------------
 // ConfigError
 // --------------------------------------------------------------------
@@ -414,6 +432,15 @@ pub struct AivyxConfig {
     /// Anthropic API key. `Option` because `--verify-only` runs do not
     /// need it. `SourcedSecret` so a stray `{:?}` never leaks the key.
     pub anthropic_api_key: Option<SourcedSecret>,
+    /// OpenAI API key. `Option` because only needed when
+    /// `provider == ProviderKind::OpenAi`.
+    pub openai_api_key: Option<SourcedSecret>,
+    /// OpenAI-compatible base URL override. `None` means use the
+    /// provider's default (`https://api.openai.com`). Set for
+    /// Ollama / local endpoints.
+    pub openai_base_url: Option<Sourced<String>>,
+    /// Which LLM provider backend to use. Default: `Anthropic`.
+    pub provider: Sourced<ProviderKind>,
     /// Model id. Always populated — falls through to [`DEFAULT_MODEL`]
     /// if no source supplied one (tagged [`FieldSource::Default`]).
     pub model: Sourced<String>,
@@ -726,6 +753,8 @@ struct RawToml {
     #[serde(default)]
     anthropic: RawAnthropic,
     #[serde(default)]
+    openai: RawOpenAi,
+    #[serde(default)]
     agent: RawAgent,
     #[serde(default)]
     fs: RawFs,
@@ -814,11 +843,21 @@ struct RawAnthropic {
 }
 
 #[derive(Debug, Default, Deserialize)]
+struct RawOpenAi {
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 struct RawAgent {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
     system_prompt: Option<String>,
+    #[serde(default)]
+    provider: Option<ProviderKind>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -863,6 +902,8 @@ struct RawAivyx {
 pub mod secret_keys {
     /// Storage key for the Anthropic API key. Value: UTF-8 string.
     pub const ANTHROPIC_API_KEY: &[u8] = b"anthropic_api_key";
+    /// Storage key for the OpenAI API key. Value: UTF-8 string.
+    pub const OPENAI_API_KEY: &[u8] = b"openai_api_key";
     /// Storage key for the Telegram bot token. Value: UTF-8 string.
     pub const TELEGRAM_TOKEN: &[u8] = b"telegram_token";
     /// Storage key for the Aivyx master-key passphrase. Value: UTF-8 string.
@@ -894,6 +935,9 @@ const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
 /// active-role resolution chain (below [`LoadOptions::role_override`]
 /// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
 const ENV_ROLE: &str = "AIVYX_ROLE";
+const ENV_OPENAI_API_KEY: &str = "AIVYX_OPENAI_API_KEY";
+const ENV_OPENAI_BASE_URL: &str = "AIVYX_OPENAI_BASE_URL";
+const ENV_PROVIDER: &str = "AIVYX_PROVIDER";
 
 // --------------------------------------------------------------------
 // Loader
@@ -920,6 +964,50 @@ impl AivyxConfig {
                     .as_ref()
                     .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
             });
+
+        // --- openai_api_key -----------------------------------------
+        let openai_api_key = env_secret(ENV_OPENAI_API_KEY)
+            .map(|s| SourcedSecret::new(s, FieldSource::Env))
+            .or_else(|| {
+                toml.openai
+                    .api_key
+                    .as_ref()
+                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+            });
+
+        // --- openai_base_url ----------------------------------------
+        let openai_base_url = match env_string(ENV_OPENAI_BASE_URL) {
+            Some(v) => Some(Sourced::new(v, FieldSource::Env)),
+            None => toml
+                .openai
+                .base_url
+                .clone()
+                .map(|v| Sourced::new(v, FieldSource::Toml)),
+        };
+
+        // --- provider -----------------------------------------------
+        let provider = match env_string(ENV_PROVIDER) {
+            Some(v) => {
+                let kind = match v.as_str() {
+                    "anthropic" => ProviderKind::Anthropic,
+                    "openai" => ProviderKind::OpenAi,
+                    other => {
+                        return Err(ConfigError::Invalid {
+                            field: "provider",
+                            reason: format!(
+                                "{ENV_PROVIDER}={other:?} is not valid. \
+                                 Supported: anthropic, openai"
+                            ),
+                        });
+                    }
+                };
+                Sourced::new(kind, FieldSource::Env)
+            }
+            None => match toml.agent.provider {
+                Some(kind) => Sourced::new(kind, FieldSource::Toml),
+                None => Sourced::new(ProviderKind::Anthropic, FieldSource::Default),
+            },
+        };
 
         // --- model --------------------------------------------------
         // Always populated — falls through to DEFAULT_MODEL.
@@ -1287,6 +1375,9 @@ impl AivyxConfig {
 
         Ok(Self {
             anthropic_api_key,
+            openai_api_key,
+            openai_base_url,
+            provider,
             model,
             system_prompt,
             fs_root,
@@ -1339,6 +1430,25 @@ impl AivyxConfig {
             }
         }
 
+        if self.openai_api_key.is_none() {
+            if let Some(bytes) = secrets
+                .get(secret_keys::OPENAI_API_KEY)
+                .await
+                .map_err(|e| ConfigError::StoreRead {
+                    field: "openai_api_key",
+                    reason: e.to_string(),
+                })?
+            {
+                let s = String::from_utf8(bytes).map_err(|_| ConfigError::NonUtf8Secret {
+                    field: "openai_api_key",
+                })?;
+                self.openai_api_key = Some(SourcedSecret::new(
+                    SecretString::from(s),
+                    FieldSource::EncryptedStore,
+                ));
+            }
+        }
+
         if let Some(tg) = self.telegram.as_mut() {
             if tg.token.is_none() {
                 if let Some(bytes) = secrets
@@ -1372,10 +1482,23 @@ impl AivyxConfig {
     /// is populated. Returns [`ConfigError::Missing`] for the first
     /// missing required field.
     pub fn validate(&self, opts: &LoadOptions) -> Result<(), ConfigError> {
-        if opts.require_api_key && self.anthropic_api_key.is_none() {
-            return Err(ConfigError::Missing {
-                field: "anthropic_api_key",
-            });
+        if opts.require_api_key {
+            match self.provider.value {
+                ProviderKind::Anthropic => {
+                    if self.anthropic_api_key.is_none() {
+                        return Err(ConfigError::Missing {
+                            field: "anthropic_api_key",
+                        });
+                    }
+                }
+                ProviderKind::OpenAi => {
+                    if self.openai_api_key.is_none() {
+                        return Err(ConfigError::Missing {
+                            field: "openai_api_key",
+                        });
+                    }
+                }
+            }
         }
         if opts.require_telegram_token {
             match self.telegram.as_ref().and_then(|t| t.token.as_ref()) {

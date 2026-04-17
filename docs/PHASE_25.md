@@ -95,6 +95,33 @@ flag to select between `anthropic` (default) and `openai`.
 `AIVYX_OPENAI_API_KEY` env var and `[openai] api_key` TOML
 field.
 
+**Task 3 ship record**
+
+- `ProviderKind` enum (`Anthropic` | `OpenAi`) added to `aivyx-config`,
+  serde-compatible for TOML deserialization.
+- New `AivyxConfig` fields: `provider`, `openai_api_key`,
+  `openai_base_url`.
+- `RawToml` gains `[openai]` section (`api_key`, `base_url`) and
+  `[agent] provider` field.
+- Env vars: `AIVYX_PROVIDER`, `AIVYX_OPENAI_API_KEY`,
+  `AIVYX_OPENAI_BASE_URL`. Standard env > TOML > default precedence.
+- `validate()` now checks `openai_api_key` when provider is `OpenAi`,
+  `anthropic_api_key` when `Anthropic` — no longer demands the wrong
+  key for the active provider.
+- `hydrate_secrets_from_store` reads `openai_api_key` from
+  `KeyDomain::Secrets` alongside the existing Anthropic path.
+- `--provider <anthropic|openai>` CLI flag in the binary, highest
+  priority (overrides env and TOML).
+- Provider construction in `run_async` dispatches between
+  `AnthropicProvider` and `OpenAiProvider` based on `provider_kind`.
+- `aivyx-channel/Cargo.toml` now enables `provider-openai` feature.
+- Startup banner shows `provider` and conditional `openai_*` fields.
+- Example TOML updated with `[agent] provider` and `[openai]` section.
+- 7 config tests + 5 CLI tests. Workspace: 635 tests, 0 failures.
+- Production-core streak extends to **sixteen** (hash `d8ab203f…`).
+- Q2 resolved: provider selection is **global** via config/CLI, not
+  per-role.
+
 ### Task 4+ — Scope TBD at Task 3 exit
 
 Candidates: tool-calling translation layer (if OpenAI's

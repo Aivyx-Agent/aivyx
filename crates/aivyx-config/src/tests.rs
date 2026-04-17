@@ -32,7 +32,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AivyxConfig, ConfigError, FieldSource, LoadOptions, Role, ToolAllowlist,
+    AivyxConfig, ConfigError, FieldSource, LoadOptions, ProviderKind, Role, ToolAllowlist,
     DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
@@ -81,6 +81,9 @@ impl EnvScope {
             // the env-guard so role-tests don't leak state across
             // parallel cargo-test runs.
             "AIVYX_ROLE",
+            "AIVYX_OPENAI_API_KEY",
+            "AIVYX_OPENAI_BASE_URL",
+            "AIVYX_PROVIDER",
         ];
         let saved: Vec<_> = vars
             .iter()
@@ -1891,5 +1894,133 @@ api_key = "sk-test"
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert!(cfg.mcp_servers.is_empty());
 
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Phase 25 Task 3 — provider selection + OpenAI config
+// ------------------------------------------------------------------
+
+#[test]
+fn provider_defaults_to_anthropic() {
+    let env = EnvScope::new();
+    let opts = LoadOptions::test_env_only();
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Anthropic);
+    assert_eq!(cfg.provider.source, FieldSource::Default);
+    drop(env);
+}
+
+#[test]
+fn provider_from_env_var() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "openai");
+    let opts = LoadOptions::test_env_only();
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::OpenAi);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn provider_invalid_env_var_is_error() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "gemini");
+    let opts = LoadOptions::test_env_only();
+    let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
+    assert!(matches!(err, ConfigError::Invalid { field: "provider", .. }));
+    drop(env);
+}
+
+#[test]
+fn provider_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("provider-toml");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "openai"
+
+[openai]
+api_key = "sk-openai-test"
+base_url = "http://localhost:11434/v1"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::OpenAi);
+    assert_eq!(cfg.provider.source, FieldSource::Toml);
+    assert!(cfg.openai_api_key.is_some());
+    assert_eq!(cfg.openai_api_key.as_ref().unwrap().source, FieldSource::Toml);
+    let base_url = cfg.openai_base_url.as_ref().expect("base_url set");
+    assert_eq!(base_url.value, "http://localhost:11434/v1");
+    assert_eq!(base_url.source, FieldSource::Toml);
+    drop(env);
+}
+
+#[test]
+fn openai_api_key_from_env_overrides_toml() {
+    let env = EnvScope::new();
+    env.set("AIVYX_OPENAI_API_KEY", "sk-env-wins");
+    let tmp = TempDir::new("openai-env-over-toml");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[openai]
+api_key = "sk-toml-loses"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.openai_api_key.as_ref().unwrap().source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn validate_requires_openai_key_when_provider_is_openai() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "openai");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let err = cfg.validate(&opts).unwrap_err();
+    assert!(matches!(err, ConfigError::Missing { field: "openai_api_key" }));
+    drop(env);
+}
+
+#[test]
+fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "openai");
+    env.set("AIVYX_OPENAI_API_KEY", "sk-test");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts).expect("should pass — openai key present");
     drop(env);
 }

@@ -126,7 +126,9 @@ use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
     Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory,
 };
+use aivyx_config::ProviderKind;
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
+use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_channel::mission_tool::MissionCreateTool;
@@ -273,6 +275,7 @@ fn run() -> Result<(), String> {
         role: role_override,
         no_daemon,
         mcp_servers: cli_mcp_servers,
+        provider: cli_provider,
     } = parse_cli_args()?;
 
     // ---- Lightweight daemon management subcommands ----------------------
@@ -335,6 +338,10 @@ fn run() -> Result<(), String> {
         role_override: print_role.clone().or(role_override),
     };
     let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
+
+    if let Some(kind) = cli_provider {
+        config.provider = aivyx_config::Sourced::new(kind, aivyx_config::FieldSource::Env);
+    }
 
     // Phase 13 Task 4 — `--print-role` exit branch. Lands here,
     // *before* `mkdir fs_root`, master-key derivation, store open,
@@ -534,12 +541,33 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
 fn print_config_banner(config: &AivyxConfig) {
     eprintln!("aivyx config sources:");
     eprintln!(
+        "  provider          = {} ({})",
+        config.provider.value,
+        source_label(config.provider.source),
+    );
+    eprintln!(
         "  anthropic_api_key = {}",
         match &config.anthropic_api_key {
             Some(s) => format!("<redacted> ({})", source_label(s.source)),
             None => "<unset>".to_string(),
         }
     );
+    if config.provider.value == aivyx_config::ProviderKind::OpenAi {
+        eprintln!(
+            "  openai_api_key    = {}",
+            match &config.openai_api_key {
+                Some(s) => format!("<redacted> ({})", source_label(s.source)),
+                None => "<unset>".to_string(),
+            }
+        );
+        if let Some(base_url) = &config.openai_base_url {
+            eprintln!(
+                "  openai_base_url   = {:?} ({})",
+                base_url.value,
+                source_label(base_url.source),
+            );
+        }
+    }
     eprintln!(
         "  model             = {:?} ({})",
         config.model.value,
@@ -680,6 +708,7 @@ struct CliArgs {
     role: Option<String>,
     no_daemon: bool,
     mcp_servers: Vec<CliMcpServer>,
+    provider: Option<ProviderKind>,
 }
 
 #[derive(Debug)]
@@ -736,6 +765,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             role: None,
             no_daemon: false,
             mcp_servers: Vec::new(),
+            provider: None,
         });
     }
 
@@ -745,6 +775,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut print_role: Option<String> = None;
     let mut no_daemon = false;
     let mut mcp_servers: Vec<CliMcpServer> = Vec::new();
+    let mut cli_provider: Option<ProviderKind> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -792,6 +823,23 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 no_daemon = true;
                 i += 1;
             }
+            "--provider" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| {
+                        "`--provider` requires a value: `anthropic` or `openai`".to_string()
+                    })?;
+                cli_provider = Some(match value.as_str() {
+                    "anthropic" => ProviderKind::Anthropic,
+                    "openai" => ProviderKind::OpenAi,
+                    other => {
+                        return Err(format!(
+                            "unrecognized provider `{other}`. Supported: anthropic, openai"
+                        ));
+                    }
+                });
+                i += 2;
+            }
             "--mcp-server" => {
                 let value = args
                     .get(i + 1)
@@ -827,7 +875,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --mcp-server <name:command[:args]>, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai>, --mcp-server <name:command[:args]>, daemon run|status|stop"
                 ));
             }
         }
@@ -879,6 +927,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         role,
         no_daemon,
         mcp_servers,
+        provider: cli_provider,
     })
 }
 
@@ -979,6 +1028,9 @@ async fn run_async(
     // `run()`.
     let AivyxConfig {
         anthropic_api_key,
+        openai_api_key,
+        openai_base_url,
+        provider: provider_kind,
         model,
         system_prompt: _legacy_system_prompt,
         fs_root,
@@ -1012,9 +1064,6 @@ async fn run_async(
             enabled: true,
         });
     }
-    let api_key = anthropic_api_key
-        .expect("anthropic_api_key validated non-None before run_async")
-        .value;
     let model = model.value;
     let fs_root = fs_root.value;
     let memory_cap = memory_max_per_topic.value;
@@ -1048,9 +1097,28 @@ async fn run_async(
     let memory_topic_prefix: Option<String> = role.memory_topic_prefix.value;
 
     // ---- Provider -----------------------------------------------------
-    let anthropic = AnthropicProvider::new(AnthropicConfig::new(api_key))
-        .map_err(|e| format!("failed to build Anthropic provider: {e}"))?;
-    let provider: Arc<dyn LlmProvider> = Arc::new(anthropic);
+    let provider: Arc<dyn LlmProvider> = match provider_kind.value {
+        ProviderKind::Anthropic => {
+            let api_key = anthropic_api_key
+                .expect("anthropic_api_key validated non-None before run_async")
+                .value;
+            let p = AnthropicProvider::new(AnthropicConfig::new(api_key))
+                .map_err(|e| format!("failed to build Anthropic provider: {e}"))?;
+            Arc::new(p)
+        }
+        ProviderKind::OpenAi => {
+            let api_key = openai_api_key
+                .expect("openai_api_key validated non-None before run_async")
+                .value;
+            let mut cfg = OpenAiConfig::new(api_key);
+            if let Some(base_url) = openai_base_url {
+                cfg = cfg.with_base_url(base_url.value);
+            }
+            let p = OpenAiProvider::new(cfg)
+                .map_err(|e| format!("failed to build OpenAI provider: {e}"))?;
+            Arc::new(p)
+        }
+    };
 
     // ---- Audit --------------------------------------------------------
     // Persistent HMAC-chained audit log over `KeyDomain::Audit`.
@@ -2646,6 +2714,43 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&[]))
             .expect("empty argv must parse");
         assert!(parsed.mcp_servers.is_empty());
+    }
+
+    // ---- --provider flag tests ----------------------------------------
+
+    #[test]
+    fn provider_flag_anthropic() {
+        let parsed = parse_cli_args_from(&argv(&["--provider", "anthropic"]))
+            .expect("must parse");
+        assert_eq!(parsed.provider, Some(ProviderKind::Anthropic));
+    }
+
+    #[test]
+    fn provider_flag_openai() {
+        let parsed = parse_cli_args_from(&argv(&["--provider", "openai"]))
+            .expect("must parse");
+        assert_eq!(parsed.provider, Some(ProviderKind::OpenAi));
+    }
+
+    #[test]
+    fn provider_flag_unknown_is_error() {
+        let err = parse_cli_args_from(&argv(&["--provider", "gemini"]))
+            .expect_err("unknown provider must error");
+        assert!(err.contains("unrecognized provider"), "error: {err}");
+    }
+
+    #[test]
+    fn provider_flag_missing_value_is_error() {
+        let err = parse_cli_args_from(&argv(&["--provider"]))
+            .expect_err("missing value must error");
+        assert!(err.contains("requires a value"), "error: {err}");
+    }
+
+    #[test]
+    fn no_provider_flag_defaults_to_none() {
+        let parsed = parse_cli_args_from(&argv(&[]))
+            .expect("must parse");
+        assert!(parsed.provider.is_none());
     }
 
 }

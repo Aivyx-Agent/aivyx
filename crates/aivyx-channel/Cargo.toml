@@ -59,7 +59,7 @@ rpassword = "7"
 # entries above; the `aivyx` bin pulls in the rest so a single
 # `cargo run --bin aivyx` launches the full agent stack.
 aivyx-audit = { path = "../aivyx-audit" }
-aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
+aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider-openai"] }
 
 # Phase 8 Task 4 — `aivyx --channel telegram` delegates into
 # `aivyx_telegram::run_telegram_session`. The dep is binary-only
