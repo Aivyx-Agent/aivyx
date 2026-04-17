@@ -185,12 +185,39 @@ resolved or deferred:
 ## Open questions
 
 **Q1 — Does the OpenAI tool-calling response format require
-changes to `aivyx-core` types?** Leaning (b) no — the
-provider adapter should translate between formats internally.
-But if the `ToolCall` / `ToolResult` types in `aivyx-core`
-are too Anthropic-specific, this may require core changes.
+changes to `aivyx-core` types?** ✓ Resolved in Task 2: **no**.
+The provider adapter translates between formats internally.
 
 **Q2 — Should the provider be selectable per-role or only
-globally?** Leaning (a) globally — per-role providers add
-complexity for a rare use case. Global selection via config
-or CLI flag.
+globally?** ✓ Resolved in Task 3: **globally**. Config/CLI/env
+selection, not per-role.
+
+## Prediction vs reality
+
+| Streak | Prediction | Outcome |
+|--------|-----------|---------|
+| DESIGN.md | Low risk — no edits | ✓ Unchanged (`ceb5386…`) |
+| PRODUCT.md | Not at risk | ✓ Unchanged (`478cab6…`) |
+| Production-core | Extends to 15 if trait composes, breaks if tool-calling needs core changes | ✓ Extends to **sixteen** — no core changes needed. Hash `d8ab203f…` unchanged. |
+
+Phase scope prediction: "1 phase, quick win." Reality: **4 tasks
+in 1 phase** — open, provider impl, config+CLI, docs. Clean fit.
+
+## Exit criteria
+
+- [x] `OpenAiProvider` implements `LlmProvider::stream_turn` with
+  text streaming and tool-call assembly.
+- [x] `provider-openai` feature compiles and passes 7 provider-
+  specific tests.
+- [x] Config wiring: `ProviderKind` enum, `--provider` CLI,
+  `AIVYX_PROVIDER` env, `[agent] provider` + `[openai]` TOML.
+- [x] `validate()` checks the correct API key per provider.
+- [x] Binary dispatches between `AnthropicProvider` and
+  `OpenAiProvider` at startup.
+- [x] Shared `HttpTransport` seam (transport lift to crate root).
+- [x] `PRODUCT_ROADMAP.md` Multi-Provider milestone delivered.
+- [x] Both Q-block questions resolved.
+- [x] 635 workspace tests, 0 failures.
+- [x] Production-core streak intact (16 phases).
+- [x] DESIGN.md unchanged.
+- [x] PRODUCT.md unchanged.
