@@ -60,6 +60,30 @@ support to `aivyx-config`. Fields: `name` (server identifier
 used in scope qualifiers), `command` (executable path),
 `args` (argument list), `enabled` (default true).
 
+## Task 2 ship record
+
+**Files modified:**
+- `crates/aivyx-config/src/lib.rs`: added `RawMcpServer` struct
+  (internal TOML deserialization target with `name`, `command`,
+  `args: Option<Vec<String>>`, `enabled` with `default_true`),
+  `mcp_servers: Option<Vec<RawMcpServer>>` on `RawToml` with
+  `#[serde(default, rename = "mcp_server")]`, public
+  `McpServerConfig` struct, `mcp_servers: Vec<McpServerConfig>`
+  on `AivyxConfig`, and loader mapping that filters disabled
+  servers and unwraps `Option<Vec<String>>` args to empty vec.
+- `crates/aivyx-config/src/tests.rs`: two new tests —
+  `mcp_server_entries_parse_from_toml` (three entries, one
+  disabled, verifies filtering + field mapping) and
+  `no_mcp_server_section_gives_empty_vec`.
+- `crates/aivyx-channel/src/bin/aivyx.rs`: added `mcp_servers`
+  to the `AivyxConfig` destructure (prefixed `_` for now — Task
+  3 will use it).
+- `examples/aivyx.toml`: added commented `[[mcp_server]]`
+  section with two example entries (github, filesystem).
+
+**Test delta:** +2 (608 → 610).
+**Production-core streak:** extends to fourteen (hash unchanged).
+
 ### Task 3 — Daemon-side MCP bridge lifecycle
 
 Wire `McpServerBridge::start` into daemon startup:

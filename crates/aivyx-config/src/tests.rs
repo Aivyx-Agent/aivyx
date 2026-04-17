@@ -1810,3 +1810,86 @@ system_prompt = "coder prompt"
 
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Phase 24: [[mcp_server]] config entries
+// ------------------------------------------------------------------
+
+#[test]
+fn mcp_server_entries_parse_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-cfg");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[[mcp_server]]
+name = "disabled-one"
+command = "echo"
+enabled = false
+
+[[mcp_server]]
+name = "bare"
+command = "/usr/bin/my-server"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.mcp_servers.len(), 2, "disabled server filtered out");
+
+    let gh = &cfg.mcp_servers[0];
+    assert_eq!(gh.name, "github");
+    assert_eq!(gh.command, "npx");
+    assert_eq!(gh.args, vec!["-y", "@modelcontextprotocol/server-github"]);
+    assert!(gh.enabled);
+
+    let bare = &cfg.mcp_servers[1];
+    assert_eq!(bare.name, "bare");
+    assert_eq!(bare.command, "/usr/bin/my-server");
+    assert!(bare.args.is_empty(), "absent args default to empty vec");
+    assert!(bare.enabled);
+
+    drop(env);
+}
+
+#[test]
+fn no_mcp_server_section_gives_empty_vec() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("no-mcp");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(cfg.mcp_servers.is_empty());
+
+    drop(env);
+}

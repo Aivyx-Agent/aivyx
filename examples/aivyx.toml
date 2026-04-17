@@ -310,3 +310,26 @@ memory_topic_prefix = "junior_researcher/"
 capability_scopes = []
 trust_ceiling = "Trusted"
 parent_role = "researcher"
+
+# ----------------------------------------------------------------
+# MCP server entries (Phase 24)
+# ----------------------------------------------------------------
+#
+# Each `[[mcp_server]]` entry declares an MCP server that the
+# daemon starts at boot and whose tools become available to agents.
+# Required keys: `name` (server identifier, used in scope
+# qualifiers as `mcp.call:<name>:<tool>`), `command` (executable).
+# Optional: `args` (argument list, default []), `enabled` (default
+# true — set false to keep the entry but skip startup).
+#
+# Uncomment to enable:
+#
+# [[mcp_server]]
+# name = "github"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+#
+# [[mcp_server]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]

@@ -510,6 +510,9 @@ pub struct AivyxConfig {
     ///   that defines one role but inherits `DEFAULT_SYSTEM_PROMPT`
     ///   doesn't get a spurious warning.
     pub warnings: Vec<String>,
+    /// MCP server configurations from `[[mcp_server]]` entries.
+    /// Empty when no entries are configured.
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -699,6 +702,16 @@ pub struct TelegramConfig {
     pub chat_filter: Option<Sourced<i64>>,
 }
 
+/// One MCP server to connect to at daemon startup.
+/// Loaded from `[[mcp_server]]` entries in `aivyx.toml`.
+#[derive(Debug, Clone)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub enabled: bool,
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -733,6 +746,9 @@ struct RawToml {
     /// entries.
     #[serde(default, rename = "role")]
     roles: Option<Vec<RawRole>>,
+    /// `[[mcp_server]]` table-array. Phase 24 Task 2.
+    #[serde(default, rename = "mcp_server")]
+    mcp_servers: Option<Vec<RawMcpServer>>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -774,6 +790,21 @@ struct RawRole {
     trust_ceiling: Option<TrustTier>,
     #[serde(default)]
     parent_role: Option<String>,
+}
+
+/// One `[[mcp_server]]` entry in the TOML file. Phase 24 Task 2.
+#[derive(Debug, Default, Deserialize)]
+struct RawMcpServer {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1240,6 +1271,20 @@ impl AivyxConfig {
             });
         }
 
+        // --- mcp_servers ------------------------------------------
+        let mcp_servers: Vec<McpServerConfig> = toml
+            .mcp_servers
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .map(|r| McpServerConfig {
+                name: r.name,
+                command: r.command,
+                args: r.args.unwrap_or_default(),
+                enabled: true,
+            })
+            .collect();
+
         Ok(Self {
             anthropic_api_key,
             model,
@@ -1252,6 +1297,7 @@ impl AivyxConfig {
             roles,
             active_role,
             warnings,
+            mcp_servers,
         })
     }
 

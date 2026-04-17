@@ -961,6 +961,7 @@ async fn run_async(
         // the time we land here the banner has already printed any
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
+        mcp_servers: _mcp_servers,
     } = config;
     let api_key = anthropic_api_key
         .expect("anthropic_api_key validated non-None before run_async")
