@@ -125,6 +125,19 @@ impl DaemonSession {
         })
     }
 
+    pub async fn submit_input_for_mission(
+        &mut self,
+        text: String,
+        mission_id: String,
+    ) -> Result<(Vec<StreamEventPayload>, String), String> {
+        let submit = FrontendMessage::SubmitInput {
+            session_id: self.session_id.clone(),
+            text,
+            mission_id: Some(mission_id),
+        };
+        self.send_and_collect(submit).await
+    }
+
     /// Submit a turn to the daemon and collect all streamed events
     /// until `TurnComplete`. Returns the events and the outcome string.
     pub async fn submit_input(
@@ -134,9 +147,17 @@ impl DaemonSession {
         let submit = FrontendMessage::SubmitInput {
             session_id: self.session_id.clone(),
             text,
+            mission_id: None,
         };
+        self.send_and_collect(submit).await
+    }
+
+    async fn send_and_collect(
+        &mut self,
+        msg: FrontendMessage,
+    ) -> Result<(Vec<StreamEventPayload>, String), String> {
         let frame =
-            encode_frame(&submit).map_err(|e| format!("encode SubmitInput: {e}"))?;
+            encode_frame(&msg).map_err(|e| format!("encode SubmitInput: {e}"))?;
         {
             let mut w = self.writer.lock().await;
             w.write_all(&frame)

@@ -131,7 +131,7 @@ async fn handle_connection(
         .map_err(|e| format!("write DaemonReady: {e}"))?;
 
     let mut buf = Vec::with_capacity(4096);
-    let mut _session_id: Option<String> = None;
+    let mut session_id: Option<String> = None;
     let mut channel: Option<Arc<dyn ChannelContext + Send + Sync>> = None;
 
     loop {
@@ -165,7 +165,7 @@ async fn handle_connection(
                             channel = Some(channel_factory(ft));
 
                             let sid = aivyx_core::SessionId::new().to_string();
-                            _session_id = Some(sid.clone());
+                            session_id = Some(sid.clone());
                             let resp = DaemonMessage::SessionStarted { session_id: sid };
                             let frame = encode_frame(&resp)
                                 .map_err(|e| format!("encode SessionStarted: {e}"))?;
@@ -177,6 +177,7 @@ async fn handle_connection(
                         FrontendMessage::SubmitInput {
                             session_id: sid,
                             text,
+                            mission_id: mid,
                         } => {
                             let ch = match &channel {
                                 Some(c) => Arc::clone(c),
@@ -204,6 +205,66 @@ async fn handle_connection(
                             writer = Arc::try_unwrap(bridge.writer)
                                 .map_err(|_| "writer arc still shared".to_string())?
                                 .into_inner();
+
+                            if let (
+                                TurnOutcome::Escalated { reason, .. },
+                                Some(mission_id),
+                                Some(store),
+                            ) = (&outcome, &mid, &mission_store)
+                            {
+                                let gate_result = async {
+                                    let mut record = mission::get_mission(store, mission_id)
+                                        .await
+                                        .map_err(|e| format!("get mission: {e}"))?
+                                        .ok_or_else(|| {
+                                            format!("mission {mission_id} not found")
+                                        })?;
+                                    let gate_id = format!(
+                                        "gate-{}",
+                                        uuid::Uuid::new_v4().as_hyphenated()
+                                    );
+                                    mission::add_gate(
+                                        &mut record,
+                                        gate_id.clone(),
+                                        reason.clone(),
+                                        None,
+                                    )?;
+                                    mission::update_mission(store, &record)
+                                        .await
+                                        .map_err(|e| format!("persist mission: {e}"))?;
+                                    Ok::<String, String>(gate_id)
+                                }
+                                .await;
+
+                                match gate_result {
+                                    Ok(gate_id) => {
+                                        let gate_event =
+                                            DaemonMessage::StreamEvent {
+                                                session_id: sid.clone(),
+                                                event: StreamEventPayload::ApprovalGate {
+                                                    mission_id: mission_id.clone(),
+                                                    gate_id,
+                                                    reason: reason.clone(),
+                                                    scope: None,
+                                                },
+                                            };
+                                        let frame = encode_frame(&gate_event)
+                                            .map_err(|e| format!("encode ApprovalGate: {e}"))?;
+                                        writer
+                                            .write_all(&frame)
+                                            .await
+                                            .map_err(|e| format!("write ApprovalGate: {e}"))?;
+                                    }
+                                    Err(e) => {
+                                        let err = DaemonMessage::Error {
+                                            code: "gate_create_failed".into(),
+                                            message: format!("failed to create gate: {e}"),
+                                        };
+                                        let frame = encode_frame(&err).unwrap_or_default();
+                                        let _ = writer.write_all(&frame).await;
+                                    }
+                                }
+                            }
 
                             let outcome_str = format_outcome(&outcome);
 
@@ -254,8 +315,8 @@ async fn handle_connection(
                             match result {
                                 Ok(()) => {
                                     let resp = DaemonMessage::GateResolved {
-                                        mission_id,
-                                        gate_id,
+                                        mission_id: mission_id.clone(),
+                                        gate_id: gate_id.clone(),
                                         approved,
                                     };
                                     let frame = encode_frame(&resp)
@@ -264,6 +325,47 @@ async fn handle_connection(
                                         .write_all(&frame)
                                         .await
                                         .map_err(|e| format!("write GateResolved: {e}"))?;
+
+                                    if approved {
+                                        if let Some(ch) = &channel {
+                                            let ch = Arc::clone(ch);
+                                            let resume_text = format!(
+                                                "Gate {gate_id} approved — continue mission {mission_id}"
+                                            );
+                                            let msg = Message::text(
+                                                aivyx_core::SessionId::new(),
+                                                resume_text,
+                                            );
+                                            let sid = session_id.clone().unwrap_or_default();
+                                            let bridge = IpcChannelBridge {
+                                                inner: ch,
+                                                writer: Arc::new(
+                                                    tokio::sync::Mutex::new(writer),
+                                                ),
+                                                session_id: sid.clone(),
+                                            };
+
+                                            let resume_outcome = agent.turn(msg, &bridge).await;
+
+                                            writer = Arc::try_unwrap(bridge.writer)
+                                                .map_err(|_| {
+                                                    "writer arc still shared".to_string()
+                                                })?
+                                                .into_inner();
+
+                                            let outcome_str = format_outcome(&resume_outcome);
+                                            let resp = DaemonMessage::TurnComplete {
+                                                session_id: sid,
+                                                outcome: outcome_str,
+                                            };
+                                            let frame = encode_frame(&resp).map_err(|e| {
+                                                format!("encode resume TurnComplete: {e}")
+                                            })?;
+                                            writer.write_all(&frame).await.map_err(|e| {
+                                                format!("write resume TurnComplete: {e}")
+                                            })?;
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     let err = DaemonMessage::Error {

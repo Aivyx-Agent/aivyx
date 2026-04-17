@@ -78,6 +78,8 @@ pub enum FrontendMessage {
     SubmitInput {
         session_id: String,
         text: String,
+        #[serde(default)]
+        mission_id: Option<String>,
     },
     CancelTurn {
         session_id: String,
@@ -352,6 +354,7 @@ mod tests {
             FrontendMessage::SubmitInput {
                 session_id: "abc-123".into(),
                 text: "hello world".into(),
+                mission_id: None,
             },
             FrontendMessage::CancelTurn {
                 session_id: "abc-123".into(),
@@ -459,6 +462,7 @@ mod tests {
         let msg = FrontendMessage::SubmitInput {
             session_id: "s".into(),
             text: huge,
+            mission_id: None,
         };
         let err = encode_frame(&msg).unwrap_err();
         assert!(matches!(err, FrameError::PayloadTooLarge(_)));

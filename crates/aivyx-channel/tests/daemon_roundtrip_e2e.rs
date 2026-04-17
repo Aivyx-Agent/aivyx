@@ -243,6 +243,7 @@ async fn multi_turn_session_streams_both_turns() {
     let frame = encode_frame(&FrontendMessage::SubmitInput {
         session_id: sid.clone(),
         text: "turn one".into(),
+        mission_id: None,
     })
     .unwrap();
     writer.write_all(&frame).await.unwrap();
@@ -258,6 +259,7 @@ async fn multi_turn_session_streams_both_turns() {
     let frame = encode_frame(&FrontendMessage::SubmitInput {
         session_id: sid.clone(),
         text: "turn two".into(),
+        mission_id: None,
     })
     .unwrap();
     writer.write_all(&frame).await.unwrap();
@@ -1376,4 +1378,470 @@ fn read_pid_file_returns_none_for_non_numeric_content() {
     let result = aivyx_channel::daemon_client::read_pid_file(&path);
     let _ = std::fs::remove_file(&path);
     assert!(result.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// FakeEscalatingAgent — returns TurnOutcome::Escalated on the first turn,
+// then Completed on subsequent turns (simulating the resume after gate
+// approval).
+// ---------------------------------------------------------------------------
+
+struct FakeEscalatingAgent {
+    id: AgentId,
+    caps: CapabilitySet,
+    turn_count: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl Agent for FakeEscalatingAgent {
+    fn id(&self) -> AgentId {
+        self.id
+    }
+
+    fn capabilities(&self) -> &CapabilitySet {
+        &self.caps
+    }
+
+    async fn turn(
+        &self,
+        _message: Message,
+        channel: &dyn ChannelContext,
+    ) -> TurnOutcome {
+        let n = self.turn_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            let _ = channel.stream_event(StreamEvent::Text("escalating...")).await;
+            TurnOutcome::Escalated {
+                reason: "requires approval".into(),
+                pending_tool: aivyx_core::ToolId::new(),
+                tool_calls_made: 1,
+            }
+        } else {
+            let _ = channel.stream_event(StreamEvent::Text("resumed after approval")).await;
+            TurnOutcome::Completed {
+                final_message: "mission continued".into(),
+                tool_calls_made: 0,
+                duration: Duration::from_millis(1),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Escalation→gate turn-loop wiring integration test (Phase 23 Task 2).
+//
+// Verifies: submit a turn with mission_id → agent escalates →
+// daemon creates gate + emits ApprovalGate → resolve gate approved →
+// daemon resumes turn → TurnComplete.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn escalation_gate_wiring_approve_resumes_turn() {
+    use aivyx_channel::mission::{self, MissionRecord};
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let daemon_socket = socket_path.clone();
+
+    let store_path = scratch.path.join("test.redb");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path),
+        MasterKey::from_raw([7u8; 32]),
+    )
+    .await
+    .expect("storage must open");
+    let mission_handle = storage.domain(KeyDomain::Missions);
+
+    let mission_id = format!("m-{}", uuid::Uuid::new_v4());
+    let record = MissionRecord::new(
+        mission_id.clone(),
+        "default".into(),
+        "test mission".into(),
+    );
+    mission::create_mission(&mission_handle, &record)
+        .await
+        .expect("create mission must succeed");
+
+    let mut record = mission::get_mission(&mission_handle, &mission_id)
+        .await
+        .expect("get mission")
+        .expect("mission must exist");
+    mission::transition_to_running(&mut record).expect("start mission");
+    mission::update_mission(&mission_handle, &record)
+        .await
+        .expect("persist started mission");
+
+    let verify_handle = storage.domain(KeyDomain::Missions);
+
+    let agent: Arc<dyn Agent + Send + Sync> = Arc::new(FakeEscalatingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+        turn_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let daemon_agent = Arc::clone(&agent);
+    let shutdown = CancellationToken::new();
+    let daemon_shutdown = shutdown.clone();
+
+    let factory: ChannelFactory = Arc::new(move |_ft| {
+        let ch: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(LocalChannel::new("gate-test", Vec::<u8>::new()));
+        ch
+    });
+
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(
+            &daemon_socket,
+            daemon_agent,
+            factory,
+            daemon_shutdown,
+            Some(mission_handle),
+        )
+        .await
+        .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path)
+        .await
+        .expect("connect to daemon");
+    let (mut reader, mut writer) = stream.into_split();
+
+    let mut buf = Vec::new();
+
+    // --- Handshake ---
+    read_more(&mut reader, &mut buf).await;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        other => panic!("expected DaemonReady, got {other:?}"),
+    }
+
+    let start = FrontendMessage::StartSession {
+        role: None,
+        frontend_type: Some(FrontendType::Local),
+    };
+    let frame = encode_frame(&start).unwrap();
+    writer.write_all(&frame).await.unwrap();
+
+    loop {
+        read_more(&mut reader, &mut buf).await;
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SessionStarted { session_id, .. }, consumed)) => {
+                buf.drain(..consumed);
+                let _ = session_id;
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => continue,
+            other => panic!("expected SessionStarted, got {other:?}"),
+        }
+    }
+
+    // --- Turn 1: submit with mission_id → expect escalation + gate ---
+    let submit = FrontendMessage::SubmitInput {
+        session_id: "s1".into(),
+        text: "do something risky".into(),
+        mission_id: Some(mission_id.clone()),
+    };
+    let frame = encode_frame(&submit).unwrap();
+    writer.write_all(&frame).await.unwrap();
+
+    let mut gate_event: Option<(String, String)> = None;
+    let mut saw_escalated_outcome = false;
+    let mut events = Vec::new();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::StreamEvent { event, .. }, consumed)) => {
+                buf.drain(..consumed);
+                if let StreamEventPayload::ApprovalGate {
+                    ref mission_id,
+                    ref gate_id,
+                    ..
+                } = event
+                {
+                    gate_event = Some((mission_id.clone(), gate_id.clone()));
+                }
+                events.push(event);
+            }
+            Ok((DaemonEnvelope::TurnComplete { outcome, .. }, consumed)) => {
+                buf.drain(..consumed);
+                assert!(
+                    outcome.contains("escalated"),
+                    "expected escalated outcome, got: {outcome}"
+                );
+                saw_escalated_outcome = true;
+                break;
+            }
+            Ok((DaemonEnvelope::Error { code, message }, _)) => {
+                panic!("daemon error ({code}): {message}");
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await;
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                panic!("unexpected message: {other:?}");
+            }
+            Err(e) => panic!("decode error: {e}"),
+        }
+    }
+
+    assert!(saw_escalated_outcome, "must see escalated TurnComplete");
+    let (gate_mid, gate_gid) =
+        gate_event.expect("must receive ApprovalGate stream event");
+    assert_eq!(gate_mid, mission_id, "gate mission_id must match");
+
+    // Verify mission is now GatePending in storage.
+    let stored = mission::get_mission(&verify_handle, &mission_id)
+        .await
+        .expect("get mission")
+        .expect("mission must exist");
+    assert_eq!(
+        stored.state,
+        aivyx_channel::mission::MissionState::GatePending,
+        "mission must be GatePending after escalation"
+    );
+    assert_eq!(stored.gates.len(), 1, "must have exactly one gate");
+
+    // --- Resolve gate (approved) → expect resume turn ---
+    let resolve = FrontendMessage::ResolveGate {
+        mission_id: mission_id.clone(),
+        gate_id: gate_gid.clone(),
+        approved: true,
+    };
+    let frame = encode_frame(&resolve).unwrap();
+    writer.write_all(&frame).await.unwrap();
+
+    let mut saw_gate_resolved = false;
+    let mut saw_resume_complete = false;
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::GateResolved { approved, .. }, consumed)) => {
+                buf.drain(..consumed);
+                assert!(approved, "gate must be approved");
+                saw_gate_resolved = true;
+            }
+            Ok((DaemonEnvelope::StreamEvent { event, .. }, consumed)) => {
+                buf.drain(..consumed);
+                events.push(event);
+            }
+            Ok((DaemonEnvelope::TurnComplete { outcome, .. }, consumed)) => {
+                buf.drain(..consumed);
+                assert!(
+                    outcome.contains("mission continued"),
+                    "resume outcome: {outcome}"
+                );
+                saw_resume_complete = true;
+                break;
+            }
+            Ok((DaemonEnvelope::Error { code, message }, _)) => {
+                panic!("daemon error during resume ({code}): {message}");
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await;
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                panic!("unexpected message during resume: {other:?}");
+            }
+            Err(e) => panic!("decode error during resume: {e}"),
+        }
+    }
+
+    assert!(saw_gate_resolved, "must see GateResolved");
+    assert!(saw_resume_complete, "must see resume TurnComplete");
+
+    // Verify mission is back to Running after gate approval.
+    let stored = mission::get_mission(&verify_handle, &mission_id)
+        .await
+        .expect("get mission")
+        .expect("mission must exist");
+    assert_eq!(
+        stored.state,
+        aivyx_channel::mission::MissionState::Running,
+        "mission must be Running after approved gate"
+    );
+
+    // Clean up.
+    let disconnect = FrontendMessage::Disconnect;
+    let frame = encode_frame(&disconnect).unwrap();
+    let _ = writer.write_all(&frame).await;
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[tokio::test]
+async fn escalation_gate_wiring_reject_fails_mission() {
+    use aivyx_channel::mission::{self, MissionRecord};
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let daemon_socket = socket_path.clone();
+
+    let store_path = scratch.path.join("test.redb");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path),
+        MasterKey::from_raw([7u8; 32]),
+    )
+    .await
+    .expect("storage must open");
+    let mission_handle = storage.domain(KeyDomain::Missions);
+
+    let mission_id = format!("m-{}", uuid::Uuid::new_v4());
+    let record = MissionRecord::new(
+        mission_id.clone(),
+        "default".into(),
+        "test mission".into(),
+    );
+    mission::create_mission(&mission_handle, &record)
+        .await
+        .expect("create mission");
+
+    let mut record = mission::get_mission(&mission_handle, &mission_id)
+        .await
+        .expect("get")
+        .expect("exists");
+    mission::transition_to_running(&mut record).expect("start");
+    mission::update_mission(&mission_handle, &record)
+        .await
+        .expect("persist");
+
+    let verify_handle = storage.domain(KeyDomain::Missions);
+
+    let agent: Arc<dyn Agent + Send + Sync> = Arc::new(FakeEscalatingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+        turn_count: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let daemon_agent = Arc::clone(&agent);
+    let shutdown = CancellationToken::new();
+    let daemon_shutdown = shutdown.clone();
+
+    let factory: ChannelFactory = Arc::new(move |_ft| {
+        let ch: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(LocalChannel::new("gate-test", Vec::<u8>::new()));
+        ch
+    });
+
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(
+            &daemon_socket,
+            daemon_agent,
+            factory,
+            daemon_shutdown,
+            Some(mission_handle),
+        )
+        .await
+        .expect("daemon must complete");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path)
+        .await
+        .expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::new();
+
+    // Handshake.
+    read_more(&mut reader, &mut buf).await;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        other => panic!("expected DaemonReady: {other:?}"),
+    };
+
+    let start = FrontendMessage::StartSession {
+        role: None,
+        frontend_type: Some(FrontendType::Local),
+    };
+    writer.write_all(&encode_frame(&start).unwrap()).await.unwrap();
+    loop {
+        read_more(&mut reader, &mut buf).await;
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SessionStarted { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => continue,
+            other => panic!("expected SessionStarted: {other:?}"),
+        }
+    }
+
+    // Submit with mission → triggers escalation.
+    let submit = FrontendMessage::SubmitInput {
+        session_id: "s1".into(),
+        text: "do something".into(),
+        mission_id: Some(mission_id.clone()),
+    };
+    writer.write_all(&encode_frame(&submit).unwrap()).await.unwrap();
+
+    let mut gate_gid = String::new();
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::StreamEvent { event, .. }, consumed)) => {
+                buf.drain(..consumed);
+                if let StreamEventPayload::ApprovalGate { gate_id, .. } = &event {
+                    gate_gid = gate_id.clone();
+                }
+            }
+            Ok((DaemonEnvelope::TurnComplete { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                panic!("unexpected: {other:?}");
+            }
+            Err(e) => panic!("decode: {e}"),
+        }
+    }
+    assert!(!gate_gid.is_empty(), "must have gate_id");
+
+    // Reject the gate.
+    let resolve = FrontendMessage::ResolveGate {
+        mission_id: mission_id.clone(),
+        gate_id: gate_gid,
+        approved: false,
+    };
+    writer.write_all(&encode_frame(&resolve).unwrap()).await.unwrap();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::GateResolved { approved, .. }, consumed)) => {
+                buf.drain(..consumed);
+                assert!(!approved, "gate must be rejected");
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                panic!("unexpected during reject: {other:?}");
+            }
+            Err(e) => panic!("decode: {e}"),
+        }
+    }
+
+    // Verify mission is Failed after rejection.
+    let stored = mission::get_mission(&verify_handle, &mission_id)
+        .await
+        .expect("get mission")
+        .expect("must exist");
+    assert_eq!(
+        stored.state,
+        aivyx_channel::mission::MissionState::Failed,
+        "mission must be Failed after gate rejection"
+    );
+
+    let disconnect = FrontendMessage::Disconnect;
+    let _ = writer.write_all(&encode_frame(&disconnect).unwrap()).await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }

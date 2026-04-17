@@ -72,7 +72,7 @@ JSON object with a `"type"` discriminator field.
 | Variant          | Payload fields                  | Semantics                                                |
 |------------------|---------------------------------|----------------------------------------------------------|
 | `StartSession`   | `role: Option<String>`          | Request a new session under the named role (or default).  |
-| `SubmitInput`    | `session_id: String`, `text: String` | Send one user input line to the named session.       |
+| `SubmitInput`    | `session_id: String`, `text: String`, `mission_id: Option<String>` | Send one user input line. When `mission_id` is set and the turn escalates, the daemon creates a gate on that mission and emits `ApprovalGate`. |
 | `CancelTurn`     | `session_id: String`            | Request cancellation of the in-flight turn.              |
 | `ResolveGate`    | `mission_id: String`, `gate_id: String`, `approved: bool` | Operator resolves a pending mission approval gate. |
 | `Disconnect`     | *(none)*                        | Graceful frontend disconnect. Daemon may keep the session alive. |
@@ -140,7 +140,31 @@ Error codes are short string tags, not numeric. Phase 16 defines:
 
 - `"invalid_message"` — the daemon could not parse the frame.
 - `"unknown_session"` — `session_id` does not match a live session.
+- `"no_mission_store"` — `ResolveGate` received but no mission store configured.
+- `"gate_create_failed"` — escalation→gate creation failed (missing mission, wrong state).
+- `"gate_resolve_failed"` — gate resolution failed (missing mission/gate, wrong state).
 - `"internal"` — catch-all for unexpected daemon-side failures.
+
+### Escalation→gate turn-loop wiring (Phase 23)
+
+When a `SubmitInput` carries a `mission_id` and the agent's turn returns
+`TurnOutcome::Escalated`, the daemon:
+
+1. Loads the mission from redb.
+2. Creates a `GateRecord` via `mission::add_gate`, transitioning the
+   mission to `GatePending`.
+3. Emits `StreamEventPayload::ApprovalGate` to the frontend.
+4. Sends `TurnComplete` with outcome `"escalated: <reason>"`.
+
+When the frontend sends `ResolveGate` with `approved: true`, the daemon:
+
+1. Resolves the gate, transitioning the mission back to `Running`.
+2. Sends `GateResolved`.
+3. Starts a new turn with the approval context as input, streaming
+   events and ending with a second `TurnComplete`.
+
+When rejected, the mission transitions to `Failed` and no resume turn
+occurs.
 
 ---
 

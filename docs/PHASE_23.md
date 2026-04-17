@@ -83,6 +83,36 @@ resume.
 This closes the Phase 21 net-new deferral and completes the
 P2 approval-gate lifecycle.
 
+## Task 2 ship record
+
+**Design decision:** `mission_id: Option<String>` added to
+`FrontendMessage::SubmitInput` rather than `TurnOutcome::Escalated`
+in aivyx-core, keeping all changes in `aivyx-channel` and
+preserving the production-core byte-identity streak at twelve.
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_ipc.rs`: added `mission_id:
+  Option<String>` to `SubmitInput` variant with `#[serde(default)]`
+  for backward compatibility. Updated two test constructions.
+- `crates/aivyx-channel/src/daemon_server.rs`: wired escalation→gate
+  creation in `SubmitInput` handler (load mission, `add_gate`,
+  persist, emit `ApprovalGate`). Wired gate resume in `ResolveGate`
+  handler (on approved, start new turn with approval context).
+  Renamed `_session_id` to `session_id` for resume use.
+- `crates/aivyx-channel/src/daemon_client.rs`: extracted
+  `send_and_collect` helper, added `submit_input_for_mission`
+  method. Existing `submit_input` passes `mission_id: None`.
+- `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs`: added
+  `FakeEscalatingAgent` (returns `Escalated` on first turn,
+  `Completed` on subsequent), two integration tests:
+  `escalation_gate_wiring_approve_resumes_turn` (full lifecycle)
+  and `escalation_gate_wiring_reject_fails_mission`.
+- `docs/DAEMON_IPC.md`: documented `SubmitInput.mission_id` field,
+  three new error codes, escalation→gate turn-loop wiring section.
+
+**Test delta:** +2 (598 → 600).
+**Production-core streak:** extends to twelve (hash unchanged).
+
 ### Task 3+ — MCP client adapter (scope TBD at Task 2 exit)
 
 Shape to be refined after the gate wiring lands. Expected
@@ -120,7 +150,7 @@ scope:
 - **Telegram-specific protocol extensions (attachment
   delivery, inline keyboards, etc.)** — Phase 19. Untouched.
 - **Escalation→gate turn-loop wiring** — Phase 21.
-  **Targeted by Task 2.**
+  **Closed by Task 2.**
 - **`mission.list` / `mission.status` read-only tools** —
   Phase 21. Untouched.
 
