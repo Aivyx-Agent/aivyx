@@ -654,6 +654,15 @@ scopes (`display.window_close`, etc.) are deferred to Phase 1, when the
 tool crate is built. The Reserved section already lists them; they'll be
 promoted to active when the tool lands.
 
+> **Amendment (2026-04-17):** The capability taxonomy has grown
+> from 12 to 23 known bases across Phases 1–21. Two bases
+> added by Phase 21 (`mission.create`, `mission.gate`) are
+> infrastructure tools per P10's taxonomy. See amendment
+> [`docs/amendments/2026-04-17-mission-state-machine.md`](docs/amendments/2026-04-17-mission-state-machine.md)
+> for the mission-specific bases and amendment
+> [`docs/amendments/2026-04-17-capability-taxonomy-growth.md`](docs/amendments/2026-04-17-capability-taxonomy-growth.md)
+> for the full 23-base inventory.
+
 ---
 
 ## Deliverable 5 — Trust Tier Model (LOCKED 2026-04-13)
