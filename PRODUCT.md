@@ -1051,3 +1051,134 @@ because the foundation already supports them:
   inheritance layer.
 - **P10 — Substrate-only core.** Already true at exactly
   the current count.
+
+---
+
+## Delivery Status (as of Phase 21 exit, 2026-04-17)
+
+A traceability surface mapping each product commitment to its
+implementation state after 21 phases. The commitment text
+above is unchanged — this section records what shipped, what
+partially shipped, and what remains forward.
+
+### Fully Delivered
+
+- **P1 — Sub-Agent Role-Switching.** Phase 14. Inline
+  sub-session nesting via `OnceLock`-backed `RoleSwitchTool`
+  factory closure, one level deep. Structural impossibility
+  of escalation pinned by integration tests and `--print-role`
+  reachable-targets enumerator. Multi-level nesting deferred
+  (low urgency — no-op failure mode is correct).
+
+- **P4 — Daemon-Default Architecture.** Phases 16–20 (five-
+  phase migration). Protocol settlement, production hardening,
+  REPL wiring, multi-connection + Telegram port, daemon
+  management. Auto-spawn, graceful shutdown, PID file,
+  `daemon run`/`status`/`stop` subcommands, `--no-daemon`
+  flag. The daemon is the sole execution shape in production.
+
+- **P6 — OS-Level Operator Identity.** Always true by
+  construction. The daemon's IPC socket is mode `0600`, owned
+  by the operator's effective UID. No Aivyx-level identity.
+
+- **P7 — Single-Inheritance Role Tree.** Phase 11 (role
+  primitive) + Phase 13 (config migration). `parent_role` in
+  TOML config, strict attenuation along every dimension,
+  validated at config-load time.
+
+- **P9 — Per-Role Full Capability Declaration.** Phase 13.
+  `capability_scopes` parsed via `Scope::parse` at config-load
+  time. Four-role worked example in `examples/aivyx.toml`.
+  `--print-role` debug flag for operator introspection.
+
+- **P10 — Substrate-Only Core, Seven Tools Forever.** Always
+  true. The seven substrate tools (`fs.read`, `fs.write`,
+  `memory.read`, `memory.write`, `memory.forget`, `shell.exec`,
+  `web.fetch`) are the closed set. Infrastructure tools (4)
+  and third-party tools (0) are separate categories.
+
+### Partially Delivered
+
+- **P2 — Session Legibility and Two Success Modes.** Phase 21.
+  Mission state machine (six states), `MissionCreateTool`,
+  `ResolveGate` handler, gate rendering (CLI + Telegram).
+  **Missing:** escalation→gate turn-loop wiring (the daemon
+  does not yet create gates from `TurnOutcome::Escalated`),
+  `mission.list`/`mission.status` read-only tools.
+
+- **P3 — Goals and Non-Goals.** Vision document — partially
+  realized through implementation:
+  - **G1 (Web interaction):** `web.fetch` shipped (Phase 12).
+    Rich web interaction (page rendering, form submission)
+    not yet started.
+  - **G2 (Code interaction):** Shipped. `fs.read`, `fs.write`,
+    `shell.exec` all operational with role gating.
+  - **G3 (Memory Reflection):** Memory substrate shipped
+    (Phase 6). Reflection layer not yet started.
+  - **G4 (Sub-agent orchestration):** Shipped (Phase 14).
+    One-level deep role-switching.
+  - **G5 (Autonomous/scheduled execution):** Daemon substrate
+    exists. Timer/cron/webhook triggers not yet started.
+  - **G6 (Local execution, privacy):** Shipped. Fully
+    operational.
+  - **G7 (Third-party tool SDK):** `Tool` trait exists. SDK
+    documentation and process IPC not yet started.
+
+### Forward (Not Yet Started)
+
+- **P5 — Open First-Party Channel Surface.** The
+  `ChannelContext` trait is the de facto adapter interface, but
+  no documented SDK surface, no versioned contract, no
+  third-party-consumable crate exists yet. Blocked on SDK
+  documentation pass.
+
+- **P8 — Outcome-Driven Audited Reflection.** The audit chain
+  records outcomes. The agent cannot yet *read* that history
+  as structured input, and no reflection write capability
+  exists. Blocked on outcome history exposure + runtime role
+  mutation.
+
+- **P11 — SDK Contract: Interface + Integration.** The `Tool`
+  trait is the in-tree SDK surface. No published documentation,
+  no worked examples for third-party authors, no stability
+  commitment. Blocked on P5 + P12 landing.
+
+- **P12 — Tools as Separate Processes Over Daemon IPC.** All
+  tools are in-process. The daemon IPC protocol exists but has
+  no tool-process extension. Blocked on IPC protocol extension
+  for tool registration and dispatch.
+
+### Forward Commitment Candidates
+
+The following are **not commitments** — they are candidates
+identified by a seven-dimension gap analysis at the Phase 21
+boundary. Each would require a product-shape review pass
+(following the same four-cluster pinning methodology used to
+produce P1–P12) before becoming a locked commitment.
+
+- **MCP Client Integration.** The `Tool` trait's shape
+  (`name`, `description`, `input_schema`, `required_scope`,
+  `execute`) maps near-1:1 to MCP's tool interface. One MCP
+  client adapter would bridge external MCP servers into
+  Aivyx's tool registry with full capability scoping and
+  audit logging. Highest-leverage single integration effort
+  identified.
+
+- **Multi-Provider LLM Support.** The `LlmProvider` trait is
+  already provider-agnostic. An OpenAI-compatible adapter
+  would unlock GPT-4, Ollama, and any OpenAI-API-compatible
+  endpoint. Quick win given the existing trait shape.
+
+- **Web UI Channel.** A `127.0.0.1`-only web interface that
+  connects to the daemon over existing IPC. The daemon
+  architecture makes this cheap (the frontend is a thin
+  client). Would provide richer interaction than CLI or
+  Telegram for mission management, gate resolution, and
+  audit inspection.
+
+- **Scheduled Execution.** G5 commits to autonomous and
+  scheduled execution. The daemon substrate exists. Needs
+  cron-like timer primitives, webhook trigger endpoints
+  (localhost-only per P6), and file-change watchers. Each
+  trigger creates a daemon turn attributed to the operator's
+  identity.
