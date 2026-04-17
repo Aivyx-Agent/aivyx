@@ -121,10 +121,32 @@ bridge itself is covered by 8 tests in `mcp_bridge_e2e.rs` and
 the config surface by 2 tests from Task 2.
 **Production-core streak:** extends to fourteen (hash unchanged).
 
-### Task 4+ — Scope TBD at Task 3 exit
+### Task 4 — Workspace Layout Amendment addendum for `aivyx-mcp`
 
-Candidates: SSE transport, amendment for 11-crate workspace,
-binary-level `--mcp-server` CLI flag.
+Update the A4 workspace layout amendment and DESIGN.md inline
+reference to reflect the 11-crate workspace (was 10).
+
+## Task 4 ship record
+
+**Docs-only task.** Updated the A4 workspace layout amendment
+and DESIGN.md to reflect the 11-crate workspace.
+
+**Files modified:**
+- `docs/amendments/2026-04-17-workspace-layout.md`: 10→11
+  crates, added `aivyx-mcp` to crate tree and description
+  section, updated traceability table with Phase 23 + 24
+  entries, updated capability count 23→24 known bases,
+  added Phase 23 + 24 to implementing phases.
+- `DESIGN.md`: updated inline amendment reference "9 to 10"
+  → "9 to 11", added `aivyx-mcp` to the Phase 0 crate tree,
+  updated crate count "9 crates" → "11 crates".
+
+**Test delta:** +0 (610 → 610).
+**Production-core streak:** extends to fourteen (hash unchanged).
+
+### Task 5+ — Scope TBD at Task 4 exit
+
+Candidates: SSE transport, binary-level `--mcp-server` CLI flag.
 
 ## Deferrals
 

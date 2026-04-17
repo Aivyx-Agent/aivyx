@@ -1038,7 +1038,8 @@ impl DomainHandle {
     ├── aivyx-storage/    redb-backed, KeyDomain, Storage trait
     ├── aivyx-llm/        LlmProvider trait + reference impls
     ├── aivyx-memory/     memory.{read,write,forget} tools
-    └── aivyx-channel/    ChannelContext, StreamEvent, LocalChannel
+    ├── aivyx-channel/    ChannelContext, StreamEvent, LocalChannel
+    └── aivyx-mcp/        MCP client adapter (Phase 23)
 ```
 
 Every crate is a stub at this point: doc comments pointing at DESIGN.md
@@ -1050,13 +1051,14 @@ each one has an empty `[dependencies]` section.
 
 ### Verification
 
-`cargo check --workspace` compiles all 9 crates clean on rust 1.85 /
+`cargo check --workspace` compiles all 11 crates clean on rust 1.85 /
 edition 2024 in ~0.03s. The skeleton is the minimum artifact that
 proves the design is buildable — it is not an implementation.
 
 > **Amendment (2026-04-17):** The workspace has grown from 9
-> to 10 crates (adding `aivyx-telegram` in Phase 8), and
-> `aivyx-channel` has expanded into the platform's integration
+> to 11 crates (adding `aivyx-telegram` in Phase 8 and
+> `aivyx-mcp` in Phase 23), and `aivyx-channel` has expanded
+> into the platform's integration
 > hub with 15 modules. See amendment
 > [`docs/amendments/2026-04-17-workspace-layout.md`](docs/amendments/2026-04-17-workspace-layout.md)
 > for the full current layout and module map.

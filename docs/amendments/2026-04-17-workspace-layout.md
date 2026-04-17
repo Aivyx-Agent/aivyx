@@ -4,14 +4,14 @@
 **Phase:** 22
 **Supersedes:** Extends D8 (Repo Skeleton). No text removed —
 additive only.
-**Implementing phases:** 8, 14, 15, 16, 17, 18, 19, 20, 21
+**Implementing phases:** 8, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24
 
 ---
 
 ## What changed
 
 D8's repo skeleton described a 9-crate workspace of stubs.
-The workspace now has **10 crates** with substantial module
+The workspace now has **11 crates** with substantial module
 growth, most of it concentrated in `aivyx-channel` which
 serves as the platform's integration hub.
 
@@ -44,14 +44,15 @@ serves as the platform's integration hub.
 └── crates/
     ├── aivyx-core/       turn loop, Agent/Tool traits, TurnOutcome
     ├── aivyx-crypto/     HKDF, ChaCha20-Poly1305, Argon2id
-    ├── aivyx-capability/ Scope, CapabilitySet, TrustTier, 23 known bases
+    ├── aivyx-capability/ Scope, CapabilitySet, TrustTier, 24 known bases
     ├── aivyx-audit/      HMAC-chained audit log
     ├── aivyx-config/     config loading, role TOML parsing, secret-field resolution
     ├── aivyx-storage/    redb-backed, KeyDomain (5 domains), Storage trait
     ├── aivyx-llm/        LlmProvider trait + Anthropic reference impl
     ├── aivyx-memory/     memory.{read,write,forget} tools
     ├── aivyx-channel/    platform integration hub (see module map below)
-    └── aivyx-telegram/   Telegram transport: ReqwestTransport, scripted mock
+    ├── aivyx-telegram/   Telegram transport: ReqwestTransport, scripted mock
+    └── aivyx-mcp/        MCP client adapter: McpServerBridge, McpToolProxy
 ```
 
 ### New crate: `aivyx-telegram` (Phase 8)
@@ -61,6 +62,16 @@ API dependency. Contains `ReqwestTransport` (real HTTP) and
 `ScriptedTransport` (deterministic test double). The transport
 trait (`TelegramTransport`) enables E2E tests without network
 access.
+
+### New crate: `aivyx-mcp` (Phase 23)
+
+MCP (Model Context Protocol) client adapter. Spawns MCP servers
+as child processes, communicates over stdio with JSON-RPC 2.0,
+and bridges discovered tools into the `Tool` trait via
+`McpToolProxy`. The `mcp.call` scope base in `aivyx-capability`
+gates access per-server-per-tool. Phase 24 wired config-driven
+startup (`[[mcp_server]]` TOML entries) and daemon-side lifecycle
+management.
 
 ### `aivyx-channel` module map
 
@@ -111,3 +122,5 @@ preserves the production-core streak by keeping
 | Phase 18 | +`daemon_session.rs` |
 | Phase 19 | +`telegram_daemon_frontend.rs` (binary extraction) |
 | Phase 21 | +`mission.rs`, `mission_tool.rs` |
+| Phase 23 | +`aivyx-mcp` crate (11 crates), `mcp.call` scope base |
+| Phase 24 | `[[mcp_server]]` config entries, daemon-side MCP bridge lifecycle |
