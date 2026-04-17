@@ -99,6 +99,14 @@ const KNOWN_BASES: &[&str] = &[
     // "any role named `*`" or "any role"?). Reject at parse
     // time, not check time, per the v1 scope registry rule.
     "role.switch",
+    // MCP bridge (Phase 23 Task 3 — PRODUCT_ROADMAP.md MCP Integration).
+    // `mcp.call` gates invocation of tools discovered from MCP servers.
+    // Qualifier format: `<server_name>:<tool_name>` — e.g.,
+    // `mcp.call:github:create_issue`. Unqualified `mcp.call` grants
+    // all MCP tools (Rule 2). Uses `SimpleGlob` dispatch (same as
+    // `role.switch`), so `mcp.call:github:*` grants all tools on the
+    // `github` server.
+    "mcp.call",
 ];
 
 // ---------------------------------------------------------------------------
@@ -553,6 +561,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "mission.create",
         "mission.gate",
         "role.switch",
+        "mcp.call",
     ])
 });
 

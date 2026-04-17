@@ -1,0 +1,23 @@
+[package]
+name = "aivyx-mcp"
+description = "MCP client adapter — bridges MCP server tools into the Aivyx Tool trait"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "sync"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "process", "io-util"] }

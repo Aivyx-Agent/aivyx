@@ -140,6 +140,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-mcp"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "aivyx-memory"
 version = "0.1.0"
 dependencies = [

@@ -113,17 +113,62 @@ preserving the production-core byte-identity streak at twelve.
 **Test delta:** +2 (598 → 600).
 **Production-core streak:** extends to twelve (hash unchanged).
 
-### Task 3+ — MCP client adapter (scope TBD at Task 2 exit)
+### Task 3 — MCP client adapter foundation
 
-Shape to be refined after the gate wiring lands. Expected
-scope:
+New crate `aivyx-mcp` (11th workspace member): stdio transport,
+JSON-RPC 2.0 framing, MCP protocol messages (`initialize`,
+`tools/list`, `tools/call`), tool bridge (`McpToolProxy` implements
+`Tool` trait), `McpServerBridge` spawns a child process and manages
+the connection lifecycle.
 
-- New crate `aivyx-mcp` or module in `aivyx-channel`
-- MCP client transport (stdio or SSE)
-- Tool bridge: MCP server tools → Aivyx `Tool` trait impls
-- Capability scoping: each MCP tool gets a declared scope
-- Config surface: `[[mcp_server]]` entries in `aivyx.toml`
-- Integration test against a mock MCP server
+Key decisions:
+- **(a) New crate** — MCP brings its own protocol and dependency
+  surface; conceptually separate from channel adapters.
+- **(b) `mcp.call` scope base** — added to `KNOWN_BASES` in
+  `aivyx-capability`. Qualifier: `<server>:<tool>` (e.g.,
+  `mcp.call:github:create_issue`). Trusted-tier ceiling only.
+- **(c) Stdio transport** — spawns MCP server as child process,
+  newline-delimited JSON-RPC over stdin/stdout. No external MCP
+  SDK dependency.
+- **(d) Bridge pattern** — `McpServerBridge::start(cmd, args, name)`
+  → `initialize` + `notifications/initialized` → `discover_tools()`
+  returns `Vec<Arc<dyn Tool>>`.
+- **(e) Config deferred** — `[[mcp_server]]` TOML entries deferred.
+  Programmatic API only for now.
+
+## Task 3 ship record
+
+**Files created:**
+- `crates/aivyx-mcp/Cargo.toml`: new crate, depends on `aivyx-core`
+  and `aivyx-capability`.
+- `crates/aivyx-mcp/src/lib.rs`: crate root, re-exports
+  `McpToolProxy` and `McpServerBridge`.
+- `crates/aivyx-mcp/src/jsonrpc.rs`: minimal JSON-RPC 2.0
+  `Request`/`Response`/`RpcError` types.
+- `crates/aivyx-mcp/src/protocol.rs`: MCP protocol message types
+  (`InitializeParams`, `McpToolDef`, `ToolsCallParams`,
+  `ToolsCallResult`, `ContentBlock`).
+- `crates/aivyx-mcp/src/transport.rs`: `McpServerBridge` —
+  spawns child process, stdio transport, `initialize` +
+  `tools/list` + `tools/call` + `discover_tools` + `shutdown`.
+- `crates/aivyx-mcp/src/proxy.rs`: `McpToolProxy` — one `Tool`
+  trait impl per discovered MCP tool, delegates `execute` over
+  stdio JSON-RPC to the server process.
+- `crates/aivyx-mcp/tests/mock_mcp_server.py`: mock MCP server
+  (Python) implementing two tools (`echo`, `add`).
+- `crates/aivyx-mcp/tests/mcp_bridge_e2e.rs`: 8 integration tests
+  covering discovery, listing, calling, error handling, trait
+  compliance, and full `execute` through `ToolContext`.
+
+**Files modified:**
+- `Cargo.toml`: added `crates/aivyx-mcp` to workspace members.
+- `crates/aivyx-capability/src/lib.rs`: added `mcp.call` to
+  `KNOWN_BASES` and `CEILING_TRUSTED`.
+
+**Test delta:** +8 (600 → 608).
+**Production-core streak:** extends to thirteen (hash unchanged).
+**Zero-new-dep streak:** holds (no new workspace-level
+dependencies — `aivyx-mcp` uses only workspace deps).
 
 ## Deferrals
 
