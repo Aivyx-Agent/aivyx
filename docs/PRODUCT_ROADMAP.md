@@ -387,18 +387,17 @@ CLI flag. Closed the MCP config surface deferral. 9 tests.
 **Remaining:** SSE transport for remote MCP servers (deferred
 from Phase 23).
 
-## Milestone — Multi-Provider Support
+## Milestone — Multi-Provider Support ✓
 
-**Forward commitment candidate:** not yet locked. **Couples
-to:** `LlmProvider` trait (Phase 1).
+**Delivered in Phase 25** (2026-04-17). **Coupled to:**
+`LlmProvider` trait (Phase 1).
 
-The `LlmProvider` trait is already provider-agnostic. This
-milestone adds an OpenAI-compatible adapter covering GPT-4,
-Ollama, and any OpenAI-API-compatible endpoint. The load-
-bearing decision is how to handle capability differences
-between providers (some support tool calling natively, some
-require prompt-based tool emulation). Expected to be 1 phase.
-Quick win given the existing trait shape.
+The `LlmProvider` trait was already provider-agnostic. Phase 25
+added an OpenAI-compatible adapter covering GPT-4, Ollama, and
+any OpenAI-API-compatible endpoint. Capability differences
+between providers (tool-calling wire format) are handled
+internally by the adapter — no core type changes were needed.
+Delivered in 1 phase as predicted.
 
 ## Milestone — Web UI Channel
 
@@ -442,8 +441,8 @@ chains.
   One adapter unlocks the entire MCP ecosystem. Couples to
   the `Tool` trait (already stable) and the daemon (delivered).
   Expected ~2 phases.
-- **Multi-Provider is a quick win.** The `LlmProvider` trait
-  is ready. ~1 phase.
+- **Multi-Provider is delivered** (Phase 25). ~1 phase as
+  predicted.
 - **Web UI Channel is high impact.** Daemon IPC makes it
   cheap. ~2 phases.
 - **Scheduled Execution realizes G5.** Daemon + mission
@@ -481,3 +480,13 @@ chains.
   in-process portion of **PRODUCT.md P1 — Sub-Agent
   Mode via Role-Switching**. Multi-level nesting is
   the single net-new Phase 14 deferral, low-urgency.
+- **Multi-Provider Support** — shipped in Phase 25
+  (2026-04-17). OpenAI-compatible `LlmProvider` adapter
+  (`provider-openai` feature in `aivyx-llm`) covering
+  GPT-4, Ollama, and any OpenAI-API-compatible endpoint.
+  Global provider selection via `--provider` CLI flag,
+  `AIVYX_PROVIDER` env var, or `[agent] provider` TOML
+  field. Shared `HttpTransport` seam for both providers.
+  No core type changes required — the adapter translates
+  between OpenAI and internal formats internally.
+  1 phase, 3 implementation tasks + 1 docs task.

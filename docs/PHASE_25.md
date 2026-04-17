@@ -122,15 +122,37 @@ field.
 - Q2 resolved: provider selection is **global** via config/CLI, not
   per-role.
 
-### Task 4+ — Scope TBD at Task 3 exit
+### Task 4 — Docs update + PRODUCT_ROADMAP delivery record
 
-Candidates: tool-calling translation layer (if OpenAI's
-tool format differs), `--provider` flag for daemon mode,
-provider-specific token counting.
+Mark Multi-Provider milestone as delivered in
+`docs/PRODUCT_ROADMAP.md`. Update sequencing notes.
+All three Task 4 candidates from the original plan are
+resolved or deferred:
+
+- **Tool-calling translation**: handled internally by
+  `OpenAiProvider` — no core type changes (Q1 resolved in
+  Task 2).
+- **`--provider` for daemon mode**: daemon reads
+  `AIVYX_PROVIDER` env var or `[agent] provider` TOML,
+  which is sufficient — the `daemon run` parser does not
+  need a `--provider` flag.
+- **Provider-specific token counting**: deferred — both
+  providers report usage via `LlmUsage` from the stream;
+  model-specific tokenizer libraries are a future concern.
+
+**Task 4 ship record**
+
+- `PRODUCT_ROADMAP.md`: Multi-Provider milestone marked as
+  delivered with delivery summary. Sequencing notes updated.
+  Milestone section updated from "candidate" to "delivered."
+- Remaining Task 4 candidates triaged: tool-calling already
+  internal (Task 2), daemon provider already works via env/TOML
+  (Task 3), token counting deferred.
+- New deferral: **provider-specific token counting** (Phase 25).
 
 ## Deferrals
 
-**Rolling deferrals carried from Phase 24 (12 items):**
+**Rolling deferrals carried from Phase 24 + Phase 25 (13 items):**
 
 - **Forensic `ToolOutcome::NotInRole` variant** —
   Phase 11 Q1. Untouched.
@@ -155,6 +177,10 @@ provider-specific token counting.
 - **`mission.list` / `mission.status` read-only tools** —
   Phase 21. Untouched.
 - **MCP SSE transport** — Phase 23. Untouched.
+- **Provider-specific token counting** — Phase 25. Both
+  providers report usage via `LlmUsage`; model-specific
+  tokenizer libraries for pre-request estimation are a
+  future concern.
 
 ## Open questions
 
