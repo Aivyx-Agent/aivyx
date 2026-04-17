@@ -132,7 +132,9 @@ use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_channel::mission_tool::MissionCreateTool;
-use aivyx_channel::schedule_tool::{ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool};
+use aivyx_channel::schedule_tool::{
+    ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool, ScheduleUpdateTool,
+};
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1256,6 +1258,8 @@ async fn run_async(
     tool_list.push(Arc::clone(&schedule_list_tool) as Arc<dyn Tool>);
     let schedule_delete_tool: Arc<ScheduleDeleteTool> = Arc::new(ScheduleDeleteTool::new());
     tool_list.push(Arc::clone(&schedule_delete_tool) as Arc<dyn Tool>);
+    let schedule_update_tool: Arc<ScheduleUpdateTool> = Arc::new(ScheduleUpdateTool::new());
+    tool_list.push(Arc::clone(&schedule_update_tool) as Arc<dyn Tool>);
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -1532,6 +1536,13 @@ async fn run_async(
         .set_schedule_store(storage.domain(KeyDomain::Schedules))
         .map_err(|_| {
             "schedule.delete store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    schedule_update_tool
+        .set_schedule_store(storage.domain(KeyDomain::Schedules))
+        .map_err(|_| {
+            "schedule.update store was already set — startup path \
              bug, should be called exactly once"
                 .to_string()
         })?;

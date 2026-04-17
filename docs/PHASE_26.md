@@ -192,11 +192,41 @@ Streak check:
 
 Test delta: 658 pass, 0 fail. +6 new schedule tool tests.
 
-### Task 5+ — Scope TBD at Task 4 exit
+### Task 5 — `schedule.update` tool (CRUD completion)
 
-Candidates: `[[schedule]]` TOML config surface (if not done
-in Task 2), `--schedule` CLI flag, webhook triggers (Phase
-2 of the milestone), file-change watchers.
+Round out the schedule CRUD surface: add `schedule.update`
+so the agent can toggle `enabled`, change cron expression,
+prompt, or role on an existing schedule without delete +
+recreate.
+
+**Ship record — Task 5**
+
+| Artefact | What changed |
+|---|---|
+| `crates/aivyx-channel/src/schedule_tool.rs` | Added `ScheduleUpdateTool` — partial update by ID (enabled, cron, prompt, role). Validates cron on change. Returns updated schedule with next-fire-time. 2 tests |
+| `crates/aivyx-channel/src/bin/aivyx.rs` | Tool registration + `set_schedule_store` wiring for `ScheduleUpdateTool` |
+| `crates/aivyx-capability/src/lib.rs` | Added `schedule.update` to `KNOWN_BASES` and `CEILING_TRUSTED` |
+
+Design decisions:
+
+- **Partial update.** Only specified fields are changed — omitted
+  fields are left untouched. This avoids the "read-modify-write
+  the whole record" pattern for simple enable/disable toggles.
+- **Cron validation on update.** If a new `cron` field is provided,
+  it's validated before persisting. Invalid cron fails the tool
+  call rather than creating a broken schedule.
+- **Not-found is a hard error** (unlike delete's soft `deleted: false`),
+  because updating a nonexistent schedule is always a caller mistake.
+
+Streak check:
+
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+Test delta: 660 pass, 0 fail. +2 new schedule.update tests.
+
+### Task 6 — Exit freeze (scope TBD)
 
 ## Deferrals
 

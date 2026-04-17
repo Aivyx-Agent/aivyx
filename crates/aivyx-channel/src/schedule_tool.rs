@@ -1,11 +1,12 @@
-//! Schedule agent tools — Phase 26 Task 4.
+//! Schedule agent tools — Phase 26 Tasks 4–5.
 //!
-//! Three tools following the `OnceLock`-factory pattern from
+//! Four tools following the `OnceLock`-factory pattern from
 //! `MissionCreateTool`:
 //!
 //! - `schedule.create` — create a new cron schedule
 //! - `schedule.list` — list all schedules
 //! - `schedule.delete` — delete a schedule by ID
+//! - `schedule.update` — update fields on an existing schedule
 
 use std::sync::OnceLock;
 
@@ -398,6 +399,182 @@ impl Tool for ScheduleDeleteTool {
 }
 
 // ---------------------------------------------------------------------------
+// schedule.update
+// ---------------------------------------------------------------------------
+
+pub struct ScheduleUpdateTool {
+    id: ToolId,
+    schema: Value,
+    store: OnceLock<DomainHandle>,
+}
+
+impl std::fmt::Debug for ScheduleUpdateTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScheduleUpdateTool")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+impl Default for ScheduleUpdateTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScheduleUpdateTool {
+    pub fn new() -> Self {
+        ScheduleUpdateTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "schedule_id": {
+                        "type": "string",
+                        "description": "The ID of the schedule to update."
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "Set to true to enable or false to disable the schedule."
+                    },
+                    "cron": {
+                        "type": "string",
+                        "description": "New cron expression (7-field: sec min hour dom month dow year)."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "New prompt text for the scheduled turn."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "New role name for the scheduled turn."
+                    }
+                },
+                "required": ["schedule_id"]
+            }),
+            store: OnceLock::new(),
+        }
+    }
+
+    pub fn set_schedule_store(&self, handle: DomainHandle) -> Result<(), DomainHandle> {
+        assert_eq!(handle.domain(), KeyDomain::Schedules);
+        self.store.set(handle)
+    }
+}
+
+#[async_trait]
+impl Tool for ScheduleUpdateTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "schedule.update"
+    }
+
+    fn description(&self) -> &str {
+        "Update an existing schedule. Provide the schedule_id and any \
+         fields to change: enabled (true/false), cron expression, prompt, \
+         or role. Unspecified fields are left unchanged. Returns the \
+         updated schedule."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("schedule.update").expect("known base")
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let Some(store) = self.store.get() else {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.update: no schedule store configured".to_string(),
+            });
+        };
+
+        let schedule_id = input
+            .get("schedule_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if schedule_id.is_empty() {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.update requires a non-empty `schedule_id` field".to_string(),
+            });
+        }
+
+        let mut record = match schedule::get_schedule(store, &schedule_id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("schedule {schedule_id} not found"),
+                });
+            }
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("failed to read schedule: {e}"),
+                });
+            }
+        };
+
+        if let Some(enabled) = input.get("enabled").and_then(|v| v.as_bool()) {
+            record.enabled = enabled;
+        }
+
+        if let Some(cron) = input.get("cron").and_then(|v| v.as_str()) {
+            if let Err(e) = schedule::validate_cron(cron) {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("schedule.update: {e}"),
+                });
+            }
+            record.cron_expr = cron.to_string();
+        }
+
+        if let Some(prompt) = input.get("prompt").and_then(|v| v.as_str()) {
+            if prompt.is_empty() {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "schedule.update: prompt cannot be empty".to_string(),
+                });
+            }
+            record.prompt = prompt.to_string();
+        }
+
+        if let Some(role) = input.get("role").and_then(|v| v.as_str()) {
+            record.role_name = role.to_string();
+        }
+
+        if let Err(e) = schedule::update_schedule(store, &record).await {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("failed to persist schedule update: {e}"),
+            });
+        }
+
+        let next = record.next_fire_time().map(|dt| dt.to_rfc3339());
+        ToolOutcome::Completed {
+            output: json!({
+                "schedule_id": record.schedule_id,
+                "cron": record.cron_expr,
+                "role": record.role_name,
+                "prompt": record.prompt,
+                "enabled": record.enabled,
+                "next_fire": next,
+            }),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -453,5 +630,26 @@ mod tests {
         assert_eq!(tool.name(), "schedule.delete");
         let schema = tool.input_schema();
         assert!(schema["required"].as_array().unwrap().contains(&json!("schedule_id")));
+    }
+
+    #[test]
+    fn schedule_update_scope() {
+        let tool = ScheduleUpdateTool::new();
+        assert_eq!(
+            tool.required_scope(&json!({})).as_str(),
+            "schedule.update"
+        );
+    }
+
+    #[test]
+    fn schedule_update_name_and_schema() {
+        let tool = ScheduleUpdateTool::new();
+        assert_eq!(tool.name(), "schedule.update");
+        let schema = tool.input_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("schedule_id")));
+        assert!(schema["properties"]["enabled"].is_object());
+        assert!(schema["properties"]["cron"].is_object());
+        assert!(schema["properties"]["prompt"].is_object());
+        assert!(schema["properties"]["role"].is_object());
     }
 }

@@ -103,6 +103,7 @@ const KNOWN_BASES: &[&str] = &[
     "schedule.create",
     "schedule.list",
     "schedule.delete",
+    "schedule.update",
     // MCP bridge (Phase 23 Task 3 — PRODUCT_ROADMAP.md MCP Integration).
     // `mcp.call` gates invocation of tools discovered from MCP servers.
     // Qualifier format: `<server_name>:<tool_name>` — e.g.,
@@ -567,6 +568,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "schedule.create",
         "schedule.list",
         "schedule.delete",
+        "schedule.update",
         "role.switch",
         "mcp.call",
     ])
