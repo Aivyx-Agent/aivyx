@@ -297,13 +297,28 @@ PRODUCT.md at nine. Production-core streak extended to eleven
 (new record). Test count unchanged at 598. Three Q-block
 questions resolved. Zero net-new deferrals.
 
-## Phase 23 — Escalation→Gate Wiring + MCP Foundation
+## Phase 23 — Escalation→Gate Wiring + MCP Foundation (frozen)
 
-Escalation→gate turn-loop wiring (Phase 21 deferral —
-completes the P2 mission approval-gate lifecycle end-to-end),
-potentially paired with MCP client adapter foundation work if
-the gate wiring lands quickly. The gate wiring is targeted:
-daemon-side orchestration between `TurnOutcome::Escalated`
-and `mission::add_gate`, with integration tests. MCP
-integration is the highest-leverage single effort identified
-in the Phase 22 gap analysis.
+**Frozen — see [PHASE_23.md](PHASE_23.md).** Mixed phase:
+(1) escalation→gate turn-loop wiring closing the Phase 21
+deferral — `SubmitInput.mission_id` + daemon-side gate
+creation + resume turn on approval (Task 2); (2) MCP client
+adapter foundation — new `aivyx-mcp` crate (11th workspace
+member), stdio transport, `McpServerBridge` + `McpToolProxy`,
+`mcp.call` scope base in `aivyx-capability` (Task 3). Three
+Q-block questions resolved. Production-core streak extends
+to thirteen (new record). Test delta +10 (598→608). Rolling
+backlog 12→13 (−1 closed, +2 net-new: MCP config surface,
+MCP SSE transport).
+
+## Phase 24 — MCP Integration: Config + Binary Wiring
+
+Wire MCP server discovery into the daemon startup path so
+operators can declare MCP servers in `aivyx.toml` and have
+their tools available to agents automatically. Expected scope:
+`[[mcp_server]]` TOML config entries in `aivyx-config`,
+daemon-side `McpServerBridge` lifecycle management (start at
+daemon boot, shutdown at daemon exit), tool registration into
+`ToolRegistry`, and an amendment to DESIGN.md if the workspace
+layout or capability taxonomy changes warrant one. SSE
+transport may also land if the config wiring is small.

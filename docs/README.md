@@ -80,8 +80,9 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 20 | Frozen  | [PHASE_20.md](PHASE_20.md) | `8e77075` |
 | Phase 21 | Frozen  | [PHASE_21.md](PHASE_21.md) | `05cc349` |
 | Phase 22 | Frozen  | [PHASE_22.md](PHASE_22.md) | `549bc6e` |
-| Phase 23 | **Open** | [PHASE_23.md](PHASE_23.md) | —         |
-| Phase 24+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
+| Phase 23 | Frozen  | [PHASE_23.md](PHASE_23.md) | `_TBD_`   |
+| Phase 24 | **Open** | [PHASE_24.md](PHASE_24.md) | —         |
+| Phase 25+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

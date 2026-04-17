@@ -170,9 +170,33 @@ Key decisions:
 **Zero-new-dep streak:** holds (no new workspace-level
 dependencies — `aivyx-mcp` uses only workspace deps).
 
+## Prediction vs. reality
+
+- **DESIGN.md** — Predicted: **low risk**.
+  **Reality: correct.** Hash unchanged:
+  `629b12e6e800f54f5d2f0874b0492540314a57fdf1b664e65218eb5665ae427a`.
+  No amendment needed for foundation-level MCP work.
+
+- **PRODUCT.md** — Predicted: **not at risk**.
+  **Reality: correct.** Hash unchanged:
+  `478cab6aa07ec94b49c1bfdf17619568cc66d6ccd8ca98dd93ef97de9a3ea1cf`.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **may break** at twelve if MCP requires core trait
+  changes, or **extends to twelve** if it composes against
+  existing shapes. **Reality: extends to thirteen** — both
+  Task 2 (gate wiring in `aivyx-channel`) and Task 3 (MCP
+  adapter in `aivyx-mcp`) composed entirely against the
+  existing `Tool` trait without modification. The open-doc
+  prediction was conservative; the trait's `required_scope`
+  + `execute` surface proved sufficient for both a daemon
+  orchestration change and a new protocol bridge.
+  Hash unchanged:
+  `d8ab203fc98c89b01a3dc7bd56653132786d4875fd912cfe11b47e22085eeb77`.
+
 ## Deferrals
 
-**Rolling deferrals carried from Phase 22 (12 items):**
+**Rolling deferrals at exit (11 items, -1 closed):**
 
 - **Forensic `ToolOutcome::NotInRole` variant** —
   Phase 11 Q1. Untouched.
@@ -194,25 +218,56 @@ dependencies — `aivyx-mcp` uses only workspace deps).
   Phase 17 Q6→(c+). Tagged: **reactive.**
 - **Telegram-specific protocol extensions (attachment
   delivery, inline keyboards, etc.)** — Phase 19. Untouched.
-- **Escalation→gate turn-loop wiring** — Phase 21.
-  **Closed by Task 2.**
 - **`mission.list` / `mission.status` read-only tools** —
   Phase 21. Untouched.
+
+**Net-new deferrals from Phase 23 (2 items):**
+
+- **MCP config surface (`[[mcp_server]]` in `aivyx.toml`)** —
+  Phase 23 Task 3 decision (e). Programmatic API shipped;
+  TOML config deferred.
+- **MCP SSE transport** — Phase 23 Q3. Stdio shipped first;
+  SSE transport for remote MCP servers deferred.
+
+**Rolling backlog: 12 → 13 (−1 closed, +2 net-new).**
+
+## Exit criteria
+
+- [x] Escalation→gate turn-loop wiring shipped (Task 2,
+  `da0f6e6`): `SubmitInput.mission_id` → escalation creates
+  gate → `ApprovalGate` emitted → `ResolveGate` approved
+  resumes turn / rejected fails mission.
+- [x] Phase 21 escalation→gate deferral closed.
+- [x] MCP client adapter foundation shipped (Task 3,
+  `83ef47e`): new `aivyx-mcp` crate, stdio transport,
+  `McpServerBridge` + `McpToolProxy`, `mcp.call` scope base.
+- [x] `mcp.call` added to `KNOWN_BASES` and
+  `CEILING_TRUSTED` in `aivyx-capability`.
+- [x] 11-crate workspace (was 10).
+- [x] Production-core streak extends to thirteen consecutive
+  phases (new record).
+- [x] Test count: 598 → 608 (+10, across two tasks).
+- [x] Three Q-block questions resolved.
+- [x] Prediction-vs-reality block recorded (all three
+  correct, production-core prediction conservative).
+- [x] Deferrals block recorded (−1 closed, +2 net-new).
 
 ## Open questions
 
 **Q1 — Should the MCP adapter live in a new crate
-(`aivyx-mcp`) or as a module in `aivyx-channel`?** Leaning
-(a) new crate — MCP brings its own dependencies
-(jsonrpc, transport) and is conceptually a separate
-integration surface.
+(`aivyx-mcp`) or as a module in `aivyx-channel`?** →
+**(a), resolved in Task 3.** New crate. MCP brings its own
+protocol types and is conceptually a separate integration
+surface. No dependency on `aivyx-channel`.
 
 **Q2 — Should MCP tools register as third-party tools under
-P12's process model, or as a "bridge" category?** Leaning
-(b) bridge — MCP tools run in-process but delegate execution
-over MCP's protocol. They're not separate OS processes (P12),
-but they're not in-tree tools either.
+P12's process model, or as a "bridge" category?** →
+**(b), resolved in Task 3.** Bridge category. `McpToolProxy`
+implements the `Tool` trait directly, running in-process but
+delegating execution over stdio JSON-RPC. The `mcp.call`
+scope base distinguishes them from native tools.
 
-**Q3 — What MCP transport should ship first?** Leaning
-(a) stdio — simplest, works with local MCP servers, matches
-the most common MCP deployment pattern.
+**Q3 — What MCP transport should ship first?** →
+**(a), resolved in Task 3.** Stdio. Spawns MCP server as
+child process, newline-delimited JSON-RPC over stdin/stdout.
+SSE transport deferred.
