@@ -344,17 +344,29 @@ streak extends to sixteen. Test delta +18 (617→635). Two Q-block
 questions resolved. One new deferral (provider-specific token
 counting).
 
-## Phase 26 — Scheduled Execution: Timer Primitives
+## Phase 26 — Scheduled Execution: Timer Primitives (frozen)
 
-First phase of the Scheduled Execution milestone (PRODUCT.md
-G5). Add cron-style timer triggers to the daemon so missions
-can run unattended on a schedule. Expected scope: timer
-storage in `aivyx-storage`, a `[[schedule]]` TOML config
-surface, a daemon-side scheduler that fires
-`SubmitInput`-equivalent turns at the scheduled time, and
-the `schedule.create` / `schedule.list` / `schedule.delete`
-tool surface for agent-initiated scheduling. The load-bearing
-decision: whether triggers create missions (gate-structured)
-or bounded tasks (single-turn, fire-and-forget). Leaning
-missions — they already have the right lifecycle (gates,
-state machine, persistence).
+**Frozen — see [PHASE_26.md](PHASE_26.md).** Opened and
+exited 2026-04-17. First phase of the Scheduled Execution
+milestone (PRODUCT.md G5). Delivered: `KeyDomain::Schedules`
+(7th encrypted storage domain), `ScheduleRecord` CRUD with
+`cron` crate 7-field validation, `[[schedule]]` TOML config
+surface with `ScheduleConfig`, daemon scheduler loop
+(`daemon_scheduler.rs`) — adaptive-tick background task with
+deduplication and TOML-to-storage sync, four agent-facing
+tools (`schedule.create`, `.list`, `.delete`, `.update`) gated
+to `CEILING_TRUSTED`. Production-core streak extends to
+seventeen consecutive phases (new record). DESIGN.md and
+PRODUCT.md both untouched. Test delta +17 (643→660). Rolling
+backlog 13→14 (+1 net-new: automatic mission wrapping for
+scheduled turns).
+
+## Phase 27 — TBD at Phase 26 exit
+
+Strongest candidates: (a) Web UI Channel — browser-based
+frontend over existing daemon IPC, makes schedules + missions
+operator-visible without CLI; (b) Scheduled Execution Phase 2
+— webhook trigger endpoints + file-change watchers completing
+G5; (c) Reflection Layer — periodic self-assessment using
+scheduler as trigger substrate. Decision deferred to Phase 27
+open.

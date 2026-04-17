@@ -445,8 +445,9 @@ chains.
   predicted.
 - **Web UI Channel is high impact.** Daemon IPC makes it
   cheap. ~2 phases.
-- **Scheduled Execution realizes G5.** Daemon + mission
-  substrate both exist. ~2 phases.
+- **Scheduled Execution Phase 1 delivered** (Phase 26).
+  Timer primitives shipped. Phase 2 (webhooks, file-watchers)
+  remains. ~1 more phase.
 - **Reflection Layer is the most ambitious and most
   consequential.** Now unblocked by the mission gate primitive
   from Phase 21. ~2–3 phases.

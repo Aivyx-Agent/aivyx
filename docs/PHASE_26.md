@@ -226,11 +226,43 @@ Streak check:
 
 Test delta: 660 pass, 0 fail. +2 new schedule.update tests.
 
-### Task 6 — Exit freeze (scope TBD)
+### Task 6 — Exit freeze + Phase 27 open
+
+Exit criteria, prediction-vs-reality table, and next-phase scaffold.
+
+## Exit criteria
+
+**All exit criteria met.**
+
+1. ✅ `ScheduleRecord` struct with cron validation, encrypted
+   persistence under `KeyDomain::Schedules`, full CRUD functions.
+2. ✅ `[[schedule]]` TOML config surface with `ScheduleConfig` struct,
+   env-agnostic loader, and daemon-startup sync to storage.
+3. ✅ Daemon scheduler loop — adaptive-tick background task that fires
+   agent turns at cron-scheduled times with deduplication.
+4. ✅ Four agent-facing tools: `schedule.create`, `schedule.list`,
+   `schedule.delete`, `schedule.update` — all Trusted-tier only.
+5. ✅ 660 tests pass, 0 failures. +17 net-new tests this phase.
+6. ✅ Production-core `aivyx-core/src/lib.rs` streak extends to
+   **seventeen consecutive phases** — `d8ab203f…`.
+7. ✅ DESIGN.md untouched — `ceb53860…`.
+8. ✅ PRODUCT.md untouched — `478cab6a…`.
+
+## Prediction vs reality
+
+| Prediction | Reality |
+|---|---|
+| DESIGN.md — medium risk, one amendment for scheduler architecture | **No amendment needed.** The scheduler is a daemon-internal concern (tokio::spawn + shared Agent/ChannelFactory), not a new architectural primitive. The existing daemon IPC spec covers it. |
+| PRODUCT.md — low risk | **Correct.** Untouched. |
+| Production-core — low risk, streak extends to seventeen | **Correct.** Scheduler operates at daemon/channel/storage level, not core turn loop. |
+| Q1 — triggers create missions (leaning yes) | **Deferred.** The scheduler fires raw turns through the agent, which can create missions if the prompt instructs it. Automatic mission wrapping is Phase 27+ scope. |
+| Q2 — persist across restarts (leaning yes) | **Yes.** `KeyDomain::Schedules` is encrypted, persistent, survives daemon restarts. TOML config entries are synced to storage on startup. |
+| Q3 — cron syntax (leaning 5-field + shorthand) | **7-field cron.** The `cron` crate uses `sec min hour dom month dow year`. `@daily` shorthand is crate-version-dependent and not relied upon. |
+| ~2 phases for Scheduled Execution milestone | **On track.** Phase 26 delivers timer primitives (first half). Webhook triggers + file-change watchers remain for a second phase. |
 
 ## Deferrals
 
-**Rolling deferrals carried from Phase 25 (13 items):**
+**Rolling deferrals carried from Phase 25 (13 items) + 1 new:**
 
 - **Forensic `ToolOutcome::NotInRole` variant** —
   Phase 11 Q1. Untouched.
@@ -257,3 +289,7 @@ Test delta: 660 pass, 0 fail. +2 new schedule.update tests.
 - **MCP SSE transport** — Phase 23. Untouched.
 - **Provider-specific token counting** — Phase 25.
   Untouched.
+- **Automatic mission wrapping for scheduled turns** —
+  Phase 26 Q1. The scheduler fires raw turns; wrapping
+  each in a mission (for gate/audit lifecycle) is
+  deferred to Phase 27+.
