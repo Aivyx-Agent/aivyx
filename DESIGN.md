@@ -103,6 +103,18 @@ Four scenarios the paragraph should make easy to reason about:
   `Denied { scope: Scope }`, `RequiresEscalation { reason: String }`,
   `Failed(AivyxError)`.
 
+> **Amendment (2026-04-17):** The turn loop described above now runs
+> inside a daemon process. Channel frontends deliver messages over a
+> Unix-domain-socket IPC protocol rather than by direct trait call.
+> See amendment
+> [`docs/amendments/2026-04-17-daemon-ipc-protocol.md`](docs/amendments/2026-04-17-daemon-ipc-protocol.md)
+> for the daemon execution topology, IPC envelope types, and
+> multi-connection model that implement this contract in production.
+> See also amendment
+> [`docs/amendments/2026-04-17-mission-state-machine.md`](docs/amendments/2026-04-17-mission-state-machine.md)
+> for the fifth termination condition (`TurnOutcome::Escalated` as
+> mission gate suspension).
+
 ---
 
 ---
@@ -416,6 +428,14 @@ The paragraph compiles.
 - **`AuditWriter` full definition** — referenced in `ToolContext`, fully defined in Deliverable 6 (error contract) or a separate audit deliverable
 - **`SessionStore` / `MemoryStore`** — implementation details of concrete agents, not core contracts. Memory is a tool (Deliverable 1 commitment A2); underlying storage is private to the concrete agent
 - **Agent construction / builder** — the sketch shows what an agent *is*, not how to build one. Builder lives in concrete impl
+
+> **Amendment (2026-04-17):** The `ChannelContext` trait is now
+> implemented twice per channel: once for in-process mode (the
+> original adapter) and once for daemon mode (`IpcChannelBridge`
+> on the server side). `StreamEvent<'a>` has an owned IPC mirror
+> (`StreamEventPayload`) for serialization over the wire. See
+> amendment
+> [`docs/amendments/2026-04-17-daemon-ipc-protocol.md`](docs/amendments/2026-04-17-daemon-ipc-protocol.md).
 
 ---
 
