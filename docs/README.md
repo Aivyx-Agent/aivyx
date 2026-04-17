@@ -83,7 +83,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 23 | Frozen  | [PHASE_23.md](PHASE_23.md) | `8f104e8` |
 | Phase 24 | Frozen  | [PHASE_24.md](PHASE_24.md) | `84962d1` |
 | Phase 25 | Frozen  | [PHASE_25.md](PHASE_25.md) | `5e4144f` |
-| Phase 26 | Frozen  | [PHASE_26.md](PHASE_26.md) | `pending` |
+| Phase 26 | Frozen  | [PHASE_26.md](PHASE_26.md) | `e550229` |
 | Phase 27+ | Planned | [ROADMAP.md](ROADMAP.md)   | —         |
 
 Frozen means the phase doc is no longer edited except through commits
