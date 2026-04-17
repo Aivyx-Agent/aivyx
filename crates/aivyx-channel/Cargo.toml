@@ -71,6 +71,7 @@ aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
 # bottom of the binary-only block so the task-provenance comment
 # history stays readable.
 aivyx-telegram = { path = "../aivyx-telegram" }
+aivyx-mcp = { path = "../aivyx-mcp" }
 
 # Phase 9 Task 3 — unified config loader. The binary's ten
 # `std::env::var` call sites collapse into a single

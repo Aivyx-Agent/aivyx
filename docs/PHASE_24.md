@@ -92,6 +92,35 @@ Wire `McpServerBridge::start` into daemon startup:
 - Merge discovered tools into `ToolRegistry`
 - Shutdown bridges at daemon exit
 
+## Task 3 ship record
+
+**Design decision:** MCP bridges start eagerly at binary startup
+(Q1 resolved → (a)), before `ToolRegistry::new`. Discovered tools
+are pushed into `tool_list` alongside native tools. Bridge shutdown
+uses a two-tier strategy: explicit `shutdown()` call on the daemon
+path (clean MCP protocol goodbye), `kill_on_drop(true)` as safety
+net on all paths (covers early returns from daemon-session and
+channel branches).
+
+**Files modified:**
+- `crates/aivyx-channel/Cargo.toml`: added `aivyx-mcp`
+  dependency (binary-only, for MCP bridge startup in `aivyx.rs`).
+- `crates/aivyx-channel/src/bin/aivyx.rs`: wired MCP bridge
+  lifecycle — iterates `mcp_servers` from config, starts each
+  `McpServerBridge`, calls `discover_tools`, extends `tool_list`
+  with discovered MCP tools, prints per-server diagnostic line.
+  Daemon path explicitly shuts down bridges after `run_daemon`
+  returns. Non-daemon paths rely on `kill_on_drop`.
+- `crates/aivyx-mcp/src/transport.rs`: added `kill_on_drop(true)`
+  to the child-process `Command` builder so MCP server processes
+  are cleaned up on bridge drop (all code paths, not just explicit
+  `shutdown()`).
+
+**Test delta:** +0 (610 → 610). Binary wiring is glue code; the
+bridge itself is covered by 8 tests in `mcp_bridge_e2e.rs` and
+the config surface by 2 tests from Task 2.
+**Production-core streak:** extends to fourteen (hash unchanged).
+
 ### Task 4+ — Scope TBD at Task 3 exit
 
 Candidates: SSE transport, amendment for 11-crate workspace,
@@ -124,16 +153,20 @@ binary-level `--mcp-server` CLI flag.
 - **`mission.list` / `mission.status` read-only tools** —
   Phase 21. Untouched.
 - **MCP config surface (`[[mcp_server]]` in `aivyx.toml`)** —
-  Phase 23. **Targeted by Task 2.**
+  Phase 23. **Closed by Task 2.**
 - **MCP SSE transport** — Phase 23. Untouched.
 
 ## Open questions
 
 **Q1 — Should MCP bridges be started eagerly at daemon boot
-or lazily on first tool call?** Leaning (a) eagerly — the
-`tools/list` discovery must happen before tool registration,
-and lazy init would require a mutable tool registry.
+or lazily on first tool call?** → **(a), resolved in Task 3.**
+Eagerly. Bridges start before `ToolRegistry::new` so discovered
+tools are in the registry from the first turn. Lazy init would
+require a mutable registry.
 
 **Q2 — Should MCP tool names be prefixed with the server
-name to avoid collisions?** Leaning (a) yes — e.g.,
-`github__create_issue` to match MCP convention.
+name to avoid collisions?** → **(b), resolved in Task 3.**
+No prefix needed at the `name()` level — `ToolRegistry`
+looks up by `ToolId` (UUID), not name. The scope system
+(`mcp.call:<server>:<tool>`) disambiguates at the capability
+layer. Tool names shown to the LLM are the raw MCP names.

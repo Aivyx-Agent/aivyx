@@ -63,6 +63,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-crypto",
  "aivyx-llm",
+ "aivyx-mcp",
  "aivyx-memory",
  "aivyx-storage",
  "aivyx-telegram",

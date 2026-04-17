@@ -961,7 +961,7 @@ async fn run_async(
         // the time we land here the banner has already printed any
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
-        mcp_servers: _mcp_servers,
+        mcp_servers,
     } = config;
     let api_key = anthropic_api_key
         .expect("anthropic_api_key validated non-None before run_async")
@@ -1130,6 +1130,44 @@ async fn run_async(
 
     let mission_create_tool: Arc<MissionCreateTool> = Arc::new(MissionCreateTool::new());
     tool_list.push(Arc::clone(&mission_create_tool) as Arc<dyn Tool>);
+
+    let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
+    for mcp_cfg in &mcp_servers {
+        let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
+        match aivyx_mcp::McpServerBridge::start(
+            &mcp_cfg.command,
+            &args_ref,
+            &mcp_cfg.name,
+        )
+        .await
+        {
+            Ok(bridge) => {
+                match bridge.discover_tools().await {
+                    Ok(mcp_tools) => {
+                        let count = mcp_tools.len();
+                        tool_list.extend(mcp_tools);
+                        eprintln!(
+                            "aivyx: MCP server {:?} — {} tool(s) registered",
+                            mcp_cfg.name, count,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx: MCP server {:?} tool discovery failed: {e}",
+                            mcp_cfg.name,
+                        );
+                    }
+                }
+                mcp_bridges.push(bridge);
+            }
+            Err(e) => {
+                eprintln!(
+                    "aivyx: MCP server {:?} failed to start: {e}",
+                    mcp_cfg.name,
+                );
+            }
+        }
+    }
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
@@ -1410,7 +1448,7 @@ async fn run_async(
             socket_path.display(),
         );
 
-        return run_daemon(
+        let result = run_daemon(
             &socket_path,
             agent,
             channel_factory,
@@ -1418,6 +1456,11 @@ async fn run_async(
             Some(storage.domain(KeyDomain::Missions)),
         )
             .await;
+
+        for bridge in mcp_bridges {
+            let _ = bridge.shutdown().await;
+        }
+        return result;
     }
 
     // ---- Channel branch ----------------------------------------------
