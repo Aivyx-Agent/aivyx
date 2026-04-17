@@ -30,6 +30,7 @@ pub use aivyx_core::{
 
 pub mod daemon_client;
 pub mod daemon_ipc;
+pub mod daemon_scheduler;
 pub mod daemon_server;
 pub mod mission;
 pub mod mission_tool;

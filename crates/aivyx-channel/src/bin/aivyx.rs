@@ -1055,7 +1055,7 @@ async fn run_async(
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
         mut mcp_servers,
-        schedules: _schedules,
+        schedules: config_schedules,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -1566,12 +1566,39 @@ async fn run_async(
             socket_path.display(),
         );
 
+        // Sync TOML [[schedule]] entries into the schedule store.
+        let schedule_domain = storage.domain(KeyDomain::Schedules);
+        if !config_schedules.is_empty() {
+            match aivyx_channel::daemon_scheduler::config_to_records(&config_schedules) {
+                Ok(records) => {
+                    match aivyx_channel::daemon_scheduler::sync_config_schedules(
+                        &schedule_domain,
+                        &records,
+                    )
+                    .await
+                    {
+                        Ok(n) if n > 0 => {
+                            eprintln!("aivyx daemon: synced {n} schedule(s) from config");
+                        }
+                        Err(e) => {
+                            eprintln!("aivyx daemon: failed to sync config schedules: {e}");
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    eprintln!("aivyx daemon: invalid schedule config: {e}");
+                }
+            }
+        }
+
         let result = run_daemon(
             &socket_path,
             agent,
             channel_factory,
             shutdown,
             Some(storage.domain(KeyDomain::Missions)),
+            Some(schedule_domain),
         )
             .await;
 

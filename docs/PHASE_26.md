@@ -124,6 +124,39 @@ time computation, deduplication (don't double-fire on slow
 turns), and attribution (scheduled turns carry the
 operator's identity per P6).
 
+**Ship record — Task 3**
+
+| Artefact | What changed |
+|---|---|
+| `crates/aivyx-channel/src/daemon_scheduler.rs` | **New.** `run_scheduler` background loop — adaptive tick (sleep until next-fire, capped at 60 s), deduplication via `last_fired_at ≥ fire_time`, `sync_config_schedules` for TOML → storage merge, `config_to_records` converter, turn serialization via `Mutex`. 8 tests |
+| `crates/aivyx-channel/src/daemon_server.rs` | `run_daemon` gains `schedule_store: Option<DomainHandle>` param; spawns `run_scheduler` alongside accept loop sharing agent + factory + shutdown token |
+| `crates/aivyx-channel/src/lib.rs` | `pub mod daemon_scheduler;` |
+| `crates/aivyx-channel/src/bin/aivyx.rs` | Config schedule sync at daemon startup; passes `KeyDomain::Schedules` handle to `run_daemon` |
+| `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs` | 5 call sites updated for new `run_daemon` arity (`schedule_store: None`) |
+
+Design decisions:
+
+- **Adaptive tick cadence**: sleeps until the earliest next-fire-time
+  across all enabled schedules, capped at 60 s so dynamically created
+  schedules are picked up within one minute.
+- **Turn serialization**: a `Mutex` serializes scheduled turns so two
+  schedules firing simultaneously don't interleave on the agent.
+- **Config-to-storage sync**: TOML `[[schedule]]` entries are merged
+  into `KeyDomain::Schedules` on daemon startup. Storage is
+  authoritative after first sync — edits via agent tools persist
+  independently of the config file.
+- **Deduplication**: `last_fired_at ≥ fire_time` prevents double-fire
+  if the scheduler ticks again before the turn completes.
+
+Streak check:
+
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+Test delta: 652 pass, 0 fail. +9 new scheduler tests (8 in
+`daemon_scheduler.rs`, 0 regressions in e2e suite).
+
 ### Task 4 — `schedule.create` / `schedule.list` /
 `schedule.delete` tools
 

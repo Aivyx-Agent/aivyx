@@ -51,6 +51,7 @@ pub async fn run_daemon(
     channel_factory: ChannelFactory,
     shutdown: CancellationToken,
     mission_store: Option<DomainHandle>,
+    schedule_store: Option<DomainHandle>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -72,6 +73,22 @@ pub async fn run_daemon(
 
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
+
+    // Spawn the scheduler loop if a schedule store is provided.
+    let _scheduler_handle = schedule_store.map(|store| {
+        let sched_agent = Arc::clone(&agent);
+        let sched_factory = Arc::clone(&channel_factory);
+        let sched_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            crate::daemon_scheduler::run_scheduler(
+                sched_agent,
+                sched_factory,
+                store,
+                sched_shutdown,
+            )
+            .await;
+        })
+    });
 
     let mission_store = mission_store.map(Arc::new);
     let mut handles = Vec::new();
@@ -456,7 +473,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown, None).await
+    run_daemon(socket_path, agent, factory, shutdown, None, None).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
