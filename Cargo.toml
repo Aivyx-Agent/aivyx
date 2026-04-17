@@ -54,3 +54,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 # Byte stream utilities used by the SSE parser
 futures-util = "0.3"
 bytes = "1"
+
+# Cron expression parsing for scheduled execution (Phase 26)
+cron = "0.16"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

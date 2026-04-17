@@ -540,6 +540,9 @@ pub struct AivyxConfig {
     /// MCP server configurations from `[[mcp_server]]` entries.
     /// Empty when no entries are configured.
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Scheduled execution entries from `[[schedule]]` entries.
+    /// Empty when no entries are configured.
+    pub schedules: Vec<ScheduleConfig>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -739,6 +742,16 @@ pub struct McpServerConfig {
     pub enabled: bool,
 }
 
+/// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
+#[derive(Debug, Clone)]
+pub struct ScheduleConfig {
+    pub name: String,
+    pub cron: String,
+    pub role: String,
+    pub prompt: String,
+    pub enabled: bool,
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -778,6 +791,9 @@ struct RawToml {
     /// `[[mcp_server]]` table-array. Phase 24 Task 2.
     #[serde(default, rename = "mcp_server")]
     mcp_servers: Option<Vec<RawMcpServer>>,
+    /// `[[schedule]]` table-array. Phase 26 Task 2.
+    #[serde(default, rename = "schedule")]
+    schedules: Option<Vec<RawSchedule>>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -830,6 +846,22 @@ struct RawMcpServer {
     args: Option<Vec<String>>,
     #[serde(default = "default_true")]
     enabled: bool,
+}
+
+/// One `[[schedule]]` entry in the TOML file. Phase 26 Task 2.
+#[derive(Debug, Default, Deserialize)]
+struct RawSchedule {
+    name: String,
+    cron: String,
+    #[serde(default = "default_role_name")]
+    role: String,
+    prompt: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_role_name() -> String {
+    DEFAULT_ROLE_NAME.to_string()
 }
 
 fn default_true() -> bool {
@@ -1373,6 +1405,21 @@ impl AivyxConfig {
             })
             .collect();
 
+        // --- schedules ---------------------------------------------
+        let schedules: Vec<ScheduleConfig> = toml
+            .schedules
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .map(|r| ScheduleConfig {
+                name: r.name,
+                cron: r.cron,
+                role: r.role,
+                prompt: r.prompt,
+                enabled: true,
+            })
+            .collect();
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
@@ -1389,6 +1436,7 @@ impl AivyxConfig {
             active_role,
             warnings,
             mcp_servers,
+            schedules,
         })
     }
 

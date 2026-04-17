@@ -1055,6 +1055,7 @@ async fn run_async(
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
         mut mcp_servers,
+        schedules: _schedules,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {

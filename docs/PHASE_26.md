@@ -86,6 +86,35 @@ template, enabled flag) and persistence layer. Store in
 the TOML config as `[[schedule]]` entries. Parse cron
 expressions at load time.
 
+**Ship record — Task 2**
+
+| Artefact | What changed |
+|---|---|
+| `Cargo.toml` (workspace) | Added `cron = "0.16"` and `chrono = { version = "0.4", … }` workspace deps |
+| `crates/aivyx-storage/src/lib.rs` | 7th `KeyDomain::Schedules` — subkey derivation, table name `aivyx_schedules_v1`, `ALL` array bump to 7 |
+| `crates/aivyx-channel/src/schedule.rs` | **New.** `ScheduleRecord` struct, cron validation via `cron` crate (7-field expressions), `next_fire_time` / `next_fire_time_after`, full CRUD (`create_schedule`, `get_schedule`, `update_schedule`, `list_schedules`, `delete_schedule`), 7 tests |
+| `crates/aivyx-channel/src/lib.rs` | `pub mod schedule;` |
+| `crates/aivyx-channel/Cargo.toml` | Added `cron` and `chrono` workspace deps |
+| `crates/aivyx-config/src/lib.rs` | `ScheduleConfig` struct, `RawSchedule`, `[[schedule]]` TOML surface, `schedules` field on `AivyxConfig` |
+| `crates/aivyx-channel/src/bin/aivyx.rs` | Binary destructure updated for `schedules: _schedules` |
+
+Answers to open questions surfaced during implementation:
+
+- **Q3 resolved — 7-field cron.** The `cron` crate uses 7-field
+  expressions (`sec min hour dom month dow year`), not standard
+  5-field. `@daily` shorthand support is crate-version-dependent
+  and not relied upon. This is documented in the test suite.
+
+Streak check:
+
+- **Production-core** — `d8ab203f…` — streak **extends to
+  seventeen**. Scheduler touches storage and channel, not core.
+- **DESIGN.md** — Untouched this task (amendment deferred to
+  Task 3 or later if the scheduler architecture warrants it).
+- **PRODUCT.md** — Untouched this task.
+
+Test delta: 643 pass, 0 fail. +7 new schedule tests.
+
 ### Task 3 — Daemon scheduler loop
 
 A background task inside the daemon that evaluates schedule

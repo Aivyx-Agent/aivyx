@@ -97,6 +97,8 @@ pub enum KeyDomain {
     ChannelState,
     /// Mission records — long-running work items with approval gates (Phase 21).
     Missions,
+    /// Schedule records — cron-triggered execution entries (Phase 26).
+    Schedules,
 }
 
 impl KeyDomain {
@@ -114,6 +116,7 @@ impl KeyDomain {
             KeyDomain::Secrets => b"secrets",
             KeyDomain::ChannelState => b"channel-state",
             KeyDomain::Missions => b"missions",
+            KeyDomain::Schedules => b"schedules",
         }
     }
 
@@ -130,18 +133,20 @@ impl KeyDomain {
             KeyDomain::Secrets => "aivyx_secrets_v1",
             KeyDomain::ChannelState => "aivyx_channel_state_v1",
             KeyDomain::Missions => "aivyx_missions_v1",
+            KeyDomain::Schedules => "aivyx_schedules_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 6] = [
+    pub const ALL: [KeyDomain; 7] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
         KeyDomain::Secrets,
         KeyDomain::ChannelState,
         KeyDomain::Missions,
+        KeyDomain::Schedules,
     ];
 }
 
@@ -327,7 +332,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 6],
+    subkeys: [SubKey; 7],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -404,7 +409,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 6], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 7], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -415,6 +420,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Secrets.as_bytes())?,
             master.derive_subkey(KeyDomain::ChannelState.as_bytes())?,
             master.derive_subkey(KeyDomain::Missions.as_bytes())?,
+            master.derive_subkey(KeyDomain::Schedules.as_bytes())?,
         ])
     }
 
@@ -429,6 +435,7 @@ impl RedbStorage {
             KeyDomain::Secrets => &self.subkeys[3],
             KeyDomain::ChannelState => &self.subkeys[4],
             KeyDomain::Missions => &self.subkeys[5],
+            KeyDomain::Schedules => &self.subkeys[6],
         }
     }
 }
@@ -840,7 +847,8 @@ mod tests {
                 | KeyDomain::Audit
                 | KeyDomain::Secrets
                 | KeyDomain::ChannelState
-                | KeyDomain::Missions => {}
+                | KeyDomain::Missions
+                | KeyDomain::Schedules => {}
             }
         }
     }

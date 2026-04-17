@@ -97,6 +97,8 @@ secrecy = { workspace = true }
 # workspace standard entropy source, same choice aivyx-storage makes
 # for its AEAD nonces.
 uuid = { workspace = true }
+cron = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 # LocalChannel unit tests exercise the async ChannelContext surface
