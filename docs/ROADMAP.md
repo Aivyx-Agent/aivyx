@@ -329,14 +329,32 @@ extends to fourteen consecutive phases (new record). Test
 delta +9 (608→617). Rolling backlog 13→12 (−1 closed, 0
 net-new). Two Q-block questions resolved.
 
-## Phase 25 — Multi-Provider Support
+## Phase 25 — Multi-Provider Support (frozen)
 
-Add an OpenAI-compatible `LlmProvider` adapter so operators
-can use GPT-4, Ollama, or any OpenAI-API-compatible endpoint
-alongside the Anthropic provider. The `LlmProvider` trait is
-already provider-agnostic; this phase delivers the second
-concrete implementation. Expected scope: new
-`provider-openai` feature in `aivyx-llm`, `--provider` CLI
-flag or `[provider]` TOML config, and any trait extensions
-needed for capability differences (tool calling shape, token
-counting). Light phase — the trait shape is settled.
+**Frozen — see [PHASE_25.md](PHASE_25.md).** Opened and
+exited 2026-04-17. OpenAI-compatible `LlmProvider` adapter
+(`provider-openai` feature in `aivyx-llm`) with `OpenAiProvider`
+implementing `stream_turn` for `/v1/chat/completions`. Shared
+`HttpTransport` seam lifted to crate root. Config + CLI wiring:
+`ProviderKind` enum, `--provider` flag, `AIVYX_PROVIDER` env,
+`[agent] provider` + `[openai]` TOML sections. Provider-aware
+`validate()`. PRODUCT_ROADMAP Multi-Provider milestone delivered.
+DESIGN.md unchanged. PRODUCT.md unchanged. Production-core
+streak extends to sixteen. Test delta +18 (617→635). Two Q-block
+questions resolved. One new deferral (provider-specific token
+counting).
+
+## Phase 26 — Scheduled Execution: Timer Primitives
+
+First phase of the Scheduled Execution milestone (PRODUCT.md
+G5). Add cron-style timer triggers to the daemon so missions
+can run unattended on a schedule. Expected scope: timer
+storage in `aivyx-storage`, a `[[schedule]]` TOML config
+surface, a daemon-side scheduler that fires
+`SubmitInput`-equivalent turns at the scheduled time, and
+the `schedule.create` / `schedule.list` / `schedule.delete`
+tool surface for agent-initiated scheduling. The load-bearing
+decision: whether triggers create missions (gate-structured)
+or bounded tasks (single-turn, fire-and-forget). Leaning
+missions — they already have the right lifecycle (gates,
+state machine, persistence).
