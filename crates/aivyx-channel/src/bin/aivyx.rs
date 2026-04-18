@@ -287,6 +287,7 @@ fn run() -> Result<(), String> {
         role: role_override,
         no_daemon,
         mcp_servers: cli_mcp_servers,
+        mcp_sse_servers: cli_mcp_sse_servers,
         provider: cli_provider,
     } = parse_cli_args()?;
 
@@ -494,6 +495,7 @@ fn run() -> Result<(), String> {
             mode,
             no_daemon,
             cli_mcp_servers,
+            cli_mcp_sse_servers,
         )
         .await
     })
@@ -720,6 +722,7 @@ struct CliArgs {
     role: Option<String>,
     no_daemon: bool,
     mcp_servers: Vec<CliMcpServer>,
+    mcp_sse_servers: Vec<CliMcpSse>,
     provider: Option<ProviderKind>,
 }
 
@@ -728,6 +731,12 @@ struct CliMcpServer {
     name: String,
     command: String,
     args: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CliMcpSse {
+    name: String,
+    url: String,
 }
 
 /// Parse the CLI arg surface.
@@ -777,6 +786,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             role: None,
             no_daemon: false,
             mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
             provider: None,
         });
     }
@@ -787,6 +797,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     let mut print_role: Option<String> = None;
     let mut no_daemon = false;
     let mut mcp_servers: Vec<CliMcpServer> = Vec::new();
+    let mut mcp_sse_servers: Vec<CliMcpSse> = Vec::new();
     let mut cli_provider: Option<ProviderKind> = None;
 
     let mut i = 0;
@@ -879,6 +890,27 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 });
                 i += 2;
             }
+            "--mcp-sse" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| {
+                        "`--mcp-sse` requires a value in the format \
+                         `name:url`"
+                            .to_string()
+                    })?;
+                let parts: Vec<&str> = value.splitn(2, ':').collect();
+                if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
+                    return Err(format!(
+                        "`--mcp-sse` value `{value}` is malformed. \
+                         Expected `name:url` (e.g. `myserver:http://host:8080/sse`)"
+                    ));
+                }
+                mcp_sse_servers.push(CliMcpSse {
+                    name: parts[0].to_string(),
+                    url: parts[1].to_string(),
+                });
+                i += 2;
+            }
             "daemon" => {
                 return Err(
                     "unrecognized subcommand. Did you mean `daemon run`, `daemon status`, or `daemon stop`?".to_string()
@@ -939,6 +971,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         role,
         no_daemon,
         mcp_servers,
+        mcp_sse_servers,
         provider: cli_provider,
     })
 }
@@ -1027,6 +1060,7 @@ async fn run_async(
     mode: CliMode,
     no_daemon: bool,
     cli_mcp_servers: Vec<CliMcpServer>,
+    cli_mcp_sse_servers: Vec<CliMcpSse>,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -1075,8 +1109,20 @@ async fn run_async(
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
             name: cli.name,
-            command: cli.command,
+            transport: aivyx_config::McpTransportKind::Stdio,
+            command: Some(cli.command),
             args: cli.args,
+            url: None,
+            enabled: true,
+        });
+    }
+    for cli in cli_mcp_sse_servers {
+        mcp_servers.push(aivyx_config::McpServerConfig {
+            name: cli.name,
+            transport: aivyx_config::McpTransportKind::Sse,
+            command: None,
+            args: Vec::new(),
+            url: Some(cli.url),
             enabled: true,
         });
     }
@@ -1308,21 +1354,40 @@ async fn run_async(
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
-        let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
-        match aivyx_mcp::McpServerBridge::start(
-            &mcp_cfg.command,
-            &args_ref,
-            &mcp_cfg.name,
-        )
-        .await
-        {
+        let bridge_result = match mcp_cfg.transport {
+            aivyx_config::McpTransportKind::Stdio => {
+                let cmd = mcp_cfg.command.as_deref().unwrap_or("");
+                let args_ref: Vec<&str> =
+                    mcp_cfg.args.iter().map(|s| s.as_str()).collect();
+                aivyx_mcp::McpServerBridge::start(cmd, &args_ref, &mcp_cfg.name)
+                    .await
+            }
+            aivyx_config::McpTransportKind::Sse => {
+                let url = mcp_cfg.url.as_deref().unwrap_or("");
+                match aivyx_mcp::SseTransport::connect(url).await {
+                    Ok(transport) => {
+                        aivyx_mcp::McpServerBridge::from_transport(
+                            std::sync::Arc::new(transport),
+                            &mcp_cfg.name,
+                        )
+                        .await
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        match bridge_result {
             Ok(bridge) => {
                 match bridge.discover_tools().await {
                     Ok(mcp_tools) => {
                         let count = mcp_tools.len();
                         tool_list.extend(mcp_tools);
+                        let transport_label = match mcp_cfg.transport {
+                            aivyx_config::McpTransportKind::Stdio => "stdio",
+                            aivyx_config::McpTransportKind::Sse => "sse",
+                        };
                         eprintln!(
-                            "aivyx: MCP server {:?} — {} tool(s) registered",
+                            "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
                             mcp_cfg.name, count,
                         );
                     }
@@ -3014,6 +3079,60 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&[]))
             .expect("empty argv must parse");
         assert!(parsed.mcp_servers.is_empty());
+        assert!(parsed.mcp_sse_servers.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 32 Task 4 — `--mcp-sse` flag parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn mcp_sse_flag_parses_name_and_url() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--mcp-sse",
+            "remote:http://host:8080/sse",
+        ]))
+        .expect("`--mcp-sse remote:url` must parse");
+        assert_eq!(parsed.mcp_sse_servers.len(), 1);
+        assert_eq!(parsed.mcp_sse_servers[0].name, "remote");
+        assert_eq!(parsed.mcp_sse_servers[0].url, "http://host:8080/sse");
+    }
+
+    #[test]
+    fn mcp_sse_flag_repeatable() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--mcp-sse", "a:http://a/sse",
+            "--mcp-sse", "b:https://b/sse",
+        ]))
+        .expect("repeated --mcp-sse must parse");
+        assert_eq!(parsed.mcp_sse_servers.len(), 2);
+        assert_eq!(parsed.mcp_sse_servers[0].name, "a");
+        assert_eq!(parsed.mcp_sse_servers[1].name, "b");
+    }
+
+    #[test]
+    fn mcp_sse_flag_missing_value_is_error() {
+        let err = parse_cli_args_from(&argv(&["--mcp-sse"]))
+            .expect_err("--mcp-sse with no value must error");
+        assert!(err.contains("--mcp-sse"), "error must mention flag: {err}");
+    }
+
+    #[test]
+    fn mcp_sse_flag_malformed_is_error() {
+        let err = parse_cli_args_from(&argv(&["--mcp-sse", "nocolon"]))
+            .expect_err("--mcp-sse nocolon must error");
+        assert!(err.contains("malformed"), "error must say malformed: {err}");
+    }
+
+    #[test]
+    fn mcp_sse_and_stdio_flags_combine() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "--mcp-server", "local:npx",
+            "--mcp-sse", "remote:http://host/sse",
+        ]))
+        .expect("combining --mcp-server and --mcp-sse must parse");
+        assert_eq!(parsed.mcp_servers.len(), 1);
+        assert_eq!(parsed.mcp_sse_servers.len(), 1);
     }
 
     // ---- --provider flag tests ----------------------------------------

@@ -741,13 +741,27 @@ pub struct TelegramConfig {
     pub chat_filter: Option<Sourced<i64>>,
 }
 
+/// Transport kind for an MCP server connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpTransportKind {
+    /// Local child process over stdio (Phase 23).
+    Stdio,
+    /// Remote HTTP server over SSE (Phase 32).
+    Sse,
+}
+
 /// One MCP server to connect to at daemon startup.
 /// Loaded from `[[mcp_server]]` entries in `aivyx.toml`.
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
     pub name: String,
-    pub command: String,
+    pub transport: McpTransportKind,
+    /// Command to spawn (stdio transport only).
+    pub command: Option<String>,
+    /// Command-line arguments (stdio transport only).
     pub args: Vec<String>,
+    /// SSE endpoint URL (SSE transport only).
+    pub url: Option<String>,
     pub enabled: bool,
 }
 
@@ -886,15 +900,28 @@ struct RawRole {
     parent_role: Option<String>,
 }
 
-/// One `[[mcp_server]]` entry in the TOML file. Phase 24 Task 2.
+/// One `[[mcp_server]]` entry in the TOML file. Phase 24 Task 2,
+/// extended in Phase 32 Task 4 for SSE transport.
 #[derive(Debug, Default, Deserialize)]
 struct RawMcpServer {
     name: String,
-    command: String,
+    /// Transport kind: `"stdio"` (default) or `"sse"`.
+    #[serde(default = "default_stdio_transport")]
+    transport: String,
+    /// Command to spawn (stdio transport).
+    #[serde(default)]
+    command: Option<String>,
     #[serde(default)]
     args: Option<Vec<String>>,
+    /// SSE endpoint URL (SSE transport).
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+}
+
+fn default_stdio_transport() -> String {
+    "stdio".into()
 }
 
 /// One `[[schedule]]` entry in the TOML file. Phase 26 Task 2.
@@ -1471,18 +1498,53 @@ impl AivyxConfig {
         }
 
         // --- mcp_servers ------------------------------------------
-        let mcp_servers: Vec<McpServerConfig> = toml
-            .mcp_servers
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.enabled)
-            .map(|r| McpServerConfig {
+        let mut mcp_servers: Vec<McpServerConfig> = Vec::new();
+        for r in toml.mcp_servers.unwrap_or_default() {
+            if !r.enabled {
+                continue;
+            }
+            let transport = match r.transport.as_str() {
+                "stdio" => McpTransportKind::Stdio,
+                "sse" => McpTransportKind::Sse,
+                other => {
+                    return Err(ConfigError::Invalid {
+                        field: "mcp_server.transport",
+                        reason: format!(
+                            "server {:?}: unknown transport {:?} \
+                             (expected \"stdio\" or \"sse\")",
+                            r.name, other,
+                        ),
+                    });
+                }
+            };
+            // Validate required fields per transport kind.
+            if transport == McpTransportKind::Stdio && r.command.is_none() {
+                return Err(ConfigError::Invalid {
+                    field: "mcp_server.command",
+                    reason: format!(
+                        "server {:?}: stdio transport requires `command`",
+                        r.name,
+                    ),
+                });
+            }
+            if transport == McpTransportKind::Sse && r.url.is_none() {
+                return Err(ConfigError::Invalid {
+                    field: "mcp_server.url",
+                    reason: format!(
+                        "server {:?}: sse transport requires `url`",
+                        r.name,
+                    ),
+                });
+            }
+            mcp_servers.push(McpServerConfig {
                 name: r.name,
+                transport,
                 command: r.command,
                 args: r.args.unwrap_or_default(),
+                url: r.url,
                 enabled: true,
-            })
-            .collect();
+            });
+        }
 
         // --- schedules ---------------------------------------------
         let schedules: Vec<ScheduleConfig> = toml

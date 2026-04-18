@@ -32,8 +32,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AivyxConfig, ConfigError, FieldSource, LoadOptions, ProviderKind, Role, ToolAllowlist,
-    DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
+    AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, ProviderKind, Role,
+    ToolAllowlist, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME,
+    DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -1858,13 +1859,15 @@ command = "/usr/bin/my-server"
 
     let gh = &cfg.mcp_servers[0];
     assert_eq!(gh.name, "github");
-    assert_eq!(gh.command, "npx");
+    assert_eq!(gh.transport, McpTransportKind::Stdio);
+    assert_eq!(gh.command.as_deref(), Some("npx"));
     assert_eq!(gh.args, vec!["-y", "@modelcontextprotocol/server-github"]);
     assert!(gh.enabled);
 
     let bare = &cfg.mcp_servers[1];
     assert_eq!(bare.name, "bare");
-    assert_eq!(bare.command, "/usr/bin/my-server");
+    assert_eq!(bare.transport, McpTransportKind::Stdio);
+    assert_eq!(bare.command.as_deref(), Some("/usr/bin/my-server"));
     assert!(bare.args.is_empty(), "absent args default to empty vec");
     assert!(bare.enabled);
 
@@ -1893,6 +1896,118 @@ api_key = "sk-test"
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert!(cfg.mcp_servers.is_empty());
+
+    drop(env);
+}
+
+#[test]
+fn mcp_server_sse_transport_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-sse");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "remote"
+transport = "sse"
+url = "http://example.com:8080/sse"
+
+[[mcp_server]]
+name = "local"
+command = "npx"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.mcp_servers.len(), 2);
+
+    let remote = &cfg.mcp_servers[0];
+    assert_eq!(remote.name, "remote");
+    assert_eq!(remote.transport, McpTransportKind::Sse);
+    assert_eq!(remote.url.as_deref(), Some("http://example.com:8080/sse"));
+    assert!(remote.command.is_none());
+
+    let local = &cfg.mcp_servers[1];
+    assert_eq!(local.name, "local");
+    assert_eq!(local.transport, McpTransportKind::Stdio);
+    assert_eq!(local.command.as_deref(), Some("npx"));
+    assert!(local.url.is_none());
+
+    drop(env);
+}
+
+#[test]
+fn mcp_server_sse_missing_url_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-sse-no-url");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "broken"
+transport = "sse"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("sse without url must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("url"), "error must mention url: {msg}");
+
+    drop(env);
+}
+
+#[test]
+fn mcp_server_stdio_missing_command_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-stdio-no-cmd");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "broken"
+transport = "stdio"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("stdio without command must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("command"), "error must mention command: {msg}");
 
     drop(env);
 }
