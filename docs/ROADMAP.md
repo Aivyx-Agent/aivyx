@@ -378,7 +378,7 @@ Two new Cargo.lock entries: httpdate (transitive), notify (direct).
 
 ## Phase 28 — Deferral Cleanup + Reflection Foundation
 
-**Frozen** (`_HASH_`). Hybrid phase: closed two formal deferrals
+**Frozen** (`2cd41d9`). Hybrid phase: closed two formal deferrals
 (`mission.list`/`mission.status` tools, forensic
 `ToolOutcome::NotInRole`) plus webhook port configurability
 (Phase 27 decision item). Shipped the first Reflection Layer
