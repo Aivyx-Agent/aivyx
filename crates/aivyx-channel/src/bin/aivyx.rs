@@ -135,6 +135,9 @@ use aivyx_channel::mission_tool::MissionCreateTool;
 use aivyx_channel::schedule_tool::{
     ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool, ScheduleUpdateTool,
 };
+use aivyx_channel::webhook_tool::{
+    WebhookCreateTool, WebhookDeleteTool, WebhookListTool,
+};
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1059,6 +1062,7 @@ async fn run_async(
         warnings: _,
         mut mcp_servers,
         schedules: config_schedules,
+        webhooks: config_webhooks,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -1260,6 +1264,13 @@ async fn run_async(
     tool_list.push(Arc::clone(&schedule_delete_tool) as Arc<dyn Tool>);
     let schedule_update_tool: Arc<ScheduleUpdateTool> = Arc::new(ScheduleUpdateTool::new());
     tool_list.push(Arc::clone(&schedule_update_tool) as Arc<dyn Tool>);
+
+    let webhook_create_tool: Arc<WebhookCreateTool> = Arc::new(WebhookCreateTool::new());
+    tool_list.push(Arc::clone(&webhook_create_tool) as Arc<dyn Tool>);
+    let webhook_list_tool: Arc<WebhookListTool> = Arc::new(WebhookListTool::new());
+    tool_list.push(Arc::clone(&webhook_list_tool) as Arc<dyn Tool>);
+    let webhook_delete_tool: Arc<WebhookDeleteTool> = Arc::new(WebhookDeleteTool::new());
+    tool_list.push(Arc::clone(&webhook_delete_tool) as Arc<dyn Tool>);
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -1547,6 +1558,28 @@ async fn run_async(
                 .to_string()
         })?;
 
+    webhook_create_tool
+        .set_webhook_store(storage.domain(KeyDomain::Webhooks))
+        .map_err(|_| {
+            "webhook.create store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    webhook_list_tool
+        .set_webhook_store(storage.domain(KeyDomain::Webhooks))
+        .map_err(|_| {
+            "webhook.list store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    webhook_delete_tool
+        .set_webhook_store(storage.domain(KeyDomain::Webhooks))
+        .map_err(|_| {
+            "webhook.delete store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
     // ---- Phase 17 Task 3: daemon-run branch ----------------------------
     // If the operator invoked `aivyx daemon run`, launch the daemon
     // server in the foreground. The daemon reuses the same agent,
@@ -1633,6 +1666,39 @@ async fn run_async(
             }
         }
 
+        // Sync TOML [[webhook]] entries into the webhook store.
+        let webhook_domain = storage.domain(KeyDomain::Webhooks);
+        if !config_webhooks.is_empty() {
+            let mut synced = 0usize;
+            for wh_cfg in &config_webhooks {
+                let wh_id = format!("cfg-{}", wh_cfg.name);
+                match aivyx_channel::webhook::get_webhook(&webhook_domain, &wh_id).await {
+                    Ok(None) => {
+                        let record = aivyx_channel::webhook::WebhookRecord::new(
+                            wh_id,
+                            wh_cfg.role.clone(),
+                            wh_cfg.prompt.clone(),
+                        );
+                        if let Err(e) = aivyx_channel::webhook::create_webhook(
+                            &webhook_domain,
+                            &record,
+                        ).await {
+                            eprintln!("aivyx daemon: failed to sync webhook {:?}: {e}", wh_cfg.name);
+                        } else {
+                            synced += 1;
+                        }
+                    }
+                    Ok(Some(_)) => {} // already exists in storage
+                    Err(e) => {
+                        eprintln!("aivyx daemon: webhook sync lookup failed: {e}");
+                    }
+                }
+            }
+            if synced > 0 {
+                eprintln!("aivyx daemon: synced {synced} webhook(s) from config");
+            }
+        }
+
         let result = run_daemon(
             &socket_path,
             agent,
@@ -1640,6 +1706,7 @@ async fn run_async(
             shutdown,
             Some(storage.domain(KeyDomain::Missions)),
             Some(schedule_domain),
+            Some(webhook_domain),
         )
             .await;
 

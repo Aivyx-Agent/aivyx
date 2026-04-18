@@ -543,6 +543,9 @@ pub struct AivyxConfig {
     /// Scheduled execution entries from `[[schedule]]` entries.
     /// Empty when no entries are configured.
     pub schedules: Vec<ScheduleConfig>,
+    /// Webhook trigger entries from `[[webhook]]` entries.
+    /// Empty when no entries are configured.
+    pub webhooks: Vec<WebhookConfig>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -752,6 +755,16 @@ pub struct ScheduleConfig {
     pub enabled: bool,
 }
 
+/// One webhook trigger entry loaded from `[[webhook]]` in the TOML file.
+/// Phase 27 Task 3.
+#[derive(Debug, Clone)]
+pub struct WebhookConfig {
+    pub name: String,
+    pub role: String,
+    pub prompt: String,
+    pub enabled: bool,
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -794,6 +807,9 @@ struct RawToml {
     /// `[[schedule]]` table-array. Phase 26 Task 2.
     #[serde(default, rename = "schedule")]
     schedules: Option<Vec<RawSchedule>>,
+    /// `[[webhook]]` table-array. Phase 27 Task 3.
+    #[serde(default, rename = "webhook")]
+    webhooks: Option<Vec<RawWebhook>>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -853,6 +869,17 @@ struct RawMcpServer {
 struct RawSchedule {
     name: String,
     cron: String,
+    #[serde(default = "default_role_name")]
+    role: String,
+    prompt: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+/// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
+#[derive(Debug, Default, Deserialize)]
+struct RawWebhook {
+    name: String,
     #[serde(default = "default_role_name")]
     role: String,
     prompt: String,
@@ -1420,6 +1447,20 @@ impl AivyxConfig {
             })
             .collect();
 
+        // --- webhooks ----------------------------------------------
+        let webhooks: Vec<WebhookConfig> = toml
+            .webhooks
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .map(|r| WebhookConfig {
+                name: r.name,
+                role: r.role,
+                prompt: r.prompt,
+                enabled: true,
+            })
+            .collect();
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
@@ -1437,6 +1478,7 @@ impl AivyxConfig {
             warnings,
             mcp_servers,
             schedules,
+            webhooks,
         })
     }
 

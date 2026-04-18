@@ -52,6 +52,7 @@ pub async fn run_daemon(
     shutdown: CancellationToken,
     mission_store: Option<DomainHandle>,
     schedule_store: Option<DomainHandle>,
+    webhook_store: Option<DomainHandle>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -90,6 +91,24 @@ pub async fn run_daemon(
                 sched_shutdown,
             )
             .await;
+        })
+    });
+
+    // Spawn the webhook HTTP listener if a webhook store is provided.
+    let _webhook_handle = webhook_store.map(|store| {
+        let wh_dispatch = trigger_dispatch.clone();
+        let wh_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::webhook_listener::run_webhook_listener(
+                wh_dispatch,
+                store,
+                crate::webhook_listener::DEFAULT_WEBHOOK_PORT,
+                wh_shutdown,
+            )
+            .await
+            {
+                eprintln!("aivyx webhook listener error: {e}");
+            }
         })
     });
 
@@ -476,7 +495,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown, None, None).await
+    run_daemon(socket_path, agent, factory, shutdown, None, None, None).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {

@@ -99,6 +99,12 @@ secrecy = { workspace = true }
 uuid = { workspace = true }
 cron = { workspace = true }
 chrono = { workspace = true }
+# Phase 27 Task 3 — webhook trigger listener. hyper is already a
+# transitive dep via reqwest; promoting to a direct dep adds no new
+# Cargo.lock entries.
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 
 [dev-dependencies]
 # LocalChannel unit tests exercise the async ChannelContext surface
