@@ -142,6 +142,7 @@ use aivyx_channel::file_watch_tool::{
     FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool,
 };
 use aivyx_channel::reflection_tool::{ReflectionApplyTool, ReflectionProposeTool};
+use aivyx_channel::role_update_tool::RoleUpdateTool;
 use aivyx_channel::turn_history_tool::TurnHistoryTool;
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
@@ -1301,6 +1302,10 @@ async fn run_async(
     let reflection_apply_tool: Arc<ReflectionApplyTool> = Arc::new(ReflectionApplyTool::new());
     tool_list.push(Arc::clone(&reflection_apply_tool) as Arc<dyn Tool>);
 
+    let role_update_tool: Arc<RoleUpdateTool> = Arc::new(RoleUpdateTool::new());
+    tool_list.push(Arc::clone(&role_update_tool) as Arc<dyn Tool>);
+    let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
+
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
         let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
@@ -1690,6 +1695,14 @@ async fn run_async(
                 .to_string()
         })?;
 
+    role_update_tool
+        .set_overrides(shared_role_overrides.clone())
+        .map_err(|_| {
+            "role.update overrides was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
     // ---- Phase 17 Task 3: daemon-run branch ----------------------------
     // If the operator invoked `aivyx daemon run`, launch the daemon
     // server in the foreground. The daemon reuses the same agent,
@@ -1704,11 +1717,21 @@ async fn run_async(
             .with_tool_allowlist(tool_allowlist);
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
+        let daemon_overrides = shared_role_overrides.clone();
         let planner_factory = move || {
+            let mut cfg = planner_config.clone();
+            if let Ok(overrides) = daemon_overrides.read() {
+                if !overrides.is_empty() {
+                    aivyx_channel::role_overrides::apply_to_planner_config(
+                        &overrides,
+                        &mut cfg,
+                    );
+                }
+            }
             Box::new(LlmPlanner::new(
                 Arc::clone(&planner_provider),
                 Arc::clone(&planner_tools),
-                planner_config.clone(),
+                cfg,
             )) as Box<dyn aivyx_core::TurnPlanner>
         };
         let agent: Arc<dyn Agent> = Arc::new(
@@ -1988,6 +2011,7 @@ async fn run_async(
                 )),
                 tool_allowlist,
                 memory_topic_prefix,
+                role_overrides: Some(shared_role_overrides),
             };
 
             let stdin = io::stdin();

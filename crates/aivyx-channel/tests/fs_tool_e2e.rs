@@ -270,6 +270,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         banner: None,
         tool_allowlist: None,
         memory_topic_prefix: None,
+        role_overrides: None,
     }
 }
 

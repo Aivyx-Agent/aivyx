@@ -130,6 +130,10 @@ pub struct SessionConfig {
     /// call's `topic` input before the tool sees it. Invisible to
     /// the model by design.
     pub memory_topic_prefix: Option<String>,
+    /// Phase 30 — runtime role overrides. When `Some`, the planner
+    /// factory reads this on each turn construction to pick up
+    /// prompt appendix and allowlist mutations set by `role.update`.
+    pub role_overrides: Option<crate::role_overrides::SharedRoleOverrides>,
 }
 
 /// Summary of what the session did, returned after EOF.
@@ -193,6 +197,7 @@ where
         .with_system_prompt(config.system_prompt)
         .with_max_tokens(config.max_tokens)
         .with_tool_allowlist(config.tool_allowlist.clone());
+    let role_overrides_for_factory = config.role_overrides.clone();
 
     let agent = ConcreteAgent::new(
         AgentId::new(),
@@ -200,10 +205,21 @@ where
         registry,
         audit,
         move || {
+            let mut cfg = planner_config.clone();
+            if let Some(ref shared) = role_overrides_for_factory {
+                if let Ok(overrides) = shared.read() {
+                    if !overrides.is_empty() {
+                        crate::role_overrides::apply_to_planner_config(
+                            &overrides,
+                            &mut cfg,
+                        );
+                    }
+                }
+            }
             Box::new(LlmPlanner::new(
                 Arc::clone(&provider_for_factory),
                 Arc::clone(&registry_for_factory),
-                planner_config.clone(),
+                cfg,
             ))
         },
     )
