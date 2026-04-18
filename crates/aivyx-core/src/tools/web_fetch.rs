@@ -31,12 +31,11 @@
 //!   bodies surface as `ToolOutcome::Failed` with a clear
 //!   "body exceeded cap" detail — no silent truncation, no
 //!   OOM risk, no "the LLM saw half a file" footgun.
-//! - **Response headers audit-log-only.** Q3 pinned this. The
-//!   tool's return value to the model is just
-//!   `{status: u16, body: String}`. Headers are not in the
-//!   return payload — the audit layer sees the
-//!   `ToolCallFinished` with whatever the renderer produces,
-//!   which for Task 2 is the same shape.
+//! - **Response headers: content-type surfaced.** Phase 12 Q3
+//!   originally pinned headers as audit-log-only. Phase 31
+//!   Task 2 adds `content_type` to the return payload so the
+//!   model can distinguish JSON from HTML from plain text.
+//!   Other headers remain audit-only.
 //! - **UTF-8 only.** The body is decoded via
 //!   `String::from_utf8`. Non-UTF-8 responses fail with a
 //!   clear detail. Phase 12's `StreamEvent::ToolOutput`
@@ -290,6 +289,11 @@ impl Tool for WebFetchTool {
         };
 
         let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
 
         // ---- Stream body through StreamEvent::ToolOutput ----------
         //
@@ -356,6 +360,7 @@ impl Tool for WebFetchTool {
             output: json!({
                 "url": url,
                 "status": status,
+                "content_type": content_type,
                 "body": body,
             }),
             verified: Verification::NotApplicable,
