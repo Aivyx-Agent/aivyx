@@ -389,12 +389,13 @@ variant). DESIGN.md and PRODUCT.md untouched. Test delta +7
 
 ## Phase 29 — Agent Reflection Loop
 
-**Active — see [PHASE_29.md](PHASE_29.md).** Completes the
-Reflection Layer (PRODUCT.md G3 / P8). Delivers `reflection.propose`
-and `reflection.apply` tools: the agent reads its own recent outcomes
+**Frozen** (`_HASH_`). Completed the Reflection Layer (memory-only
+scope of PRODUCT.md G3 / P8). Delivered `reflection.propose` and
+`reflection.apply` tools: the agent reads its own recent outcomes
 via `turn.history`, proposes memory adjustments, and surfaces them
-through mission gates for operator approval. New `reflection.propose`
-and `reflection.apply` capability bases in CEILING_TRUSTED.
+through mission gates for operator approval. Deferral backlog
+unchanged at 11. DESIGN.md, PRODUCT.md, and production-core all
+untouched. Test delta +4 (697->701).
 
 ## Phase 30 — TBD at Phase 29 exit
 

@@ -311,7 +311,7 @@ recent turn outcomes. Combined with deferral cleanup
 forensic `ToolOutcome::NotInRole`). See
 [`docs/PHASE_28.md`](PHASE_28.md).
 
-**Phase 29 (Agent Reflection Loop, 2026-04-18):** active.
+**Phase 29 (Agent Reflection Loop, 2026-04-18):** frozen.
 Completes the Reflection Layer — `reflection.propose` and
 `reflection.apply` tools for the full observe-propose-approve-apply
 cycle. Memory-only scope for this phase; runtime role-config
