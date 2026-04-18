@@ -141,6 +141,7 @@ use aivyx_channel::webhook_tool::{
 use aivyx_channel::file_watch_tool::{
     FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool,
 };
+use aivyx_channel::turn_history_tool::TurnHistoryTool;
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1145,7 +1146,10 @@ async fn run_async(
         .await
         .map_err(|e| format!("failed to open persistent audit log: {e}"))?;
     let verified_event_count = persistent_audit.len();
-    let audit: Arc<dyn AuditHook> = Arc::new(persistent_audit);
+    let persistent_audit = Arc::new(persistent_audit);
+    let audit_log_for_tool: Arc<dyn aivyx_audit::AuditLog + Send + Sync> =
+        Arc::clone(&persistent_audit) as _;
+    let audit: Arc<dyn AuditHook> = persistent_audit;
 
     // ---- Tools --------------------------------------------------------
     // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`
@@ -1287,6 +1291,9 @@ async fn run_async(
     tool_list.push(Arc::clone(&file_watch_list_tool) as Arc<dyn Tool>);
     let file_watch_delete_tool: Arc<FileWatchDeleteTool> = Arc::new(FileWatchDeleteTool::new());
     tool_list.push(Arc::clone(&file_watch_delete_tool) as Arc<dyn Tool>);
+
+    let turn_history_tool: Arc<TurnHistoryTool> = Arc::new(TurnHistoryTool::new());
+    tool_list.push(Arc::clone(&turn_history_tool) as Arc<dyn Tool>);
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -1628,6 +1635,14 @@ async fn run_async(
         .set_file_watch_store(storage.domain(KeyDomain::FileWatches))
         .map_err(|_| {
             "file_watch.delete store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
+    turn_history_tool
+        .set_audit_log(audit_log_for_tool)
+        .map_err(|_| {
+            "turn.history audit log was already set — startup path \
              bug, should be called exactly once"
                 .to_string()
         })?;
