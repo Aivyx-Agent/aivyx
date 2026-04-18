@@ -91,11 +91,39 @@ Surface HTTP response status code and content-type header in
 the `web.fetch` tool's output JSON. This closes the Phase 12
 Q3 deferral.
 
+**Ship record:** `17cce6b`. Added `content_type` extraction from
+response headers in `web_fetch.rs`. Output JSON now includes a
+`"content_type"` field (nullable string). The status code was
+already present in the output from Phase 12. This closes the
+remaining Q3 half — the doc comment was updated from "audit-log-
+only" to "content-type surfaced." Production-core `lib.rs`
+untouched (the tool lives in `tools/web_fetch.rs`).
+
 ### Task 3 -- Provider-reported token usage in turn outcome
 
 Surface token usage (input/output counts) reported by the LLM
 provider in the turn outcome or audit event. This closes the
 Phase 25 deferral.
+
+**Ship record:** `fc4310f`. Added `TokenUsage` struct to
+`aivyx-core/src/lib.rs` with `From<LlmUsage>` conversion.
+`LlmPlanner` accumulates per-step usage in a new
+`accumulated_usage` field; `TurnPlanner::turn_usage()` trait
+method exposes it (defaults to zero for `VecPlanner`).
+`AuditTag::TurnEnded` and `AuditEvent::TurnEnded` gain a `usage:
+TokenUsage` field. The agent reads `planner.turn_usage()` at
+turn exit and threads it into the audit event. Both providers
+(Anthropic, OpenAI) already populated `LlmUsage` on
+`LlmStepEnd`; the planner was previously ignoring it.
+
+Files touched: `aivyx-core/src/lib.rs` (TokenUsage struct +
+AuditTag), `aivyx-core/src/planner.rs` (trait method),
+`aivyx-core/src/llm_planner.rs` (accumulation + impl),
+`aivyx-core/src/agent.rs` (threading), `aivyx-audit/src/lib.rs`
+(AuditEvent + bridge + tests), `aivyx-audit/src/persistent.rs`
+(test helper), `aivyx-channel/src/turn_history_tool.rs`
+(destructure update). 710 → 710 tests (no new tests; all
+existing pass with the new field).
 
 ### Task 4 -- Second regression channel for role primitive
 
@@ -103,12 +131,90 @@ Add a minimal second channel adapter to the integration test
 suite as a regression surface for the role-switching behavior.
 This closes the Phase 11 Q6 deferral.
 
+**Ship record:** `dcc7111`. Added three tests to
+`aivyx-core/src/agent.rs` exercising the role-allowlist under a
+`SemiTrusted` channel (`FakeChannel` with `ChannelPlatform::
+Telegram` and `TrustTier::SemiTrusted`):
+
+1. `semitrusted_channel_role_allowlist_permits_ceiling_included_tool`
+   — `memory.read` (in SemiTrusted ceiling) succeeds through
+   SemiTrusted channel with role allowlist.
+2. `semitrusted_channel_ceiling_denies_role_allowed_tool` —
+   `shell.exec` (not in SemiTrusted ceiling) is denied by the
+   capability gate even when the role allowlist includes it.
+3. `semitrusted_channel_records_narrowed_effective_caps_in_audit`
+   — `TurnStarted` audit event reports SemiTrusted tier and
+   narrowed effective capabilities after ceiling intersection.
+
+Test delta: 710 → 713 (+3).
+
 ### Task 5 -- Stretch goals (if time permits)
 
 MCP SSE transport or multi-level nesting, depending on which
 feels more natural after Tasks 2–4.
 
+**Outcome:** Not attempted. All Tier 1 items closed cleanly;
+Tier 2 items are better scoped as their own phase.
+
 ### Task 6 -- Exit freeze + docs
 
 Exit criteria checklist, prediction-vs-reality table, streak
 report. Record deferral backlog delta.
+
+## Exit criteria
+
+- [x] Task 1 shipped: Phase 31 scaffold, README + ROADMAP
+      updated.
+- [x] Task 2 shipped at `17cce6b`: content-type in web.fetch
+      output. Phase 12 Q3 deferral closed.
+- [x] Task 3 shipped at `fc4310f`: TokenUsage in TurnEnded
+      audit event. Phase 25 deferral closed.
+- [x] Task 4 shipped at `dcc7111`: SemiTrusted regression
+      tests for role primitive. Phase 11 Q6 deferral closed.
+- [x] Task 5 skipped: stretch goals not attempted.
+- [x] Task 6: this section.
+- [x] 713 tests, 0 failures.
+- [x] `cargo check` clean (only pre-existing MCP warnings).
+- [x] DESIGN.md untouched.
+- [x] PRODUCT.md untouched.
+
+## Prediction vs reality
+
+| Prediction | Reality | Notes |
+|---|---|---|
+| DESIGN.md untouched | Untouched | Correct |
+| PRODUCT.md untouched | Untouched | Correct — streak extends to 1 |
+| Production-core may break (streak 2) | **Broken** at Task 3 | `TokenUsage` + `AuditTag::TurnEnded.usage` added. Streak resets to 0 |
+
+## Streak report
+
+| Target | Streak at entry | This phase | Streak at exit |
+|---|---|---|---|
+| DESIGN.md | extends | untouched | extends |
+| PRODUCT.md | 0 (reset Phase 30) | untouched | 1 |
+| Production-core `lib.rs` | 2 | **broke** (Task 3) | 0 |
+
+## Rolling deferrals at Phase 31 exit (8 items, -3 closed)
+
+**Closed this phase:**
+- Response headers in web.fetch output (Phase 12 Q3) — Task 2
+- Provider-reported token usage (Phase 25) — Task 3
+- Second regression channel for role primitive (Phase 11 Q6)
+  — Task 4
+
+**Remaining (8 items):**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE)** — Phase 12 Q1.
+  Deferred indefinitely.
+- **Redirect following with per-hop scope re-check** —
+  Phase 12 Q5. Deferred indefinitely.
+- **Binary response bodies / non-UTF-8** — Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering** — Phase 12 Task 1.
+  Deferred reactively.
+- **Multi-level sub-agent nesting** — Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC** —
+  Phase 17 Q6->(c+). Tagged: reactive.
+- **Telegram-specific protocol extensions** — Phase 19.
+  Untouched.
+- **MCP SSE transport** — Phase 23. Untouched.

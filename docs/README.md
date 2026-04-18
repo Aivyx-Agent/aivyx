@@ -88,7 +88,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 28 | Frozen  | [PHASE_28.md](PHASE_28.md) | `2cd41d9`  |
 | Phase 29 | Frozen  | [PHASE_29.md](PHASE_29.md) | `03a804b`  |
 | Phase 30 | Frozen  | [PHASE_30.md](PHASE_30.md) | `8b93180` |
-| Phase 31 | **Open** | [PHASE_31.md](PHASE_31.md) | —         |
+| Phase 31 | Frozen  | [PHASE_31.md](PHASE_31.md) | `PENDING` |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

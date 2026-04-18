@@ -411,11 +411,14 @@ and G3 delivery status updated. Production-core streak extends
 to 2. Test delta +9 (701->710). Deferral backlog unchanged
 at 11.
 
-## Phase 31 — Deferral Cleanup
+## Phase 31 — Deferral Cleanup (frozen)
 
-**Active — see [PHASE_31.md](PHASE_31.md).** Non-product-shape
-cleanup phase targeting readily closable deferrals: response
-headers in web.fetch output (Phase 12 Q3), provider-reported
-token usage (Phase 25), second regression channel for role
-primitive (Phase 11 Q6). Stretch goals: MCP SSE transport,
-multi-level sub-agent nesting.
+**Frozen** (`PENDING`). Non-product-shape cleanup phase.
+Closed 3 of 11 rolling deferrals: content-type in web.fetch
+output (Phase 12 Q3), provider-reported token usage via
+`TokenUsage` in `TurnEnded` audit event (Phase 25), SemiTrusted
+regression tests for role primitive (Phase 11 Q6). Stretch goals
+(MCP SSE, multi-level nesting) not attempted — better scoped as
+own phase. DESIGN.md untouched. PRODUCT.md untouched (streak 1).
+Production-core broke at Task 3 (TokenUsage struct). Test delta
++3 (710->713). Deferral backlog 11 -> 8.
