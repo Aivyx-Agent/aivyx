@@ -74,15 +74,18 @@ pub async fn run_daemon(
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
 
+    // Shared trigger dispatch — all trigger subsystems (cron, webhook,
+    // file-watch) share the same turn lock and agent/channel references.
+    let trigger_dispatch =
+        crate::trigger::TriggerDispatch::new(Arc::clone(&agent), Arc::clone(&channel_factory));
+
     // Spawn the scheduler loop if a schedule store is provided.
     let _scheduler_handle = schedule_store.map(|store| {
-        let sched_agent = Arc::clone(&agent);
-        let sched_factory = Arc::clone(&channel_factory);
+        let sched_dispatch = trigger_dispatch.clone();
         let sched_shutdown = shutdown.clone();
         tokio::spawn(async move {
             crate::daemon_scheduler::run_scheduler(
-                sched_agent,
-                sched_factory,
+                sched_dispatch,
                 store,
                 sched_shutdown,
             )

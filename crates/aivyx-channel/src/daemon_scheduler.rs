@@ -9,18 +9,15 @@
 //! next-fire-time across all enabled schedules (capped at 60 s so new
 //! schedules created mid-run are picked up promptly).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use tokio::sync::Mutex;
 
-use aivyx_core::{Agent, CancellationToken, Message, SessionId};
+use aivyx_core::CancellationToken;
 use aivyx_storage::DomainHandle;
 
-use crate::daemon_ipc::FrontendType;
-use crate::daemon_server::ChannelFactory;
 use crate::schedule::{self, ScheduleRecord};
+use crate::trigger::{TriggerDispatch, TriggerSource};
 
 const MAX_TICK_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -78,21 +75,16 @@ pub fn config_to_records(
 /// 3. Updates `last_fired_at` on fired schedules.
 /// 4. Sleeps until the earliest next-fire-time (capped at 60 s).
 pub async fn run_scheduler(
-    agent: Arc<dyn Agent>,
-    channel_factory: ChannelFactory,
+    dispatch: TriggerDispatch,
     store: DomainHandle,
     shutdown: CancellationToken,
 ) {
-    // Serialize scheduled turns so two schedules firing simultaneously
-    // don't interleave turns on the same agent.
-    let turn_lock = Arc::new(Mutex::new(()));
-
     loop {
         if shutdown.is_cancelled() {
             return;
         }
 
-        let sleep_dur = match tick(&agent, &channel_factory, &store, &turn_lock).await {
+        let sleep_dur = match tick(&dispatch, &store).await {
             Ok(dur) => dur,
             Err(e) => {
                 eprintln!("aivyx scheduler: tick error: {e}");
@@ -110,10 +102,8 @@ pub async fn run_scheduler(
 /// Execute one scheduler tick. Returns the duration to sleep before the
 /// next tick.
 async fn tick(
-    agent: &Arc<dyn Agent>,
-    channel_factory: &ChannelFactory,
+    dispatch: &TriggerDispatch,
     store: &DomainHandle,
-    turn_lock: &Arc<Mutex<()>>,
 ) -> Result<Duration, String> {
     let schedules = schedule::list_schedules(store)
         .await
@@ -135,7 +125,7 @@ async fn tick(
 
         if next_fire <= now {
             if !already_fired_in_window(sched, next_fire) {
-                fire_schedule(agent, channel_factory, store, sched, turn_lock).await;
+                fire_schedule(dispatch, store, sched).await;
             }
             // Recompute next fire after this one.
             if let Some(after_now) = sched.next_fire_time_after(now) {
@@ -188,30 +178,15 @@ fn update_earliest(
     }
 }
 
-/// Fire a single scheduled turn through the agent.
+/// Fire a single scheduled turn through the shared trigger dispatch.
 async fn fire_schedule(
-    agent: &Arc<dyn Agent>,
-    channel_factory: &ChannelFactory,
+    dispatch: &TriggerDispatch,
     store: &DomainHandle,
     sched: &ScheduleRecord,
-    turn_lock: &Arc<Mutex<()>>,
 ) {
-    eprintln!(
-        "aivyx scheduler: firing schedule {:?} (role={}, prompt={:?})",
-        sched.schedule_id, sched.role_name, sched.prompt,
-    );
-
-    let channel = channel_factory(FrontendType::Local);
-    let msg = Message::text(SessionId::new(), sched.prompt.clone());
-
-    let _guard = turn_lock.lock().await;
-    let outcome = agent.turn(msg, channel.as_ref()).await;
-    drop(_guard);
-
-    eprintln!(
-        "aivyx scheduler: schedule {:?} turn outcome: {outcome:?}",
-        sched.schedule_id,
-    );
+    dispatch
+        .fire(TriggerSource::Cron, &sched.schedule_id, &sched.prompt)
+        .await;
 
     // Update last_fired_at regardless of outcome.
     let now_ms = std::time::SystemTime::now()
