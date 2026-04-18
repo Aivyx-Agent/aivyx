@@ -101,6 +101,8 @@ pub enum KeyDomain {
     Schedules,
     /// Webhook trigger records — HTTP-triggered execution entries (Phase 27).
     Webhooks,
+    /// File-watch trigger records — filesystem-change-triggered entries (Phase 27).
+    FileWatches,
 }
 
 impl KeyDomain {
@@ -120,6 +122,7 @@ impl KeyDomain {
             KeyDomain::Missions => b"missions",
             KeyDomain::Schedules => b"schedules",
             KeyDomain::Webhooks => b"webhooks",
+            KeyDomain::FileWatches => b"file-watches",
         }
     }
 
@@ -138,12 +141,13 @@ impl KeyDomain {
             KeyDomain::Missions => "aivyx_missions_v1",
             KeyDomain::Schedules => "aivyx_schedules_v1",
             KeyDomain::Webhooks => "aivyx_webhooks_v1",
+            KeyDomain::FileWatches => "aivyx_file_watches_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 8] = [
+    pub const ALL: [KeyDomain; 9] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -152,6 +156,7 @@ impl KeyDomain {
         KeyDomain::Missions,
         KeyDomain::Schedules,
         KeyDomain::Webhooks,
+        KeyDomain::FileWatches,
     ];
 }
 
@@ -337,7 +342,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 8],
+    subkeys: [SubKey; 9],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -347,7 +352,7 @@ pub struct RedbStorage {
 impl RedbStorage {
     /// Open (or create) an encrypted store at the given path using
     /// the provided master key. All tables are created on first open
-    /// and all eight [`KeyDomain`] subkeys are derived up front, so
+    /// and all nine [`KeyDomain`] subkeys are derived up front, so
     /// the hot path never calls HKDF.
     ///
     /// # Errors
@@ -414,7 +419,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 8], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 9], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -427,6 +432,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Missions.as_bytes())?,
             master.derive_subkey(KeyDomain::Schedules.as_bytes())?,
             master.derive_subkey(KeyDomain::Webhooks.as_bytes())?,
+            master.derive_subkey(KeyDomain::FileWatches.as_bytes())?,
         ])
     }
 
@@ -443,6 +449,7 @@ impl RedbStorage {
             KeyDomain::Missions => &self.subkeys[5],
             KeyDomain::Schedules => &self.subkeys[6],
             KeyDomain::Webhooks => &self.subkeys[7],
+            KeyDomain::FileWatches => &self.subkeys[8],
         }
     }
 }
@@ -843,7 +850,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a ninth `KeyDomain` variant, this
+        // If a future phase adds a tenth `KeyDomain` variant, this
         // test fails because `ALL` is a fixed-size array and the
         // match below forces an update. Tripwire for "adding a
         // variant without updating ALL."
@@ -856,7 +863,8 @@ mod tests {
                 | KeyDomain::ChannelState
                 | KeyDomain::Missions
                 | KeyDomain::Schedules
-                | KeyDomain::Webhooks => {}
+                | KeyDomain::Webhooks
+                | KeyDomain::FileWatches => {}
             }
         }
     }

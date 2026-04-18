@@ -108,6 +108,10 @@ const KNOWN_BASES: &[&str] = &[
     "webhook.create",
     "webhook.list",
     "webhook.delete",
+    // file_watch (Phase 27 — PRODUCT.md G5 completion)
+    "file_watch.create",
+    "file_watch.list",
+    "file_watch.delete",
     // MCP bridge (Phase 23 Task 3 — PRODUCT_ROADMAP.md MCP Integration).
     // `mcp.call` gates invocation of tools discovered from MCP servers.
     // Qualifier format: `<server_name>:<tool_name>` — e.g.,
@@ -576,6 +580,9 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "webhook.create",
         "webhook.list",
         "webhook.delete",
+        "file_watch.create",
+        "file_watch.list",
+        "file_watch.delete",
         "role.switch",
         "mcp.call",
     ])

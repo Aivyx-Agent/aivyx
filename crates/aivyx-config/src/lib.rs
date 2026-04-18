@@ -546,6 +546,9 @@ pub struct AivyxConfig {
     /// Webhook trigger entries from `[[webhook]]` entries.
     /// Empty when no entries are configured.
     pub webhooks: Vec<WebhookConfig>,
+    /// File-watch trigger entries from `[[file_watch]]` entries.
+    /// Empty when no entries are configured.
+    pub file_watches: Vec<FileWatchConfig>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -765,6 +768,18 @@ pub struct WebhookConfig {
     pub enabled: bool,
 }
 
+/// One file-watch trigger entry loaded from `[[file_watch]]` in the TOML file.
+/// Phase 27 Task 4.
+#[derive(Debug, Clone)]
+pub struct FileWatchConfig {
+    pub name: String,
+    pub path: String,
+    pub role: String,
+    pub prompt: String,
+    pub enabled: bool,
+    pub debounce_ms: Option<u64>,
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -810,6 +825,9 @@ struct RawToml {
     /// `[[webhook]]` table-array. Phase 27 Task 3.
     #[serde(default, rename = "webhook")]
     webhooks: Option<Vec<RawWebhook>>,
+    /// `[[file_watch]]` table-array. Phase 27 Task 4.
+    #[serde(default, rename = "file_watch")]
+    file_watches: Option<Vec<RawFileWatch>>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -885,6 +903,19 @@ struct RawWebhook {
     prompt: String,
     #[serde(default = "default_true")]
     enabled: bool,
+}
+
+/// One `[[file_watch]]` entry in the TOML file. Phase 27 Task 4.
+#[derive(Debug, Default, Deserialize)]
+struct RawFileWatch {
+    name: String,
+    path: String,
+    #[serde(default = "default_role_name")]
+    role: String,
+    prompt: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    debounce_ms: Option<u64>,
 }
 
 fn default_role_name() -> String {
@@ -1461,6 +1492,22 @@ impl AivyxConfig {
             })
             .collect();
 
+        // --- file watches ------------------------------------------
+        let file_watches: Vec<FileWatchConfig> = toml
+            .file_watches
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .map(|r| FileWatchConfig {
+                name: r.name,
+                path: r.path,
+                role: r.role,
+                prompt: r.prompt,
+                enabled: true,
+                debounce_ms: r.debounce_ms,
+            })
+            .collect();
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
@@ -1479,6 +1526,7 @@ impl AivyxConfig {
             mcp_servers,
             schedules,
             webhooks,
+            file_watches,
         })
     }
 

@@ -138,6 +138,9 @@ use aivyx_channel::schedule_tool::{
 use aivyx_channel::webhook_tool::{
     WebhookCreateTool, WebhookDeleteTool, WebhookListTool,
 };
+use aivyx_channel::file_watch_tool::{
+    FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool,
+};
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
 };
@@ -1063,6 +1066,7 @@ async fn run_async(
         mut mcp_servers,
         schedules: config_schedules,
         webhooks: config_webhooks,
+        file_watches: config_file_watches,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -1271,6 +1275,13 @@ async fn run_async(
     tool_list.push(Arc::clone(&webhook_list_tool) as Arc<dyn Tool>);
     let webhook_delete_tool: Arc<WebhookDeleteTool> = Arc::new(WebhookDeleteTool::new());
     tool_list.push(Arc::clone(&webhook_delete_tool) as Arc<dyn Tool>);
+
+    let file_watch_create_tool: Arc<FileWatchCreateTool> = Arc::new(FileWatchCreateTool::new());
+    tool_list.push(Arc::clone(&file_watch_create_tool) as Arc<dyn Tool>);
+    let file_watch_list_tool: Arc<FileWatchListTool> = Arc::new(FileWatchListTool::new());
+    tool_list.push(Arc::clone(&file_watch_list_tool) as Arc<dyn Tool>);
+    let file_watch_delete_tool: Arc<FileWatchDeleteTool> = Arc::new(FileWatchDeleteTool::new());
+    tool_list.push(Arc::clone(&file_watch_delete_tool) as Arc<dyn Tool>);
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -1580,6 +1591,28 @@ async fn run_async(
                 .to_string()
         })?;
 
+    file_watch_create_tool
+        .set_file_watch_store(storage.domain(KeyDomain::FileWatches))
+        .map_err(|_| {
+            "file_watch.create store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    file_watch_list_tool
+        .set_file_watch_store(storage.domain(KeyDomain::FileWatches))
+        .map_err(|_| {
+            "file_watch.list store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    file_watch_delete_tool
+        .set_file_watch_store(storage.domain(KeyDomain::FileWatches))
+        .map_err(|_| {
+            "file_watch.delete store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
     // ---- Phase 17 Task 3: daemon-run branch ----------------------------
     // If the operator invoked `aivyx daemon run`, launch the daemon
     // server in the foreground. The daemon reuses the same agent,
@@ -1699,6 +1732,26 @@ async fn run_async(
             }
         }
 
+        // Sync TOML [[file_watch]] entries into the file-watch store.
+        let file_watch_domain = storage.domain(KeyDomain::FileWatches);
+        if !config_file_watches.is_empty() {
+            let records = aivyx_channel::file_watcher::config_to_records(&config_file_watches);
+            match aivyx_channel::file_watcher::sync_config_file_watches(
+                &file_watch_domain,
+                &records,
+            )
+            .await
+            {
+                Ok(n) if n > 0 => {
+                    eprintln!("aivyx daemon: synced {n} file watch(es) from config");
+                }
+                Err(e) => {
+                    eprintln!("aivyx daemon: file-watch config sync failed: {e}");
+                }
+                _ => {}
+            }
+        }
+
         let result = run_daemon(
             &socket_path,
             agent,
@@ -1707,6 +1760,7 @@ async fn run_async(
             Some(storage.domain(KeyDomain::Missions)),
             Some(schedule_domain),
             Some(webhook_domain),
+            Some(file_watch_domain),
         )
             .await;
 

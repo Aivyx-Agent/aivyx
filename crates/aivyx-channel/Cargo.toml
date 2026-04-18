@@ -105,6 +105,11 @@ chrono = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
+# Phase 27 Task 4 — file-watch trigger. Cross-platform filesystem
+# notification (inotify on Linux, FSEvents on macOS, ReadDirectoryChanges
+# on Windows). First genuinely new Cargo.lock entry since Phase 26's
+# `cron` crate.
+notify = { workspace = true }
 
 [dev-dependencies]
 # LocalChannel unit tests exercise the async ChannelContext surface

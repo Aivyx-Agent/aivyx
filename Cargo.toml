@@ -63,3 +63,6 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
+
+# File-system change notifications for file-watch triggers (Phase 27)
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
