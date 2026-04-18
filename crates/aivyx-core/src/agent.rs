@@ -2988,4 +2988,193 @@ mod tests {
             "parent and child must have distinct TurnIds — that's the P1.4 tagging guarantee"
         );
     }
+
+    // =====================================================================
+    // Phase 31 Task 4 — SemiTrusted channel regression for role primitive
+    // =====================================================================
+    //
+    // The Phase 11 Q6 deferral asked for a second regression channel
+    // beyond `LocalChannel` (Trusted) to exercise the role-allowlist
+    // under a different trust tier. These tests use `FakeChannel` with
+    // `ChannelPlatform::Telegram` and `TrustTier::SemiTrusted` to prove
+    // that the allowlist gate and the capability-ceiling gate compose
+    // correctly when the tier narrows the effective capability set.
+    //
+    // Key property: the SemiTrusted ceiling strips `shell.exec`,
+    // `role.switch`, `role.update`, `reflection.*` etc. A role whose
+    // allowlist includes `shell.exec` still cannot execute it through
+    // a SemiTrusted channel because the *capability* gate fires after
+    // the allowlist gate passes.
+
+    #[tokio::test]
+    async fn semitrusted_channel_role_allowlist_permits_ceiling_included_tool() {
+        // Positive control: `memory.read` is in the SemiTrusted ceiling.
+        // An agent with both the capability AND the role-allowlist entry
+        // should succeed through a SemiTrusted channel.
+        let audit = RecordingAudit::new();
+        let mem = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let mem_id = mem.id();
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+        ]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: mem_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let registry = Arc::new(ToolRegistry::new(vec![mem as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["memory.read"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Telegram, TrustTier::SemiTrusted);
+        let message = Message::text(channel.session, "recall");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Completed { tool_calls_made, .. } => {
+                assert_eq!(tool_calls_made, 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let events = audit.snapshot();
+        assert!(
+            events.iter().any(|e| matches!(e, AuditTag::ToolCall { .. })),
+            "SemiTrusted in-role, in-ceiling call must execute"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "no denial expected for in-ceiling, in-role tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn semitrusted_channel_ceiling_denies_role_allowed_tool() {
+        // The critical composition test: the agent holds `shell.exec`
+        // capability and the role allowlist includes `shell.exec`, but
+        // the SemiTrusted ceiling strips it. The capability gate must
+        // fire (not the allowlist gate) — proving the two layers are
+        // independent and compose in the correct order.
+        let audit = RecordingAudit::new();
+        let shell = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let shell_id = shell.id();
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("shell.exec").unwrap(),
+        ]);
+        let plan = vec![NextStep::ToolCall {
+            tool_id: shell_id,
+            input: json!({}),
+        }];
+        let registry = Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["shell.exec"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Telegram, TrustTier::SemiTrusted);
+        let message = Message::text(channel.session, "rm -rf");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        // Must produce a ScopeDenied with base `shell.exec` (capability
+        // denial), NOT `tool.allowlist` (role denial) — proving the
+        // allowlist gate passed but the ceiling narrowed the effective
+        // caps and the capability gate denied.
+        let denial = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ScopeDenied { scope_requested, .. } => Some(scope_requested),
+                _ => None,
+            })
+            .expect("SemiTrusted ceiling must deny shell.exec");
+        assert_eq!(
+            denial.base(),
+            "shell.exec",
+            "denial must be a capability denial (shell.exec), not a \
+             role-allowlist denial (tool.allowlist)"
+        );
+    }
+
+    #[tokio::test]
+    async fn semitrusted_channel_records_narrowed_effective_caps_in_audit() {
+        // The TurnStarted audit event must report SemiTrusted tier and
+        // the intersection of agent caps with the SemiTrusted ceiling.
+        // This is the auditor's primary signal for channel-specific
+        // capability narrowing.
+        let audit = RecordingAudit::new();
+        let mem = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let mem_id = mem.id();
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("shell.exec").unwrap(),
+        ]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: mem_id,
+                input: json!({}),
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let registry = Arc::new(ToolRegistry::new(vec![mem as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_tool_allowlist(Some(allowlist(&["memory.read", "shell.exec"])));
+
+        let channel = FakeChannel::new(ChannelPlatform::Telegram, TrustTier::SemiTrusted);
+        let message = Message::text(channel.session, "check");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        let started = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::TurnStarted {
+                    trust_tier,
+                    effective_capabilities,
+                    ..
+                } => Some((trust_tier, effective_capabilities)),
+                _ => None,
+            })
+            .expect("TurnStarted must be emitted");
+
+        assert_eq!(
+            *started.0,
+            TrustTier::SemiTrusted,
+            "TurnStarted must report SemiTrusted tier"
+        );
+        // shell.exec must NOT appear in effective caps — the ceiling
+        // strips it during intersection.
+        assert!(
+            !started.1.grants(&Scope::parse("shell.exec").unwrap()),
+            "effective caps under SemiTrusted must not include shell.exec"
+        );
+        // memory.read MUST survive — it's in both the agent caps and
+        // the SemiTrusted ceiling.
+        assert!(
+            started.1.grants(&Scope::parse("memory.read").unwrap()),
+            "effective caps under SemiTrusted must include memory.read"
+        );
+    }
 }
