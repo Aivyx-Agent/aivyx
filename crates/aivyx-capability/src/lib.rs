@@ -122,6 +122,9 @@ const KNOWN_BASES: &[&str] = &[
     // `role.switch`), so `mcp.call:github:*` grants all tools on the
     // `github` server.
     "mcp.call",
+    // reflection (Phase 29 — PRODUCT.md G3/P8)
+    "reflection.propose",
+    "reflection.apply",
 ];
 
 // ---------------------------------------------------------------------------
@@ -589,6 +592,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "file_watch.delete",
         "role.switch",
         "mcp.call",
+        "reflection.propose",
+        "reflection.apply",
     ])
 });
 
