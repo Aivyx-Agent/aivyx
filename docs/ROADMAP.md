@@ -361,12 +361,19 @@ PRODUCT.md both untouched. Test delta +17 (643→660). Rolling
 backlog 13→14 (+1 net-new: automatic mission wrapping for
 scheduled turns).
 
-## Phase 27 — TBD at Phase 26 exit
+## Phase 27 — Scheduled Execution Phase 2: Webhook Triggers + File Watchers
+
+**Active — see [PHASE_27.md](PHASE_27.md).** Completes G5 by
+adding webhook trigger endpoints (localhost-only HTTP listener)
+and file-change watchers alongside the cron timer primitives
+shipped in Phase 26. Unifies all trigger sources under a shared
+`TriggerSource` dispatch abstraction. Closes the Phase 26
+automatic-mission-wrapping deferral with opt-in `wrap_mission`
+on all trigger configs.
+
+## Phase 28 — TBD at Phase 27 exit
 
 Strongest candidates: (a) Web UI Channel — browser-based
-frontend over existing daemon IPC, makes schedules + missions
-operator-visible without CLI; (b) Scheduled Execution Phase 2
-— webhook trigger endpoints + file-change watchers completing
-G5; (c) Reflection Layer — periodic self-assessment using
-scheduler as trigger substrate. Decision deferred to Phase 27
-open.
+frontend over existing daemon IPC; (b) Reflection Layer —
+periodic self-assessment using scheduler + trigger substrate.
+Decision deferred to Phase 28 open.

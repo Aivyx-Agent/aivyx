@@ -423,10 +423,20 @@ substrate exists and missions survive restarts. This milestone
 adds cron-like timer primitives, webhook trigger endpoints
 (localhost-only per P6), and file-change watchers. Each
 trigger creates a daemon turn attributed to the operator's
-identity. Expected to be 1–2 phases. The load-bearing
-decision is whether triggers create missions (long-running,
-gate-structured) or bounded tasks (single-turn, fire-and-
-forget).
+identity.
+
+**Phase 26 (Timer Primitives, 2026-04-17):** delivered cron
+scheduler — `KeyDomain::Schedules`, `ScheduleRecord` CRUD,
+`[[schedule]]` TOML config, daemon scheduler loop with
+adaptive-tick and dedup, four agent tools (`schedule.create`,
+`.list`, `.delete`, `.update`) gated to `CEILING_TRUSTED`.
+660 tests. All byte-identity streaks held. See
+[`docs/PHASE_26.md`](PHASE_26.md).
+
+**Phase 27 (Webhook Triggers + File Watchers, 2026-04-18):**
+active. Completes G5 with webhook endpoints, file-change
+watchers, trigger abstraction unification, and opt-in
+mission wrapping. See [`docs/PHASE_27.md`](PHASE_27.md).
 
 ## Sequencing notes (revised at Phase 22 entry, 2026-04-17)
 
@@ -445,9 +455,10 @@ chains.
   predicted.
 - **Web UI Channel is high impact.** Daemon IPC makes it
   cheap. ~2 phases.
-- **Scheduled Execution Phase 1 delivered** (Phase 26).
-  Timer primitives shipped. Phase 2 (webhooks, file-watchers)
-  remains. ~1 more phase.
+- **Scheduled Execution Phase 2 active** (Phase 27).
+  Timer primitives shipped in Phase 26. Phase 27 adds webhooks,
+  file-watchers, trigger unification, and mission wrapping to
+  complete G5.
 - **Reflection Layer is the most ambitious and most
   consequential.** Now unblocked by the mission gate primitive
   from Phase 21. ~2–3 phases.
