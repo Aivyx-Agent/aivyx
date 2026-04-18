@@ -125,6 +125,8 @@ const KNOWN_BASES: &[&str] = &[
     // reflection (Phase 29 — PRODUCT.md G3/P8)
     "reflection.propose",
     "reflection.apply",
+    // role mutation (Phase 30 — PRODUCT.md P8 completion)
+    "role.update",
 ];
 
 // ---------------------------------------------------------------------------
@@ -594,6 +596,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "mcp.call",
         "reflection.propose",
         "reflection.apply",
+        "role.update",
     ])
 });
 

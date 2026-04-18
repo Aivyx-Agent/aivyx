@@ -44,6 +44,7 @@ pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod reflection_tool;
+pub mod role_overrides;
 pub mod turn_history_tool;
 mod daemon_session;
 mod local;
