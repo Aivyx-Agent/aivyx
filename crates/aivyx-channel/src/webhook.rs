@@ -20,6 +20,7 @@ pub struct WebhookRecord {
     pub role_name: String,
     pub prompt: String,
     pub enabled: bool,
+    pub wrap_mission: bool,
     pub created_at: u64,
     pub last_fired_at: Option<u64>,
 }
@@ -35,6 +36,7 @@ impl WebhookRecord {
             role_name,
             prompt,
             enabled: true,
+            wrap_mission: false,
             created_at: now_millis(),
             last_fired_at: None,
         }

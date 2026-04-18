@@ -78,8 +78,11 @@ pub async fn run_daemon(
 
     // Shared trigger dispatch — all trigger subsystems (cron, webhook,
     // file-watch) share the same turn lock and agent/channel references.
-    let trigger_dispatch =
+    let mut trigger_dispatch =
         crate::trigger::TriggerDispatch::new(Arc::clone(&agent), Arc::clone(&channel_factory));
+    if let Some(ref ms) = mission_store {
+        trigger_dispatch = trigger_dispatch.with_mission_store(ms.clone());
+    }
 
     // Spawn the scheduler loop if a schedule store is provided.
     let _scheduler_handle = schedule_store.map(|store| {

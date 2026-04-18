@@ -62,6 +62,7 @@ pub fn config_to_records(
                 c.prompt.clone(),
             );
             r.enabled = c.enabled;
+            r.wrap_mission = c.wrap_mission;
             if let Some(ms) = c.debounce_ms {
                 r.debounce_ms = ms;
             }
@@ -115,9 +116,10 @@ pub async fn run_file_watcher(
                             let dispatch = dispatch.clone();
                             let id = watch_id.clone();
                             let prompt = state.prompt.clone();
+                            let wrap = state.wrap_mission;
                             let store = store.clone();
                             tokio::spawn(async move {
-                                dispatch.fire(TriggerSource::FileWatch, &id, &prompt).await;
+                                dispatch.fire(TriggerSource::FileWatch, &id, &prompt, wrap).await;
                                 // Update last_fired_at in storage.
                                 update_last_fired(&store, &id).await;
                             });
@@ -133,6 +135,7 @@ struct WatchState {
     path: PathBuf,
     prompt: String,
     debounce_ms: u64,
+    wrap_mission: bool,
     last_fired_ms: Option<u64>,
 }
 
@@ -243,6 +246,7 @@ fn reconcile_watches(
                             path: p,
                             prompt: r.prompt.clone(),
                             debounce_ms: r.debounce_ms,
+                            wrap_mission: r.wrap_mission,
                             last_fired_ms: r.last_fired_at,
                         });
                     }
@@ -309,6 +313,7 @@ mod tests {
             prompt: "new data arrived".into(),
             enabled: true,
             debounce_ms: Some(5000),
+            wrap_mission: false,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records.len(), 1);
@@ -326,6 +331,7 @@ mod tests {
             prompt: "check logs".into(),
             enabled: true,
             debounce_ms: None,
+            wrap_mission: false,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records[0].debounce_ms, file_watch::DEFAULT_DEBOUNCE_MS);
@@ -340,8 +346,24 @@ mod tests {
             prompt: "test".into(),
             enabled: false,
             debounce_ms: None,
+            wrap_mission: false,
         }];
         let records = config_to_records(&configs);
         assert!(!records[0].enabled);
+    }
+
+    #[test]
+    fn config_to_records_propagates_wrap_mission() {
+        let configs = vec![aivyx_config::FileWatchConfig {
+            name: "wrapped".into(),
+            path: "/tmp/data".into(),
+            role: "default".into(),
+            prompt: "process".into(),
+            enabled: true,
+            debounce_ms: None,
+            wrap_mission: true,
+        }];
+        let records = config_to_records(&configs);
+        assert!(records[0].wrap_mission);
     }
 }

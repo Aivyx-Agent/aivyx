@@ -756,6 +756,7 @@ pub struct ScheduleConfig {
     pub role: String,
     pub prompt: String,
     pub enabled: bool,
+    pub wrap_mission: bool,
 }
 
 /// One webhook trigger entry loaded from `[[webhook]]` in the TOML file.
@@ -766,6 +767,7 @@ pub struct WebhookConfig {
     pub role: String,
     pub prompt: String,
     pub enabled: bool,
+    pub wrap_mission: bool,
 }
 
 /// One file-watch trigger entry loaded from `[[file_watch]]` in the TOML file.
@@ -778,6 +780,7 @@ pub struct FileWatchConfig {
     pub prompt: String,
     pub enabled: bool,
     pub debounce_ms: Option<u64>,
+    pub wrap_mission: bool,
 }
 
 // --------------------------------------------------------------------
@@ -892,6 +895,8 @@ struct RawSchedule {
     prompt: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    wrap_mission: bool,
 }
 
 /// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
@@ -903,6 +908,8 @@ struct RawWebhook {
     prompt: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    wrap_mission: bool,
 }
 
 /// One `[[file_watch]]` entry in the TOML file. Phase 27 Task 4.
@@ -916,6 +923,8 @@ struct RawFileWatch {
     #[serde(default = "default_true")]
     enabled: bool,
     debounce_ms: Option<u64>,
+    #[serde(default)]
+    wrap_mission: bool,
 }
 
 fn default_role_name() -> String {
@@ -1475,6 +1484,7 @@ impl AivyxConfig {
                 role: r.role,
                 prompt: r.prompt,
                 enabled: true,
+                wrap_mission: r.wrap_mission,
             })
             .collect();
 
@@ -1489,6 +1499,7 @@ impl AivyxConfig {
                 role: r.role,
                 prompt: r.prompt,
                 enabled: true,
+                wrap_mission: r.wrap_mission,
             })
             .collect();
 
@@ -1505,6 +1516,7 @@ impl AivyxConfig {
                 prompt: r.prompt,
                 enabled: true,
                 debounce_ms: r.debounce_ms,
+                wrap_mission: r.wrap_mission,
             })
             .collect();
 

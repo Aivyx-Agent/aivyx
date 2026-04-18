@@ -22,6 +22,7 @@ pub struct FileWatchRecord {
     pub role_name: String,
     pub prompt: String,
     pub enabled: bool,
+    pub wrap_mission: bool,
     /// Debounce interval in milliseconds. Events within this window
     /// after the last fire are suppressed.
     pub debounce_ms: u64,
@@ -46,6 +47,7 @@ impl FileWatchRecord {
             role_name,
             prompt,
             enabled: true,
+            wrap_mission: false,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             created_at: now_millis(),
             last_fired_at: None,

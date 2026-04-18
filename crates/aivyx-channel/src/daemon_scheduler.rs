@@ -59,6 +59,7 @@ pub fn config_to_records(
             )
             .map(|mut r| {
                 r.enabled = c.enabled;
+                r.wrap_mission = c.wrap_mission;
                 r
             })
         })
@@ -185,7 +186,7 @@ async fn fire_schedule(
     sched: &ScheduleRecord,
 ) {
     dispatch
-        .fire(TriggerSource::Cron, &sched.schedule_id, &sched.prompt)
+        .fire(TriggerSource::Cron, &sched.schedule_id, &sched.prompt, sched.wrap_mission)
         .await;
 
     // Update last_fired_at regardless of outcome.
@@ -303,6 +304,7 @@ mod tests {
             role: "ops".into(),
             prompt: "check system health".into(),
             enabled: true,
+            wrap_mission: false,
         }];
         let records = config_to_records(&configs).unwrap();
         assert_eq!(records.len(), 1);
@@ -319,6 +321,7 @@ mod tests {
             role: "default".into(),
             prompt: "test".into(),
             enabled: true,
+            wrap_mission: false,
         }];
         assert!(config_to_records(&configs).is_err());
     }
@@ -331,8 +334,23 @@ mod tests {
             role: "default".into(),
             prompt: "test".into(),
             enabled: false,
+            wrap_mission: false,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(!records[0].enabled);
+    }
+
+    #[test]
+    fn config_to_records_propagates_wrap_mission() {
+        let configs = vec![aivyx_config::ScheduleConfig {
+            name: "wrapped".into(),
+            cron: "0 0 9 * * * *".into(),
+            role: "default".into(),
+            prompt: "test".into(),
+            enabled: true,
+            wrap_mission: true,
+        }];
+        let records = config_to_records(&configs).unwrap();
+        assert!(records[0].wrap_mission);
     }
 }

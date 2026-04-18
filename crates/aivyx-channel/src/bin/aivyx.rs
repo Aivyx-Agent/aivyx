@@ -1707,11 +1707,12 @@ async fn run_async(
                 let wh_id = format!("cfg-{}", wh_cfg.name);
                 match aivyx_channel::webhook::get_webhook(&webhook_domain, &wh_id).await {
                     Ok(None) => {
-                        let record = aivyx_channel::webhook::WebhookRecord::new(
+                        let mut record = aivyx_channel::webhook::WebhookRecord::new(
                             wh_id,
                             wh_cfg.role.clone(),
                             wh_cfg.prompt.clone(),
                         );
+                        record.wrap_mission = wh_cfg.wrap_mission;
                         if let Err(e) = aivyx_channel::webhook::create_webhook(
                             &webhook_domain,
                             &record,
