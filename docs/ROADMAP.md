@@ -422,3 +422,11 @@ regression tests for role primitive (Phase 11 Q6). Stretch goals
 own phase. DESIGN.md untouched. PRODUCT.md untouched (streak 1).
 Production-core broke at Task 3 (TokenUsage struct). Test delta
 +3 (710->713). Deferral backlog 11 -> 8.
+
+## Phase 32 — MCP SSE Transport
+
+**Active — see [PHASE_32.md](PHASE_32.md).** Adds HTTP/SSE
+transport for remote MCP servers, complementing the existing
+stdio transport. Closes the Phase 23 MCP SSE deferral and
+completes the MCP Integration milestone. Transport trait
+extraction, SSE implementation, config + binary wiring.
