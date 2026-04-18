@@ -382,7 +382,7 @@ SDK and Tool Process IPC milestones have landed) and dresses
 them as a publishable contract. Expected to be one phase, late
 in the sequence.
 
-## Milestone — MCP Integration (stdio shipped, SSE deferred)
+## Milestone — MCP Integration ✓
 
 **Forward commitment candidate:** not yet locked (requires
 product-shape review). **Couples to:** P11 (SDK Contract),
@@ -410,8 +410,12 @@ lifecycle (eager startup, tool registration, `kill_on_drop`
 shutdown), workspace layout amendment addendum, `--mcp-server`
 CLI flag. Closed the MCP config surface deferral. 9 tests.
 
-**Remaining:** SSE transport for remote MCP servers (deferred
-from Phase 23).
+**Phase 32 (MCP SSE Transport, 2026-04-19):**
+`McpTransport` trait abstraction, `StdioTransport` extraction,
+`SseTransport` over HTTP+SSE with background event reader,
+`McpTransportKind` config enum, `--mcp-sse` CLI flag. Closes the
+Phase 23 SSE deferral. 23 new tests (9 parser, 8 config/CLI,
+6 integration). Milestone fully delivered.
 
 ## Milestone — Multi-Provider Support ✓
 
