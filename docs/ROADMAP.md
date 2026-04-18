@@ -387,10 +387,18 @@ primitive — `turn.history` audit introspection tool. Backlog
 variant). DESIGN.md and PRODUCT.md untouched. Test delta +7
 (690→697).
 
-## Phase 29 — TBD at Phase 28 exit
+## Phase 29 — Agent Reflection Loop
+
+**Active — see [PHASE_29.md](PHASE_29.md).** Completes the
+Reflection Layer (PRODUCT.md G3 / P8). Delivers `reflection.propose`
+and `reflection.apply` tools: the agent reads its own recent outcomes
+via `turn.history`, proposes memory adjustments, and surfaces them
+through mission gates for operator approval. New `reflection.propose`
+and `reflection.apply` capability bases in CEILING_TRUSTED.
+
+## Phase 30 — TBD at Phase 29 exit
 
 Strongest candidates: (a) Web UI Channel — browser-based
-frontend over existing daemon IPC; (b) Reflection Layer Phase 2
-— periodic self-assessment loop composing audit introspection
-with trigger scheduling; (c) further deferral cleanup.
-Decision deferred to Phase 29 open.
+frontend over existing daemon IPC; (b) runtime role-config
+mutation (the second half of full P8); (c) further deferral
+cleanup (11 items). Decision deferred to Phase 30 open.

@@ -311,6 +311,12 @@ recent turn outcomes. Combined with deferral cleanup
 forensic `ToolOutcome::NotInRole`). See
 [`docs/PHASE_28.md`](PHASE_28.md).
 
+**Phase 29 (Agent Reflection Loop, 2026-04-18):** active.
+Completes the Reflection Layer — `reflection.propose` and
+`reflection.apply` tools for the full observe-propose-approve-apply
+cycle. Memory-only scope for this phase; runtime role-config
+mutation deferred. See [`docs/PHASE_29.md`](PHASE_29.md).
+
 ## Milestone — Channel SDK Surface
 
 **Forward commitment:** [`PRODUCT.md` P5](../PRODUCT.md). **Couples to:**
