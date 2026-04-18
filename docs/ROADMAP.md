@@ -411,9 +411,11 @@ and G3 delivery status updated. Production-core streak extends
 to 2. Test delta +9 (701->710). Deferral backlog unchanged
 at 11.
 
-## Phase 31 — TBD at Phase 30 exit
+## Phase 31 — Deferral Cleanup
 
-Strongest candidates: (a) Web UI Channel — browser-based
-frontend over existing daemon IPC; (b) further deferral
-cleanup (11 items); (c) MCP SSE transport (Phase 23 deferral).
-Decision deferred to Phase 31 open.
+**Active — see [PHASE_31.md](PHASE_31.md).** Non-product-shape
+cleanup phase targeting readily closable deferrals: response
+headers in web.fetch output (Phase 12 Q3), provider-reported
+token usage (Phase 25), second regression channel for role
+primitive (Phase 11 Q6). Stretch goals: MCP SSE transport,
+multi-level sub-agent nesting.
