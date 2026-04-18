@@ -423,10 +423,22 @@ own phase. DESIGN.md untouched. PRODUCT.md untouched (streak 1).
 Production-core broke at Task 3 (TokenUsage struct). Test delta
 +3 (710->713). Deferral backlog 11 -> 8.
 
-## Phase 32 — MCP SSE Transport
+## Phase 32 — MCP SSE Transport (frozen)
 
-**Active — see [PHASE_32.md](PHASE_32.md).** Adds HTTP/SSE
-transport for remote MCP servers, complementing the existing
-stdio transport. Closes the Phase 23 MCP SSE deferral and
-completes the MCP Integration milestone. Transport trait
-extraction, SSE implementation, config + binary wiring.
+**Frozen** (`4aabea8`). HTTP/SSE transport for remote MCP
+servers. `McpTransport` trait extraction, `SseTransport`
+implementation, `McpTransportKind` config enum, `--mcp-sse`
+CLI flag. Channel-backed integration tests. Closed Phase 23
+MCP SSE deferral, completing the MCP Integration milestone.
+DESIGN.md and PRODUCT.md untouched. Production-core streak
+extends to 1. Test delta +23 (713→736). Deferral backlog
+8→7.
+
+## Phase 33 — Multi-Level Sub-Agent Nesting
+
+**Active — see [PHASE_33.md](PHASE_33.md).** Closes the
+Phase 14 Task 3 deferral: multi-level sub-agent nesting.
+The architecture already supports recursive factory reuse;
+the work is config changes (`examples/aivyx.toml`) and
+integration tests proving the capability-bounded recursion
+terminates correctly.
