@@ -397,9 +397,12 @@ through mission gates for operator approval. Deferral backlog
 unchanged at 11. DESIGN.md, PRODUCT.md, and production-core all
 untouched. Test delta +4 (697->701).
 
-## Phase 30 — TBD at Phase 29 exit
+## Phase 30 — Runtime Role Mutation (P8 completion)
 
-Strongest candidates: (a) Web UI Channel — browser-based
-frontend over existing daemon IPC; (b) runtime role-config
-mutation (the second half of full P8); (c) further deferral
-cleanup (11 items). Decision deferred to Phase 30 open.
+**Active — see [PHASE_30.md](PHASE_30.md).** Completes
+PRODUCT.md P8 — Outcome-Driven Audited Reflection by adding
+runtime role-config mutation. Phase 29 delivered the memory-only
+reflection loop; this phase extends `reflection.apply` to also
+modify the agent's system prompt and tool allowlist at runtime
+via a shared `Arc<RwLock<RoleOverrides>>` read by the planner
+factory on each turn construction.

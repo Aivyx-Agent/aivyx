@@ -317,6 +317,13 @@ Completes the Reflection Layer — `reflection.propose` and
 cycle. Memory-only scope for this phase; runtime role-config
 mutation deferred. See [`docs/PHASE_29.md`](PHASE_29.md).
 
+**Phase 30 (Runtime Role Mutation, 2026-04-18):** active.
+Completes P8 by extending `reflection.apply` to modify the
+agent's system prompt and tool allowlist at runtime. Adds
+`RoleOverrides` struct behind `Arc<RwLock<>>`, `role.update`
+capability base, and planner factory integration. See
+[`docs/PHASE_30.md`](PHASE_30.md).
+
 ## Milestone — Channel SDK Surface
 
 **Forward commitment:** [`PRODUCT.md` P5](../PRODUCT.md). **Couples to:**
