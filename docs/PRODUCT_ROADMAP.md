@@ -303,7 +303,7 @@ side orchestration, at which point the reflection loop can
 compose directly against the existing gate machinery for
 surfacing proposed self-modifications to the operator.
 
-**Phase 28 (Reflection Foundation, 2026-04-18):** active.
+**Phase 28 (Reflection Foundation, 2026-04-18):** frozen.
 First Reflection Layer primitive — `turn.history` audit
 introspection tool giving the agent read access to its own
 recent turn outcomes. Combined with deferral cleanup

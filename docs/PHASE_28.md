@@ -134,3 +134,110 @@ its own behavior.
 Exit criteria checklist, prediction-vs-reality table, streak
 report, ROADMAP.md update, README.md status update. Record
 deferral backlog delta.
+
+---
+
+## Ship records
+
+### Task 1 — Open commit
+
+Opened Phase 28 journal, updated docs/README.md (Phase 28 Open),
+docs/ROADMAP.md (Phase 28 active pointer), docs/PRODUCT_ROADMAP.md
+(Phase 28 reflection entry).
+
+### Task 2 — `mission.list` and `mission.status` tools
+
+Two new tools in `mission_tool.rs` following the OnceLock pattern.
+`mission.list` returns all missions with state/role/gates/timestamps.
+`mission.status` returns a single mission by ID with full gate details.
+Both scoped separately (`mission.list`, `mission.status`) added to
+KNOWN_BASES and CEILING_TRUSTED. Wired in the binary with store
+injection. 4 new tests. Closes the Phase 21 deferral.
+
+### Task 3 — Webhook port configurability
+
+Added `[daemon]` TOML section with `webhook_port: Option<u16>`.
+New `RawDaemon` struct in config, wired through loader → AivyxConfig →
+`run_daemon` → webhook listener spawn with `unwrap_or(DEFAULT_WEBHOOK_PORT)`
+fallback. Updated `run_daemon_compat` and all 5 e2e test call sites.
+Closes the Phase 27 decision item about hardcoded port 7842.
+
+### Task 4 — Forensic `ToolOutcome::NotInRole` variant
+
+Added `NotInRole { tool_name }` to `ToolOutcome` and `NotInRole` to
+`ToolOutcomeSummary` in `aivyx-core`. Updated the `From` impl, the
+`tool_outcome_summary_str` renderer, and the `render_tool_result`
+function in `llm_planner.rs`. Changed the allowlist gate in the turn
+loop from `ToolOutcome::Denied` with synthetic scope to the new
+`NotInRole` variant. ScopeDenied audit tag still fires for backward
+compatibility. 1 new test. Closes the Phase 11 Q1 deferral — the
+oldest item in the backlog (17 phases carried).
+
+**Production-core streak broken at 18.** New streak starts at 0.
+
+### Task 5 — `turn.history` audit introspection tool
+
+First Reflection Layer primitive. New `turn_history_tool.rs` in
+`aivyx-channel` — a read-only tool that queries the persistent
+audit chain and returns recent turn outcomes. Input: optional
+`limit` (default 10) and `since_ms` (epoch millis filter). Output:
+array of `{ turn_id, session_id, channel, outcome, tool_calls_made,
+duration_ms, started_at }`. Scoped to `audit.read` (already in
+CEILING_SEMITRUSTED). Uses `OnceLock<Arc<dyn AuditLog>>`, wired in
+the binary by cloning the `Arc<PersistentAuditLog>` before the
+`dyn AuditHook` cast. 2 new tests. Advances PRODUCT.md G3.
+
+Streak check:
+- DESIGN.md: **untouched** (streak extends)
+- PRODUCT.md: **untouched** (streak extends)
+- Production-core: **broken at Task 4** (new streak: 0)
+
+## Exit criteria
+
+- [x] All 6 tasks committed.
+- [x] `cargo check` clean (warnings only in aivyx-mcp, pre-existing).
+- [x] `cargo test` — 697 tests, 0 failures, 1 ignored.
+- [x] Three deferrals closed: `ToolOutcome::NotInRole` (Phase 11 Q1),
+      `mission.list`/`mission.status` (Phase 21),
+      webhook port configurability (Phase 27 decision).
+- [x] First Reflection Layer primitive (`turn.history`) shipped.
+- [x] DESIGN.md untouched — streak extends.
+- [x] PRODUCT.md untouched — streak extends.
+- [x] Production-core streak broken (expected, predicted in journal).
+- [x] Deferral backlog: 13 → 11 (closed 2 from the formal list;
+      webhook port was a decision item, not a numbered deferral).
+
+## Prediction vs reality
+
+| Prediction | Reality |
+|---|---|
+| DESIGN.md untouched | **Correct.** Untouched. |
+| PRODUCT.md untouched | **Correct.** Untouched. |
+| Production-core streak extends to 19 | **Wrong.** Broke at Task 4 (NotInRole variant). The journal itself noted this was expected for Task 4. The streak prediction at phase open was optimistic — it said "Low risk" and "extends to nineteen" but then Task 4's own description said "this task will break the production-core streak." |
+| Backlog 13 → 10 | **Close.** Actual is 13 → 11. Webhook port config was a Phase 27 decision item, not a numbered deferral, so only 2 formal closures. |
+
+## Deferrals
+
+**Rolling deferrals at Phase 28 exit (11 items, -2 closed):**
+
+- **Second regression channel for the role primitive** —
+  Phase 11 Q6. Untouched.
+- **Response headers in audit payload** — Phase 12 Q3 half.
+  Untouched.
+- **Non-GET verbs (POST/PUT/PATCH/DELETE)** — Phase 12 Q1.
+  Deferred indefinitely.
+- **Redirect following with per-hop scope re-check** —
+  Phase 12 Q5. Deferred indefinitely.
+- **Binary response bodies / non-UTF-8** — Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering** — Phase 12 Task 1.
+  Deferred reactively.
+- **Multi-level sub-agent nesting** — Phase 14 Task 3.
+  Untouched.
+- **LocalChannel regression-test rewrite over IPC** —
+  Phase 17 Q6->(c+). Tagged: **reactive.**
+- **Telegram-specific protocol extensions (attachment
+  delivery, inline keyboards, etc.)** — Phase 19. Untouched.
+- **MCP SSE transport** — Phase 23. Untouched.
+- **Provider-specific token counting** — Phase 25.
+  Untouched.

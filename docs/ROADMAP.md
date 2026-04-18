@@ -378,12 +378,14 @@ Two new Cargo.lock entries: httpdate (transitive), notify (direct).
 
 ## Phase 28 — Deferral Cleanup + Reflection Foundation
 
-**Active — see [PHASE_28.md](PHASE_28.md).** Hybrid phase: close
-three rolling deferrals (`mission.list`/`mission.status` tools,
-webhook port configurability, forensic `ToolOutcome::NotInRole`)
-trimming the backlog from 13 → 10, then lay the first Reflection
-Layer primitive — a `turn.history` audit introspection tool that
-lets the agent observe its own recent turn outcomes. Advances G3.
+**Frozen** (`_HASH_`). Hybrid phase: closed two formal deferrals
+(`mission.list`/`mission.status` tools, forensic
+`ToolOutcome::NotInRole`) plus webhook port configurability
+(Phase 27 decision item). Shipped the first Reflection Layer
+primitive — `turn.history` audit introspection tool. Backlog
+13 → 11. Production-core streak broken at 18 (expected — NotInRole
+variant). DESIGN.md and PRODUCT.md untouched. Test delta +7
+(690→697).
 
 ## Phase 29 — TBD at Phase 28 exit
 
