@@ -413,7 +413,7 @@ at 11.
 
 ## Phase 31 — Deferral Cleanup (frozen)
 
-**Frozen** (`PENDING`). Non-product-shape cleanup phase.
+**Frozen** (`7f16f7a`). Non-product-shape cleanup phase.
 Closed 3 of 11 rolling deferrals: content-type in web.fetch
 output (Phase 12 Q3), provider-reported token usage via
 `TokenUsage` in `TurnEnded` audit event (Phase 25), SemiTrusted
