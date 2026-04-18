@@ -549,6 +549,9 @@ pub struct AivyxConfig {
     /// File-watch trigger entries from `[[file_watch]]` entries.
     /// Empty when no entries are configured.
     pub file_watches: Vec<FileWatchConfig>,
+    /// Webhook listener port override. `None` means use the default
+    /// (7842). Loaded from `[daemon] webhook_port` in the TOML file.
+    pub webhook_port: Option<u16>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -831,6 +834,15 @@ struct RawToml {
     /// `[[file_watch]]` table-array. Phase 27 Task 4.
     #[serde(default, rename = "file_watch")]
     file_watches: Option<Vec<RawFileWatch>>,
+    /// `[daemon]` section. Phase 28 Task 3.
+    #[serde(default)]
+    daemon: RawDaemon,
+}
+
+/// `[daemon]` section in the TOML file. Phase 28 Task 3.
+#[derive(Debug, Default, Deserialize)]
+struct RawDaemon {
+    webhook_port: Option<u16>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -1539,6 +1551,7 @@ impl AivyxConfig {
             schedules,
             webhooks,
             file_watches,
+            webhook_port: toml.daemon.webhook_port,
         })
     }
 

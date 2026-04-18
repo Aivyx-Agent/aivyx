@@ -54,6 +54,7 @@ pub async fn run_daemon(
     schedule_store: Option<DomainHandle>,
     webhook_store: Option<DomainHandle>,
     file_watch_store: Option<DomainHandle>,
+    webhook_port: Option<u16>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -102,11 +103,12 @@ pub async fn run_daemon(
     let _webhook_handle = webhook_store.map(|store| {
         let wh_dispatch = trigger_dispatch.clone();
         let wh_shutdown = shutdown.clone();
+        let port = webhook_port.unwrap_or(crate::webhook_listener::DEFAULT_WEBHOOK_PORT);
         tokio::spawn(async move {
             if let Err(e) = crate::webhook_listener::run_webhook_listener(
                 wh_dispatch,
                 store,
-                crate::webhook_listener::DEFAULT_WEBHOOK_PORT,
+                port,
                 wh_shutdown,
             )
             .await
@@ -508,7 +510,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown, None, None, None, None).await
+    run_daemon(socket_path, agent, factory, shutdown, None, None, None, None, None).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {

@@ -1067,6 +1067,7 @@ async fn run_async(
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
+        webhook_port: config_webhook_port,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -1780,6 +1781,7 @@ async fn run_async(
             Some(schedule_domain),
             Some(webhook_domain),
             Some(file_watch_domain),
+            config_webhook_port,
         )
             .await;
 
