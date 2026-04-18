@@ -317,12 +317,17 @@ Completes the Reflection Layer — `reflection.propose` and
 cycle. Memory-only scope for this phase; runtime role-config
 mutation deferred. See [`docs/PHASE_29.md`](PHASE_29.md).
 
-**Phase 30 (Runtime Role Mutation, 2026-04-18):** active.
-Completes P8 by extending `reflection.apply` to modify the
-agent's system prompt and tool allowlist at runtime. Adds
-`RoleOverrides` struct behind `Arc<RwLock<>>`, `role.update`
-capability base, and planner factory integration. See
+**Phase 30 (Runtime Role Mutation, 2026-04-18):** frozen.
+Completes P8 — `RoleOverrides` struct with prompt appendix and
+allowlist add/remove, `role.update` tool and capability base,
+planner factory integration reading overrides per-turn, and
+extended `reflection.apply` for role mutations. Full
+observe-propose-approve-apply cycle now operational for both
+memory writes and runtime role-config changes. See
 [`docs/PHASE_30.md`](PHASE_30.md).
+
+**Status: G3 / P8 — Reflection Layer is now fully delivered**
+across Phases 28–30.
 
 ## Milestone — Channel SDK Surface
 
@@ -486,9 +491,8 @@ chains.
 - **Scheduled Execution delivered** (Phases 26–27).
   G5 fully shipped: cron timers, webhook endpoints, file-change
   watchers, trigger unification, and mission wrapping.
-- **Reflection Layer is the most ambitious and most
-  consequential.** Now unblocked by the mission gate primitive
-  from Phase 21. ~2–3 phases.
+- **Reflection Layer is delivered** (Phases 28–30). Full P8:
+  audit introspection, reflection loop, runtime role mutation.
 - **Channel SDK Surface + Tool Process IPC** are documentation
   and protocol phases. Best done after MCP Integration
   validates the extension surface. ~1–2 phases each.

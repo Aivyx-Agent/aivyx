@@ -46,30 +46,20 @@ outcomes and, with operator approval, adjust its own behavior.
   be visible to the `Agent` trait. Prediction: streak **may break**
   (currently at 1).
 
-## Open questions
+## Resolved questions
 
-**Q1 -- Where does `RuntimeRoleOverrides` live?** Options:
-  (a) In `aivyx-core` — visible to `ConcreteAgent` and `TurnPlanner`.
-  (b) In `aivyx-channel` — only visible to the binary's planner
-  factory closure. The planner factory is a closure, not a trait
-  method, so it can capture anything.
-  Leaning **(b)** — the overrides are a channel-level concern. The
-  planner factory closure captures `Arc<RwLock<RoleOverrides>>` and
-  reads it on each `planner_config.clone()`. No core changes needed.
+**Q1 -- Where does `RuntimeRoleOverrides` live?** Resolved **(b)**
+  — in `aivyx-channel` as `role_overrides.rs`. The planner factory
+  closure captures `Arc<RwLock<RoleOverrides>>` and reads it on
+  each turn construction. No core changes needed.
 
-**Q2 -- Scope of mutation.** Should the agent be able to:
-  (a) Append to the system prompt only (safe, additive-only).
-  (b) Replace the system prompt entirely (powerful but risky).
-  (c) Modify the tool allowlist (add/remove tools).
-  Leaning **(a + c)** — append-only for prompts (the original
-  prompt is always preserved), add/remove for allowlist. Full
-  replacement is deferred.
+**Q2 -- Scope of mutation.** Resolved **(a + c)** — append-only
+  for prompts (the original prompt is always preserved), add/remove
+  for allowlist. Full replacement deferred.
 
-**Q3 -- Capability base name.** `role.update` (new base) or
-  reuse `reflection.apply`? Leaning **(a) `role.update`** — it's
-  a distinct operation from memory writes, and a separate scope
-  lets operators grant reflection-to-memory without granting
-  reflection-to-role-config.
+**Q3 -- Capability base name.** Resolved **(a) `role.update`** —
+  separate from `reflection.apply`. Operators can grant
+  reflection-to-memory without granting reflection-to-role-config.
 
 ## Tasks
 
@@ -78,46 +68,104 @@ outcomes and, with operator approval, adjust its own behavior.
 This file. Update `docs/README.md` to show Phase 30 as Open.
 Update `docs/ROADMAP.md` with Phase 30 active pointer.
 
-### Task 2 -- `RuntimeRoleOverrides` + `role.update` capability
+**Ship record:** `f037c66`
 
-Define `RoleOverrides` struct in `aivyx-channel` with:
+### Task 2 -- `RoleOverrides` struct + `role.update` capability
+
+Defined `RoleOverrides` struct in `aivyx-channel/src/role_overrides.rs`:
 - `prompt_appendix: Option<String>` — appended to system prompt
 - `allowlist_additions: Vec<String>` — tools to add
 - `allowlist_removals: Vec<String>` — tools to remove
+- `SharedRoleOverrides` type alias: `Arc<RwLock<RoleOverrides>>`
+- `shared_role_overrides()` constructor
 
-Add `role.update` scope to `KNOWN_BASES` and `CEILING_TRUSTED`.
+Added `role.update` scope to `KNOWN_BASES` and `CEILING_TRUSTED`
+in `aivyx-capability`. 4 tests.
+
+**Ship record:** `aa8d864`
 
 ### Task 3 -- `role.update` tool
 
-New tool in `aivyx-channel`. Input:
-```json
-{
-  "prompt_append": "When using shell.exec, prefer smaller commands.",
-  "allowlist_add": ["tool_name"],
-  "allowlist_remove": ["tool_name"]
-}
-```
+New `RoleUpdateTool` in `aivyx-channel/src/role_update_tool.rs`.
+Input: `prompt_append`, `allowlist_add`, `allowlist_remove` (all
+optional, at least one required). Writes to shared
+`Arc<RwLock<RoleOverrides>>` via OnceLock injection. Scoped to
+`role.update`. Removals cancel pending additions. 2 tests.
 
-Writes to the shared `Arc<RwLock<RoleOverrides>>`. Every mutation
-emits an `AuditTag::ToolCall` via the normal tool execution path.
-Scoped to `role.update`.
+**Ship record:** `dc2727d`
 
 ### Task 4 -- Planner factory integration
 
-Modify the planner factory closure in the binary to read from
-`RoleOverrides` on each turn. When `prompt_appendix` is set,
-append it to the system prompt in the `LlmPlannerConfig`. When
-allowlist changes are set, apply them to the tool allowlist.
+Both planner factory closures (daemon path in `aivyx.rs` and
+in-process path in `session.rs`) now read from
+`SharedRoleOverrides` on each turn construction. New
+`apply_to_planner_config()` function in `role_overrides.rs`
+applies prompt appendix (preserving original prompt) and
+allowlist additions/removals to the per-turn `LlmPlannerConfig`
+clone. `SessionConfig` gains optional `role_overrides` field.
+`RoleUpdateTool` registered in binary with OnceLock injection.
+5 test file updates for new field. 3 new tests.
+
+**Ship record:** `207b4d1`
 
 ### Task 5 -- Extend `reflection.apply` for role updates
 
-Add `prompt_append: Option<String>` and `allowlist_changes`
-fields to `ProposalRecord`. When `reflection.apply` executes
-an approved proposal with these fields, it writes to the
-`RuntimeRoleOverrides` in addition to memory writes.
+`ProposalRecord` gains optional `prompt_append: Option<String>`
+and `allowlist_changes: Option<AllowlistChanges>` fields (serde
+skip_serializing_if for backwards compatibility with Phase 29
+proposals). `ReflectionApplyTool` accepts `SharedRoleOverrides`
+via new `set_role_overrides` OnceLock setter. When an approved
+proposal contains role mutation fields, the tool writes to the
+shared handle in addition to executing memory writes. Output
+gains `role_updated: bool` field. Binary wires shared handle
+into both `role.update` and `reflection.apply`.
+
+**Ship record:** `4359f59`
 
 ### Task 6 -- Exit freeze + docs
 
 Exit criteria checklist, prediction-vs-reality table, streak
-report. Update PRODUCT.md P8 delivery status if warranted.
-Record deferral backlog delta.
+report. Update PRODUCT.md P8 delivery status.
+
+## Exit criteria
+
+- [x] `role.update` scope in KNOWN_BASES and CEILING_TRUSTED.
+- [x] `RoleOverrides` struct with prompt appendix and allowlist
+      add/remove fields.
+- [x] `role.update` tool writing to shared state.
+- [x] Planner factory reads overrides per-turn (both daemon and
+      in-process paths).
+- [x] `reflection.apply` writes to RoleOverrides when proposal
+      contains role mutation fields.
+- [x] PRODUCT.md P8 delivery status updated.
+- [x] 710 workspace tests, 0 failures (701 -> 710, +9).
+- [x] Deferral backlog unchanged at 11.
+
+## Prediction vs reality
+
+| Prediction              | Reality           | Correct? |
+|-------------------------|-------------------|----------|
+| DESIGN.md untouched     | Untouched         | Yes      |
+| PRODUCT.md may break    | Broke (P8 status) | Yes      |
+| Production-core may break | Untouched (streak 2) | No (survived) |
+
+## Streak report
+
+- **DESIGN.md:** untouched this phase. Streak extends (reset
+  at Phase 22 amendment batch).
+- **PRODUCT.md:** edited this phase (P8 and G3/G5 delivery
+  status updates). Streak resets to 0.
+- **Production-core `aivyx-core/src/lib.rs`:** untouched this
+  phase. Streak extends to 2 (broken in Phase 28 at 18).
+
+## New files
+
+- `crates/aivyx-channel/src/role_overrides.rs` — RoleOverrides
+  struct, SharedRoleOverrides alias, apply_to_planner_config fn.
+- `crates/aivyx-channel/src/role_update_tool.rs` — RoleUpdateTool.
+
+## Rolling deferrals at Phase 30 exit (11 items, unchanged)
+
+No new deferrals. No closures of existing numbered deferrals.
+The runtime role-config mutation was a forward commitment (P8),
+not a numbered deferral item. P8 is now fully delivered.

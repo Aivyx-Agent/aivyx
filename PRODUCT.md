@@ -1113,12 +1113,13 @@ partially shipped, and what remains forward.
     not yet started.
   - **G2 (Code interaction):** Shipped. `fs.read`, `fs.write`,
     `shell.exec` all operational with role gating.
-  - **G3 (Memory Reflection):** Memory substrate shipped
-    (Phase 6). Reflection layer not yet started.
+  - **G3 (Memory Reflection):** Shipped. Memory substrate
+    (Phase 6), reflection loop (Phase 29), runtime role
+    mutation (Phase 30).
   - **G4 (Sub-agent orchestration):** Shipped (Phase 14).
     One-level deep role-switching.
-  - **G5 (Autonomous/scheduled execution):** Daemon substrate
-    exists. Timer/cron/webhook triggers not yet started.
+  - **G5 (Autonomous/scheduled execution):** Shipped. Cron
+    schedules (Phase 26), webhooks + file watchers (Phase 27).
   - **G6 (Local execution, privacy):** Shipped. Fully
     operational.
   - **G7 (Third-party tool SDK):** `Tool` trait exists. SDK
@@ -1132,11 +1133,12 @@ partially shipped, and what remains forward.
   third-party-consumable crate exists yet. Blocked on SDK
   documentation pass.
 
-- **P8 — Outcome-Driven Audited Reflection.** The audit chain
-  records outcomes. The agent cannot yet *read* that history
-  as structured input, and no reflection write capability
-  exists. Blocked on outcome history exposure + runtime role
-  mutation.
+- **P8 — Outcome-Driven Audited Reflection.** Shipped. Audit
+  introspection via `turn.history` (Phase 28), reflection
+  loop via `reflection.propose`/`.apply` (Phase 29), runtime
+  role mutation via `role.update` + planner factory integration
+  (Phase 30). Full observe→propose→approve→apply cycle
+  operational for both memory writes and role-config changes.
 
 - **P11 — SDK Contract: Interface + Integration.** The `Tool`
   trait is the in-tree SDK surface. No published documentation,
