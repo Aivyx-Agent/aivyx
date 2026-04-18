@@ -389,7 +389,7 @@ variant). DESIGN.md and PRODUCT.md untouched. Test delta +7
 
 ## Phase 29 — Agent Reflection Loop
 
-**Frozen** (`_HASH_`). Completed the Reflection Layer (memory-only
+**Frozen** (`03a804b`). Completed the Reflection Layer (memory-only
 scope of PRODUCT.md G3 / P8). Delivered `reflection.propose` and
 `reflection.apply` tools: the agent reads its own recent outcomes
 via `turn.history`, proposes memory adjustments, and surfaces them
