@@ -141,6 +141,7 @@ use aivyx_channel::webhook_tool::{
 use aivyx_channel::file_watch_tool::{
     FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool,
 };
+use aivyx_channel::reflection_tool::{ReflectionApplyTool, ReflectionProposeTool};
 use aivyx_channel::turn_history_tool::TurnHistoryTool;
 use aivyx_channel::telegram_daemon_frontend::{
     run_telegram_daemon_multi_session, TelegramDaemonChannel,
@@ -1295,6 +1296,11 @@ async fn run_async(
     let turn_history_tool: Arc<TurnHistoryTool> = Arc::new(TurnHistoryTool::new());
     tool_list.push(Arc::clone(&turn_history_tool) as Arc<dyn Tool>);
 
+    let reflection_propose_tool: Arc<ReflectionProposeTool> = Arc::new(ReflectionProposeTool::new());
+    tool_list.push(Arc::clone(&reflection_propose_tool) as Arc<dyn Tool>);
+    let reflection_apply_tool: Arc<ReflectionApplyTool> = Arc::new(ReflectionApplyTool::new());
+    tool_list.push(Arc::clone(&reflection_apply_tool) as Arc<dyn Tool>);
+
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
         let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
@@ -1640,9 +1646,46 @@ async fn run_async(
         })?;
 
     turn_history_tool
-        .set_audit_log(audit_log_for_tool)
+        .set_audit_log(Arc::clone(&audit_log_for_tool))
         .map_err(|_| {
             "turn.history audit log was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
+    reflection_propose_tool
+        .set_audit_log(audit_log_for_tool)
+        .map_err(|_| {
+            "reflection.propose audit log was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    reflection_propose_tool
+        .set_mission_store(storage.domain(KeyDomain::Missions))
+        .map_err(|_| {
+            "reflection.propose mission store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    reflection_propose_tool
+        .set_role_name(active_role_name.clone())
+        .map_err(|_| {
+            "reflection.propose role_name was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+
+    reflection_apply_tool
+        .set_mission_store(storage.domain(KeyDomain::Missions))
+        .map_err(|_| {
+            "reflection.apply mission store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    reflection_apply_tool
+        .set_memory(Arc::clone(&memory))
+        .map_err(|_| {
+            "reflection.apply memory was already set — startup path \
              bug, should be called exactly once"
                 .to_string()
         })?;
