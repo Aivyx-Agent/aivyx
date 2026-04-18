@@ -71,12 +71,26 @@ struct ProposalRecord {
     proposal_id: String,
     observations: Vec<String>,
     memory_writes: Vec<ProposedWrite>,
+    /// Phase 30 — text to append to the system prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_append: Option<String>,
+    /// Phase 30 — tool allowlist additions and removals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allowlist_changes: Option<AllowlistChanges>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProposedWrite {
     topic: String,
     content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AllowlistChanges {
+    #[serde(default)]
+    add: Vec<String>,
+    #[serde(default)]
+    remove: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +362,8 @@ impl Tool for ReflectionProposeTool {
             proposal_id: proposal_id.clone(),
             observations: observations.clone(),
             memory_writes: memory_writes.clone(),
+            prompt_append: None,
+            allowlist_changes: None,
         };
 
         let proposal_json = match serde_json::to_string(&proposal) {
@@ -433,6 +449,7 @@ pub struct ReflectionApplyTool {
     schema: Value,
     mission_store: OnceLock<DomainHandle>,
     memory: OnceLock<std::sync::Arc<dyn Memory>>,
+    role_overrides: OnceLock<crate::role_overrides::SharedRoleOverrides>,
 }
 
 impl std::fmt::Debug for ReflectionApplyTool {
@@ -465,6 +482,7 @@ impl ReflectionApplyTool {
             }),
             mission_store: OnceLock::new(),
             memory: OnceLock::new(),
+            role_overrides: OnceLock::new(),
         }
     }
 
@@ -475,6 +493,13 @@ impl ReflectionApplyTool {
 
     pub fn set_memory(&self, mem: std::sync::Arc<dyn Memory>) -> Result<(), std::sync::Arc<dyn Memory>> {
         self.memory.set(mem)
+    }
+
+    pub fn set_role_overrides(
+        &self,
+        overrides: crate::role_overrides::SharedRoleOverrides,
+    ) -> Result<(), crate::role_overrides::SharedRoleOverrides> {
+        self.role_overrides.set(overrides)
     }
 }
 
@@ -612,6 +637,32 @@ impl Tool for ReflectionApplyTool {
             }
         }
 
+        // Phase 30 — apply role overrides if present in the proposal.
+        let mut role_updated = false;
+        if proposal.prompt_append.is_some() || proposal.allowlist_changes.is_some() {
+            if let Some(shared) = self.role_overrides.get() {
+                if let Ok(mut w) = shared.write() {
+                    if let Some(ref text) = proposal.prompt_append {
+                        w.prompt_appendix = Some(text.clone());
+                    }
+                    if let Some(ref changes) = proposal.allowlist_changes {
+                        for name in &changes.add {
+                            if !w.allowlist_additions.contains(name) {
+                                w.allowlist_additions.push(name.clone());
+                            }
+                        }
+                        for name in &changes.remove {
+                            w.allowlist_additions.retain(|n| n != name);
+                            if !w.allowlist_removals.contains(name) {
+                                w.allowlist_removals.push(name.clone());
+                            }
+                        }
+                    }
+                    role_updated = true;
+                }
+            }
+        }
+
         // Complete the mission.
         let mut updated = record.clone();
         if updated.state == MissionState::Running {
@@ -623,6 +674,7 @@ impl Tool for ReflectionApplyTool {
             output: json!({
                 "applied": true,
                 "writes_executed": writes_executed,
+                "role_updated": role_updated,
                 "proposal_id": proposal_id,
             }),
             verified: Verification::Verified,

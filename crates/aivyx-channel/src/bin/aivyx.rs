@@ -1694,6 +1694,13 @@ async fn run_async(
              bug, should be called exactly once"
                 .to_string()
         })?;
+    reflection_apply_tool
+        .set_role_overrides(shared_role_overrides.clone())
+        .map_err(|_| {
+            "reflection.apply role_overrides was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
 
     role_update_tool
         .set_overrides(shared_role_overrides.clone())
