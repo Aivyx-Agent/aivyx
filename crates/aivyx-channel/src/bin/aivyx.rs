@@ -131,7 +131,7 @@ use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
-use aivyx_channel::mission_tool::MissionCreateTool;
+use aivyx_channel::mission_tool::{MissionCreateTool, MissionListTool, MissionStatusTool};
 use aivyx_channel::schedule_tool::{
     ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool, ScheduleUpdateTool,
 };
@@ -1259,6 +1259,10 @@ async fn run_async(
 
     let mission_create_tool: Arc<MissionCreateTool> = Arc::new(MissionCreateTool::new());
     tool_list.push(Arc::clone(&mission_create_tool) as Arc<dyn Tool>);
+    let mission_list_tool: Arc<MissionListTool> = Arc::new(MissionListTool::new());
+    tool_list.push(Arc::clone(&mission_list_tool) as Arc<dyn Tool>);
+    let mission_status_tool: Arc<MissionStatusTool> = Arc::new(MissionStatusTool::new());
+    tool_list.push(Arc::clone(&mission_status_tool) as Arc<dyn Tool>);
 
     let schedule_create_tool: Arc<ScheduleCreateTool> = Arc::new(ScheduleCreateTool::new());
     tool_list.push(Arc::clone(&schedule_create_tool) as Arc<dyn Tool>);
@@ -1529,6 +1533,20 @@ async fn run_async(
         .set_mission_store(storage.domain(KeyDomain::Missions))
         .map_err(|_| {
             "mission.create store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    mission_list_tool
+        .set_mission_store(storage.domain(KeyDomain::Missions))
+        .map_err(|_| {
+            "mission.list store was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    mission_status_tool
+        .set_mission_store(storage.domain(KeyDomain::Missions))
+        .map_err(|_| {
+            "mission.status store was already set — startup path \
              bug, should be called exactly once"
                 .to_string()
         })?;

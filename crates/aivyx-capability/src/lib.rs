@@ -62,9 +62,11 @@ const KNOWN_BASES: &[&str] = &[
     "config.write",
     // role allowlist (synthetic — Phase 11 Task 4)
     "tool.allowlist",
-    // mission (Phase 21 — PRODUCT.md P2)
+    // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
+    "mission.list",
+    "mission.status",
     // Phase 14 Task 2 — Sub-Agent Role-Switching (PRODUCT.md P1).
     // `role.switch` gates the `role.switch` tool that opens a
     // bounded sub-session under a child role's attenuated
@@ -573,6 +575,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "config.write",
         "mission.create",
         "mission.gate",
+        "mission.list",
+        "mission.status",
         "schedule.create",
         "schedule.list",
         "schedule.delete",

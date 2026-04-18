@@ -168,6 +168,246 @@ fn mission_create_input_schema() -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// mission.list
+// ---------------------------------------------------------------------------
+
+pub struct MissionListTool {
+    id: ToolId,
+    schema: Value,
+    store: OnceLock<DomainHandle>,
+}
+
+impl std::fmt::Debug for MissionListTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MissionListTool")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+impl Default for MissionListTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MissionListTool {
+    pub fn new() -> Self {
+        MissionListTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            store: OnceLock::new(),
+        }
+    }
+
+    pub fn set_mission_store(&self, handle: DomainHandle) -> Result<(), DomainHandle> {
+        assert_eq!(handle.domain(), KeyDomain::Missions);
+        self.store.set(handle)
+    }
+}
+
+#[async_trait]
+impl Tool for MissionListTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "mission.list"
+    }
+
+    fn description(&self) -> &str {
+        "List all missions. Returns an array of mission objects with \
+         id, role, description, state, gate count, and timestamps."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("mission.list").expect("known base")
+    }
+
+    async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let Some(store) = self.store.get() else {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "mission.list: no mission store configured".to_string(),
+            });
+        };
+
+        match mission::list_missions(store).await {
+            Ok(missions) => {
+                let entries: Vec<Value> = missions
+                    .iter()
+                    .map(|m| {
+                        json!({
+                            "mission_id": m.mission_id,
+                            "role": m.role_name,
+                            "description": m.description,
+                            "state": format!("{:?}", m.state),
+                            "gates": m.gates.len(),
+                            "created_at": m.created_at,
+                            "updated_at": m.updated_at,
+                        })
+                    })
+                    .collect();
+                ToolOutcome::Completed {
+                    output: json!({ "missions": entries }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("failed to list missions: {e}"),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mission.status
+// ---------------------------------------------------------------------------
+
+pub struct MissionStatusTool {
+    id: ToolId,
+    schema: Value,
+    store: OnceLock<DomainHandle>,
+}
+
+impl std::fmt::Debug for MissionStatusTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MissionStatusTool")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+impl Default for MissionStatusTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MissionStatusTool {
+    pub fn new() -> Self {
+        MissionStatusTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "mission_id": {
+                        "type": "string",
+                        "description": "The ID of the mission to inspect."
+                    }
+                },
+                "required": ["mission_id"]
+            }),
+            store: OnceLock::new(),
+        }
+    }
+
+    pub fn set_mission_store(&self, handle: DomainHandle) -> Result<(), DomainHandle> {
+        assert_eq!(handle.domain(), KeyDomain::Missions);
+        self.store.set(handle)
+    }
+}
+
+#[async_trait]
+impl Tool for MissionStatusTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "mission.status"
+    }
+
+    fn description(&self) -> &str {
+        "Get the full status of a mission by ID. Returns the mission's \
+         state, description, role, all gates with their resolution status, \
+         and timestamps."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("mission.status").expect("known base")
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let Some(store) = self.store.get() else {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "mission.status: no mission store configured".to_string(),
+            });
+        };
+
+        let mission_id = input
+            .get("mission_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if mission_id.is_empty() {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "mission.status requires a non-empty `mission_id` field".to_string(),
+            });
+        }
+
+        match mission::get_mission(store, &mission_id).await {
+            Ok(Some(m)) => {
+                let gates: Vec<Value> = m
+                    .gates
+                    .iter()
+                    .map(|g| {
+                        json!({
+                            "gate_id": g.gate_id,
+                            "reason": g.reason,
+                            "scope": g.scope,
+                            "state": format!("{:?}", g.state),
+                            "created_at": g.created_at,
+                            "resolved_at": g.resolved_at,
+                        })
+                    })
+                    .collect();
+                ToolOutcome::Completed {
+                    output: json!({
+                        "mission_id": m.mission_id,
+                        "role": m.role_name,
+                        "description": m.description,
+                        "state": format!("{:?}", m.state),
+                        "gates": gates,
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at,
+                    }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+            Ok(None) => ToolOutcome::Completed {
+                output: json!({
+                    "found": false,
+                    "reason": format!("mission {mission_id} not found")
+                }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("failed to get mission: {e}"),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +425,37 @@ mod tests {
         assert_eq!(tool.name(), "mission.create");
         let schema = tool.input_schema();
         assert_eq!(schema["required"][0], "description");
+    }
+
+    #[test]
+    fn mission_list_scope() {
+        let tool = MissionListTool::new();
+        assert_eq!(
+            tool.required_scope(&json!({})).as_str(),
+            "mission.list"
+        );
+    }
+
+    #[test]
+    fn mission_list_name() {
+        let tool = MissionListTool::new();
+        assert_eq!(tool.name(), "mission.list");
+    }
+
+    #[test]
+    fn mission_status_scope() {
+        let tool = MissionStatusTool::new();
+        assert_eq!(
+            tool.required_scope(&json!({})).as_str(),
+            "mission.status"
+        );
+    }
+
+    #[test]
+    fn mission_status_name_and_schema() {
+        let tool = MissionStatusTool::new();
+        assert_eq!(tool.name(), "mission.status");
+        let schema = tool.input_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("mission_id")));
     }
 }
