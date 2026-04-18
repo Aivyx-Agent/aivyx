@@ -434,9 +434,16 @@ adaptive-tick and dedup, four agent tools (`schedule.create`,
 [`docs/PHASE_26.md`](PHASE_26.md).
 
 **Phase 27 (Webhook Triggers + File Watchers, 2026-04-18):**
-active. Completes G5 with webhook endpoints, file-change
-watchers, trigger abstraction unification, and opt-in
-mission wrapping. See [`docs/PHASE_27.md`](PHASE_27.md).
+completed G5. Webhook HTTP listener (localhost-only, hyper,
+127.0.0.1:7842), file-change watcher (`notify` crate,
+cross-platform, per-watch debounce), `TriggerDispatch`
+unification with shared turn-lock, opt-in `wrap_mission`
+on all trigger configs closing the Phase 26 deferral.
+Nine storage domains. +30 tests (660→690). See
+[`docs/PHASE_27.md`](PHASE_27.md).
+
+**Status: G5 — Autonomous and Scheduled Execution is now
+fully delivered** across Phases 26–27.
 
 ## Sequencing notes (revised at Phase 22 entry, 2026-04-17)
 
@@ -455,10 +462,9 @@ chains.
   predicted.
 - **Web UI Channel is high impact.** Daemon IPC makes it
   cheap. ~2 phases.
-- **Scheduled Execution Phase 2 active** (Phase 27).
-  Timer primitives shipped in Phase 26. Phase 27 adds webhooks,
-  file-watchers, trigger unification, and mission wrapping to
-  complete G5.
+- **Scheduled Execution delivered** (Phases 26–27).
+  G5 fully shipped: cron timers, webhook endpoints, file-change
+  watchers, trigger unification, and mission wrapping.
 - **Reflection Layer is the most ambitious and most
   consequential.** Now unblocked by the mission gate primitive
   from Phase 21. ~2–3 phases.

@@ -361,19 +361,29 @@ PRODUCT.md both untouched. Test delta +17 (643→660). Rolling
 backlog 13→14 (+1 net-new: automatic mission wrapping for
 scheduled turns).
 
-## Phase 27 — Scheduled Execution Phase 2: Webhook Triggers + File Watchers
+## Phase 27 — Scheduled Execution Phase 2: Webhook Triggers + File Watchers (frozen)
 
-**Active — see [PHASE_27.md](PHASE_27.md).** Completes G5 by
-adding webhook trigger endpoints (localhost-only HTTP listener)
-and file-change watchers alongside the cron timer primitives
-shipped in Phase 26. Unifies all trigger sources under a shared
-`TriggerSource` dispatch abstraction. Closes the Phase 26
-automatic-mission-wrapping deferral with opt-in `wrap_mission`
-on all trigger configs.
+**Frozen — see [PHASE_27.md](PHASE_27.md).** Opened and
+exited 2026-04-18. Completed **PRODUCT.md G5 — Autonomous and
+Scheduled Execution** by adding webhook triggers (localhost-only
+hyper HTTP/1.1 listener on 127.0.0.1:7842) and file-change
+watchers (`notify` crate, cross-platform). Unified all trigger
+sources under `TriggerDispatch` with shared `Mutex<()>` turn
+serialization. Closed the Phase 26 automatic-mission-wrapping
+deferral with opt-in `wrap_mission = true` on all trigger configs.
+Nine storage domains, 27 known capability bases. Production-core
+streak extends to eighteen consecutive phases (new record).
+DESIGN.md and PRODUCT.md both untouched. Test delta +30 (660→690).
+Two new Cargo.lock entries: httpdate (transitive), notify (direct).
 
-## Phase 28 — TBD at Phase 27 exit
+## Phase 28 — TBD
 
-Strongest candidates: (a) Web UI Channel — browser-based
-frontend over existing daemon IPC; (b) Reflection Layer —
-periodic self-assessment using scheduler + trigger substrate.
-Decision deferred to Phase 28 open.
+**Active — see [PHASE_28.md](PHASE_28.md).** Strongest
+candidates: (a) Web UI Channel — browser-based frontend over
+existing daemon IPC, leveraging `FrontendType::Web`; (b) Reflection
+Layer — periodic self-assessment composing the scheduler + trigger
+substrate from Phases 26–27 with the mission gate primitive from
+Phase 21; (c) Deferral cleanup pass — close accumulated backlog
+items. Decision made at Phase 28 open.
+
+## Phase 29 — TBD at Phase 28 exit

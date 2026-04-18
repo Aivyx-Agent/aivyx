@@ -133,3 +133,155 @@ for scheduled turns."
 
 Exit criteria checklist, prediction-vs-reality table, streak
 report, ROADMAP.md update, README.md status update.
+
+## Ship records
+
+### Task 1 — Open commit (2026-04-18)
+
+Commit `a8ce418`. Scaffolded `docs/PHASE_27.md` with goal, why-
+now, streak predictions, three open questions, and six-task
+breakdown. Updated `docs/README.md` phase-status table (Phase 27
+Open). Updated `docs/ROADMAP.md` with Phase 27 active pointer
+and Phase 28 placeholder. Updated `docs/PRODUCT_ROADMAP.md` with
+Phase 27 active entry under Scheduled Execution milestone.
+
+### Task 2 — Trigger abstraction layer (2026-04-18)
+
+Commit `54e31a6`. Introduced `TriggerSource` enum (`Cron`,
+`Webhook`, `FileWatch`) and `TriggerDispatch` struct — shared
+turn-dispatch context with `Mutex<()>` serialization. Refactored
+`daemon_scheduler.rs` to use `TriggerDispatch` instead of raw
+agent + channel factory references. Two tests.
+
+Streak check:
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+### Task 3 — Webhook trigger (2026-04-18)
+
+Commit `28cf3f2`. Localhost-only HTTP listener via hyper on
+`127.0.0.1:7842`. Three new modules: `webhook.rs` (WebhookRecord
+CRUD under `KeyDomain::Webhooks`, 8th storage domain),
+`webhook_listener.rs` (hyper HTTP/1.1 server, `POST /trigger/<id>`
+fires turn, `GET /health` returns OK, async 202 Accepted),
+`webhook_tool.rs` (`webhook.create`, `.list`, `.delete` — OnceLock
+pattern, `CEILING_TRUSTED`). Config surface: `WebhookConfig` +
+`[[webhook]]` TOML entries. Inline config sync in binary.
+httpdate enters Cargo.lock as transitive dep via hyper[server].
+Six tests.
+
+Streak check:
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+### Task 4 — File-watch trigger (2026-04-18)
+
+Commit `afaa1d7`. Filesystem-change-triggered execution via
+`notify` crate. Three new modules: `file_watch.rs` (FileWatchRecord
+CRUD under `KeyDomain::FileWatches`, 9th storage domain, with
+`debounce_ms` default 2000ms), `file_watcher.rs` (daemon loop using
+`notify::RecommendedWatcher`, 60s reload interval, path→watch_id
+lookup with canonicalization, `sync_config_file_watches` +
+`config_to_records`), `file_watch_tool.rs` (`file_watch.create`,
+`.list`, `.delete` — OnceLock pattern, `CEILING_TRUSTED`). Config
+surface: `FileWatchConfig` with optional `debounce_ms` +
+`[[file_watch]]` TOML entries. `notify` enters Cargo.lock as new
+direct dep. Fifteen tests.
+
+Streak check:
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+### Task 5 — Automatic mission wrapping (2026-04-18)
+
+Commit `331a299`. Opt-in `wrap_mission = true` field on all
+trigger configs (`ScheduleConfig`, `WebhookConfig`,
+`FileWatchConfig`) and their storage records (`ScheduleRecord`,
+`WebhookRecord`, `FileWatchRecord`). `TriggerDispatch::fire()`
+extended with `wrap_mission: bool` parameter: when true and a
+mission store is configured (via `with_mission_store()`), creates
+a MissionRecord (Created → Running) before the turn and completes
+or cancels it after based on `TurnOutcome`. Escalated outcomes
+left in Running for the normal gate path. Mission store threaded
+from `daemon_server.rs` into the dispatch. `#[serde(default)]` on
+TOML raw structs ensures backward compatibility with existing
+configs. Closes the Phase 26 deferral: "automatic mission wrapping
+for scheduled turns." Two tests.
+
+Streak check:
+- **Production-core** — `d8ab203f…` — streak holds at seventeen.
+- **DESIGN.md** — Untouched.
+- **PRODUCT.md** — Untouched.
+
+### Task 6 — Exit freeze (2026-04-18)
+
+This task. Docs-only.
+
+### Exit criteria (final)
+
+1. ✅ `TriggerSource` enum with `Cron`, `Webhook`, `FileWatch` variants,
+   unified dispatch via `TriggerDispatch::fire()`.
+2. ✅ Webhook HTTP listener on `127.0.0.1:7842` (localhost-only per P6),
+   `POST /trigger/<id>` fires turn with 202 Accepted, async background
+   execution.
+3. ✅ File-watch trigger via `notify` crate with per-watch debounce
+   (default 2000ms), 60s reload interval, recursive directory watching.
+4. ✅ Nine encrypted storage domains (added `Webhooks`, `FileWatches`).
+5. ✅ Nine capability bases added: `webhook.create`, `webhook.list`,
+   `webhook.delete`, `file_watch.create`, `file_watch.list`,
+   `file_watch.delete` — all `CEILING_TRUSTED` only.
+6. ✅ Config surface: `[[webhook]]`, `[[file_watch]]` TOML entries with
+   config-to-storage sync on daemon startup.
+7. ✅ Automatic mission wrapping: opt-in `wrap_mission = true` on all
+   trigger configs, creating MissionRecords for gate/audit lifecycle.
+8. ✅ 690 tests pass, 0 failures. +30 net-new tests this phase
+   (660 → 690).
+9. ✅ Production-core `aivyx-core/src/lib.rs` streak extends to
+   **eighteen consecutive phases** — `d8ab203f…`.
+10. ✅ DESIGN.md untouched — `ceb53860…`.
+11. ✅ PRODUCT.md untouched — `478cab6a…`.
+
+### Prediction vs reality
+
+| Prediction | Reality |
+|---|---|
+| DESIGN.md — low risk, untouched | **Correct.** Untouched. Triggers are daemon-internal concerns, not new architectural primitives. |
+| PRODUCT.md — low risk, likely untouched | **Correct.** Untouched. |
+| Production-core — low risk, streak extends to eighteen | **Correct.** All trigger work operates at daemon/channel/storage level. |
+| Q1 — hyper for webhook listener (leaning direct hyper) | **Direct hyper.** hyper is already a transitive dep; direct usage is ~80 LOC for a minimal HTTP/1.1 listener. httpdate entered Cargo.lock as a transitive dep. |
+| Q2 — notify crate for file watching (leaning yes) | **Yes.** `notify` 8.x provides cross-platform filesystem notification. Breaks zero-new-dep at 2 entries for this phase. |
+| Q3 — mission wrapping opt-in or default (leaning opt-in) | **Opt-in.** `wrap_mission = true` on trigger configs, defaults to `false`. Keeps simple triggers simple. |
+
+### Decisions made during Phase 27 not in DESIGN.md
+
+1. **Trigger dispatch serialization.** All trigger types share a
+   single `Mutex<()>` turn lock. This prevents concurrent triggered
+   turns from interleaving, which simplifies the audit chain and
+   avoids provider rate-limit contention. If parallel triggers
+   become needed, the lock can be replaced with a semaphore.
+
+2. **Webhook port 7842.** Hardcoded localhost-only on
+   `127.0.0.1:7842`. No configuration surface yet — a future phase
+   can add `[daemon] webhook_port` to the config. The port number
+   was chosen to be memorable (aivyx → roughly "ai" + "vyx") and
+   unlikely to conflict with common services.
+
+3. **File-watch reconciliation strategy.** The watcher is rebuilt
+   from scratch (not incrementally updated) every 60 seconds when
+   the watch set changes. This is simpler than incremental
+   add/remove and the cost is negligible at the expected scale
+   (tens of watches, not thousands).
+
+4. **Mission wrapping outcome mapping.** `TurnOutcome::Completed`
+   → mission completed. `Failed`/`Cancelled`/`TimedOut` → mission
+   cancelled (not failed — the mission itself didn't hit a gate
+   rejection). `Escalated` → left in Running (the gate path
+   handles it). This avoids conflating turn-level failure with
+   mission-level failure.
+
+5. **New Cargo.lock entries.** `httpdate` (transitive via hyper
+   server feature) and `notify` (direct) are the two new Cargo.lock
+   entries this phase. Zero-new-dep streak broken at 2.
