@@ -36,7 +36,8 @@ use thiserror::Error;
 
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_core::{
-    ChannelPlatform, SessionId, ToolId, ToolOutcomeSummary, TurnId, TurnOutcomeSummary,
+    ChannelPlatform, SessionId, TokenUsage, ToolId, ToolOutcomeSummary, TurnId,
+    TurnOutcomeSummary,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -103,6 +104,7 @@ pub enum AuditEvent {
         outcome: TurnOutcomeSummary,
         tool_calls_made: usize,
         duration: Duration,
+        usage: TokenUsage,
     },
 
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
@@ -489,11 +491,13 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 outcome,
                 tool_calls_made,
                 duration,
+                usage,
             } => AuditEvent::TurnEnded {
                 turn_id,
                 outcome,
                 tool_calls_made,
                 duration,
+                usage,
             },
             AuditTag::ToolCall {
                 turn_id,
@@ -687,6 +691,7 @@ mod tests {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 1,
             duration: Duration::from_secs(2),
+            usage: TokenUsage::default(),
         })
         .unwrap();
         assert_eq!(AuditLog::len(&log), 3);
@@ -714,6 +719,7 @@ mod tests {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 1,
             duration: Duration::from_secs(2),
+            usage: TokenUsage::default(),
         })
         .unwrap();
         log.verify().unwrap();
@@ -846,6 +852,7 @@ mod tests {
                 outcome: TurnOutcomeSummary::Cancelled,
                 tool_calls_made: 2,
                 duration: Duration::from_millis(500),
+                usage: TokenUsage::default(),
             },
             AuditEvent::MemoryAccess {
                 turn_id,
@@ -907,6 +914,7 @@ mod tests {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 0,
             duration: Duration::from_millis(42),
+            usage: TokenUsage::default(),
         })
         .unwrap();
 
@@ -977,7 +985,7 @@ mod tests {
 
     #[test]
     fn bridge_translates_all_five_variants() {
-        use aivyx_core::{AuditHook, AuditTag, ToolId};
+        use aivyx_core::{AuditHook, AuditTag, TokenUsage, ToolId};
         use std::time::Duration;
 
         let bridge = AuditBridge::new(HmacChainLog::new(test_key()));
@@ -1019,6 +1027,7 @@ mod tests {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 1,
             duration: Duration::from_millis(5),
+            usage: TokenUsage::default(),
         });
 
         // All five entries present, chain still verifies.

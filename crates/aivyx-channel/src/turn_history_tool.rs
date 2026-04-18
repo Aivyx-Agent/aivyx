@@ -178,6 +178,7 @@ impl Tool for TurnHistoryTool {
                     outcome,
                     tool_calls_made,
                     duration,
+                    ..
                 } => {
                     let turn_id_str = format!("{turn_id:?}");
                     ended_map.insert(

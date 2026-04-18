@@ -42,7 +42,7 @@ use serde_json::json;
 
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
-    LlmToolCallRecord, LlmToolDescriptor,
+    LlmToolCallRecord, LlmToolDescriptor, LlmUsage,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
@@ -135,6 +135,8 @@ pub struct LlmPlanner {
     tools: Vec<LlmToolDescriptor>,
     history: Vec<LlmMessage>,
     pending_call_id: Option<String>,
+    /// Cumulative token usage across all LLM steps in this turn.
+    accumulated_usage: crate::TokenUsage,
 }
 
 impl LlmPlanner {
@@ -175,6 +177,7 @@ impl LlmPlanner {
             tools,
             history: Vec::new(),
             pending_call_id: None,
+            accumulated_usage: crate::TokenUsage::default(),
         }
     }
 
@@ -194,6 +197,16 @@ impl LlmPlanner {
     /// order.
     pub fn advertised_tool_names(&self) -> Vec<&str> {
         self.tools.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    /// Add a step's usage to the running total.
+    fn accumulate(&mut self, usage: LlmUsage) {
+        self.accumulated_usage.input_tokens += usage.input_tokens;
+        self.accumulated_usage.output_tokens += usage.output_tokens;
+        self.accumulated_usage.cache_creation_input_tokens +=
+            usage.cache_creation_input_tokens;
+        self.accumulated_usage.cache_read_input_tokens +=
+            usage.cache_read_input_tokens;
     }
 
     /// Build one `LlmRequest` from the current history + config and
@@ -308,7 +321,8 @@ impl TurnPlanner for LlmPlanner {
             };
 
             match terminal {
-                LlmStepEnd::FinalMessage { text, .. } => {
+                LlmStepEnd::FinalMessage { text, usage } => {
+                    self.accumulate(usage);
                     self.history.push(LlmMessage::Assistant {
                         text: text.clone(),
                         tool_calls: Vec::new(),
@@ -320,8 +334,9 @@ impl TurnPlanner for LlmPlanner {
                     tool_name,
                     input,
                     text_so_far,
-                    ..
+                    usage,
                 } => {
+                    self.accumulate(usage);
                     let record = LlmToolCallRecord {
                         call_id: call_id.clone(),
                         tool_name: tool_name.clone(),
@@ -383,6 +398,10 @@ impl TurnPlanner for LlmPlanner {
             content,
             is_error,
         });
+    }
+
+    fn turn_usage(&self) -> crate::TokenUsage {
+        self.accumulated_usage
     }
 }
 

@@ -306,6 +306,7 @@ impl Agent for ConcreteAgent {
             outcome: TurnOutcomeSummary::from(&outcome),
             tool_calls_made,
             duration,
+            usage: planner.turn_usage(),
         });
 
         // D1: "returning a TurnOutcome to the channel, and yielding control."

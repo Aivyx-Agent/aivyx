@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::{ChannelContext, Message, Tool, ToolId, ToolOutcome, ToolOutcomeSummary};
+use crate::{ChannelContext, Message, TokenUsage, Tool, ToolId, ToolOutcome, ToolOutcomeSummary};
 
 /// What the loop should do next. Mirrors the shapes a real LLM step can
 /// produce — a tool call, a final message, or a stop — but with none of
@@ -77,6 +77,14 @@ pub trait TurnPlanner: Send + Sync {
         _tool_id: ToolId,
         _outcome: &ToolOutcome,
     ) {
+    }
+
+    /// Cumulative token usage across all LLM steps in this turn.
+    /// The turn loop reads this after the step loop exits and passes
+    /// it into `AuditTag::TurnEnded`. Deterministic planners return
+    /// zero (the default).
+    fn turn_usage(&self) -> TokenUsage {
+        TokenUsage::default()
     }
 }
 

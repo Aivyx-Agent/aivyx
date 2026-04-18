@@ -469,6 +469,7 @@ pub enum AuditTag {
         outcome: TurnOutcomeSummary,
         tool_calls_made: usize,
         duration: Duration,
+        usage: TokenUsage,
     },
     ToolCall {
         turn_id: TurnId,
@@ -490,6 +491,29 @@ pub enum AuditTag {
         scope: Scope,
         query_or_key: String,
     },
+}
+
+/// Aggregate token usage for one turn. Mirrors `LlmUsage` from
+/// `aivyx-llm` but lives in core so the audit layer can reference it
+/// without depending on the LLM crate. The planner sums per-step
+/// `LlmUsage` into this and the turn loop passes it into `AuditTag::TurnEnded`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_input_tokens: u32,
+    pub cache_read_input_tokens: u32,
+}
+
+impl From<aivyx_llm::LlmUsage> for TokenUsage {
+    fn from(u: aivyx_llm::LlmUsage) -> Self {
+        TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_creation_input_tokens: u.cache_creation_input_tokens,
+            cache_read_input_tokens: u.cache_read_input_tokens,
+        }
+    }
 }
 
 /// Dedicated memory-operation kind, duplicated from `aivyx_audit` to keep

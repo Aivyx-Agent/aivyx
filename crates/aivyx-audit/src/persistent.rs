@@ -623,8 +623,8 @@ mod tests {
     use crate::{AuditEvent, MemoryOperation as AuditMemoryOp, TrustTierSummary};
     use aivyx_capability::{CapabilitySet, Scope, TrustTier};
     use aivyx_core::{
-        ChannelPlatform, SessionId, ToolId, ToolOutcomeSummary, TurnId, TurnOutcomeSummary,
-        VerificationSummary,
+        ChannelPlatform, SessionId, TokenUsage, ToolId, ToolOutcomeSummary, TurnId,
+        TurnOutcomeSummary, VerificationSummary,
     };
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{RedbStorage, StorageConfig};
@@ -677,6 +677,7 @@ mod tests {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 1,
             duration: Duration::from_millis(2),
+            usage: TokenUsage::default(),
         }
     }
 
