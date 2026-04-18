@@ -376,14 +376,19 @@ streak extends to eighteen consecutive phases (new record).
 DESIGN.md and PRODUCT.md both untouched. Test delta +30 (660→690).
 Two new Cargo.lock entries: httpdate (transitive), notify (direct).
 
-## Phase 28 — TBD
+## Phase 28 — Deferral Cleanup + Reflection Foundation
 
-**Active — see [PHASE_28.md](PHASE_28.md).** Strongest
-candidates: (a) Web UI Channel — browser-based frontend over
-existing daemon IPC, leveraging `FrontendType::Web`; (b) Reflection
-Layer — periodic self-assessment composing the scheduler + trigger
-substrate from Phases 26–27 with the mission gate primitive from
-Phase 21; (c) Deferral cleanup pass — close accumulated backlog
-items. Decision made at Phase 28 open.
+**Active — see [PHASE_28.md](PHASE_28.md).** Hybrid phase: close
+three rolling deferrals (`mission.list`/`mission.status` tools,
+webhook port configurability, forensic `ToolOutcome::NotInRole`)
+trimming the backlog from 13 → 10, then lay the first Reflection
+Layer primitive — a `turn.history` audit introspection tool that
+lets the agent observe its own recent turn outcomes. Advances G3.
 
 ## Phase 29 — TBD at Phase 28 exit
+
+Strongest candidates: (a) Web UI Channel — browser-based
+frontend over existing daemon IPC; (b) Reflection Layer Phase 2
+— periodic self-assessment loop composing audit introspection
+with trigger scheduling; (c) further deferral cleanup.
+Decision deferred to Phase 29 open.
