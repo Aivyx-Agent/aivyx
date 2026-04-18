@@ -320,6 +320,14 @@ pub enum ToolOutcome {
         scope: Scope,
         held: CapabilitySet,
     },
+    /// Phase 28 Task 4 — the tool exists and the agent holds the
+    /// capability, but the active role's allowlist does not include
+    /// it. Forensically distinct from `Denied` (capability gate) so
+    /// audit walkers can separate "agent lacks authority" from
+    /// "role policy forbids this tool."
+    NotInRole {
+        tool_name: String,
+    },
     RequiresEscalation {
         reason: String,
     },
@@ -358,6 +366,7 @@ pub enum TurnOutcome {
 pub enum ToolOutcomeSummary {
     Completed { verified: VerificationSummary },
     Denied,
+    NotInRole,
     RequiresEscalation,
     Failed,
 }
@@ -395,6 +404,7 @@ impl From<&ToolOutcome> for ToolOutcomeSummary {
                 verified: VerificationSummary::from(verified),
             },
             ToolOutcome::Denied { .. } => ToolOutcomeSummary::Denied,
+            ToolOutcome::NotInRole { .. } => ToolOutcomeSummary::NotInRole,
             ToolOutcome::RequiresEscalation { .. } => ToolOutcomeSummary::RequiresEscalation,
             ToolOutcome::Failed(_) => ToolOutcomeSummary::Failed,
         }
@@ -699,6 +709,14 @@ mod tests {
             held: CapabilitySet::empty(),
         };
         assert_eq!(ToolOutcomeSummary::from(&full), ToolOutcomeSummary::Denied);
+    }
+
+    #[test]
+    fn tool_outcome_summary_from_not_in_role() {
+        let full = ToolOutcome::NotInRole {
+            tool_name: "shell.exec".to_string(),
+        };
+        assert_eq!(ToolOutcomeSummary::from(&full), ToolOutcomeSummary::NotInRole);
     }
 
     #[test]

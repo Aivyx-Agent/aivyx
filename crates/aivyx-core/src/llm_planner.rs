@@ -424,6 +424,13 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
             });
             (envelope.to_string(), true)
         }
+        ToolOutcome::NotInRole { tool_name } => {
+            let envelope = json!({
+                "error": "not_in_role",
+                "message": format!("tool {tool_name} is not in the active role's allowlist"),
+            });
+            (envelope.to_string(), true)
+        }
         ToolOutcome::RequiresEscalation { reason } => {
             let envelope = json!({
                 "error": "requires_escalation",

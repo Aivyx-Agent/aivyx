@@ -441,14 +441,13 @@ impl ConcreteAgent {
                 scope_requested: synthetic.clone(),
                 held_capabilities: effective.clone(),
             });
-            let outcome = ToolOutcome::Denied {
-                scope: synthetic,
-                held: effective.clone(),
+            let outcome = ToolOutcome::NotInRole {
+                tool_name: tool_name_str,
             };
             return (
                 StepObservation {
                     tool_id,
-                    summary: ToolOutcomeSummary::Denied,
+                    summary: ToolOutcomeSummary::NotInRole,
                 },
                 outcome,
             );
@@ -600,6 +599,7 @@ fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
             verified: VerificationSummary::NotApplicable,
         } => "completed",
         ToolOutcomeSummary::Denied => "denied",
+        ToolOutcomeSummary::NotInRole => "not in role",
         ToolOutcomeSummary::RequiresEscalation => "requires escalation",
         ToolOutcomeSummary::Failed => "failed",
     }
@@ -1839,10 +1839,11 @@ mod tests {
     // injection, before `required_scope`, and before the capability
     // check.
     //
-    // Q1 Option A — the rejection routes through `ToolOutcome::Denied
-    // { scope, held }` with a synthetic `tool.allowlist:<tool_name>`
-    // scope. No new `ToolOutcome` variant, preserving the production-
-    // core byte-identity streak at a single Phase 11 break (Task 3).
+    // Phase 28 Task 4 upgraded the routing from `ToolOutcome::Denied`
+    // (Phase 11 Q1 Option A) to `ToolOutcome::NotInRole { tool_name }`
+    // — forensically distinct in the audit chain. The `ScopeDenied`
+    // audit tag still fires with the synthetic `tool.allowlist:<name>`
+    // scope for backward compatibility with audit walkers.
 
     use std::collections::BTreeSet;
 
