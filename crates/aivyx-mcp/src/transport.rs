@@ -1,11 +1,10 @@
-//! Stdio transport — spawns an MCP server as a child process and
-//! communicates over stdin/stdout with newline-delimited JSON-RPC 2.0.
+//! `McpServerBridge` — protocol-level bridge to an MCP server.
+//!
+//! Handles MCP lifecycle (initialize, tools/list, tools/call, shutdown)
+//! over an abstract `McpTransport`. The bridge owns the transport and
+//! the JSON-RPC ID counter; tool proxies share both via `Arc`.
 
 use std::sync::Arc;
-
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
 
 use aivyx_core::Tool;
 
@@ -15,43 +14,39 @@ use crate::protocol::{
     ToolsCallParams, ToolsCallResult, ToolsListResult,
 };
 use crate::proxy::McpToolProxy;
+use crate::transport_trait::McpTransport;
 
 pub struct McpServerBridge {
-    child: Child,
-    writer: Arc<Mutex<tokio::process::ChildStdin>>,
-    reader: Arc<Mutex<BufReader<tokio::process::ChildStdout>>>,
+    transport: Arc<dyn McpTransport>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
     server_name: String,
 }
 
 impl McpServerBridge {
+    /// Create a bridge from an already-connected transport. Runs the
+    /// MCP `initialize` handshake before returning.
+    pub async fn from_transport(
+        transport: Arc<dyn McpTransport>,
+        server_name: impl Into<String>,
+    ) -> Result<Self, String> {
+        let mut bridge = McpServerBridge {
+            transport,
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            server_name: server_name.into(),
+        };
+        bridge.initialize().await?;
+        Ok(bridge)
+    }
+
+    /// Convenience: spawn a child process over stdio and initialize.
+    /// This is the Phase 23 entry point preserved for backwards compat.
     pub async fn start(
         command: &str,
         args: &[&str],
         server_name: impl Into<String>,
     ) -> Result<Self, String> {
-        let mut child = Command::new(command)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("spawn MCP server: {e}"))?;
-
-        let stdin = child.stdin.take().ok_or("no stdin on child")?;
-        let stdout = child.stdout.take().ok_or("no stdout on child")?;
-
-        let mut bridge = McpServerBridge {
-            child,
-            writer: Arc::new(Mutex::new(stdin)),
-            reader: Arc::new(Mutex::new(BufReader::new(stdout))),
-            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            server_name: server_name.into(),
-        };
-
-        bridge.initialize().await?;
-        Ok(bridge)
+        let stdio = crate::stdio::StdioTransport::start(command, args).await?;
+        Self::from_transport(Arc::new(stdio), server_name).await
     }
 
     async fn initialize(&mut self) -> Result<InitializeResult, String> {
@@ -104,8 +99,7 @@ impl McpServerBridge {
                 let proxy = McpToolProxy::new(
                     self.server_name.clone(),
                     def,
-                    Arc::clone(&self.writer),
-                    Arc::clone(&self.reader),
+                    Arc::clone(&self.transport),
                     Arc::clone(&self.next_id),
                 );
                 Arc::new(proxy) as Arc<dyn Tool>
@@ -118,10 +112,15 @@ impl McpServerBridge {
         &self.server_name
     }
 
-    pub async fn shutdown(mut self) -> Result<(), String> {
+    /// Returns the transport handle. Used by the binary to access
+    /// transport-specific shutdown (e.g. killing a stdio child).
+    pub fn transport(&self) -> &Arc<dyn McpTransport> {
+        &self.transport
+    }
+
+    pub async fn shutdown(self) -> Result<(), String> {
         let _ = self.call::<serde_json::Value>("shutdown", None).await;
         let _ = self.send_notification("exit", None).await;
-        let _ = self.child.kill().await;
         Ok(())
     }
 
@@ -138,27 +137,9 @@ impl McpServerBridge {
             .map_err(|e| format!("serialize request: {e}"))?;
         line.push('\n');
 
-        {
-            let mut w = self.writer.lock().await;
-            w.write_all(line.as_bytes())
-                .await
-                .map_err(|e| format!("write to MCP server: {e}"))?;
-            w.flush()
-                .await
-                .map_err(|e| format!("flush to MCP server: {e}"))?;
-        }
+        self.transport.send(&line).await?;
 
-        let mut resp_line = String::new();
-        {
-            let mut r = self.reader.lock().await;
-            r.read_line(&mut resp_line)
-                .await
-                .map_err(|e| format!("read from MCP server: {e}"))?;
-        }
-
-        if resp_line.is_empty() {
-            return Err("MCP server closed stdout".into());
-        }
+        let resp_line = self.transport.receive().await?;
 
         let resp: Response = serde_json::from_str(&resp_line)
             .map_err(|e| format!("parse MCP response: {e}"))?;
@@ -202,13 +183,6 @@ impl McpServerBridge {
             .map_err(|e| format!("serialize notification: {e}"))?;
         line.push('\n');
 
-        let mut w = self.writer.lock().await;
-        w.write_all(line.as_bytes())
-            .await
-            .map_err(|e| format!("write notification: {e}"))?;
-        w.flush()
-            .await
-            .map_err(|e| format!("flush notification: {e}"))?;
-        Ok(())
+        self.transport.send(&line).await
     }
 }

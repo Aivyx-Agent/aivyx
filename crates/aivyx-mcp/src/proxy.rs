@@ -3,8 +3,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::BufReader;
-use tokio::sync::Mutex;
 
 use aivyx_capability::Scope;
 use aivyx_core::{
@@ -13,13 +11,13 @@ use aivyx_core::{
 
 use crate::jsonrpc::{Request, Response};
 use crate::protocol::{McpToolDef, ToolsCallParams, ToolsCallResult};
+use crate::transport_trait::McpTransport;
 
 pub struct McpToolProxy {
     id: ToolId,
     server_name: String,
     def: McpToolDef,
-    writer: Arc<Mutex<tokio::process::ChildStdin>>,
-    reader: Arc<Mutex<BufReader<tokio::process::ChildStdout>>>,
+    transport: Arc<dyn McpTransport>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -27,16 +25,14 @@ impl McpToolProxy {
     pub fn new(
         server_name: String,
         def: McpToolDef,
-        writer: Arc<Mutex<tokio::process::ChildStdin>>,
-        reader: Arc<Mutex<BufReader<tokio::process::ChildStdout>>>,
+        transport: Arc<dyn McpTransport>,
         next_id: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         McpToolProxy {
             id: ToolId::new(),
             server_name,
             def,
-            writer,
-            reader,
+            transport,
             next_id,
         }
     }
@@ -45,8 +41,6 @@ impl McpToolProxy {
         &self,
         arguments: serde_json::Value,
     ) -> Result<ToolsCallResult, String> {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -63,25 +57,9 @@ impl McpToolProxy {
             .map_err(|e| format!("serialize: {e}"))?;
         line.push('\n');
 
-        {
-            let mut w = self.writer.lock().await;
-            w.write_all(line.as_bytes())
-                .await
-                .map_err(|e| format!("write: {e}"))?;
-            w.flush().await.map_err(|e| format!("flush: {e}"))?;
-        }
+        self.transport.send(&line).await?;
 
-        let mut resp_line = String::new();
-        {
-            let mut r = self.reader.lock().await;
-            r.read_line(&mut resp_line)
-                .await
-                .map_err(|e| format!("read: {e}"))?;
-        }
-
-        if resp_line.is_empty() {
-            return Err("MCP server closed stdout".into());
-        }
+        let resp_line = self.transport.receive().await?;
 
         let resp: Response = serde_json::from_str(&resp_line)
             .map_err(|e| format!("parse response: {e}"))?;
