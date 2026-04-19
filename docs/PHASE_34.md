@@ -130,3 +130,39 @@ guidance the user can act on.
 
 Exit criteria checklist, prediction-vs-reality table,
 streak report.
+
+## Ship records
+
+### Tasks 2–3 — `e805580`
+
+**ProviderKind::Ollama + optional API key + conditional
+stream_options.**
+
+- `ProviderKind::Ollama` variant with `is_openai_compatible()`
+  helper; validation skips API-key requirement for Ollama.
+- `OpenAiConfig.api_key` → `Option<SecretString>`;
+  `without_api_key()` ctor omits Authorization header.
+- `include_stream_usage` bool gates `stream_options` in
+  request body (defaults off for `without_api_key()`).
+- `DEFAULT_OLLAMA_BASE_URL` constant
+  (`http://localhost:11434`).
+- CLI `--provider ollama` flag; banner shows default base URL.
+- 14 new tests (6 config, 7 provider, 1 CLI). 754 total.
+
+### Tasks 4–5 — `TBD`
+
+**Health check + worked example.**
+
+- `HttpTransport::get_text` default method (backward-compatible
+  trait widening) + `ReqwestTransport` implementation.
+- `OpenAiProvider::health_check()` — GET to base URL, returns
+  actionable error with `ollama serve` guidance on failure.
+- Binary performs non-fatal health check at Ollama provider
+  construction; warns with actionable message if unreachable.
+- `examples/aivyx-ollama.toml` — complete worked example for
+  local LLM setup (provider, model, role config, optional
+  overrides).
+- Updated `examples/aivyx.toml` provider comment to document
+  all three provider values and cross-reference the Ollama
+  example.
+- 2 new health-check tests. 756 total.

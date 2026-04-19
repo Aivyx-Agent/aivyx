@@ -27,9 +27,12 @@ use crate::LlmError;
 pub type ByteStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, LlmError>> + Send + 'static>>;
 
-/// The transport seam. One method, because that's all the Anthropic
-/// Messages streaming endpoint needs: POST a JSON body, read back an SSE
-/// stream.
+/// The transport seam. Two methods:
+///
+/// - `post_sse` — POST a JSON body, read back an SSE byte stream.
+/// - `get_text` — GET a URL and return the response body as a string.
+///   Used for lightweight health checks (e.g. Ollama's root endpoint
+///   returns `"Ollama is running"`).
 #[async_trait]
 pub trait HttpTransport: Send + Sync {
     async fn post_sse(
@@ -39,6 +42,15 @@ pub trait HttpTransport: Send + Sync {
         body: Vec<u8>,
         cancellation: &CancellationToken,
     ) -> Result<ByteStream, LlmError>;
+
+    /// Simple GET returning the response body as a `String`.
+    /// Default implementation returns `LlmError::Transport` so
+    /// test fakes that don't need it can skip the method.
+    async fn get_text(&self, _url: &str) -> Result<String, LlmError> {
+        Err(LlmError::Transport(
+            "get_text not implemented on this transport".to_string(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +78,32 @@ impl ReqwestTransport {
 
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
+    async fn get_text(&self, url: &str) -> Result<String, LlmError> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
+            return Err(LlmError::Api {
+                status: status.as_u16(),
+                message: body,
+            });
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))
+    }
+
     async fn post_sse(
         &self,
         url: &str,

@@ -326,16 +326,26 @@ parent_role = "researcher"
 # ----------------------------------------------------------------
 #
 # `[agent] provider` selects the LLM backend. Default: "anthropic".
-# Set to "openai" for OpenAI, Ollama, or any OpenAI-compatible
-# endpoint. Can also be overridden via `AIVYX_PROVIDER` env var
-# or `--provider` CLI flag.
+# Supported values: "anthropic", "openai", "ollama".
+#
+# - "openai" targets cloud OpenAI or any compatible endpoint.
+# - "ollama" is sugar for local Ollama — defaults to
+#   http://localhost:11434, API key is optional, and
+#   stream_options.include_usage is omitted (some Ollama
+#   versions reject unknown fields).
+#
+# Can also be overridden via `AIVYX_PROVIDER` env var or
+# `--provider` CLI flag.
+#
+# See `examples/aivyx-ollama.toml` for a complete local LLM
+# worked example.
 #
 # [agent]
 # provider = "openai"
 #
 # [openai]
 # api_key = "sk-..."
-# base_url = "http://localhost:11434/v1"   # Ollama example
+# base_url = "https://api.openai.com"  # default for "openai"
 
 # ----------------------------------------------------------------
 # MCP server entries (Phase 24)

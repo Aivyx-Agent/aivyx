@@ -1,0 +1,84 @@
+# Aivyx — Ollama (local LLM) worked example (Phase 34)
+#
+# This file shows how to run Aivyx against a local Ollama
+# instance. Copy it, adjust the model name, and point the
+# binary at it:
+#
+#   ollama pull llama3.1
+#   ollama serve
+#   aivyx --config examples/aivyx-ollama.toml
+#
+# ----------------------------------------------------------------
+# Prerequisites
+# ----------------------------------------------------------------
+#
+# 1. Install Ollama: https://ollama.ai
+# 2. Pull a model:   `ollama pull llama3.1`
+# 3. Start the server: `ollama serve`
+#    (or let it auto-start on macOS/Linux via the system service)
+#
+# Aivyx performs a health check at startup — if Ollama is not
+# reachable at the configured base URL, you'll see an actionable
+# warning with the exact command to run.
+#
+# ----------------------------------------------------------------
+# Provider config
+# ----------------------------------------------------------------
+
+[agent]
+provider = "ollama"
+
+# Model name must match a model you've pulled locally.
+# Common choices: llama3.1, llama3.2, mistral, codellama, etc.
+model = "llama3.1"
+
+# ----------------------------------------------------------------
+# Optional overrides
+# ----------------------------------------------------------------
+#
+# base_url: defaults to http://localhost:11434. Override if
+# Ollama is running on a different host or port:
+#
+# [openai]
+# base_url = "http://192.168.1.100:11434"
+#
+# api_key: Ollama ignores API keys, so none is required. If
+# you're running behind an authenticating reverse proxy, set
+# it here:
+#
+# [openai]
+# api_key = "my-proxy-token"
+
+# ----------------------------------------------------------------
+# Roles (same as any Aivyx config — provider-independent)
+# ----------------------------------------------------------------
+
+[[role]]
+name = "default"
+system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+capability_scopes = [
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "fs.read",
+  "fs.write",
+  "net.fetch",
+  "shell.exec",
+]
+trust_ceiling = "Trusted"
+
+[[role]]
+name = "coder"
+system_prompt = "You are a pair-programmer. Reach for tests first."
+tool_allowlist = ["fs.read", "fs.write", "memory.read", "memory.write", "memory.forget", "shell.exec"]
+memory_topic_prefix = "coder/"
+capability_scopes = [
+  "fs.read",
+  "fs.write",
+  "memory.read",
+  "memory.write",
+  "memory.forget",
+  "shell.exec",
+]
+trust_ceiling = "Trusted"
+parent_role = "default"

@@ -1202,6 +1202,15 @@ async fn run_async(
             cfg = cfg.with_base_url(base_url);
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build Ollama provider: {e}"))?;
+
+            // Lightweight health check — warn (don't abort) if Ollama
+            // is unreachable so the user gets actionable guidance.
+            if let Err(msg) = p.health_check().await {
+                eprintln!("\n⚠  Ollama health check failed:");
+                eprintln!("   {msg}");
+                eprintln!();
+            }
+
             Arc::new(p)
         }
     };

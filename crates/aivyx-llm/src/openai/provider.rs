@@ -109,6 +109,47 @@ impl OpenAiProvider {
             .unwrap_or(DEFAULT_BASE_URL);
         format!("{base}/v1/chat/completions")
     }
+
+    fn base_url(&self) -> &str {
+        self.config
+            .base_url
+            .as_deref()
+            .unwrap_or(DEFAULT_BASE_URL)
+    }
+
+    /// Lightweight health check against the provider's base URL.
+    ///
+    /// For Ollama, a GET to `http://localhost:11434` returns the
+    /// plain-text body `"Ollama is running"`. This method checks
+    /// reachability and returns a human-readable diagnostic:
+    ///
+    /// - `Ok(())` — the server responded (any 2xx).
+    /// - `Err(msg)` — actionable error string suitable for display
+    ///   to the user.
+    pub async fn health_check(&self) -> Result<(), String> {
+        let url = self.base_url();
+        match self.transport.get_text(url).await {
+            Ok(_body) => Ok(()),
+            Err(LlmError::Transport(e)) => {
+                // Connection refused, DNS failure, timeout, etc.
+                Err(format!(
+                    "cannot reach {url} — is Ollama running? \
+                     Start it with `ollama serve`.\n  \
+                     (transport error: {e})"
+                ))
+            }
+            Err(LlmError::Api { status, message }) => {
+                Err(format!(
+                    "{url} returned HTTP {status}: {message}"
+                ))
+            }
+            Err(other) => {
+                Err(format!(
+                    "health check against {url} failed: {other}"
+                ))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -719,6 +760,78 @@ data: [DONE]\n\n";
     #[test]
     fn default_ollama_base_url_is_localhost_11434() {
         assert_eq!(DEFAULT_OLLAMA_BASE_URL, "http://localhost:11434");
+    }
+
+    // ---- Health-check tests -----------------------------------------------
+
+    struct HealthyTransport;
+
+    #[async_trait]
+    impl HttpTransport for HealthyTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            unreachable!("post_sse should not be called during health check");
+        }
+
+        async fn get_text(&self, _url: &str) -> Result<String, LlmError> {
+            Ok("Ollama is running".to_string())
+        }
+    }
+
+    struct UnreachableTransport;
+
+    #[async_trait]
+    impl HttpTransport for UnreachableTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            unreachable!();
+        }
+
+        async fn get_text(&self, _url: &str) -> Result<String, LlmError> {
+            Err(LlmError::Transport(
+                "connection refused".to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn health_check_ok_when_server_responds() {
+        let cfg = OpenAiConfig::without_api_key()
+            .with_base_url("http://localhost:11434");
+        let provider = OpenAiProvider::with_transport(
+            cfg,
+            Box::new(HealthyTransport),
+        );
+        assert!(provider.health_check().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn health_check_returns_actionable_error_on_connection_refused() {
+        let cfg = OpenAiConfig::without_api_key()
+            .with_base_url("http://localhost:11434");
+        let provider = OpenAiProvider::with_transport(
+            cfg,
+            Box::new(UnreachableTransport),
+        );
+        let err = provider.health_check().await.unwrap_err();
+        assert!(
+            err.contains("ollama serve"),
+            "error should mention `ollama serve`: {err}"
+        );
+        assert!(
+            err.contains("localhost:11434"),
+            "error should mention the URL: {err}"
+        );
     }
 
     #[test]
