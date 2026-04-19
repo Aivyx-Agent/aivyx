@@ -1054,21 +1054,30 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 21 exit, 2026-04-17)
+## Delivery Status (as of Phase 35 exit, 2026-04-19)
 
 A traceability surface mapping each product commitment to its
-implementation state after 21 phases. The commitment text
+implementation state after 35 phases. The commitment text
 above is unchanged — this section records what shipped, what
 partially shipped, and what remains forward.
 
 ### Fully Delivered
 
-- **P1 — Sub-Agent Role-Switching.** Phase 14. Inline
-  sub-session nesting via `OnceLock`-backed `RoleSwitchTool`
-  factory closure, one level deep. Structural impossibility
-  of escalation pinned by integration tests and `--print-role`
-  reachable-targets enumerator. Multi-level nesting deferred
-  (low urgency — no-op failure mode is correct).
+- **P1 — Sub-Agent Role-Switching.** Phase 14 (inline
+  sub-session nesting), Phase 33 (multi-level nesting).
+  `OnceLock`-backed `RoleSwitchTool` factory closure with
+  capability-bounded recursive nesting — each child's
+  envelope can only narrow, never widen. Structural
+  impossibility of escalation pinned by integration tests
+  and `--print-role` reachable-targets enumerator.
+
+- **P2 — Session Legibility and Two Success Modes.** Phases
+  21, 23, 28, 35. Mission state machine (six states),
+  `MissionCreateTool`, gate creation from
+  `TurnOutcome::Escalated` (turn loop + daemon + trigger
+  path), `ResolveGate` handler with turn resumption on
+  approval, `mission.list`/`mission.status` read-only tools,
+  gate rendering (CLI + Telegram).
 
 - **P4 — Daemon-Default Architecture.** Phases 16–20 (five-
   phase migration). Protocol settlement, production hardening,
@@ -1086,6 +1095,14 @@ partially shipped, and what remains forward.
   TOML config, strict attenuation along every dimension,
   validated at config-load time.
 
+- **P8 — Outcome-Driven Audited Reflection.** Phases 28–30.
+  Audit introspection via `turn.history` (Phase 28),
+  reflection loop via `reflection.propose`/`.apply`
+  (Phase 29), runtime role mutation via `role.update` +
+  planner factory integration (Phase 30). Full
+  observe→propose→approve→apply cycle operational for
+  both memory writes and runtime role-config changes.
+
 - **P9 — Per-Role Full Capability Declaration.** Phase 13.
   `capability_scopes` parsed via `Scope::parse` at config-load
   time. Four-role worked example in `examples/aivyx.toml`.
@@ -1094,17 +1111,10 @@ partially shipped, and what remains forward.
 - **P10 — Substrate-Only Core, Seven Tools Forever.** Always
   true. The seven substrate tools (`fs.read`, `fs.write`,
   `memory.read`, `memory.write`, `memory.forget`, `shell.exec`,
-  `web.fetch`) are the closed set. Infrastructure tools (4)
-  and third-party tools (0) are separate categories.
+  `web.fetch`) are the closed set. Infrastructure tools and
+  third-party MCP tools are separate categories.
 
 ### Partially Delivered
-
-- **P2 — Session Legibility and Two Success Modes.** Phase 21.
-  Mission state machine (six states), `MissionCreateTool`,
-  `ResolveGate` handler, gate rendering (CLI + Telegram).
-  **Missing:** escalation→gate turn-loop wiring (the daemon
-  does not yet create gates from `TurnOutcome::Escalated`),
-  `mission.list`/`mission.status` read-only tools.
 
 - **P3 — Goals and Non-Goals.** Vision document — partially
   realized through implementation:
@@ -1113,17 +1123,18 @@ partially shipped, and what remains forward.
     not yet started.
   - **G2 (Code interaction):** Shipped. `fs.read`, `fs.write`,
     `shell.exec` all operational with role gating.
-  - **G3 (Memory Reflection):** Shipped. Memory substrate
-    (Phase 6), reflection loop (Phase 29), runtime role
-    mutation (Phase 30).
-  - **G4 (Sub-agent orchestration):** Shipped (Phase 14).
-    One-level deep role-switching.
-  - **G5 (Autonomous/scheduled execution):** Shipped. Cron
-    schedules (Phase 26), webhooks + file watchers (Phase 27).
-  - **G6 (Local execution, privacy):** Shipped. Fully
-    operational.
-  - **G7 (Third-party tool SDK):** `Tool` trait exists. SDK
-    documentation and process IPC not yet started.
+  - **G3 (Memory Reflection):** Shipped (Phases 28–30).
+    Memory substrate, reflection loop, runtime role mutation.
+  - **G4 (Sub-agent orchestration):** Shipped (Phases 14, 33).
+    Multi-level role-switching with capability attenuation.
+  - **G5 (Autonomous/scheduled execution):** Shipped (Phases
+    26–27). Cron schedules, webhooks, file watchers,
+    trigger unification, mission wrapping.
+  - **G6 (Local execution, privacy):** Shipped (Phase 34).
+    Ollama first-class support with health check.
+  - **G7 (Third-party tool SDK):** `Tool` trait exists. MCP
+    integration shipped (Phases 23–24, 32). SDK documentation
+    and process IPC not yet started.
 
 ### Forward (Not Yet Started)
 
@@ -1132,13 +1143,6 @@ partially shipped, and what remains forward.
   no documented SDK surface, no versioned contract, no
   third-party-consumable crate exists yet. Blocked on SDK
   documentation pass.
-
-- **P8 — Outcome-Driven Audited Reflection.** Shipped. Audit
-  introspection via `turn.history` (Phase 28), reflection
-  loop via `reflection.propose`/`.apply` (Phase 29), runtime
-  role mutation via `role.update` + planner factory integration
-  (Phase 30). Full observe→propose→approve→apply cycle
-  operational for both memory writes and role-config changes.
 
 - **P11 — SDK Contract: Interface + Integration.** The `Tool`
   trait is the in-tree SDK surface. No published documentation,
@@ -1150,37 +1154,29 @@ partially shipped, and what remains forward.
   no tool-process extension. Blocked on IPC protocol extension
   for tool registration and dispatch.
 
-### Forward Commitment Candidates
+### Forward Commitment Candidates — Status Update
 
-The following are **not commitments** — they are candidates
-identified by a seven-dimension gap analysis at the Phase 21
-boundary. Each would require a product-shape review pass
-(following the same four-cluster pinning methodology used to
-produce P1–P12) before becoming a locked commitment.
+The following were identified at the Phase 21 boundary as
+candidates. Several have since been delivered:
 
-- **MCP Client Integration.** The `Tool` trait's shape
-  (`name`, `description`, `input_schema`, `required_scope`,
-  `execute`) maps near-1:1 to MCP's tool interface. One MCP
-  client adapter would bridge external MCP servers into
-  Aivyx's tool registry with full capability scoping and
-  audit logging. Highest-leverage single integration effort
-  identified.
+- **MCP Client Integration.** Delivered (Phases 23–24, 32).
+  `aivyx-mcp` crate with stdio and SSE transports,
+  `McpServerBridge` + `McpToolProxy`, `mcp.call` capability
+  base, `[[mcp_server]]` TOML config, `--mcp-server` and
+  `--mcp-sse` CLI flags.
 
-- **Multi-Provider LLM Support.** The `LlmProvider` trait is
-  already provider-agnostic. An OpenAI-compatible adapter
-  would unlock GPT-4, Ollama, and any OpenAI-API-compatible
-  endpoint. Quick win given the existing trait shape.
+- **Multi-Provider LLM Support.** Delivered (Phases 25, 34).
+  OpenAI-compatible `LlmProvider` adapter, `ProviderKind`
+  enum (`Anthropic`, `OpenAi`, `Ollama`), `--provider` CLI
+  flag. Phase 34 added first-class Ollama support with
+  optional API key, conditional `stream_options`, health
+  check, and worked example.
 
-- **Web UI Channel.** A `127.0.0.1`-only web interface that
-  connects to the daemon over existing IPC. The daemon
-  architecture makes this cheap (the frontend is a thin
-  client). Would provide richer interaction than CLI or
-  Telegram for mission management, gate resolution, and
-  audit inspection.
+- **Scheduled Execution.** Delivered (Phases 26–27). Cron
+  schedules, webhook triggers (localhost-only), file-change
+  watchers, `TriggerDispatch` unification, opt-in mission
+  wrapping.
 
-- **Scheduled Execution.** G5 commits to autonomous and
-  scheduled execution. The daemon substrate exists. Needs
-  cron-like timer primitives, webhook trigger endpoints
-  (localhost-only per P6), and file-change watchers. Each
-  trigger creates a daemon turn attributed to the operator's
-  identity.
+- **Web UI Channel.** Not yet started. The daemon architecture
+  and `FrontendType` enum are designed to make this cheap.
+  Highest-impact undelivered user-facing feature.
