@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Scope registry — the v1 active namespace (21 scopes, per D4).
+// Scope registry — the v1 active namespace (34 scopes).
 // ---------------------------------------------------------------------------
 
 /// The v1 active scope bases. `Scope::parse` rejects anything not in this
@@ -127,6 +127,10 @@ const KNOWN_BASES: &[&str] = &[
     "reflection.apply",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
+    // ollama model management (Phase 36 — local LLM story completion)
+    "ollama.list",
+    "ollama.show",
+    "ollama.pull",
 ];
 
 // ---------------------------------------------------------------------------
@@ -597,6 +601,9 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "reflection.propose",
         "reflection.apply",
         "role.update",
+        "ollama.list",
+        "ollama.show",
+        "ollama.pull",
     ])
 });
 
@@ -1055,6 +1062,41 @@ mod tests {
         let untrusted = TrustTier::Untrusted.default_ceiling();
         assert!(!untrusted.grants(&s("mission.create")));
         assert!(!untrusted.grants(&s("mission.gate")));
+    }
+
+    // ---- Phase 36: Ollama model management scopes ----
+
+    #[test]
+    fn ollama_scopes_parse() {
+        assert!(Scope::parse("ollama.list").is_some());
+        assert!(Scope::parse("ollama.show").is_some());
+        assert!(Scope::parse("ollama.pull").is_some());
+        // Qualified forms are valid (though tools use bare forms)
+        assert!(Scope::parse("ollama.show:llama3.1").is_some());
+    }
+
+    #[test]
+    fn ollama_scopes_trusted_grants() {
+        let trusted = TrustTier::Trusted.default_ceiling();
+        assert!(trusted.grants(&s("ollama.list")));
+        assert!(trusted.grants(&s("ollama.show")));
+        assert!(trusted.grants(&s("ollama.pull")));
+    }
+
+    #[test]
+    fn ollama_scopes_semitrusted_denies() {
+        let semi = TrustTier::SemiTrusted.default_ceiling();
+        assert!(!semi.grants(&s("ollama.list")));
+        assert!(!semi.grants(&s("ollama.show")));
+        assert!(!semi.grants(&s("ollama.pull")));
+    }
+
+    #[test]
+    fn ollama_scopes_untrusted_denies() {
+        let untrusted = TrustTier::Untrusted.default_ceiling();
+        assert!(!untrusted.grants(&s("ollama.list")));
+        assert!(!untrusted.grants(&s("ollama.show")));
+        assert!(!untrusted.grants(&s("ollama.pull")));
     }
 
     // ---- Phase 11 Task 4: synthetic `tool.allowlist` base ----
