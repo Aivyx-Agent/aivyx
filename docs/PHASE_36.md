@@ -139,3 +139,86 @@ the MCP tools block.
 
 Exit criteria checklist, prediction-vs-reality table,
 streak report.
+
+## Ship records
+
+### Task 1 — `44b78be`
+
+Open commit. PHASE_36.md scaffold, README.md Phase 36 row,
+ROADMAP.md active pointer.
+
+### Task 2 — `c0824a9`
+
+**Capability scopes: ollama.list, ollama.show, ollama.pull.**
+
+Three new scope bases in `KNOWN_BASES` (34 total), added to
+`CEILING_TRUSTED`. Omitted from `CEILING_SEMITRUSTED` and
+`CEILING_UNTRUSTED`. Four new tests.
+
+### Tasks 3–5 — `401295c`
+
+**OllamaListTool + OllamaShowTool + OllamaPullTool + binary
+wiring.**
+
+- `ollama_tools.rs`: three tools using `reqwest::Client`
+  directly for Ollama REST API calls.
+- `ollama.list`: GET `/api/tags`, returns model list.
+- `ollama.show`: POST `/api/show`, returns model metadata.
+- `ollama.pull`: POST `/api/pull` with `stream: false`,
+  5-minute timeout for large model downloads.
+- Binary registration conditional on `provider = "ollama"`.
+  Backcompat floor includes `ollama.*` scopes when provider
+  is Ollama.
+- `reqwest` promoted to direct dep in `aivyx-channel`.
+- 10 unit tests with mock TCP server.
+
+## Exit criteria
+
+- [x] `ollama.list`, `ollama.show`, `ollama.pull` scope bases
+      added to `KNOWN_BASES` and `CEILING_TRUSTED`.
+- [x] All three scopes rejected by `CEILING_SEMITRUSTED` and
+      `CEILING_UNTRUSTED`.
+- [x] `OllamaListTool` issues `GET /api/tags` and returns
+      parsed JSON model list.
+- [x] `OllamaShowTool` issues `POST /api/show` and returns
+      model metadata.
+- [x] `OllamaPullTool` issues `POST /api/pull` with
+      `stream: false` and 5-minute timeout.
+- [x] All three tools registered only when `provider = "ollama"`.
+- [x] Backcompat floor includes `ollama.*` scopes for Ollama
+      provider so default-role agents can use the tools.
+- [x] 14 new tests (4 capability + 10 tool). 771 total, 0
+      failures.
+- [x] DESIGN.md untouched.
+- [x] PRODUCT.md untouched.
+- [x] `aivyx-core/src/lib.rs` untouched.
+
+## Prediction vs reality
+
+| Streak file                  | Predicted   | Actual      |
+|------------------------------|-------------|-------------|
+| DESIGN.md                    | untouched   | untouched   |
+| PRODUCT.md                   | untouched   | untouched   |
+| aivyx-core/src/lib.rs        | untouched   | untouched   |
+
+All three predictions confirmed.
+
+## Streak report
+
+| Streak file             | Last touched | Current run          |
+|-------------------------|--------------|----------------------|
+| DESIGN.md               | Phase 29     | 7 (Phases 30–36)     |
+| PRODUCT.md              | Phase 35     | 1 (Phase 36)         |
+| aivyx-core/src/lib.rs   | Phase 31     | 5 (Phases 32–36)     |
+
+## Summary
+
+Phase 36 delivered Ollama Model Management — three agent-facing
+tools (`ollama.list`, `ollama.show`, `ollama.pull`) that let the
+agent inspect and manage local Ollama models without requiring
+the operator to switch to the Ollama CLI. Tools are Trusted-only,
+conditionally registered when `provider = "ollama"`, and use
+`reqwest` directly for the Ollama REST API. Completes the local
+LLM story started in Phase 34.
+
+Test delta: +14 (757→771). Deferral backlog unchanged at 6.
