@@ -163,9 +163,24 @@ impl TriggerDispatch {
                         mission::cancel_mission(&mut record)
                             .map_err(|e| format!("cancel mission: {e}"))?;
                     }
-                    TurnOutcome::Escalated { .. } => {
-                        // Leave in Running state — escalation means a gate
-                        // will be created by the normal gate path.
+                    TurnOutcome::Escalated { reason, .. } => {
+                        // Phase 35: create a gate on the mission so the
+                        // operator can approve/reject and resume the turn.
+                        let gate_id = format!(
+                            "gate-{}",
+                            uuid::Uuid::new_v4().as_hyphenated()
+                        );
+                        mission::add_gate(
+                            &mut record,
+                            gate_id.clone(),
+                            reason.clone(),
+                            None,
+                        )
+                        .map_err(|e| format!("add gate: {e}"))?;
+                        eprintln!(
+                            "aivyx trigger: escalation gate {gate_id} created on mission {mid}",
+                        );
+                        // Mission stays in GatePending (set by add_gate).
                     }
                 }
 

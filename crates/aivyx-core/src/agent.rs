@@ -22,8 +22,8 @@
 //! Deferred from Phase 1:
 //! - Timeout enforcement (variant exists, loop doesn't check a budget yet —
 //!   real deadlines land when a real use case shows up)
-//! - `RequiresEscalation` propagation from tools (variant exists, no tool
-//!   emits it in Phase 1)
+//! - `RequiresEscalation` propagation from tools (Phase 35: the turn loop
+//!   now breaks on `RequiresEscalation` and produces `TurnOutcome::Escalated`)
 //! - LLM-backed planning (covered by Phase 2's `LlmProvider` + its own
 //!   `TurnPlanner` impl)
 
@@ -272,6 +272,21 @@ impl Agent for ConcreteAgent {
                         )
                         .await;
                     observed.push(observation);
+
+                    // Phase 35: escalation breaks the loop instead of
+                    // feeding the error back to the LLM. The daemon's
+                    // gate-creation handler (daemon_server.rs) picks up
+                    // the TurnOutcome::Escalated and creates an approval
+                    // gate on the active mission.
+                    if let ToolOutcome::RequiresEscalation { reason } = &outcome {
+                        planner.observe_tool_outcome(tool_id, &outcome).await;
+                        loop_outcome = LoopOutcome::Escalated {
+                            reason: reason.clone(),
+                            pending_tool: tool_id,
+                        };
+                        break;
+                    }
+
                     planner.observe_tool_outcome(tool_id, &outcome).await;
                 }
             }
@@ -299,6 +314,14 @@ impl Agent for ConcreteAgent {
             LoopOutcome::MaxStepsExceeded => TurnOutcome::Failed(AivyxError::Internal(
                 format!("planner exceeded {MAX_STEPS_PER_TURN} steps per turn"),
             )),
+            LoopOutcome::Escalated {
+                reason,
+                pending_tool,
+            } => TurnOutcome::Escalated {
+                reason,
+                pending_tool,
+                tool_calls_made,
+            },
         };
 
         self.audit.on_event(AuditTag::TurnEnded {
@@ -323,14 +346,18 @@ impl Agent for ConcreteAgent {
 
 /// Internal loop termination reason before it's translated into a public
 /// `TurnOutcome`. Phase 2 added `MaxStepsExceeded`; Phase 3 task 4
-/// adds `TimedOut` (the first code path that emits the long-
-/// advertised `TurnOutcome::TimedOut`). `Escalated` will join this
-/// enum if and when a real tool emits it.
+/// adds `TimedOut`; Phase 35 adds `Escalated` (the turn loop now
+/// breaks on `ToolOutcome::RequiresEscalation` instead of feeding it
+/// back to the LLM as an error).
 enum LoopOutcome {
     Completed,
     Cancelled,
     TimedOut,
     MaxStepsExceeded,
+    Escalated {
+        reason: String,
+        pending_tool: ToolId,
+    },
 }
 
 impl ConcreteAgent {
@@ -3176,5 +3203,102 @@ mod tests {
             started.1.grants(&Scope::parse("memory.read").unwrap()),
             "effective caps under SemiTrusted must include memory.read"
         );
+    }
+
+    // ---- Phase 35: RequiresEscalation → TurnOutcome::Escalated ----
+
+    /// A tool that always returns `ToolOutcome::RequiresEscalation`.
+    struct EscalatingTool {
+        id: ToolId,
+        name: &'static str,
+        schema: Value,
+        scope: Scope,
+    }
+
+    impl EscalatingTool {
+        fn new(name: &'static str, scope: &str) -> Self {
+            EscalatingTool {
+                id: ToolId::new(),
+                name,
+                schema: json!({}),
+                scope: Scope::parse(scope).unwrap(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for EscalatingTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "always escalates"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            self.scope.clone()
+        }
+        async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+            ToolOutcome::RequiresEscalation {
+                reason: "approval required".to_string(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn requires_escalation_produces_escalated_outcome() {
+        let audit = RecordingAudit::new();
+
+        let tool = Arc::new(EscalatingTool::new("test.escalate", "memory.read"));
+        let tool_id = tool.id();
+
+        let agent_caps =
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]);
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+            },
+            // The loop should never reach this step — it breaks on
+            // escalation before asking the planner for another step.
+            NextStep::FinalMessage("should not reach here".to_string()),
+        ];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "do something risky");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Escalated {
+                reason,
+                pending_tool,
+                tool_calls_made,
+            } => {
+                assert_eq!(reason, "approval required");
+                assert_eq!(pending_tool, tool_id);
+                assert_eq!(tool_calls_made, 1);
+            }
+            other => panic!("expected Escalated, got {other:?}"),
+        }
+
+        // Audit: TurnStarted → ToolCall → TurnEnded (Escalated)
+        let events = audit.snapshot();
+        assert_eq!(events.len(), 3, "audit trail: {events:?}");
+        assert!(matches!(events[0], AuditTag::TurnStarted { .. }));
+        assert!(matches!(events[1], AuditTag::ToolCall { .. }));
+        match &events[2] {
+            AuditTag::TurnEnded { outcome, .. } => {
+                assert_eq!(*outcome, TurnOutcomeSummary::Escalated);
+            }
+            other => panic!("expected TurnEnded, got {other:?}"),
+        }
     }
 }
