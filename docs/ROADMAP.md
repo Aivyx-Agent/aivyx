@@ -475,3 +475,11 @@ Trusted-only ceiling, `reqwest` directly (not through
 in Phase 34. DESIGN.md, PRODUCT.md, and production-core all
 untouched. Test delta +14 (757→771). Deferral backlog
 unchanged at 6.
+
+## Phase 37 — WebFetchTool Hardening
+
+**Active — see [PHASE_37.md](PHASE_37.md).** Closes all three
+web-fetch deferrals: binary response bodies (base64 fallback),
+non-GET verbs (new `WebPostTool` with `net.post` scope), and
+redirect following (opt-in manual loop with per-hop scope
+re-check). Cuts deferral backlog from 6 to 3.
