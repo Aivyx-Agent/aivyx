@@ -452,3 +452,12 @@ key, graceful `stream_options` handling, connection health
 check with actionable errors, worked example config.
 DESIGN.md, PRODUCT.md, and production-core all untouched.
 Test delta +16 (740→756). Deferral backlog unchanged at 6.
+
+## Phase 35 — P2 Completion + Delivery Status Refresh
+
+**Active — see [PHASE_35.md](PHASE_35.md).** Wire
+`ToolOutcome::RequiresEscalation` through the turn loop to
+`TurnOutcome::Escalated`, activating the daemon's existing
+gate-creation code (Phase 23). Refresh PRODUCT.md Delivery
+Status from "Phase 21 exit" to current. Closes the last gap
+in P2 — Session Legibility and Two Success Modes.

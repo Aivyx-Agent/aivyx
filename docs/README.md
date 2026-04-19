@@ -92,6 +92,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 32 | Frozen  | [PHASE_32.md](PHASE_32.md) | `4aabea8` |
 | Phase 33 | Frozen  | [PHASE_33.md](PHASE_33.md) | `d02dda6` |
 | Phase 34 | Frozen  | [PHASE_34.md](PHASE_34.md) | `0004cf2` |
+| Phase 35 | Open    | [PHASE_35.md](PHASE_35.md) |           |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
