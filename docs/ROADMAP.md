@@ -463,3 +463,13 @@ PRODUCT.md Delivery Status from Phase 21 to Phase 35. P2
 moved to Fully Delivered. DESIGN.md and production-core
 untouched; PRODUCT.md edited (intentional). Test delta +1
 (756→757). Deferral backlog unchanged at 6.
+
+## Phase 36 — Ollama Model Management
+
+**Active — see [PHASE_36.md](PHASE_36.md).** Three new
+agent-facing tools (`ollama.list`, `ollama.show`,
+`ollama.pull`) for inspecting and managing local Ollama
+models. Tools in `aivyx-channel`, Trusted-only ceiling,
+`reqwest` directly (not through `HttpTransport`), conditional
+registration when `provider = "ollama"`. Completes the local
+LLM story started in Phase 34.
