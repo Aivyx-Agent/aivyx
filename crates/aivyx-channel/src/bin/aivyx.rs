@@ -1169,6 +1169,8 @@ async fn run_async(
     let memory_topic_prefix: Option<String> = role.memory_topic_prefix.value;
 
     // ---- Provider -----------------------------------------------------
+    // Track the Ollama base URL for tool registration (Phase 36).
+    let mut ollama_base_url_for_tools: Option<String> = None;
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
             let api_key = anthropic_api_key
@@ -1199,6 +1201,7 @@ async fn run_async(
             let base_url = openai_base_url
                 .map(|s| s.value)
                 .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
+            ollama_base_url_for_tools = Some(base_url.clone());
             cfg = cfg.with_base_url(base_url);
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build Ollama provider: {e}"))?;
@@ -1442,6 +1445,22 @@ async fn run_async(
         }
     }
 
+    // ---- Phase 36: Ollama model management tools ----------------------
+    // Registered only when provider = "ollama". Uses the same base URL
+    // resolved during provider construction.
+    if let Some(ref ollama_url) = ollama_base_url_for_tools {
+        use aivyx_channel::ollama_tools::{OllamaListTool, OllamaShowTool, OllamaPullTool};
+        let list_tool = OllamaListTool::new(ollama_url)
+            .map_err(|e| format!("failed to build ollama.list tool: {e}"))?;
+        tool_list.push(Arc::new(list_tool) as Arc<dyn Tool>);
+        let show_tool = OllamaShowTool::new(ollama_url)
+            .map_err(|e| format!("failed to build ollama.show tool: {e}"))?;
+        tool_list.push(Arc::new(show_tool) as Arc<dyn Tool>);
+        let pull_tool = OllamaPullTool::new(ollama_url)
+            .map_err(|e| format!("failed to build ollama.pull tool: {e}"))?;
+        tool_list.push(Arc::new(pull_tool) as Arc<dyn Tool>);
+    }
+
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
     // ---- Capabilities -------------------------------------------------
@@ -1479,6 +1498,14 @@ async fn run_async(
     ];
     if let Some(s) = shell_exec_scope {
         backcompat_floor.push(s);
+    }
+    // Phase 36 — grant ollama model management scopes in the
+    // backcompat floor when provider is Ollama, so the default
+    // role (empty capability_scopes) can use the tools.
+    if ollama_base_url_for_tools.is_some() {
+        backcompat_floor.push(Scope::parse("ollama.list").unwrap());
+        backcompat_floor.push(Scope::parse("ollama.show").unwrap());
+        backcompat_floor.push(Scope::parse("ollama.pull").unwrap());
     }
 
     // Walk the active role's inheritance chain, intersecting

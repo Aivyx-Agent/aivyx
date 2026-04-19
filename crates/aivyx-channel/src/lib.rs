@@ -47,6 +47,7 @@ pub mod reflection_tool;
 pub mod role_overrides;
 pub mod role_update_tool;
 pub mod turn_history_tool;
+pub mod ollama_tools;
 mod daemon_session;
 mod local;
 pub mod passphrase;
