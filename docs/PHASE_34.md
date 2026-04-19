@@ -149,7 +149,7 @@ stream_options.**
 - CLI `--provider ollama` flag; banner shows default base URL.
 - 14 new tests (6 config, 7 provider, 1 CLI). 754 total.
 
-### Tasks 4–5 — `TBD`
+### Tasks 4–5 — `c076c24`
 
 **Health check + worked example.**
 
@@ -166,3 +166,56 @@ stream_options.**
   all three provider values and cross-reference the Ollama
   example.
 - 2 new health-check tests. 756 total.
+
+## Exit criteria
+
+- [x] `ProviderKind::Ollama` parses from TOML, env, CLI flag.
+- [x] `validate()` accepts Ollama without API key.
+- [x] `OpenAiConfig.api_key` is `Option<SecretString>`;
+      Authorization header omitted when `None`.
+- [x] `stream_options.include_usage` omitted for Ollama by
+      default; opt-in via `with_include_stream_usage(true)`.
+- [x] `DEFAULT_OLLAMA_BASE_URL` = `http://localhost:11434`.
+- [x] Health check GETs base URL at startup; warns (non-fatal)
+      with `ollama serve` guidance on connection failure.
+- [x] `examples/aivyx-ollama.toml` worked example ships.
+- [x] `examples/aivyx.toml` provider comment documents all
+      three values and cross-references Ollama example.
+- [x] Banner shows Ollama base URL (default or explicit).
+- [x] All existing tests pass; 16 new tests added.
+- [x] DESIGN.md untouched.
+- [x] PRODUCT.md untouched.
+- [x] `aivyx-core/src/lib.rs` untouched.
+
+## Prediction vs reality
+
+| Streak file                  | Predicted   | Actual      |
+|------------------------------|-------------|-------------|
+| DESIGN.md                    | untouched   | untouched   |
+| PRODUCT.md                   | untouched   | untouched   |
+| aivyx-core/src/lib.rs        | untouched   | untouched   |
+
+All three predictions confirmed. Streaks extend:
+- DESIGN.md: 5 (Phases 30–34)
+- PRODUCT.md: 4 (Phases 31–34)
+- production-core: 3 (Phases 32–34)
+
+## Streak report
+
+| Streak file             | Last touched | Current run          |
+|-------------------------|--------------|----------------------|
+| DESIGN.md               | Phase 29     | 5 (Phases 30–34)     |
+| PRODUCT.md              | Phase 30     | 4 (Phases 31–34)     |
+| aivyx-core/src/lib.rs   | Phase 31     | 3 (Phases 32–34)     |
+
+## Summary
+
+Phase 34 made local LLM usage via Ollama a first-class
+experience. `ProviderKind::Ollama` is config-level sugar —
+not a new provider implementation — that constructs the same
+`OpenAiProvider` with Ollama-appropriate defaults: optional
+API key, omitted `stream_options`, and `localhost:11434` as
+the default base URL. A non-fatal health check at startup
+gives actionable guidance when Ollama is unreachable.
+
+Test delta: +16 (740→756). Deferral backlog unchanged at 6.

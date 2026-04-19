@@ -444,10 +444,11 @@ terminates correctly. Zero code changes to the architecture.
 DESIGN.md, PRODUCT.md, and production-core all untouched.
 Test delta +4 (736→740). Deferral backlog 7→6.
 
-## Phase 34 — Ollama Foundation
+## Phase 34 — Ollama Foundation (frozen)
 
-**Active — see [PHASE_34.md](PHASE_34.md).** First-class
-local LLM experience via Ollama. `ProviderKind::Ollama`
-config sugar, optional API key, graceful `stream_options`
-handling, connection health check with actionable errors,
-worked example config.
+**Frozen** (`TBD`). First-class local LLM experience via
+Ollama. `ProviderKind::Ollama` config sugar, optional API
+key, graceful `stream_options` handling, connection health
+check with actionable errors, worked example config.
+DESIGN.md, PRODUCT.md, and production-core all untouched.
+Test delta +16 (740→756). Deferral backlog unchanged at 6.
