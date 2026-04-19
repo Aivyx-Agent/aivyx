@@ -162,3 +162,85 @@ exit") up to date at Phase 35 exit:
 
 Exit criteria checklist, prediction-vs-reality table,
 streak report.
+
+## Ship records
+
+### Tasks 2–3, 5 — `bd3d19d`
+
+**Escalation→gate turn-loop wiring.**
+
+- `LoopOutcome::Escalated { reason, pending_tool }` added;
+  turn loop breaks on `ToolOutcome::RequiresEscalation`
+  instead of feeding it back to the LLM.
+- `LoopOutcome::Escalated` → `TurnOutcome::Escalated`
+  mapping activates daemon's existing gate-creation handler.
+- Trigger path creates gates on missions when escalation
+  occurs with `wrap_mission = true`.
+- `EscalatingTool` test fake + unit test proving the turn
+  loop produces Escalated with correct fields and audit
+  trail.
+- 1 new test. 757 total.
+
+### Task 4 — `af9223d`
+
+**PRODUCT.md Delivery Status refresh (Phase 21 → Phase 35).**
+
+- P1 updated with multi-level nesting (Phase 33).
+- P2 moved from Partially Delivered to Fully Delivered.
+- P8 moved from Forward to Fully Delivered (Phases 28–30).
+- P3 sub-items (G1–G7) updated with current state.
+- Forward Commitment Candidates: MCP Integration,
+  Multi-Provider, Scheduled Execution marked as delivered.
+- "as of" label updated to Phase 35 exit.
+
+## Exit criteria
+
+- [x] `ToolOutcome::RequiresEscalation` breaks the turn loop
+      and produces `TurnOutcome::Escalated`.
+- [x] Daemon-side gate creation (Phase 23 code) activates
+      from `TurnOutcome::Escalated` + `mission_id`.
+- [x] Trigger path creates gates on missions for escalated
+      turns with `wrap_mission = true`.
+- [x] Unit test proves escalation produces correct outcome,
+      tool ID, and audit trail.
+- [x] PRODUCT.md Delivery Status refreshed from Phase 21 to
+      Phase 35 — all delivered commitments reflected.
+- [x] P2 moved to Fully Delivered.
+- [x] DESIGN.md untouched.
+- [x] `aivyx-core/src/lib.rs` untouched.
+
+## Prediction vs reality
+
+| Streak file                  | Predicted   | Actual      |
+|------------------------------|-------------|-------------|
+| DESIGN.md                    | untouched   | untouched   |
+| PRODUCT.md                   | edited      | edited      |
+| aivyx-core/src/lib.rs        | untouched   | untouched   |
+
+All three predictions confirmed. Streaks:
+- DESIGN.md: 6 (Phases 30–35)
+- PRODUCT.md: streak breaks at 4 (intentional — Delivery
+  Status refresh, not drift)
+- production-core: 4 (Phases 32–35)
+
+## Streak report
+
+| Streak file             | Last touched | Current run          |
+|-------------------------|--------------|----------------------|
+| DESIGN.md               | Phase 29     | 6 (Phases 30–35)     |
+| PRODUCT.md              | Phase 35     | 0 (intentional edit) |
+| aivyx-core/src/lib.rs   | Phase 31     | 4 (Phases 32–35)     |
+
+## Summary
+
+Phase 35 closed the last gap in PRODUCT.md P2 — Session
+Legibility and Two Success Modes. The turn loop now breaks
+on `ToolOutcome::RequiresEscalation` and produces
+`TurnOutcome::Escalated`, activating the daemon's existing
+gate-creation handler wired in Phase 23. The trigger path
+also creates gates for escalated missions. PRODUCT.md's
+Delivery Status section was refreshed from Phase 21 to
+Phase 35 — a 14-phase update reflecting P1, P2, P8, MCP,
+Multi-Provider, and Scheduled Execution as fully delivered.
+
+Test delta: +1 (756→757). Deferral backlog unchanged at 6.

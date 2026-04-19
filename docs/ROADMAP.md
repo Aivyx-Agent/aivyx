@@ -453,11 +453,13 @@ check with actionable errors, worked example config.
 DESIGN.md, PRODUCT.md, and production-core all untouched.
 Test delta +16 (740→756). Deferral backlog unchanged at 6.
 
-## Phase 35 — P2 Completion + Delivery Status Refresh
+## Phase 35 — P2 Completion + Delivery Status Refresh (frozen)
 
-**Active — see [PHASE_35.md](PHASE_35.md).** Wire
-`ToolOutcome::RequiresEscalation` through the turn loop to
-`TurnOutcome::Escalated`, activating the daemon's existing
-gate-creation code (Phase 23). Refresh PRODUCT.md Delivery
-Status from "Phase 21 exit" to current. Closes the last gap
-in P2 — Session Legibility and Two Success Modes.
+**Frozen** (`TBD`). Wired `ToolOutcome::RequiresEscalation`
+through the turn loop to `TurnOutcome::Escalated`, activating
+the daemon's existing gate-creation handler. Trigger path
+also creates gates for escalated missions. Refreshed
+PRODUCT.md Delivery Status from Phase 21 to Phase 35. P2
+moved to Fully Delivered. DESIGN.md and production-core
+untouched; PRODUCT.md edited (intentional). Test delta +1
+(756→757). Deferral backlog unchanged at 6.
