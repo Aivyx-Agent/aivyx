@@ -167,8 +167,45 @@ after `assemble_role_envelope` completes.
 
 ### Task 6 -- Exit freeze + docs
 
-Exit criteria checklist, prediction-vs-reality table,
-streak report.
+## Exit criteria
+
+- [x] Binary body support: base64 fallback when UTF-8 fails,
+      `body_encoding` field in output JSON, streaming skipped
+      for binary. 2 tests.
+- [x] `WebPostTool`: POST/PUT/PATCH/DELETE via `net.post` scope,
+      JSON + string body, Trusted-only ceiling. 9 tests.
+- [x] Binary wiring: tool registered alongside `web.fetch`,
+      `net.post` in backcompat floor, 2 registration tests.
+- [x] Redirect following: `follow_redirects` boolean on both
+      tools, manual loop with per-hop scope re-check via
+      `OnceLock<CapabilitySet>`, max 10 hops, binary wiring
+      via `set_effective_capabilities`. 6 tests.
+- [x] All 788 tests pass (up from 771 at Phase 36 exit).
+- [x] `DESIGN.md` untouched (streak at 13 from Phase 25).
+- [x] `PRODUCT.md` untouched (streak at 2 from Phase 36).
+- [x] `aivyx-core/src/lib.rs` touched in Task 3 (pub-use
+      re-export for `WebPostTool`, `WebPostToolConfig`).
+      Streak resets to 0.
+
+## Prediction vs reality
+
+| Streak target | Predicted | Reality | Notes |
+|---|---|---|---|
+| DESIGN.md | untouched (8→13) | untouched | continues |
+| PRODUCT.md | untouched (2) | untouched | continues |
+| lib.rs | untouched (6) | **touched** | `pub use` re-export for `WebPostTool` |
+
+## Deferral status
+
+Phase 37 clears 3 of the 6 rolling deferrals:
+- ~~Binary response bodies~~ (Phase 12 Q5) → Task 2
+- ~~Non-GET verbs~~ (Phase 12 Q1) → Task 3
+- ~~Redirect following~~ (Phase 12 Q1) → Tasks 4-5
+
+Remaining 3 deferrals:
+1. **Rendering parity** — terminal vs Telegram output formatting
+2. **Integration test infra** — E2E test harness for full turns
+3. **Protocol versioning** — MCP/SSE stream format negotiation
 
 ## Ship records
 
@@ -180,7 +217,7 @@ streak report.
 - **Task 3** `a1bc08b` — `WebPostTool` (POST/PUT/PATCH/DELETE),
   `net.post` scope base, binary registration, backcompat floor,
   2 registration tests, 7 tool tests. 782 tests.
-- **Tasks 4+5** `(pending)` — redirect following with per-hop
+- **Tasks 4+5** `aed97cc` — redirect following with per-hop
   scope re-check. `OnceLock<CapabilitySet>` on both tools,
   `follow_redirects` input field, shared helpers
   (`extract_redirect_location`, `check_redirect_scope`,
