@@ -374,6 +374,297 @@ impl Tool for WebFetchTool {
 }
 
 // ---------------------------------------------------------------------------
+// WebPostTool — Phase 37 Task 3
+// ---------------------------------------------------------------------------
+
+/// Construction inputs for [`WebPostTool`].
+pub struct WebPostToolConfig;
+
+impl WebPostToolConfig {
+    pub fn new() -> Self {
+        WebPostToolConfig
+    }
+
+    pub fn build(self) -> Result<WebPostTool, AivyxError> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| {
+                AivyxError::Config(format!(
+                    "web.post reqwest client build failed: {e}"
+                ))
+            })?;
+        Ok(WebPostTool {
+            id: ToolId::new(),
+            client: Arc::new(client),
+            schema: web_post_input_schema_value(),
+        })
+    }
+}
+
+impl Default for WebPostToolConfig {
+    fn default() -> Self {
+        WebPostToolConfig::new()
+    }
+}
+
+/// HTTP write-verb tool. Agents holding `net.post:<origin>/<path>`
+/// (or `net.post` unqualified) can POST/PUT/PATCH/DELETE against
+/// any URL under the granted prefix.
+///
+/// Separate from `WebFetchTool` because:
+/// - Different scope base: `net.post` (write) vs `net.fetch` (read).
+/// - Different trust tier: `net.post` is Trusted-only;
+///   `net.fetch` is SemiTrusted-accessible.
+/// - Different input shape: needs `body` and `content_type` fields.
+#[derive(Debug)]
+pub struct WebPostTool {
+    id: ToolId,
+    client: Arc<reqwest::Client>,
+    schema: Value,
+}
+
+/// Allowed HTTP methods for `WebPostTool`. Case-insensitive on
+/// input, normalized to uppercase.
+const ALLOWED_METHODS: &[&str] = &["POST", "PUT", "PATCH", "DELETE"];
+
+fn web_post_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Absolute http or https URL to send the request to. \
+                                Must be covered by the agent's net.post capability."
+            },
+            "method": {
+                "type": "string",
+                "enum": ["POST", "PUT", "PATCH", "DELETE"],
+                "description": "HTTP method. Default: POST."
+            },
+            "body": {
+                "description": "Request body. A string is sent as-is; a JSON object \
+                                or array is serialized to JSON. Omit for an empty body."
+            },
+            "content_type": {
+                "type": "string",
+                "description": "Content-Type header value. Default: application/json \
+                                when body is a JSON object/array, text/plain when \
+                                body is a string, omitted when body is absent."
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_TIMEOUT_MS as i64,
+                "description": "Wall-clock timeout in milliseconds. \
+                                Default 30000; maximum 600000 (10 minutes)."
+            }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+    })
+}
+
+/// A scope no real agent should ever hold. Returned by
+/// `required_scope` when the input is malformed.
+fn deny_post_scope() -> Scope {
+    Scope::parse("net.post:https://aivyx.invalid/__deny__/invalid-input")
+        .expect("deny scope must parse")
+}
+
+#[async_trait]
+impl Tool for WebPostTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "web.post"
+    }
+
+    fn description(&self) -> &str {
+        "Send an HTTP request with a write verb (POST, PUT, \
+         PATCH, DELETE) to a URL and return its status code \
+         and body. UTF-8 bodies are returned directly; binary \
+         bodies are base64-encoded. Redirects are not followed. \
+         Subject to a 10 MiB response cap. The agent must hold \
+         a net.post capability that covers the requested URL's \
+         origin and path prefix."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        let Some(url) = input.get("url").and_then(Value::as_str) else {
+            return deny_post_scope();
+        };
+        if url.is_empty() {
+            return deny_post_scope();
+        }
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return deny_post_scope();
+        }
+        Scope::parse(&format!("net.post:{url}")).unwrap_or_else(deny_post_scope)
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        // ---- Parse input -------------------------------------------------
+        let url = match input.get("url").and_then(Value::as_str) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a non-empty string `url` field"
+                        .to_string(),
+                });
+            }
+        };
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("url must start with http:// or https:// (got {url:?})"),
+            });
+        }
+
+        let method_str = input
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("POST");
+        let method_upper = method_str.to_uppercase();
+        if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "unsupported HTTP method {method_str:?}; \
+                     allowed: POST, PUT, PATCH, DELETE"
+                ),
+            });
+        }
+
+        let timeout_ms = input_timeout_ms(&input);
+
+        // ---- Build request body ------------------------------------------
+        let (body_bytes, content_type) = match input.get("body") {
+            None => (Vec::new(), None),
+            Some(Value::String(s)) => {
+                let ct = input
+                    .get("content_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("text/plain")
+                    .to_string();
+                (s.as_bytes().to_vec(), Some(ct))
+            }
+            Some(val) => {
+                // JSON object or array — serialize to JSON bytes
+                let ct = input
+                    .get("content_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/json")
+                    .to_string();
+                let serialized = serde_json::to_vec(val).unwrap_or_default();
+                (serialized, Some(ct))
+            }
+        };
+
+        // ---- Issue request -----------------------------------------------
+        let method = match method_upper.as_str() {
+            "POST" => reqwest::Method::POST,
+            "PUT" => reqwest::Method::PUT,
+            "PATCH" => reqwest::Method::PATCH,
+            "DELETE" => reqwest::Method::DELETE,
+            _ => unreachable!("validated above"),
+        };
+
+        let mut request = self
+            .client
+            .request(method, &url)
+            .timeout(Duration::from_millis(timeout_ms))
+            .body(body_bytes);
+
+        if let Some(ref ct) = content_type {
+            request = request.header(reqwest::header::CONTENT_TYPE, ct.as_str());
+        }
+
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("{method_upper} {url} failed: {e}"),
+                });
+            }
+        };
+
+        let status = response.status().as_u16();
+        let resp_content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+
+        // ---- Stream response body ----------------------------------------
+        let mut resp_body_bytes: Vec<u8> = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = match chunk_result {
+                Ok(b) => b,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("body stream error from {url}: {e}"),
+                    });
+                }
+            };
+            if resp_body_bytes.len() + chunk.len() > MAX_BODY_BYTES {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "response body from {url} exceeded {} byte cap",
+                        MAX_BODY_BYTES
+                    ),
+                });
+            }
+            resp_body_bytes.extend_from_slice(&chunk);
+
+            if let Ok(s) = std::str::from_utf8(&chunk) {
+                let _ = ctx
+                    .channel
+                    .stream_event(StreamEvent::ToolOutput {
+                        tool: self.id,
+                        tool_name: "web.post",
+                        chunk: s,
+                    })
+                    .await;
+            }
+        }
+
+        let (body, body_encoding) = match String::from_utf8(resp_body_bytes) {
+            Ok(s) => (s, "utf-8"),
+            Err(e) => {
+                let raw = e.into_bytes();
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+                (encoded, "base64")
+            }
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "url": url,
+                "method": method_upper,
+                "status": status,
+                "content_type": resp_content_type,
+                "body": body,
+                "body_encoding": body_encoding,
+            }),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -756,6 +1047,240 @@ mod tests {
                 );
             }
             other => panic!("expected Failed Tool error, got {other:?}"),
+        }
+    }
+
+    // ---- Mock server that echoes request details ----------------------
+
+    /// Starts a mock HTTP server that echoes request method, headers,
+    /// and body back as a JSON response.
+    async fn echo_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 8192];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]);
+
+                    // Parse method from first line
+                    let method = request
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("UNKNOWN")
+                        .to_string();
+
+                    // Extract body after \r\n\r\n
+                    let req_body = request
+                        .split_once("\r\n\r\n")
+                        .map(|(_, b)| b.to_string())
+                        .unwrap_or_default();
+
+                    let echo = json!({
+                        "echo_method": method,
+                        "echo_body": req_body,
+                    })
+                    .to_string();
+
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\
+                         \r\n\
+                         {echo}",
+                        echo.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        base_url
+    }
+
+    fn build_post_tool() -> WebPostTool {
+        WebPostToolConfig::new()
+            .build()
+            .expect("web.post tool builds with default config")
+    }
+
+    // ---- WebPostTool: scope derivation --------------------------------
+
+    #[test]
+    fn post_required_scope_uses_net_post_base() {
+        let tool = build_post_tool();
+        let scope = tool.required_scope(&json!({
+            "url": "https://api.example.com/data"
+        }));
+        assert_eq!(scope.base(), "net.post");
+        assert_eq!(
+            scope.qualifier(),
+            Some("https://api.example.com/data")
+        );
+    }
+
+    #[test]
+    fn post_required_scope_for_missing_url_is_deny_scope() {
+        let tool = build_post_tool();
+        let scope = tool.required_scope(&json!({}));
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+        assert_eq!(scope.base(), "net.post");
+    }
+
+    // ---- WebPostTool: execution ----------------------------------------
+
+    #[tokio::test]
+    async fn post_sends_json_body() {
+        let url = echo_server().await;
+        let tool = build_post_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/api"),
+                    "body": {"key": "value"}
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["status"], 200);
+                assert_eq!(output["method"], "POST");
+                // The echo server returns the request body
+                let echo_body: Value = serde_json::from_str(
+                    output["body"].as_str().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(echo_body["echo_method"], "POST");
+                // Verify the JSON body was sent
+                let sent: Value = serde_json::from_str(
+                    echo_body["echo_body"].as_str().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(sent["key"], "value");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn post_put_method_is_honored() {
+        let url = echo_server().await;
+        let tool = build_post_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/resource"),
+                    "method": "PUT",
+                    "body": "updated"
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["method"], "PUT");
+                let echo_body: Value = serde_json::from_str(
+                    output["body"].as_str().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(echo_body["echo_method"], "PUT");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn post_delete_method_is_honored() {
+        let url = echo_server().await;
+        let tool = build_post_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/resource/42"),
+                    "method": "DELETE"
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["method"], "DELETE");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn post_invalid_method_fails() {
+        let tool = build_post_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": "http://localhost:1/test",
+                    "method": "GET"
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(
+                    detail.contains("unsupported"),
+                    "expected method error: {detail}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn post_missing_url_fails() {
+        let tool = build_post_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool.execute(json!({}), &ctx).await;
+
+        match out {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(
+                    detail.contains("url"),
+                    "expected url error: {detail}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
         }
     }
 }

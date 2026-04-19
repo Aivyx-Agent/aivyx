@@ -91,6 +91,9 @@ Cuts the rolling deferral backlog from 6 to 3.
   the redirect scope re-check if we chose option (A). With the
   OnceLock pattern, `lib.rs` stays untouched.
   Prediction: **untouched** (streak at 6 from Phase 37).
+  Reality: **touched** in Task 3 — `pub use` re-export line
+  extended with `WebPostTool, WebPostToolConfig`. Streak
+  resets to 0.
 
 ## Tasks
 
@@ -166,3 +169,14 @@ after `assemble_role_envelope` completes.
 
 Exit criteria checklist, prediction-vs-reality table,
 streak report.
+
+## Ship records
+
+- **Task 1** `582727b` — open commit, PHASE_37.md scaffold,
+  README.md + ROADMAP.md updates.
+- **Task 2** `5023eb8` — binary body support in `WebFetchTool`
+  (base64 fallback, `body_encoding` field, 2 new tests). Added
+  `base64 = "0.22"` workspace dep. 773 tests.
+- **Task 3** `(pending)` — `WebPostTool` (POST/PUT/PATCH/DELETE),
+  `net.post` scope base, binary registration, backcompat floor,
+  2 registration tests, 7 tool tests. 782 tests.

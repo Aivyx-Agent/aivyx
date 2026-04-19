@@ -120,7 +120,7 @@ use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsReadToolConfig,
     FsWriteToolConfig, LlmPlanner, LlmPlannerConfig, ShellExecToolConfig, Tool, ToolRegistry,
-    WebFetchToolConfig,
+    WebFetchToolConfig, WebPostToolConfig,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -242,6 +242,22 @@ fn build_web_fetch_for_channel(
     let tool = WebFetchToolConfig::new()
         .build()
         .map_err(|e| format!("failed to build web.fetch tool: {e}"))?;
+    Ok(Arc::new(tool) as Arc<dyn Tool>)
+}
+
+/// Build `web.post` for the given channel kind.
+///
+/// Unlike `web.fetch`, `web.post` is **Trusted-only** — it requires
+/// `net.post` which lives in `CEILING_TRUSTED` but not
+/// `CEILING_SEMITRUSTED`. The helper still accepts `ChannelKind`
+/// for consistency with the other `build_*_for_channel` helpers
+/// and to give a future tier-gate hook point if needed.
+fn build_web_post_for_channel(
+    _channel_kind: ChannelKind,
+) -> Result<Arc<dyn Tool>, String> {
+    let tool = WebPostToolConfig::new()
+        .build()
+        .map_err(|e| format!("failed to build web.post tool: {e}"))?;
     Ok(Arc::new(tool) as Arc<dyn Tool>)
 }
 
@@ -1319,6 +1335,7 @@ async fn run_async(
     // and the broad `net.fetch` held by the Local CLI
     // (granted below) covers the Trusted-tier catch-all.
     tool_list.push(build_web_fetch_for_channel(channel_kind)?);
+    tool_list.push(build_web_post_for_channel(channel_kind)?);
 
     // Phase 14 Task 3 — `role.switch` sub-agent primitive. The
     // tool is created here with an empty `child_factory` slot
@@ -1495,6 +1512,7 @@ async fn run_async(
         fs_read_scope,
         fs_write_scope,
         Scope::parse("net.fetch").unwrap(),
+        Scope::parse("net.post").unwrap(),
     ];
     if let Some(s) = shell_exec_scope {
         backcompat_floor.push(s);
@@ -2440,6 +2458,30 @@ mod tests {
         let tool = build_web_fetch_for_channel(ChannelKind::Telegram)
             .expect("telegram branch must build web.fetch cleanly");
         assert_eq!(tool.name(), "web.fetch");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 37 Task 3 — registration-time gate for `web.post`.
+    //
+    // `web.post` is registered for both channel kinds (like
+    // `web.fetch`), but is Trusted-only by ceiling — the tool
+    // will be present in the registry for SemiTrusted channels,
+    // but the capability intersection against CEILING_SEMITRUSTED
+    // (which lacks `net.post`) prevents its use there.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn channel_local_receives_web_post() {
+        let tool = build_web_post_for_channel(ChannelKind::Local)
+            .expect("local branch must build web.post cleanly");
+        assert_eq!(tool.name(), "web.post");
+    }
+
+    #[test]
+    fn channel_telegram_receives_web_post() {
+        let tool = build_web_post_for_channel(ChannelKind::Telegram)
+            .expect("telegram branch must build web.post cleanly");
+        assert_eq!(tool.name(), "web.post");
     }
 
     // ================================================================

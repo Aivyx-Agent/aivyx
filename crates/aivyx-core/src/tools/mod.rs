@@ -33,4 +33,4 @@ pub mod web_fetch;
 pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
-pub use web_fetch::{WebFetchTool, WebFetchToolConfig};
+pub use web_fetch::{WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig};
