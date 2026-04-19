@@ -466,7 +466,7 @@ untouched; PRODUCT.md edited (intentional). Test delta +1
 
 ## Phase 36 — Ollama Model Management (frozen)
 
-**Frozen** (`_EXIT_`). Three agent-facing tools
+**Frozen** (`1f726f9`). Three agent-facing tools
 (`ollama.list`, `ollama.show`, `ollama.pull`) for inspecting
 and managing local Ollama models. Tools in `aivyx-channel`,
 Trusted-only ceiling, `reqwest` directly (not through
