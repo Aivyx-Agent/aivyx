@@ -36,11 +36,12 @@
 //!   Task 2 adds `content_type` to the return payload so the
 //!   model can distinguish JSON from HTML from plain text.
 //!   Other headers remain audit-only.
-//! - **UTF-8 only.** The body is decoded via
-//!   `String::from_utf8`. Non-UTF-8 responses fail with a
-//!   clear detail. Phase 12's `StreamEvent::ToolOutput`
-//!   variant carries `&str` (text-only), so a non-UTF-8
-//!   body couldn't be streamed even if we wanted to.
+//! - **Binary fallback.** Phase 37 replaces the UTF-8-only
+//!   gate with a base64 fallback: `String::from_utf8`
+//!   success → `body_encoding: "utf-8"`, failure →
+//!   `body_encoding: "base64"` with the raw bytes
+//!   base64-encoded. `StreamEvent::ToolOutput` streaming is
+//!   skipped for binary responses (the chunk type is `&str`).
 //!
 //! ## Defense in depth
 //!
@@ -75,6 +76,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
@@ -223,10 +225,12 @@ impl Tool for WebFetchTool {
 
     fn description(&self) -> &str {
         "Fetch an HTTP or HTTPS URL via GET and return its \
-         status code and UTF-8 body. Redirects are not \
-         followed. Response body is streamed to the user as it \
-         arrives, subject to a 10 MiB hard cap. The agent must \
-         hold a net.fetch capability that covers the requested \
+         status code and body. UTF-8 bodies are streamed to \
+         the user as they arrive; non-UTF-8 (binary) bodies \
+         are returned base64-encoded with body_encoding set \
+         to \"base64\". Redirects are not followed. Subject \
+         to a 10 MiB hard cap. The agent must hold a \
+         net.fetch capability that covers the requested \
          URL's origin and path prefix."
     }
 
@@ -344,15 +348,15 @@ impl Tool for WebFetchTool {
             }
         }
 
-        let body = match String::from_utf8(body_bytes) {
-            Ok(s) => s,
+        let (body, body_encoding) = match String::from_utf8(body_bytes) {
+            Ok(s) => (s, "utf-8"),
             Err(e) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!(
-                        "response body from {url} is not valid UTF-8: {e}"
-                    ),
-                });
+                // Phase 37: binary fallback — base64-encode the
+                // raw bytes instead of failing. Streaming was
+                // already skipped for non-UTF-8 chunks above.
+                let raw = e.into_bytes();
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+                (encoded, "base64")
             }
         };
 
@@ -362,6 +366,7 @@ impl Tool for WebFetchTool {
                 "status": status,
                 "content_type": content_type,
                 "body": body,
+                "body_encoding": body_encoding,
             }),
             verified: Verification::NotApplicable,
         }
@@ -612,6 +617,114 @@ mod tests {
             }
             other => panic!("expected Failed Tool error, got {other:?}"),
         }
+    }
+
+    /// Starts a mock HTTP server returning a fixed response.
+    async fn mock_server(
+        status: &'static str,
+        headers: &'static str,
+        body: &'static [u8],
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+
+        tokio::spawn(async move {
+            for _ in 0..5 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+
+                    let mut response = format!(
+                        "HTTP/1.1 {status}\r\n\
+                         Content-Length: {}\r\n\
+                         {headers}\
+                         Connection: close\r\n\
+                         \r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    response.extend_from_slice(body);
+                    let _ = stream.write_all(&response).await;
+                });
+            }
+        });
+
+        base_url
+    }
+
+    #[tokio::test]
+    async fn execute_utf8_body_returns_utf8_encoding() {
+        let body = b"Hello, world!";
+        let url = mock_server(
+            "200 OK",
+            "Content-Type: text/plain\r\n",
+            body,
+        )
+        .await;
+
+        let tool = build_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(json!({"url": format!("{url}/test")}), &ctx)
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["body"], "Hello, world!");
+                assert_eq!(output["body_encoding"], "utf-8");
+                assert_eq!(output["status"], 200);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_binary_body_returns_base64_encoding() {
+        // Invalid UTF-8 bytes
+        let body: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x89, 0x50, 0x4E, 0x47];
+        let url = mock_server(
+            "200 OK",
+            "Content-Type: application/octet-stream\r\n",
+            body,
+        )
+        .await;
+
+        let tool = build_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(json!({"url": format!("{url}/binary")}), &ctx)
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["body_encoding"], "base64");
+                // Decode and verify round-trip
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(output["body"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(decoded, body);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // Binary responses should NOT have been streamed
+        assert!(
+            channel.chunks().is_empty(),
+            "binary body should not produce ToolOutput stream chunks"
+        );
     }
 
     #[tokio::test]

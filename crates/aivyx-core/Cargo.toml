@@ -30,5 +30,10 @@ reqwest = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 
+# Phase 37 — base64 encoding for binary response bodies in
+# web.fetch. Already transitive via reqwest/rustls; promoting
+# to a direct dep. Zero new Cargo.lock entries.
+base64 = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
