@@ -16,4 +16,4 @@
 
 pub mod provider;
 
-pub use provider::{OpenAiConfig, OpenAiProvider};
+pub use provider::{OpenAiConfig, OpenAiProvider, DEFAULT_OLLAMA_BASE_URL};

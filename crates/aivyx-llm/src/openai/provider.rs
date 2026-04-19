@@ -30,26 +30,49 @@ use crate::{
 use crate::transport::{ByteStream, HttpTransport, ReqwestTransport};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
+/// Default Ollama base URL — standard port for `ollama serve`.
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 pub struct OpenAiConfig {
-    pub api_key: SecretString,
+    pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
+    /// When `true`, the `stream_options.include_usage` field is
+    /// included in request bodies. Cloud OpenAI supports this;
+    /// some Ollama versions may reject unknown fields. Default:
+    /// `true`.
+    pub include_stream_usage: bool,
 }
 
 impl OpenAiConfig {
     pub fn new(api_key: impl Into<SecretString>) -> Self {
         OpenAiConfig {
-            api_key: api_key.into(),
+            api_key: Some(api_key.into()),
             base_url: None,
+            include_stream_usage: true,
+        }
+    }
+
+    /// Build a config with no API key. Used for local providers
+    /// like Ollama that don't require authentication.
+    pub fn without_api_key() -> Self {
+        OpenAiConfig {
+            api_key: None,
+            base_url: None,
+            include_stream_usage: false,
         }
     }
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn with_include_stream_usage(mut self, include: bool) -> Self {
+        self.include_stream_usage = include;
         self
     }
 }
@@ -95,16 +118,21 @@ impl LlmProvider for OpenAiProvider {
         request: LlmRequest<'_>,
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        let body = build_request_body(&request)?;
+        let body = build_request_body(&request, self.config.include_stream_usage)?;
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| LlmError::Parse(format!("request serialization: {e}")))?;
 
-        let api_key = self.config.api_key.expose_secret().to_string();
-        let auth_header = format!("Bearer {api_key}");
-        let headers: Vec<(&str, &str)> = vec![
+        let mut headers: Vec<(&str, &str)> = vec![
             ("content-type", "application/json"),
-            ("authorization", auth_header.as_str()),
         ];
+        // Only add the Authorization header if an API key is
+        // configured. Ollama ignores it, but omitting it avoids
+        // sending "Bearer " with an empty secret.
+        let auth_header;
+        if let Some(ref api_key) = self.config.api_key {
+            auth_header = format!("Bearer {}", api_key.expose_secret());
+            headers.push(("authorization", auth_header.as_str()));
+        }
 
         let endpoint = self.endpoint();
         let byte_stream = self
@@ -126,7 +154,10 @@ impl LlmProvider for OpenAiProvider {
 // Request-body construction
 // ---------------------------------------------------------------------------
 
-fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
+fn build_request_body(
+    request: &LlmRequest<'_>,
+    include_stream_usage: bool,
+) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
     }
@@ -144,8 +175,11 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
         "max_tokens": request.max_tokens,
         "messages": messages,
         "stream": true,
-        "stream_options": {"include_usage": true},
     });
+
+    if include_stream_usage {
+        body["stream_options"] = json!({"include_usage": true});
+    }
 
     if !request.tools.is_empty() {
         let tools: Vec<Value> = request
@@ -568,7 +602,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
         };
-        let body = build_request_body(&req).unwrap();
+        let body = build_request_body(&req, true).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "you are helpful");
@@ -591,7 +625,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
         };
-        let body = build_request_body(&req).unwrap();
+        let body = build_request_body(&req, true).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
         assert_eq!(tool_arr.len(), 1);
         assert_eq!(tool_arr[0]["type"], "function");
@@ -627,5 +661,121 @@ data: [DONE]\n\n";
         let tcs = val["tool_calls"].as_array().unwrap();
         assert_eq!(tcs[0]["id"], "call_1");
         assert_eq!(tcs[0]["function"]["name"], "search");
+    }
+
+    // ---- Ollama / optional API key tests --------------------------------
+
+    #[test]
+    fn without_api_key_config_has_none_key_and_no_stream_usage() {
+        let cfg = OpenAiConfig::without_api_key();
+        assert!(cfg.api_key.is_none());
+        assert!(!cfg.include_stream_usage);
+    }
+
+    #[test]
+    fn with_api_key_config_has_some_key_and_stream_usage() {
+        let cfg = OpenAiConfig::new("sk-test");
+        assert!(cfg.api_key.is_some());
+        assert!(cfg.include_stream_usage);
+    }
+
+    #[tokio::test]
+    async fn request_body_omits_stream_options_when_disabled() {
+        let (msgs, _) = simple_request();
+        let req = LlmRequest {
+            model: "llama3.1",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 2048,
+            temperature: None,
+        };
+        let body = build_request_body(&req, false).unwrap();
+        assert!(
+            body.get("stream_options").is_none(),
+            "stream_options must be absent when include_stream_usage is false: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_includes_stream_options_when_enabled() {
+        let (msgs, _) = simple_request();
+        let req = LlmRequest {
+            model: "gpt-4",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1000,
+            temperature: None,
+        };
+        let body = build_request_body(&req, true).unwrap();
+        assert!(
+            body.get("stream_options").is_some(),
+            "stream_options must be present when include_stream_usage is true: {body}"
+        );
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn default_ollama_base_url_is_localhost_11434() {
+        assert_eq!(DEFAULT_OLLAMA_BASE_URL, "http://localhost:11434");
+    }
+
+    #[test]
+    fn ollama_config_endpoint_uses_ollama_base_url() {
+        let cfg = OpenAiConfig::without_api_key()
+            .with_base_url(DEFAULT_OLLAMA_BASE_URL);
+        let provider = OpenAiProvider::with_transport(
+            cfg,
+            Box::new(FakeTransport::new("")),
+        );
+        assert_eq!(
+            provider.endpoint(),
+            "http://localhost:11434/v1/chat/completions"
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_style_text_response_without_usage() {
+        // Ollama often omits usage fields entirely and may not
+        // send stream_options. This test verifies the provider
+        // handles a response that has no usage block gracefully.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let cfg = OpenAiConfig::without_api_key()
+            .with_base_url("http://localhost:11434");
+        let provider = OpenAiProvider::with_transport(
+            cfg,
+            Box::new(FakeTransport::new(sse)),
+        );
+        let (msgs, tools) = simple_request();
+        let req = LlmRequest {
+            model: "llama3.1",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 2048,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+
+        let ev = stream.next_event().await.unwrap().unwrap();
+        assert!(matches!(ev, LlmStreamEvent::TextChunk(ref t) if t == "Hi"));
+        assert!(stream.next_event().await.unwrap().is_none());
+
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, usage } => {
+                assert_eq!(text, "Hi");
+                // Usage is zero when not provided — not an error.
+                assert_eq!(usage.input_tokens, 0);
+                assert_eq!(usage.output_tokens, 0);
+            }
+            _ => panic!("expected FinalMessage"),
+        }
     }
 }

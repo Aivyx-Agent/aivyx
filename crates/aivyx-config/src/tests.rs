@@ -2139,3 +2139,95 @@ fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
     cfg.validate(&opts).expect("should pass — openai key present");
     drop(env);
 }
+
+// ---- Ollama provider tests ----
+
+#[test]
+fn ollama_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "ollama");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Ollama);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn ollama_provider_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("ollama-toml");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "ollama"
+model = "llama3.1"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Ollama);
+    assert_eq!(cfg.model.value, "llama3.1");
+    drop(env);
+}
+
+#[test]
+fn ollama_validate_does_not_require_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "ollama");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts)
+        .expect("ollama must not require an API key even with require_api_key=true");
+    drop(env);
+}
+
+#[test]
+fn ollama_accepts_optional_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "ollama");
+    env.set("AIVYX_OPENAI_API_KEY", "sk-optional");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts).expect("ollama with optional key must pass");
+    assert!(cfg.openai_api_key.is_some());
+    drop(env);
+}
+
+#[test]
+fn provider_kind_is_openai_compatible() {
+    assert!(!ProviderKind::Anthropic.is_openai_compatible());
+    assert!(ProviderKind::OpenAi.is_openai_compatible());
+    assert!(ProviderKind::Ollama.is_openai_compatible());
+}
+
+#[test]
+fn provider_kind_display() {
+    assert_eq!(ProviderKind::Anthropic.to_string(), "anthropic");
+    assert_eq!(ProviderKind::OpenAi.to_string(), "openai");
+    assert_eq!(ProviderKind::Ollama.to_string(), "ollama");
+}

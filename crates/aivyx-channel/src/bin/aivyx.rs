@@ -128,7 +128,7 @@ use aivyx_memory::{
 };
 use aivyx_config::ProviderKind;
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
-use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
+use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider, DEFAULT_OLLAMA_BASE_URL};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_channel::mission_tool::{MissionCreateTool, MissionListTool, MissionStatusTool};
@@ -566,19 +566,26 @@ fn print_config_banner(config: &AivyxConfig) {
             None => "<unset>".to_string(),
         }
     );
-    if config.provider.value == aivyx_config::ProviderKind::OpenAi {
-        eprintln!(
-            "  openai_api_key    = {}",
-            match &config.openai_api_key {
-                Some(s) => format!("<redacted> ({})", source_label(s.source)),
-                None => "<unset>".to_string(),
-            }
-        );
+    if config.provider.value.is_openai_compatible() {
+        if config.provider.value == aivyx_config::ProviderKind::OpenAi {
+            eprintln!(
+                "  openai_api_key    = {}",
+                match &config.openai_api_key {
+                    Some(s) => format!("<redacted> ({})", source_label(s.source)),
+                    None => "<unset>".to_string(),
+                }
+            );
+        }
         if let Some(base_url) = &config.openai_base_url {
             eprintln!(
-                "  openai_base_url   = {:?} ({})",
+                "  base_url          = {:?} ({})",
                 base_url.value,
                 source_label(base_url.source),
+            );
+        } else if config.provider.value == aivyx_config::ProviderKind::Ollama {
+            eprintln!(
+                "  base_url          = {:?} (default)",
+                DEFAULT_OLLAMA_BASE_URL,
             );
         }
     }
@@ -850,14 +857,17 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| {
-                        "`--provider` requires a value: `anthropic` or `openai`".to_string()
+                        "`--provider` requires a value: `anthropic`, `openai`, or `ollama`"
+                            .to_string()
                     })?;
                 cli_provider = Some(match value.as_str() {
                     "anthropic" => ProviderKind::Anthropic,
                     "openai" => ProviderKind::OpenAi,
+                    "ollama" => ProviderKind::Ollama,
                     other => {
                         return Err(format!(
-                            "unrecognized provider `{other}`. Supported: anthropic, openai"
+                            "unrecognized provider `{other}`. \
+                             Supported: anthropic, openai, ollama"
                         ));
                     }
                 });
@@ -919,7 +929,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai>, --mcp-server <name:command[:args]>, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
                 ));
             }
         }
@@ -1178,6 +1188,20 @@ async fn run_async(
             }
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build OpenAI provider: {e}"))?;
+            Arc::new(p)
+        }
+        ProviderKind::Ollama => {
+            let mut cfg = match openai_api_key {
+                Some(key) => OpenAiConfig::new(key.value),
+                None => OpenAiConfig::without_api_key(),
+            };
+            // Ollama default base URL; explicit config overrides.
+            let base_url = openai_base_url
+                .map(|s| s.value)
+                .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
+            cfg = cfg.with_base_url(base_url);
+            let p = OpenAiProvider::new(cfg)
+                .map_err(|e| format!("failed to build Ollama provider: {e}"))?;
             Arc::new(p)
         }
     };
@@ -3171,6 +3195,13 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&[]))
             .expect("must parse");
         assert!(parsed.provider.is_none());
+    }
+
+    #[test]
+    fn provider_flag_ollama() {
+        let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"]))
+            .expect("must parse");
+        assert_eq!(parsed.provider, Some(ProviderKind::Ollama));
     }
 
 }

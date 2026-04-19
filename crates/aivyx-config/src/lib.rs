@@ -204,12 +204,27 @@ pub const DEFAULT_MEMORY_MAX_PER_TOPIC: usize = 10_000;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 
 /// Which LLM provider backend to use.
+///
+/// `Ollama` is config-level sugar for the OpenAI-compatible
+/// provider with Ollama-specific defaults: `base_url` defaults
+/// to `http://localhost:11434`, API key is not required, and
+/// `stream_options` is omitted from requests (older Ollama
+/// versions may reject unknown fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     Anthropic,
     #[serde(alias = "openai")]
     OpenAi,
+    Ollama,
+}
+
+impl ProviderKind {
+    /// Returns `true` if this provider uses the OpenAI-compatible
+    /// API (either cloud OpenAI or local Ollama).
+    pub fn is_openai_compatible(&self) -> bool {
+        matches!(self, ProviderKind::OpenAi | ProviderKind::Ollama)
+    }
 }
 
 impl std::fmt::Display for ProviderKind {
@@ -217,6 +232,7 @@ impl std::fmt::Display for ProviderKind {
         match self {
             ProviderKind::Anthropic => f.write_str("anthropic"),
             ProviderKind::OpenAi => f.write_str("openai"),
+            ProviderKind::Ollama => f.write_str("ollama"),
         }
     }
 }
@@ -435,9 +451,10 @@ pub struct AivyxConfig {
     /// OpenAI API key. `Option` because only needed when
     /// `provider == ProviderKind::OpenAi`.
     pub openai_api_key: Option<SourcedSecret>,
-    /// OpenAI-compatible base URL override. `None` means use the
-    /// provider's default (`https://api.openai.com`). Set for
-    /// Ollama / local endpoints.
+    /// OpenAI-compatible base URL override. For `ProviderKind::OpenAi`,
+    /// `None` means `https://api.openai.com`. For `ProviderKind::Ollama`,
+    /// `None` means `http://localhost:11434`. Explicit values override
+    /// both defaults.
     pub openai_base_url: Option<Sourced<String>>,
     /// Which LLM provider backend to use. Default: `Anthropic`.
     pub provider: Sourced<ProviderKind>,
@@ -1129,12 +1146,13 @@ impl AivyxConfig {
                 let kind = match v.as_str() {
                     "anthropic" => ProviderKind::Anthropic,
                     "openai" => ProviderKind::OpenAi,
+                    "ollama" => ProviderKind::Ollama,
                     other => {
                         return Err(ConfigError::Invalid {
                             field: "provider",
                             reason: format!(
                                 "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai"
+                                 Supported: anthropic, openai, ollama"
                             ),
                         });
                     }
@@ -1722,6 +1740,12 @@ impl AivyxConfig {
                             field: "openai_api_key",
                         });
                     }
+                }
+                ProviderKind::Ollama => {
+                    // Ollama does not require an API key — it runs
+                    // locally and ignores the Authorization header.
+                    // The key is accepted if present (forwarded to
+                    // the OpenAI provider) but never required.
                 }
             }
         }
