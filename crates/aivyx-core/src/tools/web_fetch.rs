@@ -72,7 +72,7 @@
 //! returns the tool for both tiers and `None` for
 //! `Untrusted`/`Kernel`.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -80,7 +80,7 @@ use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use aivyx_capability::Scope;
+use aivyx_capability::{CapabilitySet, Scope};
 
 use crate::{
     AivyxError, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, Verification,
@@ -132,6 +132,7 @@ impl WebFetchToolConfig {
             id: ToolId::new(),
             client: Arc::new(client),
             schema: web_fetch_input_schema_value(),
+            effective_caps: OnceLock::new(),
         })
     }
 }
@@ -142,14 +143,29 @@ impl Default for WebFetchToolConfig {
     }
 }
 
+/// Maximum number of redirect hops before the loop gives up.
+const MAX_REDIRECT_HOPS: usize = 10;
+
 /// Reference HTTP-GET tool. Agents holding
 /// `net.fetch:<origin>/<path>` (or `net.fetch` unqualified)
 /// can fetch any URL under the granted prefix.
-#[derive(Debug)]
 pub struct WebFetchTool {
     id: ToolId,
     client: Arc<reqwest::Client>,
     schema: Value,
+    /// Effective capabilities for per-hop redirect scope checks.
+    /// Set once at startup via `set_effective_capabilities`.
+    /// When absent, redirects are always denied (safe default).
+    effective_caps: OnceLock<CapabilitySet>,
+}
+
+impl std::fmt::Debug for WebFetchTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebFetchTool")
+            .field("id", &self.id)
+            .field("has_effective_caps", &self.effective_caps.get().is_some())
+            .finish()
+    }
 }
 
 impl WebFetchTool {
@@ -162,7 +178,20 @@ impl WebFetchTool {
             id: ToolId::new(),
             client: Arc::new(client),
             schema: web_fetch_input_schema_value(),
+            effective_caps: OnceLock::new(),
         }
+    }
+
+    /// Install the effective capability set for per-hop redirect
+    /// scope checks. Called once at startup after
+    /// `assemble_role_envelope` completes. Takes `&self` because
+    /// the tool is already inside an `Arc` at the call site.
+    /// Returns `Err(caps)` if capabilities were already set.
+    pub fn set_effective_capabilities(
+        &self,
+        caps: CapabilitySet,
+    ) -> Result<(), CapabilitySet> {
+        self.effective_caps.set(caps)
     }
 }
 
@@ -196,6 +225,14 @@ fn web_fetch_input_schema_value() -> Value {
                 "description": "Wall-clock timeout in milliseconds. \
                                 Default 30000; maximum 600000 \
                                 (10 minutes)."
+            },
+            "follow_redirects": {
+                "type": "boolean",
+                "description": "Follow 3xx redirects up to 10 hops. \
+                                Each hop re-checks the redirect \
+                                URL against the agent's net.fetch \
+                                scope. Default: false (3xx surfaces \
+                                as-is)."
             }
         },
         "required": ["url"],
@@ -213,6 +250,166 @@ fn input_timeout_ms(input: &Value) -> u64 {
         .clamp(1, MAX_TIMEOUT_MS)
 }
 
+// ---------------------------------------------------------------------------
+// Shared redirect + body helpers (used by both WebFetchTool and WebPostTool)
+// ---------------------------------------------------------------------------
+
+/// Extract a valid absolute HTTP(S) URL from a 3xx response's
+/// `Location` header. Returns `None` if the header is missing,
+/// unparseable, or uses a non-HTTP scheme. Resolves relative
+/// `Location` values against `base_url`.
+fn extract_redirect_location(
+    response: &reqwest::Response,
+    base_url: &str,
+) -> Option<String> {
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)?
+        .to_str()
+        .ok()?;
+
+    // Handle relative URLs by resolving against the current URL
+    let resolved = if location.starts_with("http://") || location.starts_with("https://") {
+        location.to_string()
+    } else if location.starts_with('/') {
+        // Absolute path — resolve against origin
+        let url = reqwest::Url::parse(base_url).ok()?;
+        let origin = url.origin().unicode_serialization();
+        format!("{origin}{location}")
+    } else {
+        // Relative path — punt, treat as opaque
+        return None;
+    };
+
+    // Must be http/https
+    if !(resolved.starts_with("http://") || resolved.starts_with("https://")) {
+        return None;
+    }
+
+    Some(resolved)
+}
+
+/// Check that a redirect target URL is within the agent's
+/// effective capabilities for the given scope base. Returns
+/// `Ok(())` if granted, or `Err(ToolOutcome)` with a clear
+/// denial message if the redirect is out of scope or if no
+/// capabilities have been installed.
+fn check_redirect_scope(
+    tool_id: ToolId,
+    redirect_url: &str,
+    scope_base: &str,
+    effective_caps: &OnceLock<CapabilitySet>,
+) -> Result<(), ToolOutcome> {
+    let needed = match Scope::parse(&format!("{scope_base}:{redirect_url}")) {
+        Some(s) => s,
+        None => {
+            return Err(ToolOutcome::Completed {
+                output: json!({
+                    "url": redirect_url,
+                    "error": "redirect URL failed scope parse",
+                    "body": "",
+                    "body_encoding": "utf-8",
+                }),
+                verified: Verification::NotApplicable,
+            });
+        }
+    };
+
+    let caps = match effective_caps.get() {
+        Some(c) => c,
+        None => {
+            // No capabilities installed — deny redirect as a
+            // safe default. The tool still works for non-redirect
+            // requests; this path is only hit when
+            // follow_redirects=true and the binary didn't wire up
+            // set_effective_capabilities (test scenarios, or a
+            // future binary refactor that misses the wiring).
+            return Err(ToolOutcome::Failed(AivyxError::Tool {
+                tool: tool_id,
+                detail: format!(
+                    "redirect to {redirect_url} denied: no effective \
+                     capabilities installed for redirect scope checks"
+                ),
+            }));
+        }
+    };
+
+    if !caps.grants(&needed) {
+        return Err(ToolOutcome::Completed {
+            output: json!({
+                "url": redirect_url,
+                "error": format!(
+                    "redirect to {redirect_url} denied by {scope_base} scope"
+                ),
+                "body": "",
+                "body_encoding": "utf-8",
+            }),
+            verified: Verification::NotApplicable,
+        });
+    }
+
+    Ok(())
+}
+
+/// Collect the response body, streaming UTF-8 chunks through
+/// `StreamEvent::ToolOutput` and applying the base64 fallback
+/// for binary content. Returns `(body_string, encoding)` on
+/// success or `ToolOutcome::Failed` on error.
+async fn collect_body(
+    response: reqwest::Response,
+    tool_id: ToolId,
+    tool_name: &str,
+    url: &str,
+    ctx: &ToolContext<'_>,
+) -> Result<(String, &'static str), ToolOutcome> {
+    let mut body_bytes: Vec<u8> = Vec::new();
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = match chunk_result {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(ToolOutcome::Failed(AivyxError::Tool {
+                    tool: tool_id,
+                    detail: format!("body stream error from {url}: {e}"),
+                }));
+            }
+        };
+        if body_bytes.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(ToolOutcome::Failed(AivyxError::Tool {
+                tool: tool_id,
+                detail: format!(
+                    "response body from {url} exceeded {} byte cap",
+                    MAX_BODY_BYTES
+                ),
+            }));
+        }
+        body_bytes.extend_from_slice(&chunk);
+
+        if let Ok(s) = std::str::from_utf8(&chunk) {
+            let _ = ctx
+                .channel
+                .stream_event(StreamEvent::ToolOutput {
+                    tool: tool_id,
+                    tool_name,
+                    chunk: s,
+                })
+                .await;
+        }
+    }
+
+    let (body, encoding) = match String::from_utf8(body_bytes) {
+        Ok(s) => (s, "utf-8"),
+        Err(e) => {
+            let raw = e.into_bytes();
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+            (encoded, "base64")
+        }
+    };
+
+    Ok((body, encoding))
+}
+
 #[async_trait]
 impl Tool for WebFetchTool {
     fn id(&self) -> ToolId {
@@ -228,10 +425,12 @@ impl Tool for WebFetchTool {
          status code and body. UTF-8 bodies are streamed to \
          the user as they arrive; non-UTF-8 (binary) bodies \
          are returned base64-encoded with body_encoding set \
-         to \"base64\". Redirects are not followed. Subject \
-         to a 10 MiB hard cap. The agent must hold a \
-         net.fetch capability that covers the requested \
-         URL's origin and path prefix."
+         to \"base64\". Set follow_redirects to true to \
+         follow 3xx redirects (up to 10 hops); each hop \
+         re-checks the redirect URL against the agent's \
+         net.fetch scope. Subject to a 10 MiB hard cap. \
+         The agent must hold a net.fetch capability that \
+         covers the requested URL's origin and path prefix."
     }
 
     fn input_schema(&self) -> &Value {
@@ -275,23 +474,73 @@ impl Tool for WebFetchTool {
             });
         }
         let timeout_ms = input_timeout_ms(&input);
+        let follow_redirects = input
+            .get("follow_redirects")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
-        // ---- Issue GET ---------------------------------------------
-        let request = self
-            .client
-            .get(&url)
-            .timeout(Duration::from_millis(timeout_ms));
+        // ---- Issue GET (with optional redirect loop) ---------------
+        let mut current_url = url;
+        let mut hops: usize = 0;
 
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("GET {url} failed: {e}"),
-                });
+        let response = loop {
+            let request = self
+                .client
+                .get(&current_url)
+                .timeout(Duration::from_millis(timeout_ms));
+
+            let resp = match request.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("GET {current_url} failed: {e}"),
+                    });
+                }
+            };
+
+            // Check for redirect
+            if follow_redirects && resp.status().is_redirection() {
+                hops += 1;
+                if hops > MAX_REDIRECT_HOPS {
+                    return ToolOutcome::Completed {
+                        output: json!({
+                            "url": current_url,
+                            "status": resp.status().as_u16(),
+                            "error": format!(
+                                "redirect chain exceeded {MAX_REDIRECT_HOPS} hops"
+                            ),
+                            "body": "",
+                            "body_encoding": "utf-8",
+                        }),
+                        verified: Verification::NotApplicable,
+                    };
+                }
+
+                let location = match extract_redirect_location(&resp, &current_url) {
+                    Some(loc) => loc,
+                    None => break resp, // No valid Location — return 3xx as-is
+                };
+
+                // Re-derive scope from redirect URL and check
+                // against effective capabilities.
+                if let Err(outcome) = check_redirect_scope(
+                    self.id,
+                    &location,
+                    "net.fetch",
+                    &self.effective_caps,
+                ) {
+                    return outcome;
+                }
+
+                current_url = location;
+                continue;
             }
+
+            break resp;
         };
 
+        let final_url = current_url;
         let status = response.status().as_u16();
         let content_type = response
             .headers()
@@ -300,69 +549,22 @@ impl Tool for WebFetchTool {
             .map(String::from);
 
         // ---- Stream body through StreamEvent::ToolOutput ----------
-        //
-        // Collect into a `Vec<u8>` as we go so we can also return
-        // the body to the planner. Per-chunk UTF-8 decoding would
-        // split multibyte characters at chunk boundaries, so we
-        // collect into bytes and only decode/stream the parts that
-        // are complete UTF-8 prefixes.
-        let mut body_bytes: Vec<u8> = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = match chunk_result {
-                Ok(b) => b,
-                Err(e) => {
-                    return ToolOutcome::Failed(AivyxError::Tool {
-                        tool: self.id,
-                        detail: format!("body stream error from {url}: {e}"),
-                    });
-                }
-            };
-            if body_bytes.len() + chunk.len() > MAX_BODY_BYTES {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!(
-                        "response body from {url} exceeded {} byte cap",
-                        MAX_BODY_BYTES
-                    ),
-                });
-            }
-            body_bytes.extend_from_slice(&chunk);
-
-            // Stream the new chunk if it's valid UTF-8. A
-            // multi-byte character split across chunks will
-            // read as invalid on the first chunk and valid on
-            // the next — we keep it simple: if `str::from_utf8`
-            // fails on the incremental chunk, we skip streaming
-            // that chunk (the full body is decoded below) and
-            // let the planner see the aggregated string.
-            if let Ok(s) = std::str::from_utf8(&chunk) {
-                let _ = ctx
-                    .channel
-                    .stream_event(StreamEvent::ToolOutput {
-                        tool: self.id,
-                        tool_name: "web.fetch",
-                        chunk: s,
-                    })
-                    .await;
-            }
-        }
-
-        let (body, body_encoding) = match String::from_utf8(body_bytes) {
-            Ok(s) => (s, "utf-8"),
-            Err(e) => {
-                // Phase 37: binary fallback — base64-encode the
-                // raw bytes instead of failing. Streaming was
-                // already skipped for non-UTF-8 chunks above.
-                let raw = e.into_bytes();
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-                (encoded, "base64")
-            }
+        let (body, body_encoding) = match collect_body(
+            response,
+            self.id,
+            "web.fetch",
+            &final_url,
+            ctx,
+        )
+        .await
+        {
+            Ok(pair) => pair,
+            Err(outcome) => return outcome,
         };
 
         ToolOutcome::Completed {
             output: json!({
-                "url": url,
+                "url": final_url,
                 "status": status,
                 "content_type": content_type,
                 "body": body,
@@ -399,6 +601,7 @@ impl WebPostToolConfig {
             id: ToolId::new(),
             client: Arc::new(client),
             schema: web_post_input_schema_value(),
+            effective_caps: OnceLock::new(),
         })
     }
 }
@@ -406,6 +609,17 @@ impl WebPostToolConfig {
 impl Default for WebPostToolConfig {
     fn default() -> Self {
         WebPostToolConfig::new()
+    }
+}
+
+impl WebPostTool {
+    /// Install the effective capability set for per-hop redirect
+    /// scope checks. Same pattern as `WebFetchTool`.
+    pub fn set_effective_capabilities(
+        &self,
+        caps: CapabilitySet,
+    ) -> Result<(), CapabilitySet> {
+        self.effective_caps.set(caps)
     }
 }
 
@@ -418,11 +632,21 @@ impl Default for WebPostToolConfig {
 /// - Different trust tier: `net.post` is Trusted-only;
 ///   `net.fetch` is SemiTrusted-accessible.
 /// - Different input shape: needs `body` and `content_type` fields.
-#[derive(Debug)]
 pub struct WebPostTool {
     id: ToolId,
     client: Arc<reqwest::Client>,
     schema: Value,
+    /// Effective capabilities for per-hop redirect scope checks.
+    effective_caps: OnceLock<CapabilitySet>,
+}
+
+impl std::fmt::Debug for WebPostTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebPostTool")
+            .field("id", &self.id)
+            .field("has_effective_caps", &self.effective_caps.get().is_some())
+            .finish()
+    }
 }
 
 /// Allowed HTTP methods for `WebPostTool`. Case-insensitive on
@@ -459,6 +683,14 @@ fn web_post_input_schema_value() -> Value {
                 "maximum": MAX_TIMEOUT_MS as i64,
                 "description": "Wall-clock timeout in milliseconds. \
                                 Default 30000; maximum 600000 (10 minutes)."
+            },
+            "follow_redirects": {
+                "type": "boolean",
+                "description": "Follow 3xx redirects up to 10 hops. \
+                                Each hop re-checks the redirect URL \
+                                against the agent's net.post scope. \
+                                Redirect hops always use GET. \
+                                Default: false."
             }
         },
         "required": ["url"],
@@ -487,10 +719,12 @@ impl Tool for WebPostTool {
         "Send an HTTP request with a write verb (POST, PUT, \
          PATCH, DELETE) to a URL and return its status code \
          and body. UTF-8 bodies are returned directly; binary \
-         bodies are base64-encoded. Redirects are not followed. \
-         Subject to a 10 MiB response cap. The agent must hold \
-         a net.post capability that covers the requested URL's \
-         origin and path prefix."
+         bodies are base64-encoded. Set follow_redirects to \
+         true to follow 3xx redirects (up to 10 hops, using \
+         GET); each hop re-checks scope. Subject to a 10 MiB \
+         response cap. The agent must hold a net.post \
+         capability that covers the requested URL's origin \
+         and path prefix."
     }
 
     fn input_schema(&self) -> &Value {
@@ -545,6 +779,10 @@ impl Tool for WebPostTool {
         }
 
         let timeout_ms = input_timeout_ms(&input);
+        let follow_redirects = input
+            .get("follow_redirects")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         // ---- Build request body ------------------------------------------
         let (body_bytes, content_type) = match input.get("body") {
@@ -569,7 +807,7 @@ impl Tool for WebPostTool {
             }
         };
 
-        // ---- Issue request -----------------------------------------------
+        // ---- Issue initial request (POST/PUT/PATCH/DELETE) ----------------
         let method = match method_upper.as_str() {
             "POST" => reqwest::Method::POST,
             "PUT" => reqwest::Method::PUT,
@@ -578,17 +816,17 @@ impl Tool for WebPostTool {
             _ => unreachable!("validated above"),
         };
 
-        let mut request = self
+        let mut req_builder = self
             .client
             .request(method, &url)
             .timeout(Duration::from_millis(timeout_ms))
             .body(body_bytes);
 
         if let Some(ref ct) = content_type {
-            request = request.header(reqwest::header::CONTENT_TYPE, ct.as_str());
+            req_builder = req_builder.header(reqwest::header::CONTENT_TYPE, ct.as_str());
         }
 
-        let response = match request.send().await {
+        let mut response = match req_builder.send().await {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -598,6 +836,63 @@ impl Tool for WebPostTool {
             }
         };
 
+        // ---- Redirect loop (subsequent hops always use GET) --------------
+        let mut current_url = url;
+        let mut hops: usize = 0;
+
+        while follow_redirects && response.status().is_redirection() {
+            hops += 1;
+            if hops > MAX_REDIRECT_HOPS {
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "url": current_url,
+                        "method": method_upper,
+                        "status": response.status().as_u16(),
+                        "error": format!(
+                            "redirect chain exceeded {MAX_REDIRECT_HOPS} hops"
+                        ),
+                        "body": "",
+                        "body_encoding": "utf-8",
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
+
+            let location = match extract_redirect_location(&response, &current_url) {
+                Some(loc) => loc,
+                None => break, // No valid Location — return 3xx as-is
+            };
+
+            if let Err(outcome) = check_redirect_scope(
+                self.id,
+                &location,
+                "net.post",
+                &self.effective_caps,
+            ) {
+                return outcome;
+            }
+
+            current_url = location;
+
+            // Redirect hops always use GET (POST-redirect-GET per
+            // HTTP 303 semantics; we apply this uniformly).
+            let hop_request = self
+                .client
+                .get(&current_url)
+                .timeout(Duration::from_millis(timeout_ms));
+
+            response = match hop_request.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("GET {current_url} (redirect hop) failed: {e}"),
+                    });
+                }
+            };
+        }
+
+        let final_url = current_url;
         let status = response.status().as_u16();
         let resp_content_type = response
             .headers()
@@ -605,54 +900,23 @@ impl Tool for WebPostTool {
             .and_then(|v| v.to_str().ok())
             .map(String::from);
 
-        // ---- Stream response body ----------------------------------------
-        let mut resp_body_bytes: Vec<u8> = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = match chunk_result {
-                Ok(b) => b,
-                Err(e) => {
-                    return ToolOutcome::Failed(AivyxError::Tool {
-                        tool: self.id,
-                        detail: format!("body stream error from {url}: {e}"),
-                    });
-                }
-            };
-            if resp_body_bytes.len() + chunk.len() > MAX_BODY_BYTES {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!(
-                        "response body from {url} exceeded {} byte cap",
-                        MAX_BODY_BYTES
-                    ),
-                });
-            }
-            resp_body_bytes.extend_from_slice(&chunk);
-
-            if let Ok(s) = std::str::from_utf8(&chunk) {
-                let _ = ctx
-                    .channel
-                    .stream_event(StreamEvent::ToolOutput {
-                        tool: self.id,
-                        tool_name: "web.post",
-                        chunk: s,
-                    })
-                    .await;
-            }
-        }
-
-        let (body, body_encoding) = match String::from_utf8(resp_body_bytes) {
-            Ok(s) => (s, "utf-8"),
-            Err(e) => {
-                let raw = e.into_bytes();
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-                (encoded, "base64")
-            }
+        // ---- Collect response body ----------------------------------------
+        let (body, body_encoding) = match collect_body(
+            response,
+            self.id,
+            "web.post",
+            &final_url,
+            ctx,
+        )
+        .await
+        {
+            Ok(pair) => pair,
+            Err(outcome) => return outcome,
         };
 
         ToolOutcome::Completed {
             output: json!({
-                "url": url,
+                "url": final_url,
                 "method": method_upper,
                 "status": status,
                 "content_type": resp_content_type,
@@ -1278,6 +1542,303 @@ mod tests {
                 assert!(
                     detail.contains("url"),
                     "expected url error: {detail}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    // ---- Redirect tests -------------------------------------------------
+
+    /// Mock server that returns a 301 redirect to a given Location,
+    /// then serves a 200 OK with the given body at the redirect target.
+    /// The redirect is triggered by any path ending in `/redirect`;
+    /// all other paths return the final body.
+    async fn redirect_server(
+        status_code: u16,
+        final_body: &'static str,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+
+        let base_for_task = base_url.clone();
+        tokio::spawn(async move {
+            for _ in 0..15 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let base = base_for_task.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]);
+
+                    // Parse path from first line
+                    let path = request
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/");
+
+                    let response = if path.ends_with("/redirect") {
+                        format!(
+                            "HTTP/1.1 {status_code} Redirect\r\n\
+                             Location: {base}/final\r\n\
+                             Content-Length: 0\r\n\
+                             Connection: close\r\n\
+                             \r\n"
+                        )
+                    } else {
+                        format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: text/plain\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n\
+                             {final_body}",
+                            final_body.len()
+                        )
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        base_url
+    }
+
+    /// Mock server that always redirects (for testing the hop cap).
+    async fn infinite_redirect_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+
+        let base_for_task = base_url.clone();
+        tokio::spawn(async move {
+            for i in 0..20 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let base = base_for_task.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+
+                    let response = format!(
+                        "HTTP/1.1 301 Moved\r\n\
+                         Location: {base}/hop{i}\r\n\
+                         Content-Length: 0\r\n\
+                         Connection: close\r\n\
+                         \r\n"
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        base_url
+    }
+
+    fn build_tool_with_caps(scopes: &[&str]) -> WebFetchTool {
+        let tool = build_tool();
+        let caps = CapabilitySet::from_scopes(
+            scopes.iter().map(|s| Scope::parse(s).unwrap()),
+        );
+        tool.set_effective_capabilities(caps).unwrap();
+        tool
+    }
+
+    #[tokio::test]
+    async fn redirect_301_followed_within_scope() {
+        let url = redirect_server(301, "arrived").await;
+        let tool = build_tool_with_caps(&[
+            &format!("net.fetch:{url}/"),
+        ]);
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/redirect"),
+                    "follow_redirects": true
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["status"], 200);
+                assert_eq!(output["url"], format!("{url}/final"));
+                assert!(
+                    output["body"].as_str().unwrap().contains("arrived"),
+                    "should have followed redirect to final page"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_302_followed_within_scope() {
+        let url = redirect_server(302, "found-it").await;
+        let tool = build_tool_with_caps(&[
+            &format!("net.fetch:{url}/"),
+        ]);
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/redirect"),
+                    "follow_redirects": true
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["status"], 200);
+                assert!(
+                    output["body"].as_str().unwrap().contains("found-it"),
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_to_out_of_scope_url_denied() {
+        let url = redirect_server(301, "secret").await;
+        // Grant scope only for the initial URL's path, not for /final
+        let tool = build_tool_with_caps(&[
+            "net.fetch:http://other-host.invalid/",
+        ]);
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/redirect"),
+                    "follow_redirects": true
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert!(
+                    output["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("denied"),
+                    "redirect to out-of-scope URL should be denied: {output}"
+                );
+            }
+            other => panic!("expected Completed with denial, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_chain_capped_at_max_hops() {
+        let url = infinite_redirect_server().await;
+        let tool = build_tool_with_caps(&[
+            &format!("net.fetch:{url}/"),
+        ]);
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/start"),
+                    "follow_redirects": true
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert!(
+                    output["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("exceeded"),
+                    "should hit hop cap: {output}"
+                );
+            }
+            other => panic!("expected Completed with hop-cap error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_without_follow_flag_returns_3xx_as_is() {
+        let url = redirect_server(301, "should-not-reach").await;
+        let tool = build_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/redirect"),
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(
+                    output["status"], 301,
+                    "without follow_redirects, 301 should surface as-is"
+                );
+            }
+            other => panic!("expected Completed with 301, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_without_capabilities_installed_fails() {
+        let url = redirect_server(301, "nope").await;
+        // Don't call set_effective_capabilities
+        let tool = build_tool();
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "url": format!("{url}/redirect"),
+                    "follow_redirects": true
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(
+                    detail.contains("no effective capabilities"),
+                    "should explain caps not installed: {detail}"
                 );
             }
             other => panic!("expected Failed, got {other:?}"),

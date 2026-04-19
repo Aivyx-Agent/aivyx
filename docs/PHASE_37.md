@@ -177,6 +177,12 @@ streak report.
 - **Task 2** `5023eb8` — binary body support in `WebFetchTool`
   (base64 fallback, `body_encoding` field, 2 new tests). Added
   `base64 = "0.22"` workspace dep. 773 tests.
-- **Task 3** `(pending)` — `WebPostTool` (POST/PUT/PATCH/DELETE),
+- **Task 3** `a1bc08b` — `WebPostTool` (POST/PUT/PATCH/DELETE),
   `net.post` scope base, binary registration, backcompat floor,
   2 registration tests, 7 tool tests. 782 tests.
+- **Tasks 4+5** `(pending)` — redirect following with per-hop
+  scope re-check. `OnceLock<CapabilitySet>` on both tools,
+  `follow_redirects` input field, shared helpers
+  (`extract_redirect_location`, `check_redirect_scope`,
+  `collect_body`). Binary wires capabilities via
+  `set_effective_capabilities`. 6 redirect tests. 788 tests.

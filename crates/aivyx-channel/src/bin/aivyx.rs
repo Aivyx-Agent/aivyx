@@ -120,7 +120,7 @@ use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsReadToolConfig,
     FsWriteToolConfig, LlmPlanner, LlmPlannerConfig, ShellExecToolConfig, Tool, ToolRegistry,
-    WebFetchToolConfig, WebPostToolConfig,
+    WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -238,11 +238,11 @@ fn build_shell_exec_for_channel(
 /// grants are decided by `aivyx-config` based on role.
 fn build_web_fetch_for_channel(
     _channel_kind: ChannelKind,
-) -> Result<Arc<dyn Tool>, String> {
+) -> Result<Arc<WebFetchTool>, String> {
     let tool = WebFetchToolConfig::new()
         .build()
         .map_err(|e| format!("failed to build web.fetch tool: {e}"))?;
-    Ok(Arc::new(tool) as Arc<dyn Tool>)
+    Ok(Arc::new(tool))
 }
 
 /// Build `web.post` for the given channel kind.
@@ -254,11 +254,11 @@ fn build_web_fetch_for_channel(
 /// and to give a future tier-gate hook point if needed.
 fn build_web_post_for_channel(
     _channel_kind: ChannelKind,
-) -> Result<Arc<dyn Tool>, String> {
+) -> Result<Arc<WebPostTool>, String> {
     let tool = WebPostToolConfig::new()
         .build()
         .map_err(|e| format!("failed to build web.post tool: {e}"))?;
-    Ok(Arc::new(tool) as Arc<dyn Tool>)
+    Ok(Arc::new(tool))
 }
 
 // Phase 13 Task 2's `assemble_role_envelope` walker lifted into
@@ -1334,8 +1334,10 @@ async fn run_async(
     // `aivyx-config` decide which URLs a given role may fetch,
     // and the broad `net.fetch` held by the Local CLI
     // (granted below) covers the Trusted-tier catch-all.
-    tool_list.push(build_web_fetch_for_channel(channel_kind)?);
-    tool_list.push(build_web_post_for_channel(channel_kind)?);
+    let web_fetch_tool: Arc<WebFetchTool> = build_web_fetch_for_channel(channel_kind)?;
+    tool_list.push(Arc::clone(&web_fetch_tool) as Arc<dyn Tool>);
+    let web_post_tool: Arc<WebPostTool> = build_web_post_for_channel(channel_kind)?;
+    tool_list.push(Arc::clone(&web_post_tool) as Arc<dyn Tool>);
 
     // Phase 14 Task 3 — `role.switch` sub-agent primitive. The
     // tool is created here with an empty `child_factory` slot
@@ -1547,6 +1549,13 @@ async fn run_async(
     // structural-impossibility rule from P1+P7.
     let role_tier_ceiling = role_for_envelope.trust_ceiling.value.default_ceiling();
     let capabilities = role_envelope.intersect(role_tier_ceiling);
+
+    // ---- Phase 37 Task 4 — wire effective capabilities for redirect
+    //      scope re-checks on web.fetch and web.post tools. The
+    //      OnceLock is set once here; the tools read it on every
+    //      redirect hop in their execute() loop.
+    let _ = web_fetch_tool.set_effective_capabilities(capabilities.clone());
+    let _ = web_post_tool.set_effective_capabilities(capabilities.clone());
 
     // ---- Phase 14 Task 3 — wire the role.switch child factory --------
     //
