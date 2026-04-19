@@ -446,7 +446,7 @@ Test delta +4 (736→740). Deferral backlog 7→6.
 
 ## Phase 34 — Ollama Foundation (frozen)
 
-**Frozen** (`TBD`). First-class local LLM experience via
+**Frozen** (`0004cf2`). First-class local LLM experience via
 Ollama. `ProviderKind::Ollama` config sugar, optional API
 key, graceful `stream_options` handling, connection health
 check with actionable errors, worked example config.
