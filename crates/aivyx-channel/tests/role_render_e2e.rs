@@ -199,6 +199,10 @@ fn print_role_renders_junior_researcher_with_visible_drops() {
 /// exists as a *contrast* to the junior_researcher test: it
 /// pins that a "cleanly attenuated" role does not produce
 /// false-positive drop noise.
+///
+/// Phase 33 added `role.switch:junior_researcher` to
+/// researcher's declared scopes — the second link in the
+/// multi-level nesting chain.
 #[test]
 fn print_role_renders_researcher_with_no_drops() {
     let cfg = load_example_config();
@@ -207,6 +211,11 @@ fn print_role_renders_researcher_with_no_drops() {
 
     assert!(rendered.contains("role: researcher"));
     assert!(rendered.contains("parent chain: researcher -> default"));
+    assert!(
+        rendered.contains("role.switch:junior_researcher"),
+        "researcher must show role.switch:junior_researcher in effective \
+         envelope (Phase 33): {rendered}"
+    );
     assert!(
         rendered.contains("<none - every scope the active role declared survived intersection>"),
         "researcher's declared scopes all survive intersection; \
@@ -314,20 +323,15 @@ fn print_role_lists_all_other_roles_when_unqualified_role_switch_held() {
     );
 }
 
-/// Case 1 (no `role.switch` survives intersection → no targets).
+/// Case 3 for researcher (single qualified target).
 ///
-/// `researcher` in `examples/aivyx.toml` does NOT declare
-/// `role.switch` in its `capability_scopes`. Even though
-/// `default` declares unqualified `role.switch`, the
-/// child→parent intersection drops it from the leaf side
-/// (researcher's declared set is what gets attenuated against
-/// the parent, not the other way around). So researcher's
-/// effective envelope has no `role.switch` scope and the
-/// enumerator must emit the explicit "cannot start a
-/// sub-session" line — actionable feedback rather than an
-/// ambiguous empty section.
+/// Phase 33 added `role.switch:junior_researcher` to
+/// `researcher`'s `capability_scopes`. The enumerator must
+/// list `junior_researcher` as a reachable target and only
+/// that target — mirroring the `coder` → `researcher` pattern
+/// but one level deeper in the nesting chain.
 #[test]
-fn print_role_reports_no_targets_when_role_switch_not_in_effective_envelope() {
+fn print_role_lists_junior_researcher_as_reachable_target_for_researcher() {
     let cfg = load_example_config();
     let rendered = render_role_envelope("researcher", &cfg, ChannelKind::Local)
         .expect("researcher must render");
@@ -337,10 +341,18 @@ fn print_role_reports_no_targets_when_role_switch_not_in_effective_envelope() {
         .expect("section header must be present");
     let section = &rendered[section_start..];
     assert!(
-        section.contains("<none - this role cannot start a sub-session>"),
-        "researcher has no role.switch in effective envelope; \
-         enumerator must say so explicitly: {section}"
+        section.contains("\n  junior_researcher\n"),
+        "junior_researcher must be listed as a reachable target: {section}"
     );
+    // Structural impossibility: no other role names may appear.
+    for forbidden in &["default", "coder", "researcher"] {
+        let pattern = format!("\n  {forbidden}");
+        assert!(
+            !section.contains(&pattern),
+            "`{forbidden}` must NOT be listed as a reachable target for researcher \
+             (would violate PRODUCT.md P1.3 structural impossibility): {section}"
+        );
+    }
 }
 
 /// `junior_researcher` is the empty-child case — its declared

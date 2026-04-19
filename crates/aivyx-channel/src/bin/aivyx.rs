@@ -2725,13 +2725,14 @@ mod tests {
             "memory.write",
             "memory.forget",
             "net.fetch:url-prefix:https://httpbin.org/",
+            "role.switch:junior_researcher",
         ];
         expected.sort();
         assert_eq!(
             got, expected,
             "researcher runtime envelope (after Trusted ceiling) must be \
-             exactly the documented five scopes — note unqualified fs.read \
-             survives because Trusted ceiling includes the fs.read base"
+             exactly the documented six scopes — includes \
+             role.switch:junior_researcher added in Phase 33"
         );
     }
 

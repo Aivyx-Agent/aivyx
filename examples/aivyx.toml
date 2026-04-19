@@ -188,6 +188,14 @@ parent_role = "default"
 # `default.net.fetch` (unqualified) at config-load time via
 # D4 Rule 2.
 #
+# Phase 33 adds `role.switch:junior_researcher` — the second
+# link in the multi-level nesting chain. `coder` can switch
+# into `researcher`, and now `researcher` can switch into
+# `junior_researcher`. This demonstrates capability-bounded
+# recursive nesting: each level can only narrow. The
+# qualified form `role.switch:junior_researcher` is granted
+# by `default`'s unqualified `role.switch` under D4 Rule 2.
+#
 # Trust ceiling note: `researcher` runs at `Trusted` here so
 # the `fs.read` and `memory.forget` scopes survive the
 # ceiling intersection — `CEILING_SEMITRUSTED` deliberately
@@ -207,11 +215,12 @@ parent_role = "default"
 # Effective runtime envelope (when activated):
 #   researcher_declared ∩ default_declared ∩ CEILING_TRUSTED
 #     = [fs.read, memory.read, memory.write, memory.forget,
-#        net.fetch:url-prefix:https://httpbin.org/]
+#        net.fetch:url-prefix:https://httpbin.org/,
+#        role.switch:junior_researcher]
 [[role]]
 name = "researcher"
 system_prompt = "You are a careful note-taker. Cite sources."
-tool_allowlist = ["fs.read", "memory.read", "memory.write", "memory.forget", "web.fetch"]
+tool_allowlist = ["fs.read", "memory.read", "memory.write", "memory.forget", "web.fetch", "role.switch"]
 memory_topic_prefix = "researcher/"
 capability_scopes = [
   "fs.read",
@@ -219,6 +228,7 @@ capability_scopes = [
   "memory.write",
   "memory.forget",
   "net.fetch:url-prefix:https://httpbin.org/",
+  "role.switch:junior_researcher",
 ]
 trust_ceiling = "Trusted"
 parent_role = "default"

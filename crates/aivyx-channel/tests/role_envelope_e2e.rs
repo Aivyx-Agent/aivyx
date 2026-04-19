@@ -223,13 +223,14 @@ fn cross_crate_assemble_envelope_for_researcher_matches_documented_set() {
         "memory.write".to_string(),
         "memory.forget".to_string(),
         "net.fetch:url-prefix:https://httpbin.org/".to_string(),
+        "role.switch:junior_researcher".to_string(),
     ];
     expected.sort();
     assert_eq!(
         got, expected,
         "researcher runtime envelope (via cross-crate public API) \
-         must match the five scopes the example file documents — \
-         unqualified fs.read survives under Trusted ceiling"
+         must match the six scopes the example file documents — \
+         includes role.switch:junior_researcher added in Phase 33"
     );
 }
 
