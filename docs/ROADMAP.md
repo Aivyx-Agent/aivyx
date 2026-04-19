@@ -434,11 +434,20 @@ DESIGN.md and PRODUCT.md untouched. Production-core streak
 extends to 1. Test delta +23 (713→736). Deferral backlog
 8→7.
 
-## Phase 33 — Multi-Level Sub-Agent Nesting
+## Phase 33 — Multi-Level Sub-Agent Nesting (frozen)
 
-**Active — see [PHASE_33.md](PHASE_33.md).** Closes the
-Phase 14 Task 3 deferral: multi-level sub-agent nesting.
-The architecture already supports recursive factory reuse;
-the work is config changes (`examples/aivyx.toml`) and
-integration tests proving the capability-bounded recursion
-terminates correctly.
+**Frozen** (`d02dda6`). Closed the Phase 14 Task 3 deferral:
+multi-level sub-agent nesting. Config change granting
+`researcher` `role.switch:junior_researcher`, plus 4
+integration tests proving capability-bounded recursion
+terminates correctly. Zero code changes to the architecture.
+DESIGN.md, PRODUCT.md, and production-core all untouched.
+Test delta +4 (736→740). Deferral backlog 7→6.
+
+## Phase 34 — Ollama Foundation
+
+**Active — see [PHASE_34.md](PHASE_34.md).** First-class
+local LLM experience via Ollama. `ProviderKind::Ollama`
+config sugar, optional API key, graceful `stream_options`
+handling, connection health check with actionable errors,
+worked example config.

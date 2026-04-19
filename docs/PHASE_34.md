@@ -1,0 +1,132 @@
+# Phase 34 — Ollama Foundation
+
+Phase journals are working documents. They churn freely
+during the phase and freeze at exit under a final Exit criteria
+block. For the locked technical contract see
+[`../DESIGN.md`](../DESIGN.md); for the locked product contract
+see [`../PRODUCT.md`](../PRODUCT.md).
+
+## Goal
+
+Make local LLM usage via Ollama a first-class experience,
+equally smooth as cloud providers. Phase 25 shipped the
+OpenAI-compatible adapter; this phase removes the friction
+that makes local deployment feel like an afterthought.
+
+## Why now
+
+1. **Growing user interest in local-only agents.** Privacy,
+   cost, latency, and offline operation are strong motivators.
+   Ollama is the dominant local LLM runtime and exposes an
+   OpenAI-compatible API — but several paper-cuts in Aivyx's
+   current wiring make it harder to use than it should be.
+
+2. **The plumbing exists.** `OpenAiProvider` already targets
+   `/v1/chat/completions` and handles streaming + tool calls.
+   The work is removing friction, not building a new provider.
+
+3. **Small, high-impact phase.** Each change is independently
+   useful and testable. No architecture changes expected.
+
+## Friction points this phase addresses
+
+1. **API key required when not needed.** Ollama ignores API
+   keys, but `validate()` demands one when `provider = openai`.
+   Users must set a dummy `api_key = "ollama"`.
+
+2. **No `provider = "ollama"` sugar.** Users must know to set
+   `provider = "openai"` + `base_url = "http://localhost:11434"`
+   — not discoverable.
+
+3. **`stream_options.include_usage` may fail.** Older Ollama
+   versions don't support this field. If the server rejects
+   unknown fields, the entire request fails.
+
+4. **No connection health check.** Cloud APIs are always up.
+   A local Ollama instance might not be running, might be
+   loading a model, or might be mid-download. The error
+   surface is a raw `reqwest` transport error with no
+   actionable guidance.
+
+5. **Banner doesn't show Ollama context.** When running
+   against Ollama, the startup banner should show the
+   effective base URL and provider clearly so operators
+   know they're hitting their local instance.
+
+## Streak predictions
+
+- **DESIGN.md** -- Very low risk. No architecture change.
+  Prediction: **untouched**.
+
+- **PRODUCT.md** -- Low risk. Local LLM support is an
+  enhancement to the existing provider surface, not a new
+  product commitment. Prediction: **untouched** (streak
+  at 3 from Phase 33).
+
+- **Production-core `aivyx-core/src/lib.rs`** -- Very low
+  risk. All changes are in `aivyx-config`, `aivyx-llm`, and
+  the binary. Prediction: **untouched** (streak at 2 from
+  Phase 33).
+
+## Tasks
+
+### Task 1 -- Open commit + PHASE_34.md scaffold
+
+This file. Update `docs/README.md` to show Phase 34 as Open.
+Update `docs/ROADMAP.md` with Phase 34 active pointer.
+
+### Task 2 -- ProviderKind::Ollama + optional API key
+
+Add `ProviderKind::Ollama` as a config-level variant that
+maps to the OpenAI-compatible provider with Ollama-specific
+defaults:
+- `base_url` defaults to `http://localhost:11434` (not the
+  OpenAI default)
+- API key is optional (not required by `validate()`)
+- `--provider ollama` CLI flag, `AIVYX_PROVIDER=ollama` env
+
+Under the hood, `Ollama` still constructs an `OpenAiProvider`
+— the variant is config-level sugar, not a new provider impl.
+The `OpenAiConfig` gains an `api_key_required: bool` field (or
+the API key becomes `Option`) so the provider can skip the
+`Authorization` header when no key is set.
+
+### Task 3 -- Graceful stream_options handling
+
+Make the `stream_options.include_usage` field conditional:
+- For `ProviderKind::OpenAi` (cloud): always send it (cloud
+  APIs support it).
+- For `ProviderKind::Ollama`: omit it by default. Add an
+  opt-in config field if needed.
+
+This prevents request failures on older Ollama versions
+that reject unknown fields.
+
+### Task 4 -- Connection health check + actionable errors
+
+When `provider = ollama`, attempt a lightweight health check
+(GET to the base URL, which Ollama responds to with
+`"Ollama is running"`) before the first LLM request. On
+failure, emit an actionable error:
+- "Ollama is not running at http://localhost:11434 — start
+  it with `ollama serve`"
+- "Ollama is running but model X is not available — pull it
+  with `ollama pull X`"
+
+This replaces the raw `reqwest` transport error with
+guidance the user can act on.
+
+### Task 5 -- Banner + worked example
+
+- Update `print_config_banner` to show Ollama-specific
+  context when `provider = ollama`.
+- Add `examples/aivyx-ollama.toml` as a worked example for
+  local LLM setup, mirroring the teaching style of
+  `examples/aivyx.toml`.
+- Update `examples/aivyx.toml`'s provider section comment
+  to mention `provider = "ollama"` alongside `"openai"`.
+
+### Task 6 -- Exit freeze + docs
+
+Exit criteria checklist, prediction-vs-reality table,
+streak report.
