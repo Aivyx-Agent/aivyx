@@ -99,22 +99,85 @@ to `researcher`'s `capability_scopes` and `role.switch` to its
 `tool_allowlist`. Update existing tests that pin `researcher`'s
 envelope to include the new scope.
 
+**Ship record:** `075a00b`. Added `role.switch:junior_researcher`
+to `researcher`'s `capability_scopes` and `role.switch` to its
+`tool_allowlist`. Updated four test sites that pin researcher's
+envelope: binary-internal, cross-crate envelope, cross-crate
+render (envelope contents + reachable targets section). The
+`--print-role researcher` render test now asserts
+`junior_researcher` is listed as a reachable target (was:
+`<none>`).
+
 ### Task 3 -- Integration tests for multi-level nesting
 
 Write integration tests in `crates/aivyx-channel/tests/` that
 exercise the 2-level nesting chain through the capability
-system. Key assertions:
-- `researcher`'s effective envelope now contains
-  `role.switch:junior_researcher`
-- `junior_researcher`'s effective envelope does NOT contain
-  any `role.switch` scope (recursion terminates)
-- `--print-role` for `researcher` lists `junior_researcher`
-  as a reachable target
-- `--print-role` for `junior_researcher` still shows
-  `<none - this role cannot start a sub-session>`
+system.
+
+**Ship record:** `bb4ea33`. Four new integration tests in
+`multilevel_nesting_e2e.rs`:
+- `nesting_chain_role_switch_narrows_at_each_level`: walks
+  coder → researcher → junior_researcher, verifying
+  `role.switch` narrows at each depth and terminates at leaf.
+- `inheritance_chain_attenuation_researcher_to_junior`: proves
+  junior's envelope is strictly narrower than researcher's
+  (scope count and base coverage).
+- `backcompat_floor_does_not_contain_role_switch`: pins that
+  the floor cannot leak nesting ability to empty-child roles.
+- `default_unqualified_role_switch_reaches_all_chain_members`:
+  verifies root can reach any role including the deepest leaf.
 
 ### Task 4 -- Exit freeze + docs
 
 Exit criteria checklist, prediction-vs-reality table, streak
 report. Close the Phase 14 Task 3 deferral in the rolling
 backlog.
+
+## Exit criteria
+
+- [x] Task 1 shipped: Phase 33 scaffold, README + ROADMAP
+      updated.
+- [x] Task 2 shipped at `075a00b`: researcher granted
+      `role.switch:junior_researcher`, existing tests updated.
+- [x] Task 3 shipped at `bb4ea33`: 4 new integration tests.
+- [x] Task 4: this section.
+- [x] 740 tests, 0 failures.
+- [x] `cargo check` clean (only pre-existing MCP warnings).
+- [x] DESIGN.md untouched.
+- [x] PRODUCT.md untouched.
+- [x] Production-core `aivyx-core/src/lib.rs` untouched.
+
+## Prediction vs reality
+
+| Prediction | Reality | Notes |
+|---|---|---|
+| DESIGN.md untouched | Untouched | Correct |
+| PRODUCT.md untouched | Untouched | Correct — streak extends to 3 |
+| Production-core untouched (streak 1) | Untouched | Correct — streak extends to 2 |
+
+## Streak report
+
+| Target | Streak at entry | This phase | Streak at exit |
+|---|---|---|---|
+| DESIGN.md | extends | untouched | extends |
+| PRODUCT.md | 2 | untouched | 3 |
+| Production-core `lib.rs` | 1 | untouched | 2 |
+
+## Rolling deferrals at Phase 33 exit (6 items, -1 closed)
+
+**Closed this phase:**
+- Multi-level sub-agent nesting (Phase 14 Task 3) — Tasks 2–3
+
+**Remaining (6 items):**
+- **Non-GET verbs (POST/PUT/PATCH/DELETE)** — Phase 12 Q1.
+  Deferred indefinitely.
+- **Redirect following with per-hop scope re-check** —
+  Phase 12 Q5. Deferred indefinitely.
+- **Binary response bodies / non-UTF-8** — Deferred
+  indefinitely.
+- **Per-chunk Telegram rendering** — Phase 12 Task 1.
+  Deferred reactively.
+- **LocalChannel regression-test rewrite over IPC** —
+  Phase 17 Q6->(c+). Tagged: reactive.
+- **Telegram-specific protocol extensions** — Phase 19.
+  Untouched.
