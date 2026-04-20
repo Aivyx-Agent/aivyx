@@ -87,13 +87,33 @@ history grouping, escalation-in-batch.
 
 ## Exit criteria
 
-- [ ] `LlmStepEnd::ToolCalls` surfaces all tool-use blocks from both providers.
-- [ ] `NextStep::ToolCalls` variant exists and VecPlanner can use it.
-- [ ] `LlmPlanner` maps multi-tool responses to batch NextStep.
-- [ ] Turn loop dispatches batch tools via `join_all`.
-- [ ] Anthropic serializer groups consecutive ToolResults correctly.
-- [ ] Escalation-in-batch observed correctly (non-escalated first).
-- [ ] All tests pass (801 + new).
-- [ ] Zero clippy warnings.
-- [ ] Amendment A6 filed and referenced in DESIGN.md.
-- [ ] PRODUCT.md untouched (streak 3 from Phase 39).
+- [x] `LlmStepEnd::ToolCalls` surfaces all tool-use blocks from both providers.
+- [x] `NextStep::ToolCalls` variant exists and VecPlanner can use it.
+- [x] `LlmPlanner` maps multi-tool responses to batch NextStep.
+- [x] Turn loop dispatches batch tools via `join_all`.
+- [x] Anthropic serializer groups consecutive ToolResults correctly.
+- [x] Escalation-in-batch observed correctly (non-escalated first).
+- [x] All tests pass (807, up from 801).
+- [x] Zero clippy warnings.
+- [x] Amendment A6 filed and referenced in DESIGN.md.
+- [x] PRODUCT.md untouched (streak 4 from Phase 39).
+
+## Streak results
+
+| Streak target | Predicted | Actual | Notes |
+|---|---|---|---|
+| DESIGN.md | touched | **touched** (Task 1) | A6 ref added |
+| PRODUCT.md | untouched (3) | **untouched (4)** | Internal-only |
+| lib.rs | touched | **touched** (Task 2/3) | LlmStepEnd, NextStep |
+
+## Commit log
+
+| Hash | Task | Summary |
+|---|---|---|
+| abb64de | 1 | Open commit + PHASE_40.md + Amendment A6 |
+| d666c8b | 2 | LlmStepEnd::ToolCall → ToolCalls |
+| 648e393 | 3 | NextStep::ToolCalls + turn-loop stub |
+| ef52cb7 | 4 | LlmPlanner batch adaptation |
+| 7d58521 | 5 | Anthropic tool_result grouping |
+| 03a02ed | 6 | Turn loop parallel dispatch via join_all |
+| e7e543a | 7 | Tests (807 pass, 0 warnings) |

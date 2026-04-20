@@ -510,7 +510,7 @@ lib.rs untouched (streak 3).
 
 ## Phase 40 — Parallel Tool Execution
 
-**Active — see [PHASE_40.md](PHASE_40.md).** Resolves the D1
+**Shipped — see [PHASE_40.md](PHASE_40.md).** Resolves the D1
 deferred concurrency decision (line 67) via Amendment A6.
 Implements batch tool dispatch: `LlmStepEnd::ToolCalls` surfaces
 all tool-use blocks from providers, `NextStep::ToolCalls` carries
