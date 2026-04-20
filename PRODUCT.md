@@ -1055,17 +1055,18 @@ because the foundation already supports them:
 - **P7 — Single-inheritance role tree.** Phase 11's role
   primitive is the substrate; **P9**'s migration adds the
   inheritance layer.
-- **P10 — Substrate-only core.** Already true at exactly
-  the current count.
+- **P10 — Substrate-only core.** True at eight tools
+  (Amendment A5, Phase 38).
 
 ---
 
-## Delivery Status (as of Phase 35 exit, 2026-04-19)
+## Delivery Status (as of Phase 38 exit, 2026-04-20)
 
 A traceability surface mapping each product commitment to its
-implementation state after 35 phases. The commitment text
-above is unchanged — this section records what shipped, what
-partially shipped, and what remains forward.
+implementation state after 38 phases. The commitment text
+above is unchanged (except P10's seven→eight amendment) —
+this section records what shipped, what partially shipped,
+and what remains forward.
 
 ### Fully Delivered
 
@@ -1114,19 +1115,23 @@ partially shipped, and what remains forward.
   time. Four-role worked example in `examples/aivyx.toml`.
   `--print-role` debug flag for operator introspection.
 
-- **P10 — Substrate-Only Core, Seven Tools Forever.** Always
-  true. The seven substrate tools (`fs.read`, `fs.write`,
+- **P10 — Substrate-Only Core, Eight Tools Forever.** Always
+  true. The eight substrate tools (`fs.read`, `fs.write`,
   `memory.read`, `memory.write`, `memory.forget`, `shell.exec`,
-  `web.fetch`) are the closed set. Infrastructure tools and
-  third-party MCP tools are separate categories.
+  `web.fetch`, `web.post`) are the closed set. `web.post`
+  added in Phase 37, amendment A5 filed in Phase 38.
+  Infrastructure tools and third-party MCP tools are separate
+  categories.
 
 ### Partially Delivered
 
 - **P3 — Goals and Non-Goals.** Vision document — partially
   realized through implementation:
-  - **G1 (Web interaction):** `web.fetch` shipped (Phase 12).
-    Rich web interaction (page rendering, form submission)
-    not yet started.
+  - **G1 (Web interaction):** `web.fetch` shipped (Phase 12),
+    `web.post` (POST/PUT/PATCH/DELETE) shipped (Phase 37),
+    binary body support and redirect following shipped
+    (Phase 37). Rich web interaction (page rendering, form
+    submission) not yet started.
   - **G2 (Code interaction):** Shipped. `fs.read`, `fs.write`,
     `shell.exec` all operational with role gating.
   - **G3 (Memory Reflection):** Shipped (Phases 28–30).
