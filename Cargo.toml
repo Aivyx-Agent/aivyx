@@ -67,5 +67,8 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
+# WebSocket support for web UI channel (Phase 39)
+tokio-tungstenite = "0.26"
+
 # File-system change notifications for file-watch triggers (Phase 27)
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }

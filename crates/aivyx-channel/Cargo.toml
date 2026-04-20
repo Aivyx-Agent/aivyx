@@ -114,6 +114,14 @@ notify = { workspace = true }
 # Ollama REST API calls (GET /api/tags, POST /api/show, POST /api/pull).
 # Already a workspace dep and transitive via aivyx-core.
 reqwest = { workspace = true }
+# Phase 39 — WebSocket support for the web UI channel. Each browser
+# connection upgrades HTTP to WebSocket, then bridges JSON frames to
+# the daemon's Unix socket IPC.
+tokio-tungstenite = { workspace = true }
+# Phase 39 — StreamExt/SinkExt for splitting the WebSocket stream
+# into independent read/write halves. Already a workspace dep via
+# aivyx-llm's SSE parser.
+futures-util = { workspace = true }
 
 [dev-dependencies]
 # LocalChannel unit tests exercise the async ChannelContext surface
