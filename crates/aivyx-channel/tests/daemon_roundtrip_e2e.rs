@@ -785,7 +785,7 @@ async fn two_concurrent_connections() {
     let daemon_factory = Arc::clone(&factory);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_factory, daemon_shutdown, None, None, None, None, None)
+        run_daemon(&daemon_socket, daemon_agent, daemon_factory, daemon_shutdown, None, None, None, None, None, None)
             .await
             .expect("daemon must complete successfully");
     });
@@ -1048,7 +1048,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
     let daemon_agent = Arc::clone(&agent);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None)
+        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None, None)
             .await
             .expect("daemon must complete successfully");
     });
@@ -1109,7 +1109,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
     let daemon_agent = Arc::clone(&agent);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None)
+        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None, None)
             .await
             .expect("daemon must complete successfully");
     });
@@ -1504,6 +1504,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("daemon must complete successfully");
@@ -1747,6 +1748,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             factory,
             daemon_shutdown,
             Some(mission_handle),
+            None,
             None,
             None,
             None,

@@ -569,6 +569,11 @@ pub struct AivyxConfig {
     /// Webhook listener port override. `None` means use the default
     /// (7842). Loaded from `[daemon] webhook_port` in the TOML file.
     pub webhook_port: Option<u16>,
+    /// Web UI port. `Some(port)` enables the web UI on that port.
+    /// `None` means the web UI is disabled. Set via `[daemon] web_ui = true`
+    /// (uses default 7843) or `[daemon] web_ui_port = <N>` (enables on
+    /// that port). Phase 39.
+    pub web_ui_port: Option<u16>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -871,9 +876,12 @@ struct RawToml {
 }
 
 /// `[daemon]` section in the TOML file. Phase 28 Task 3.
+/// Phase 39 adds `web_ui` and `web_ui_port` for the web UI channel.
 #[derive(Debug, Default, Deserialize)]
 struct RawDaemon {
     webhook_port: Option<u16>,
+    web_ui: Option<bool>,
+    web_ui_port: Option<u16>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -1632,6 +1640,14 @@ impl AivyxConfig {
             webhooks,
             file_watches,
             webhook_port: toml.daemon.webhook_port,
+            web_ui_port: match (toml.daemon.web_ui, toml.daemon.web_ui_port) {
+                // Explicit port always wins (and implicitly enables).
+                (_, Some(port)) => Some(port),
+                // `web_ui = true` without explicit port → default.
+                (Some(true), None) => Some(7843),
+                // Not configured or explicitly disabled.
+                _ => None,
+            },
         })
     }
 

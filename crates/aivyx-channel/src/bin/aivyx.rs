@@ -305,6 +305,7 @@ fn run() -> Result<(), String> {
         mcp_servers: cli_mcp_servers,
         mcp_sse_servers: cli_mcp_sse_servers,
         provider: cli_provider,
+        web_ui_port: cli_web_ui_port,
     } = parse_cli_args()?;
 
     // ---- Lightweight daemon management subcommands ----------------------
@@ -512,6 +513,7 @@ fn run() -> Result<(), String> {
             no_daemon,
             cli_mcp_servers,
             cli_mcp_sse_servers,
+            cli_web_ui_port,
         )
         .await
     })
@@ -747,6 +749,9 @@ struct CliArgs {
     mcp_servers: Vec<CliMcpServer>,
     mcp_sse_servers: Vec<CliMcpSse>,
     provider: Option<ProviderKind>,
+    /// Web UI port override from `--web-ui` or `--web-ui-port <N>`.
+    /// `Some(port)` enables the web UI in daemon mode. Phase 39.
+    web_ui_port: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -796,12 +801,32 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
         };
-        if args.len() > 2 {
-            return Err(format!(
-                "unrecognized argument after `{subcmd}`: `{}`. \
-                 `{subcmd}` takes no additional flags.",
-                args[2]
-            ));
+        // Parse optional flags after `daemon run`.
+        let mut daemon_web_ui_port: Option<u16> = None;
+        let mut di = 2;
+        while di < args.len() {
+            match args[di].as_str() {
+                "--web-ui" if mode == CliMode::DaemonRun => {
+                    daemon_web_ui_port = Some(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
+                    di += 1;
+                }
+                "--web-ui-port" if mode == CliMode::DaemonRun => {
+                    let value = args.get(di + 1).ok_or_else(|| {
+                        "`--web-ui-port` requires a port number".to_string()
+                    })?;
+                    let port: u16 = value.parse().map_err(|_| {
+                        format!("`--web-ui-port` value `{value}` is not a valid port number")
+                    })?;
+                    daemon_web_ui_port = Some(port);
+                    di += 2;
+                }
+                other => {
+                    return Err(format!(
+                        "unrecognized argument after `{subcmd}`: `{other}`. \
+                         `{subcmd}` supports: --web-ui, --web-ui-port <N>"
+                    ));
+                }
+            }
         }
         return Ok(CliArgs {
             mode,
@@ -811,6 +836,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             mcp_servers: Vec::new(),
             mcp_sse_servers: Vec::new(),
             provider: None,
+            web_ui_port: daemon_web_ui_port,
         });
     }
 
@@ -999,6 +1025,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         mcp_servers,
         mcp_sse_servers,
         provider: cli_provider,
+        web_ui_port: None,
     })
 }
 
@@ -1088,6 +1115,7 @@ async fn run_async(
     no_daemon: bool,
     cli_mcp_servers: Vec<CliMcpServer>,
     cli_mcp_sse_servers: Vec<CliMcpSse>,
+    cli_web_ui_port: Option<u16>,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -1132,6 +1160,7 @@ async fn run_async(
         webhooks: config_webhooks,
         file_watches: config_file_watches,
         webhook_port: config_webhook_port,
+        web_ui_port: config_web_ui_port,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -2026,6 +2055,7 @@ async fn run_async(
             Some(webhook_domain),
             Some(file_watch_domain),
             config_webhook_port,
+            cli_web_ui_port.or(config_web_ui_port),
         )
             .await;
 
@@ -3293,6 +3323,41 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"]))
             .expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Ollama));
+    }
+
+    // -----------------------------------------------------------------
+    // --web-ui / --web-ui-port — Phase 39
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn web_ui_flag_sets_default_port() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"]))
+            .expect("must parse");
+        assert_eq!(
+            parsed.web_ui_port,
+            Some(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT)
+        );
+    }
+
+    #[test]
+    fn web_ui_port_flag_sets_custom_port() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "8080"]))
+            .expect("must parse");
+        assert_eq!(parsed.web_ui_port, Some(8080));
+    }
+
+    #[test]
+    fn web_ui_port_flag_invalid_value_errors() {
+        let err = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "notaport"]))
+            .expect_err("invalid port must error");
+        assert!(err.contains("not a valid port"), "error: {err}");
+    }
+
+    #[test]
+    fn no_web_ui_flag_means_none() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
+            .expect("must parse");
+        assert_eq!(parsed.web_ui_port, None);
     }
 
 }

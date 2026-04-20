@@ -45,7 +45,7 @@ pub type ChannelFactory =
 /// to trigger a graceful shutdown. When cancelled, the daemon stops
 /// accepting new connections; in-flight handler tasks complete their
 /// current turn and exit.
-#[allow(clippy::too_many_arguments)] // Stores accreted across Phases 21–27; bundling deferred to SDK phase
+#[allow(clippy::too_many_arguments)] // Stores accreted across Phases 21–39; bundling deferred to SDK phase
 pub async fn run_daemon(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
@@ -56,6 +56,7 @@ pub async fn run_daemon(
     webhook_store: Option<DomainHandle>,
     file_watch_store: Option<DomainHandle>,
     webhook_port: Option<u16>,
+    web_ui_port: Option<u16>,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -125,6 +126,23 @@ pub async fn run_daemon(
         let fw_shutdown = shutdown.clone();
         tokio::spawn(async move {
             crate::file_watcher::run_file_watcher(fw_dispatch, store, fw_shutdown).await;
+        })
+    });
+
+    // Spawn the web UI server if a port is configured.
+    let _web_ui_handle = web_ui_port.map(|port| {
+        let web_shutdown = shutdown.clone();
+        let web_socket_path = socket_path.to_path_buf();
+        tokio::spawn(async move {
+            if let Err(e) = crate::web_ui::run_web_ui_server(
+                web_socket_path,
+                port,
+                web_shutdown,
+            )
+            .await
+            {
+                eprintln!("aivyx web ui error: {e}");
+            }
         })
     });
 
@@ -511,7 +529,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown, None, None, None, None, None).await
+    run_daemon(socket_path, agent, factory, shutdown, None, None, None, None, None, None).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {

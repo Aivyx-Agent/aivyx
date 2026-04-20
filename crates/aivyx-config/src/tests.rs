@@ -2231,3 +2231,96 @@ fn provider_kind_display() {
     assert_eq!(ProviderKind::OpenAi.to_string(), "openai");
     assert_eq!(ProviderKind::Ollama.to_string(), "ollama");
 }
+
+// ------------------------------------------------------------------
+// [daemon] web_ui / web_ui_port — Phase 39
+// ------------------------------------------------------------------
+
+#[test]
+fn daemon_web_ui_true_yields_default_port() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("web-ui-true");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[daemon]
+web_ui = true
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.web_ui_port, Some(7843));
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_port_overrides_default() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("web-ui-port");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[daemon]
+web_ui_port = 9999
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.web_ui_port, Some(9999));
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_false_disables() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("web-ui-false");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[daemon]
+web_ui = false
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.web_ui_port, None);
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_absent_means_none() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("web-ui-absent");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.web_ui_port, None);
+    drop(env);
+}
