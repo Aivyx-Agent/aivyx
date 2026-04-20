@@ -35,6 +35,7 @@
 //! produces a fresh planner per `Agent::turn` call, so concurrent turns
 //! never share history.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -45,7 +46,7 @@ use aivyx_llm::{
     LlmToolCallRecord, LlmToolDescriptor, LlmUsage,
 };
 
-use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
+use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
 use crate::{ChannelContext, Message, MessageContent, StreamEvent, ToolId, ToolOutcome};
 
 // ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ pub struct LlmPlanner {
     config: LlmPlannerConfig,
     tools: Vec<LlmToolDescriptor>,
     history: Vec<LlmMessage>,
-    pending_call_id: Option<String>,
+    pending_call_ids: VecDeque<String>,
     /// Cumulative token usage across all LLM steps in this turn.
     accumulated_usage: crate::TokenUsage,
 }
@@ -176,7 +177,7 @@ impl LlmPlanner {
             config,
             tools,
             history: Vec::new(),
-            pending_call_id: None,
+            pending_call_ids: VecDeque::new(),
             accumulated_usage: crate::TokenUsage::default(),
         }
     }
@@ -274,7 +275,7 @@ impl TurnPlanner for LlmPlanner {
             MessageContent::Text(text) => text.clone(),
         };
         self.history.push(LlmMessage::User { content });
-        self.pending_call_id = None;
+        self.pending_call_ids.clear();
     }
 
     async fn next_step(
@@ -350,39 +351,55 @@ impl TurnPlanner for LlmPlanner {
                         tool_calls: records,
                     });
 
-                    // For now, handle the first call only (single-tool
-                    // path). Full batch dispatch lands in Task 4.
-                    let first = calls.into_iter().next().expect(
-                        "LlmStepEnd::ToolCalls must have at least one call",
-                    );
+                    // Partition calls into known (dispatchable) and
+                    // unknown (immediate error). Known calls get queued
+                    // for execution; unknown ones get synthetic
+                    // tool_result errors appended to history now.
+                    let mut batch: Vec<ToolCallRequest> = Vec::new();
 
-                    match self.registry.find_by_name(&first.tool_name) {
-                        Some(tool_id) => {
-                            self.pending_call_id = Some(first.call_id);
-                            return NextStep::ToolCall {
-                                tool_id,
-                                input: first.input,
-                            };
-                        }
-                        None => {
-                            // Unknown tool — synthesize an error
-                            // tool_result, append it to history, and
-                            // ask the provider for another step.
-                            self.history.push(LlmMessage::ToolResult {
-                                call_id: first.call_id,
-                                content: json!({
-                                    "error": "unknown_tool",
-                                    "message": format!(
-                                        "tool '{}' is not registered",
-                                        first.tool_name
-                                    ),
-                                })
-                                .to_string(),
-                                is_error: true,
-                            });
-                            continue;
+                    for call in calls {
+                        match self.registry.find_by_name(&call.tool_name) {
+                            Some(tool_id) => {
+                                self.pending_call_ids.push_back(call.call_id);
+                                batch.push(ToolCallRequest {
+                                    tool_id,
+                                    input: call.input,
+                                });
+                            }
+                            None => {
+                                self.history.push(LlmMessage::ToolResult {
+                                    call_id: call.call_id,
+                                    content: json!({
+                                        "error": "unknown_tool",
+                                        "message": format!(
+                                            "tool '{}' is not registered",
+                                            call.tool_name
+                                        ),
+                                    })
+                                    .to_string(),
+                                    is_error: true,
+                                });
+                            }
                         }
                     }
+
+                    if batch.is_empty() {
+                        // All tools unknown — loop to retry the LLM
+                        // with the error results in history.
+                        continue;
+                    }
+
+                    if batch.len() == 1 {
+                        // Single known tool — use the singular path.
+                        let req = batch.into_iter().next().unwrap();
+                        return NextStep::ToolCall {
+                            tool_id: req.tool_id,
+                            input: req.input,
+                        };
+                    }
+
+                    // Multiple known tools — batch dispatch.
+                    return NextStep::ToolCalls(batch);
                 }
             }
         }
@@ -393,13 +410,13 @@ impl TurnPlanner for LlmPlanner {
         _tool_id: ToolId,
         outcome: &ToolOutcome,
     ) {
-        // `pending_call_id` is set by the most recent ToolCall return;
-        // if it's None, either `begin_turn` wasn't called or the turn
-        // loop invoked us out of order. Either way, synthesize a stable
-        // id so the history stays well-formed.
+        // `pending_call_ids` is populated by the most recent ToolCall(s)
+        // return; if empty, either `begin_turn` wasn't called or the turn
+        // loop invoked us out of order. Synthesize a stable id so the
+        // history stays well-formed.
         let call_id = self
-            .pending_call_id
-            .take()
+            .pending_call_ids
+            .pop_front()
             .unwrap_or_else(|| "unknown-call".to_string());
 
         let (content, is_error) = render_tool_result(outcome);
