@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures_util::future::join_all;
 use sha2::{Digest, Sha256};
 
 use aivyx_capability::{CapabilitySet, Scope};
@@ -290,13 +291,11 @@ impl Agent for ConcreteAgent {
                     planner.observe_tool_outcome(tool_id, &outcome).await;
                 }
                 NextStep::ToolCalls(batch) => {
-                    // Phase 40: parallel dispatch placeholder — runs
-                    // sequentially until Task 6 wires up join_all.
-                    let mut escalated: Option<(String, ToolId)> = None;
-                    for req in batch {
-                        tool_calls_made += 1;
-                        let (observation, outcome) = self
-                            .run_tool_call(
+                    // Phase 40: parallel dispatch via join_all.
+                    let futures: Vec<_> = batch
+                        .into_iter()
+                        .map(|req| {
+                            self.run_tool_call(
                                 turn_id,
                                 req.tool_id,
                                 req.input,
@@ -304,13 +303,22 @@ impl Agent for ConcreteAgent {
                                 &cancellation,
                                 &effective,
                             )
-                            .await;
+                        })
+                        .collect();
+                    let results = join_all(futures).await;
+
+                    tool_calls_made += results.len();
+                    let mut escalated: Option<(String, ToolId)> = None;
+
+                    for (observation, outcome) in results {
+                        let obs_tool_id = observation.tool_id;
                         observed.push(observation);
                         if let ToolOutcome::RequiresEscalation { reason } = &outcome {
-                            escalated = Some((reason.clone(), req.tool_id));
+                            escalated = Some((reason.clone(), obs_tool_id));
                         }
-                        planner.observe_tool_outcome(req.tool_id, &outcome).await;
+                        planner.observe_tool_outcome(obs_tool_id, &outcome).await;
                     }
+
                     if let Some((reason, pending_tool)) = escalated {
                         loop_outcome = LoopOutcome::Escalated {
                             reason,
