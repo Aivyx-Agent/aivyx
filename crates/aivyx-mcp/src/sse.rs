@@ -190,10 +190,10 @@ async fn sse_reader_task(
         loop {
             match try_parse_one(&mut buf) {
                 Ok(Some(event)) => {
-                    if event.event == "message" {
-                        if tx.send(Ok(event.data)).await.is_err() {
-                            return; // receiver dropped
-                        }
+                    if event.event == "message"
+                        && tx.send(Ok(event.data)).await.is_err()
+                    {
+                        return; // receiver dropped
                     }
                     // Skip non-message events (e.g. heartbeat comments).
                 }

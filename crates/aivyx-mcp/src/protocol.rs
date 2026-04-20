@@ -23,6 +23,7 @@ pub struct ClientInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Protocol struct — fields parsed for validation
 pub struct InitializeResult {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
@@ -32,12 +33,14 @@ pub struct InitializeResult {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Protocol struct — fields parsed for validation
 pub struct ServerInfo {
     pub name: String,
     pub version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Protocol struct — fields parsed for validation
 pub struct ServerCapabilities {
     pub tools: Option<Value>,
 }

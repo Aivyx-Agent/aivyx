@@ -147,7 +147,7 @@ fn last_fired_or_epoch(sched: &ScheduleRecord) -> chrono::DateTime<Utc> {
     match sched.last_fired_at {
         Some(ms) => {
             chrono::DateTime::from_timestamp_millis(ms as i64)
-                .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+                .unwrap_or(chrono::DateTime::UNIX_EPOCH)
         }
         None => chrono::DateTime::UNIX_EPOCH,
     }

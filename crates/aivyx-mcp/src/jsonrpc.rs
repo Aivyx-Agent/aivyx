@@ -33,6 +33,7 @@ pub struct Response {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Protocol struct — fields parsed for validation
 pub struct RpcError {
     pub code: i64,
     pub message: String,

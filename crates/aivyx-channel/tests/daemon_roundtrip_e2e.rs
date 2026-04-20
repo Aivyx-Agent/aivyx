@@ -1553,6 +1553,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
     writer.write_all(&frame).await.unwrap();
 
     let mut gate_event: Option<(String, String)> = None;
+    #[allow(unused_assignments)] // Initial false is the default; overwritten in loop body
     let mut saw_escalated_outcome = false;
     let mut events = Vec::new();
 
@@ -1620,6 +1621,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
     writer.write_all(&frame).await.unwrap();
 
     let mut saw_gate_resolved = false;
+    #[allow(unused_assignments)]
     let mut saw_resume_complete = false;
 
     loop {

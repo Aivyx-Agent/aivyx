@@ -45,6 +45,7 @@ pub type ChannelFactory =
 /// to trigger a graceful shutdown. When cancelled, the daemon stops
 /// accepting new connections; in-flight handler tasks complete their
 /// current turn and exit.
+#[allow(clippy::too_many_arguments)] // Stores accreted across Phases 21–27; bundling deferred to SDK phase
 pub async fn run_daemon(
     socket_path: &Path,
     agent: Arc<dyn Agent>,

@@ -1078,6 +1078,7 @@ async fn run_verify_only(
 // `AivyxConfig` **is** the consolidated shape, so passing it whole
 // lets every downstream consumer pull its exact field without the
 // binary playing field-forwarder.
+#[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
 async fn run_async(
     config: AivyxConfig,
     storage: Arc<dyn Storage>,

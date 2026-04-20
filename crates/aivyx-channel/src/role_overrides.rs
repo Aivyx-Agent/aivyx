@@ -82,15 +82,19 @@ mod tests {
 
     #[test]
     fn prompt_appendix_makes_non_empty() {
-        let mut o = RoleOverrides::default();
-        o.prompt_appendix = Some("Prefer short commands.".into());
+        let o = RoleOverrides {
+            prompt_appendix: Some("Prefer short commands.".into()),
+            ..RoleOverrides::default()
+        };
         assert!(!o.is_empty());
     }
 
     #[test]
     fn allowlist_additions_make_non_empty() {
-        let mut o = RoleOverrides::default();
-        o.allowlist_additions.push("shell.exec".into());
+        let o = RoleOverrides {
+            allowlist_additions: vec!["shell.exec".into()],
+            ..RoleOverrides::default()
+        };
         assert!(!o.is_empty());
     }
 
@@ -113,8 +117,10 @@ mod tests {
     fn apply_prompt_appendix_preserves_original() {
         let mut config = LlmPlannerConfig::new("test-model".to_string())
             .with_system_prompt("You are helpful.");
-        let mut o = RoleOverrides::default();
-        o.prompt_appendix = Some("Be concise.".into());
+        let o = RoleOverrides {
+            prompt_appendix: Some("Be concise.".into()),
+            ..RoleOverrides::default()
+        };
         apply_to_planner_config(&o, &mut config);
         assert_eq!(
             config.system_prompt.as_deref(),

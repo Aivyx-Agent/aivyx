@@ -9,7 +9,7 @@
 //! pick up dynamically created watches (via `file_watch.create`).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -175,7 +175,7 @@ fn reconcile_watches(
     let desired_ids: std::collections::HashSet<_> = desired.keys().cloned().collect();
 
     let paths_changed = active.iter().any(|(id, state)| {
-        desired.get(id).is_some_and(|r| PathBuf::from(&r.path) != state.path)
+        desired.get(id).is_some_and(|r| Path::new(&r.path) != state.path)
     });
 
     if current_ids == desired_ids && !paths_changed {
