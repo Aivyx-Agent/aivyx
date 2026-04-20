@@ -1047,4 +1047,139 @@ mod tests {
         assert_eq!(parsed["error"], "failed");
         assert!(parsed["message"].as_str().unwrap().contains("boom"));
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 40 — multi-tool ToolCalls produces NextStep::ToolCalls batch
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn multi_tool_calls_returns_next_step_tool_calls_batch() {
+        let tool_a = Arc::new(FakeTool::new("fs.read"));
+        let tool_b = Arc::new(FakeTool::new("memory.read"));
+        let tool_a_id = tool_a.id();
+        let tool_b_id = tool_b.id();
+
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![
+                    ToolCallEnd {
+                        call_id: "toolu_a".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "/x"}),
+                    },
+                    ToolCallEnd {
+                        call_id: "toolu_b".to_string(),
+                        tool_name: "memory.read".to_string(),
+                        input: json!({"topic": "notes"}),
+                    },
+                ],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool_a, tool_b]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "do both"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+
+        match step {
+            NextStep::ToolCalls(batch) => {
+                assert_eq!(batch.len(), 2);
+                assert_eq!(batch[0].tool_id, tool_a_id);
+                assert_eq!(batch[0].input, json!({"path": "/x"}));
+                assert_eq!(batch[1].tool_id, tool_b_id);
+                assert_eq!(batch[1].input, json!({"topic": "notes"}));
+            }
+            other => panic!("expected ToolCalls batch, got {other:?}"),
+        }
+
+        // Verify history: assistant has 2 tool_calls.
+        let hist = planner.history();
+        match &hist[1] {
+            LlmMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 2);
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_tool_with_unknown_executes_known_and_errors_unknown() {
+        // 3 calls: 2 known, 1 unknown. Should return ToolCalls with the
+        // 2 known tools and append a synthetic error ToolResult for the unknown.
+        let tool_a = Arc::new(FakeTool::new("fs.read"));
+        let tool_b = Arc::new(FakeTool::new("memory.read"));
+        let tool_a_id = tool_a.id();
+        let tool_b_id = tool_b.id();
+
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![
+                    ToolCallEnd {
+                        call_id: "toolu_a".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({}),
+                    },
+                    ToolCallEnd {
+                        call_id: "toolu_bad".to_string(),
+                        tool_name: "does.not.exist".to_string(),
+                        input: json!({}),
+                    },
+                    ToolCallEnd {
+                        call_id: "toolu_b".to_string(),
+                        tool_name: "memory.read".to_string(),
+                        input: json!({}),
+                    },
+                ],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool_a, tool_b]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+
+        match step {
+            NextStep::ToolCalls(batch) => {
+                assert_eq!(batch.len(), 2);
+                assert_eq!(batch[0].tool_id, tool_a_id);
+                assert_eq!(batch[1].tool_id, tool_b_id);
+            }
+            other => panic!("expected ToolCalls batch, got {other:?}"),
+        }
+
+        // The unknown tool's error result is already in history.
+        let hist = planner.history();
+        let tool_result = &hist[2]; // index 0 = user, 1 = assistant, 2 = tool_result
+        match tool_result {
+            LlmMessage::ToolResult {
+                call_id, is_error, ..
+            } => {
+                assert_eq!(call_id, "toolu_bad");
+                assert!(is_error);
+            }
+            other => panic!("expected ToolResult for unknown tool, got {other:?}"),
+        }
+    }
 }

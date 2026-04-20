@@ -3339,4 +3339,66 @@ mod tests {
             other => panic!("expected TurnEnded, got {other:?}"),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 40 — parallel tool dispatch via NextStep::ToolCalls
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn tool_calls_batch_dispatches_all_tools_in_one_step() {
+        use crate::planner::ToolCallRequest;
+
+        let audit = RecordingAudit::new();
+
+        let tool_a = Arc::new(FakeTool::new_bare("fs.read", "fs.read"));
+        let tool_b = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_a_id = tool_a.id();
+        let tool_b_id = tool_b.id();
+
+        let agent_caps = CapabilitySet::from_scopes([
+            Scope::parse("fs.read").unwrap(),
+            Scope::parse("memory.read").unwrap(),
+        ]);
+
+        let plan = vec![
+            NextStep::ToolCalls(vec![
+                ToolCallRequest {
+                    tool_id: tool_a_id,
+                    input: json!({"path": "/a.txt"}),
+                },
+                ToolCallRequest {
+                    tool_id: tool_b_id,
+                    input: json!({"topic": "notes"}),
+                },
+            ]),
+            NextStep::FinalMessage("done".to_string()),
+        ];
+
+        let agent = make_agent(
+            agent_caps,
+            vec![tool_a, tool_b],
+            audit.clone(),
+            plan,
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "do both");
+        let outcome = agent.turn(msg, &channel).await;
+
+        match &outcome {
+            TurnOutcome::Completed { final_message, .. } => {
+                assert_eq!(final_message, "done");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // Audit trail: TurnStarted, ToolCall, ToolCall, TurnEnded
+        // Batch = 2 tool calls but 1 step in the loop.
+        let events = audit.snapshot();
+        let tool_call_count = events
+            .iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .count();
+        assert_eq!(tool_call_count, 2);
+    }
 }

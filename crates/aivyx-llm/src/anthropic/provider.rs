@@ -852,4 +852,150 @@ mod tests {
         }
         assert!(events >= 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 40 — consecutive ToolResult messages merge into one user message
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::useless_vec)]
+    fn consecutive_tool_results_merge_into_single_user_message() {
+        use crate::LlmMessage;
+
+        let messages = vec![
+            LlmMessage::User {
+                content: "read both files".to_string(),
+            },
+            LlmMessage::Assistant {
+                text: String::new(),
+                tool_calls: vec![
+                    crate::LlmToolCallRecord {
+                        call_id: "call_1".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "/a.txt"}),
+                    },
+                    crate::LlmToolCallRecord {
+                        call_id: "call_2".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "/b.txt"}),
+                    },
+                ],
+            },
+            LlmMessage::ToolResult {
+                call_id: "call_1".to_string(),
+                content: "contents of a".to_string(),
+                is_error: false,
+            },
+            LlmMessage::ToolResult {
+                call_id: "call_2".to_string(),
+                content: "contents of b".to_string(),
+                is_error: false,
+            },
+        ];
+
+        let serialized: Vec<Value> = messages
+            .iter()
+            .map(anthropic_message)
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // Before merging: 4 messages (user, assistant, user/tool_result, user/tool_result)
+        assert_eq!(serialized.len(), 4);
+
+        let merged = merge_consecutive_tool_results(serialized);
+
+        // After merging: 3 messages (user, assistant, user with 2 tool_results)
+        assert_eq!(merged.len(), 3);
+
+        // The merged user message has both tool_result blocks.
+        let tool_msg = &merged[2];
+        assert_eq!(tool_msg["role"], "user");
+        let content = tool_msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["tool_use_id"], "call_1");
+        assert_eq!(content[1]["tool_use_id"], "call_2");
+    }
+
+    #[test]
+    #[allow(clippy::useless_vec)]
+    fn non_consecutive_tool_results_stay_separate() {
+        use crate::LlmMessage;
+
+        // Two tool results with a text user message between them — should NOT merge.
+        let messages = vec![
+            LlmMessage::ToolResult {
+                call_id: "call_1".to_string(),
+                content: "ok".to_string(),
+                is_error: false,
+            },
+            LlmMessage::User {
+                content: "continue".to_string(),
+            },
+            LlmMessage::ToolResult {
+                call_id: "call_2".to_string(),
+                content: "ok".to_string(),
+                is_error: false,
+            },
+        ];
+
+        let serialized: Vec<Value> = messages
+            .iter()
+            .map(anthropic_message)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let merged = merge_consecutive_tool_results(serialized);
+
+        // All 3 should remain separate.
+        assert_eq!(merged.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 40 — multi-tool stream produces ToolCalls with multiple entries
+    // -----------------------------------------------------------------------
+
+    fn multi_tool_call_script() -> Vec<&'static str> {
+        vec![
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"fs.read\",\"input\":{}}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"/a.txt\\\"}\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"memory.read\",\"input\":{}}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"topic\\\":\\\"notes\\\"}\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":1}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ]
+    }
+
+    #[tokio::test]
+    async fn multi_tool_stream_produces_batch_tool_calls() {
+        let (provider, _t) = provider_with(FakeTransport::ok(multi_tool_call_script()));
+        let (messages, tools) = blank_request_args();
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            system: Some("sys"),
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 256,
+            temperature: None,
+        };
+        let token = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &token).await.unwrap();
+
+        // Drain mid-stream events.
+        while stream.next_event().await.unwrap().is_some() {}
+
+        match stream.finish().await.unwrap() {
+            LlmStepEnd::ToolCalls { calls, .. } => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].call_id, "toolu_01");
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert_eq!(calls[0].input, json!({"path": "/a.txt"}));
+                assert_eq!(calls[1].call_id, "toolu_02");
+                assert_eq!(calls[1].tool_name, "memory.read");
+                assert_eq!(calls[1].input, json!({"topic": "notes"}));
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
 }
