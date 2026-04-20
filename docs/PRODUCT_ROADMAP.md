@@ -443,6 +443,16 @@ management, gate resolution buttons, audit inspection surface.
 The `FrontendType` enum already has the extension point
 (`FrontendType::Web`).
 
+**Phase 39 (Chat Interface, 2026-04-20):** delivered Phase 1
+of the Web UI Channel. `FrontendType::Web` variant,
+`WebDaemonChannel` stub, `tokio-tungstenite` WebSocket bridge
+(TCP peek routing, no hyper in WS path), embedded HTML/CSS/JS
+frontend with streaming text, collapsible tool-call cards,
+approval-gate Approve/Deny buttons, cancel button.
+`--web-ui` CLI flag and `[daemon] web_ui` / `web_ui_port`
+TOML config. 801 tests (+13), zero clippy warnings. All three
+byte-level streaks intact (DESIGN.md 16, PRODUCT.md 2, lib.rs 3).
+
 ## Milestone — Scheduled Execution
 
 **Forward commitment:** [`PRODUCT.md` G5](../PRODUCT.md).

@@ -39,29 +39,45 @@ surface.
 
 The web server is a background task spawned inside `run_daemon`
 (same pattern as the webhook listener). Each WebSocket connection
-creates a `DaemonSession` that connects back to the daemon's Unix
-socket. The WebSocket wire format is identical JSON to the IPC
-protocol (`FrontendMessage`/`DaemonMessage` serde tags). The web
-server is purely a protocol translator — WebSocket frames to/from
-length-prefixed Unix socket frames.
+bridges directly to the daemon's Unix socket at the frame level —
+sending `FrontendMessage` frames and forwarding `DaemonEnvelope`
+frames in real time. The WebSocket wire format is identical JSON
+to the IPC protocol. The web server is purely a protocol
+translator — WebSocket frames to/from length-prefixed Unix socket
+frames.
 
 ```
 Browser ──WebSocket──► Web UI Server ──Unix Socket──► Daemon
-  JS sends                hyper +              DaemonSession
-  FrontendMessage JSON    tokio-tungstenite    bridges to IPC
+  JS sends                TCP peek +          encode_frame /
+  FrontendMessage JSON    tokio-tungstenite   decode_frame
 ```
 
 `ChannelPlatform::Local` is used (not a new variant) — the
 existing doc says "CLI, desktop app, local REST on 127.0.0.1."
 This preserves the production-core `aivyx-core/src/lib.rs` streak.
 
-## Streak predictions
+## Streak predictions → reality
 
-| Streak target | Predicted | Notes |
+| Streak target | Predicted | Actual | Notes |
+|---|---|---|---|
+| DESIGN.md | untouched (15) | untouched (16) | no contract changes |
+| PRODUCT.md | untouched (1) | untouched (2) | Web UI is a candidate, not commitment |
+| lib.rs | untouched (2) | untouched (3) | `ChannelPlatform::Local` already exists |
+
+## Ship record
+
+| Task | Commit | What shipped |
 |---|---|---|
-| DESIGN.md | untouched (15) | no contract changes |
-| PRODUCT.md | untouched (1) | Web UI is a candidate, not commitment |
-| lib.rs | untouched (2) | `ChannelPlatform::Local` already exists |
+| 1 | `756b3c8` | Open commit, PHASE_39.md scaffold, README + ROADMAP |
+| 2 | `4b30d4b` | `FrontendType::Web`, `WebDaemonChannel` stub, `ChannelFactory` wiring |
+| 3 | `b5bb9dd` | `tokio-tungstenite` dep, `run_web_ui_server()`, TCP peek routing |
+| 4 | `612d003` | Embedded HTML/CSS/JS frontend — streaming chat, tool cards, gates |
+| 5 | `4538624` | Config + CLI wiring (`--web-ui`, `[daemon] web_ui`), daemon spawn |
+| 6 | _this commit_ | Exit freeze, docs update |
+
+Test count: 788 → 801 (+13 new tests across 5 tasks).
+Clippy warnings: 0 throughout.
+New Cargo.lock entries: `tokio-tungstenite` (+ transitive deps).
 
 ## Tasks
 
@@ -84,9 +100,9 @@ tests.
 Add `tokio-tungstenite` to workspace deps. Implement
 `run_web_ui_server()` in `web_ui.rs`:
 - Binds `127.0.0.1:<port>` (default 7843)
-- `hyper` HTTP/1.1 (same pattern as `webhook_listener.rs`)
+- TCP peek routing (no hyper dependency in WS path)
 - Routes: `GET /` serves HTML, `GET /ws` upgrades to WebSocket
-- Each WS connection bridges to daemon via `DaemonSession`
+- Each WS connection bridges to daemon Unix socket at frame level
 - Shutdown via `CancellationToken`
 
 ### Task 4 — Embedded HTML/CSS/JS frontend
@@ -106,16 +122,16 @@ pattern as webhook listener).
 
 ## Exit criteria
 
-- [ ] `FrontendType::Web` variant added and tested.
-- [ ] `WebDaemonChannel` implements `ChannelContext` with correct
+- [x] `FrontendType::Web` variant added and tested.
+- [x] `WebDaemonChannel` implements `ChannelContext` with correct
       platform and trust tier.
-- [ ] Web UI server binds localhost, serves HTML, upgrades to WS.
-- [ ] WebSocket bridge forwards `FrontendMessage`/`DaemonMessage`
+- [x] Web UI server binds localhost, serves HTML, upgrades to WS.
+- [x] WebSocket bridge forwards `FrontendMessage`/`DaemonMessage`
       between browser and daemon.
-- [ ] Embedded HTML renders text, tool calls, and approval gates.
-- [ ] `--web-ui` flag and `[daemon] web_ui` config wired.
-- [ ] All tests pass (788 + new).
-- [ ] Zero clippy warnings.
-- [ ] DESIGN.md untouched (streak 15 from Phase 25).
-- [ ] PRODUCT.md untouched (streak 1 from Phase 38).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak 2 from Phase 38).
+- [x] Embedded HTML renders text, tool calls, and approval gates.
+- [x] `--web-ui` flag and `[daemon] web_ui` config wired.
+- [x] All tests pass (801, up from 788).
+- [x] Zero clippy warnings.
+- [x] DESIGN.md untouched (streak 16 from Phase 25).
+- [x] PRODUCT.md untouched (streak 2 from Phase 38).
+- [x] `aivyx-core/src/lib.rs` untouched (streak 3 from Phase 38).
