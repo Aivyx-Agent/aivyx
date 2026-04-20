@@ -488,8 +488,9 @@ untouched; lib.rs touched (pub-use re-export). Test delta
 
 ## Phase 38 — Foundation Audit
 
-**Active — see [PHASE_38.md](PHASE_38.md).** Post-37-phase
-health check: P10 amendment for `web.post` classification,
-clippy warning cleanup (13 warnings across 4 crates),
-PRODUCT.md delivery status refresh, deferral backlog review.
-No new features — corrections and classification only.
+**Frozen.** Post-37-phase health check: Amendment A5 (P10
+substrate tool count 7→8 for `web.post`), clippy warning
+cleanup (13→0), PRODUCT.md delivery status refresh
+(Phase 35→38), deferral backlog review (3→1, only protocol
+versioning remains). DESIGN.md and lib.rs untouched;
+PRODUCT.md touched. Test count unchanged at 788.

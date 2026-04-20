@@ -88,27 +88,67 @@ Update the Delivery Status section from Phase 35 to Phase 37:
 ### Task 5 — Deferral backlog review
 
 Reassess the 3 remaining deferrals:
-1. Rendering parity (terminal vs Telegram formatting)
-2. Integration test infra (E2E harness for full turns)
-3. Protocol versioning (MCP/SSE format negotiation)
 
-For each: is it still relevant? Should it be reframed? Can
-it be closed as "won't do" or "already addressed"?
+1. **Rendering parity (terminal vs Telegram formatting)**
+   — **Closed: resolved by design.** Both channels render
+   via `StreamEvent` polymorphism. The asymmetry (Local
+   streams `ToolOutput` chunks live; Telegram defers to
+   aggregated `ToolCallFinished` to avoid API cost) is
+   intentional Phase 12 design, not a bug. Documented in
+   `TelegramChannel::stream_event` as trust-tier asymmetry.
+
+2. **Integration test infra (E2E harness for full turns)**
+   — **Closed: implemented.** 10 E2E test files in
+   `crates/aivyx-channel/tests/` exercise the full turn
+   loop with real tool dispatch: `fs_tool_e2e.rs`,
+   `memory_tool_e2e.rs`, `daemon_roundtrip_e2e.rs`,
+   `multilevel_nesting_e2e.rs`, `role_envelope_e2e.rs`,
+   etc. The deferral was overtaken by incremental
+   implementation across Phases 17–33.
+
+3. **Protocol versioning (MCP/SSE format negotiation)**
+   — **Reframed: keep as sole remaining deferral.** Version
+   constants exist (`PROTOCOL_VERSION = "0.1"` in daemon
+   IPC, `"2024-11-05"` in MCP) but no negotiation logic
+   validates them. Acceptable for single-version deployment;
+   becomes relevant when MCP servers evolve or when the
+   daemon needs backward compatibility.
+
+**Net result:** Deferral backlog drops from 3 to 1.
 
 ### Task 6 — Exit freeze + docs
 
-Exit criteria checklist, prediction-vs-reality table,
-streak report.
+## Exit criteria
 
-## Streak predictions
+- [x] P10 amendment filed (Amendment A5, `web.post` added
+      to substrate tool list, seven → eight).
+- [x] Clippy warnings eliminated (13 → 0 across 4 crates).
+- [x] PRODUCT.md Delivery Status refreshed (Phase 35 → 38).
+- [x] Deferral backlog reviewed and reduced (3 → 1).
+- [x] All 788 tests pass (unchanged from Phase 37 exit).
+- [x] `DESIGN.md` untouched (streak at 14 from Phase 25).
+- [x] `PRODUCT.md` touched in Tasks 2 + 4 (P10 amendment +
+      delivery status refresh). Streak resets to 0.
+- [x] `aivyx-core/src/lib.rs` untouched (streak at 1 from
+      Phase 38).
 
-- **DESIGN.md** — Low risk. No architecture change expected.
-  Prediction: **untouched** (streak at 14 from Phase 38).
+## Streak predictions + reality
 
-- **PRODUCT.md** — **Will be touched** in Tasks 2 and 4
-  (P10 amendment + delivery status refresh).
-  Prediction: **touched** (streak resets to 0).
+| Streak target | Predicted | Reality | Notes |
+|---|---|---|---|
+| DESIGN.md | untouched (14) | untouched | continues |
+| PRODUCT.md | touched (0) | touched | P10 amendment + delivery status |
+| lib.rs | untouched (1) | untouched | continues |
 
-- **Production-core `aivyx-core/src/lib.rs`** — Very low risk.
-  Clippy warnings are in other crates. No tool changes.
-  Prediction: **untouched** (streak at 1 from Phase 38).
+## Ship records
+
+- **Task 1** `27e1c74` — open commit, PHASE_38.md scaffold,
+  README.md + ROADMAP.md updates.
+- **Task 2** `7798254` — Amendment A5: P10 substrate tool
+  count (7 → 8, web.post).
+- **Task 3** `90cbbeb` — clippy warning cleanup (13 → 0,
+  9 files across 4 crates).
+- **Task 4** `54a4c83` — PRODUCT.md Delivery Status refresh
+  (Phase 35 → Phase 38).
+- **Tasks 5+6** `(pending)` — deferral backlog review
+  (3 → 1) + exit freeze.
