@@ -146,11 +146,13 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
         return Err(LlmError::UnknownModel(String::new()));
     }
 
-    let messages: Vec<Value> = request
-        .messages
-        .iter()
-        .map(anthropic_message)
-        .collect::<Result<_, _>>()?;
+    let messages: Vec<Value> = merge_consecutive_tool_results(
+        request
+            .messages
+            .iter()
+            .map(anthropic_message)
+            .collect::<Result<_, _>>()?,
+    );
 
     let tools: Vec<Value> = request
         .tools
@@ -219,6 +221,46 @@ fn anthropic_message(msg: &LlmMessage) -> Result<Value, LlmError> {
             }],
         }),
     })
+}
+
+/// Merge consecutive `role: "user"` messages whose content blocks are all
+/// `tool_result` entries into a single user message. The Anthropic API
+/// requires all tool results answering a multi-tool assistant turn to
+/// appear in one `role: "user"` message. Phase 40.
+fn merge_consecutive_tool_results(messages: Vec<Value>) -> Vec<Value> {
+    let mut merged: Vec<Value> = Vec::with_capacity(messages.len());
+
+    for msg in messages {
+        let dominated = is_tool_result_user_msg(&msg)
+            && merged.last().is_some_and(is_tool_result_user_msg);
+
+        if dominated {
+            // Extend the previous message's content array.
+            let prev = merged.last_mut().unwrap();
+            let incoming = msg["content"].as_array().unwrap();
+            let target = prev["content"].as_array_mut().unwrap();
+            target.extend(incoming.iter().cloned());
+        } else {
+            merged.push(msg);
+        }
+    }
+
+    merged
+}
+
+/// Returns `true` if `msg` is a `role: "user"` message where every
+/// content block has `type: "tool_result"`.
+fn is_tool_result_user_msg(msg: &Value) -> bool {
+    msg.get("role").and_then(Value::as_str) == Some("user")
+        && msg
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks
+                        .iter()
+                        .all(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            })
 }
 
 // ---------------------------------------------------------------------------
