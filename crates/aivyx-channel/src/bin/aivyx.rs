@@ -1914,6 +1914,9 @@ async fn run_async(
                 aivyx_channel::daemon_ipc::FrontendType::Local => {
                     Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()))
                 }
+                aivyx_channel::daemon_ipc::FrontendType::Web => {
+                    Arc::new(aivyx_channel::web_ui::WebDaemonChannel::new())
+                }
             }
         });
 

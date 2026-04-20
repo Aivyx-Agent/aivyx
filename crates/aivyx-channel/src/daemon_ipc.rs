@@ -61,6 +61,7 @@ pub fn default_pid_path() -> Result<PathBuf, String> {
 pub enum FrontendType {
     Local,
     Telegram,
+    Web,
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +351,10 @@ mod tests {
             FrontendMessage::StartSession {
                 role: None,
                 frontend_type: Some(FrontendType::Telegram),
+            },
+            FrontendMessage::StartSession {
+                role: None,
+                frontend_type: Some(FrontendType::Web),
             },
             FrontendMessage::SubmitInput {
                 session_id: "abc-123".into(),

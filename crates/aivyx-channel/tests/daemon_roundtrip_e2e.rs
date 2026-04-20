@@ -1038,7 +1038,9 @@ async fn telegram_frontend_type_gets_telegram_channel() {
 
     let factory: ChannelFactory = Arc::new(|ft| match ft {
         FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
-        FrontendType::Local => Arc::new(LocalChannel::new("test-local", Vec::<u8>::new())),
+        FrontendType::Local | FrontendType::Web => {
+            Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
+        }
     });
 
     let shutdown = CancellationToken::new();
@@ -1097,7 +1099,9 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
 
     let factory: ChannelFactory = Arc::new(|ft| match ft {
         FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
-        FrontendType::Local => Arc::new(LocalChannel::new("test-local", Vec::<u8>::new())),
+        FrontendType::Local | FrontendType::Web => {
+            Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
+        }
     });
 
     let shutdown = CancellationToken::new();
