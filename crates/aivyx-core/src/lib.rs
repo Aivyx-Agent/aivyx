@@ -38,7 +38,9 @@ pub mod tools;
 
 pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig};
-pub use planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner, VecPlanner};
+pub use planner::{
+    NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner, VecPlanner,
+};
 pub use tools::{
     FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig, ShellExecTool,
     ShellExecToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,

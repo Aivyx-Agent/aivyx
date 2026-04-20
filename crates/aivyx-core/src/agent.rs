@@ -289,6 +289,36 @@ impl Agent for ConcreteAgent {
 
                     planner.observe_tool_outcome(tool_id, &outcome).await;
                 }
+                NextStep::ToolCalls(batch) => {
+                    // Phase 40: parallel dispatch placeholder — runs
+                    // sequentially until Task 6 wires up join_all.
+                    let mut escalated: Option<(String, ToolId)> = None;
+                    for req in batch {
+                        tool_calls_made += 1;
+                        let (observation, outcome) = self
+                            .run_tool_call(
+                                turn_id,
+                                req.tool_id,
+                                req.input,
+                                channel,
+                                &cancellation,
+                                &effective,
+                            )
+                            .await;
+                        observed.push(observation);
+                        if let ToolOutcome::RequiresEscalation { reason } = &outcome {
+                            escalated = Some((reason.clone(), req.tool_id));
+                        }
+                        planner.observe_tool_outcome(req.tool_id, &outcome).await;
+                    }
+                    if let Some((reason, pending_tool)) = escalated {
+                        loop_outcome = LoopOutcome::Escalated {
+                            reason,
+                            pending_tool,
+                        };
+                        break;
+                    }
+                }
             }
         }
 

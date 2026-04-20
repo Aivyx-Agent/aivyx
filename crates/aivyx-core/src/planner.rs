@@ -21,6 +21,11 @@ pub enum NextStep {
     /// either execute or deny.
     ToolCall { tool_id: ToolId, input: Value },
 
+    /// Execute multiple tool calls concurrently. The loop dispatches all
+    /// of them via `join_all`, observes every outcome, then asks the
+    /// planner for the next step. Phase 40.
+    ToolCalls(Vec<ToolCallRequest>),
+
     /// The planner has a final assistant message for the channel. Loop
     /// terminates with `TurnOutcome::Completed`.
     FinalMessage(String),
@@ -29,6 +34,15 @@ pub enum NextStep {
     /// empty final message. Used by planners that finish without a
     /// natural "final message" signal.
     Stop,
+}
+
+/// A single tool call within a [`NextStep::ToolCalls`] batch. Carries the
+/// resolved `ToolId` (not the string name — resolution happens in the
+/// planner before the batch reaches the turn loop).
+#[derive(Debug, Clone)]
+pub struct ToolCallRequest {
+    pub tool_id: ToolId,
+    pub input: Value,
 }
 
 /// What the planner observes after each executed step. Carries only the
