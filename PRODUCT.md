@@ -658,27 +658,32 @@ future implementation from compromising it for ergonomics.
 
 ---
 
-## Product Commitment 10 — Substrate-Only Core, Seven Tools Forever (LOCKED 2026-04-15)
+## Product Commitment 10 — Substrate-Only Core, Eight Tools Forever (LOCKED 2026-04-15, amended 2026-04-20)
 
 ### The Rule
 
-> **Aivyx core ships exactly seven first-party tools forever:
+> **Aivyx core ships exactly eight first-party tools forever:
 > `fs.read`, `fs.write`, `memory.read`, `memory.write`,
-> `memory.forget`, `shell.exec`, `web.fetch`. Adding to or
-> removing from this list requires a `PRODUCT.md` amendment.**
+> `memory.forget`, `shell.exec`, `web.fetch`, `web.post`.
+> Adding to or removing from this list requires a
+> `PRODUCT.md` amendment.**
+>
+> *See amendment
+> [`2026-04-20-substrate-tool-count.md`](docs/amendments/2026-04-20-substrate-tool-count.md)
+> — `web.post` added in Phase 37, amendment filed in Phase 38.*
 
 ### What this commits us to
 
 1. **The substrate is the operator-discoverable surface.** An
    operator who runs Aivyx for the first time finds these
-   seven tools available (subject to role allowlists and trust
+   eight tools available (subject to role allowlists and trust
    tiers). Every richer capability — git, browser, LSP, code
    search, email, calendar, anything domain-specific — is a
    third-party tool the operator installs explicitly.
 
 2. **The substrate is closed-set.** The contract pins the
-   exact list, not "approximately seven" or "the current set
-   plus reasonable additions." Pressure to add an eighth tool
+   exact list, not "approximately eight" or "the current set
+   plus reasonable additions." Pressure to add a ninth tool
    to core is met with "amendment to **P10** required" — and
    the amendment must explain why the new tool is substrate
    rather than third-party. The default answer is "third
@@ -688,14 +693,15 @@ future implementation from compromising it for ergonomics.
    needs to bootstrap."** A tool belongs in core if and only
    if Aivyx without it cannot perform basic operator-useful
    work. `fs.*` and `memory.*` and `shell.exec` and
-   `web.fetch` together cover "read, write, remember, execute,
-   fetch" — the minimal set for an agent that does anything
+   `web.fetch`, and `web.post` together cover "read, write,
+   remember, execute, fetch, post" — the minimal set for an
+   agent that does anything
    useful. Anything richer is curated by the operator's role
    declarations and tool installations, not by Aivyx core.
 
 ### Substrate vs. Infrastructure vs. Third-Party — the three-tier taxonomy
 
-The seven-tools-forever rule applies only to *substrate
+The eight-tools-forever rule applies only to *substrate
 tools* — the operator-facing primitives an operator chooses
 when configuring a role. Aivyx is permitted (and expected)
 to grow two adjacent tool categories that are **not**
@@ -721,8 +727,8 @@ substrate and therefore **not** counted against the cap:
 
 ### Why the cap is at exactly the current count
 
-Phase 12 happens to be the moment the substrate set has
-stabilized at seven tools that together cover the minimum
+Phase 37 is the moment the substrate set has stabilized at
+eight tools that together cover the minimum
 viable agent surface. Pinning the cap at the current count
 is a way of saying: **the foundation is done growing the
 substrate.** Future product phases focus on the daemon
@@ -733,7 +739,7 @@ tools into core.
 
 ### What this commitment deliberately does not say
 
-- **It does not say the existing seven tools are frozen in
+- **It does not say the existing eight tools are frozen in
   shape.** A future phase may extend `web.fetch` to support
   HEAD, may extend `shell.exec` to support a process-group
   kill API, may extend `memory.read` to support new query
@@ -854,7 +860,7 @@ tools into core.
    the SDK from **P11**.
 
 4. **First-party tools special-case in-process for speed.**
-   The seven substrate tools from **P10** ship in-process
+   The eight substrate tools from **P10** ship in-process
    in the daemon for latency reasons. They speak the same
    protocol third-party tools speak — the protocol is the
    contract — but they bypass the IPC hop. This means a
@@ -946,7 +952,7 @@ The pass ran in three stages:
   is explicitly out. The single most reframing cluster: the
   pinned answers expanded the product vision substantially
   beyond what the foundation today implements, taking the
-  product from "personal CLI agent with seven tools" to
+  product from "personal CLI agent with eight tools" to
   "personal autonomous agent platform with daemon, missions,
   reflection, sub-agents, third-party SDK."
 
