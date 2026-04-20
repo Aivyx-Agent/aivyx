@@ -494,3 +494,15 @@ cleanup (13→0), PRODUCT.md delivery status refresh
 (Phase 35→38), deferral backlog review (3→1, only protocol
 versioning remains). DESIGN.md and lib.rs untouched;
 PRODUCT.md touched. Test count unchanged at 788.
+
+## Phase 39 — Web UI Channel (Phase 1: Chat Interface)
+
+**Active — see [PHASE_39.md](PHASE_39.md).** First phase of the
+Web UI Channel milestone. Adds a localhost-only web chat interface
+(`127.0.0.1:7843`) that connects to the daemon over the existing
+IPC protocol via WebSocket. `FrontendType::Web` variant,
+`WebDaemonChannel` stub, `tokio-tungstenite` WebSocket bridge,
+embedded HTML/CSS/JS frontend with streaming text, tool-call
+cards, and approval-gate buttons. `--web-ui` CLI flag and
+`[daemon] web_ui` config. One new Cargo.lock entry
+(`tokio-tungstenite`).
