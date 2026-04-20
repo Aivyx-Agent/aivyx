@@ -64,7 +64,9 @@ against it: does this make the paragraph easier or harder to say?
 
 - Streaming protocol details — deferred to Phase 1 trait design
 - Single-shot vs. multi-step tool loop structure — covered by "tool-calling loop"
-- Concurrency model (sequential? parallel tools?) — deferred
+- Concurrency model (sequential? parallel tools?) — **resolved by
+  [Amendment A6](docs/amendments/2026-04-21-parallel-tool-execution.md)**:
+  batch dispatch via `join_all` when planner returns `NextStep::ToolCalls`
 - Multi-agent coordination — out of scope for v1
 - Federation / remote agents — out of scope for v1
 

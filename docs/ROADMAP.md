@@ -507,3 +507,15 @@ cards, and approval-gate buttons. `--web-ui` CLI flag and
 `[daemon] web_ui` config. 801 tests, zero clippy warnings.
 DESIGN.md untouched (streak 16), PRODUCT.md untouched (streak 2),
 lib.rs untouched (streak 3).
+
+## Phase 40 — Parallel Tool Execution
+
+**Active — see [PHASE_40.md](PHASE_40.md).** Resolves the D1
+deferred concurrency decision (line 67) via Amendment A6.
+Implements batch tool dispatch: `LlmStepEnd::ToolCalls` surfaces
+all tool-use blocks from providers, `NextStep::ToolCalls` carries
+batches through the planner, and the turn loop dispatches them
+concurrently via `futures::future::join_all`. Anthropic serializer
+groups consecutive `ToolResult` entries into one user message.
+Step accounting: batch=1 step, N tool_calls. Breaks DESIGN.md
+streak (A6) and lib.rs streak (core changes).
