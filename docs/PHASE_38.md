@@ -150,5 +150,5 @@ Reassess the 3 remaining deferrals:
   9 files across 4 crates).
 - **Task 4** `54a4c83` — PRODUCT.md Delivery Status refresh
   (Phase 35 → Phase 38).
-- **Tasks 5+6** `(pending)` — deferral backlog review
+- **Tasks 5+6** `b596207` — deferral backlog review
   (3 → 1) + exit freeze.
