@@ -485,3 +485,11 @@ response bodies (base64 fallback), non-GET verbs (new
 deferral backlog from 6 to 3. DESIGN.md and PRODUCT.md
 untouched; lib.rs touched (pub-use re-export). Test delta
 +17 (771→788).
+
+## Phase 38 — Foundation Audit
+
+**Active — see [PHASE_38.md](PHASE_38.md).** Post-37-phase
+health check: P10 amendment for `web.post` classification,
+clippy warning cleanup (13 warnings across 4 crates),
+PRODUCT.md delivery status refresh, deferral backlog review.
+No new features — corrections and classification only.
