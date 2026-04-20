@@ -60,7 +60,8 @@ use aivyx_core::{
 };
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
-    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
+    LlmUsage, ToolCallEnd,
 };
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 
@@ -299,10 +300,12 @@ async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
         // Step 1: LLM calls fs.read. The planner dispatches the call.
         ScriptedStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_read_01".to_string(),
-                tool_name: "fs.read".to_string(),
-                input: json!({ "path": target_path_str }),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_read_01".to_string(),
+                    tool_name: "fs.read".to_string(),
+                    input: json!({ "path": target_path_str }),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },
@@ -506,10 +509,12 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
     let provider = ScriptedProvider::new(vec![
         ScriptedStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_bad_01".to_string(),
-                tool_name: "fs.read".to_string(),
-                input: json!({ "path": "/etc/passwd" }),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_bad_01".to_string(),
+                    tool_name: "fs.read".to_string(),
+                    input: json!({ "path": "/etc/passwd" }),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },

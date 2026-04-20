@@ -194,26 +194,40 @@ pub enum LlmStepEnd {
     /// loop and the turn terminates with `TurnOutcome::Completed`.
     FinalMessage { text: String, usage: LlmUsage },
 
-    /// The LLM wants to invoke a tool. The planner looks up the tool
-    /// by `tool_name` in its registry, returns a `NextStep::ToolCall`
-    /// to the loop, and on the next step appends an
-    /// [`LlmMessage::ToolResult`] keyed by `call_id` to the history.
+    /// The LLM wants to invoke one or more tools. The planner looks up
+    /// each tool by name in its registry and returns a
+    /// `NextStep::ToolCalls` batch to the turn loop. On the next step
+    /// the planner appends an [`LlmMessage::ToolResult`] for each
+    /// `call_id` to the history.
     ///
     /// Tool-call argument deltas are reassembled by the provider before
     /// this variant is produced — the planner sees the complete `input`
-    /// once, not a stream of argument chunks. Providers that stream
-    /// `input_json_delta` events (Anthropic) buffer them internally.
-    ToolCall {
-        call_id: String,
-        tool_name: String,
-        input: Value,
+    /// once per tool, not a stream of argument chunks. Providers that
+    /// stream `input_json_delta` events (Anthropic) buffer them
+    /// internally.
+    ///
+    /// Phase 40: changed from singular `ToolCall` to plural
+    /// `ToolCalls` to support parallel tool execution.
+    ToolCalls {
+        calls: Vec<ToolCallEnd>,
         /// Any text the LLM emitted in the same step *before* the tool
-        /// call. Often empty, but models can narrate their reasoning
-        /// before calling a tool. The planner should still relay it to
+        /// calls. Often empty, but models can narrate their reasoning
+        /// before calling tools. The planner should still relay it to
         /// the channel so the user sees it.
         text_so_far: String,
         usage: LlmUsage,
     },
+}
+
+/// A single tool call end-state within an [`LlmStepEnd::ToolCalls`]
+/// batch. Phase 40.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallEnd {
+    /// Opaque ID assigned by the provider — needed to correlate an
+    /// [`LlmMessage::ToolResult`] back to the call that produced it.
+    pub call_id: String,
+    pub tool_name: String,
+    pub input: Value,
 }
 
 /// Token usage accounting for one step. All fields are optional in
@@ -546,10 +560,12 @@ mod tests {
         let input = json!({"query": "yesterday", "limit": 10});
         let provider = FakeProvider::new(
             vec![],
-            LlmStepEnd::ToolCall {
-                call_id: "toolu_01".to_string(),
-                tool_name: "memory.read".to_string(),
-                input: input.clone(),
+            LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_01".to_string(),
+                    tool_name: "memory.read".to_string(),
+                    input: input.clone(),
+                }],
                 text_so_far: String::new(),
                 usage: LlmUsage::default(),
             },
@@ -574,19 +590,18 @@ mod tests {
         assert!(stream.next_event().await.unwrap().is_none());
 
         match stream.finish().await.unwrap() {
-            LlmStepEnd::ToolCall {
-                call_id,
-                tool_name,
-                input: got_input,
+            LlmStepEnd::ToolCalls {
+                calls,
                 text_so_far,
                 ..
             } => {
-                assert_eq!(call_id, "toolu_01");
-                assert_eq!(tool_name, "memory.read");
-                assert_eq!(got_input, input);
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].call_id, "toolu_01");
+                assert_eq!(calls[0].tool_name, "memory.read");
+                assert_eq!(calls[0].input, input);
                 assert!(text_so_far.is_empty());
             }
-            other => panic!("expected ToolCall, got {other:?}"),
+            other => panic!("expected ToolCalls, got {other:?}"),
         }
     }
 

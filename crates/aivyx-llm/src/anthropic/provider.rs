@@ -230,7 +230,7 @@ struct StreamState {
     accumulated_text: String,
     usage: LlmUsage,
     pending_tool: Option<PendingTool>,
-    completed_tool: Option<CompletedTool>,
+    completed_tools: Vec<CompletedTool>,
     stop_reason: Option<String>,
 }
 
@@ -338,7 +338,7 @@ impl AnthropicStream {
                             LlmError::Parse(format!("tool input_json parse: {e}"))
                         })?
                     };
-                    self.state.completed_tool = Some(CompletedTool {
+                    self.state.completed_tools.push(CompletedTool {
                         call_id: pending.call_id,
                         tool_name: pending.tool_name,
                         input,
@@ -380,15 +380,21 @@ impl AnthropicStream {
         let usage = self.state.usage;
         let stop = self.state.stop_reason.as_deref().unwrap_or("");
         if stop == "tool_use" {
-            let tool = self.state.completed_tool.take().ok_or_else(|| {
-                LlmError::Parse(
-                    "stop_reason=tool_use but no completed tool_use block".to_string(),
-                )
-            })?;
-            Ok(LlmStepEnd::ToolCall {
-                call_id: tool.call_id,
-                tool_name: tool.tool_name,
-                input: tool.input,
+            if self.state.completed_tools.is_empty() {
+                return Err(LlmError::Parse(
+                    "stop_reason=tool_use but no completed tool_use blocks".to_string(),
+                ));
+            }
+            let calls = std::mem::take(&mut self.state.completed_tools)
+                .into_iter()
+                .map(|t| crate::ToolCallEnd {
+                    call_id: t.call_id,
+                    tool_name: t.tool_name,
+                    input: t.input,
+                })
+                .collect();
+            Ok(LlmStepEnd::ToolCalls {
+                calls,
                 text_so_far: std::mem::take(&mut self.state.accumulated_text),
                 usage,
             })
@@ -657,21 +663,20 @@ mod tests {
         let terminal = stream.finish().await.unwrap();
 
         match terminal {
-            LlmStepEnd::ToolCall {
-                call_id,
-                tool_name,
-                input,
+            LlmStepEnd::ToolCalls {
+                calls,
                 text_so_far,
                 usage,
             } => {
-                assert_eq!(call_id, "toolu_01");
-                assert_eq!(tool_name, "memory.read");
-                assert_eq!(input, json!({"query": "yesterday"}));
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].call_id, "toolu_01");
+                assert_eq!(calls[0].tool_name, "memory.read");
+                assert_eq!(calls[0].input, json!({"query": "yesterday"}));
                 assert_eq!(text_so_far, "");
                 assert_eq!(usage.input_tokens, 25);
                 assert_eq!(usage.output_tokens, 19);
             }
-            other => panic!("expected ToolCall, got {other:?}"),
+            other => panic!("expected ToolCalls, got {other:?}"),
         }
     }
 

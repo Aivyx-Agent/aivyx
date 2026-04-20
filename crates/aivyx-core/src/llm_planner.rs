@@ -329,47 +329,57 @@ impl TurnPlanner for LlmPlanner {
                     });
                     return NextStep::FinalMessage(text);
                 }
-                LlmStepEnd::ToolCall {
-                    call_id,
-                    tool_name,
-                    input,
+                LlmStepEnd::ToolCalls {
+                    calls,
                     text_so_far,
                     usage,
                 } => {
                     self.accumulate(usage);
-                    let record = LlmToolCallRecord {
-                        call_id: call_id.clone(),
-                        tool_name: tool_name.clone(),
-                        input: input.clone(),
-                    };
+
+                    // Build assistant message with all tool call records.
+                    let records: Vec<LlmToolCallRecord> = calls
+                        .iter()
+                        .map(|c| LlmToolCallRecord {
+                            call_id: c.call_id.clone(),
+                            tool_name: c.tool_name.clone(),
+                            input: c.input.clone(),
+                        })
+                        .collect();
                     self.history.push(LlmMessage::Assistant {
                         text: text_so_far,
-                        tool_calls: vec![record],
+                        tool_calls: records,
                     });
 
-                    match self.registry.find_by_name(&tool_name) {
+                    // For now, handle the first call only (single-tool
+                    // path). Full batch dispatch lands in Task 4.
+                    let first = calls.into_iter().next().expect(
+                        "LlmStepEnd::ToolCalls must have at least one call",
+                    );
+
+                    match self.registry.find_by_name(&first.tool_name) {
                         Some(tool_id) => {
-                            self.pending_call_id = Some(call_id);
-                            return NextStep::ToolCall { tool_id, input };
+                            self.pending_call_id = Some(first.call_id);
+                            return NextStep::ToolCall {
+                                tool_id,
+                                input: first.input,
+                            };
                         }
                         None => {
                             // Unknown tool — synthesize an error
                             // tool_result, append it to history, and
-                            // ask the provider for another step. This
-                            // gives the LLM a chance to recover
-                            // (pick a different tool or give up).
+                            // ask the provider for another step.
                             self.history.push(LlmMessage::ToolResult {
-                                call_id,
+                                call_id: first.call_id,
                                 content: json!({
                                     "error": "unknown_tool",
-                                    "message": format!("tool '{tool_name}' is not registered"),
+                                    "message": format!(
+                                        "tool '{}' is not registered",
+                                        first.tool_name
+                                    ),
                                 })
                                 .to_string(),
                                 is_error: true,
                             });
-                            // Fall through to the loop's next iteration
-                            // so we call the provider again with the
-                            // updated history.
                             continue;
                         }
                     }
@@ -474,6 +484,7 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivyx_llm::ToolCallEnd;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -703,10 +714,12 @@ mod tests {
 
         let script = vec![FakeStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_01".to_string(),
-                tool_name: "memory.read".to_string(),
-                input: json!({"query": "yesterday"}),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_01".to_string(),
+                    tool_name: "memory.read".to_string(),
+                    input: json!({"query": "yesterday"}),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },
@@ -754,10 +767,12 @@ mod tests {
 
         let script = vec![FakeStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_42".to_string(),
-                tool_name: "memory.read".to_string(),
-                input: json!({}),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_42".to_string(),
+                    tool_name: "memory.read".to_string(),
+                    input: json!({}),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },
@@ -806,10 +821,12 @@ mod tests {
 
         let script = vec![FakeStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_denied".to_string(),
-                tool_name: "shell.exec".to_string(),
-                input: json!({}),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_denied".to_string(),
+                    tool_name: "shell.exec".to_string(),
+                    input: json!({}),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },
@@ -863,10 +880,12 @@ mod tests {
         let script = vec![
             FakeStep {
                 events: vec![],
-                terminal: LlmStepEnd::ToolCall {
-                    call_id: "toolu_bad".to_string(),
-                    tool_name: "does.not.exist".to_string(),
-                    input: json!({}),
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_bad".to_string(),
+                        tool_name: "does.not.exist".to_string(),
+                        input: json!({}),
+                    }],
                     text_so_far: String::new(),
                     usage: zero_usage(),
                 },

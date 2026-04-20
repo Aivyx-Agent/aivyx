@@ -79,6 +79,7 @@ use aivyx_core::{
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    ToolCallEnd,
 };
 use aivyx_memory::{Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory};
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
@@ -254,10 +255,12 @@ fn memory_write_script(topic: &str, body: &str) -> Vec<ScriptedStep> {
     vec![
         ScriptedStep {
             events: vec![],
-            terminal: LlmStepEnd::ToolCall {
-                call_id: "toolu_write_01".to_string(),
-                tool_name: "memory.write".to_string(),
-                input: json!({ "topic": topic, "body": body }),
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_write_01".to_string(),
+                    tool_name: "memory.write".to_string(),
+                    input: json!({ "topic": topic, "body": body }),
+                }],
                 text_so_far: String::new(),
                 usage: zero_usage(),
             },

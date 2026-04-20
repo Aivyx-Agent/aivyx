@@ -1539,6 +1539,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
     use aivyx_crypto::MasterKey;
     use aivyx_llm::{
         LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+        ToolCallEnd,
     };
     use aivyx_memory::{Memory, MemoryReadTool, MemoryWriteTool, RedbMemory};
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
@@ -1609,10 +1610,12 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
         vec![
             ScriptedStep {
                 events: vec![],
-                terminal: LlmStepEnd::ToolCall {
-                    call_id: format!("toolu_{body}"),
-                    tool_name: "memory.write".to_string(),
-                    input: json!({ "topic": topic, "body": body }),
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: format!("toolu_{body}"),
+                        tool_name: "memory.write".to_string(),
+                        input: json!({ "topic": topic, "body": body }),
+                    }],
                     text_so_far: String::new(),
                     usage: LlmUsage::default(),
                 },
@@ -3027,7 +3030,7 @@ impl aivyx_llm::LlmProvider for SharedScriptedProvider {
         request: aivyx_llm::LlmRequest<'_>,
         _cancellation: &aivyx_core::CancellationToken,
     ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
-        use aivyx_llm::{LlmStepEnd, LlmStreamEvent, LlmUsage};
+        use aivyx_llm::{LlmStepEnd, LlmStreamEvent, LlmUsage, ToolCallEnd};
         use serde_json::json;
 
         // Step 1 of a turn: the planner has sent the user's message
@@ -3038,10 +3041,12 @@ impl aivyx_llm::LlmProvider for SharedScriptedProvider {
         // but we still return FinalMessage so an unexpected extra
         // planner iteration doesn't emit a cascading ToolCall chain.
         let step_end: LlmStepEnd = if request.messages.len() <= 1 {
-            LlmStepEnd::ToolCall {
-                call_id: "toolu_purple".to_string(),
-                tool_name: "memory.write".to_string(),
-                input: json!({ "topic": "notes", "body": "purple" }),
+            LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_purple".to_string(),
+                    tool_name: "memory.write".to_string(),
+                    input: json!({ "topic": "notes", "body": "purple" }),
+                }],
                 text_so_far: String::new(),
                 usage: LlmUsage::default(),
             }

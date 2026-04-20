@@ -74,7 +74,8 @@ use aivyx_core::{
 };
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
-    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
+    LlmUsage, ToolCallEnd,
 };
 use aivyx_memory::{Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory};
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
@@ -310,13 +311,15 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
         let provider = ScriptedProvider::new(vec![
             ScriptedStep {
                 events: vec![],
-                terminal: LlmStepEnd::ToolCall {
-                    call_id: "toolu_write_01".to_string(),
-                    tool_name: "memory.write".to_string(),
-                    input: json!({
-                        "topic": "notes",
-                        "body": "the user's favorite color is purple",
-                    }),
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_write_01".to_string(),
+                        tool_name: "memory.write".to_string(),
+                        input: json!({
+                            "topic": "notes",
+                            "body": "the user's favorite color is purple",
+                        }),
+                    }],
                     text_so_far: String::new(),
                     usage: zero_usage(),
                 },
@@ -537,10 +540,12 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
         let provider = ScriptedProvider::new(vec![
             ScriptedStep {
                 events: vec![],
-                terminal: LlmStepEnd::ToolCall {
-                    call_id: "toolu_read_01".to_string(),
-                    tool_name: "memory.read".to_string(),
-                    input: json!({ "topic": "notes" }),
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_read_01".to_string(),
+                        tool_name: "memory.read".to_string(),
+                        input: json!({ "topic": "notes" }),
+                    }],
                     text_so_far: String::new(),
                     usage: zero_usage(),
                 },
@@ -722,10 +727,12 @@ async fn memory_forget_persists_across_reopen() {
         let provider = ScriptedProvider::new(vec![
             ScriptedStep {
                 events: vec![],
-                terminal: LlmStepEnd::ToolCall {
-                    call_id: "toolu_forget_01".to_string(),
-                    tool_name: "memory.forget".to_string(),
-                    input: json!({ "topic": "notes" }),
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_forget_01".to_string(),
+                        tool_name: "memory.forget".to_string(),
+                        input: json!({ "topic": "notes" }),
+                    }],
                     text_so_far: String::new(),
                     usage: zero_usage(),
                 },

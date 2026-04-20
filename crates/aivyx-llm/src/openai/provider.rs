@@ -296,10 +296,15 @@ fn openai_message(msg: &LlmMessage) -> Result<Value, LlmError> {
 struct StreamState {
     accumulated_text: String,
     usage: LlmUsage,
-    tool_call_id: Option<String>,
-    tool_name: String,
-    tool_arguments: String,
+    pending_tools: Vec<PendingToolCall>,
     finish_reason: Option<String>,
+}
+
+#[derive(Default)]
+struct PendingToolCall {
+    call_id: String,
+    tool_name: String,
+    arguments: String,
 }
 
 struct OpenAiStream {
@@ -385,15 +390,21 @@ impl OpenAiStream {
 
         if let Some(tool_calls) = choice.delta.tool_calls {
             for tc in tool_calls {
+                let idx = tc.index.unwrap_or(0) as usize;
+                // Grow the Vec to accommodate this index.
+                while self.state.pending_tools.len() <= idx {
+                    self.state.pending_tools.push(PendingToolCall::default());
+                }
+                let pending = &mut self.state.pending_tools[idx];
                 if let Some(id) = tc.id {
-                    self.state.tool_call_id = Some(id);
+                    pending.call_id = id;
                 }
                 if let Some(func) = tc.function {
                     if let Some(name) = func.name {
-                        self.state.tool_name = name;
+                        pending.tool_name = name;
                     }
                     if let Some(args) = func.arguments {
-                        self.state.tool_arguments.push_str(&args);
+                        pending.arguments.push_str(&args);
                     }
                 }
             }
@@ -407,17 +418,23 @@ impl OpenAiStream {
         let reason = self.state.finish_reason.as_deref().unwrap_or("stop");
 
         if reason == "tool_calls" {
-            let input: Value = if self.state.tool_arguments.is_empty() {
-                json!({})
-            } else {
-                serde_json::from_str(&self.state.tool_arguments).map_err(|e| {
-                    LlmError::Parse(format!("tool arguments JSON: {e}"))
-                })?
-            };
-            Ok(LlmStepEnd::ToolCall {
-                call_id: self.state.tool_call_id.take().unwrap_or_default(),
-                tool_name: std::mem::take(&mut self.state.tool_name),
-                input,
+            let mut calls = Vec::with_capacity(self.state.pending_tools.len());
+            for pending in std::mem::take(&mut self.state.pending_tools) {
+                let input: Value = if pending.arguments.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str(&pending.arguments).map_err(|e| {
+                        LlmError::Parse(format!("tool arguments JSON: {e}"))
+                    })?
+                };
+                calls.push(crate::ToolCallEnd {
+                    call_id: pending.call_id,
+                    tool_name: pending.tool_name,
+                    input,
+                });
+            }
+            Ok(LlmStepEnd::ToolCalls {
+                calls,
                 text_so_far: std::mem::take(&mut self.state.accumulated_text),
                 usage,
             })
@@ -474,6 +491,7 @@ struct ChunkDelta {
 
 #[derive(Deserialize)]
 struct ChunkToolCall {
+    index: Option<u32>,
     id: Option<String>,
     function: Option<ChunkFunction>,
 }
@@ -615,20 +633,19 @@ data: [DONE]\n\n";
 
         let end = stream.finish().await.unwrap();
         match end {
-            LlmStepEnd::ToolCall {
-                call_id,
-                tool_name,
-                input,
+            LlmStepEnd::ToolCalls {
+                calls,
                 usage,
                 ..
             } => {
-                assert_eq!(call_id, "call_abc");
-                assert_eq!(tool_name, "get_weather");
-                assert_eq!(input["location"], "SF");
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].call_id, "call_abc");
+                assert_eq!(calls[0].tool_name, "get_weather");
+                assert_eq!(calls[0].input["location"], "SF");
                 assert_eq!(usage.input_tokens, 5);
                 assert_eq!(usage.output_tokens, 8);
             }
-            _ => panic!("expected ToolCall"),
+            _ => panic!("expected ToolCalls"),
         }
     }
 
