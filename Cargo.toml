@@ -72,3 +72,6 @@ tokio-tungstenite = "0.26"
 
 # File-system change notifications for file-watch triggers (Phase 27)
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+# Unix process-group signaling for shell.exec (Phase 42)
+libc = "0.2"

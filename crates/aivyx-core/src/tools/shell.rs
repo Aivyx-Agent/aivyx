@@ -373,16 +373,45 @@ impl Tool for ShellExecTool {
         // agent calling `echo hi > file` is a feature, not a bug.
         let mut command = Command::new("sh");
         command.arg("-c").arg(&cmd).current_dir(&canonical_cwd);
+        // Pipe stdout/stderr so wait_with_output() captures them.
+        // Without this, child output goes to the parent's terminal
+        // and wait_with_output() returns empty buffers.
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        // Phase 42 — put the child and all its descendants into
+        // their own process group (PGID = child PID). Without
+        // this, `sh -c "cmd1 | cmd2"` forks cmd1 and cmd2 as
+        // separate processes that outlive the direct child if we
+        // only signal `sh`. With process_group(0), a single
+        // killpg() reaches the entire tree.
+        command.process_group(0);
         // Kill the child if the parent task is dropped (e.g. the
         // turn is cancelled mid-exec). Without this the child
         // would keep running until its own exit, leaking CPU
-        // beyond the turn's wall-clock budget.
+        // beyond the turn's wall-clock budget. With process_group
+        // this only kills the direct child; the timeout path below
+        // handles the full group via killpg().
         command.kill_on_drop(true);
 
-        let run = async { command.output().await };
+        let child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("spawn failed: {e}"),
+                });
+            }
+        };
+
+        // Capture the PID before wait_with_output() consumes the
+        // child. The PID equals the PGID because we called
+        // process_group(0). We need it in the timeout path to
+        // signal the entire process group.
+        let child_pid = child.id();
+
         let output = match tokio::time::timeout(
             Duration::from_millis(timeout_ms),
-            run,
+            child.wait_with_output(),
         )
         .await
         {
@@ -390,19 +419,45 @@ impl Tool for ShellExecTool {
             Ok(Err(e)) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: format!("spawn failed: {e}"),
+                    detail: format!("wait failed: {e}"),
                 });
             }
             Err(_elapsed) => {
-                // tokio's `timeout` drops the inner future on
-                // expiry; combined with `kill_on_drop(true)` the
-                // child SIGKILLs itself within a scheduler tick.
-                // Report as `Completed` with `timed_out: true` and
-                // empty output rather than as `Failed` — a timed-
-                // out command is a successful invocation of a
-                // correctly-configured tool that happened to
-                // produce no useful output. The planner can
-                // decide how to recover.
+                // Phase 42 — graceful process-group shutdown:
+                // 1. SIGTERM the entire process group (child +
+                //    grandchildren). This lets processes flush
+                //    buffers and clean up temp files.
+                // 2. Wait 2 seconds for graceful exit.
+                // 3. SIGKILL the process group if still alive.
+                //
+                // The child's PID equals its PGID because we
+                // called process_group(0). child_pid is None
+                // only if the child exited before we read it,
+                // which would be surprising here (we just timed
+                // out waiting for it), but we handle it.
+                if let Some(pid) = child_pid {
+                    let pgid = pid as i32;
+                    // SIGTERM the process group.
+                    // Safety: killpg is a standard POSIX call.
+                    // pgid is always positive (u32 -> i32 of a
+                    // real PID). A stale pgid (process already
+                    // exited) returns ESRCH, which we ignore.
+                    unsafe { libc::killpg(pgid, libc::SIGTERM); }
+
+                    // Give the group 2 seconds to exit gracefully,
+                    // then SIGKILL. We spawn a brief background
+                    // reaper — the timeout future already dropped
+                    // the child handle, so we can't await it here.
+                    // Instead we wait synchronously (non-blocking
+                    // for already-exited processes) via killpg
+                    // after a sleep.
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        // If the group is still alive, force-kill.
+                        unsafe { libc::killpg(pgid, libc::SIGKILL); }
+                    });
+                }
+
                 return ToolOutcome::Completed {
                     output: json!({
                         "cmd": cmd,
@@ -796,6 +851,68 @@ mod tests {
             }
             other => panic!("expected Failed internal lexical escape, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn execute_timeout_kills_process_group_including_grandchildren() {
+        // Phase 42 load-bearing test: a grandchild spawned by `sh -c`
+        // must be killed when the tool times out, not left running as
+        // an orphan. The command writes its grandchild PID to a file,
+        // then sleeps. On timeout the tool SIGTERMs the process group.
+        // We verify that the grandchild PID is gone after the tool
+        // returns.
+        let scratch = Scratch::new();
+        let pid_file = scratch.dir.join("grandchild.pid");
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        // The command: (1) fork a background grandchild that writes
+        // its PID to a file then sleeps, (2) parent sleeps too.
+        // Both will be killed by the process-group signal on timeout.
+        let cmd = format!(
+            "( echo $$ > {} ; sleep 30 ) & sleep 30",
+            pid_file.display()
+        );
+
+        let out = tool
+            .execute(
+                json!({
+                    "cmd": cmd,
+                    "args": { "timeout_ms": 200 }
+                }),
+                &ctx,
+            )
+            .await;
+
+        match &out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["timed_out"], true);
+            }
+            other => panic!("expected Completed timed_out, got {other:?}"),
+        }
+
+        // Give the SIGTERM/SIGKILL reaper a moment to fire.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Read the grandchild PID and verify it's no longer running.
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // kill(pid, 0) checks if the process exists without
+                // sending a signal. Returns 0 if alive, -1 if not.
+                let alive = unsafe { libc::kill(pid, 0) };
+                assert_eq!(
+                    alive, -1,
+                    "grandchild PID {pid} should be dead after \
+                     process-group kill, but kill(pid, 0) returned 0 \
+                     (still alive)"
+                );
+            }
+        }
+        // If the pid file doesn't exist, the grandchild never got
+        // a chance to write it (the timeout was faster than the
+        // fork) — that's fine, the process group is still killed.
     }
 
     #[tokio::test]

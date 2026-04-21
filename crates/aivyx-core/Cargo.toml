@@ -35,5 +35,10 @@ futures-util = { workspace = true }
 # to a direct dep. Zero new Cargo.lock entries.
 base64 = { workspace = true }
 
+# Phase 42 — process-group signaling for shell.exec. Already
+# transitive via cc/aws-lc-sys; promoting to direct dep so
+# shell.rs can call killpg(). Zero new Cargo.lock entries.
+libc = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
