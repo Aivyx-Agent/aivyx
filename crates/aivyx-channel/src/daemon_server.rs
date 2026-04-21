@@ -33,31 +33,60 @@ use crate::mission;
 pub type ChannelFactory =
     Arc<dyn Fn(FrontendType) -> Arc<dyn ChannelContext + Send + Sync> + Send + Sync>;
 
+/// Configuration for the daemon server.
+///
+/// Bundles the parameters that `run_daemon` needs into a single struct.
+/// Phase 41 Task 2 extracted these from the 10-parameter function
+/// signature that had accreted across Phases 21–39.
+pub struct DaemonConfig {
+    /// Path to the Unix domain socket the daemon listens on.
+    pub socket_path: PathBuf,
+    /// The shared agent instance that serves all connections.
+    pub agent: Arc<dyn Agent>,
+    /// Factory that constructs per-connection `ChannelContext` impls.
+    pub channel_factory: ChannelFactory,
+    /// Token for triggering graceful shutdown from outside.
+    pub shutdown: CancellationToken,
+    /// Optional encrypted storage domain for mission state.
+    pub mission_store: Option<DomainHandle>,
+    /// Optional encrypted storage domain for cron schedules.
+    pub schedule_store: Option<DomainHandle>,
+    /// Optional encrypted storage domain for webhook triggers.
+    pub webhook_store: Option<DomainHandle>,
+    /// Optional encrypted storage domain for file-watch triggers.
+    pub file_watch_store: Option<DomainHandle>,
+    /// Port for the localhost-only webhook HTTP listener.
+    pub webhook_port: Option<u16>,
+    /// Port for the localhost-only web UI server.
+    pub web_ui_port: Option<u16>,
+}
+
 /// Run the daemon server.
 ///
-/// Binds the Unix socket at `socket_path`, accepts connections in a
-/// loop, and spawns a handler task per connection. Each handler reads
-/// `FrontendMessage` frames and dispatches turns through the shared
-/// `agent`. The `channel_factory` constructs a per-connection
+/// Binds the Unix socket at `config.socket_path`, accepts connections
+/// in a loop, and spawns a handler task per connection. Each handler
+/// reads `FrontendMessage` frames and dispatches turns through the
+/// shared `agent`. The `channel_factory` constructs a per-connection
 /// `ChannelContext` based on the frontend type sent in `StartSession`.
 ///
 /// The `shutdown` token allows external code (signal handlers, tests)
 /// to trigger a graceful shutdown. When cancelled, the daemon stops
 /// accepting new connections; in-flight handler tasks complete their
 /// current turn and exit.
-#[allow(clippy::too_many_arguments)] // Stores accreted across Phases 21–39; bundling deferred to SDK phase
-pub async fn run_daemon(
-    socket_path: &Path,
-    agent: Arc<dyn Agent>,
-    channel_factory: ChannelFactory,
-    shutdown: CancellationToken,
-    mission_store: Option<DomainHandle>,
-    schedule_store: Option<DomainHandle>,
-    webhook_store: Option<DomainHandle>,
-    file_watch_store: Option<DomainHandle>,
-    webhook_port: Option<u16>,
-    web_ui_port: Option<u16>,
-) -> Result<(), String> {
+pub async fn run_daemon(config: DaemonConfig) -> Result<(), String> {
+    let DaemonConfig {
+        socket_path,
+        agent,
+        channel_factory,
+        shutdown,
+        mission_store,
+        schedule_store,
+        webhook_store,
+        file_watch_store,
+        webhook_port,
+        web_ui_port,
+    } = config;
+    let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
 
     if let Some(parent) = socket_path.parent() {
@@ -529,7 +558,18 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), String> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(socket_path, agent, factory, shutdown, None, None, None, None, None, None).await
+    run_daemon(DaemonConfig {
+        socket_path: socket_path.to_path_buf(),
+        agent,
+        channel_factory: factory,
+        shutdown,
+        mission_store: None,
+        schedule_store: None,
+        webhook_store: None,
+        file_watch_store: None,
+        webhook_port: None,
+        web_ui_port: None,
+    }).await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {

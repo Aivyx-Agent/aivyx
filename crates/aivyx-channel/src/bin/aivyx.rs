@@ -109,7 +109,7 @@ use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::Scope;
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::daemon_server::{run_daemon, ChannelFactory};
+use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
 use aivyx_channel::daemon_client::DaemonSession;
 use aivyx_channel::{
     assemble_role_envelope, render_role_envelope, run_daemon_session_connected, run_session,
@@ -2045,18 +2045,18 @@ async fn run_async(
             }
         }
 
-        let result = run_daemon(
-            &socket_path,
+        let result = run_daemon(DaemonConfig {
+            socket_path,
             agent,
             channel_factory,
             shutdown,
-            Some(storage.domain(KeyDomain::Missions)),
-            Some(schedule_domain),
-            Some(webhook_domain),
-            Some(file_watch_domain),
-            config_webhook_port,
-            cli_web_ui_port.or(config_web_ui_port),
-        )
+            mission_store: Some(storage.domain(KeyDomain::Missions)),
+            schedule_store: Some(schedule_domain),
+            webhook_store: Some(webhook_domain),
+            file_watch_store: Some(file_watch_domain),
+            webhook_port: config_webhook_port,
+            web_ui_port: cli_web_ui_port.or(config_web_ui_port),
+        })
             .await;
 
         for bridge in mcp_bridges {

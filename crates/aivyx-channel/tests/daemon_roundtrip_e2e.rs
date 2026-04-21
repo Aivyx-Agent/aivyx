@@ -25,7 +25,7 @@ use aivyx_channel::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
 };
 use aivyx_channel::daemon_ipc::FrontendType;
-use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory};
+use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory, DaemonConfig};
 use aivyx_channel::LocalChannel;
 use aivyx_core::{
     Agent, AgentId, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome,
@@ -785,7 +785,18 @@ async fn two_concurrent_connections() {
     let daemon_factory = Arc::clone(&factory);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, daemon_factory, daemon_shutdown, None, None, None, None, None, None)
+        run_daemon(DaemonConfig {
+                socket_path: daemon_socket,
+                agent: daemon_agent,
+                channel_factory: daemon_factory,
+                shutdown: daemon_shutdown,
+                mission_store: None,
+                schedule_store: None,
+                webhook_store: None,
+                file_watch_store: None,
+                webhook_port: None,
+                web_ui_port: None,
+            })
             .await
             .expect("daemon must complete successfully");
     });
@@ -1048,7 +1059,18 @@ async fn telegram_frontend_type_gets_telegram_channel() {
     let daemon_agent = Arc::clone(&agent);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None, None)
+        run_daemon(DaemonConfig {
+                socket_path: daemon_socket,
+                agent: daemon_agent,
+                channel_factory: factory,
+                shutdown: daemon_shutdown,
+                mission_store: None,
+                schedule_store: None,
+                webhook_store: None,
+                file_watch_store: None,
+                webhook_port: None,
+                web_ui_port: None,
+            })
             .await
             .expect("daemon must complete successfully");
     });
@@ -1109,7 +1131,18 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
     let daemon_agent = Arc::clone(&agent);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(&daemon_socket, daemon_agent, factory, daemon_shutdown, None, None, None, None, None, None)
+        run_daemon(DaemonConfig {
+                socket_path: daemon_socket,
+                agent: daemon_agent,
+                channel_factory: factory,
+                shutdown: daemon_shutdown,
+                mission_store: None,
+                schedule_store: None,
+                webhook_store: None,
+                file_watch_store: None,
+                webhook_port: None,
+                web_ui_port: None,
+            })
             .await
             .expect("daemon must complete successfully");
     });
@@ -1494,18 +1527,18 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
     });
 
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(
-            &daemon_socket,
-            daemon_agent,
-            factory,
-            daemon_shutdown,
-            Some(mission_handle),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        run_daemon(DaemonConfig {
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: Some(mission_handle),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+        })
         .await
         .expect("daemon must complete successfully");
     });
@@ -1742,18 +1775,18 @@ async fn escalation_gate_wiring_reject_fails_mission() {
     });
 
     let daemon_handle = tokio::spawn(async move {
-        run_daemon(
-            &daemon_socket,
-            daemon_agent,
-            factory,
-            daemon_shutdown,
-            Some(mission_handle),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        run_daemon(DaemonConfig {
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: Some(mission_handle),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+        })
         .await
         .expect("daemon must complete");
     });
