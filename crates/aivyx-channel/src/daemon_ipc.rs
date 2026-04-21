@@ -92,6 +92,12 @@ pub enum FrontendMessage {
     },
     Disconnect,
     Shutdown,
+    /// Protocol version negotiation (Phase 41 Task 5).
+    /// Sent by the frontend after receiving `DaemonReady`.
+    /// For v0.1, the daemon always accepts.
+    ProtocolNegotiation {
+        version: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +133,15 @@ pub enum DaemonMessage {
         mission_id: String,
         gate_id: String,
         approved: bool,
+    },
+    /// Protocol version accepted (Phase 41 Task 5).
+    ProtocolAccepted {
+        version: String,
+    },
+    /// Protocol version rejected — client should disconnect or retry
+    /// with a supported version (Phase 41 Task 5).
+    ProtocolRejected {
+        supported: Vec<String>,
     },
 }
 
@@ -338,6 +353,13 @@ pub enum DaemonEnvelope {
         lost_turns: Vec<String>,
         stale_since: u64,
     },
+    // Protocol negotiation variants (Phase 41 Task 5)
+    ProtocolAccepted {
+        version: String,
+    },
+    ProtocolRejected {
+        supported: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +408,9 @@ mod tests {
             },
             FrontendMessage::Disconnect,
             FrontendMessage::Shutdown,
+            FrontendMessage::ProtocolNegotiation {
+                version: "0.1".into(),
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -437,6 +462,12 @@ mod tests {
                 mission_id: "m-001".into(),
                 gate_id: "g-001".into(),
                 approved: true,
+            },
+            DaemonMessage::ProtocolAccepted {
+                version: "0.1".into(),
+            },
+            DaemonMessage::ProtocolRejected {
+                supported: vec!["0.1".into(), "0.2".into()],
             },
         ];
         for msg in cases {
@@ -531,6 +562,29 @@ mod tests {
         let frame = encode_frame(&turn).expect("encode turn");
         let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
         assert!(matches!(envelope, DaemonEnvelope::TurnComplete { .. }));
+
+        let accepted = DaemonMessage::ProtocolAccepted {
+            version: "0.1".into(),
+        };
+        let frame = encode_frame(&accepted).expect("encode accepted");
+        let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        assert!(matches!(envelope, DaemonEnvelope::ProtocolAccepted { .. }));
+
+        let rejected = DaemonMessage::ProtocolRejected {
+            supported: vec!["0.1".into()],
+        };
+        let frame = encode_frame(&rejected).expect("encode rejected");
+        let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        assert!(matches!(envelope, DaemonEnvelope::ProtocolRejected { .. }));
+
+        let recovery = DaemonLifecycleEvent::RecoveryNotice {
+            lost_sessions: vec![],
+            lost_turns: vec![],
+            stale_since: 0,
+        };
+        let frame = encode_frame(&recovery).expect("encode recovery");
+        let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        assert!(matches!(envelope, DaemonEnvelope::RecoveryNotice { .. }));
     }
 
     // ---- StreamEventPayload covers all variants ----

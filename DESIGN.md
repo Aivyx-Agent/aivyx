@@ -116,6 +116,14 @@ Four scenarios the paragraph should make easy to reason about:
 > [`docs/amendments/2026-04-17-mission-state-machine.md`](docs/amendments/2026-04-17-mission-state-machine.md)
 > for the fifth termination condition (`TurnOutcome::Escalated` as
 > mission gate suspension).
+>
+> **Amendment (2026-04-21):** The IPC protocol now supports optional
+> version negotiation via `ProtocolNegotiation`/`ProtocolAccepted`/
+> `ProtocolRejected` messages. For v0.1, the daemon always accepts.
+> The daemon also writes a `daemon.state` file for crash recovery
+> and emits `RecoveryNotice` lifecycle events on restart after
+> unclean shutdown. See amendment
+> [`docs/amendments/2026-04-21-protocol-negotiation.md`](docs/amendments/2026-04-21-protocol-negotiation.md).
 
 ---
 

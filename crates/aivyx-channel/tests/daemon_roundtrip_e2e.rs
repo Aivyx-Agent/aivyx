@@ -1894,3 +1894,87 @@ async fn escalation_gate_wiring_reject_fails_mission() {
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }
+
+// ---------------------------------------------------------------------------
+// Protocol negotiation (Phase 41 Task 5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn protocol_negotiation_accepted() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path)
+        .await
+        .expect("connect to daemon");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+
+    // Read DaemonReady.
+    read_more(&mut reader, &mut buf).await;
+    let (envelope, consumed): (DaemonEnvelope, _) =
+        decode_frame(&buf).expect("decode DaemonReady");
+    buf.drain(..consumed);
+    assert!(matches!(envelope, DaemonEnvelope::DaemonReady { .. }));
+
+    // Send ProtocolNegotiation.
+    let negotiate = FrontendMessage::ProtocolNegotiation {
+        version: "0.1".into(),
+    };
+    let frame = encode_frame(&negotiate).unwrap();
+    writer.write_all(&frame).await.unwrap();
+
+    // Read ProtocolAccepted.
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::ProtocolAccepted { version }, consumed)) => {
+                buf.drain(..consumed);
+                assert_eq!(version, "0.1");
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected ProtocolAccepted, got {other:?}"),
+        }
+    }
+
+    // After negotiation, normal session flow works.
+    let frame =
+        encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
+    writer.write_all(&frame).await.unwrap();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SessionStarted { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected SessionStarted, got {other:?}"),
+        }
+    }
+
+    let disconnect = FrontendMessage::Disconnect;
+    let _ = writer.write_all(&encode_frame(&disconnect).unwrap()).await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}

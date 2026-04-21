@@ -585,6 +585,22 @@ async fn handle_connection(
                             shutdown.cancel();
                             return Ok(());
                         }
+                        FrontendMessage::ProtocolNegotiation { version } => {
+                            // v0.1: always accept. Future versions can
+                            // check compatibility and respond with
+                            // ProtocolRejected if needed.
+                            let resp = if version == PROTOCOL_VERSION {
+                                DaemonMessage::ProtocolAccepted { version }
+                            } else {
+                                // For v0.1, accept any version the client
+                                // sends — forward compatibility. When v0.2
+                                // ships, this branch can reject unknown
+                                // versions.
+                                DaemonMessage::ProtocolAccepted { version }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                     }
                 }
                 Err(FrameError::IncompleteBuf) => break,
