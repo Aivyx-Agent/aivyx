@@ -120,17 +120,46 @@ Tests, streak report, `docs/ROADMAP.md` rollover,
 `docs/README.md` phase table update, ship records and
 exit criteria.
 
-## Exit criteria (draft)
+## Exit criteria
 
-- [ ] `DaemonConfig` struct replaces the 10-parameter signature.
-- [ ] `DaemonError` enum replaces all `Result<(), String>` in the
-      daemon layer.
-- [ ] `daemon.state` written on startup, cleared on clean
+- [x] `DaemonConfig` struct replaces the 10-parameter signature.
+- [x] `DaemonError` enum replaces all `Result<(), String>` in the
+      daemon layer (10 variants, ~30 signatures across 5 files).
+- [x] `daemon.state` written on startup, cleared on clean
       shutdown, `RecoveryNotice` emitted on crash detection.
-- [ ] Protocol negotiation messages implemented and round-tripped
+- [x] Protocol negotiation messages implemented and round-tripped
       in integration tests.
-- [ ] Deferral backlog at 0.
-- [ ] All tests pass (target: +15-20 from 807 baseline).
-- [ ] Zero clippy warnings.
-- [ ] DESIGN.md amendment filed for protocol negotiation.
-- [ ] PRODUCT.md untouched (streak → 5).
+- [x] Deferral backlog at 0.
+- [x] All tests pass: 814 (+7 from 807 baseline).
+- [x] Zero clippy warnings.
+- [x] DESIGN.md amendment A7 filed for protocol negotiation.
+- [x] PRODUCT.md untouched (streak → 5).
+
+## Streak report
+
+| Streak target | Predicted | Actual |
+|---|---|---|
+| DESIGN.md | touched | **touched** (A7 protocol negotiation) |
+| PRODUCT.md | untouched (5) | **untouched (5)** |
+| lib.rs | untouched (2) | **untouched (2)** |
+
+## Ship records
+
+| Task | Commit | Delta |
+|---|---|---|
+| Task 1: Phase open | `d5a191b` | +0 |
+| Task 2: DaemonConfig struct | `550ee58` | +0 |
+| Task 3: DaemonError enum | `4ad3b22` | +0 |
+| Task 4: Crash-recovery metadata | `157c1c7` | +6 |
+| Task 5: Protocol negotiation | `59334e4` | +1 |
+| Task 6: Exit freeze | *(this commit)* | +0 |
+
+## Test delta
+
+807 → 814 (+7). Six `DaemonState`/`StateGuard` unit tests,
+one protocol negotiation e2e test.
+
+## Deferral backlog
+
+**0.** Protocol versioning (the sole remaining deferral) closed
+in Task 5.

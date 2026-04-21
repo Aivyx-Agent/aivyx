@@ -519,3 +519,51 @@ concurrently via `futures::future::join_all`. Anthropic serializer
 groups consecutive `ToolResult` entries into one user message.
 Step accounting: batch=1 step, N tool_calls. Breaks DESIGN.md
 streak (A6) and lib.rs streak (core changes).
+
+## Phase 41 — Daemon Hardening & Error Typing
+
+**Shipped — see [PHASE_41.md](PHASE_41.md).** Hardening phase:
+`DaemonConfig` parameter-object refactor (10 params → 1 struct),
+`DaemonError` thiserror enum replacing ~30 `Result<_, String>`
+signatures across 5 files, crash-recovery metadata (`daemon.state`
++ `StateGuard` RAII + `RecoveryNotice` lifecycle event), and
+protocol version negotiation (`ProtocolNegotiation`/`Accepted`/
+`Rejected` messages, v0.1 always-accept). DESIGN.md amendment A7
+filed for protocol negotiation. Closes sole remaining deferral
+(backlog 1 → 0). 814 tests, zero clippy warnings. DESIGN.md
+touched (A7), PRODUCT.md untouched (streak 5), lib.rs untouched
+(streak 2).
+
+## Phase 42 — Shell Hardening & Memory GC
+
+Process-group shell execution (prevent zombie grandchildren),
+shell environment variable support, per-topic memory cap
+enforcement, TTL-based memory expiry, `memory.gc` infrastructure
+tool. Strengthens G2 (code interaction), G3 (memory reflection),
+G6 (bounded storage).
+
+## Phase 43 — Context Window Management
+
+Token counting, history pruning, pruning-to-memory bridge,
+`TokenUsage` reporting extension. Prevents context-window
+exhaustion during long multi-step turns. Strengthens G3
+(memory reflection) and G5 (autonomous execution).
+
+## Phase 44 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
+
+IPC query messages, mission dashboard, audit viewer, session
+history. Makes the Web UI a full operator inspection surface.
+Delivers P2 (mission legibility) and P4 (daemon inspection).
+
+## Phase 45 — Channel Adapter SDK & Documentation (P5 + P11)
+
+Channel adapter contract documentation, adapter conformance
+test suite, example Python adapter. Delivers P5 (channel SDK)
+and P11 (SDK documentation).
+
+## Phase 46 — Tool Process IPC Foundation (P12)
+
+Third-party tools as separate OS processes speaking the daemon's
+IPC protocol. `ToolProcessBridge`, tool process lifecycle,
+`TOOL_SDK.md`, example Python tool. Completes all 12 product
+commitments.
