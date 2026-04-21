@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
 
+use crate::daemon_server::DaemonError;
+
 // ---------------------------------------------------------------------------
 // State enums
 // ---------------------------------------------------------------------------
@@ -155,16 +157,16 @@ pub async fn delete_mission(
 // State transitions
 // ---------------------------------------------------------------------------
 
-pub fn transition_to_running(record: &mut MissionRecord) -> Result<(), String> {
+pub fn transition_to_running(record: &mut MissionRecord) -> Result<(), DaemonError> {
     match record.state {
         MissionState::Created => {
             record.state = MissionState::Running;
             record.updated_at = now_millis();
             Ok(())
         }
-        other => Err(format!(
+        other => Err(DaemonError::MissionStore(format!(
             "cannot transition to Running from {other:?}"
-        )),
+        ))),
     }
 }
 
@@ -173,12 +175,12 @@ pub fn add_gate(
     gate_id: String,
     reason: String,
     scope: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     if record.state != MissionState::Running {
-        return Err(format!(
+        return Err(DaemonError::MissionStore(format!(
             "cannot add gate in state {:?}",
             record.state
-        ));
+        )));
     }
     record.gates.push(GateRecord {
         gate_id,
@@ -197,18 +199,20 @@ pub fn resolve_gate(
     record: &mut MissionRecord,
     gate_id: &str,
     approved: bool,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     if record.state != MissionState::GatePending {
-        return Err(format!(
+        return Err(DaemonError::MissionStore(format!(
             "cannot resolve gate in state {:?}",
             record.state
-        ));
+        )));
     }
     let gate = record
         .gates
         .iter_mut()
         .find(|g| g.gate_id == gate_id && g.state == GateState::Pending)
-        .ok_or_else(|| format!("no pending gate with id {gate_id}"))?;
+        .ok_or_else(|| {
+            DaemonError::MissionStore(format!("no pending gate with id {gate_id}"))
+        })?;
 
     let now = now_millis();
     gate.state = if approved {
@@ -227,24 +231,24 @@ pub fn resolve_gate(
     Ok(())
 }
 
-pub fn complete_mission(record: &mut MissionRecord) -> Result<(), String> {
+pub fn complete_mission(record: &mut MissionRecord) -> Result<(), DaemonError> {
     if record.state != MissionState::Running {
-        return Err(format!(
+        return Err(DaemonError::MissionStore(format!(
             "cannot complete in state {:?}",
             record.state
-        ));
+        )));
     }
     record.state = MissionState::Completed;
     record.updated_at = now_millis();
     Ok(())
 }
 
-pub fn cancel_mission(record: &mut MissionRecord) -> Result<(), String> {
+pub fn cancel_mission(record: &mut MissionRecord) -> Result<(), DaemonError> {
     if record.is_terminal() {
-        return Err(format!(
+        return Err(DaemonError::MissionStore(format!(
             "cannot cancel in terminal state {:?}",
             record.state
-        ));
+        )));
     }
     record.state = MissionState::Cancelled;
     record.updated_at = now_millis();

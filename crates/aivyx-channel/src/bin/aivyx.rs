@@ -554,7 +554,7 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
                 }
                 Err(e) => {
                     eprintln!("aivyx daemon: stop failed — {e}");
-                    return Err(e);
+                    return Err(e.to_string());
                 }
             }
         }
@@ -2062,7 +2062,7 @@ async fn run_async(
         for bridge in mcp_bridges {
             let _ = bridge.shutdown().await;
         }
-        return result;
+        return result.map_err(|e| e.to_string());
     }
 
     // ---- Channel branch ----------------------------------------------

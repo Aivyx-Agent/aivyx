@@ -26,6 +26,73 @@ use crate::daemon_ipc::{
 };
 use crate::mission;
 
+// ---------------------------------------------------------------------------
+// DaemonError — typed error enum for the daemon layer (Phase 41 Task 3)
+// ---------------------------------------------------------------------------
+
+/// Typed error enum for the daemon server and its subsystems.
+///
+/// Phase 41 Task 3 replaces the stringly-typed `Result<(), String>`
+/// signatures that had accumulated across Phases 16–39. Typed errors
+/// are a prerequisite for the Channel SDK (P5) — third-party adapters
+/// need matchable variants, not opaque strings.
+#[derive(Debug, thiserror::Error)]
+pub enum DaemonError {
+    /// Failed to bind the Unix domain socket.
+    #[error("failed to bind daemon socket at {path}: {source}")]
+    Bind {
+        path: String,
+        source: std::io::Error,
+    },
+
+    /// Failed to accept an incoming connection.
+    #[error("accept error: {0}")]
+    Accept(std::io::Error),
+
+    /// IPC frame encoding or decoding failure.
+    #[error("frame error: {0}")]
+    Frame(#[from] FrameError),
+
+    /// IPC protocol violation (e.g., message before handshake).
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    /// I/O error on the socket connection.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// PID file or state file operation failed.
+    #[error("pid/state file error at {path}: {source}")]
+    PidFile {
+        path: String,
+        source: std::io::Error,
+    },
+
+    /// Mission store operation failed.
+    #[error("mission store error: {0}")]
+    MissionStore(String),
+
+    /// Configuration error (missing or invalid config values).
+    #[error("config error: {0}")]
+    Config(String),
+
+    /// WebSocket or Web UI error.
+    #[error("websocket error: {0}")]
+    WebSocket(String),
+
+    /// Internal error (catch-all for unexpected conditions).
+    #[error("{0}")]
+    Internal(String),
+}
+
+impl DaemonError {
+    /// Convert a `DaemonError` to a `String` for backward compatibility
+    /// with callers that still use `Result<_, String>`.
+    pub fn to_string_compat(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// Channel factory: given a `FrontendType`, returns the appropriate
 /// `ChannelContext` implementation for that frontend. The binary
 /// constructs this closure at startup, capturing the resources each
@@ -73,7 +140,7 @@ pub struct DaemonConfig {
 /// to trigger a graceful shutdown. When cancelled, the daemon stops
 /// accepting new connections; in-flight handler tasks complete their
 /// current turn and exit.
-pub async fn run_daemon(config: DaemonConfig) -> Result<(), String> {
+pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let DaemonConfig {
         socket_path,
         agent,
@@ -91,18 +158,18 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), String> {
 
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create socket parent dir: {e}"))?;
+            .map_err(|e| DaemonError::Bind { path: parent.display().to_string(), source: e })?;
     }
 
     let listener = UnixListener::bind(socket_path)
-        .map_err(|e| format!("failed to bind daemon socket at {}: {e}", socket_path.display()))?;
+        .map_err(|e| DaemonError::Bind { path: socket_path.display().to_string(), source: e })?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(socket_path, perms)
-            .map_err(|e| format!("failed to set socket permissions: {e}"))?;
+            .map_err(|e| DaemonError::Bind { path: socket_path.display().to_string(), source: e })?;
     }
 
     let pid_path = socket_path.with_extension("pid");
@@ -220,17 +287,14 @@ async fn handle_connection(
     channel_factory: ChannelFactory,
     shutdown: CancellationToken,
     mission_store: Option<Arc<DomainHandle>>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let (mut reader, mut writer) = stream.into_split();
 
     let ready = DaemonLifecycleEvent::DaemonReady {
         version: PROTOCOL_VERSION.into(),
     };
-    let frame = encode_frame(&ready).map_err(|e| format!("encode DaemonReady: {e}"))?;
-    writer
-        .write_all(&frame)
-        .await
-        .map_err(|e| format!("write DaemonReady: {e}"))?;
+    let frame = encode_frame(&ready)?;
+    writer.write_all(&frame).await?;
 
     let mut buf = Vec::with_capacity(4096);
     let mut session_id: Option<String> = None;
@@ -245,7 +309,7 @@ async fn handle_connection(
         let mut tmp = [0u8; 4096];
         let n = tokio::select! {
             result = reader.read(&mut tmp) => {
-                result.map_err(|e| format!("read error: {e}"))?
+                result?
             }
             _ = shutdown.cancelled() => {
                 send_shutting_down(&mut writer, "shutdown requested").await;
@@ -269,12 +333,8 @@ async fn handle_connection(
                             let sid = aivyx_core::SessionId::new().to_string();
                             session_id = Some(sid.clone());
                             let resp = DaemonMessage::SessionStarted { session_id: sid };
-                            let frame = encode_frame(&resp)
-                                .map_err(|e| format!("encode SessionStarted: {e}"))?;
-                            writer
-                                .write_all(&frame)
-                                .await
-                                .map_err(|e| format!("write SessionStarted: {e}"))?;
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
                         }
                         FrontendMessage::SubmitInput {
                             session_id: sid,
@@ -305,7 +365,7 @@ async fn handle_connection(
                             let outcome = agent.turn(msg, &bridge).await;
 
                             writer = Arc::try_unwrap(bridge.writer)
-                                .map_err(|_| "writer arc still shared".to_string())?
+                                .map_err(|_| DaemonError::Internal("writer arc still shared".into()))?
                                 .into_inner();
 
                             if let (
@@ -330,7 +390,8 @@ async fn handle_connection(
                                         gate_id.clone(),
                                         reason.clone(),
                                         None,
-                                    )?;
+                                    )
+                                    .map_err(|e| e.to_string())?;
                                     mission::update_mission(store, &record)
                                         .await
                                         .map_err(|e| format!("persist mission: {e}"))?;
@@ -350,12 +411,8 @@ async fn handle_connection(
                                                     scope: None,
                                                 },
                                             };
-                                        let frame = encode_frame(&gate_event)
-                                            .map_err(|e| format!("encode ApprovalGate: {e}"))?;
-                                        writer
-                                            .write_all(&frame)
-                                            .await
-                                            .map_err(|e| format!("write ApprovalGate: {e}"))?;
+                                        let frame = encode_frame(&gate_event)?;
+                                        writer.write_all(&frame).await?;
                                     }
                                     Err(e) => {
                                         let err = DaemonMessage::Error {
@@ -374,12 +431,8 @@ async fn handle_connection(
                                 session_id: sid,
                                 outcome: outcome_str,
                             };
-                            let frame = encode_frame(&resp)
-                                .map_err(|e| format!("encode TurnComplete: {e}"))?;
-                            writer
-                                .write_all(&frame)
-                                .await
-                                .map_err(|e| format!("write TurnComplete: {e}"))?;
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
                         }
                         FrontendMessage::Disconnect => {
                             return Ok(());
@@ -408,7 +461,8 @@ async fn handle_connection(
                                     .await
                                     .map_err(|e| format!("get mission: {e}"))?
                                     .ok_or_else(|| format!("mission {mission_id} not found"))?;
-                                mission::resolve_gate(&mut record, &gate_id, approved)?;
+                                mission::resolve_gate(&mut record, &gate_id, approved)
+                                    .map_err(|e| e.to_string())?;
                                 mission::update_mission(store, &record)
                                     .await
                                     .map_err(|e| format!("persist mission: {e}"))?;
@@ -421,12 +475,8 @@ async fn handle_connection(
                                         gate_id: gate_id.clone(),
                                         approved,
                                     };
-                                    let frame = encode_frame(&resp)
-                                        .map_err(|e| format!("encode GateResolved: {e}"))?;
-                                    writer
-                                        .write_all(&frame)
-                                        .await
-                                        .map_err(|e| format!("write GateResolved: {e}"))?;
+                                    let frame = encode_frame(&resp)?;
+                                    writer.write_all(&frame).await?;
 
                                     if approved {
                                         if let Some(ch) = &channel {
@@ -450,9 +500,9 @@ async fn handle_connection(
                                             let resume_outcome = agent.turn(msg, &bridge).await;
 
                                             writer = Arc::try_unwrap(bridge.writer)
-                                                .map_err(|_| {
-                                                    "writer arc still shared".to_string()
-                                                })?
+                                                .map_err(|_| DaemonError::Internal(
+                                                    "writer arc still shared".into(),
+                                                ))?
                                                 .into_inner();
 
                                             let outcome_str = format_outcome(&resume_outcome);
@@ -460,12 +510,8 @@ async fn handle_connection(
                                                 session_id: sid,
                                                 outcome: outcome_str,
                                             };
-                                            let frame = encode_frame(&resp).map_err(|e| {
-                                                format!("encode resume TurnComplete: {e}")
-                                            })?;
-                                            writer.write_all(&frame).await.map_err(|e| {
-                                                format!("write resume TurnComplete: {e}")
-                                            })?;
+                                            let frame = encode_frame(&resp)?;
+                                            writer.write_all(&frame).await?;
                                         }
                                     }
                                 }
@@ -494,7 +540,7 @@ async fn handle_connection(
                     };
                     let frame = encode_frame(&err_resp).unwrap_or_default();
                     let _ = writer.write_all(&frame).await;
-                    return Err(format!("frame decode error: {e}"));
+                    return Err(e.into());
                 }
             }
         }
@@ -510,7 +556,7 @@ pub async fn run_poc_daemon<C: ChannelContext + Send + Sync + 'static>(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
     channel: Arc<C>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
     run_single_connection_daemon(socket_path, agent, factory).await
@@ -522,28 +568,29 @@ async fn run_single_connection_daemon(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let _ = std::fs::remove_file(socket_path);
 
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create socket parent dir: {e}"))?;
+        std::fs::create_dir_all(parent)?;
     }
 
     let listener = UnixListener::bind(socket_path)
-        .map_err(|e| format!("failed to bind daemon socket at {}: {e}", socket_path.display()))?;
+        .map_err(|source| DaemonError::Bind {
+            path: socket_path.display().to_string(),
+            source,
+        })?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(socket_path, perms)
-            .map_err(|e| format!("failed to set socket permissions: {e}"))?;
+        std::fs::set_permissions(socket_path, perms)?;
     }
 
     let (stream, _addr) = listener.accept()
         .await
-        .map_err(|e| format!("failed to accept connection: {e}"))?;
+        .map_err(DaemonError::Accept)?;
 
     let shutdown = CancellationToken::new();
     handle_connection(stream, agent, channel_factory, shutdown, None).await
@@ -555,7 +602,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
     agent: Arc<dyn Agent>,
     channel: Arc<C>,
     shutdown: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
     run_daemon(DaemonConfig {
@@ -604,10 +651,13 @@ struct PidGuard {
 }
 
 impl PidGuard {
-    fn write(path: &Path) -> Result<Self, String> {
+    fn write(path: &Path) -> Result<Self, DaemonError> {
         let pid = std::process::id();
         std::fs::write(path, pid.to_string())
-            .map_err(|e| format!("failed to write PID file at {}: {e}", path.display()))?;
+            .map_err(|source| DaemonError::PidFile {
+                path: path.display().to_string(),
+                source,
+            })?;
         Ok(PidGuard { path: path.to_path_buf() })
     }
 }

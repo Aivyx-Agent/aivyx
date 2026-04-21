@@ -21,6 +21,7 @@ use aivyx_telegram::transport::{IncomingMessage, OutgoingMessage, ReqwestTranspo
 
 use crate::daemon_client::DaemonSession;
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
+use crate::daemon_server::DaemonError;
 
 const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 
@@ -90,7 +91,7 @@ impl ChannelContext for TelegramDaemonChannel {
 
 struct ChatRoute {
     sender: tokio::sync::mpsc::Sender<IncomingMessage>,
-    handle: tokio::task::JoinHandle<Result<(), String>>,
+    handle: tokio::task::JoinHandle<Result<(), DaemonError>>,
 }
 
 /// Drive a multi-chat Telegram frontend over the daemon IPC channel.
@@ -104,7 +105,7 @@ pub async fn run_telegram_daemon_multi_session(
     socket_path: PathBuf,
     role: Option<String>,
     shutdown: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let mut routes: HashMap<i64, ChatRoute> = HashMap::new();
     let mut offset: i64 = 0;
 
@@ -192,7 +193,7 @@ async fn run_telegram_daemon_chat_task(
     role: Option<String>,
     mut mailbox: tokio::sync::mpsc::Receiver<IncomingMessage>,
     shutdown: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let mut session = DaemonSession::connect(
         &socket_path,
         role,
@@ -229,7 +230,9 @@ async fn run_telegram_daemon_chat_task(
             transport
                 .send_message(OutgoingMessage { chat_id, text: reply })
                 .await
-                .map_err(|e| format!("send_message to chat {chat_id}: {e}"))?;
+                .map_err(|e| DaemonError::Internal(format!(
+                    "send_message to chat {chat_id}: {e}"
+                )))?;
             continue;
         }
 
@@ -243,7 +246,9 @@ async fn run_telegram_daemon_chat_task(
                 text: buf,
             })
             .await
-            .map_err(|e| format!("send_message to chat {chat_id}: {e}"))?;
+            .map_err(|e| DaemonError::Internal(format!(
+                "send_message to chat {chat_id}: {e}"
+            )))?;
     }
 
     let _ = session.disconnect().await;

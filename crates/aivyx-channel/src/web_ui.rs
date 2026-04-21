@@ -26,6 +26,7 @@ use aivyx_core::{
     TurnOutcome,
 };
 
+use crate::daemon_server::DaemonError;
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
 };
@@ -120,11 +121,14 @@ pub async fn run_web_ui_server(
     socket_path: PathBuf,
     port: u16,
     shutdown: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr)
         .await
-        .map_err(|e| format!("web ui: failed to bind {addr}: {e}"))?;
+        .map_err(|source| DaemonError::Bind {
+            path: addr.to_string(),
+            source,
+        })?;
 
     eprintln!("aivyx web ui: listening on http://{addr}");
 
@@ -160,14 +164,13 @@ pub async fn run_web_ui_server(
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     socket_path: &Path,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     // Peek at the HTTP request line to determine the path.
     // We read up to 1024 bytes to get the full request line.
     let mut peek_buf = [0u8; 1024];
     let n = stream
         .peek(&mut peek_buf)
-        .await
-        .map_err(|e| format!("peek: {e}"))?;
+        .await?;
     let request_line = String::from_utf8_lossy(&peek_buf[..n]);
 
     if request_line.starts_with("GET /ws") {
@@ -175,7 +178,7 @@ async fn handle_connection(
         // HTTP 101 handshake and the WebSocket framing.
         let ws_stream = tokio_tungstenite::accept_async(stream)
             .await
-            .map_err(|e| format!("ws handshake: {e}"))?;
+            .map_err(|e| DaemonError::WebSocket(format!("ws handshake: {e}")))?;
 
         handle_websocket(ws_stream, socket_path).await
     } else if request_line.starts_with("GET / ")
@@ -190,7 +193,7 @@ async fn handle_connection(
 }
 
 /// Serve the embedded HTML page as an HTTP response.
-async fn serve_html(mut stream: tokio::net::TcpStream) -> Result<(), String> {
+async fn serve_html(mut stream: tokio::net::TcpStream) -> Result<(), DaemonError> {
     let body = HTML.as_bytes();
     let response = format!(
         "HTTP/1.1 200 OK\r\n\
@@ -200,19 +203,13 @@ async fn serve_html(mut stream: tokio::net::TcpStream) -> Result<(), String> {
          \r\n",
         body.len()
     );
-    stream
-        .write_all(response.as_bytes())
-        .await
-        .map_err(|e| format!("write html header: {e}"))?;
-    stream
-        .write_all(body)
-        .await
-        .map_err(|e| format!("write html body: {e}"))?;
+    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(body).await?;
     Ok(())
 }
 
 /// Serve a 404 Not Found response.
-async fn serve_404(mut stream: tokio::net::TcpStream) -> Result<(), String> {
+async fn serve_404(mut stream: tokio::net::TcpStream) -> Result<(), DaemonError> {
     let body = b"not found";
     let response = format!(
         "HTTP/1.1 404 Not Found\r\n\
@@ -222,14 +219,8 @@ async fn serve_404(mut stream: tokio::net::TcpStream) -> Result<(), String> {
          \r\n",
         body.len()
     );
-    stream
-        .write_all(response.as_bytes())
-        .await
-        .map_err(|e| format!("write 404: {e}"))?;
-    stream
-        .write_all(body)
-        .await
-        .map_err(|e| format!("write 404 body: {e}"))?;
+    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(body).await?;
     Ok(())
 }
 
@@ -245,23 +236,20 @@ async fn serve_404(mut stream: tokio::net::TcpStream) -> Result<(), String> {
 async fn handle_websocket(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     socket_path: &Path,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     // Connect to the daemon's Unix socket.
-    let unix_stream = UnixStream::connect(socket_path)
-        .await
-        .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+    let unix_stream = UnixStream::connect(socket_path).await?;
     let (mut unix_reader, mut unix_writer) = unix_stream.into_split();
 
     // Read DaemonReady from the daemon.
     let mut ipc_buf = Vec::with_capacity(4096);
     loop {
         let mut tmp = [0u8; 4096];
-        let n = unix_reader
-            .read(&mut tmp)
-            .await
-            .map_err(|e| format!("read DaemonReady: {e}"))?;
+        let n = unix_reader.read(&mut tmp).await?;
         if n == 0 {
-            return Err("daemon disconnected before DaemonReady".into());
+            return Err(DaemonError::Protocol(
+                "daemon disconnected before DaemonReady".into(),
+            ));
         }
         ipc_buf.extend_from_slice(&tmp[..n]);
         match decode_frame::<DaemonEnvelope>(&ipc_buf) {
@@ -271,11 +259,11 @@ async fn handle_websocket(
             }
             Err(FrameError::IncompleteBuf) => continue,
             Ok((other, _)) => {
-                return Err(format!("expected DaemonReady, got {other:?}"));
+                return Err(DaemonError::Protocol(format!(
+                    "expected DaemonReady, got {other:?}"
+                )));
             }
-            Err(e) => {
-                return Err(format!("decode DaemonReady: {e}"));
-            }
+            Err(e) => return Err(e.into()),
         }
     }
 
@@ -284,21 +272,17 @@ async fn handle_websocket(
         role: None,
         frontend_type: Some(FrontendType::Web),
     };
-    let frame = encode_frame(&start).map_err(|e| format!("encode StartSession: {e}"))?;
-    unix_writer
-        .write_all(&frame)
-        .await
-        .map_err(|e| format!("write StartSession: {e}"))?;
+    let frame = encode_frame(&start)?;
+    unix_writer.write_all(&frame).await?;
 
     // Read SessionStarted — forward it to the WebSocket as JSON.
     let session_id: String = loop {
         let mut tmp = [0u8; 4096];
-        let n = unix_reader
-            .read(&mut tmp)
-            .await
-            .map_err(|e| format!("read SessionStarted: {e}"))?;
+        let n = unix_reader.read(&mut tmp).await?;
         if n == 0 {
-            return Err("daemon disconnected before SessionStarted".into());
+            return Err(DaemonError::Protocol(
+                "daemon disconnected before SessionStarted".into(),
+            ));
         }
         ipc_buf.extend_from_slice(&tmp[..n]);
         match decode_frame::<DaemonEnvelope>(&ipc_buf) {
@@ -308,11 +292,11 @@ async fn handle_websocket(
             }
             Err(FrameError::IncompleteBuf) => continue,
             Ok((other, _)) => {
-                return Err(format!("expected SessionStarted, got {other:?}"));
+                return Err(DaemonError::Protocol(format!(
+                    "expected SessionStarted, got {other:?}"
+                )));
             }
-            Err(e) => {
-                return Err(format!("decode SessionStarted: {e}"));
-            }
+            Err(e) => return Err(e.into()),
         }
     };
 

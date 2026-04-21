@@ -22,6 +22,7 @@ use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
     StreamEventPayload,
 };
+use crate::daemon_server::DaemonError;
 
 /// Result of a single PoC daemon turn (Phase 16 shape, kept for
 /// backward compatibility with the existing e2e test).
@@ -51,15 +52,8 @@ impl DaemonSession {
         socket_path: &Path,
         role: Option<String>,
         frontend_type: Option<FrontendType>,
-    ) -> Result<Self, String> {
-        let stream = UnixStream::connect(socket_path)
-            .await
-            .map_err(|e| {
-                format!(
-                    "failed to connect to daemon at {}: {e}",
-                    socket_path.display()
-                )
-            })?;
+    ) -> Result<Self, DaemonError> {
+        let stream = UnixStream::connect(socket_path).await?;
         let (mut reader, writer) = stream.into_split();
         let mut buf = Vec::with_capacity(4096);
 
@@ -72,23 +66,20 @@ impl DaemonSession {
                     Some(version)
                 }
                 Ok((other, _)) => {
-                    return Err(format!("expected DaemonReady, got {other:?}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "expected DaemonReady, got {other:?}"
+                    )));
                 }
-                Err(e) => {
-                    return Err(format!("failed to read DaemonReady: {e}"));
-                }
+                Err(e) => return Err(e.into()),
             };
 
         // Send StartSession.
         let start = FrontendMessage::StartSession { role, frontend_type };
-        let frame =
-            encode_frame(&start).map_err(|e| format!("encode StartSession: {e}"))?;
+        let frame = encode_frame(&start)?;
         let writer = Arc::new(tokio::sync::Mutex::new(writer));
         {
             let mut w = writer.lock().await;
-            w.write_all(&frame)
-                .await
-                .map_err(|e| format!("write StartSession: {e}"))?;
+            w.write_all(&frame).await?;
         }
 
         // Read SessionStarted.
@@ -102,17 +93,19 @@ impl DaemonSession {
                     break sid;
                 }
                 Ok((DaemonEnvelope::Error { code, message }, _)) => {
-                    return Err(format!("daemon error ({code}): {message}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "daemon error ({code}): {message}"
+                    )));
                 }
                 Err(FrameError::IncompleteBuf) => {
                     read_more(&mut reader, &mut buf).await?;
                 }
                 Ok((other, _)) => {
-                    return Err(format!("expected SessionStarted, got {other:?}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "expected SessionStarted, got {other:?}"
+                    )));
                 }
-                Err(e) => {
-                    return Err(format!("failed to read SessionStarted: {e}"));
-                }
+                Err(e) => return Err(e.into()),
             }
         };
 
@@ -129,7 +122,7 @@ impl DaemonSession {
         &mut self,
         text: String,
         mission_id: String,
-    ) -> Result<(Vec<StreamEventPayload>, String), String> {
+    ) -> Result<(Vec<StreamEventPayload>, String), DaemonError> {
         let submit = FrontendMessage::SubmitInput {
             session_id: self.session_id.clone(),
             text,
@@ -143,7 +136,7 @@ impl DaemonSession {
     pub async fn submit_input(
         &mut self,
         text: String,
-    ) -> Result<(Vec<StreamEventPayload>, String), String> {
+    ) -> Result<(Vec<StreamEventPayload>, String), DaemonError> {
         let submit = FrontendMessage::SubmitInput {
             session_id: self.session_id.clone(),
             text,
@@ -155,14 +148,11 @@ impl DaemonSession {
     async fn send_and_collect(
         &mut self,
         msg: FrontendMessage,
-    ) -> Result<(Vec<StreamEventPayload>, String), String> {
-        let frame =
-            encode_frame(&msg).map_err(|e| format!("encode SubmitInput: {e}"))?;
+    ) -> Result<(Vec<StreamEventPayload>, String), DaemonError> {
+        let frame = encode_frame(&msg)?;
         {
             let mut w = self.writer.lock().await;
-            w.write_all(&frame)
-                .await
-                .map_err(|e| format!("write SubmitInput: {e}"))?;
+            w.write_all(&frame).await?;
         }
 
         let mut events = Vec::new();
@@ -177,36 +167,37 @@ impl DaemonSession {
                     return Ok((events, outcome));
                 }
                 Ok((DaemonEnvelope::Error { code, message }, _)) => {
-                    return Err(format!("daemon error ({code}): {message}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "daemon error ({code}): {message}"
+                    )));
                 }
                 Ok((DaemonEnvelope::ShuttingDown { reason }, _)) => {
-                    return Err(format!("daemon shutting down: {reason}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "daemon shutting down: {reason}"
+                    )));
                 }
                 Err(FrameError::IncompleteBuf) => {
                     read_more(&mut self.reader, &mut self.buf).await?;
                 }
                 Ok((other, consumed)) => {
                     self.buf.drain(..consumed);
-                    return Err(format!("unexpected message during turn: {other:?}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "unexpected message during turn: {other:?}"
+                    )));
                 }
-                Err(e) => {
-                    return Err(format!("frame decode error: {e}"));
-                }
+                Err(e) => return Err(e.into()),
             }
         }
     }
 
     /// Send `CancelTurn` to request cancellation of the in-flight turn.
-    pub async fn cancel_turn(&mut self) -> Result<(), String> {
+    pub async fn cancel_turn(&mut self) -> Result<(), DaemonError> {
         let cancel = FrontendMessage::CancelTurn {
             session_id: self.session_id.clone(),
         };
-        let frame =
-            encode_frame(&cancel).map_err(|e| format!("encode CancelTurn: {e}"))?;
+        let frame = encode_frame(&cancel)?;
         let mut w = self.writer.lock().await;
-        w.write_all(&frame)
-            .await
-            .map_err(|e| format!("write CancelTurn: {e}"))?;
+        w.write_all(&frame).await?;
         Ok(())
     }
 
@@ -216,18 +207,16 @@ impl DaemonSession {
         mission_id: String,
         gate_id: String,
         approved: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), DaemonError> {
         let msg = FrontendMessage::ResolveGate {
             mission_id,
             gate_id,
             approved,
         };
-        let frame = encode_frame(&msg).map_err(|e| format!("encode ResolveGate: {e}"))?;
+        let frame = encode_frame(&msg)?;
         {
             let mut w = self.writer.lock().await;
-            w.write_all(&frame)
-                .await
-                .map_err(|e| format!("write ResolveGate: {e}"))?;
+            w.write_all(&frame).await?;
         }
 
         loop {
@@ -237,21 +226,25 @@ impl DaemonSession {
                     return Ok(());
                 }
                 Ok((DaemonEnvelope::Error { code, message }, _)) => {
-                    return Err(format!("gate resolve error ({code}): {message}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "gate resolve error ({code}): {message}"
+                    )));
                 }
                 Ok((DaemonEnvelope::ShuttingDown { reason }, _)) => {
-                    return Err(format!("daemon shutting down: {reason}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "daemon shutting down: {reason}"
+                    )));
                 }
                 Err(FrameError::IncompleteBuf) => {
                     read_more(&mut self.reader, &mut self.buf).await?;
                 }
                 Ok((other, consumed)) => {
                     self.buf.drain(..consumed);
-                    return Err(format!("unexpected message during ResolveGate: {other:?}"));
+                    return Err(DaemonError::Protocol(format!(
+                        "unexpected message during ResolveGate: {other:?}"
+                    )));
                 }
-                Err(e) => {
-                    return Err(format!("frame decode error: {e}"));
-                }
+                Err(e) => return Err(e.into()),
             }
         }
     }
@@ -265,13 +258,10 @@ impl DaemonSession {
     }
 
     /// Send `Disconnect` and drop the connection cleanly.
-    pub async fn disconnect(self) -> Result<(), String> {
-        let frame = encode_frame(&FrontendMessage::Disconnect)
-            .map_err(|e| format!("encode Disconnect: {e}"))?;
+    pub async fn disconnect(self) -> Result<(), DaemonError> {
+        let frame = encode_frame(&FrontendMessage::Disconnect)?;
         let mut w = self.writer.lock().await;
-        w.write_all(&frame)
-            .await
-            .map_err(|e| format!("write Disconnect: {e}"))?;
+        w.write_all(&frame).await?;
         Ok(())
     }
 }
@@ -347,10 +337,8 @@ pub async fn daemon_status(socket_path: &Path) -> DaemonStatusInfo {
 
 /// Send `Shutdown` to a running daemon and wait for the `ShuttingDown`
 /// lifecycle event. Returns the shutdown reason on success.
-pub async fn daemon_stop(socket_path: &Path) -> Result<String, String> {
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .map_err(|e| format!("failed to connect to daemon at {}: {e}", socket_path.display()))?;
+pub async fn daemon_stop(socket_path: &Path) -> Result<String, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
     let (mut reader, mut writer) = stream.into_split();
     let mut buf = Vec::with_capacity(4096);
 
@@ -361,20 +349,16 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, String> {
             buf.drain(..consumed);
         }
         Ok((other, _)) => {
-            return Err(format!("expected DaemonReady, got {other:?}"));
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )));
         }
-        Err(e) => {
-            return Err(format!("failed to read DaemonReady: {e}"));
-        }
+        Err(e) => return Err(e.into()),
     }
 
     // Send Shutdown.
-    let frame = encode_frame(&FrontendMessage::Shutdown)
-        .map_err(|e| format!("encode Shutdown: {e}"))?;
-    writer
-        .write_all(&frame)
-        .await
-        .map_err(|e| format!("write Shutdown: {e}"))?;
+    let frame = encode_frame(&FrontendMessage::Shutdown)?;
+    writer.write_all(&frame).await?;
 
     // Wait for ShuttingDown.
     loop {
@@ -384,14 +368,14 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, String> {
             }
             Ok((other, consumed)) => {
                 buf.drain(..consumed);
-                return Err(format!("expected ShuttingDown, got {other:?}"));
+                return Err(DaemonError::Protocol(format!(
+                    "expected ShuttingDown, got {other:?}"
+                )));
             }
             Err(FrameError::IncompleteBuf) => {
                 read_more(&mut reader, &mut buf).await?;
             }
-            Err(e) => {
-                return Err(format!("frame decode error: {e}"));
-            }
+            Err(e) => return Err(e.into()),
         }
     }
 }
@@ -405,9 +389,8 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, String> {
 pub async fn spawn_daemon_and_wait(
     socket_path: &Path,
     timeout: Duration,
-) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("failed to determine current executable: {e}"))?;
+) -> Result<PathBuf, DaemonError> {
+    let exe = std::env::current_exe()?;
 
     let _child = tokio::process::Command::new(&exe)
         .args(["daemon", "run"])
@@ -415,7 +398,7 @@ pub async fn spawn_daemon_and_wait(
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("failed to spawn daemon: {e}"))?;
+        .map_err(|e| DaemonError::Internal(format!("failed to spawn daemon: {e}")))?;
 
     // Poll for the socket to appear with exponential backoff.
     let start = tokio::time::Instant::now();
@@ -425,11 +408,11 @@ pub async fn spawn_daemon_and_wait(
             return Ok(socket_path.to_path_buf());
         }
         if start.elapsed() > timeout {
-            return Err(format!(
+            return Err(DaemonError::Internal(format!(
                 "daemon did not start within {}ms — socket not found at {}",
                 timeout.as_millis(),
                 socket_path.display(),
-            ));
+            )));
         }
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(Duration::from_millis(500));
@@ -446,7 +429,7 @@ pub async fn run_poc_client(
     socket_path: &Path,
     role: Option<String>,
     input_text: String,
-) -> Result<DaemonTurnResult, String> {
+) -> Result<DaemonTurnResult, DaemonError> {
     let mut session = DaemonSession::connect(socket_path, role, None).await?;
     let daemon_version = session.daemon_version.clone();
     let session_id = session.session_id.clone();
@@ -465,14 +448,13 @@ pub async fn run_poc_client(
 async fn read_more(
     reader: &mut tokio::net::unix::OwnedReadHalf,
     buf: &mut Vec<u8>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     let mut tmp = [0u8; 4096];
-    let n = reader
-        .read(&mut tmp)
-        .await
-        .map_err(|e| format!("read error: {e}"))?;
+    let n = reader.read(&mut tmp).await?;
     if n == 0 {
-        return Err("connection closed unexpectedly".to_string());
+        return Err(DaemonError::Protocol(
+            "connection closed unexpectedly".into(),
+        ));
     }
     buf.extend_from_slice(&tmp[..n]);
     Ok(())

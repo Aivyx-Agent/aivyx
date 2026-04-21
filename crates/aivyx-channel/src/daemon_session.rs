@@ -57,8 +57,12 @@ where
     let session = match DaemonSession::connect(&config.socket_path, config.role.clone(), config.frontend_type).await {
         Ok(s) => s,
         Err(_) => {
-            spawn_daemon_and_wait(&config.socket_path, AUTO_SPAWN_TIMEOUT).await?;
-            DaemonSession::connect(&config.socket_path, config.role, config.frontend_type).await?
+            spawn_daemon_and_wait(&config.socket_path, AUTO_SPAWN_TIMEOUT)
+                .await
+                .map_err(|e| e.to_string())?;
+            DaemonSession::connect(&config.socket_path, config.role, config.frontend_type)
+                .await
+                .map_err(|e| e.to_string())?
         }
     };
 
@@ -125,7 +129,9 @@ where
             flag.store(false, Ordering::Relaxed);
         }
 
-        let (events, outcome) = session.submit_input(input.to_string()).await?;
+        let (events, outcome) = session.submit_input(input.to_string())
+            .await
+            .map_err(|e| e.to_string())?;
 
         for event in &events {
             let rendered = event.render_for_cli();
@@ -159,7 +165,8 @@ where
                         gate_id.clone(),
                         approved,
                     )
-                    .await?;
+                    .await
+                    .map_err(|e| e.to_string())?;
                 let status = if approved { "approved" } else { "rejected" };
                 writeln!(writer, "  Gate {status}.")
                     .map_err(|e| format!("gate status write: {e}"))?;
