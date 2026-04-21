@@ -94,6 +94,9 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
+#[path = "aivyx_modules/init.rs"]
+mod init;
+
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -317,6 +320,17 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(run_daemon_management(mode));
+    }
+
+    // ---- Phase 44: interactive init wizard ----------------------------
+    // Like daemon management, init needs only a small runtime (for async
+    // Ollama detection) and no config/store/API key.
+    if mode == CliMode::Init {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(init::run_init_wizard());
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -742,6 +756,8 @@ enum CliMode {
     DaemonStatus,
     /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
+    /// `aivyx init`: interactive first-run setup wizard (Phase 44).
+    Init,
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -844,6 +860,27 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             mcp_sse_servers: Vec::new(),
             provider: None,
             web_ui_port: daemon_web_ui_port,
+        });
+    }
+
+    // Check for `init` subcommand — interactive first-run wizard.
+    if !args.is_empty() && args[0] == "init" {
+        if args.len() > 1 {
+            return Err(format!(
+                "`aivyx init` does not accept additional arguments. \
+                 Got: `{}`",
+                args[1..].join(" ")
+            ));
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Init,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
         });
     }
 
@@ -3385,6 +3422,37 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
             .expect("must parse");
         assert_eq!(parsed.web_ui_port, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 44 — `aivyx init` subcommand
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_init_subcommand() {
+        let parsed = parse_cli_args_from(&argv(&["init"]))
+            .expect("init must parse");
+        assert_eq!(parsed.mode, CliMode::Init);
+    }
+
+    #[test]
+    fn parse_init_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["init", "--channel", "local"]))
+            .expect_err("init with flags must error");
+        assert!(
+            err.contains("does not accept additional arguments"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_init_is_not_daemon_subcommand() {
+        let err = parse_cli_args_from(&argv(&["daemon", "init"]))
+            .expect_err("daemon init is not valid");
+        assert!(
+            err.contains("unrecognized daemon subcommand"),
+            "error: {err}"
+        );
     }
 
 }
