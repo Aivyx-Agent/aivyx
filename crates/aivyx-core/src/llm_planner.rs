@@ -367,8 +367,13 @@ impl TurnPlanner for LlmPlanner {
             let system_tokens = aivyx_llm::estimate_system_tokens(
                 self.config.system_prompt.as_deref(),
             );
-            let total = system_tokens + aivyx_llm::estimate_tokens(&self.history);
+            let history_tokens = aivyx_llm::estimate_tokens(&self.history);
+            let total = system_tokens + history_tokens;
             if total > budget && self.history.len() > 1 {
+                // Record pre-pruning token count.
+                self.accumulated_usage.context_tokens_before_pruning =
+                    total as u32;
+
                 // Keep at least the last message (the most recent user
                 // turn or tool result). Prune from the front until we
                 // fit, or until only one message remains.
@@ -406,6 +411,12 @@ impl TurnPlanner for LlmPlanner {
                     );
                     self.pruned_message_count += pruned_count;
                 }
+
+                // Record post-pruning token count.
+                let after = system_tokens
+                    + aivyx_llm::estimate_tokens(&self.history);
+                self.accumulated_usage.context_tokens_after_pruning =
+                    after as u32;
             }
         }
 
@@ -1536,5 +1547,50 @@ mod tests {
             planner.pruned_message_count() >= first_pruned,
             "counter should accumulate"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 43 Task 5 — TokenUsage pruning fields
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn turn_usage_reports_pruning_tokens() {
+        // Over-budget history triggers pruning and populates the
+        // before/after token fields in TokenUsage.
+        let msgs: Vec<LlmMessage> = (0..10)
+            .map(|i| LlmMessage::User {
+                content: format!("msg-{i}-{}", "x".repeat(100)),
+            })
+            .collect();
+        let (mut planner, ch) = make_pruning_planner(200, msgs, "ok");
+        planner.next_step(&[], &ch).await;
+
+        let usage = planner.turn_usage();
+        assert!(
+            usage.context_tokens_before_pruning > 0,
+            "before should be populated when pruning fires"
+        );
+        assert!(
+            usage.context_tokens_after_pruning > 0,
+            "after should be populated when pruning fires"
+        );
+        assert!(
+            usage.context_tokens_after_pruning < usage.context_tokens_before_pruning,
+            "after < before when messages were pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_usage_zeroes_when_no_pruning() {
+        // Under-budget — pruning doesn't fire, fields stay zero.
+        let msgs = vec![LlmMessage::User {
+            content: "short".to_string(),
+        }];
+        let (mut planner, ch) = make_pruning_planner(200_000, msgs, "ok");
+        planner.next_step(&[], &ch).await;
+
+        let usage = planner.turn_usage();
+        assert_eq!(usage.context_tokens_before_pruning, 0);
+        assert_eq!(usage.context_tokens_after_pruning, 0);
     }
 }

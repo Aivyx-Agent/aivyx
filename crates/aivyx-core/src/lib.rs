@@ -505,6 +505,16 @@ pub struct TokenUsage {
     pub output_tokens: u32,
     pub cache_creation_input_tokens: u32,
     pub cache_read_input_tokens: u32,
+    /// Phase 43 Task 5 — estimated context tokens before any pruning
+    /// ran during this turn. `0` means no pruning was attempted (either
+    /// the context window was not configured or the history never
+    /// exceeded the budget).
+    #[serde(default)]
+    pub context_tokens_before_pruning: u32,
+    /// Estimated context tokens after pruning. When
+    /// `context_tokens_before_pruning` is `0`, this is also `0`.
+    #[serde(default)]
+    pub context_tokens_after_pruning: u32,
 }
 
 impl From<aivyx_llm::LlmUsage> for TokenUsage {
@@ -514,6 +524,8 @@ impl From<aivyx_llm::LlmUsage> for TokenUsage {
             output_tokens: u.output_tokens,
             cache_creation_input_tokens: u.cache_creation_input_tokens,
             cache_read_input_tokens: u.cache_read_input_tokens,
+            context_tokens_before_pruning: 0,
+            context_tokens_after_pruning: 0,
         }
     }
 }
