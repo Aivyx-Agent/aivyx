@@ -82,6 +82,11 @@ pub struct LlmPlannerConfig {
     /// tool," preserving Phase 6–10 behavior for planners built
     /// without a role.
     pub tool_allowlist: Option<std::collections::BTreeSet<String>>,
+    /// Phase 43 Task 2 — context window size in tokens. Used by the
+    /// pruning layer to decide when to drop old history messages.
+    /// Defaults per provider: 200_000 (Anthropic), 128_000 (OpenAI).
+    /// `None` disables pruning entirely.
+    pub context_window_tokens: Option<usize>,
 }
 
 impl LlmPlannerConfig {
@@ -92,6 +97,7 @@ impl LlmPlannerConfig {
             max_tokens: 1024,
             temperature: None,
             tool_allowlist: None,
+            context_window_tokens: None,
         }
     }
 
@@ -107,6 +113,14 @@ impl LlmPlannerConfig {
 
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the context window size in tokens. When set, the planner
+    /// prunes old history messages before each LLM call if the
+    /// estimated token count exceeds 80% of this value.
+    pub fn with_context_window(mut self, tokens: usize) -> Self {
+        self.context_window_tokens = Some(tokens);
         self
     }
 
@@ -1181,5 +1195,22 @@ mod tests {
             }
             other => panic!("expected ToolResult for unknown tool, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 43 Task 2 — context window config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn context_window_defaults_to_none() {
+        let config = LlmPlannerConfig::new("test-model");
+        assert_eq!(config.context_window_tokens, None);
+    }
+
+    #[test]
+    fn context_window_builder() {
+        let config = LlmPlannerConfig::new("test-model")
+            .with_context_window(200_000);
+        assert_eq!(config.context_window_tokens, Some(200_000));
     }
 }

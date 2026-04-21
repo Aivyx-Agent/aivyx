@@ -126,6 +126,56 @@ pub struct LlmToolDescriptor {
 }
 
 // ---------------------------------------------------------------------------
+// Token estimation (Phase 43 Task 2)
+// ---------------------------------------------------------------------------
+
+/// Estimate the token count for a slice of conversation messages.
+///
+/// Uses a simple `chars / 4` heuristic — deliberately conservative
+/// (overestimates for ASCII, underestimates for CJK, roughly
+/// accurate for mixed English text). This is a planning heuristic,
+/// not a billing counter; the goal is to trigger pruning before the
+/// provider rejects the request, not to match the provider's exact
+/// tokenizer. Zero new dependencies.
+///
+/// The estimate covers message text content, tool call inputs
+/// (serialized as JSON), and tool result content. It does not
+/// include per-message framing overhead (role markers, JSON
+/// structure) — those are small relative to content and the 80%
+/// budget threshold absorbs the error.
+pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
+    let mut chars: usize = 0;
+    for msg in messages {
+        match msg {
+            LlmMessage::User { content } => {
+                chars += content.len();
+            }
+            LlmMessage::Assistant { text, tool_calls } => {
+                chars += text.len();
+                for tc in tool_calls {
+                    chars += tc.tool_name.len();
+                    // Serialize input to get its character count.
+                    chars += tc.input.to_string().len();
+                }
+            }
+            LlmMessage::ToolResult { content, call_id, .. } => {
+                chars += content.len();
+                chars += call_id.len();
+            }
+        }
+    }
+    chars.div_ceil(4)
+}
+
+/// Estimate the token count of a system prompt string.
+pub fn estimate_system_tokens(system: Option<&str>) -> usize {
+    match system {
+        Some(s) => s.len().div_ceil(4),
+        None => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Request
 // ---------------------------------------------------------------------------
 
@@ -680,4 +730,70 @@ mod tests {
     // a refactor that briefly removes then restores it. It's a no-op.
     #[allow(dead_code)]
     fn _keep_arc_import_alive(_: Arc<u8>) {}
+
+    // -----------------------------------------------------------------------
+    // Token estimation tests (Phase 43 Task 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(&[]), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_user_message() {
+        // 12 chars -> 3 tokens
+        let msgs = vec![LlmMessage::User {
+            content: "hello world!".to_string(),
+        }];
+        assert_eq!(estimate_tokens(&msgs), 3);
+    }
+
+    #[test]
+    fn estimate_tokens_assistant_with_tool_call() {
+        let msgs = vec![LlmMessage::Assistant {
+            text: "Let me check.".to_string(), // 14 chars
+            tool_calls: vec![LlmToolCallRecord {
+                call_id: "c1".to_string(),
+                tool_name: "fs.read".to_string(), // 7 chars
+                input: json!({ "path": "/tmp" }),  // ~16 chars serialized
+            }],
+        }];
+        let tokens = estimate_tokens(&msgs);
+        // 14 + 7 + ~16 = ~37 chars -> ~10 tokens
+        assert!(tokens > 5 && tokens < 20, "got {tokens}");
+    }
+
+    #[test]
+    fn estimate_tokens_tool_result() {
+        let msgs = vec![LlmMessage::ToolResult {
+            call_id: "c1".to_string(), // 2 chars
+            content: "file contents here".to_string(), // 18 chars
+            is_error: false,
+        }];
+        // 2 + 18 = 20 chars -> 5 tokens
+        assert_eq!(estimate_tokens(&msgs), 5);
+    }
+
+    #[test]
+    fn estimate_tokens_multi_message() {
+        let msgs = vec![
+            LlmMessage::User { content: "abcd".to_string() }, // 4 chars
+            LlmMessage::Assistant { text: "efgh".to_string(), tool_calls: vec![] }, // 4 chars
+            LlmMessage::User { content: "ijkl".to_string() }, // 4 chars
+        ];
+        // 12 chars -> 3 tokens
+        assert_eq!(estimate_tokens(&msgs), 3);
+    }
+
+    #[test]
+    fn estimate_system_tokens_none() {
+        assert_eq!(estimate_system_tokens(None), 0);
+    }
+
+    #[test]
+    fn estimate_system_tokens_some() {
+        // 20 chars -> 5 tokens
+        assert_eq!(estimate_system_tokens(Some("You are a helpful AI")), 5);
+    }
 }
