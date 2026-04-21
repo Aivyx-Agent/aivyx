@@ -139,6 +139,11 @@ pub enum DaemonMessage {
 pub enum DaemonLifecycleEvent {
     DaemonReady { version: String },
     ShuttingDown { reason: String },
+    RecoveryNotice {
+        lost_sessions: Vec<String>,
+        lost_turns: Vec<String>,
+        stale_since: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +333,11 @@ pub enum DaemonEnvelope {
     ShuttingDown {
         reason: String,
     },
+    RecoveryNotice {
+        lost_sessions: Vec<String>,
+        lost_turns: Vec<String>,
+        stale_since: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +458,11 @@ mod tests {
             },
             DaemonLifecycleEvent::ShuttingDown {
                 reason: "operator requested".into(),
+            },
+            DaemonLifecycleEvent::RecoveryNotice {
+                lost_sessions: vec!["ses-1".into(), "ses-2".into()],
+                lost_turns: vec!["ses-1:turn".into()],
+                stale_since: 1713700000,
             },
         ];
         for msg in cases {
