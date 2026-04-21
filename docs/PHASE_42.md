@@ -125,16 +125,103 @@ Tests, streak report, `docs/ROADMAP.md` rollover,
 `docs/README.md` phase table update, ship records and
 exit criteria.
 
-## Exit criteria
+## Task 1 — shipped (2026-04-21)
 
-- [ ] `process_group(0)` on all shell.exec spawns; SIGTERM →
+Phase open commit. Scaffolded `docs/PHASE_42.md`. Added
+`libc = "0.2"` to workspace deps, `libc = { workspace = true }`
+to `aivyx-core/Cargo.toml`. Commit `8da61bd`.
+
+## Task 2 — shipped (2026-04-21)
+
+Process-group shell execution. `command.process_group(0)` puts
+`sh -c` and all children under a shared PGID. On timeout:
+`libc::killpg(pgid, SIGTERM)`, background reaper task sleeps
+2s then `killpg(pgid, SIGKILL)`. `kill_on_drop(true)` retained
+as belt-and-suspenders. Switched from `command.output()` to
+`command.spawn()` + `wait_with_output()` with explicit
+`stdout(Stdio::piped())` and `stderr(Stdio::piped())`. PID
+captured before `wait_with_output()` consumes `Child`. 4 new
+tests. Commit `5f9263d`.
+
+## Task 3 — shipped (2026-04-21)
+
+Shell env isolation. `env_clear()` strips all inherited env,
+then `SAFE_ENV_DEFAULTS` (`PATH`, `HOME`, `USER`, `LANG`,
+`TERM`) are injected from the daemon's env, then any declared
+`env` field entries. Input schema updated with `env` object
+field. `input_env()` helper parses the map. 2 new tests
+(env cleared, declared vars passed, safe defaults injected
+covered by the 4 in Task 2). Commit `4ee8fcb`.
+
+## Task 4 — shipped (2026-04-21)
+
+Memory GC trait methods. Extended `Memory` trait with
+`gc_topic(topic, max_entries) -> Result<usize, MemoryError>`
+and `gc_expired(cutoff_secs) -> Result<usize, MemoryError>`.
+Implemented in both `InMemoryMemory` (BTreeMap drain/retain)
+and `RedbMemory` (prefix scan + delete). 13 new tests (8
+in-memory, 5 on-disk). Commit `6ddc68f`.
+
+## Task 5 — shipped (2026-04-21)
+
+TTL-based expiry with daemon GC timer. Added
+`memory_ttl_secs: Option<Sourced<u64>>` to `AivyxConfig`,
+`ttl_secs: Option<u64>` to TOML `[memory]`, env
+`AIVYX_MEMORY_TTL_SECS`. Extended `DaemonConfig` with
+`memory: Option<Arc<dyn Memory>>` and `memory_ttl_secs:
+Option<u64>`. Daemon spawns 1-hour `tokio::time::interval`
+background task calling `gc_expired()` when TTL configured.
+Respects shutdown `CancellationToken`. Banner prints TTL
+when set. Commit `07f1004`.
+
+## Task 6 — shipped (2026-04-21)
+
+`memory.gc` infrastructure tool. New `MemoryGcTool` in
+`crates/aivyx-channel/src/memory_gc_tool.rs`. Input:
+`{ topic, max_entries }`. Returns `{ evicted: N }`.
+`memory.gc` scope base added to `KNOWN_BASES` (34→35) and
+`CEILING_TRUSTED`. Registered in binary tool list and
+backcompat floor. 8 new tests. Commit `7eac5e4`.
+
+## Exit criteria (final)
+
+- [x] `process_group(0)` on all shell.exec spawns; SIGTERM →
       wait → SIGKILL on timeout.
-- [ ] Shell env cleared, only safe defaults + declared vars.
-- [ ] `gc_topic` on Memory trait, implemented in both backends.
-- [ ] `gc_expired` on Memory trait with TTL config field.
-- [ ] Daemon 1-hour GC timer wired.
-- [ ] `memory.gc` tool registered in channel layer.
-- [ ] All tests pass with net-positive delta.
-- [ ] Zero clippy warnings.
-- [ ] DESIGN.md amendment filed (if scope warrants).
-- [ ] PRODUCT.md untouched (streak -> 6).
+- [x] Shell env cleared, only safe defaults + declared vars.
+- [x] `gc_topic` on Memory trait, implemented in both backends.
+- [x] `gc_expired` on Memory trait with TTL config field.
+- [x] Daemon 1-hour GC timer wired.
+- [x] `memory.gc` tool registered in channel layer.
+- [x] All tests pass: 839 (entry: 814, delta: +25).
+- [x] Zero clippy warnings.
+- [x] DESIGN.md untouched this phase (streak 1 from Phase 41).
+- [x] PRODUCT.md untouched (streak → 6).
+- [x] lib.rs untouched (streak → 3 from Phase 40).
+
+## Streak report
+
+| Streak | Status | Count |
+|---|---|---|
+| DESIGN.md | Held (1 from Phase 41 A7) | 1 |
+| PRODUCT.md | Held (untouched since Phase 38) | 6 |
+| lib.rs | Held (untouched since Phase 40) | 3 |
+
+## Decisions made during Phase 42 not in DESIGN.md
+
+1. **SIGTERM-first process-group kill.** On timeout, the shell
+   tool sends SIGTERM to the process group first, waits 2s,
+   then SIGKILLs. This gives well-behaved children a chance to
+   flush buffers. The reaper is a detached `tokio::spawn` task
+   so it doesn't block the turn loop.
+
+2. **No `get_recent` TTL filtering.** The plan mentioned filtering
+   expired entries in `get_recent`, but this would couple the
+   substrate to config. The hourly GC timer physically deletes
+   expired entries, so `get_recent` naturally won't return them
+   after the next cycle. For a continuously-running daemon this
+   is sufficient.
+
+3. **`memory.gc` in channel layer, not memory crate.** Preserves
+   the lib.rs streak. The memory crate provides the substrate
+   methods; the channel crate wraps them as an agent-facing Tool.
+   Same pattern as `OllamaListTool` and `ReflectionTool`.

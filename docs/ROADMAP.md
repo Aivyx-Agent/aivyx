@@ -534,13 +534,17 @@ filed for protocol negotiation. Closes sole remaining deferral
 touched (A7), PRODUCT.md untouched (streak 5), lib.rs untouched
 (streak 2).
 
-## Phase 42 — Shell Hardening & Memory GC
+## Phase 42 — Shell Hardening & Memory GC (frozen)
 
-Process-group shell execution (prevent zombie grandchildren),
-shell environment variable support, per-topic memory cap
-enforcement, TTL-based memory expiry, `memory.gc` infrastructure
-tool. Strengthens G2 (code interaction), G3 (memory reflection),
-G6 (bounded storage).
+**Frozen — see [PHASE_42.md](PHASE_42.md).** Closed two
+operational safety gaps: zombie grandchildren (process-group
+execution with SIGTERM→SIGKILL on timeout) and unbounded
+memory growth (per-topic cap enforcement, TTL-based expiry,
+hourly daemon GC timer). Shell env isolation prevents API
+key leakage to LLM-generated commands. Agent-invocable
+`memory.gc` tool in channel layer (35 known bases). DESIGN.md,
+PRODUCT.md, and production-core all untouched. Test delta +25
+(814→839). Deferral backlog unchanged at 0.
 
 ## Phase 43 — Context Window Management
 
