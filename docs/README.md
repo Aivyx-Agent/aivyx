@@ -99,7 +99,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 39 | Frozen  | [PHASE_39.md](PHASE_39.md) | `6f7eaf1`  |
 | Phase 40 | Frozen  | [PHASE_40.md](PHASE_40.md) | `d995afd`  |
 | Phase 41 | Frozen  | [PHASE_41.md](PHASE_41.md) | `87d87c2`  |
-| Phase 42 | Frozen  | [PHASE_42.md](PHASE_42.md) | `pending`  |
+| Phase 42 | Frozen  | [PHASE_42.md](PHASE_42.md) | `0478461`  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
