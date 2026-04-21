@@ -60,15 +60,22 @@
 //!
 //! ## What this tool deliberately does NOT do
 //!
-//! - No `env`. Inheriting the agent's env is the default; letting
-//!   the LLM set arbitrary env vars is a future surface that
-//!   needs its own per-key schema. Deferred to a later phase.
-//! - No interactive shells, no PTY, no signal handling beyond the
-//!   wall-clock timeout. These are all deferred.
+//! - No interactive shells, no PTY. These are deferred.
 //! - No streaming of stdout/stderr as `StreamEvent::ToolOutput`.
 //!   Output is bundled into one `Completed` result — keeps the
 //!   `lib.rs` streak baseline stable and lets Task 4's planner
 //!   wiring treat shell.exec identically to every other tool.
+//!
+//! ## Phase 42 additions
+//!
+//! - **Process-group execution.** `process_group(0)` puts `sh -c`
+//!   and all grandchildren under one PGID. On timeout, the tool
+//!   SIGTERMs the group, waits 2s, then SIGKILLs. Prevents zombie
+//!   grandchildren from outliving the turn.
+//! - **Environment isolation.** `env_clear()` strips the daemon's
+//!   env (including secrets like `ANTHROPIC_API_KEY`). Only safe
+//!   defaults (`PATH`, `HOME`, `USER`, `LANG`, `TERM`) plus
+//!   explicitly declared `env` vars are injected.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -204,6 +211,15 @@ fn deny_scope() -> Scope {
 /// exact shape pins the Phase 11 Task 3 schema-extension contract:
 /// validator nested-object support is exercised by this fixture
 /// every time a shell.exec call runs through the loop.
+/// Safe default environment variables injected into every
+/// shell.exec invocation. These are the minimum set needed for
+/// well-behaved Unix commands (locale, terminal, path lookup).
+/// All other env vars from the daemon process are stripped via
+/// `env_clear()`. Phase 42.
+const SAFE_ENV_DEFAULTS: &[&str] = &[
+    "PATH", "HOME", "USER", "LANG", "TERM",
+];
+
 fn shell_exec_input_schema_value() -> Value {
     json!({
         "type": "object",
@@ -232,6 +248,17 @@ fn shell_exec_input_schema_value() -> Value {
                         "description": "Wall-clock timeout in milliseconds. \
                                         Default 30000; maximum 600000 \
                                         (10 minutes)."
+                    },
+                    "env": {
+                        "type": "object",
+                        "description": "Environment variables to set for \
+                                        this command. Keys are variable \
+                                        names, values are strings. The \
+                                        daemon's own environment is NOT \
+                                        inherited — only PATH, HOME, USER, \
+                                        LANG, TERM are injected as defaults, \
+                                        plus any vars declared here.",
+                        "additionalProperties": { "type": "string" }
                     }
                 },
                 "additionalProperties": false
@@ -261,6 +288,21 @@ fn input_timeout_ms(input: &Value) -> u64 {
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_TIMEOUT_MS);
     ms.clamp(1, MAX_TIMEOUT_MS)
+}
+
+/// Extract the optional `env` object from the input. Returns an
+/// empty map if missing or wrong type. Values that aren't strings
+/// are silently skipped — the schema enforces string values, so
+/// non-string values only appear if the caller bypasses validation.
+fn input_env(input: &Value) -> Vec<(String, String)> {
+    let Some(env_obj) = input.get("args").and_then(|a| a.get("env")).and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    env_obj
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect()
 }
 
 #[async_trait]
@@ -378,6 +420,22 @@ impl Tool for ShellExecTool {
         // and wait_with_output() returns empty buffers.
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
+        // Phase 42 — clear inherited environment so the child
+        // cannot read ANTHROPIC_API_KEY, AIVYX_PASSPHRASE, or
+        // any other secret from the daemon's process env. Then
+        // inject only safe defaults (PATH, HOME, USER, LANG,
+        // TERM) from the current env, plus any vars the caller
+        // explicitly declared in the `env` input field.
+        command.env_clear();
+        for &var in SAFE_ENV_DEFAULTS {
+            if let Ok(val) = std::env::var(var) {
+                command.env(var, val);
+            }
+        }
+        let declared_env = input_env(&input);
+        for (k, v) in &declared_env {
+            command.env(k, v);
+        }
         // Phase 42 — put the child and all its descendants into
         // their own process group (PGID = child PID). Without
         // this, `sh -c "cmd1 | cmd2"` forks cmd1 and cmd2 as
@@ -916,9 +974,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_env_is_cleared_by_default() {
+        // Phase 42 — the daemon's environment must not leak to
+        // child processes. We set a canary var in the current
+        // process, run a command that reads it, and verify it's
+        // absent. The env_clear() call strips everything except
+        // the safe defaults (PATH, HOME, USER, LANG, TERM).
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        // Set a canary that would leak if env_clear is missing.
+        // Safety: set_var is unsafe since Rust 2024 edition.
+        // This is a test-only narrow allow.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("AIVYX_TEST_SECRET_CANARY", "leaked");
+        }
+
+        let out = tool
+            .execute(
+                json!({"cmd": "printenv AIVYX_TEST_SECRET_CANARY || echo ABSENT"}),
+                &ctx,
+            )
+            .await;
+
+        // Clean up the canary immediately.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("AIVYX_TEST_SECRET_CANARY");
+        }
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                let stdout = output["stdout"].as_str().unwrap();
+                assert!(
+                    stdout.contains("ABSENT"),
+                    "canary var should not leak to child; got: {stdout}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_declared_env_vars_are_passed() {
+        // Phase 42 — explicitly declared env vars in the `env`
+        // input field must be available to the child.
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({
+                    "cmd": "printenv MY_CUSTOM_VAR",
+                    "args": {
+                        "env": { "MY_CUSTOM_VAR": "hello_phase42" }
+                    }
+                }),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                let stdout = output["stdout"].as_str().unwrap().trim();
+                assert_eq!(stdout, "hello_phase42");
+                assert_eq!(output["exit_code"], 0);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_safe_defaults_are_injected() {
+        // Phase 42 — PATH must survive env_clear so basic
+        // commands like `printf` resolve. HOME, USER, etc.
+        // should also be present if set in the daemon's env.
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(
+                json!({"cmd": "printenv PATH"}),
+                &ctx,
+            )
+            .await;
+
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                let stdout = output["stdout"].as_str().unwrap().trim();
+                assert!(
+                    !stdout.is_empty(),
+                    "PATH should be injected as a safe default"
+                );
+                assert_eq!(output["exit_code"], 0);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn input_schema_matches_nested_shell_exec_contract() {
         // Pins the exact schema shape: top-level required=[cmd],
-        // nested `args` is an optional object with cwd+timeout_ms.
+        // nested `args` is an optional object with cwd+timeout_ms+env.
         // If a future refactor accidentally drops the nested
         // structure or renames a field, this test catches it.
         let scratch = Scratch::new();
@@ -934,6 +1101,12 @@ mod tests {
         assert_eq!(
             args_schema["properties"]["timeout_ms"]["type"],
             "integer"
+        );
+        // Phase 42 — env field is an object with string values.
+        assert_eq!(args_schema["properties"]["env"]["type"], "object");
+        assert_eq!(
+            args_schema["properties"]["env"]["additionalProperties"],
+            json!({"type": "string"})
         );
     }
 }
