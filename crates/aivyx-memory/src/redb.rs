@@ -291,6 +291,66 @@ impl Memory for RedbMemory {
         Ok(deleted)
     }
 
+    async fn gc_topic(
+        &self,
+        topic: &str,
+        max_entries: usize,
+    ) -> Result<usize, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+
+        let prefix = Self::topic_scan_prefix(topic);
+        let rows = self
+            .handle
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+
+        if rows.len() <= max_entries {
+            return Ok(0);
+        }
+
+        // Rows are sorted by key ascending (seq ascending because
+        // seq is big-endian). Delete the oldest entries (front of
+        // the list) to keep only `max_entries` newest.
+        let to_remove = rows.len() - max_entries;
+        let mut deleted = 0usize;
+        for (key, _value) in rows.iter().take(to_remove) {
+            self.handle
+                .delete(key)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?;
+            deleted += 1;
+        }
+        Ok(deleted)
+    }
+
+    async fn gc_expired(
+        &self,
+        cutoff_secs: u64,
+    ) -> Result<usize, MemoryError> {
+        // Scan every entry in the memory domain.
+        let rows = self
+            .handle
+            .scan_prefix(ENTRY_PREFIX)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+
+        let mut deleted = 0usize;
+        for (key, value) in &rows {
+            let entry = InMemoryMemory::decode_entry(value)?;
+            if entry.created_at_secs < cutoff_secs {
+                self.handle
+                    .delete(key)
+                    .await
+                    .map_err(|e| MemoryError::Backend(e.to_string()))?;
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
+
     async fn scan_prefix(
         &self,
         topic_prefix: &str,
@@ -856,5 +916,80 @@ mod tests {
             mem.scan_prefix("", 0).await,
             Err(MemoryError::ZeroLimit)
         ));
+    }
+
+    // ---- Phase 42: gc_topic on disk ---------------------------------
+
+    #[tokio::test]
+    async fn gc_topic_on_disk_evicts_oldest() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 15).await;
+        for i in 0..5 {
+            mem.put("notes", &format!("e{i}")).await.unwrap();
+        }
+        let removed = mem.gc_topic("notes", 2).await.unwrap();
+        assert_eq!(removed, 3);
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert_eq!(remaining.len(), 2);
+        // Newest survive: seq 4, 3
+        assert_eq!(remaining[0].seq, 4);
+        assert_eq!(remaining[1].seq, 3);
+    }
+
+    #[tokio::test]
+    async fn gc_topic_on_disk_noop_when_under_cap() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 16).await;
+        mem.put("notes", "a").await.unwrap();
+        let removed = mem.gc_topic("notes", 10).await.unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[tokio::test]
+    async fn gc_topic_on_disk_does_not_affect_other_topics() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 17).await;
+        for i in 0..5 {
+            mem.put("notes", &format!("n{i}")).await.unwrap();
+        }
+        mem.put("todos", "t0").await.unwrap();
+
+        let removed = mem.gc_topic("notes", 2).await.unwrap();
+        assert_eq!(removed, 3);
+        // todos untouched
+        let todos = mem.get_recent("todos", 10).await.unwrap();
+        assert_eq!(todos.len(), 1);
+    }
+
+    // ---- Phase 42: gc_expired on disk --------------------------------
+
+    #[tokio::test]
+    async fn gc_expired_on_disk_removes_old_entries() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 18).await;
+        mem.put("notes", "old").await.unwrap();
+        mem.put("todos", "also-old").await.unwrap();
+
+        // Cutoff in the future removes everything.
+        let future = super::now_secs() + 100;
+        let removed = mem.gc_expired(future).await.unwrap();
+        assert_eq!(removed, 2);
+        let notes = mem.get_recent("notes", 10).await.unwrap();
+        let todos = mem.get_recent("todos", 10).await.unwrap();
+        assert!(notes.is_empty());
+        assert!(todos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gc_expired_on_disk_keeps_fresh_entries() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 19).await;
+        mem.put("notes", "fresh").await.unwrap();
+
+        // Cutoff in the past keeps everything.
+        let removed = mem.gc_expired(0).await.unwrap();
+        assert_eq!(removed, 0);
+        let notes = mem.get_recent("notes", 10).await.unwrap();
+        assert_eq!(notes.len(), 1);
     }
 }

@@ -233,6 +233,31 @@ pub trait Memory: Send + Sync {
         topic_prefix: &str,
         per_topic_limit: usize,
     ) -> Result<Vec<(String, Vec<MemoryEntry>)>, MemoryError>;
+
+    /// Phase 42 — evict the oldest entries from `topic` until at
+    /// most `max_entries` remain. Returns the number of entries
+    /// deleted. If the topic already has fewer than `max_entries`,
+    /// returns 0 (no-op). If `max_entries` is 0, deletes all
+    /// entries (equivalent to `forget`).
+    ///
+    /// Fails fast on empty topic.
+    async fn gc_topic(
+        &self,
+        topic: &str,
+        max_entries: usize,
+    ) -> Result<usize, MemoryError>;
+
+    /// Phase 42 — delete every entry whose `created_at_secs` is
+    /// older than `cutoff_secs` (seconds since UNIX epoch). Returns
+    /// the total number of entries deleted across all topics.
+    ///
+    /// This is the TTL-based expiry primitive. The daemon calls it
+    /// periodically (e.g. once per hour) with
+    /// `now_secs - config.memory_ttl_secs`.
+    async fn gc_expired(
+        &self,
+        cutoff_secs: u64,
+    ) -> Result<usize, MemoryError>;
 }
 
 /// Deterministic in-process `Memory` implementation.
@@ -362,6 +387,43 @@ impl Memory for InMemoryMemory {
             out.push((topic.clone(), newest_first));
         }
         Ok(out)
+    }
+
+    async fn gc_topic(
+        &self,
+        topic: &str,
+        max_entries: usize,
+    ) -> Result<usize, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let mut state = self.state.lock().unwrap();
+        let Some(entries) = state.topics.get_mut(topic) else {
+            return Ok(0);
+        };
+        if entries.len() <= max_entries {
+            return Ok(0);
+        }
+        // Entries are stored oldest-first. Drain from the front
+        // to keep the newest `max_entries`.
+        let to_remove = entries.len() - max_entries;
+        entries.drain(..to_remove);
+        Ok(to_remove)
+    }
+
+    async fn gc_expired(
+        &self,
+        cutoff_secs: u64,
+    ) -> Result<usize, MemoryError> {
+        let mut state = self.state.lock().unwrap();
+        let mut total_removed = 0usize;
+        state.topics.retain(|_topic, entries| {
+            let before = entries.len();
+            entries.retain(|e| e.created_at_secs >= cutoff_secs);
+            total_removed += before - entries.len();
+            !entries.is_empty()
+        });
+        Ok(total_removed)
     }
 }
 
@@ -623,6 +685,103 @@ mod tests {
         mem.put("b", "2").await.unwrap();
         let out = mem.scan_prefix("", 10).await.unwrap();
         assert_eq!(out.len(), 2);
+    }
+
+    // ---- Phase 42: gc_topic -------------------------------------------
+
+    #[tokio::test]
+    async fn gc_topic_evicts_oldest_entries() {
+        let mem = InMemoryMemory::new();
+        for i in 0..5 {
+            mem.put("notes", &format!("entry {i}")).await.unwrap();
+        }
+        let removed = mem.gc_topic("notes", 3).await.unwrap();
+        assert_eq!(removed, 2, "should evict 2 oldest entries");
+
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert_eq!(remaining.len(), 3);
+        // Newest entries survive: seq 4, 3, 2
+        assert_eq!(remaining[0].seq, 4);
+        assert_eq!(remaining[1].seq, 3);
+        assert_eq!(remaining[2].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn gc_topic_noop_when_under_cap() {
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "a").await.unwrap();
+        mem.put("notes", "b").await.unwrap();
+        let removed = mem.gc_topic("notes", 10).await.unwrap();
+        assert_eq!(removed, 0);
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert_eq!(remaining.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn gc_topic_zero_max_deletes_all() {
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "a").await.unwrap();
+        mem.put("notes", "b").await.unwrap();
+        let removed = mem.gc_topic("notes", 0).await.unwrap();
+        assert_eq!(removed, 2);
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gc_topic_unknown_topic_returns_zero() {
+        let mem = InMemoryMemory::new();
+        let removed = mem.gc_topic("nonexistent", 5).await.unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[tokio::test]
+    async fn gc_topic_empty_topic_is_rejected() {
+        let mem = InMemoryMemory::new();
+        assert!(matches!(
+            mem.gc_topic("", 5).await,
+            Err(MemoryError::EmptyTopic)
+        ));
+    }
+
+    // ---- Phase 42: gc_expired ----------------------------------------
+
+    #[tokio::test]
+    async fn gc_expired_removes_old_entries() {
+        let mem = InMemoryMemory::new();
+        // Write entries — they'll have current timestamps.
+        mem.put("notes", "old").await.unwrap();
+        mem.put("notes", "also-old").await.unwrap();
+
+        // gc_expired with a cutoff in the future should delete them.
+        let future = now_secs() + 100;
+        let removed = mem.gc_expired(future).await.unwrap();
+        assert_eq!(removed, 2);
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gc_expired_keeps_fresh_entries() {
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "fresh").await.unwrap();
+
+        // gc_expired with a cutoff in the past should keep them.
+        let removed = mem.gc_expired(0).await.unwrap();
+        assert_eq!(removed, 0);
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn gc_expired_crosses_topics() {
+        let mem = InMemoryMemory::new();
+        mem.put("a", "entry-a").await.unwrap();
+        mem.put("b", "entry-b").await.unwrap();
+
+        let future = now_secs() + 100;
+        let removed = mem.gc_expired(future).await.unwrap();
+        assert_eq!(removed, 2, "should remove entries from both topics");
     }
 
     #[test]
