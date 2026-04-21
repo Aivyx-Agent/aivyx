@@ -546,12 +546,14 @@ key leakage to LLM-generated commands. Agent-invocable
 PRODUCT.md, and production-core all untouched. Test delta +25
 (814→839). Deferral backlog unchanged at 0.
 
-## Phase 43 — Context Window Management
+## Phase 43 — Context Window Management ✓ FROZEN
 
-Token counting, history pruning, pruning-to-memory bridge,
-`TokenUsage` reporting extension. Prevents context-window
-exhaustion during long multi-step turns. Strengthens G3
-(memory reflection) and G5 (autonomous execution).
+Token counting (`chars.div_ceil(4)` heuristic), 80%-budget
+history pruning in `LlmPlanner::next_step`, `PruneSink` trait
+for persisting pruned summaries to memory, `TokenUsage`
+extended with `context_tokens_before/after_pruning`. Per-provider
+context window defaults (200k/128k/8k). 857 tests, zero clippy.
+DESIGN.md streak → 2, PRODUCT.md streak → 7, lib.rs streak broken.
 
 ## Phase 44 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
 
