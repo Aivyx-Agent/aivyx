@@ -77,13 +77,44 @@ overwrite guard, 0600 permissions, success message.
 
 ## Exit criteria
 
-- [ ] `aivyx init` subcommand parsed and dispatched.
-- [ ] Ollama detection via health check.
-- [ ] Model listing via `/api/tags`.
-- [ ] Interactive provider/model/path prompts.
-- [ ] TOML generation for all 3 providers.
-- [ ] File written with 0600 permissions (Unix).
-- [ ] All tests pass with net-positive delta.
-- [ ] Zero clippy warnings.
-- [ ] DESIGN.md untouched (streak -> 3).
-- [ ] PRODUCT.md untouched (streak -> 8).
+- [x] `aivyx init` subcommand parsed and dispatched.
+- [x] Ollama detection via health check.
+- [x] Model listing via `/api/tags`.
+- [x] Interactive provider/model/path prompts.
+- [x] TOML generation for all 3 providers.
+- [x] File written with 0600 permissions (Unix).
+- [x] All tests pass with net-positive delta.
+- [x] Zero clippy warnings.
+- [x] DESIGN.md untouched (streak -> 3).
+- [x] PRODUCT.md untouched (streak -> 8).
+
+## Ship record
+
+| Metric | Value |
+|---|---|
+| Tests at entry | 857 |
+| Tests at exit | 876 |
+| Test delta | +19 |
+| Clippy warnings | 0 |
+| DESIGN.md | untouched (streak → 3) |
+| PRODUCT.md | untouched (streak → 8) |
+| lib.rs | untouched (streak → 1) |
+| Deferral backlog | 0 |
+
+### Commits
+
+| Commit | Description |
+|---|---|
+| `09e4337` | Task 1: `aivyx init` subcommand + CLI parsing |
+| `83fbf72` | Task 2: Ollama detection and model listing |
+| `effd764` | Task 3: interactive prompt helpers |
+| `5c8cd33` | Task 4: TOML generation |
+| `6f54020` | Task 5: wire up `run_init_wizard()` end-to-end |
+
+### Streak predictions vs actuals
+
+| Streak | Predicted | Actual |
+|---|---|---|
+| DESIGN.md | untouched (3) | untouched (3) ✓ |
+| PRODUCT.md | untouched (8) | untouched (8) ✓ |
+| lib.rs | untouched (1) | untouched (1) ✓ |

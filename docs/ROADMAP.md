@@ -555,19 +555,27 @@ extended with `context_tokens_before/after_pruning`. Per-provider
 context window defaults (200k/128k/8k). 857 tests, zero clippy.
 DESIGN.md streak → 2, PRODUCT.md streak → 7, lib.rs streak broken.
 
-## Phase 44 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
+## Phase 44 — `aivyx init` Interactive First-Run Wizard (shipped)
+
+Interactive setup wizard for non-technical end users. Detects
+Ollama locally (zero API key path), walks through provider/model
+selection, writes `aivyx.toml` with 0600 permissions. 876 tests,
+zero clippy. DESIGN.md streak → 3, PRODUCT.md streak → 8,
+lib.rs streak → 1.
+
+## Phase 45 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
 
 IPC query messages, mission dashboard, audit viewer, session
 history. Makes the Web UI a full operator inspection surface.
 Delivers P2 (mission legibility) and P4 (daemon inspection).
 
-## Phase 45 — Channel Adapter SDK & Documentation (P5 + P11)
+## Phase 46 — Channel Adapter SDK & Documentation (P5 + P11)
 
 Channel adapter contract documentation, adapter conformance
 test suite, example Python adapter. Delivers P5 (channel SDK)
 and P11 (SDK documentation).
 
-## Phase 46 — Tool Process IPC Foundation (P12)
+## Phase 47 — Tool Process IPC Foundation (P12)
 
 Third-party tools as separate OS processes speaking the daemon's
 IPC protocol. `ToolProcessBridge`, tool process lifecycle,

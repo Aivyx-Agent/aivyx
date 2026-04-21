@@ -101,6 +101,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 41 | Frozen  | [PHASE_41.md](PHASE_41.md) | `87d87c2`  |
 | Phase 42 | Frozen  | [PHASE_42.md](PHASE_42.md) | `0478461`  |
 | Phase 43 | Frozen  | [PHASE_43.md](PHASE_43.md) | `066e633`  |
+| Phase 44 | Frozen  | [PHASE_44.md](PHASE_44.md) | *(this commit)* |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
