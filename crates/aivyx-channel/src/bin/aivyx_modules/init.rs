@@ -4,6 +4,7 @@
 //! walks the user through provider and model selection, and writes
 //! a ready-to-use `aivyx.toml` config file.
 
+use std::io::{BufRead, Write as IoWrite};
 use std::time::Duration;
 
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
@@ -79,6 +80,101 @@ fn parse_model_names(json_body: &str) -> Result<Vec<String>, String> {
     let mut sorted = models;
     sorted.sort();
     Ok(sorted)
+}
+
+// ---------------------------------------------------------------------------
+// Interactive prompt helpers
+// ---------------------------------------------------------------------------
+
+/// Read a single line from `reader`, print `prompt` to `writer` first.
+/// Returns the trimmed input. Returns an error if reading fails.
+#[allow(dead_code)] // wired in Task 5
+fn prompt_line(
+    prompt: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<String, String> {
+    write!(writer, "{prompt}").map_err(|e| format!("write error: {e}"))?;
+    writer.flush().map_err(|e| format!("flush error: {e}"))?;
+    let mut buf = String::new();
+    reader
+        .read_line(&mut buf)
+        .map_err(|e| format!("read error: {e}"))?;
+    Ok(buf.trim().to_string())
+}
+
+/// Present a numbered menu and return the chosen option (0-indexed).
+/// `default` is returned when the user presses Enter without typing.
+///
+/// Example output:
+/// ```text
+///   1) Ollama (local)
+///   2) Anthropic
+///   3) OpenAI
+/// Choose [1]:
+/// ```
+#[allow(dead_code)] // wired in Task 5
+fn prompt_choice(
+    prompt: &str,
+    options: &[&str],
+    default: usize,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<usize, String> {
+    for (i, opt) in options.iter().enumerate() {
+        writeln!(writer, "  {}) {opt}", i + 1)
+            .map_err(|e| format!("write error: {e}"))?;
+    }
+    loop {
+        let input = prompt_line(
+            &format!("{prompt} [{}]: ", default + 1),
+            reader,
+            writer,
+        )?;
+        if input.is_empty() {
+            return Ok(default);
+        }
+        match input.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= options.len() => return Ok(n - 1),
+            _ => {
+                writeln!(writer, "Please enter a number between 1 and {}.", options.len())
+                    .map_err(|e| format!("write error: {e}"))?;
+            }
+        }
+    }
+}
+
+/// Prompt for a secret (e.g. an API key) without echoing input.
+/// Uses `rpassword` which requires a real TTY — not unit-testable
+/// with injected readers.
+#[allow(dead_code)] // wired in Task 5
+fn prompt_secret(prompt: &str) -> Result<String, String> {
+    rpassword::prompt_password(prompt).map_err(|e| format!("failed to read secret: {e}"))
+}
+
+/// Ask a yes/no question. `default` is the answer when the user
+/// presses Enter. Returns `true` for yes, `false` for no.
+#[allow(dead_code)] // wired in Task 5
+fn prompt_yes_no(
+    prompt: &str,
+    default: bool,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<bool, String> {
+    let hint = if default { "Y/n" } else { "y/N" };
+    let input = prompt_line(&format!("{prompt} [{hint}]: "), reader, writer)?;
+    if input.is_empty() {
+        return Ok(default);
+    }
+    match input.to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        _ => {
+            writeln!(writer, "Please answer y or n.")
+                .map_err(|e| format!("write error: {e}"))?;
+            prompt_yes_no(prompt, default, reader, writer)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,5 +264,76 @@ mod tests {
         }"#;
         let names = parse_model_names(json).unwrap();
         assert_eq!(names, vec!["llama3.2:latest", "mistral:latest"]);
+    }
+
+    // -- prompt helpers --------------------------------------------------
+
+    use std::io::Cursor;
+
+    #[test]
+    fn prompt_line_trims_whitespace() {
+        let mut input = Cursor::new(b"  hello world  \n" as &[u8]);
+        let mut output = Vec::new();
+        let result = prompt_line("Name: ", &mut input, &mut output).unwrap();
+        assert_eq!(result, "hello world");
+        assert_eq!(String::from_utf8(output).unwrap(), "Name: ");
+    }
+
+    #[test]
+    fn prompt_choice_returns_default_on_empty_input() {
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn prompt_choice_returns_selected_option() {
+        let mut input = Cursor::new(b"2\n" as &[u8]);
+        let mut output = Vec::new();
+        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
+        assert_eq!(result, 1); // 0-indexed
+    }
+
+    #[test]
+    fn prompt_choice_rejects_out_of_range_then_accepts() {
+        // First input "5" is out of range, second "3" is valid.
+        let mut input = Cursor::new(b"5\n3\n" as &[u8]);
+        let mut output = Vec::new();
+        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
+        assert_eq!(result, 2);
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("Please enter a number between 1 and 3"));
+    }
+
+    #[test]
+    fn prompt_yes_no_defaults_true() {
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let result = prompt_yes_no("Overwrite?", true, &mut input, &mut output).unwrap();
+        assert!(result);
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("[Y/n]"));
+    }
+
+    #[test]
+    fn prompt_yes_no_defaults_false() {
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let result = prompt_yes_no("Overwrite?", false, &mut input, &mut output).unwrap();
+        assert!(!result);
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("[y/N]"));
+    }
+
+    #[test]
+    fn prompt_yes_no_accepts_yes() {
+        let mut input = Cursor::new(b"yes\n" as &[u8]);
+        let mut output = Vec::new();
+        let result = prompt_yes_no("Continue?", false, &mut input, &mut output).unwrap();
+        assert!(result);
     }
 }
