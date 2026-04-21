@@ -37,7 +37,7 @@ pub mod schema;
 pub mod tools;
 
 pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
-pub use llm_planner::{LlmPlanner, LlmPlannerConfig};
+pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
 pub use planner::{
     NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner, VecPlanner,
 };

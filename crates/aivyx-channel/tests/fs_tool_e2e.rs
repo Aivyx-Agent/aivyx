@@ -273,6 +273,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         memory_topic_prefix: None,
         role_overrides: None,
         context_window_tokens: None,
+        prune_sink: None,
     }
 }
 

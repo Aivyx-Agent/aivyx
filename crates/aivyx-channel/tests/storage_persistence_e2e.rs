@@ -260,6 +260,7 @@ async fn run_one_turn(storage: Arc<dyn Storage>, audit_key_byte: u8, user_line: 
         memory_topic_prefix: None,
         role_overrides: None,
         context_window_tokens: None,
+        prune_sink: None,
     };
 
     let report = run_session(provider, audit, config, channel, reader)

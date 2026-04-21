@@ -50,6 +50,20 @@ use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, T
 use crate::{ChannelContext, Message, MessageContent, StreamEvent, ToolId, ToolOutcome};
 
 // ---------------------------------------------------------------------------
+// PruneSink — callback for persisting pruned context
+// ---------------------------------------------------------------------------
+
+/// Receives a summary of pruned messages when context-window pruning
+/// fires. Implementations live in the channel layer (which has access
+/// to `Memory`); the core crate defines only the contract.
+#[async_trait]
+pub trait PruneSink: Send + Sync {
+    /// Called once per pruning event with the number of messages
+    /// removed and a human-readable summary of their content.
+    async fn on_prune(&self, session_id: crate::SessionId, pruned_count: usize, summary: &str);
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -57,7 +71,7 @@ use crate::{ChannelContext, Message, MessageContent, StreamEvent, ToolId, ToolOu
 /// from [`LlmPlanner::new`] so callers can build one at config-parse
 /// time and reuse it, and so new fields can land without churning the
 /// constructor signature.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LlmPlannerConfig {
     /// Provider-specific model id, e.g. `"claude-haiku-4-5-20251001"`.
     pub model: String,
@@ -87,6 +101,25 @@ pub struct LlmPlannerConfig {
     /// Defaults per provider: 200_000 (Anthropic), 128_000 (OpenAI).
     /// `None` disables pruning entirely.
     pub context_window_tokens: Option<usize>,
+    /// Phase 43 Task 4 — optional callback invoked when messages are
+    /// pruned. The channel layer provides an implementation backed by
+    /// `Memory::put()` to persist pruned context for later reflection.
+    /// `None` means pruned messages are silently discarded.
+    pub prune_sink: Option<Arc<dyn PruneSink>>,
+}
+
+impl std::fmt::Debug for LlmPlannerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmPlannerConfig")
+            .field("model", &self.model)
+            .field("system_prompt", &self.system_prompt)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .field("tool_allowlist", &self.tool_allowlist)
+            .field("context_window_tokens", &self.context_window_tokens)
+            .field("prune_sink", &self.prune_sink.as_ref().map(|_| ".."))
+            .finish()
+    }
 }
 
 impl LlmPlannerConfig {
@@ -98,6 +131,7 @@ impl LlmPlannerConfig {
             temperature: None,
             tool_allowlist: None,
             context_window_tokens: None,
+            prune_sink: None,
         }
     }
 
@@ -121,6 +155,13 @@ impl LlmPlannerConfig {
     /// estimated token count exceeds 80% of this value.
     pub fn with_context_window(mut self, tokens: usize) -> Self {
         self.context_window_tokens = Some(tokens);
+        self
+    }
+
+    /// Attach a prune sink that receives summaries of pruned messages
+    /// for persistence (e.g. to memory). See [`PruneSink`].
+    pub fn with_prune_sink(mut self, sink: Arc<dyn PruneSink>) -> Self {
+        self.prune_sink = Some(sink);
         self
     }
 
@@ -347,6 +388,12 @@ impl TurnPlanner for LlmPlanner {
                 }
                 let pruned_count = keep_from;
                 if pruned_count > 0 {
+                    // Build a summary before draining, for the prune sink.
+                    if let Some(ref sink) = self.config.prune_sink {
+                        let summary = summarise_pruned(&self.history[..pruned_count]);
+                        let sid = channel.session_id();
+                        sink.on_prune(sid, pruned_count, &summary).await;
+                    }
                     self.history.drain(..pruned_count);
                     self.history.insert(
                         0,
@@ -560,6 +607,53 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
             });
             (envelope.to_string(), true)
         }
+    }
+}
+
+/// Build a compact summary of pruned messages for the prune sink.
+/// Truncates each message to avoid storing massive tool results
+/// verbatim in memory — the point is orientation, not replay.
+fn summarise_pruned(messages: &[LlmMessage]) -> String {
+    use std::fmt::Write;
+    let mut buf = String::new();
+    for (i, msg) in messages.iter().enumerate() {
+        if i > 0 {
+            buf.push('\n');
+        }
+        match msg {
+            LlmMessage::User { content } => {
+                let _ = write!(buf, "[user] {}", truncate(content, 200));
+            }
+            LlmMessage::Assistant { text, tool_calls } => {
+                let _ = write!(buf, "[assistant] {}", truncate(text, 200));
+                for tc in tool_calls {
+                    let _ = write!(buf, "\n  tool_call: {}", tc.tool_name);
+                }
+            }
+            LlmMessage::ToolResult {
+                call_id, content, ..
+            } => {
+                let _ = write!(
+                    buf,
+                    "[tool_result call_id={call_id}] {}",
+                    truncate(content, 200)
+                );
+            }
+        }
+    }
+    buf
+}
+
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        // Find a char boundary at or before `max`.
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
     }
 }
 

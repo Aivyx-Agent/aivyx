@@ -248,6 +248,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         memory_topic_prefix: None,
         role_overrides: None,
         context_window_tokens: None,
+        prune_sink: None,
     };
 
     // -- Drive the session.

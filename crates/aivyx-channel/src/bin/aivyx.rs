@@ -1649,6 +1649,7 @@ async fn run_async(
     let backcompat_floor_for_factory = backcompat_floor.clone();
     let model_for_factory = model.clone();
     let max_tokens_for_factory: u32 = DEFAULT_MAX_TOKENS;
+    let memory_for_factory = Arc::clone(&memory);
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -1705,7 +1706,10 @@ async fn run_async(
             .with_system_prompt(child_system_prompt)
             .with_max_tokens(max_tokens_for_factory)
             .with_tool_allowlist(child_tool_allowlist.clone())
-            .with_context_window(provider_kind.value.default_context_window());
+            .with_context_window(provider_kind.value.default_context_window())
+            .with_prune_sink(Arc::new(
+                aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory_for_factory)),
+            ));
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
         let child_planner_factory = move || {
@@ -1916,7 +1920,10 @@ async fn run_async(
             .with_system_prompt(system_prompt)
             .with_max_tokens(DEFAULT_MAX_TOKENS)
             .with_tool_allowlist(tool_allowlist)
-            .with_context_window(provider_kind.value.default_context_window());
+            .with_context_window(provider_kind.value.default_context_window())
+            .with_prune_sink(Arc::new(
+                aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
+            ));
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
         let daemon_overrides = shared_role_overrides.clone();
@@ -2221,6 +2228,9 @@ async fn run_async(
                 memory_topic_prefix,
                 role_overrides: Some(shared_role_overrides),
                 context_window_tokens: Some(provider_kind.value.default_context_window()),
+                prune_sink: Some(Arc::new(
+                    aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
+                )),
             };
 
             let stdin = io::stdin();

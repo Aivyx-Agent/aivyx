@@ -138,6 +138,11 @@ pub struct SessionConfig {
     /// `Some`, the planner prunes old history when estimated tokens
     /// exceed 80% of this value. `None` disables pruning.
     pub context_window_tokens: Option<usize>,
+    /// Phase 43 Task 4 — optional sink for persisting pruned context
+    /// summaries. When `Some`, the planner calls it whenever messages
+    /// are dropped during context-window pruning. `None` means pruned
+    /// messages are silently discarded.
+    pub prune_sink: Option<Arc<dyn aivyx_core::llm_planner::PruneSink>>,
 }
 
 /// Summary of what the session did, returned after EOF.
@@ -203,6 +208,9 @@ where
         .with_tool_allowlist(config.tool_allowlist.clone());
     if let Some(cw) = config.context_window_tokens {
         planner_config = planner_config.with_context_window(cw);
+    }
+    if let Some(sink) = config.prune_sink {
+        planner_config = planner_config.with_prune_sink(sink);
     }
     let role_overrides_for_factory = config.role_overrides.clone();
 
