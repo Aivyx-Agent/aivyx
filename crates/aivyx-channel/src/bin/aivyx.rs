@@ -1334,6 +1334,7 @@ async fn run_async(
     let memory_write =
         MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
+    let memory_gc = aivyx_channel::memory_gc_tool::MemoryGcTool::new(Arc::clone(&memory));
 
     // ---- Tool list (with the Phase 11 Task 3 trust-tier gate) --------
     // This is the single registration site where the binary decides
@@ -1356,6 +1357,7 @@ async fn run_async(
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,
+        Arc::new(memory_gc) as Arc<dyn Tool>,
     ];
     let shell_exec_scope: Option<Scope> =
         match build_shell_exec_for_channel(channel_kind, &fs_root)? {
@@ -1549,6 +1551,7 @@ async fn run_async(
         Scope::parse("memory.read").unwrap(),
         Scope::parse("memory.write").unwrap(),
         Scope::parse("memory.forget").unwrap(),
+        Scope::parse("memory.gc").unwrap(),
         fs_read_scope,
         fs_write_scope,
         Scope::parse("net.fetch").unwrap(),
@@ -2774,6 +2777,7 @@ mod tests {
             Scope::parse("memory.read").unwrap(),
             Scope::parse("memory.write").unwrap(),
             Scope::parse("memory.forget").unwrap(),
+            Scope::parse("memory.gc").unwrap(),
             Scope::parse(&format!("fs.read:{sandbox}/**")).unwrap(),
             Scope::parse(&format!("fs.write:{sandbox}/**")).unwrap(),
             Scope::parse("net.fetch").unwrap(),

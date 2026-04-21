@@ -43,6 +43,7 @@ pub mod webhook_tool;
 pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
+pub mod memory_gc_tool;
 pub mod reflection_tool;
 pub mod role_overrides;
 pub mod role_update_tool;

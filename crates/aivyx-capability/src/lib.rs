@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Scope registry — the v1 active namespace (34 scopes).
+// Scope registry — the v1 active namespace (35 scopes).
 // ---------------------------------------------------------------------------
 
 /// The v1 active scope bases. `Scope::parse` rejects anything not in this
@@ -52,6 +52,7 @@ const KNOWN_BASES: &[&str] = &[
     "memory.read",
     "memory.write",
     "memory.forget",
+    "memory.gc",
     // channel
     "channel.send",
     "channel.receive",
@@ -577,6 +578,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "memory.read",
         "memory.write",
         "memory.forget",
+        "memory.gc",
         "channel.send",
         "channel.receive",
         "audit.read",
