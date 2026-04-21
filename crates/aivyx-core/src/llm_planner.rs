@@ -152,6 +152,9 @@ pub struct LlmPlanner {
     pending_call_ids: VecDeque<String>,
     /// Cumulative token usage across all LLM steps in this turn.
     accumulated_usage: crate::TokenUsage,
+    /// Running count of messages pruned during this turn for context
+    /// window management (Phase 43).
+    pruned_message_count: usize,
 }
 
 impl LlmPlanner {
@@ -193,6 +196,7 @@ impl LlmPlanner {
             history: Vec::new(),
             pending_call_ids: VecDeque::new(),
             accumulated_usage: crate::TokenUsage::default(),
+            pruned_message_count: 0,
         }
     }
 
@@ -201,6 +205,12 @@ impl LlmPlanner {
     /// after tool observations.
     pub fn history(&self) -> &[LlmMessage] {
         &self.history
+    }
+
+    /// Number of messages pruned from conversation history during this
+    /// turn to stay within the context window budget (Phase 43).
+    pub fn pruned_message_count(&self) -> usize {
+        self.pruned_message_count
     }
 
     /// Names of tools actually advertised to the provider — i.e. the
@@ -305,6 +315,51 @@ impl TurnPlanner for LlmPlanner {
             self.history.push(LlmMessage::User {
                 content: String::new(),
             });
+        }
+
+        // Phase 43 Task 3 — context window pruning. If the estimated
+        // token count exceeds 80% of the configured context window,
+        // drop the oldest messages (preserving the most-recent tail)
+        // and insert a sentinel so the model knows context was lost.
+        if let Some(window) = self.config.context_window_tokens {
+            let budget = window * 4 / 5; // 80% threshold
+            let system_tokens = aivyx_llm::estimate_system_tokens(
+                self.config.system_prompt.as_deref(),
+            );
+            let total = system_tokens + aivyx_llm::estimate_tokens(&self.history);
+            if total > budget && self.history.len() > 1 {
+                // Keep at least the last message (the most recent user
+                // turn or tool result). Prune from the front until we
+                // fit, or until only one message remains.
+                let target = budget.saturating_sub(system_tokens);
+                let mut keep_from = self.history.len() - 1;
+                let mut tail_tokens = aivyx_llm::estimate_tokens(&self.history[keep_from..]);
+                // Grow the tail backwards while it still fits.
+                while keep_from > 0 {
+                    let candidate = keep_from - 1;
+                    let candidate_tokens =
+                        aivyx_llm::estimate_tokens(&self.history[candidate..candidate + 1]);
+                    if tail_tokens + candidate_tokens > target {
+                        break;
+                    }
+                    tail_tokens += candidate_tokens;
+                    keep_from = candidate;
+                }
+                let pruned_count = keep_from;
+                if pruned_count > 0 {
+                    self.history.drain(..pruned_count);
+                    self.history.insert(
+                        0,
+                        LlmMessage::User {
+                            content: format!(
+                                "[Earlier context pruned: {pruned_count} messages removed \
+                                 to fit context window]"
+                            ),
+                        },
+                    );
+                    self.pruned_message_count += pruned_count;
+                }
+            }
         }
 
         // Loop so we can synthesize a recovery step if the LLM picks a
@@ -1212,5 +1267,180 @@ mod tests {
         let config = LlmPlannerConfig::new("test-model")
             .with_context_window(200_000);
         assert_eq!(config.context_window_tokens, Some(200_000));
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 43 Task 3 — context window pruning
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a planner with a tiny context window, pre-seed
+    /// history with known messages, then call `next_step` so the
+    /// pruning logic runs.
+    fn make_pruning_planner(
+        window_tokens: usize,
+        messages: Vec<LlmMessage>,
+        reply: &str,
+    ) -> (LlmPlanner, RecChannel) {
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: reply.to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let config = LlmPlannerConfig::new("test")
+            .with_context_window(window_tokens);
+        let mut planner = LlmPlanner::new(provider, registry, config);
+        planner.history = messages;
+        (planner, RecChannel::new())
+    }
+
+    #[tokio::test]
+    async fn pruning_skipped_when_under_budget() {
+        // 5 short messages, generous context window — no pruning.
+        let msgs: Vec<LlmMessage> = (0..5)
+            .map(|i| LlmMessage::User {
+                content: format!("msg{i}"),
+            })
+            .collect();
+        let (mut planner, ch) = make_pruning_planner(200_000, msgs, "ok");
+        planner.next_step(&[], &ch).await;
+        assert_eq!(planner.pruned_message_count(), 0);
+        // 5 original + 1 assistant reply (no sentinel inserted).
+        assert_eq!(planner.history().len(), 6);
+    }
+
+    #[tokio::test]
+    async fn pruning_drops_oldest_when_over_budget() {
+        // Each "x".repeat(100) message ≈ 25 tokens.
+        // 10 messages ≈ 250 tokens. Set window to 200 → budget = 160.
+        // Pruning should drop some messages.
+        let msgs: Vec<LlmMessage> = (0..10)
+            .map(|i| LlmMessage::User {
+                content: format!("message-{i}-{}", "x".repeat(100)),
+            })
+            .collect();
+        let (mut planner, ch) = make_pruning_planner(200, msgs, "ok");
+        planner.next_step(&[], &ch).await;
+        assert!(planner.pruned_message_count() > 0);
+        // First message in history should be the sentinel.
+        match &planner.history()[0] {
+            LlmMessage::User { content } => {
+                assert!(content.contains("[Earlier context pruned:"));
+            }
+            other => panic!("expected User sentinel, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pruning_preserves_at_least_last_message() {
+        // Extremely small window (10 tokens = 40 chars). Even a
+        // single message exceeds budget, but we never prune the last
+        // message. Two messages in: we should prune one and keep one
+        // (plus sentinel).
+        let msgs = vec![
+            LlmMessage::User {
+                content: "a]".repeat(50), // ~25 tokens
+            },
+            LlmMessage::User {
+                content: "b".repeat(200), // ~50 tokens
+            },
+        ];
+        let (mut planner, ch) = make_pruning_planner(10, msgs, "ok");
+        planner.next_step(&[], &ch).await;
+        assert_eq!(planner.pruned_message_count(), 1);
+        // History: sentinel + last-original + assistant-reply = 3.
+        assert_eq!(planner.history().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn pruning_skipped_when_no_context_window() {
+        // No context window configured → pruning never triggers.
+        let msgs: Vec<LlmMessage> = (0..20)
+            .map(|_| LlmMessage::User {
+                content: "x".repeat(1000),
+            })
+            .collect();
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let config = LlmPlannerConfig::new("test"); // no .with_context_window()
+        let mut planner = LlmPlanner::new(provider, registry, config);
+        planner.history = msgs;
+        let ch = RecChannel::new();
+        planner.next_step(&[], &ch).await;
+        assert_eq!(planner.pruned_message_count(), 0);
+        // 20 original + 1 reply
+        assert_eq!(planner.history().len(), 21);
+    }
+
+    #[tokio::test]
+    async fn pruning_accumulates_across_steps() {
+        // Two LLM calls in one turn (tool call → final). Each call
+        // prunes. We verify the counter accumulates.
+        let tool = Arc::new(FakeTool::new("echo"));
+        let tool_id = tool.id();
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".to_string(),
+                        tool_name: "echo".to_string(),
+                        input: json!({}),
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "done".to_string(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        // Tiny window ensures pruning fires on both calls.
+        let config = LlmPlannerConfig::new("test")
+            .with_context_window(60);
+        let mut planner = LlmPlanner::new(provider, registry, config);
+        // Seed with enough bulk to trigger pruning.
+        for i in 0..8 {
+            planner.history.push(LlmMessage::User {
+                content: format!("bulk-{i}-{}", "y".repeat(80)),
+            });
+        }
+        let ch = RecChannel::new();
+        // First call — tool call.
+        let step = planner.next_step(&[], &ch).await;
+        assert!(matches!(step, NextStep::ToolCall { .. }));
+        let first_pruned = planner.pruned_message_count();
+        assert!(first_pruned > 0, "should have pruned on first step");
+        // Observe tool result, adding more content.
+        planner.observe_tool_outcome(
+            tool_id,
+            &ToolOutcome::Completed {
+                output: json!({"data": "x".repeat(100)}),
+                verified: Verification::NotApplicable,
+            },
+        ).await;
+        // Second call — final message.
+        let step = planner.next_step(&[], &ch).await;
+        assert!(matches!(step, NextStep::FinalMessage(_)));
+        assert!(
+            planner.pruned_message_count() >= first_pruned,
+            "counter should accumulate"
+        );
     }
 }

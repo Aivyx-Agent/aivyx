@@ -134,6 +134,10 @@ pub struct SessionConfig {
     /// factory reads this on each turn construction to pick up
     /// prompt appendix and allowlist mutations set by `role.update`.
     pub role_overrides: Option<crate::role_overrides::SharedRoleOverrides>,
+    /// Phase 43 — context window size in tokens for pruning. When
+    /// `Some`, the planner prunes old history when estimated tokens
+    /// exceed 80% of this value. `None` disables pruning.
+    pub context_window_tokens: Option<usize>,
 }
 
 /// Summary of what the session did, returned after EOF.
@@ -193,10 +197,13 @@ where
     // per-turn; `LlmPlannerConfig` is small).
     let provider_for_factory = Arc::clone(&provider);
     let registry_for_factory = Arc::clone(&registry);
-    let planner_config = LlmPlannerConfig::new(config.model)
+    let mut planner_config = LlmPlannerConfig::new(config.model)
         .with_system_prompt(config.system_prompt)
         .with_max_tokens(config.max_tokens)
         .with_tool_allowlist(config.tool_allowlist.clone());
+    if let Some(cw) = config.context_window_tokens {
+        planner_config = planner_config.with_context_window(cw);
+    }
     let role_overrides_for_factory = config.role_overrides.clone();
 
     let agent = ConcreteAgent::new(

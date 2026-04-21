@@ -1704,7 +1704,8 @@ async fn run_async(
         let planner_config = LlmPlannerConfig::new(model_for_factory.clone())
             .with_system_prompt(child_system_prompt)
             .with_max_tokens(max_tokens_for_factory)
-            .with_tool_allowlist(child_tool_allowlist.clone());
+            .with_tool_allowlist(child_tool_allowlist.clone())
+            .with_context_window(provider_kind.value.default_context_window());
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
         let child_planner_factory = move || {
@@ -1914,7 +1915,8 @@ async fn run_async(
         let planner_config = LlmPlannerConfig::new(model.clone())
             .with_system_prompt(system_prompt)
             .with_max_tokens(DEFAULT_MAX_TOKENS)
-            .with_tool_allowlist(tool_allowlist);
+            .with_tool_allowlist(tool_allowlist)
+            .with_context_window(provider_kind.value.default_context_window());
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
         let daemon_overrides = shared_role_overrides.clone();
@@ -2218,6 +2220,7 @@ async fn run_async(
                 tool_allowlist,
                 memory_topic_prefix,
                 role_overrides: Some(shared_role_overrides),
+                context_window_tokens: Some(provider_kind.value.default_context_window()),
             };
 
             let stdin = io::stdin();

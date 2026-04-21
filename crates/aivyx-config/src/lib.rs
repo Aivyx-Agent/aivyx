@@ -225,6 +225,20 @@ impl ProviderKind {
     pub fn is_openai_compatible(&self) -> bool {
         matches!(self, ProviderKind::OpenAi | ProviderKind::Ollama)
     }
+
+    /// Default context window size in tokens for this provider.
+    /// Used by the planner's pruning layer (Phase 43) to decide
+    /// when to drop old history messages.
+    pub fn default_context_window(&self) -> usize {
+        match self {
+            ProviderKind::Anthropic => 200_000,
+            ProviderKind::OpenAi => 128_000,
+            // Ollama models vary widely; 8k is a conservative default
+            // that works for most 7B/13B models. Operators can override
+            // via config.
+            ProviderKind::Ollama => 8_000,
+        }
+    }
 }
 
 impl std::fmt::Display for ProviderKind {
