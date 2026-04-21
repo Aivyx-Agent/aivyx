@@ -126,6 +126,11 @@ pub struct DaemonConfig {
     pub webhook_port: Option<u16>,
     /// Port for the localhost-only web UI server.
     pub web_ui_port: Option<u16>,
+    /// Optional shared memory instance for background GC.
+    pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
+    /// If set, entries older than this many seconds are expired by a
+    /// background 1-hour timer.  Requires `memory` to be `Some`.
+    pub memory_ttl_secs: Option<u64>,
 }
 
 /// Run the daemon server.
@@ -152,6 +157,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         file_watch_store,
         webhook_port,
         web_ui_port,
+        memory,
+        memory_ttl_secs,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -253,6 +260,40 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 eprintln!("aivyx web ui error: {e}");
             }
         })
+    });
+
+    // Spawn the memory-GC timer if a TTL is configured (Phase 42 Task 5).
+    // Runs every hour, deleting entries older than `memory_ttl_secs`.
+    let _memory_gc_handle = memory_ttl_secs.and_then(|ttl| {
+        let mem = memory?;
+        let gc_shutdown = shutdown.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            // The first tick fires immediately — skip it so the first GC
+            // runs after one hour of uptime, not at startup.
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let cutoff = now.saturating_sub(ttl);
+                        match mem.gc_expired(cutoff).await {
+                            Ok(n) if n > 0 => {
+                                eprintln!("aivyx memory gc: expired {n} entries (cutoff={cutoff})");
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("aivyx memory gc error: {e}");
+                            }
+                        }
+                    }
+                    _ = gc_shutdown.cancelled() => break,
+                }
+            }
+        }))
     });
 
     let mission_store = mission_store.map(Arc::new);
@@ -701,6 +742,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         file_watch_store: None,
         webhook_port: None,
         web_ui_port: None,
+        memory: None,
+        memory_ttl_secs: None,
     }).await
 }
 

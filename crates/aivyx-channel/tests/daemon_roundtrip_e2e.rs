@@ -796,6 +796,8 @@ async fn two_concurrent_connections() {
                 file_watch_store: None,
                 webhook_port: None,
                 web_ui_port: None,
+                memory: None,
+                memory_ttl_secs: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1070,6 +1072,8 @@ async fn telegram_frontend_type_gets_telegram_channel() {
                 file_watch_store: None,
                 webhook_port: None,
                 web_ui_port: None,
+                memory: None,
+                memory_ttl_secs: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1142,6 +1146,8 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
                 file_watch_store: None,
                 webhook_port: None,
                 web_ui_port: None,
+                memory: None,
+                memory_ttl_secs: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1538,6 +1544,8 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             file_watch_store: None,
             webhook_port: None,
             web_ui_port: None,
+            memory: None,
+            memory_ttl_secs: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1786,6 +1794,8 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             file_watch_store: None,
             webhook_port: None,
             web_ui_port: None,
+            memory: None,
+            memory_ttl_secs: None,
         })
         .await
         .expect("daemon must complete");

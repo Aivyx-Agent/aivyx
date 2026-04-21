@@ -496,6 +496,11 @@ pub struct AivyxConfig {
     /// Per-topic memory-write tripwire. Always populated — default is
     /// [`DEFAULT_MEMORY_MAX_PER_TOPIC`].
     pub memory_max_per_topic: Sourced<usize>,
+    /// Phase 42 — optional TTL for memory entries, in seconds.
+    /// `None` means no TTL (entries live forever). When set, the
+    /// daemon periodically calls `gc_expired(now - ttl)` to remove
+    /// entries older than this duration.
+    pub memory_ttl_secs: Option<Sourced<u64>>,
     /// Aivyx store passphrase. `None` means "no source supplied one"
     /// and the binary should either prompt the user (tty branch) or
     /// error out (non-tty branch). Config layer does not do terminal
@@ -1039,6 +1044,9 @@ struct RawStorage {
 struct RawMemory {
     #[serde(default)]
     max_per_topic: Option<usize>,
+    /// Phase 42 — optional TTL for memory entries, in seconds.
+    #[serde(default)]
+    ttl_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1091,6 +1099,7 @@ const ENV_STORAGE_PATH: &str = "AIVYX_STORAGE_PATH";
 const ENV_XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 const ENV_HOME: &str = "HOME";
 const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_MEMORY_MAX_PER_TOPIC";
+const ENV_MEMORY_TTL_SECS: &str = "AIVYX_MEMORY_TTL_SECS";
 const ENV_PASSPHRASE: &str = "AIVYX_PASSPHRASE";
 const ENV_TELEGRAM_TOKEN: &str = "AIVYX_TELEGRAM_TOKEN";
 const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
@@ -1247,6 +1256,21 @@ impl AivyxConfig {
                 Some(n) => Sourced::new(n, FieldSource::Toml),
                 None => Sourced::new(DEFAULT_MEMORY_MAX_PER_TOPIC, FieldSource::Default),
             },
+        };
+
+        // --- memory_ttl_secs ---------------------------------------
+        // Phase 42 — optional TTL for memory entries.
+        let memory_ttl_secs = match env_string(ENV_MEMORY_TTL_SECS) {
+            Some(s) => {
+                let parsed = s.parse::<u64>().map_err(|e| ConfigError::Invalid {
+                    field: "memory_ttl_secs",
+                    reason: format!(
+                        "{ENV_MEMORY_TTL_SECS}={s:?} is not a valid u64: {e}"
+                    ),
+                })?;
+                Some(Sourced::new(parsed, FieldSource::Env))
+            }
+            None => toml.memory.ttl_secs.map(|n| Sourced::new(n, FieldSource::Toml)),
         };
 
         // --- passphrase --------------------------------------------
@@ -1630,6 +1654,7 @@ impl AivyxConfig {
             fs_root,
             storage_path,
             memory_max_per_topic,
+            memory_ttl_secs,
             passphrase,
             telegram,
             roles,

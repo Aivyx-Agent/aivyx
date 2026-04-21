@@ -632,6 +632,13 @@ fn print_config_banner(config: &AivyxConfig) {
         config.memory_max_per_topic.value,
         source_label(config.memory_max_per_topic.source),
     );
+    if let Some(ref ttl) = config.memory_ttl_secs {
+        eprintln!(
+            "  memory_ttl_secs   = {} ({})",
+            ttl.value,
+            source_label(ttl.source),
+        );
+    }
     eprintln!(
         "  passphrase        = {}",
         match &config.passphrase {
@@ -1161,6 +1168,7 @@ async fn run_async(
         file_watches: config_file_watches,
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
+        memory_ttl_secs,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -2056,6 +2064,8 @@ async fn run_async(
             file_watch_store: Some(file_watch_domain),
             webhook_port: config_webhook_port,
             web_ui_port: cli_web_ui_port.or(config_web_ui_port),
+            memory: Some(Arc::clone(&memory)),
+            memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
         })
             .await;
 
