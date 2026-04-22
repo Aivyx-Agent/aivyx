@@ -92,7 +92,7 @@ Extend `FrontendMessage::SubmitInput` with `attachments` field.
 | 4 | `ab21e9a` | 887 |
 | 5 | `f94112a` | 890 |
 | 6 | `0bea643` | 893 |
-| 7 (exit) | `TBD` | 893 |
+| 7 (exit) | `1ca3dc4` | 893 |
 
 ## Exit criteria
 
