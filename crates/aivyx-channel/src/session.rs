@@ -358,7 +358,45 @@ where
         // a fresh one per turn.
         channel.reset_cancellation();
 
-        let message = Message::text(channel.session_id(), input);
+        // Phase 45 — `/image <path> [caption]` command. Reads a local
+        // file, detects media type from extension, and constructs an
+        // image or text+image message for the agent.
+        let message = if let Some(rest) = input.strip_prefix("/image ") {
+            match parse_image_command(rest) {
+                Ok((path, caption)) => match read_image_file(&path) {
+                    Ok((media_type, data)) => {
+                        if let Some(text) = caption {
+                            Message::text_with_image(
+                                channel.session_id(),
+                                text,
+                                media_type,
+                                data,
+                            )
+                        } else {
+                            Message::image(channel.session_id(), media_type, data)
+                        }
+                    }
+                    Err(e) => {
+                        let writer = channel.writer_handle();
+                        if let Ok(mut guard) = writer.lock() {
+                            let _ = writeln!(&mut *guard, "error: {e}");
+                            let _ = guard.flush();
+                        }
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    let writer = channel.writer_handle();
+                    if let Ok(mut guard) = writer.lock() {
+                        let _ = writeln!(&mut *guard, "error: {e}");
+                        let _ = guard.flush();
+                    }
+                    continue;
+                }
+            }
+        } else {
+            Message::text(channel.session_id(), input)
+        };
         let outcome = agent.turn(message, &channel).await;
         turns_run += 1;
         last_outcome = Some(outcome);
@@ -450,6 +488,66 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+// ---------------------------------------------------------------------------
+// Phase 45 — `/image` command helpers
+// ---------------------------------------------------------------------------
+
+/// Detect MIME type from a file extension. Returns an error for
+/// unsupported extensions so the user gets clear feedback.
+fn detect_media_type(path: &std::path::Path) -> Result<&'static str, String> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Ok("image/png"),
+        Some("jpg" | "jpeg") => Ok("image/jpeg"),
+        Some("gif") => Ok("image/gif"),
+        Some("webp") => Ok("image/webp"),
+        Some(other) => Err(format!(
+            "unsupported image extension '.{other}' — expected png, jpg, jpeg, gif, or webp"
+        )),
+        None => Err(format!(
+            "cannot detect image type: '{}' has no file extension",
+            path.display()
+        )),
+    }
+}
+
+/// Parse `/image <path> [caption]`. The path is the first whitespace-
+/// delimited token; everything after it (if any) is the caption text.
+fn parse_image_command(rest: &str) -> Result<(String, Option<String>), String> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err("usage: /image <path> [caption text]".to_string());
+    }
+    // Split on first whitespace: path + optional caption.
+    let (path, caption) = match rest.split_once(char::is_whitespace) {
+        Some((p, c)) => {
+            let c = c.trim();
+            if c.is_empty() {
+                (p.to_string(), None)
+            } else {
+                (p.to_string(), Some(c.to_string()))
+            }
+        }
+        None => (rest.to_string(), None),
+    };
+    Ok((path, caption))
+}
+
+/// Read a file from disk and detect its media type from the extension.
+fn read_image_file(path: &str) -> Result<(String, Vec<u8>), String> {
+    let p = std::path::Path::new(path);
+    let media_type = detect_media_type(p)?;
+    let data = std::fs::read(p).map_err(|e| format!("cannot read '{}': {e}", p.display()))?;
+    if data.is_empty() {
+        return Err(format!("file '{}' is empty", p.display()));
+    }
+    Ok((media_type.to_string(), data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +604,40 @@ mod tests {
         let hex = marker.session_uuid_hex();
         assert_eq!(hex.len(), 32);
         assert_eq!(hex, "0123456789abcdeffedcba9876543210");
+    }
+
+    // ---- Phase 45 — /image command helpers ----
+
+    #[test]
+    fn detect_media_type_from_extension() {
+        use std::path::Path;
+        assert_eq!(detect_media_type(Path::new("photo.png")).unwrap(), "image/png");
+        assert_eq!(detect_media_type(Path::new("photo.jpg")).unwrap(), "image/jpeg");
+        assert_eq!(detect_media_type(Path::new("photo.jpeg")).unwrap(), "image/jpeg");
+        assert_eq!(detect_media_type(Path::new("photo.JPG")).unwrap(), "image/jpeg");
+        assert_eq!(detect_media_type(Path::new("photo.gif")).unwrap(), "image/gif");
+        assert_eq!(detect_media_type(Path::new("photo.webp")).unwrap(), "image/webp");
+        assert!(detect_media_type(Path::new("photo.bmp")).is_err());
+        assert!(detect_media_type(Path::new("noext")).is_err());
+    }
+
+    #[test]
+    fn parse_image_command_path_only() {
+        let (path, caption) = parse_image_command("/tmp/shot.png").unwrap();
+        assert_eq!(path, "/tmp/shot.png");
+        assert_eq!(caption, None);
+    }
+
+    #[test]
+    fn parse_image_command_with_caption() {
+        let (path, caption) = parse_image_command("/tmp/shot.png What is this?").unwrap();
+        assert_eq!(path, "/tmp/shot.png");
+        assert_eq!(caption, Some("What is this?".to_string()));
+    }
+
+    #[test]
+    fn parse_image_command_empty_is_error() {
+        assert!(parse_image_command("").is_err());
+        assert!(parse_image_command("   ").is_err());
     }
 }
