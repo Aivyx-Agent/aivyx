@@ -83,16 +83,46 @@ Extend `FrontendMessage::SubmitInput` with `attachments` field.
 
 ### Task 7 — Exit freeze
 
+## Ship records
+
+| Task | Commit | Tests after |
+|---|---|---|
+| 1+2 | `92210f6` | 879 |
+| 3 | `c133018` | 883 |
+| 4 | `ab21e9a` | 887 |
+| 5 | `f94112a` | 890 |
+| 6 | `0bea643` | 893 |
+| 7 (exit) | `TBD` | 893 |
+
 ## Exit criteria
 
-- [ ] `ContentBlock` enum with `Text` and `ImageBase64` variants.
-- [ ] `LlmMessage::User` carries `Vec<ContentBlock>`.
-- [ ] Anthropic provider serializes image content blocks.
-- [ ] OpenAI provider serializes image content arrays.
-- [ ] `MessageContent::Image` and `MessageContent::Mixed` variants.
-- [ ] CLI `/image <path>` command sends images to the agent.
-- [ ] Telegram photo extraction via Bot API.
-- [ ] Daemon IPC carries attachments with backwards compat.
-- [ ] All tests pass with net-positive delta.
-- [ ] Zero clippy warnings.
-- [ ] PRODUCT.md untouched (streak -> 9).
+- [x] `ContentBlock` enum with `Text` and `ImageBase64` variants.
+- [x] `LlmMessage::User` carries `Vec<ContentBlock>`.
+- [x] Anthropic provider serializes image content blocks.
+- [x] OpenAI provider serializes image content arrays.
+- [x] `MessageContent::Image` and `MessageContent::Mixed` variants.
+- [x] CLI `/image <path>` command sends images to the agent.
+- [x] Telegram photo extraction via Bot API.
+- [x] Daemon IPC carries attachments with backwards compat.
+- [x] All tests pass with net-positive delta.
+- [x] Zero clippy warnings.
+- [x] PRODUCT.md untouched (streak -> 9).
+
+## Exit stats
+
+- Tests: 876 -> 893 (+17)
+- Clippy warnings: 0
+- Deferral backlog: 0
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | touched | untouched | 4 |
+| PRODUCT.md | untouched (9) | untouched | 9 |
+| lib.rs | touched | touched | 0 |
+
+DESIGN.md prediction was wrong: we extended `MessageContent`
+(a D3-adjacent type) but the D3 contract itself was not
+modified. The enum extension is an additive change that does
+not alter the existing D3 surface.
