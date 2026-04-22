@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
-    StreamEventPayload,
+    IpcAttachment, StreamEventPayload,
 };
 use crate::daemon_server::DaemonError;
 
@@ -127,6 +127,7 @@ impl DaemonSession {
             session_id: self.session_id.clone(),
             text,
             mission_id: Some(mission_id),
+            attachments: vec![],
         };
         self.send_and_collect(submit).await
     }
@@ -141,6 +142,22 @@ impl DaemonSession {
             session_id: self.session_id.clone(),
             text,
             mission_id: None,
+            attachments: vec![],
+        };
+        self.send_and_collect(submit).await
+    }
+
+    /// Submit a turn with image attachments. Phase 45 multimodal path.
+    pub async fn submit_input_with_attachments(
+        &mut self,
+        text: String,
+        attachments: Vec<IpcAttachment>,
+    ) -> Result<(Vec<StreamEventPayload>, String), DaemonError> {
+        let submit = FrontendMessage::SubmitInput {
+            session_id: self.session_id.clone(),
+            text,
+            mission_id: None,
+            attachments,
         };
         self.send_and_collect(submit).await
     }

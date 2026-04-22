@@ -244,6 +244,7 @@ async fn multi_turn_session_streams_both_turns() {
         session_id: sid.clone(),
         text: "turn one".into(),
         mission_id: None,
+        attachments: vec![],
     })
     .unwrap();
     writer.write_all(&frame).await.unwrap();
@@ -260,6 +261,7 @@ async fn multi_turn_session_streams_both_turns() {
         session_id: sid.clone(),
         text: "turn two".into(),
         mission_id: None,
+        attachments: vec![],
     })
     .unwrap();
     writer.write_all(&frame).await.unwrap();
@@ -1594,6 +1596,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
         session_id: "s1".into(),
         text: "do something risky".into(),
         mission_id: Some(mission_id.clone()),
+        attachments: vec![],
     };
     let frame = encode_frame(&submit).unwrap();
     writer.write_all(&frame).await.unwrap();
@@ -1838,6 +1841,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
         session_id: "s1".into(),
         text: "do something".into(),
         mission_id: Some(mission_id.clone()),
+        attachments: vec![],
     };
     writer.write_all(&encode_frame(&submit).unwrap()).await.unwrap();
 

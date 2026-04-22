@@ -236,7 +236,21 @@ async fn run_telegram_daemon_chat_task(
             continue;
         }
 
-        let (events, _outcome) = session.submit_input(msg.text).await?;
+        // Phase 45 — forward image data through IPC when present.
+        let (events, _outcome) = if let Some(ref img) = msg.image {
+            use base64::Engine;
+            let encoder = base64::engine::general_purpose::STANDARD;
+            let att = crate::daemon_ipc::IpcAttachment {
+                media_type: img.media_type.clone(),
+                data_base64: encoder.encode(&img.data),
+                filename: None,
+            };
+            session
+                .submit_input_with_attachments(msg.text, vec![att])
+                .await?
+        } else {
+            session.submit_input(msg.text).await?
+        };
 
         let buf = render_events_for_telegram(&events);
 

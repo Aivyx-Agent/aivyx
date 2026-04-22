@@ -93,6 +93,8 @@ aivyx-memory = { path = "../aivyx-memory" }
 # daemon_client.rs (UnixListener, UnixStream, AsyncReadExt, AsyncWriteExt).
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal", "net", "io-util", "sync"] }
 secrecy = { workspace = true }
+# Phase 45 — base64 decoding for IPC image attachments.
+base64 = { workspace = true }
 # Salt bytes for the passphrase module — uuid::Uuid::new_v4() is the
 # workspace standard entropy source, same choice aivyx-storage makes
 # for its AEAD nonces.

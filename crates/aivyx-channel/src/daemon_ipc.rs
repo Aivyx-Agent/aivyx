@@ -65,6 +65,21 @@ pub enum FrontendType {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 45 — IPC attachment for multimodal input
+// ---------------------------------------------------------------------------
+
+/// A base64-encoded file attachment sent with `SubmitInput`. The daemon
+/// decodes the base64 data and constructs the appropriate `Message`
+/// variant (image, text+image, or text-only if no attachments).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IpcAttachment {
+    pub media_type: String,
+    pub data_base64: String,
+    #[serde(default)]
+    pub filename: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
 
@@ -81,6 +96,10 @@ pub enum FrontendMessage {
         text: String,
         #[serde(default)]
         mission_id: Option<String>,
+        /// Phase 45 — optional image/file attachments. `#[serde(default)]`
+        /// ensures old clients that omit this field still deserialize.
+        #[serde(default)]
+        attachments: Vec<IpcAttachment>,
     },
     CancelTurn {
         session_id: String,
@@ -392,6 +411,7 @@ mod tests {
                 session_id: "abc-123".into(),
                 text: "hello world".into(),
                 mission_id: None,
+                attachments: vec![],
             },
             FrontendMessage::CancelTurn {
                 session_id: "abc-123".into(),
@@ -514,6 +534,7 @@ mod tests {
             session_id: "s".into(),
             text: huge,
             mission_id: None,
+            attachments: vec![],
         };
         let err = encode_frame(&msg).unwrap_err();
         assert!(matches!(err, FrameError::PayloadTooLarge(_)));
@@ -739,5 +760,53 @@ mod tests {
         let rendered = payload.render_for_cli();
         assert!(rendered.contains("m-002/g-010"), "got: {rendered}");
         assert!(!rendered.contains("scope:"), "got: {rendered}");
+    }
+
+    // ---- Phase 45 — IpcAttachment ----
+
+    #[test]
+    fn ipc_submit_with_attachment_roundtrip() {
+        let msg = FrontendMessage::SubmitInput {
+            session_id: "s1".into(),
+            text: "describe this".into(),
+            mission_id: None,
+            attachments: vec![IpcAttachment {
+                media_type: "image/png".into(),
+                data_base64: "iVBORw0KGgo=".into(),
+                filename: Some("screenshot.png".into()),
+            }],
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (decoded, consumed): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(decoded, msg);
+        assert_eq!(consumed, frame.len());
+    }
+
+    #[test]
+    fn ipc_submit_no_attachment_backwards_compat() {
+        // Simulate an old client that omits the `attachments` field entirely.
+        let json = r#"{"type":"SubmitInput","session_id":"s1","text":"hello"}"#;
+        let msg: FrontendMessage = serde_json::from_str(json).expect("parse");
+        match msg {
+            FrontendMessage::SubmitInput {
+                text, attachments, ..
+            } => {
+                assert_eq!(text, "hello");
+                assert!(attachments.is_empty(), "default should be empty vec");
+            }
+            other => panic!("expected SubmitInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ipc_attachment_serde_roundtrip() {
+        let att = IpcAttachment {
+            media_type: "image/jpeg".into(),
+            data_base64: "AAAA".into(),
+            filename: None,
+        };
+        let json = serde_json::to_string(&att).expect("ser");
+        let back: IpcAttachment = serde_json::from_str(&json).expect("de");
+        assert_eq!(back, att);
     }
 }

@@ -425,6 +425,7 @@ async fn handle_connection(
                             session_id: sid,
                             text,
                             mission_id: mid,
+                            attachments,
                         } => {
                             let ch = match &channel {
                                 Some(c) => Arc::clone(c),
@@ -439,7 +440,29 @@ async fn handle_connection(
                                 }
                             };
 
-                            let msg = Message::text(aivyx_core::SessionId::new(), text);
+                            // Phase 45 — construct the right message type
+                            // based on whether attachments are present.
+                            let session = aivyx_core::SessionId::new();
+                            let msg = if let Some(att) = attachments.first() {
+                                use base64::Engine;
+                                let decoder = base64::engine::general_purpose::STANDARD;
+                                match decoder.decode(&att.data_base64) {
+                                    Ok(data) if text.is_empty() => {
+                                        Message::image(session, &att.media_type, data)
+                                    }
+                                    Ok(data) => {
+                                        Message::text_with_image(
+                                            session, &text, &att.media_type, data,
+                                        )
+                                    }
+                                    Err(_) => {
+                                        // Bad base64 — fall back to text-only.
+                                        Message::text(session, text)
+                                    }
+                                }
+                            } else {
+                                Message::text(session, text)
+                            };
 
                             // Track in-flight turn in daemon state.
                             let turn_key = format!("{sid}:turn");
