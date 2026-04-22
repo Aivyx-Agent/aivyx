@@ -574,19 +574,29 @@ attachments with `#[serde(default)]` backwards compat. 893 tests,
 zero clippy. DESIGN.md streak -> 4, PRODUCT.md streak -> 9,
 lib.rs streak -> 0.
 
-## Phase 46 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
+## Phase 46 — Web Search + Document Retrieval (Bundled MCP) [SHIPPED]
+
+First bundled MCP server: `aivyx mcp-server web-search`. Two
+tools: `web_search` (query → results) and `web_read` (URL →
+cleaned text). Search backend hierarchy: Brave Search API →
+SerpAPI → DuckDuckGo HTML scraping (zero-config fallback).
+Self-spawning embedded server with `bundled = true` config flag.
+Init wizard integration. 936 tests, zero clippy. DESIGN.md
+streak → 5, PRODUCT.md streak → 10, lib.rs streak → 1.
+
+## Phase 47 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
 
 IPC query messages, mission dashboard, audit viewer, session
 history. Makes the Web UI a full operator inspection surface.
 Delivers P2 (mission legibility) and P4 (daemon inspection).
 
-## Phase 47 — Channel Adapter SDK & Documentation (P5 + P11)
+## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11)
 
 Channel adapter contract documentation, adapter conformance
 test suite, example Python adapter. Delivers P5 (channel SDK)
 and P11 (SDK documentation).
 
-## Phase 48 — Tool Process IPC Foundation (P12)
+## Phase 49 — Tool Process IPC Foundation (P12)
 
 Third-party tools as separate OS processes speaking the daemon's
 IPC protocol. `ToolProcessBridge`, tool process lifecycle,

@@ -103,6 +103,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 43 | Frozen  | [PHASE_43.md](PHASE_43.md) | `066e633`  |
 | Phase 44 | Frozen  | [PHASE_44.md](PHASE_44.md) | `104c101`  |
 | Phase 45 | Frozen  | [PHASE_45.md](PHASE_45.md) | `1ca3dc4`  |
+| Phase 46 | Frozen  | [PHASE_46.md](PHASE_46.md) | `PENDING`  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

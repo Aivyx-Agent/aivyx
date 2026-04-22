@@ -88,3 +88,42 @@ selector with fallback to DuckDuckGo.
 
 | Task | Commit | Tests after |
 |---|---|---|
+| 1 | `095bbe6` | 897 |
+| 2 | `261143c` | 904 |
+| 3 | `2ec0eea` | 915 |
+| 4 | `6b3bacb` | 925 |
+| 5 | `71a3a7d` | 929 |
+| 6 | `e53b510` | 936 |
+| 7 (exit) | `PENDING` | 936 |
+
+## Exit criteria
+
+- [x] `aivyx mcp-server web-search` subcommand parses and dispatches.
+- [x] Stdio JSON-RPC harness handles full MCP lifecycle.
+- [x] `web_search` tool with DuckDuckGo HTML scraping.
+- [x] `web_read` tool with HTML-to-text extraction.
+- [x] `bundled = true` config flag resolves to `current_exe()`.
+- [x] Init wizard offers web search opt-in.
+- [x] Brave Search API backend with JSON parser.
+- [x] SerpAPI backend with JSON parser.
+- [x] Backend selector hierarchy: Brave → SerpAPI → DuckDuckGo.
+- [x] All tests pass with net-positive delta.
+- [x] Zero clippy warnings.
+- [x] DESIGN.md untouched (streak -> 5).
+- [x] PRODUCT.md untouched (streak -> 10).
+
+## Exit stats
+
+- Tests: 893 -> 936 (+43)
+- Clippy warnings: 0
+- Deferral backlog: 0
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (5) | untouched | 5 |
+| PRODUCT.md | untouched (10) | untouched | 10 |
+| lib.rs | untouched (1) | untouched | 1 |
+
+All three predictions correct.
