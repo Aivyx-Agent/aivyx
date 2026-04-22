@@ -38,6 +38,16 @@ pub struct OutgoingMessage {
     pub text: String,
 }
 
+/// Image payload extracted from a Telegram photo message. Carries
+/// the raw bytes and MIME type so the session layer can construct a
+/// `Message::image` or `Message::text_with_image` without touching
+/// the Bot API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImagePayload {
+    pub media_type: String,
+    pub data: Vec<u8>,
+}
+
 /// One inbound update the channel wants to route into the turn loop.
 /// Only fields the channel actually consumes are kept — `message_id`,
 /// `chat_id`, `user_id`, and the user's text. Everything else
@@ -45,17 +55,19 @@ pub struct OutgoingMessage {
 /// deliberately dropped at the transport boundary so the channel's
 /// turn-loop glue has one obvious shape to handle.
 ///
-/// Task 1 only constructs this from the production `ReqwestTransport`
-/// (not exercised by tests) and from `ScriptedTransport::push_update`
-/// (also `#[allow(dead_code)]` until task 2). The #[allow] is the
-/// minimum scoped annotation so clippy's -D warnings still catches
-/// anything newly orphaned elsewhere in the module.
+/// Phase 45 added the optional `image` field for photo messages.
+/// When a Telegram message contains a photo, the transport layer
+/// downloads the largest size via `getFile` + HTTP GET and populates
+/// this field. The `text` field carries the caption (if any) when
+/// an image is present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingMessage {
     pub update_id: i64,
     pub chat_id: i64,
     pub user_id: i64,
     pub text: String,
+    /// Phase 45 — optional image payload for photo messages.
+    pub image: Option<ImagePayload>,
 }
 
 #[derive(Debug, Error)]
@@ -108,13 +120,74 @@ pub trait TelegramTransport: Send + Sync {
 /// a real bot token is what actually covers this code path.
 pub struct ReqwestTransport {
     bot: frankenstein::client_reqwest::Bot,
+    /// Stored separately for constructing file download URLs.
+    /// The Bot API file endpoint is `https://api.telegram.org/file/bot{token}/{path}`.
+    token: String,
 }
 
 impl ReqwestTransport {
     pub fn new(token: &str) -> Self {
         ReqwestTransport {
             bot: frankenstein::client_reqwest::Bot::new(token),
+            token: token.to_string(),
         }
+    }
+
+    /// Download a photo by `file_id` via `getFile` + HTTP GET.
+    /// Returns the raw bytes and a MIME type inferred from the file
+    /// extension (defaulting to `image/jpeg` if unknown).
+    async fn download_photo(&self, file_id: &str) -> Result<ImagePayload, TransportError> {
+        use frankenstein::AsyncTelegramApi;
+        use frankenstein::methods::GetFileParams;
+
+        let params = GetFileParams::builder().file_id(file_id).build();
+        let file_resp = self
+            .bot
+            .get_file(&params)
+            .await
+            .map_err(|e| TransportError::Platform(format!("get_file: {e}")))?;
+
+        let file_path = file_resp
+            .result
+            .file_path
+            .ok_or_else(|| TransportError::Platform("get_file: no file_path in response".into()))?;
+
+        let url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.token, file_path
+        );
+        let resp = reqwest::get(&url)
+            .await
+            .map_err(|e| TransportError::Platform(format!("photo download: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(TransportError::Platform(format!(
+                "photo download: HTTP {}",
+                resp.status()
+            )));
+        }
+
+        let data = resp
+            .bytes()
+            .await
+            .map_err(|e| TransportError::Platform(format!("photo download body: {e}")))?
+            .to_vec();
+
+        // Infer MIME type from file extension.
+        let media_type = file_path
+            .rsplit('.')
+            .next()
+            .map(|ext| match ext.to_ascii_lowercase().as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                _ => "image/jpeg", // Telegram photos are almost always JPEG
+            })
+            .unwrap_or("image/jpeg")
+            .to_string();
+
+        Ok(ImagePayload { media_type, data })
     }
 }
 
@@ -139,34 +212,67 @@ impl TelegramTransport for ReqwestTransport {
             .await
             .map_err(|e| TransportError::Platform(format!("get_updates: {e}")))?;
 
-        Ok(response
-            .result
-            .into_iter()
-            .filter_map(|u| {
-                // Only route `message` updates with text content. All
-                // other update kinds (callback_query, edited_message,
-                // channel_post, inline_query, ...) are silently skipped
-                // at the transport boundary — they're out of scope for
-                // Phase 8's "text turn in, text turn out" shape.
-                //
-                // `frankenstein 0.49` flattens update variants into
-                // an `UpdateContent` enum; we pattern-match the
-                // `Message` arm and drop the others.
-                let update_id = u.update_id as i64;
-                let msg = match u.content {
-                    frankenstein::updates::UpdateContent::Message(m) => *m,
-                    _ => return None,
-                };
-                let text = msg.text?;
-                let from = msg.from?;
-                Some(IncomingMessage {
-                    update_id,
-                    chat_id: msg.chat.id,
-                    user_id: from.id as i64,
-                    text,
-                })
-            })
-            .collect())
+        let mut messages = Vec::new();
+        for u in response.result {
+            let update_id = u.update_id as i64;
+            let msg = match u.content {
+                frankenstein::updates::UpdateContent::Message(m) => *m,
+                _ => continue,
+            };
+            let from = match msg.from {
+                Some(f) => f,
+                None => continue,
+            };
+
+            // Phase 45 — photo extraction. If the message has a photo
+            // array, pick the largest size (last element — Telegram
+            // sorts smallest to largest), download via getFile + HTTP
+            // GET, and attach to the IncomingMessage. The caption field
+            // becomes the text; if no caption, text is empty.
+            let (text, image) = if let Some(ref photos) = msg.photo {
+                if let Some(largest) = photos.last() {
+                    let image = self.download_photo(&largest.file_id).await;
+                    let caption = msg.caption.clone().unwrap_or_default();
+                    match image {
+                        Ok(payload) => (caption, Some(payload)),
+                        Err(e) => {
+                            // Download failed — fall back to text-only
+                            // with the caption so the user's message
+                            // isn't silently lost.
+                            eprintln!(
+                                "aivyx-telegram: photo download failed ({e}); falling back to caption"
+                            );
+                            (caption, None)
+                        }
+                    }
+                } else {
+                    // Empty photo array — treat as text-only.
+                    match msg.text {
+                        Some(t) => (t, None),
+                        None => continue,
+                    }
+                }
+            } else {
+                match msg.text {
+                    Some(t) => (t, None),
+                    None => continue,
+                }
+            };
+
+            // Skip messages with no text and no image.
+            if text.is_empty() && image.is_none() {
+                continue;
+            }
+
+            messages.push(IncomingMessage {
+                update_id,
+                chat_id: msg.chat.id,
+                user_id: from.id as i64,
+                text,
+                image,
+            });
+        }
+        Ok(messages)
     }
 
     async fn send_message(&self, msg: OutgoingMessage) -> Result<(), TransportError> {

@@ -571,7 +571,20 @@ where
         // didn't swap the slot.
         channel.reset_cancellation();
 
-        let message = Message::text(channel.session_id(), &msg.text);
+        // Phase 45 — construct the right message type depending on
+        // whether the inbound update carried an image payload.
+        let message = match msg.image {
+            Some(ref img) if msg.text.is_empty() => {
+                Message::image(channel.session_id(), &img.media_type, img.data.clone())
+            }
+            Some(ref img) => Message::text_with_image(
+                channel.session_id(),
+                &msg.text,
+                &img.media_type,
+                img.data.clone(),
+            ),
+            None => Message::text(channel.session_id(), &msg.text),
+        };
         let turn_fut = agent.turn(message, channel.as_ref());
         tokio::pin!(turn_fut);
 
@@ -844,7 +857,19 @@ where
 
         channel.reset_cancellation();
 
-        let message = Message::text(channel.session_id(), &msg.text);
+        // Phase 45 — same image-aware dispatch as the single-chat path.
+        let message = match msg.image {
+            Some(ref img) if msg.text.is_empty() => {
+                Message::image(channel.session_id(), &img.media_type, img.data.clone())
+            }
+            Some(ref img) => Message::text_with_image(
+                channel.session_id(),
+                &msg.text,
+                &img.media_type,
+                img.data.clone(),
+            ),
+            None => Message::text(channel.session_id(), &msg.text),
+        };
         let turn_fut = agent.turn(message, channel.as_ref());
         tokio::pin!(turn_fut);
 

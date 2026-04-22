@@ -42,6 +42,13 @@ serde_json = { workspace = true }
 # that the private `TelegramTransport` trait makes swappable.
 frankenstein = { version = "0.49", features = ["client-reqwest"] }
 
+# Phase 45 — direct reqwest dep for downloading Telegram photo files.
+# The `getFile` API returns a file path; the actual download is a plain
+# HTTP GET to `https://api.telegram.org/file/bot{token}/{path}`. Using
+# reqwest directly is simpler than trying to route through frankenstein's
+# generic `request()` method (which expects JSON responses).
+reqwest = { workspace = true }
+
 [dev-dependencies]
 # Unit tests drive the async ChannelContext surface + the scripted
 # transport. `time` is new in Task 4: the scripted `get_updates` now

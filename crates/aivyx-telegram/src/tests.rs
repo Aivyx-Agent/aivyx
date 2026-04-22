@@ -40,7 +40,9 @@ use aivyx_core::{
 };
 
 use crate::telegram_channel::TelegramChannel;
-use crate::transport::{IncomingMessage, OutgoingMessage, TelegramTransport, TransportError};
+use crate::transport::{
+    ImagePayload, IncomingMessage, OutgoingMessage, TelegramTransport, TransportError,
+};
 
 // ---------------------------------------------------------------------------
 // ScriptedTransport — the test double
@@ -947,12 +949,14 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         chat_id: 777,
         user_id: 1,
         text: "first".to_string(),
+        image: None,
     });
     transport.push_update(IncomingMessage {
         update_id: 11,
         chat_id: 777,
         user_id: 1,
         text: "second".to_string(),
+        image: None,
     });
     // One extra update for a *different* chat — the loop must filter
     // it out (one channel = one chat_id in Phase 8). If the loop mis-
@@ -963,6 +967,7 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         chat_id: 999,
         user_id: 1,
         text: "wrong chat".to_string(),
+        image: None,
     });
 
     let channel = Arc::new(TelegramChannel::new(
@@ -1307,12 +1312,14 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
         chat_id: 555,
         user_id: 1,
         text: "please stall".to_string(),
+        image: None,
     });
     transport.push_update(IncomingMessage {
         update_id: 101,
         chat_id: 555,
         user_id: 1,
         text: "please reply normally".to_string(),
+        image: None,
     });
 
     let channel = Arc::new(TelegramChannel::new(
@@ -1759,6 +1766,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             chat_id: 3001,
             user_id: 1,
             text: "remember".to_string(),
+            image: None,
         });
         let channel_a = Arc::new(TelegramChannel::new(
             "tg-chat-a",
@@ -1773,6 +1781,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             chat_id: 4001,
             user_id: 2,
             text: "remember".to_string(),
+            image: None,
         });
         let channel_b = Arc::new(TelegramChannel::new(
             "tg-chat-b",
@@ -2245,6 +2254,7 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
         chat_id: 777,
         user_id: 1,
         text: "please stall forever".to_string(),
+        image: None,
     });
 
     let channel = Arc::new(TelegramChannel::new(
@@ -2283,6 +2293,7 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
                     chat_id: 777,
                     user_id: 1,
                     text: "/cancel".to_string(),
+                    image: None,
                 });
                 return;
             }
@@ -2498,6 +2509,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
         chat_id: 888,
         user_id: 1,
         text: "please stall".to_string(),
+        image: None,
     });
 
     let channel = Arc::new(TelegramChannel::new(
@@ -2534,6 +2546,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
                     chat_id: 888,
                     user_id: 1,
                     text: "queue me up".to_string(),
+                    image: None,
                 });
                 return;
             }
@@ -2780,18 +2793,21 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             chat_id: CHAT_B,
             user_id: 20,
             text: "remember".to_string(),
+            image: None,
         });
         transport.push_update(IncomingMessage {
             update_id: 501,
             chat_id: CHAT_A,
             user_id: 10,
             text: "remember".to_string(),
+            image: None,
         });
         transport.push_update(IncomingMessage {
             update_id: 502,
             chat_id: CHAT_C,
             user_id: 30,
             text: "remember".to_string(),
+            image: None,
         });
 
         let config = TelegramSessionConfig {
@@ -3089,4 +3105,59 @@ impl aivyx_llm::LlmStream for SharedScriptedStream {
         self.terminal
             .ok_or_else(|| aivyx_llm::LlmError::StreamEnded("double-finish".into()))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 45 — IncomingMessage with image payload
+// ---------------------------------------------------------------------------
+
+#[test]
+fn incoming_message_with_photo_carries_image() {
+    let msg = IncomingMessage {
+        update_id: 1,
+        chat_id: 42,
+        user_id: 1,
+        text: "describe this".to_string(),
+        image: Some(ImagePayload {
+            media_type: "image/jpeg".to_string(),
+            data: vec![0xFF, 0xD8, 0xFF],
+        }),
+    };
+    assert!(msg.image.is_some());
+    let img = msg.image.unwrap();
+    assert_eq!(img.media_type, "image/jpeg");
+    assert_eq!(img.data, vec![0xFF, 0xD8, 0xFF]);
+}
+
+#[test]
+fn incoming_message_text_only_has_no_image() {
+    let msg = IncomingMessage {
+        update_id: 1,
+        chat_id: 42,
+        user_id: 1,
+        text: "hello".to_string(),
+        image: None,
+    };
+    assert!(msg.image.is_none());
+}
+
+#[test]
+fn photo_picks_largest_size_rationale() {
+    // This test documents the convention: Telegram sends photos as an
+    // array sorted smallest→largest. The transport picks `photos.last()`
+    // (the largest). We can't exercise the real `ReqwestTransport` here
+    // (it hits the network), but this test pins the data structure so
+    // the session layer's image routing is tested against a known shape.
+    let msg = IncomingMessage {
+        update_id: 1,
+        chat_id: 42,
+        user_id: 1,
+        text: String::new(),
+        image: Some(ImagePayload {
+            media_type: "image/jpeg".to_string(),
+            data: vec![0xFF; 1024], // simulates "largest" photo bytes
+        }),
+    };
+    assert!(msg.image.is_some());
+    assert_eq!(msg.image.as_ref().unwrap().data.len(), 1024);
 }
