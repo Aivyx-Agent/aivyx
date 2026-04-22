@@ -94,7 +94,7 @@ selector with fallback to DuckDuckGo.
 | 4 | `6b3bacb` | 925 |
 | 5 | `71a3a7d` | 929 |
 | 6 | `e53b510` | 936 |
-| 7 (exit) | `PENDING` | 936 |
+| 7 (exit) | `074d167` | 936 |
 
 ## Exit criteria
 
