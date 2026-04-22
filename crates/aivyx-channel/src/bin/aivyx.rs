@@ -96,6 +96,8 @@
 
 #[path = "aivyx_modules/init.rs"]
 mod init;
+#[path = "aivyx_modules/mcp_server.rs"]
+mod mcp_server;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -331,6 +333,17 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(init::run_init_wizard());
+    }
+
+    // ---- Phase 46: bundled MCP server -----------------------------------
+    // Like init, the MCP server needs only a minimal runtime and no
+    // config/store/API key — it reads from stdin and writes to stdout.
+    if let CliMode::McpServer(ref name) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(mcp_server::run_mcp_server(name));
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -758,6 +771,8 @@ enum CliMode {
     DaemonStop,
     /// `aivyx init`: interactive first-run setup wizard (Phase 44).
     Init,
+    /// `aivyx mcp-server <name>`: bundled MCP server (Phase 46).
+    McpServer(String),
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -874,6 +889,39 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Init,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Check for `mcp-server <name>` subcommand — bundled MCP server (Phase 46).
+    if !args.is_empty() && args[0] == "mcp-server" {
+        let name = args.get(1).ok_or_else(|| {
+            "`aivyx mcp-server` requires a server name. Supported: web-search".to_string()
+        })?;
+        if args.len() > 2 {
+            return Err(format!(
+                "`aivyx mcp-server {name}` does not accept additional arguments. \
+                 Got: `{}`",
+                args[2..].join(" ")
+            ));
+        }
+        // Validate server name eagerly at parse time.
+        match name.as_str() {
+            "web-search" => {}
+            other => {
+                return Err(format!(
+                    "unknown MCP server name: `{other}`. Supported: web-search"
+                ));
+            }
+        }
+        return Ok(CliArgs {
+            mode: CliMode::McpServer(name.clone()),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -3451,6 +3499,47 @@ mod tests {
             .expect_err("daemon init is not valid");
         assert!(
             err.contains("unrecognized daemon subcommand"),
+            "error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 46 — `aivyx mcp-server <name>` subcommand
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_mcp_server_subcommand() {
+        let parsed = parse_cli_args_from(&argv(&["mcp-server", "web-search"]))
+            .expect("mcp-server web-search must parse");
+        assert_eq!(parsed.mode, CliMode::McpServer("web-search".into()));
+    }
+
+    #[test]
+    fn parse_mcp_server_missing_name() {
+        let err = parse_cli_args_from(&argv(&["mcp-server"]))
+            .expect_err("mcp-server without name must error");
+        assert!(
+            err.contains("requires a server name"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_mcp_server_unknown_name() {
+        let err = parse_cli_args_from(&argv(&["mcp-server", "bogus"]))
+            .expect_err("unknown server name must error");
+        assert!(
+            err.contains("unknown MCP server name"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_mcp_server_no_extra_args() {
+        let err = parse_cli_args_from(&argv(&["mcp-server", "web-search", "--verbose"]))
+            .expect_err("extra args must error");
+        assert!(
+            err.contains("does not accept additional arguments"),
             "error: {err}"
         );
     }
