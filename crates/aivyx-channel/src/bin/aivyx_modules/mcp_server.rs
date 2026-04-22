@@ -93,6 +93,20 @@ fn web_search_tool_schemas() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
+            name: "web_read",
+            description: "Fetch a URL and return its content as cleaned readable text (HTML tags stripped).",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to fetch and read."
+                    }
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolSchema {
             name: "echo",
             description: "Echo the input message (smoke test tool).",
             input_schema: serde_json::json!({
@@ -317,6 +331,209 @@ fn handle_echo(args: Value) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// web_read — URL fetch + HTML-to-text
+// ---------------------------------------------------------------------------
+
+const WEB_READ_MAX_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
+
+async fn handle_web_read(args: Value) -> Result<String, String> {
+    let url = args
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required parameter: url".to_string())?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; aivyx/1.0)")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("build HTTP client: {e}"))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("fetch failed: {e}"))?;
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("read response body: {e}"))?;
+
+    if bytes.len() > WEB_READ_MAX_BYTES {
+        return Err(format!(
+            "response too large: {} bytes (limit: {} bytes)",
+            bytes.len(),
+            WEB_READ_MAX_BYTES
+        ));
+    }
+
+    let body = String::from_utf8_lossy(&bytes);
+
+    let is_html = content_type.contains("text/html") || body.trim_start().starts_with('<');
+
+    let (title, content) = if is_html {
+        (extract_html_title(&body), html_to_text(&body))
+    } else {
+        (String::new(), body.into_owned())
+    };
+
+    let result = serde_json::json!({
+        "title": title,
+        "url": url,
+        "content": content
+    });
+    serde_json::to_string_pretty(&result)
+        .map_err(|e| format!("serialize result: {e}"))
+}
+
+/// Extract `<title>` text from an HTML document.
+fn extract_html_title(html: &str) -> String {
+    let lower = html.to_lowercase();
+    if let Some(start) = lower.find("<title") {
+        let rest = &html[start..];
+        // Skip past the closing `>` of the opening tag.
+        if let Some(gt) = rest.find('>') {
+            let after_tag = &rest[gt + 1..];
+            if let Some(end) = after_tag.to_lowercase().find("</title") {
+                return strip_html_tags(&after_tag[..end])
+                    .trim()
+                    .to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Convert HTML to readable plain text.
+///
+/// 1. Remove `<script>` and `<style>` blocks entirely.
+/// 2. Insert newlines around block-level tags (`<p>`, `<div>`, `<br>`, etc.).
+/// 3. Strip all remaining HTML tags.
+/// 4. Decode HTML entities.
+/// 5. Collapse whitespace: multiple spaces/tabs → single space,
+///    multiple newlines → double newline (paragraph break).
+fn html_to_text(html: &str) -> String {
+    let mut s = html.to_string();
+
+    // Remove <script>...</script> blocks (case-insensitive).
+    s = remove_tag_block(&s, "script");
+    // Remove <style>...</style> blocks.
+    s = remove_tag_block(&s, "style");
+
+    // Insert newlines around block-level elements so paragraph
+    // boundaries survive tag stripping.
+    s = insert_block_breaks(&s);
+
+    // Strip remaining HTML tags.
+    let stripped = strip_html_tags(&s);
+
+    // Decode entities.
+    let decoded = html_decode(&stripped);
+
+    // Collapse whitespace.
+    collapse_whitespace(&decoded)
+}
+
+/// Insert newline markers before/after block-level HTML elements.
+fn insert_block_breaks(html: &str) -> String {
+    let block_tags = [
+        "<p", "</p", "<div", "</div", "<br", "<h1", "</h1", "<h2", "</h2",
+        "<h3", "</h3", "<h4", "</h4", "<h5", "</h5", "<h6", "</h6",
+        "<li", "</li", "<ul", "</ul", "<ol", "</ol", "<tr", "</tr",
+        "<blockquote", "</blockquote", "<hr",
+    ];
+    let mut result = html.to_string();
+    let lower = html.to_lowercase();
+
+    // Work backwards through tag positions to avoid index invalidation.
+    let mut positions: Vec<(usize, usize)> = Vec::new();
+    for tag in &block_tags {
+        let mut start = 0;
+        while let Some(pos) = lower[start..].find(tag) {
+            let abs = start + pos;
+            // Find the end of this tag.
+            if let Some(end) = lower[abs..].find('>') {
+                positions.push((abs, abs + end + 1));
+            }
+            start = abs + 1;
+        }
+    }
+    positions.sort_by(|a, b| b.0.cmp(&a.0));
+    positions.dedup_by(|a, b| a.0 == b.0);
+
+    for (start, end) in positions {
+        if end <= result.len() {
+            result.insert(end, '\n');
+            result.insert(start, '\n');
+        }
+    }
+    result
+}
+
+/// Remove all occurrences of `<tag ...>...</tag>` (case-insensitive).
+fn remove_tag_block(html: &str, tag: &str) -> String {
+    let open = format!("<{}", tag);
+    let close = format!("</{}", tag);
+    let mut result = String::with_capacity(html.len());
+    let lower = html.to_lowercase();
+    let mut cursor = 0;
+
+    while let Some(start) = lower[cursor..].find(&open) {
+        let abs_start = cursor + start;
+        result.push_str(&html[cursor..abs_start]);
+
+        if let Some(end_offset) = lower[abs_start..].find(&close) {
+            let after_close = abs_start + end_offset;
+            // Skip past the closing tag's `>`
+            if let Some(gt) = html[after_close..].find('>') {
+                cursor = after_close + gt + 1;
+            } else {
+                cursor = html.len();
+            }
+        } else {
+            // No closing tag — skip to end.
+            cursor = html.len();
+        }
+    }
+    result.push_str(&html[cursor..]);
+    result
+}
+
+/// Collapse runs of whitespace into single spaces, preserving paragraph breaks.
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_newline_count = 0;
+    let mut prev_was_space = false;
+
+    for ch in s.chars() {
+        if ch == '\n' || ch == '\r' {
+            prev_newline_count += 1;
+            prev_was_space = false;
+        } else if ch.is_whitespace() {
+            prev_was_space = true;
+        } else {
+            // Flush accumulated whitespace.
+            if prev_newline_count >= 2 {
+                out.push_str("\n\n");
+            } else if (prev_newline_count == 1 || prev_was_space) && !out.is_empty() {
+                out.push(' ');
+            }
+            prev_newline_count = 0;
+            prev_was_space = false;
+            out.push(ch);
+        }
+    }
+    out.trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
 // Stdio harness
 // ---------------------------------------------------------------------------
 
@@ -445,6 +662,7 @@ async fn dispatch_tool_call(id: u64, params: Option<Value>) -> JsonRpcResponse {
 
     let result = match tool_name {
         "web_search" => handle_web_search(arguments).await,
+        "web_read" => handle_web_read(arguments).await,
         "echo" => handle_echo(arguments),
         _ => return JsonRpcResponse::err(id, -32602, format!("unknown tool: {tool_name}")),
     };
@@ -517,14 +735,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_tools_list_returns_web_search() {
+    async fn dispatch_tools_list_returns_all_tools() {
         let schemas = web_search_tool_schemas();
         let resp = dispatch(2, "tools/list", None, &schemas).await;
         let result = resp.result.unwrap();
         let tool_list = result["tools"].as_array().unwrap();
-        assert_eq!(tool_list.len(), 2);
+        assert_eq!(tool_list.len(), 3);
         assert_eq!(tool_list[0]["name"], "web_search");
-        assert_eq!(tool_list[1]["name"], "echo");
+        assert_eq!(tool_list[1]["name"], "web_read");
+        assert_eq!(tool_list[2]["name"], "echo");
     }
 
     #[tokio::test]
@@ -688,5 +907,91 @@ mod tests {
     #[test]
     fn clean_ddg_url_passthrough() {
         assert_eq!(clean_ddg_url("https://direct.com"), "https://direct.com");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 46 Task 4 — web_read / html_to_text tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn html_to_text_strips_tags() {
+        let html = "<p>Hello <b>world</b>!</p><p>Second paragraph.</p>";
+        let text = html_to_text(html);
+        assert_eq!(text, "Hello world!\n\nSecond paragraph.");
+    }
+
+    #[test]
+    fn html_to_text_removes_scripts() {
+        let html = "<p>Before</p><script>alert('xss');</script><p>After</p>";
+        let text = html_to_text(html);
+        assert!(text.contains("Before"));
+        assert!(text.contains("After"));
+        assert!(!text.contains("alert"));
+        assert!(!text.contains("xss"));
+    }
+
+    #[test]
+    fn html_to_text_removes_styles() {
+        let html = "<style>.red { color: red; }</style><p>Content here</p>";
+        let text = html_to_text(html);
+        assert!(text.contains("Content here"));
+        assert!(!text.contains("color"));
+        assert!(!text.contains(".red"));
+    }
+
+    #[test]
+    fn html_to_text_extracts_title() {
+        let html = "<html><head><title>My Page Title</title></head><body>Body</body></html>";
+        let title = extract_html_title(html);
+        assert_eq!(title, "My Page Title");
+    }
+
+    #[test]
+    fn html_to_text_extracts_title_case_insensitive() {
+        let html = "<HTML><HEAD><TITLE>Upper Case</TITLE></HEAD></HTML>";
+        let title = extract_html_title(html);
+        assert_eq!(title, "Upper Case");
+    }
+
+    #[test]
+    fn html_to_text_no_title() {
+        let html = "<html><body>No title here</body></html>";
+        let title = extract_html_title(html);
+        assert!(title.is_empty());
+    }
+
+    #[test]
+    fn html_to_text_non_html_passthrough() {
+        // Non-HTML text should pass through unchanged (minus whitespace normalization).
+        let plain = "Just some plain text\nwith newlines.";
+        let result = html_to_text(plain);
+        assert_eq!(result, "Just some plain text with newlines.");
+    }
+
+    #[test]
+    fn web_read_schema_valid() {
+        let schemas = web_search_tool_schemas();
+        let wr = schemas.iter().find(|s| s.name == "web_read").unwrap();
+        let props = wr.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("url"));
+        let required = wr.input_schema["required"].as_array().unwrap();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "url");
+    }
+
+    #[test]
+    fn collapse_whitespace_normalizes() {
+        let input = "  Hello   world  \n\n\n  New paragraph  ";
+        let result = collapse_whitespace(input);
+        assert_eq!(result, "Hello world\n\nNew paragraph");
+    }
+
+    #[test]
+    fn remove_tag_block_strips_nested() {
+        let html = "<div>Keep<script type='text/javascript'>var x = 1;</script>This</div>";
+        let result = remove_tag_block(html, "script");
+        assert!(result.contains("Keep"));
+        assert!(result.contains("This"));
+        assert!(!result.contains("var x"));
     }
 }
