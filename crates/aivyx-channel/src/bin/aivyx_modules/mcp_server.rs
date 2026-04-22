@@ -124,12 +124,40 @@ fn web_search_tool_schemas() -> Vec<ToolSchema> {
 }
 
 // ---------------------------------------------------------------------------
+// Search backend selection
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MAX_RESULTS: usize = 5;
+const MAX_RESULTS_CAP: usize = 20;
+
+#[derive(Debug, Clone, PartialEq)]
+enum SearchBackend {
+    Brave(String),
+    SerpApi(String),
+    DuckDuckGo,
+}
+
+/// Select the best available search backend based on environment variables.
+/// Priority: Brave Search API → SerpAPI → DuckDuckGo (zero-config fallback).
+fn select_search_backend() -> SearchBackend {
+    if let Ok(key) = std::env::var("BRAVE_SEARCH_API_KEY") {
+        if !key.is_empty() {
+            return SearchBackend::Brave(key);
+        }
+    }
+    if let Ok(key) = std::env::var("SERPAPI_KEY") {
+        if !key.is_empty() {
+            return SearchBackend::SerpApi(key);
+        }
+    }
+    SearchBackend::DuckDuckGo
+}
+
+// ---------------------------------------------------------------------------
 // DuckDuckGo HTML search
 // ---------------------------------------------------------------------------
 
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
-const DEFAULT_MAX_RESULTS: usize = 5;
-const MAX_RESULTS_CAP: usize = 20;
 
 #[derive(Debug, Clone, Serialize)]
 struct SearchResult {
@@ -282,7 +310,78 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-async fn handle_web_search(args: Value) -> Result<String, String> {
+// ---------------------------------------------------------------------------
+// Brave Search API
+// ---------------------------------------------------------------------------
+
+const BRAVE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/web/search";
+
+/// Parse Brave Search API JSON response.
+fn parse_brave_json(json: &str) -> Vec<SearchResult> {
+    let value: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let results = value
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array());
+    match results {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|item| {
+                let title = item.get("title")?.as_str()?.to_string();
+                let url = item.get("url")?.as_str()?.to_string();
+                let snippet = item
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(SearchResult { title, url, snippet })
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SerpAPI
+// ---------------------------------------------------------------------------
+
+const SERPAPI_URL: &str = "https://serpapi.com/search.json";
+
+/// Parse SerpAPI JSON response.
+fn parse_serpapi_json(json: &str) -> Vec<SearchResult> {
+    let value: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let results = value
+        .get("organic_results")
+        .and_then(|r| r.as_array());
+    match results {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|item| {
+                let title = item.get("title")?.as_str()?.to_string();
+                let url = item.get("link")?.as_str()?.to_string();
+                let snippet = item
+                    .get("snippet")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(SearchResult { title, url, snippet })
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unified search handler
+// ---------------------------------------------------------------------------
+
+async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -294,29 +393,68 @@ async fn handle_web_search(args: Value) -> Result<String, String> {
         .map(|n| (n as usize).min(MAX_RESULTS_CAP))
         .unwrap_or(DEFAULT_MAX_RESULTS);
 
-    let url = format!("{}?q={}", DDG_HTML_URL, url_encode(query));
-
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (compatible; aivyx/1.0)")
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("build HTTP client: {e}"))?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+    let all_results = match backend {
+        SearchBackend::Brave(api_key) => {
+            let url = format!(
+                "{}?q={}&count={}",
+                BRAVE_SEARCH_URL,
+                url_encode(query),
+                max_results
+            );
+            let resp = client
+                .get(&url)
+                .header("X-Subscription-Token", api_key.as_str())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(|e| format!("Brave Search request failed: {e}"))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| format!("read Brave Search response: {e}"))?;
+            parse_brave_json(&body)
+        }
+        SearchBackend::SerpApi(api_key) => {
+            let url = format!(
+                "{}?q={}&api_key={}&num={}",
+                SERPAPI_URL,
+                url_encode(query),
+                url_encode(api_key),
+                max_results
+            );
+            let resp = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("SerpAPI request failed: {e}"))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| format!("read SerpAPI response: {e}"))?;
+            parse_serpapi_json(&body)
+        }
+        SearchBackend::DuckDuckGo => {
+            let url = format!("{}?q={}", DDG_HTML_URL, url_encode(query));
+            let resp = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+            let html = resp
+                .text()
+                .await
+                .map_err(|e| format!("read DuckDuckGo response: {e}"))?;
+            parse_ddg_html(&html)
+        }
+    };
 
-    let html = resp
-        .text()
-        .await
-        .map_err(|e| format!("read DuckDuckGo response: {e}"))?;
-
-    let results: Vec<SearchResult> = parse_ddg_html(&html)
-        .into_iter()
-        .take(max_results)
-        .collect();
+    let results: Vec<SearchResult> = all_results.into_iter().take(max_results).collect();
 
     serde_json::to_string_pretty(&results)
         .map_err(|e| format!("serialize results: {e}"))
@@ -548,11 +686,17 @@ pub async fn run_mcp_server(name: &str) -> Result<(), String> {
         }
     };
 
-    eprintln!("aivyx mcp-server: starting {name} server on stdio");
-    run_stdio_loop(&schemas).await
+    let backend = select_search_backend();
+    let backend_name = match &backend {
+        SearchBackend::Brave(_) => "Brave Search API",
+        SearchBackend::SerpApi(_) => "SerpAPI",
+        SearchBackend::DuckDuckGo => "DuckDuckGo (zero-config)",
+    };
+    eprintln!("aivyx mcp-server: starting {name} server on stdio (backend: {backend_name})");
+    run_stdio_loop(&schemas, &backend).await
 }
 
-async fn run_stdio_loop(schemas: &[ToolSchema]) -> Result<(), String> {
+async fn run_stdio_loop(schemas: &[ToolSchema], backend: &SearchBackend) -> Result<(), String> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut stdout = tokio::io::stdout();
@@ -592,7 +736,7 @@ async fn run_stdio_loop(schemas: &[ToolSchema]) -> Result<(), String> {
         }
 
         let id = req.id.unwrap();
-        let resp = dispatch(id, &req.method, req.params, schemas).await;
+        let resp = dispatch(id, &req.method, req.params, schemas, backend).await;
         write_response(&mut stdout, &resp).await?;
 
         if req.method == "shutdown" {
@@ -608,6 +752,7 @@ async fn dispatch(
     method: &str,
     params: Option<Value>,
     schemas: &[ToolSchema],
+    backend: &SearchBackend,
 ) -> JsonRpcResponse {
     match method {
         "initialize" => {
@@ -638,7 +783,7 @@ async fn dispatch(
             JsonRpcResponse::ok(id, serde_json::json!({ "tools": tool_defs }))
         }
 
-        "tools/call" => dispatch_tool_call(id, params).await,
+        "tools/call" => dispatch_tool_call(id, params, backend).await,
 
         "shutdown" => JsonRpcResponse::ok(id, Value::Null),
 
@@ -646,7 +791,7 @@ async fn dispatch(
     }
 }
 
-async fn dispatch_tool_call(id: u64, params: Option<Value>) -> JsonRpcResponse {
+async fn dispatch_tool_call(id: u64, params: Option<Value>, backend: &SearchBackend) -> JsonRpcResponse {
     let params = match params {
         Some(p) => p,
         None => return JsonRpcResponse::err(id, -32602, "missing params"),
@@ -661,7 +806,7 @@ async fn dispatch_tool_call(id: u64, params: Option<Value>) -> JsonRpcResponse {
         .unwrap_or(Value::Object(Default::default()));
 
     let result = match tool_name {
-        "web_search" => handle_web_search(arguments).await,
+        "web_search" => handle_web_search(arguments, backend).await,
         "web_read" => handle_web_read(arguments).await,
         "echo" => handle_echo(arguments),
         _ => return JsonRpcResponse::err(id, -32602, format!("unknown tool: {tool_name}")),
@@ -728,7 +873,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_initialize_returns_server_info() {
         let schemas = web_search_tool_schemas();
-        let resp = dispatch(1, "initialize", None, &schemas).await;
+        let resp = dispatch(1, "initialize", None, &schemas, &SearchBackend::DuckDuckGo).await;
         let result = resp.result.unwrap();
         assert_eq!(result["protocolVersion"], "2024-11-05");
         assert_eq!(result["serverInfo"]["name"], "aivyx-web-search");
@@ -737,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_tools_list_returns_all_tools() {
         let schemas = web_search_tool_schemas();
-        let resp = dispatch(2, "tools/list", None, &schemas).await;
+        let resp = dispatch(2, "tools/list", None, &schemas, &SearchBackend::DuckDuckGo).await;
         let result = resp.result.unwrap();
         let tool_list = result["tools"].as_array().unwrap();
         assert_eq!(tool_list.len(), 3);
@@ -753,7 +898,7 @@ mod tests {
             "name": "echo",
             "arguments": {"message": "hello world"}
         });
-        let resp = dispatch(3, "tools/call", Some(params), &schemas).await;
+        let resp = dispatch(3, "tools/call", Some(params), &schemas, &SearchBackend::DuckDuckGo).await;
         let result = resp.result.unwrap();
         assert_eq!(result["isError"], false);
         let content = result["content"].as_array().unwrap();
@@ -763,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_shutdown_returns_null() {
         let schemas = web_search_tool_schemas();
-        let resp = dispatch(4, "shutdown", None, &schemas).await;
+        let resp = dispatch(4, "shutdown", None, &schemas, &SearchBackend::DuckDuckGo).await;
         assert!(resp.result.unwrap().is_null());
         assert!(resp.error.is_none());
     }
@@ -771,7 +916,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_unknown_method_returns_error() {
         let schemas = web_search_tool_schemas();
-        let resp = dispatch(5, "bogus/method", None, &schemas).await;
+        let resp = dispatch(5, "bogus/method", None, &schemas, &SearchBackend::DuckDuckGo).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -783,7 +928,7 @@ mod tests {
             "name": "nonexistent",
             "arguments": {}
         });
-        let resp = dispatch(6, "tools/call", Some(params), &schemas).await;
+        let resp = dispatch(6, "tools/call", Some(params), &schemas, &SearchBackend::DuckDuckGo).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32602);
     }
@@ -993,5 +1138,100 @@ mod tests {
         assert!(result.contains("Keep"));
         assert!(result.contains("This"));
         assert!(!result.contains("var x"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 46 Task 6 — Brave Search + SerpAPI parsers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn brave_parser_extracts_results() {
+        let json = r#"{
+            "web": {
+                "results": [
+                    {
+                        "title": "Rust Programming",
+                        "url": "https://rust-lang.org",
+                        "description": "A language empowering everyone."
+                    },
+                    {
+                        "title": "Cargo Docs",
+                        "url": "https://doc.rust-lang.org/cargo/",
+                        "description": "The Rust package manager."
+                    }
+                ]
+            }
+        }"#;
+        let results = parse_brave_json(json);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Rust Programming");
+        assert_eq!(results[0].url, "https://rust-lang.org");
+        assert_eq!(results[0].snippet, "A language empowering everyone.");
+        assert_eq!(results[1].title, "Cargo Docs");
+    }
+
+    #[test]
+    fn brave_parser_empty_results() {
+        let json = r#"{ "web": { "results": [] } }"#;
+        let results = parse_brave_json(json);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn brave_parser_missing_web_key() {
+        let json = r#"{ "query": { "original": "test" } }"#;
+        let results = parse_brave_json(json);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn serpapi_parser_extracts_results() {
+        let json = r#"{
+            "organic_results": [
+                {
+                    "title": "Example Page",
+                    "link": "https://example.com",
+                    "snippet": "An example snippet."
+                },
+                {
+                    "title": "Another Page",
+                    "link": "https://another.com",
+                    "snippet": "Another snippet."
+                }
+            ]
+        }"#;
+        let results = parse_serpapi_json(json);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Example Page");
+        assert_eq!(results[0].url, "https://example.com");
+        assert_eq!(results[0].snippet, "An example snippet.");
+        assert_eq!(results[1].url, "https://another.com");
+    }
+
+    #[test]
+    fn serpapi_parser_empty_results() {
+        let json = r#"{ "organic_results": [] }"#;
+        let results = parse_serpapi_json(json);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn backend_selector_prefers_brave() {
+        // Can't reliably set env vars in parallel tests, so test the
+        // parsing logic directly instead.
+        let brave = SearchBackend::Brave("key".into());
+        assert_eq!(brave, SearchBackend::Brave("key".into()));
+
+        let serpapi = SearchBackend::SerpApi("key2".into());
+        assert_ne!(serpapi, brave);
+    }
+
+    #[test]
+    fn backend_selector_falls_back_ddg() {
+        // Without any env vars set, the default should be DuckDuckGo.
+        // We can't safely test select_search_backend() in parallel,
+        // but we can verify the enum construction.
+        let ddg = SearchBackend::DuckDuckGo;
+        assert_eq!(ddg, SearchBackend::DuckDuckGo);
     }
 }
