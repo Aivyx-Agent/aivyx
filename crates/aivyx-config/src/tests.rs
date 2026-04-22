@@ -2324,3 +2324,63 @@ fn daemon_web_ui_absent_means_none() {
     assert_eq!(cfg.web_ui_port, None);
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Phase 46: `bundled` flag on [[mcp_server]]
+// ------------------------------------------------------------------
+
+#[test]
+fn bundled_flag_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-bundled");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[mcp_server]]
+name = "web-search"
+command = "aivyx"
+args = ["mcp-server", "web-search"]
+bundled = true
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.mcp_servers.len(), 1);
+    assert!(cfg.mcp_servers[0].bundled);
+    assert_eq!(cfg.mcp_servers[0].name, "web-search");
+    drop(env);
+}
+
+#[test]
+fn bundled_default_false() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-no-bundled");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[[mcp_server]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.mcp_servers.len(), 1);
+    assert!(!cfg.mcp_servers[0].bundled);
+    drop(env);
+}

@@ -1263,6 +1263,7 @@ async fn run_async(
             args: cli.args,
             url: None,
             enabled: true,
+            bundled: false,
         });
     }
     for cli in cli_mcp_sse_servers {
@@ -1273,6 +1274,7 @@ async fn run_async(
             args: Vec::new(),
             url: Some(cli.url),
             enabled: true,
+            bundled: false,
         });
     }
     let model = model.value;
@@ -1536,10 +1538,19 @@ async fn run_async(
     for mcp_cfg in &mcp_servers {
         let bridge_result = match mcp_cfg.transport {
             aivyx_config::McpTransportKind::Stdio => {
-                let cmd = mcp_cfg.command.as_deref().unwrap_or("");
+                // Phase 46: resolve `bundled = true` to current binary path.
+                let resolved_cmd: String = if mcp_cfg.bundled {
+                    std::env::current_exe()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| {
+                            mcp_cfg.command.clone().unwrap_or_default()
+                        })
+                } else {
+                    mcp_cfg.command.clone().unwrap_or_default()
+                };
                 let args_ref: Vec<&str> =
                     mcp_cfg.args.iter().map(|s| s.as_str()).collect();
-                aivyx_mcp::McpServerBridge::start(cmd, &args_ref, &mcp_cfg.name)
+                aivyx_mcp::McpServerBridge::start(&resolved_cmd, &args_ref, &mcp_cfg.name)
                     .await
             }
             aivyx_config::McpTransportKind::Sse => {

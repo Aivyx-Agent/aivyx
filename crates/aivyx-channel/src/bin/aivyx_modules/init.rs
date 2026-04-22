@@ -196,6 +196,8 @@ struct InitConfig {
     api_key: Option<String>,
     storage_path: String,
     fs_root: String,
+    /// Phase 46: enable bundled web search MCP server.
+    enable_web_search: bool,
 }
 
 /// Render a ready-to-use `aivyx.toml` from the wizard answers.
@@ -239,6 +241,17 @@ fn render_toml(cfg: &InitConfig) -> String {
         "\n[fs]\nroot = \"{}\"\n\n[storage]\npath = \"{}\"\n",
         cfg.fs_root, cfg.storage_path,
     ));
+
+    // Phase 46: bundled web search MCP server.
+    if cfg.enable_web_search {
+        out.push_str(
+            "\n[[mcp_server]]\n\
+             name = \"web-search\"\n\
+             command = \"aivyx\"\n\
+             args = [\"mcp-server\", \"web-search\"]\n\
+             bundled = true\n",
+        );
+    }
 
     out
 }
@@ -401,6 +414,14 @@ pub async fn run_init_wizard() -> Result<(), String> {
         storage_path
     };
 
+    // 5b. Web search — bundled MCP server (Phase 46).
+    let enable_web_search = prompt_yes_no(
+        "Enable web search?",
+        true,
+        &mut reader,
+        &mut writer,
+    )?;
+
     // 6. Render + write.
     let cfg = InitConfig {
         provider,
@@ -408,6 +429,7 @@ pub async fn run_init_wizard() -> Result<(), String> {
         api_key,
         storage_path,
         fs_root,
+        enable_web_search,
     };
     let toml = render_toml(&cfg);
     write_config(config_path, &toml)?;
@@ -565,6 +587,7 @@ mod tests {
             api_key: None,
             storage_path: "data/aivyx.redb".into(),
             fs_root: "/home/user/workspace".into(),
+            enable_web_search: false,
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"ollama\""));
@@ -575,6 +598,7 @@ mod tests {
         assert!(toml.contains("root = \"/home/user/workspace\""));
         assert!(toml.contains("[storage]"));
         assert!(toml.contains("path = \"data/aivyx.redb\""));
+        assert!(!toml.contains("[[mcp_server]]"));
     }
 
     #[test]
@@ -585,6 +609,7 @@ mod tests {
             api_key: Some("sk-ant-test123".into()),
             storage_path: "store.redb".into(),
             fs_root: ".".into(),
+            enable_web_search: false,
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"anthropic\""));
@@ -601,6 +626,7 @@ mod tests {
             api_key: Some("sk-openai-xyz".into()),
             storage_path: "store.redb".into(),
             fs_root: ".".into(),
+            enable_web_search: false,
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"openai\""));
@@ -617,9 +643,45 @@ mod tests {
             api_key: None,
             storage_path: "/custom/store.redb".into(),
             fs_root: "/custom/workspace".into(),
+            enable_web_search: false,
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("root = \"/custom/workspace\""));
         assert!(toml.contains("path = \"/custom/store.redb\""));
+    }
+
+    // -- Phase 46: web search in init ------------------------------------
+
+    #[test]
+    fn init_toml_with_web_search() {
+        let cfg = InitConfig {
+            provider: Provider::Ollama,
+            model: "llama3.2:latest".into(),
+            api_key: None,
+            storage_path: "store.redb".into(),
+            fs_root: ".".into(),
+            enable_web_search: true,
+        };
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[[mcp_server]]"));
+        assert!(toml.contains("name = \"web-search\""));
+        assert!(toml.contains("command = \"aivyx\""));
+        assert!(toml.contains("args = [\"mcp-server\", \"web-search\"]"));
+        assert!(toml.contains("bundled = true"));
+    }
+
+    #[test]
+    fn init_toml_without_web_search() {
+        let cfg = InitConfig {
+            provider: Provider::Ollama,
+            model: "llama3.2:latest".into(),
+            api_key: None,
+            storage_path: "store.redb".into(),
+            fs_root: ".".into(),
+            enable_web_search: false,
+        };
+        let toml = render_toml(&cfg);
+        assert!(!toml.contains("[[mcp_server]]"));
+        assert!(!toml.contains("web-search"));
     }
 }

@@ -804,6 +804,9 @@ pub struct McpServerConfig {
     /// SSE endpoint URL (SSE transport only).
     pub url: Option<String>,
     pub enabled: bool,
+    /// When `true`, the binary resolves `command` to `std::env::current_exe()`
+    /// before spawning. Used for bundled MCP servers (Phase 46).
+    pub bundled: bool,
 }
 
 /// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
@@ -962,6 +965,10 @@ struct RawMcpServer {
     url: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    /// When `true`, resolve `command` to the current binary path at runtime.
+    /// Used for bundled MCP servers that ship inside the `aivyx` binary.
+    #[serde(default)]
+    bundled: bool,
 }
 
 fn default_stdio_transport() -> String {
@@ -1607,6 +1614,7 @@ impl AivyxConfig {
                 args: r.args.unwrap_or_default(),
                 url: r.url,
                 enabled: true,
+                bundled: r.bundled,
             });
         }
 
