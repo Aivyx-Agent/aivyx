@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
+    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
     LlmStreamEvent, LlmUsage,
 };
 
@@ -249,10 +249,38 @@ fn build_request_body(
 
 fn openai_message(msg: &LlmMessage) -> Result<Value, LlmError> {
     Ok(match msg {
-        LlmMessage::User { content } => json!({
-            "role": "user",
-            "content": content,
-        }),
+        LlmMessage::User { content } => {
+            let has_images = content.iter().any(ContentBlock::is_image);
+            if has_images {
+                // OpenAI multimodal: content array with text + image_url blocks.
+                let blocks: Vec<Value> = content
+                    .iter()
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => {
+                            json!({"type": "text", "text": text})
+                        }
+                        ContentBlock::ImageBase64 { media_type, data } => json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{media_type};base64,{data}")
+                            }
+                        }),
+                    })
+                    .collect();
+                json!({ "role": "user", "content": blocks })
+            } else {
+                // Text-only: plain string for backwards compat.
+                let text = content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                json!({ "role": "user", "content": text })
+            }
+        }
         LlmMessage::Assistant { text, tool_calls } => {
             let mut msg = json!({"role": "assistant"});
             if !text.is_empty() {
@@ -560,9 +588,7 @@ mod tests {
 
     fn simple_request() -> (Vec<LlmMessage>, Vec<LlmToolDescriptor>) {
         (
-            vec![LlmMessage::User {
-                content: "hello".into(),
-            }],
+            vec![LlmMessage::user_text("hello")],
             vec![],
         )
     }

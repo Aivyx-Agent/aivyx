@@ -32,7 +32,8 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
+    LlmStreamEvent, LlmUsage,
 };
 
 use super::sse::{SseEvent, SseReader};
@@ -188,10 +189,25 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
 
 fn anthropic_message(msg: &LlmMessage) -> Result<Value, LlmError> {
     Ok(match msg {
-        LlmMessage::User { content } => json!({
-            "role": "user",
-            "content": [{"type": "text", "text": content}],
-        }),
+        LlmMessage::User { content } => {
+            let blocks: Vec<Value> = content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => {
+                        json!({"type": "text", "text": text})
+                    }
+                    ContentBlock::ImageBase64 { media_type, data } => json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        }
+                    }),
+                })
+                .collect();
+            json!({ "role": "user", "content": blocks })
+        }
         LlmMessage::Assistant { text, tool_calls } => {
             let mut content: Vec<Value> = Vec::new();
             if !text.is_empty() {
@@ -645,9 +661,7 @@ mod tests {
 
     fn blank_request_args() -> (Vec<LlmMessage>, Vec<LlmToolDescriptor>) {
         (
-            vec![LlmMessage::User {
-                content: "hi".to_string(),
-            }],
+            vec![LlmMessage::user_text("hi")],
             vec![],
         )
     }
@@ -788,9 +802,7 @@ mod tests {
     #[tokio::test]
     async fn request_body_has_expected_shape() {
         let (provider, transport) = provider_with(FakeTransport::ok(final_message_script()));
-        let messages = vec![LlmMessage::User {
-            content: "ping".to_string(),
-        }];
+        let messages = vec![LlmMessage::user_text("ping")];
         let tools = vec![LlmToolDescriptor {
             name: "memory.read".to_string(),
             description: "look things up".to_string(),
@@ -863,9 +875,7 @@ mod tests {
         use crate::LlmMessage;
 
         let messages = vec![
-            LlmMessage::User {
-                content: "read both files".to_string(),
-            },
+            LlmMessage::user_text("read both files"),
             LlmMessage::Assistant {
                 text: String::new(),
                 tool_calls: vec![
@@ -928,9 +938,7 @@ mod tests {
                 content: "ok".to_string(),
                 is_error: false,
             },
-            LlmMessage::User {
-                content: "continue".to_string(),
-            },
+            LlmMessage::user_text("continue"),
             LlmMessage::ToolResult {
                 call_id: "call_2".to_string(),
                 content: "ok".to_string(),

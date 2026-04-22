@@ -41,9 +41,9 @@ async fn final_message_against_real_api() {
     let provider = AnthropicProvider::new(AnthropicConfig::new(SecretString::from(key)))
         .expect("AnthropicProvider::new should build a reqwest client");
 
-    let messages = vec![LlmMessage::User {
-        content: "Reply with exactly the single word: pong".to_string(),
-    }];
+    let messages = vec![LlmMessage::user_text(
+        "Reply with exactly the single word: pong",
+    )];
     let tools = [];
     let request = LlmRequest {
         model: "claude-haiku-4-5-20251001",

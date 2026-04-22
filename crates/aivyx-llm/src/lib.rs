@@ -61,6 +61,40 @@ pub mod openai;
 // Conversation messages
 // ---------------------------------------------------------------------------
 
+/// A content block within a user message. Matches the content-block
+/// array format used by both Anthropic and OpenAI APIs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    /// Plain text content.
+    Text { text: String },
+    /// Base64-encoded image with MIME type (e.g. `image/png`).
+    ImageBase64 { media_type: String, data: String },
+}
+
+impl ContentBlock {
+    /// Convenience: create a text content block.
+    pub fn text(s: impl Into<String>) -> Self {
+        ContentBlock::Text { text: s.into() }
+    }
+
+    /// Convenience: create an image content block from raw bytes.
+    /// The caller provides the MIME type; the bytes are base64-encoded
+    /// internally.
+    pub fn image_from_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
+        use base64::Engine;
+        ContentBlock::ImageBase64 {
+            media_type: media_type.into(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        }
+    }
+
+    /// Returns `true` if this block is an image.
+    pub fn is_image(&self) -> bool {
+        matches!(self, ContentBlock::ImageBase64 { .. })
+    }
+}
+
 /// A single entry in a conversation passed to [`LlmProvider::chat_stream`].
 ///
 /// The caller owns the conversation as a `Vec<LlmMessage>` and replays
@@ -71,9 +105,10 @@ pub mod openai;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum LlmMessage {
-    /// A user turn. For Phase 2 this is always plain text; richer content
-    /// (images, attachments) lands when a channel starts forwarding them.
-    User { content: String },
+    /// A user turn. Carries one or more content blocks — text, images,
+    /// or a mix. Phase 45 extended this from a plain `String` to
+    /// `Vec<ContentBlock>` for multimodal support.
+    User { content: Vec<ContentBlock> },
 
     /// A prior assistant response. Carries both the text the model
     /// emitted and any tool calls it made, so the history can be replayed
@@ -98,6 +133,15 @@ pub enum LlmMessage {
         /// render the result as an error (Anthropic's `is_error: true`).
         is_error: bool,
     },
+}
+
+impl LlmMessage {
+    /// Convenience: create a user message with a single text block.
+    pub fn user_text(s: impl Into<String>) -> Self {
+        LlmMessage::User {
+            content: vec![ContentBlock::text(s)],
+        }
+    }
 }
 
 /// A record of a tool call the LLM emitted on a prior step, stored on
@@ -143,12 +187,24 @@ pub struct LlmToolDescriptor {
 /// include per-message framing overhead (role markers, JSON
 /// structure) — those are small relative to content and the 80%
 /// budget threshold absorbs the error.
+/// Conservative flat token estimate for an image content block.
+/// Based on Anthropic's formula `(width * height) / 750` for a
+/// typical 1024x1024 image. We don't decode images to get
+/// dimensions — that would require an image decoder dependency.
+const IMAGE_TOKEN_ESTIMATE: usize = 1600;
+
 pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
     let mut chars: usize = 0;
+    let mut images: usize = 0;
     for msg in messages {
         match msg {
             LlmMessage::User { content } => {
-                chars += content.len();
+                for block in content {
+                    match block {
+                        ContentBlock::Text { text } => chars += text.len(),
+                        ContentBlock::ImageBase64 { .. } => images += 1,
+                    }
+                }
             }
             LlmMessage::Assistant { text, tool_calls } => {
                 chars += text.len();
@@ -164,7 +220,7 @@ pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
             }
         }
     }
-    chars.div_ceil(4)
+    chars.div_ceil(4) + images * IMAGE_TOKEN_ESTIMATE
 }
 
 /// Estimate the token count of a system prompt string.
@@ -519,9 +575,7 @@ mod tests {
             },
         ));
 
-        let messages: Vec<LlmMessage> = vec![LlmMessage::User {
-            content: "hi".to_string(),
-        }];
+        let messages: Vec<LlmMessage> = vec![LlmMessage::user_text("hi")];
         let tools: Vec<LlmToolDescriptor> = vec![];
         let token = CancellationToken::new();
 
@@ -567,9 +621,7 @@ mod tests {
             },
         );
 
-        let messages = vec![LlmMessage::User {
-            content: "hi".to_string(),
-        }];
+        let messages = vec![LlmMessage::user_text("hi")];
         let tools: Vec<LlmToolDescriptor> = vec![];
         let token = CancellationToken::new();
 
@@ -621,9 +673,7 @@ mod tests {
             },
         );
 
-        let messages = vec![LlmMessage::User {
-            content: "what did I work on yesterday?".to_string(),
-        }];
+        let messages = vec![LlmMessage::user_text("what did I work on yesterday?")];
         let tools = vec![LlmToolDescriptor {
             name: "memory.read".to_string(),
             description: "recall prior sessions".to_string(),
@@ -666,9 +716,7 @@ mod tests {
     #[test]
     fn llm_message_round_trips_through_serde() {
         let original = vec![
-            LlmMessage::User {
-                content: "hi".to_string(),
-            },
+            LlmMessage::user_text("hi"),
             LlmMessage::Assistant {
                 text: "Looking that up.".to_string(),
                 tool_calls: vec![LlmToolCallRecord {
@@ -743,9 +791,7 @@ mod tests {
     #[test]
     fn estimate_tokens_user_message() {
         // 12 chars -> 3 tokens
-        let msgs = vec![LlmMessage::User {
-            content: "hello world!".to_string(),
-        }];
+        let msgs = vec![LlmMessage::user_text("hello world!")];
         assert_eq!(estimate_tokens(&msgs), 3);
     }
 
@@ -778,12 +824,28 @@ mod tests {
     #[test]
     fn estimate_tokens_multi_message() {
         let msgs = vec![
-            LlmMessage::User { content: "abcd".to_string() }, // 4 chars
+            LlmMessage::user_text("abcd"), // 4 chars
             LlmMessage::Assistant { text: "efgh".to_string(), tool_calls: vec![] }, // 4 chars
-            LlmMessage::User { content: "ijkl".to_string() }, // 4 chars
+            LlmMessage::user_text("ijkl"), // 4 chars
         ];
         // 12 chars -> 3 tokens
         assert_eq!(estimate_tokens(&msgs), 3);
+    }
+
+    #[test]
+    fn estimate_tokens_with_image() {
+        let msgs = vec![LlmMessage::User {
+            content: vec![
+                ContentBlock::text("describe this"),
+                ContentBlock::ImageBase64 {
+                    media_type: "image/png".to_string(),
+                    data: "iVBOR...".to_string(),
+                },
+            ],
+        }];
+        let tokens = estimate_tokens(&msgs);
+        // 13 chars / 4 = 4 tokens + 1600 image tokens = 1604
+        assert_eq!(tokens, 1604);
     }
 
     #[test]
@@ -795,5 +857,33 @@ mod tests {
     fn estimate_system_tokens_some() {
         // 20 chars -> 5 tokens
         assert_eq!(estimate_system_tokens(Some("You are a helpful AI")), 5);
+    }
+
+    #[test]
+    fn content_block_serde_roundtrip() {
+        let blocks = vec![
+            ContentBlock::text("hello"),
+            ContentBlock::ImageBase64 {
+                media_type: "image/jpeg".to_string(),
+                data: "base64data".to_string(),
+            },
+        ];
+        let json = serde_json::to_string(&blocks).unwrap();
+        let back: Vec<ContentBlock> = serde_json::from_str(&json).unwrap();
+        assert_eq!(blocks, back);
+        assert!(json.contains(r#""type":"text""#));
+        assert!(json.contains(r#""type":"image_base64""#));
+    }
+
+    #[test]
+    fn user_text_convenience() {
+        let msg = LlmMessage::user_text("hi");
+        match &msg {
+            LlmMessage::User { content } => {
+                assert_eq!(content.len(), 1);
+                assert_eq!(content[0], ContentBlock::text("hi"));
+            }
+            _ => panic!("expected User"),
+        }
     }
 }

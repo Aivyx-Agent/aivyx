@@ -42,8 +42,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use aivyx_llm::{
-    LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
-    LlmToolCallRecord, LlmToolDescriptor, LlmUsage,
+    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
+    LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
@@ -337,7 +337,7 @@ impl LlmPlanner {
 impl TurnPlanner for LlmPlanner {
     async fn begin_turn(&mut self, message: &Message) {
         let content = match &message.content {
-            MessageContent::Text(text) => text.clone(),
+            MessageContent::Text(text) => vec![ContentBlock::text(text)],
         };
         self.history.push(LlmMessage::User { content });
         self.pending_call_ids.clear();
@@ -353,9 +353,7 @@ impl TurnPlanner for LlmPlanner {
         // user message rather than sending a tool-less message list —
         // Anthropic rejects zero-message requests.
         if self.history.is_empty() {
-            self.history.push(LlmMessage::User {
-                content: String::new(),
-            });
+            self.history.push(LlmMessage::user_text(""));
         }
 
         // Phase 43 Task 3 — context window pruning. If the estimated
@@ -402,12 +400,10 @@ impl TurnPlanner for LlmPlanner {
                     self.history.drain(..pruned_count);
                     self.history.insert(
                         0,
-                        LlmMessage::User {
-                            content: format!(
-                                "[Earlier context pruned: {pruned_count} messages removed \
-                                 to fit context window]"
-                            ),
-                        },
+                        LlmMessage::user_text(format!(
+                            "[Earlier context pruned: {pruned_count} messages removed \
+                             to fit context window]"
+                        )),
                     );
                     self.pruned_message_count += pruned_count;
                 }
@@ -633,7 +629,15 @@ fn summarise_pruned(messages: &[LlmMessage]) -> String {
         }
         match msg {
             LlmMessage::User { content } => {
-                let _ = write!(buf, "[user] {}", truncate(content, 200));
+                let parts: Vec<&str> = content
+                    .iter()
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => text.as_str(),
+                        ContentBlock::ImageBase64 { media_type, .. } => media_type.as_str(),
+                    })
+                    .collect();
+                let summary = parts.join(", ");
+                let _ = write!(buf, "[user] {}", truncate(&summary, 200));
             }
             LlmMessage::Assistant { text, tool_calls } => {
                 let _ = write!(buf, "[assistant] {}", truncate(text, 200));
@@ -887,7 +891,7 @@ mod tests {
         assert_eq!(hist.len(), 2);
         assert!(matches!(
             hist[0],
-            LlmMessage::User { ref content } if content == "hi"
+            LlmMessage::User { ref content } if content == &[ContentBlock::text("hi")]
         ));
         match &hist[1] {
             LlmMessage::Assistant { text, tool_calls } => {
@@ -1406,9 +1410,7 @@ mod tests {
     async fn pruning_skipped_when_under_budget() {
         // 5 short messages, generous context window — no pruning.
         let msgs: Vec<LlmMessage> = (0..5)
-            .map(|i| LlmMessage::User {
-                content: format!("msg{i}"),
-            })
+            .map(|i| LlmMessage::user_text(format!("msg{i}")))
             .collect();
         let (mut planner, ch) = make_pruning_planner(200_000, msgs, "ok");
         planner.next_step(&[], &ch).await;
@@ -1423,9 +1425,7 @@ mod tests {
         // 10 messages ≈ 250 tokens. Set window to 200 → budget = 160.
         // Pruning should drop some messages.
         let msgs: Vec<LlmMessage> = (0..10)
-            .map(|i| LlmMessage::User {
-                content: format!("message-{i}-{}", "x".repeat(100)),
-            })
+            .map(|i| LlmMessage::user_text(format!("message-{i}-{}", "x".repeat(100))))
             .collect();
         let (mut planner, ch) = make_pruning_planner(200, msgs, "ok");
         planner.next_step(&[], &ch).await;
@@ -1433,7 +1433,11 @@ mod tests {
         // First message in history should be the sentinel.
         match &planner.history()[0] {
             LlmMessage::User { content } => {
-                assert!(content.contains("[Earlier context pruned:"));
+                let text = match &content[0] {
+                    ContentBlock::Text { text } => text,
+                    other => panic!("expected Text block, got {other:?}"),
+                };
+                assert!(text.contains("[Earlier context pruned:"));
             }
             other => panic!("expected User sentinel, got {other:?}"),
         }
@@ -1446,12 +1450,8 @@ mod tests {
         // message. Two messages in: we should prune one and keep one
         // (plus sentinel).
         let msgs = vec![
-            LlmMessage::User {
-                content: "a]".repeat(50), // ~25 tokens
-            },
-            LlmMessage::User {
-                content: "b".repeat(200), // ~50 tokens
-            },
+            LlmMessage::user_text("a]".repeat(50)), // ~25 tokens
+            LlmMessage::user_text("b".repeat(200)),  // ~50 tokens
         ];
         let (mut planner, ch) = make_pruning_planner(10, msgs, "ok");
         planner.next_step(&[], &ch).await;
@@ -1464,9 +1464,7 @@ mod tests {
     async fn pruning_skipped_when_no_context_window() {
         // No context window configured → pruning never triggers.
         let msgs: Vec<LlmMessage> = (0..20)
-            .map(|_| LlmMessage::User {
-                content: "x".repeat(1000),
-            })
+            .map(|_| LlmMessage::user_text("x".repeat(1000)))
             .collect();
         let script = vec![FakeStep {
             events: vec![],
@@ -1522,9 +1520,9 @@ mod tests {
         let mut planner = LlmPlanner::new(provider, registry, config);
         // Seed with enough bulk to trigger pruning.
         for i in 0..8 {
-            planner.history.push(LlmMessage::User {
-                content: format!("bulk-{i}-{}", "y".repeat(80)),
-            });
+            planner.history.push(LlmMessage::user_text(
+                format!("bulk-{i}-{}", "y".repeat(80)),
+            ));
         }
         let ch = RecChannel::new();
         // First call — tool call.
@@ -1558,9 +1556,7 @@ mod tests {
         // Over-budget history triggers pruning and populates the
         // before/after token fields in TokenUsage.
         let msgs: Vec<LlmMessage> = (0..10)
-            .map(|i| LlmMessage::User {
-                content: format!("msg-{i}-{}", "x".repeat(100)),
-            })
+            .map(|i| LlmMessage::user_text(format!("msg-{i}-{}", "x".repeat(100))))
             .collect();
         let (mut planner, ch) = make_pruning_planner(200, msgs, "ok");
         planner.next_step(&[], &ch).await;
@@ -1583,9 +1579,7 @@ mod tests {
     #[tokio::test]
     async fn turn_usage_zeroes_when_no_pruning() {
         // Under-budget — pruning doesn't fire, fields stay zero.
-        let msgs = vec![LlmMessage::User {
-            content: "short".to_string(),
-        }];
+        let msgs = vec![LlmMessage::user_text("short")];
         let (mut planner, ch) = make_pruning_planner(200_000, msgs, "ok");
         planner.next_step(&[], &ch).await;
 

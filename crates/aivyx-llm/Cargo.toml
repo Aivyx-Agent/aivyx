@@ -33,6 +33,7 @@ provider-openai = [
 # inputs/outputs and `tokio_util::sync::CancellationToken` for mid-
 # stream cancellation; neither requires core types.
 async-trait = { workspace = true }
+base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
