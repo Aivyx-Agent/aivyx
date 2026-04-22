@@ -47,7 +47,9 @@ use aivyx_llm::{
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
-use crate::{ChannelContext, Message, MessageContent, StreamEvent, ToolId, ToolOutcome};
+use crate::{
+    ChannelContext, ContentPart, Message, MessageContent, StreamEvent, ToolId, ToolOutcome,
+};
 
 // ---------------------------------------------------------------------------
 // PruneSink — callback for persisting pruned context
@@ -338,6 +340,18 @@ impl TurnPlanner for LlmPlanner {
     async fn begin_turn(&mut self, message: &Message) {
         let content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
+            MessageContent::Image { media_type, data } => {
+                vec![ContentBlock::image_from_bytes(media_type, data)]
+            }
+            MessageContent::Mixed(parts) => parts
+                .iter()
+                .map(|part| match part {
+                    ContentPart::Text(text) => ContentBlock::text(text),
+                    ContentPart::Image { media_type, data } => {
+                        ContentBlock::image_from_bytes(media_type, data)
+                    }
+                })
+                .collect(),
         };
         self.history.push(LlmMessage::User { content });
         self.pending_call_ids.clear();
@@ -1586,5 +1600,68 @@ mod tests {
         let usage = planner.turn_usage();
         assert_eq!(usage.context_tokens_before_pruning, 0);
         assert_eq!(usage.context_tokens_after_pruning, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 45 Task 3 — begin_turn with multimodal MessageContent
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn begin_turn_image_to_content_block() {
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "I see an image".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let config = LlmPlannerConfig::new("test");
+        let mut planner = LlmPlanner::new(provider, registry, config);
+
+        let session = crate::SessionId::new();
+        let msg = Message::image(session, "image/png", vec![0x89, 0x50]);
+        planner.begin_turn(&msg).await;
+
+        let hist = planner.history();
+        assert_eq!(hist.len(), 1);
+        match &hist[0] {
+            LlmMessage::User { content } => {
+                assert_eq!(content.len(), 1);
+                assert!(content[0].is_image());
+            }
+            other => panic!("expected User, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn begin_turn_mixed_content() {
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let config = LlmPlannerConfig::new("test");
+        let mut planner = LlmPlanner::new(provider, registry, config);
+
+        let session = crate::SessionId::new();
+        let msg = Message::text_with_image(session, "describe this", "image/jpeg", vec![0xFF]);
+        planner.begin_turn(&msg).await;
+
+        let hist = planner.history();
+        assert_eq!(hist.len(), 1);
+        match &hist[0] {
+            LlmMessage::User { content } => {
+                assert_eq!(content.len(), 2);
+                assert!(matches!(&content[0], ContentBlock::Text { text } if text == "describe this"));
+                assert!(content[1].is_image());
+            }
+            other => panic!("expected User, got {other:?}"),
+        }
     }
 }

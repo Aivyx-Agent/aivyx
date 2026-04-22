@@ -121,12 +121,65 @@ impl Message {
             received_at: SystemTime::now(),
         }
     }
+
+    /// Convenience constructor for an image message (no text).
+    pub fn image(
+        session_id: SessionId,
+        media_type: impl Into<String>,
+        data: Vec<u8>,
+    ) -> Self {
+        Message {
+            id: MessageId::new(),
+            session_id,
+            content: MessageContent::Image {
+                media_type: media_type.into(),
+                data,
+            },
+            received_at: SystemTime::now(),
+        }
+    }
+
+    /// Convenience constructor for text + image in one message.
+    pub fn text_with_image(
+        session_id: SessionId,
+        text: impl Into<String>,
+        media_type: impl Into<String>,
+        data: Vec<u8>,
+    ) -> Self {
+        Message {
+            id: MessageId::new(),
+            session_id,
+            content: MessageContent::Mixed(vec![
+                ContentPart::Text(text.into()),
+                ContentPart::Image {
+                    media_type: media_type.into(),
+                    data,
+                },
+            ]),
+            received_at: SystemTime::now(),
+        }
+    }
 }
 
+/// The content of a user message. Phase 45 extended this from text-only
+/// to support images and mixed text+image messages.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageContent {
+    /// Plain text.
     Text(String),
-    // Phase 2: Image, Audio, File, StructuredData
+    /// A single image with MIME type and raw bytes.
+    Image { media_type: String, data: Vec<u8> },
+    /// Multiple content parts (text and/or images) in one message.
+    Mixed(Vec<ContentPart>),
+}
+
+/// A single part of a [`MessageContent::Mixed`] message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ContentPart {
+    /// Plain text.
+    Text(String),
+    /// An image with MIME type and raw bytes.
+    Image { media_type: String, data: Vec<u8> },
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +974,34 @@ mod tests {
         assert_eq!(m.session_id, session);
         match m.content {
             MessageContent::Text(t) => assert_eq!(t, "hello"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_image_constructor() {
+        let session = SessionId::new();
+        let m = Message::image(session, "image/png", vec![0x89, 0x50, 0x4E, 0x47]);
+        match &m.content {
+            MessageContent::Image { media_type, data } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, &[0x89, 0x50, 0x4E, 0x47]);
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_text_with_image_constructor() {
+        let session = SessionId::new();
+        let m = Message::text_with_image(session, "describe", "image/jpeg", vec![0xFF, 0xD8]);
+        match &m.content {
+            MessageContent::Mixed(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(&parts[0], ContentPart::Text(t) if t == "describe"));
+                assert!(matches!(&parts[1], ContentPart::Image { media_type, .. } if media_type == "image/jpeg"));
+            }
+            other => panic!("expected Mixed, got {other:?}"),
         }
     }
 
