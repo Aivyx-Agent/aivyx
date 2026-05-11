@@ -603,7 +603,7 @@ fn insert_block_breaks(html: &str) -> String {
             start = abs + 1;
         }
     }
-    positions.sort_by(|a, b| b.0.cmp(&a.0));
+    positions.sort_by_key(|p| std::cmp::Reverse(p.0));
     positions.dedup_by(|a, b| a.0 == b.0);
 
     for (start, end) in positions {
