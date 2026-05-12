@@ -486,13 +486,13 @@ Nine storage domains. +30 tests (660→690). See
 **Status: G5 — Autonomous and Scheduled Execution is now
 fully delivered** across Phases 26–27.
 
-## Milestone — Assistant Profile (P13, partially delivered)
+## Milestone — Assistant Profile ✓ (delivered across Phases 57–58)
 
 **Forward commitment:** PRODUCT.md P13 (amendment A9, Phase 56).
 **Couples to:** Per-Role Envelope (P9), `aivyx init` wizard,
 system-prompt assembly.
-**Status:** Foundation delivered Phase 57. Inspection half
-(Phase 58) is next.
+**Status:** Fully delivered. P13 closed at Phase 58 exit
+(2026-05-12).
 
 The operator's stated vision (post-Phase-55) reframes Aivyx
 from "personal autonomous agent platform" into a
@@ -552,13 +552,29 @@ Profile fields.
   aivyx-channel (992 → 1006). All three streak predictions
   correct: DESIGN.md → 4, PRODUCT.md → 1, lib.rs → 6
   (longest run since Phase 51's deliberate break at 6).
-- **Phase 58 (Inspection, next):** `aivyx profile show` /
-  `aivyx profile edit` CLI subcommands; Web UI profile
-  pane mirroring the CLI surface via the existing
-  Query/QueryResponse IPC envelope (Phase 47); optional
-  reload command per Q6 (Phase 57 deferred reload
-  semantics to the edit-surface layer). Closes the
-  milestone.
+- **Phase 58 (Inspection, shipped 2026-05-12):** delivered
+  the operator-facing CLI + Web UI surface and closed the
+  P13 milestone. `aivyx profile show` reads `aivyx.toml`
+  via the existing config loader path and renders the
+  resolved Profile in labeled banner-style format per
+  Q3(a). `aivyx profile edit` opens the `[profile]`
+  section in `$EDITOR` against a tempfile and merges the
+  result back via `toml_edit` surgical update per Q2(a)
+  — preserves comments, whitespace, and every other
+  section in `aivyx.toml`. New `CliMode::Profile(ProfileSubcommand)`
+  nested enum per Q1(a). Web UI Profile pane shows live
+  daemon state via a new `Query::GetProfile` IPC envelope
+  + `ProfileSummary` wire-shape per Q4(a) read-only.
+  Reload semantics: load-time-only per Q5(a) — edit
+  prints a `aivyx daemon stop && aivyx` restart reminder
+  on save. PRODUCT.md Delivery Status refreshed: P13 →
+  Fully Delivered (Task 5 streak-breaker). `toml_edit =
+  "0.22"` is the first new workspace crate added since
+  Phase 27's `notify`. Tests +17 across aivyx-channel
+  bin (parser + render + merge) and lib (IPC handler
+  conversion), 1006 → 1023. All three streak predictions
+  correct: DESIGN.md → 5, PRODUCT.md → broke at 2
+  (Task 5, intentional), lib.rs → 7.
 
 ## Milestone — Persona (forward, P14 candidate)
 

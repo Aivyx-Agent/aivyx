@@ -689,17 +689,39 @@ predictions correct: DESIGN.md → 4, PRODUCT.md → 1, lib.rs
 → 6 (longest run since the Phase 51 deliberate break at 6).
 Phase 58 (Inspection) is next.
 
-## Phase 58 — Profile Inspection (closes P13)
+## Phase 58 — Profile Inspection (closes P13) [SHIPPED]
 
-**Scheduled** — operator-facing inspection surface for
-Profile. `aivyx profile show` / `aivyx profile edit` CLI
-subcommands (read-only show is mechanical;
-edit may launch `$EDITOR` against a serialized form for the
-operator to revise, with reload-on-save). Web UI Profile
-pane mirroring the CLI surface using the existing
-Query/QueryResponse envelope (Phase 47). Closes the
-Assistant Profile milestone. After this phase the operator
-has a fully-shaped static identity layer driving every turn.
+**Frozen — see [PHASE_58.md](PHASE_58.md).** Operator-facing
+inspection and edit surface that closes the Assistant Profile
+milestone. After Phase 58, **P1–P13 are all fully shipped**;
+only P14 (Persona, Phases 59–60) remains forward.
+
+- `aivyx profile show` (CLI) — reads `aivyx.toml` via the
+  existing config loader path, renders the resolved Profile
+  in labeled banner-style format per Q3(a). Works whether
+  the daemon is running or not.
+- `aivyx profile edit` (CLI) — opens the `[profile]`
+  section in `$EDITOR` against a tempfile, merges back via
+  `toml_edit` surgical update per Q2(a) preserving every
+  other section and every comment in `aivyx.toml`. Prints
+  a `aivyx daemon stop && aivyx` restart reminder on save
+  per Q5(a) load-time-only semantics.
+- `CliMode::Profile(ProfileSubcommand)` nested enum per
+  Q1(a); five new parser tests cover happy paths and
+  error cases.
+- Web UI Profile pane via new `Query::GetProfile` IPC
+  envelope + `ProfileSummary` wire-shape per Q4(a)
+  read-only. Mirrors the show CLI output with an
+  injection-status banner.
+- PRODUCT.md Delivery Status refreshed (P13 → Fully
+  Delivered, Task 5 streak-break).
+
+`toml_edit = "0.22"` is the first new workspace crate
+added since Phase 27's `notify`. Tests +17 across the
+phase (1006 → 1023), zero clippy warnings. All three
+streak predictions correct: DESIGN.md → 5 (untouched),
+PRODUCT.md → broke at 2 (Task 5, intentional), lib.rs
+→ 7 (untouched). Phase 59 (Persona Foundation) is next.
 
 ## Phase 59 — Persona Foundation
 

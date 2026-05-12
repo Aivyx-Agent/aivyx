@@ -298,6 +298,29 @@ with the substrate enumeration. Note the Profile arc closure
 and the pivot to Phase 59 (Persona Foundation) as the next
 forward step.
 
+## Task 6 ship record
+
+**Files modified:**
+- `docs/PRODUCT_ROADMAP.md` (+27, -8): Assistant Profile
+  milestone status changed from *"Foundation delivered Phase
+  57. Inspection half (Phase 58) is next."* to *"Fully
+  delivered. P13 closed at Phase 58 exit (2026-05-12)."*
+  Phase 58 expected-phase row expanded from one bullet
+  into a paragraph documenting the four surfaces (CLI
+  show, CLI edit, Web UI pane, Delivery Status refresh)
+  with Q-block resolutions inline.
+- `docs/ROADMAP.md` (+29, -10): Phase 58 entry refreshed
+  from Scheduled to SHIPPED with the per-surface bullet
+  list, the streak verification ("DESIGN.md → 5
+  untouched, PRODUCT.md → broke at 2 intentional, lib.rs
+  → 7 untouched"), the `toml_edit` dependency-introduction
+  note ("first new workspace crate since Phase 27's
+  notify"), and the explicit P1–P13 closure statement +
+  Phase 59 pointer.
+
+**Test delta:** 0 (docs-only edit). Workspace total
+unchanged at 1023.
+
 ### Task 7 — Exit freeze
 
 Standard exit procedure. Prediction-vs-reality block, exit
