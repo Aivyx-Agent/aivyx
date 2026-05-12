@@ -132,18 +132,43 @@ update it as they like; the repo is unchanged.
 
 ### Task 7 — Cross-doc consistency spot-check
 
-Walk the docs that changed across Phases 47–52:
-- TOOL_SDK.md
-- CHANNEL_SDK.md
-- THREAT_MODEL.md
-- DAEMON_IPC.md (after Task 4)
-- ADAPTER_PATTERN.md
-- PRODUCT_ROADMAP.md (after Task 3)
-- ROADMAP.md
+**Resolution: docs are in sync as of Phase 54 Task 6 exit.**
+Findings recorded for the record:
 
-Look for: broken section refs, outdated counts (crates,
-phases, tests, scopes, deferrals), stale phase-status claims,
-contradictions with PRODUCT.md / DESIGN.md.
+**Section references** — checked:
+
+| Source | Reference | Target | Status |
+|---|---|---|---|
+| `THREAT_MODEL.md` §5.6 | `TOOL_SDK.md` §9 | sandbox section | ✓ |
+| `CHANNEL_SDK.md` § Message envelopes | `Query`/`QueryResponse` (Phase 47+) | DAEMON_IPC.md Phase 47 addendum | ✓ |
+| `DAEMON_IPC.md` Phase 47 addendum | `CHANNEL_SDK.md` § 4 | message envelope cheatsheet | ✓ |
+| `TOOL_SDK.md` §8.5 | `crates/aivyx-tool/tests/p12_equivalence.rs` | conformance test | ✓ |
+| `TOOL_SDK.md` §9 | bridge `bridge.rs:100` comment | ✓ |
+| `aivyx-config/src/lib.rs` doc | `TOOL_SDK.md` §9 | ✓ |
+
+**Counts** — verified against implementation:
+
+| Claim | Source | Verified against |
+|---|---|---|
+| 9 encrypted storage domains | `THREAT_MODEL.md` §3 | `KeyDomain` enum (Sessions, Memory, Audit, Secrets, ChannelState, Missions, Schedules, Webhooks, FileWatches) |
+| 43 scope bases | A3 addendum (Task 5) | `KNOWN_BASES.len()` |
+| 12 workspace crates | README + A4 addendum | `crates/*` directory listing |
+| 984 Rust + 24 Python tests | README + PRODUCT_ROADMAP | `cargo test --workspace` + Python suites |
+| 8 amendments filed | README | `docs/amendments/` directory |
+
+**Phase-status claims** — checked across PRODUCT_ROADMAP,
+ROADMAP, README, and SDK docs. Every milestone marked ✓
+matches its actual delivery. No false-shipped claims.
+
+**No drift fixes needed.** The Phase 51 cleanup (typed
+`AivyxError`), Phase 52 sandbox docs, and Phase 54 Tasks 2–5
+(README + PRODUCT_ROADMAP + DAEMON_IPC addendum + A3 addendum)
+together closed every drift point a spot-check could surface.
+
+The spot-check confirms the docs sweep is sufficient at the
+"all current docs are honest" bar. Deeper-than-spot-check
+auditing would benefit from a dedicated phase — recorded as
+non-urgent.
 
 ### Task 8 — Exit freeze + Chapter A retrospective
 
@@ -161,7 +186,8 @@ Update `docs/README.md` row.
 | 3 | `14068c2` | PRODUCT_ROADMAP.md Delivered refresh + Chapter A entries |
 | 4 | `188e603` | DAEMON_IPC.md Phase 47 Query/QueryResponse addendum |
 | 5 | `afe3d15` | A3 amendment addendum (scope-base count 24 → 43) |
-| 6 | `1239e53` | walkthrough.md gitignored — no action needed |
+| 6 | `d78afc8` | walkthrough.md gitignored — no action needed |
+| 7 | _this commit_ | cross-doc consistency spot-check — no drift |
 
 ## Deferrals carried into the phase
 
