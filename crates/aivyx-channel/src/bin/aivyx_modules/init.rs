@@ -198,6 +198,13 @@ struct InitConfig {
     fs_root: String,
     /// Phase 46: enable bundled web search MCP server.
     enable_web_search: bool,
+    /// Phase 57: Profile bootstrap per Q4(c). Each field is
+    /// `None` when the operator left the corresponding wizard
+    /// prompt blank; the renderer only emits a `[profile]`
+    /// section when at least one is `Some`.
+    profile_assistant_name: Option<String>,
+    profile_primary_use_case: Option<String>,
+    profile_communication_style: Option<String>,
 }
 
 /// Render a ready-to-use `aivyx.toml` from the wizard answers.
@@ -253,6 +260,51 @@ fn render_toml(cfg: &InitConfig) -> String {
         );
     }
 
+    // Phase 57: Profile section per Q4(c). Only emit when the
+    // operator customized at least one field. A blank-everywhere
+    // pass leaves the substrate at its synthesized default — same
+    // behavior as pre-Phase-57 configs.
+    if cfg.profile_assistant_name.is_some()
+        || cfg.profile_primary_use_case.is_some()
+        || cfg.profile_communication_style.is_some()
+    {
+        out.push_str("\n[profile]\n");
+        if let Some(name) = &cfg.profile_assistant_name {
+            out.push_str(&format!("assistant_name = \"{}\"\n", escape_toml_string(name)));
+        }
+        if let Some(style) = &cfg.profile_communication_style {
+            out.push_str(&format!(
+                "communication_style = \"{}\"\n",
+                escape_toml_string(style),
+            ));
+        }
+        if let Some(use_case) = &cfg.profile_primary_use_case {
+            out.push_str(&format!(
+                "primary_use_cases = [\"{}\"]\n",
+                escape_toml_string(use_case),
+            ));
+        }
+    }
+
+    out
+}
+
+/// Minimal TOML basic-string escape for wizard-supplied free text.
+/// Operators typing a quote or backslash should not break the
+/// generated TOML — the renderer escapes both, plus newlines for
+/// the off-chance that a paste includes them.
+fn escape_toml_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
     out
 }
 
@@ -422,6 +474,49 @@ pub async fn run_init_wizard() -> Result<(), String> {
         &mut writer,
     )?;
 
+    // 5c. Profile bootstrap (Phase 57, PRODUCT.md P13). Q4(c)
+    // resolution at sign-off: three short prompts seeding the
+    // operator's identity layer with a usable starting point.
+    // Each prompt is **opt-in** — blank input means "skip, leave
+    // this field unset." Phase 58's `aivyx profile edit` surface
+    // fills in the other three categories (operator_profile,
+    // behavioral_preferences, behavioral_constraints) later.
+    writeln!(writer, "\nAssistant identity (optional — press Enter to skip):")
+        .map_err(|e| format!("write error: {e}"))?;
+
+    let assistant_name_raw = prompt_line(
+        "Assistant name (default Aivyx): ",
+        &mut reader,
+        &mut writer,
+    )?;
+    let profile_assistant_name = if assistant_name_raw.is_empty() {
+        None
+    } else {
+        Some(assistant_name_raw)
+    };
+
+    let primary_use_case_raw = prompt_line(
+        "Primary use case (e.g. 'Rust systems programming'): ",
+        &mut reader,
+        &mut writer,
+    )?;
+    let profile_primary_use_case = if primary_use_case_raw.is_empty() {
+        None
+    } else {
+        Some(primary_use_case_raw)
+    };
+
+    let style_raw = prompt_line(
+        "Communication style (e.g. 'terse, conclusion-first'): ",
+        &mut reader,
+        &mut writer,
+    )?;
+    let profile_communication_style = if style_raw.is_empty() {
+        None
+    } else {
+        Some(style_raw)
+    };
+
     // 6. Render + write.
     let cfg = InitConfig {
         provider,
@@ -430,6 +525,9 @@ pub async fn run_init_wizard() -> Result<(), String> {
         storage_path,
         fs_root,
         enable_web_search,
+        profile_assistant_name,
+        profile_primary_use_case,
+        profile_communication_style,
     };
     let toml = render_toml(&cfg);
     write_config(config_path, &toml)?;
@@ -579,16 +677,40 @@ mod tests {
 
     // -- TOML generation -------------------------------------------------
 
+    /// Builder helper for the six pre-Phase-57 tests that don't
+    /// care about Profile fields. Wires `None` into the three new
+    /// Profile slots so the test bodies stay focused.
+    fn init_config_no_profile(
+        provider: Provider,
+        model: &str,
+        api_key: Option<&str>,
+        storage_path: &str,
+        fs_root: &str,
+        enable_web_search: bool,
+    ) -> InitConfig {
+        InitConfig {
+            provider,
+            model: model.into(),
+            api_key: api_key.map(String::from),
+            storage_path: storage_path.into(),
+            fs_root: fs_root.into(),
+            enable_web_search,
+            profile_assistant_name: None,
+            profile_primary_use_case: None,
+            profile_communication_style: None,
+        }
+    }
+
     #[test]
     fn render_toml_ollama() {
-        let cfg = InitConfig {
-            provider: Provider::Ollama,
-            model: "llama3.2:latest".into(),
-            api_key: None,
-            storage_path: "data/aivyx.redb".into(),
-            fs_root: "/home/user/workspace".into(),
-            enable_web_search: false,
-        };
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"ollama\""));
         assert!(toml.contains("model = \"llama3.2:latest\""));
@@ -599,18 +721,20 @@ mod tests {
         assert!(toml.contains("[storage]"));
         assert!(toml.contains("path = \"data/aivyx.redb\""));
         assert!(!toml.contains("[[mcp_server]]"));
+        // No [profile] section unless operator customized.
+        assert!(!toml.contains("[profile]"));
     }
 
     #[test]
     fn render_toml_anthropic() {
-        let cfg = InitConfig {
-            provider: Provider::Anthropic,
-            model: "claude-sonnet-4-20250514".into(),
-            api_key: Some("sk-ant-test123".into()),
-            storage_path: "store.redb".into(),
-            fs_root: ".".into(),
-            enable_web_search: false,
-        };
+        let cfg = init_config_no_profile(
+            Provider::Anthropic,
+            "claude-sonnet-4-20250514",
+            Some("sk-ant-test123"),
+            "store.redb",
+            ".",
+            false,
+        );
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"anthropic\""));
         assert!(toml.contains("[anthropic]"));
@@ -620,14 +744,14 @@ mod tests {
 
     #[test]
     fn render_toml_openai() {
-        let cfg = InitConfig {
-            provider: Provider::OpenAi,
-            model: "gpt-4o".into(),
-            api_key: Some("sk-openai-xyz".into()),
-            storage_path: "store.redb".into(),
-            fs_root: ".".into(),
-            enable_web_search: false,
-        };
+        let cfg = init_config_no_profile(
+            Provider::OpenAi,
+            "gpt-4o",
+            Some("sk-openai-xyz"),
+            "store.redb",
+            ".",
+            false,
+        );
         let toml = render_toml(&cfg);
         assert!(toml.contains("provider = \"openai\""));
         assert!(toml.contains("[openai]"));
@@ -637,14 +761,14 @@ mod tests {
 
     #[test]
     fn render_toml_custom_paths() {
-        let cfg = InitConfig {
-            provider: Provider::Ollama,
-            model: "mistral:latest".into(),
-            api_key: None,
-            storage_path: "/custom/store.redb".into(),
-            fs_root: "/custom/workspace".into(),
-            enable_web_search: false,
-        };
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "mistral:latest",
+            None,
+            "/custom/store.redb",
+            "/custom/workspace",
+            false,
+        );
         let toml = render_toml(&cfg);
         assert!(toml.contains("root = \"/custom/workspace\""));
         assert!(toml.contains("path = \"/custom/store.redb\""));
@@ -654,14 +778,14 @@ mod tests {
 
     #[test]
     fn init_toml_with_web_search() {
-        let cfg = InitConfig {
-            provider: Provider::Ollama,
-            model: "llama3.2:latest".into(),
-            api_key: None,
-            storage_path: "store.redb".into(),
-            fs_root: ".".into(),
-            enable_web_search: true,
-        };
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "store.redb",
+            ".",
+            true,
+        );
         let toml = render_toml(&cfg);
         assert!(toml.contains("[[mcp_server]]"));
         assert!(toml.contains("name = \"web-search\""));
@@ -672,16 +796,114 @@ mod tests {
 
     #[test]
     fn init_toml_without_web_search() {
-        let cfg = InitConfig {
-            provider: Provider::Ollama,
-            model: "llama3.2:latest".into(),
-            api_key: None,
-            storage_path: "store.redb".into(),
-            fs_root: ".".into(),
-            enable_web_search: false,
-        };
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "store.redb",
+            ".",
+            false,
+        );
         let toml = render_toml(&cfg);
         assert!(!toml.contains("[[mcp_server]]"));
         assert!(!toml.contains("web-search"));
+    }
+
+    // -- Phase 57: Profile bootstrap in init -----------------------------
+
+    #[test]
+    fn render_toml_omits_profile_section_when_all_three_unset() {
+        // Default-everything operator pass: all three Profile
+        // prompts skipped → no `[profile]` section in the
+        // generated TOML. Preserves the substrate's non-invasive
+        // default per Q5(b).
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "store.redb",
+            ".",
+            false,
+        );
+        let toml = render_toml(&cfg);
+        assert!(!toml.contains("[profile]"));
+        assert!(!toml.contains("assistant_name"));
+    }
+
+    #[test]
+    fn render_toml_emits_profile_section_when_assistant_name_set() {
+        // Operator customized only the assistant name. The
+        // `[profile]` section appears with just that field;
+        // primary_use_cases and communication_style are absent.
+        let cfg = InitConfig {
+            profile_assistant_name: Some("Codex".into()),
+            profile_primary_use_case: None,
+            profile_communication_style: None,
+            ..init_config_no_profile(
+                Provider::Ollama,
+                "llama3.2:latest",
+                None,
+                "store.redb",
+                ".",
+                false,
+            )
+        };
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[profile]"));
+        assert!(toml.contains("assistant_name = \"Codex\""));
+        assert!(!toml.contains("communication_style"));
+        assert!(!toml.contains("primary_use_cases"));
+    }
+
+    #[test]
+    fn render_toml_emits_all_three_profile_fields_when_set() {
+        let cfg = InitConfig {
+            profile_assistant_name: Some("Mira".into()),
+            profile_primary_use_case: Some("personal-finance analysis".into()),
+            profile_communication_style: Some("terse, conclusion-first".into()),
+            ..init_config_no_profile(
+                Provider::Anthropic,
+                "claude-sonnet-4-20250514",
+                Some("sk-ant-x"),
+                "store.redb",
+                ".",
+                false,
+            )
+        };
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[profile]"));
+        assert!(toml.contains("assistant_name = \"Mira\""));
+        assert!(toml.contains("communication_style = \"terse, conclusion-first\""));
+        assert!(toml.contains("primary_use_cases = [\"personal-finance analysis\"]"));
+    }
+
+    #[test]
+    fn render_toml_escapes_special_chars_in_profile_fields() {
+        // Operator might paste text containing quotes or
+        // backslashes. The renderer must escape them so the
+        // generated TOML still parses cleanly.
+        let cfg = InitConfig {
+            profile_assistant_name: Some("Quote\"y".into()),
+            profile_primary_use_case: Some("Path C:\\\\Users\\code".into()),
+            profile_communication_style: Some(
+                "with \"emphasis\" sometimes".into(),
+            ),
+            ..init_config_no_profile(
+                Provider::Ollama,
+                "llama3.2:latest",
+                None,
+                "store.redb",
+                ".",
+                false,
+            )
+        };
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("assistant_name = \"Quote\\\"y\""));
+        // The "\\\\" in the source pastes literally as `\\` (two
+        // chars) in the operator's input. After escape_toml_string
+        // each `\` becomes `\\`, so the final TOML quad-backslash
+        // round-trips to two backslashes when parsed.
+        assert!(toml.contains("primary_use_cases = [\"Path C:\\\\\\\\Users\\\\code\"]"));
+        assert!(toml.contains("communication_style = \"with \\\"emphasis\\\" sometimes\""));
     }
 }

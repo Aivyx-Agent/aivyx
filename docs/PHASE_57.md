@@ -211,6 +211,29 @@ Unit tests cover the render of the `[profile]` block in
 each communication-style preset and the omission of the
 block when prompts are skipped.
 
+## Task 4 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx_modules/init.rs` (+154,
+  -67): three new fields on `InitConfig` (`profile_assistant_name:
+  Option<String>`, `profile_primary_use_case: Option<String>`,
+  `profile_communication_style: Option<String>`); three new
+  wizard prompts (assistant name, primary use case,
+  communication style) — each blank-input = `None` per Q4(c)
+  opt-in shape; `render_toml` extended to emit a `[profile]`
+  section only when at least one field is `Some(_)` (keeps
+  default-everything path identical to pre-Phase-57 output);
+  new `escape_toml_string` helper for operator free-text
+  values containing quotes / backslashes / newlines; six
+  existing render tests refactored through an
+  `init_config_no_profile` builder helper to absorb the new
+  fields without inline noise; four new Profile-specific
+  render tests (omit when all unset, emit on assistant_name
+  only, emit all three, escape special chars).
+
+**Test delta:** +4 in aivyx-channel bin (init module).
+Workspace total: 1002 → 1006. Zero clippy warnings.
+
 ### Task 5 — Empty-Profile fallback
 
 Implement the synthesized default Profile per Q5. If the
