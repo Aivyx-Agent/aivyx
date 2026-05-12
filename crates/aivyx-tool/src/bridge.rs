@@ -82,6 +82,34 @@ pub struct ToolProcessConfig {
     pub command: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Phase 52 — optional command-wrapper sandbox. When `Some`,
+    /// the bridge spawns `wrapper wrapper_args... command
+    /// command_args...` instead of `command command_args...`.
+    /// Aivyx supplies the policy slot; the operator supplies the
+    /// policy (bubblewrap / firejail / Docker / sandbox-exec /
+    /// nothing).
+    pub sandbox: Option<SandboxConfig>,
+}
+
+/// Phase 52 — generic command wrapper around a tool process spawn.
+///
+/// The wrapper is responsible for setting up isolation (mount
+/// namespaces, network namespaces, seccomp filters, etc.) and
+/// then `exec`'ing the real command. Standard sandbox tools all
+/// support this `wrapper [wrapper-args...] command [command-args...]`
+/// shape natively — see `docs/TOOL_SDK.md` §10 for worked examples.
+///
+/// The wrapper must:
+/// 1. Pass stdin/stdout/stderr through to the wrapped command
+///    unchanged (the tool IPC protocol uses stdio).
+/// 2. Forward signals so `kill_on_drop` can clean up the whole
+///    chain. Most sandbox tools do this by default; verify per
+///    tool.
+/// 3. Not buffer or transform the tool's I/O.
+#[derive(Debug, Clone)]
+pub struct SandboxConfig {
+    pub wrapper: String,
+    pub args: Vec<String>,
 }
 
 /// Daemon-side bridge to a spawned tool process. One bridge per
@@ -117,9 +145,26 @@ impl ToolProcessBridge {
     /// Spawn the configured tool process, perform the handshake,
     /// and return a bridge ready for `invoke`.
     pub async fn spawn(config: ToolProcessConfig) -> Result<Self, ToolBridgeError> {
-        let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args)
-            .envs(config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        // Phase 52 — when a sandbox wrapper is configured, the
+        // effective spawn shape is
+        // `wrapper wrapper_args... command command_args...`.
+        // The wrapper is responsible for isolation; we just thread
+        // stdio through unchanged.
+        let mut cmd = match &config.sandbox {
+            Some(sandbox) => {
+                let mut c = Command::new(&sandbox.wrapper);
+                c.args(&sandbox.args);
+                c.arg(&config.command);
+                c.args(&config.args);
+                c
+            }
+            None => {
+                let mut c = Command::new(&config.command);
+                c.args(&config.args);
+                c
+            }
+        };
+        cmd.envs(config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -128,7 +173,15 @@ impl ToolProcessBridge {
             .kill_on_drop(true);
 
         let mut child = cmd.spawn().map_err(|e| ToolBridgeError::Spawn {
-            command: config.command.clone(),
+            // Report the actual program that failed to spawn —
+            // when sandboxed, that's the wrapper (e.g., bwrap
+            // not on PATH), not the wrapped command. Surfacing
+            // the wrapper name lets operators diagnose missing
+            // sandbox tools quickly.
+            command: match &config.sandbox {
+                Some(sandbox) => sandbox.wrapper.clone(),
+                None => config.command.clone(),
+            },
             source: e,
         })?;
 
@@ -426,6 +479,7 @@ sys.exit(0)
             command: "python3".into(),
             args: vec!["-c".into(), script.into()],
             env: vec![],
+            sandbox: None,
         };
         let bridge = match ToolProcessBridge::spawn(config).await {
             Ok(b) => b,
@@ -461,6 +515,7 @@ sys.exit(0)
             command: "/definitely/not/a/real/binary".into(),
             args: vec![],
             env: vec![],
+            sandbox: None,
         };
         let result = ToolProcessBridge::spawn(config).await;
         assert!(matches!(result, Err(ToolBridgeError::Spawn { .. })));
@@ -499,6 +554,7 @@ sys.exit(0)
             command: "python3".into(),
             args: vec!["-c".into(), script.into()],
             env: vec![],
+            sandbox: None,
         };
         let bridge = match ToolProcessBridge::spawn(config).await {
             Ok(b) => b,
@@ -516,6 +572,38 @@ sys.exit(0)
                 assert!(message.contains("on purpose"));
             }
             other => panic!("expected ToolError, got {other:?}"),
+        }
+    }
+
+    // ---- Phase 52 — sandbox wrapper ----
+
+    #[tokio::test]
+    async fn sandbox_wrapper_failure_reports_wrapper_name() {
+        // When the wrapper itself fails to spawn (e.g., bwrap not
+        // on PATH), the operator-facing error must name the
+        // *wrapper* — not the wrapped command — so they can
+        // diagnose the missing sandbox tool quickly.
+        let config = ToolProcessConfig {
+            name: "wrapped".into(),
+            command: "python3".into(),
+            args: vec![],
+            env: vec![],
+            sandbox: Some(SandboxConfig {
+                wrapper: "/definitely/not/a/real/sandbox-binary".into(),
+                args: vec!["--isolated".into()],
+            }),
+        };
+        let err = ToolProcessBridge::spawn(config)
+            .await
+            .expect_err("missing wrapper must error at spawn");
+        match err {
+            ToolBridgeError::Spawn { command, .. } => {
+                assert!(
+                    command.contains("sandbox-binary"),
+                    "error must name the wrapper, not the wrapped command — got {command:?}",
+                );
+            }
+            other => panic!("expected ToolBridgeError::Spawn, got {other:?}"),
         }
     }
 }

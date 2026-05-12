@@ -197,7 +197,8 @@ closed.
 
 | Task | Commit | Notes |
 |---|---|---|
-| 1 | _this commit_ | scaffold |
+| 1 | `05c1961` | scaffold |
+| 2 | _this commit_ | SandboxConfig + bridge wrapper application — 980 tests |
 
 ## Deferrals carried into the phase
 

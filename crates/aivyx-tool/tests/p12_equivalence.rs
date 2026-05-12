@@ -144,6 +144,7 @@ async fn fs_read_in_process_and_subprocess_produce_equivalent_outcomes() {
         command: fixture_path.to_string(),
         args: vec![scratch.path.to_string_lossy().into_owned()],
         env: vec![],
+        sandbox: None,
     };
     let bridge = ToolProcessBridge::spawn(cfg)
         .await

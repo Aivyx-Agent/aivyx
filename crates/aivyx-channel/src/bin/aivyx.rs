@@ -1634,6 +1634,9 @@ async fn run_async(
             command: tp_cfg.command.clone(),
             args: tp_cfg.args.clone(),
             env: tp_cfg.env.clone(),
+            // Phase 52 — sandbox plumbing lands in Task 3 with
+            // the matching [tool_process.sandbox] TOML schema.
+            sandbox: None,
         };
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),

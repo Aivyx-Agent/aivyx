@@ -123,6 +123,7 @@ async fn spawn_inline_python() -> Option<Arc<ToolProcessBridge>> {
         command: "python3".into(),
         args: vec!["-c".into(), PYTHON_TOOL.into()],
         env: vec![],
+        sandbox: None,
     };
     match ToolProcessBridge::spawn(config).await {
         Ok(b) => Some(Arc::new(b)),
@@ -287,6 +288,7 @@ async fn proxy_relays_tool_events_to_channel() {
         command: "python3".into(),
         args: vec!["-c".into(), PYTHON_TOOL_WITH_EVENTS.into()],
         env: vec![],
+        sandbox: None,
     };
     let bridge = match ToolProcessBridge::spawn(config).await {
         Ok(b) => Arc::new(b),
@@ -385,6 +387,7 @@ async fn proxy_sends_cancel_invocation_when_token_fires() {
         command: "python3".into(),
         args: vec!["-c".into(), PYTHON_TOOL_RESPECTS_CANCEL.into()],
         env: vec![],
+        sandbox: None,
     };
     let bridge = match ToolProcessBridge::spawn(config).await {
         Ok(b) => Arc::new(b),
