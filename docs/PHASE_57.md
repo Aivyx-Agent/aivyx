@@ -287,6 +287,32 @@ Update three docs:
   expectations — most likely the binary's docstring at top
   of `aivyx.rs`).
 
+## Task 6 ship record
+
+**Files modified:**
+- `docs/PRODUCT_ROADMAP.md` (+24, -8): Assistant Profile
+  milestone status changed from *"Forward — scheduled Phases
+  57–58"* to *"Foundation delivered Phase 57. Inspection
+  half (Phase 58) is next."* The "P13 candidate" framing is
+  dropped now that A9 is on file. The Phase 57 expected-phase
+  row gets a paragraph-long Delivered note enumerating the
+  substrate pieces (struct, TOML table, default fallback,
+  assemble_session_prompt helper, role-switch propagation,
+  init-wizard extension, banner row), test deltas (+14
+  workspace), and the three streak outcomes.
+- `docs/ROADMAP.md` (+29, -14): Phase 57 entry refreshed
+  from Scheduled to SHIPPED. Multi-bullet expansion mirrors
+  the PRODUCT_ROADMAP delta plus the PHASE_57.md pointer
+  for the per-task narrative.
+
+**Note on the third item.** The Task plan mentioned updating
+the binary's docstring banner-expectations entry. Reading the
+`crates/aivyx-channel/src/bin/aivyx.rs` top-of-file docstring
+showed it documents env vars and lifecycle, not banner row
+enumeration — there is nothing to update there. The inline
+comment on the new `profile` row in `print_startup_banner`
+explains the new row in place.
+
 ### Task 7 — Exit freeze
 
 Standard exit procedure. Streak prediction-vs-reality

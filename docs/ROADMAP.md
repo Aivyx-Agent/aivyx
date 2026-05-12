@@ -649,21 +649,45 @@ streak break: PRODUCT.md streak ends by amendment (same
 precedent as Phase 22). DESIGN.md and lib.rs streaks should
 hold.
 
-## Phase 57 — Profile Foundation
+## Phase 57 — Profile Foundation [SHIPPED]
 
-**Scheduled** — first code phase of the Profile + Persona
-arc. Storage shape Q-block (likely a new `KeyDomain::Profile`
-or extension to an existing domain; single-tenant — one
-Profile per Aivyx instance), Profile struct in `aivyx-config`
-or a new substrate location depending on Q-block resolution.
-Extends `aivyx init` interactive wizard (Phase 44) with
-use-case prompts populating Profile fields. Wires Profile
-injection into the system-prompt assembly path at turn
-start, composed alongside (not inside) the role-derived
-envelope description. The injection point is the load-bearing
-design decision — Profile must flavor every role's prompt
-without leaking into the per-role envelope, since Profile is
-identity-layer not capability-layer.
+**Frozen — see [PHASE_57.md](PHASE_57.md).** First code
+phase of the Profile + Persona arc. Delivered the Profile
+substrate per PRODUCT.md P13:
+
+- `aivyx-config::Profile` struct with six P13-commit-5
+  fields (`assistant_name`, `operator_profile`,
+  `communication_style`, `primary_use_cases`,
+  `behavioral_preferences`, `behavioral_constraints`).
+- `[profile]` TOML table per Q1(a) (plain-text-
+  inspectable, in `aivyx.toml` alongside roles).
+- `Profile::default()` synthesizing Q5(b) fallback
+  (`assistant_name = DEFAULT_ASSISTANT_NAME`, all else
+  empty) — every pre-Phase-57 `aivyx.toml` keeps working
+  unchanged.
+- `aivyx-channel::assemble_session_prompt` helper composing
+  Profile + role envelope into a labeled system prompt per
+  Q3(c) (*"## About this assistant"* + *"## Active role:
+  <name>"* layout), with passthrough behavior for legacy
+  configs where no operator content is declared.
+- Wiring through both the parent session-build path
+  (`run_async`'s `system_prompt` local) and the role-switch
+  child factory (`profile_for_factory` capture), so
+  sub-sessions inherit the same Profile section as their
+  parent.
+- `aivyx init` extended with three opt-in Profile prompts
+  per Q4(c) (assistant name, primary use case,
+  communication style); `render_toml` emits `[profile]`
+  only when the operator customized at least one field.
+- Startup-banner `profile` row surfacing assistant_name
+  provenance and a count of operator-declared extras.
+
+All six Q-block questions resolved with the recommended
+defaults. Tests +14 across aivyx-config and aivyx-channel
+(992 → 1006). Zero clippy warnings. All three streak
+predictions correct: DESIGN.md → 4, PRODUCT.md → 1, lib.rs
+→ 6 (longest run since the Phase 51 deliberate break at 6).
+Phase 58 (Inspection) is next.
 
 ## Phase 58 — Profile Inspection (closes P13)
 

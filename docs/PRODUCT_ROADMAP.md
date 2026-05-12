@@ -486,12 +486,13 @@ Nine storage domains. +30 tests (660→690). See
 **Status: G5 — Autonomous and Scheduled Execution is now
 fully delivered** across Phases 26–27.
 
-## Milestone — Assistant Profile (forward, P13 candidate)
+## Milestone — Assistant Profile (P13, partially delivered)
 
-**Forward commitment candidate:** PRODUCT.md P13 (to be filed
-as an amendment in Phase 56). **Couples to:** Per-Role
-Envelope (P9), `aivyx init` wizard, system-prompt assembly.
-**Status:** Forward — scheduled Phases 57–58.
+**Forward commitment:** PRODUCT.md P13 (amendment A9, Phase 56).
+**Couples to:** Per-Role Envelope (P9), `aivyx init` wizard,
+system-prompt assembly.
+**Status:** Foundation delivered Phase 57. Inspection half
+(Phase 58) is next.
 
 The operator's stated vision (post-Phase-55) reframes Aivyx
 from "personal autonomous agent platform" into a
@@ -534,12 +535,30 @@ Profile fields.
 
 **Expected phases:**
 
-- **Phase 57** — Foundation: storage shape, init-wizard
-  extension, profile-into-system-prompt injection at turn
-  start.
-- **Phase 58** — Inspection: `aivyx profile show` /
-  `aivyx profile edit` CLI; Web UI profile pane. Closes
-  the milestone.
+- **Phase 57 (Foundation, shipped 2026-05-12):** delivered
+  the Profile substrate. `aivyx-config::Profile` struct
+  with six P13-commit-5 fields; `[profile]` TOML table
+  parsed at config-load time per Q1(a); `Profile::default()`
+  synthesizing the Q5(b) `assistant_name = "Aivyx"` fallback
+  for legacy configs; `aivyx-channel::assemble_session_prompt`
+  helper composing Profile + role envelope into a labeled
+  system prompt per Q3(c); wiring through both the parent
+  session-build path and the role-switch child factory so
+  sub-sessions inherit the same Profile section; `aivyx
+  init` extended with three opt-in Profile prompts per
+  Q4(c) (assistant name, primary use case, communication
+  style); startup-banner row surfacing Profile provenance
+  to the operator. Tests +14 across aivyx-config and
+  aivyx-channel (992 → 1006). All three streak predictions
+  correct: DESIGN.md → 4, PRODUCT.md → 1, lib.rs → 6
+  (longest run since Phase 51's deliberate break at 6).
+- **Phase 58 (Inspection, next):** `aivyx profile show` /
+  `aivyx profile edit` CLI subcommands; Web UI profile
+  pane mirroring the CLI surface via the existing
+  Query/QueryResponse IPC envelope (Phase 47); optional
+  reload command per Q6 (Phase 57 deferred reload
+  semantics to the edit-surface layer). Closes the
+  milestone.
 
 ## Milestone — Persona (forward, P14 candidate)
 
