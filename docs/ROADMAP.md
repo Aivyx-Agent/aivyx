@@ -635,6 +635,16 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
+## Phase 52 — Tool Process Sandbox Layer
+
+**Active — see [PHASE_52.md](PHASE_52.md).** Adds a generic
+command-wrapper sandbox layer to `[[tool_process]]` —
+`[tool_process.sandbox] wrapper = "..." args = [...]` is
+prepended to the spawn. Closes the Phase 49 per-tool
+sandboxing deferral. Aivyx supplies the policy slot; the
+operator supplies the policy (bubblewrap / firejail / docker /
+sandbox-exec).
+
 ## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path [SHIPPED]
 
 **Frozen — see [PHASE_51.md](PHASE_51.md).** Mechanical
