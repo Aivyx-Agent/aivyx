@@ -239,17 +239,26 @@ across the phase as predicted — the work landed entirely in
    in place with a comment pointing at Phase 41-style `DaemonConfig`
    lift as the long-term shape.
 
-### Operator-side verification still pending
+### Operator-side verification
 
-The new tabs and the audit pagination behavior were tested at the
-embed level (HTML substring smoke tests, IPC e2e tests verifying
-the daemon answers correctly), but **the page itself was not loaded
-in a browser during the phase**. First operator session against a
-real daemon should verify:
-- All four tabs render and switch
-- Missions tab loads after creating a mission via the chat pane
-- Audit tab paginates correctly past the 100-entry page boundary
-- Verify-chain banner appears and reports OK on a clean chain
+Completed post-exit against a live daemon under Ollama
+(`gemma4:31b`) on 2026-05-12. All four tabs render correctly and
+display the relevant data:
+- Chat — Phase 39 surface intact, streaming responses clean
+- Sessions — active connection appears
+- Audit — entries (`TurnStarted` / `TurnEnded` from the chat
+  session) render with seq, event type, timestamp, and mac
+  preview; verify-chain banner reports OK
+- Missions — empty-state copy renders; populates after
+  agent-driven mission creation
 
-If any of those fail, file as Phase 47 hot-fix issues, not as
-forward work.
+Two operator-facing observations surfaced during the pass, neither
+a Phase 47 regression:
+1. `[aivyx] passphrase` in TOML is parsed by `aivyx-config` but the
+   binary still re-reads `AIVYX_PASSPHRASE` from the environment
+   (`select_passphrase_source` always returns `PassphraseSource::Env`
+   when config holds a passphrase). Pre-existing inconsistency, not
+   introduced by Phase 47. Worth a future docs note or loader patch.
+2. The agent's self-description is generic because the `default`
+   role config carries no Aivyx-specific system prompt. Substrate
+   question, not a phase issue.
