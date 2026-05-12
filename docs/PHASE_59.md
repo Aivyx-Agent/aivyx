@@ -435,31 +435,61 @@ README phase row Frozen + exit commit hash backfill.
 
 ## Prediction vs. reality
 
-*(Filled at exit.)*
+- **DESIGN.md** — Predicted: streak **extends to six**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 59 shipped under existing D-deliverables — D2
+  audit-chain pattern reused via the parallel chain, D4
+  capability taxonomy gained `persona.propose`, D5
+  storage gained `KeyDomain::Persona` — none required a
+  D-deliverable reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to one**
+  (untouched after the Phase 58 Delivery Status break).
+  **Reality: correct.** Hash unchanged:
+  `6bd91519f28370d72b382f9a87044230d7073f276e83d79c1dfb413235c54977`.
+  Phase 59 implements P14 — the Delivery Status refresh
+  waits for Phase 60's milestone closure.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  **at risk**; default extends to seven if the Phase 30
+  `role_overrides` precedent threads cleanly through
+  `aivyx-channel` only. **Reality: correct (extends to
+  seven).** Hash unchanged:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  The shared-state pattern routed entirely through
+  `aivyx-channel` (apply tool setter + binary captures +
+  planner-factory snapshot read) without touching
+  `aivyx-core`'s shape.
 
 ## Exit criteria
 
-*(Filled at exit.)*
-
-- [ ] `PersonaDelta` type + `KeyDomain::Persona` storage
-  shipping with HMAC-chained writes (Task 2).
-- [ ] `persona.propose` capability scope registered in
-  `aivyx-capability::KNOWN_BASES` + `CEILING_TRUSTED`
-  (Task 3).
-- [ ] `reflection.propose` accepts `persona_deltas` in its
+- [x] `PersonaDelta` type + `KeyDomain::Persona` storage
+  shipping with HMAC-chained writes — Task 2, commit
+  `683813a`.
+- [x] `persona.propose` capability scope registered in
+  `aivyx-capability::KNOWN_BASES` + `CEILING_TRUSTED` —
+  Task 3, commit `d357c3a`.
+- [x] `reflection.propose` accepts `persona_deltas` in its
   JSON schema and propagates them through the mission
-  record (Task 3).
-- [ ] `reflection.apply` appends approved deltas to the
-  Persona chain (Task 4).
-- [ ] `EffectivePersona` runtime state shared with the
-  planner factory; updated atomically on apply (Task 5).
-- [ ] `assemble_session_prompt` extended with the
-  "How I have learned to communicate" section (Task 6).
-- [ ] All six Q-block questions resolved.
-- [ ] Streak predictions verified (DESIGN.md → 6,
-  PRODUCT.md → 1, lib.rs → resolution per Task 2).
-- [ ] Test count delta recorded.
-- [ ] Prediction-vs-reality block filled.
+  record — Task 3, commit `d357c3a`.
+- [x] `reflection.apply` appends approved deltas to the
+  Persona chain — Task 4, commit `494f1eb`.
+- [x] `EffectivePersona` runtime state shared with the
+  planner factory — Task 5 (binary wiring) commit
+  `dac7a3c` + Task 6 (planner snapshot read) commit
+  `6a4d52c`. Per-turn refresh deferred to Phase 60 per
+  the Task 6 scope note.
+- [x] `assemble_session_prompt` extended with the
+  "How I have learned to communicate" section — Task 6,
+  commit `6a4d52c`.
+- [x] All six Q-block questions resolved (defaults
+  signed off pre-Task 2).
+- [x] Streak predictions verified (DESIGN.md → 6,
+  PRODUCT.md → 1, lib.rs → 7).
+- [x] Test count delta: +29 (1023 → 1052 across the
+  workspace), zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
 
 ## Open questions
 

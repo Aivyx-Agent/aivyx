@@ -723,21 +723,59 @@ streak predictions correct: DESIGN.md → 5 (untouched),
 PRODUCT.md → broke at 2 (Task 5, intentional), lib.rs
 → 7 (untouched). Phase 59 (Persona Foundation) is next.
 
-## Phase 59 — Persona Foundation
+## Phase 59 — Persona Foundation [SHIPPED]
 
-**Scheduled** — first code phase of the Persona half.
-Structured append-only `PersonaDelta` records (HMAC-chained
-like the audit log, possibly sharing the chain or a parallel
-chain — Q-block decision). Extends `reflection.propose`
-(Phase 29) with a new delta category for persona proposals.
-Gate threading reuses the Phase 21 / 28–30 mission-gate
-machinery — operator approves persona deltas the same way
-they approve missions today. Effective-identity assembly at
-turn start composes Profile + accumulated Persona deltas
-into a single voice layer for the system prompt. The
-load-bearing design decision is *delta granularity*: one
-delta per field-edit, one delta per approved-batch, or
-something in between.
+**Frozen — see [PHASE_59.md](PHASE_59.md).** First code phase
+of the Persona half of the Profile + Persona arc. Delivered
+the Persona substrate per PRODUCT.md P14 across six Q-block
+resolutions:
+
+- **Q1(a) — one field-edit per delta.** Fine-grained
+  `PersonaDelta` records with `PersonaDeltaCategory` (10
+  variants: 6 Profile-mirror + 4 Persona-specific) and
+  `PersonaDeltaOp` (SetScalar / AppendList / RemoveList).
+  `(category, op)` pair validated at append time.
+- **Q2(a) — parallel HMAC chain.** New `KeyDomain::Persona`
+  (10th storage domain). `PersonaChainLog` in-memory
+  primitive + `PersistentPersonaLog` storage wrapper.
+  Distinct `PERSONA_GENESIS_SEED` from the audit chain so a
+  chain-confusion attack (swapping entries between chains)
+  is structurally rejected.
+- **Q3(c) — Profile-mirror + Persona-specific.** Operator
+  can refine Profile fields OR add Persona-specific
+  content (LearnedContext, CommunicationAdaptations,
+  CharacterTraits, RelationshipMilestones).
+- **Q4(a) — extend reflection.propose.** Schema gains a
+  `persona_deltas` array; `required_scope` escalates to
+  `persona.propose` when the array is non-empty.
+  `ProposalRecord` round-trips deltas through the mission
+  description.
+- **Q5(a) — shared-state hot-reload (deferred to Phase 60).**
+  `SharedEffectivePersona = Arc<RwLock<EffectivePersona>>`
+  with `apply_delta_to_shared` helper. `reflection.apply`
+  writes both the persistent chain and the shared state.
+  Per-turn planner-factory re-call (full hot-reload UX)
+  defers to Phase 60 alongside the operator-facing
+  dashboards. Phase 59 ships snapshot-at-session-build
+  freshness — operators who approve mid-session see effect
+  on next daemon startup (Profile-shaped semantics).
+- **Q6(a) — three labeled sections.**
+  `assemble_session_prompt` gains an
+  `Option<&EffectivePersona>` parameter; renders
+  "## How I have learned to communicate" between Profile
+  and Active role when Persona is non-empty.
+
+New `persona.propose` capability scope in
+`aivyx-capability::KNOWN_BASES` + `CEILING_TRUSTED`. Three
+direct deps added on aivyx-channel (`hmac`, `sha2`,
+`serde_jcs` — already transitive). Tests +29 across the
+phase (1023 → 1052). Zero clippy warnings. All three
+streak predictions correct: DESIGN.md → 6 (untouched),
+PRODUCT.md → 1 (untouched), lib.rs → 7 (untouched —
+the "at risk" prediction resolved cleanly because the
+shared-state plumbing went through aivyx-channel + the
+existing planner factory pattern without touching core).
+Phase 60 (Persona Visualization) is next.
 
 ## Phase 60 — Persona Visualization (closes P14)
 

@@ -576,12 +576,13 @@ Profile fields.
   correct: DESIGN.md → 5, PRODUCT.md → broke at 2
   (Task 5, intentional), lib.rs → 7.
 
-## Milestone — Persona (forward, P14 candidate)
+## Milestone — Persona (P14, partially delivered)
 
-**Forward commitment candidate:** PRODUCT.md P14 (to be filed
-as an amendment in Phase 56). **Couples to:** Profile (P13),
-Reflection Layer (P8), Memory persistence (G3).
-**Status:** Forward — scheduled Phases 59–60.
+**Forward commitment:** PRODUCT.md P14 (amendment A10, Phase 56).
+**Couples to:** Profile (P13), Reflection Layer (P8), Memory
+persistence (G3).
+**Status:** Foundation delivered Phase 59. Visualization half
+(Phase 60) closes the milestone.
 
 **Persona** (operator's framing: "Soul") is the dynamic
 counterpart to Profile — the evolving character-layer that
@@ -631,12 +632,49 @@ layer.
 
 **Expected phases:**
 
-- **Phase 59** — Foundation: structured append-only deltas,
-  reflection.propose extended with persona-delta category,
-  gate threading, effective-identity assembly at turn start.
-- **Phase 60** — Visualization: Web UI panel showing
-  Persona evolution over time; possibly identity
-  export/import for backup/transfer. Closes the milestone.
+- **Phase 59 (Foundation, shipped 2026-05-12):** delivered
+  the Persona substrate per Q1–Q6 at sign-off. New
+  `KeyDomain::Persona` (10th storage domain) parallel to
+  `KeyDomain::Audit`; `PersonaDelta` struct with 10
+  `PersonaDeltaCategory` variants (6 Profile-mirror +
+  4 Persona-specific) and `PersonaDeltaOp` (SetScalar /
+  AppendList / RemoveList); `PersonaChainLog` HMAC-SHA256
+  chain primitive with a distinct genesis seed (chain-
+  confusion attacks structurally rejected);
+  `PersistentPersonaLog` storage wrapper (one redb row per
+  signed entry, keyed by big-endian seq);
+  `EffectivePersona` replay state +
+  `compute_effective_persona` pure folder;
+  `SharedEffectivePersona = Arc<RwLock<EffectivePersona>>`
+  with `apply_delta_to_shared` helper; new
+  `persona.propose` capability scope (KNOWN_BASES + 
+  CEILING_TRUSTED); `reflection.propose` schema extended
+  with `persona_deltas` array and `required_scope`
+  escalates to `persona.propose` when the array is
+  non-empty; `reflection.apply` writes approved deltas
+  to the chain AND mutates the shared runtime state;
+  `assemble_session_prompt` extended with an
+  `Option<&EffectivePersona>` parameter and a new
+  "## How I have learned to communicate" labeled
+  section; binary opens the chain at startup, replays
+  into shared state, registers on the apply tool, and
+  composes the system prompt from Profile + Persona +
+  Role for both parent and role-switch child sessions.
+  Tests +29 (1023 → 1052 across the phase). All three
+  streak predictions correct: DESIGN.md → 6, PRODUCT.md
+  → 1, lib.rs → 7. **Per-turn freshness deferred to
+  Phase 60** — Phase 59 ships snapshot-at-session-build;
+  the planner-factory per-turn re-call lands alongside
+  the Web UI / revert / CLI surfaces.
+- **Phase 60 (Visualization, next):** Web UI Persona
+  panel timeline view of the delta log; click-to-revert
+  via a structured revert delta (P14 commit 4);
+  `aivyx persona show` / `list` CLI subcommands;
+  per-turn planner-factory refresh so approved deltas
+  take effect on the next turn without daemon restart;
+  optional identity export/import. Closes the
+  milestone. After Phase 60, **P1–P14 are all
+  fully delivered**.
 
 ## Sequencing notes (revised at Phase 56 sign-off, 2026-05-12)
 
