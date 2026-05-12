@@ -376,6 +376,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="audit">Audit <span class="refresh" data-refresh="audit">↻</span></div>
     <div class="tab" data-pane="sessions">Sessions <span class="refresh" data-refresh="sessions">↻</span></div>
     <div class="tab" data-pane="profile">Profile <span class="refresh" data-refresh="profile">↻</span></div>
+    <div class="tab" data-pane="persona">Persona <span class="refresh" data-refresh="persona">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -430,6 +431,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div id="profile-body" class="empty">Click Refresh to load.</div>
   </div>
+
+  <!-- Persona pane (Phase 60 — PRODUCT.md P14 closure) -->
+  <div class="pane list-pane" data-pane="persona">
+    <div class="pane-header">
+      <span class="pane-title">Persona</span>
+      <span class="pane-action" data-refresh="persona">Refresh</span>
+    </div>
+    <div id="persona-effective" class="empty">Click Refresh to load.</div>
+    <div class="pane-header" style="margin-top: 1rem">
+      <span class="pane-title" style="font-size: 0.9em">Delta timeline</span>
+    </div>
+    <div id="persona-timeline"></div>
+  </div>
 </div>
 
 <script>
@@ -447,6 +461,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
   // Phase 47 — pending Query correlation table: id -> function(payload)
   const pendingQueries = new Map();
+  // Phase 60 — outstanding RevertPersonaDelta requests by id.
+  const pendingReverts = new Map();
+  let nextRevertSeq = 0;
   let queryCounter = 0;
   function nextQueryId(prefix) {
     queryCounter += 1;
@@ -531,6 +548,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         if (cb) {
           pendingQueries.delete(msg.id);
           cb(msg.payload);
+        }
+        break;
+      }
+
+      case 'PersonaRevertResolved': {
+        // Phase 60 — operator-initiated Persona revert response.
+        const cb = pendingReverts.get(msg.id);
+        if (cb) {
+          pendingReverts.delete(msg.id);
+          cb(msg);
         }
         break;
       }
@@ -1067,6 +1094,159 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     body.appendChild(card);
   }
 
+  // ---- Persona (Phase 60 — PRODUCT.md P14 closure) ----
+
+  function loadPersona() {
+    const effective = document.getElementById('persona-effective');
+    const timeline = document.getElementById('persona-timeline');
+    effective.className = '';
+    effective.innerHTML = '<div class="empty">Loading…</div>';
+    timeline.innerHTML = '';
+
+    sendQuery('peff', { kind: 'GetEffectivePersona' }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(effective, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'GetEffectivePersona') return;
+      renderEffectivePersona(effective, payload.persona);
+    });
+
+    sendQuery('plist', {
+      kind: 'ListPersonaDeltas',
+      from_seq: 0,
+      limit: 100,
+    }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(timeline, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'ListPersonaDeltas') return;
+      renderPersonaTimeline(timeline, payload.entries, payload.total_len);
+    });
+  }
+
+  function renderEffectivePersona(body, persona) {
+    body.innerHTML = '';
+    body.className = '';
+
+    const banner = document.createElement('div');
+    banner.className = 'row-card';
+    if (persona.is_non_empty) {
+      banner.innerHTML =
+        '<div class="row-line"><span class="row-id">Persona is shaping every turn</span>' +
+        '<span class="row-meta">reflection-approved deltas applied</span></div>';
+    } else {
+      banner.innerHTML =
+        '<div class="row-line"><span class="row-id">Persona is empty</span>' +
+        '<span class="row-meta">no reflection-approved deltas yet</span></div>';
+    }
+    body.appendChild(banner);
+
+    if (!persona.is_non_empty) return;
+
+    appendPersonaScalar(body, 'assistant_name (refined)', persona.assistant_name);
+    appendPersonaScalar(body, 'operator_profile (refined)', persona.operator_profile);
+    appendPersonaScalar(body, 'communication_style (refined)', persona.communication_style);
+
+    appendPersonaList(body, 'primary_use_cases', persona.primary_use_cases);
+    appendPersonaList(body, 'behavioral_preferences', persona.behavioral_preferences);
+    appendPersonaList(body, 'behavioral_constraints', persona.behavioral_constraints);
+    appendPersonaList(body, 'learned_context', persona.learned_context);
+    appendPersonaList(body, 'communication_adaptations', persona.communication_adaptations);
+    appendPersonaList(body, 'character_traits', persona.character_traits);
+    appendPersonaList(body, 'relationship_milestones', persona.relationship_milestones);
+  }
+
+  function appendPersonaScalar(body, label, value) {
+    if (!value) return;
+    const card = document.createElement('div');
+    card.className = 'row-card';
+    card.innerHTML =
+      '<div class="row-line"><span class="row-id">' + label + '</span>' +
+      '<span class="row-meta">' + escapeHtml(value) + '</span></div>';
+    body.appendChild(card);
+  }
+
+  function appendPersonaList(body, label, items) {
+    if (!items || items.length === 0) return;
+    const card = document.createElement('div');
+    card.className = 'row-card';
+    const lines = items.map(function(item) {
+      return '<div>&middot; ' + escapeHtml(item) + '</div>';
+    }).join('');
+    card.innerHTML =
+      '<div class="row-line"><span class="row-id">' + label + '</span></div>' +
+      '<div class="row-meta">' + lines + '</div>';
+    body.appendChild(card);
+  }
+
+  function renderPersonaTimeline(body, entries, total_len) {
+    body.innerHTML = '';
+    if (!entries || entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No persona deltas have been approved yet.';
+      body.appendChild(empty);
+      return;
+    }
+    entries.forEach(function(entry) {
+      const card = document.createElement('div');
+      card.className = 'row-card';
+      const opStr = JSON.stringify(entry.op);
+      const ts = formatUnixMs(entry.approved_at_unix_ms);
+      const isRevert = entry.op && entry.op.kind === 'Revert';
+      const headerLine =
+        '<div class="row-line">' +
+          '<span class="row-id">[#' + entry.seq + '] ' + escapeHtml(entry.delta_id) + '</span>' +
+          '<span class="row-meta">' + escapeHtml(entry.category) + ' &middot; ' + escapeHtml(ts) + '</span>' +
+        '</div>';
+      const opLine =
+        '<div class="row-meta"><code>' + escapeHtml(opStr) + '</code></div>';
+      card.innerHTML = headerLine + opLine;
+      // Phase 60 Q3(a) — revert button alongside each delta.
+      // Reverting a revert is allowed (it restores the original
+      // effect) so we don't filter by op kind.
+      const btn = document.createElement('button');
+      btn.textContent = isRevert ? 'Revert again' : 'Revert';
+      btn.className = 'pane-action';
+      btn.style.marginTop = '0.4rem';
+      btn.addEventListener('click', function() {
+        if (!confirm('Revert delta ' + entry.delta_id + '?')) return;
+        sendRevert(entry.delta_id);
+      });
+      card.appendChild(btn);
+      body.appendChild(card);
+    });
+    if (total_len > entries.length) {
+      const note = document.createElement('div');
+      note.className = 'row-meta';
+      note.textContent = '(showing first ' + entries.length + ' of ' + total_len + ' deltas)';
+      body.appendChild(note);
+    }
+  }
+
+  function sendRevert(deltaId) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      alert('Not connected to daemon.');
+      return;
+    }
+    const id = 'rv-' + (nextRevertSeq++);
+    pendingReverts.set(id, function(resp) {
+      if (resp.ok) {
+        alert('Revert applied (chain seq ' + resp.seq + '). Reloading…');
+        loadPersona();
+      } else {
+        alert('Revert failed: ' + (resp.error || 'unknown error'));
+      }
+    });
+    ws.send(JSON.stringify({
+      type: 'RevertPersonaDelta',
+      id: id,
+      target_delta_id: deltaId,
+    }));
+  }
+
   // ------------------------------------------------------------------
   // Tab switching
   // ------------------------------------------------------------------
@@ -1084,6 +1264,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     else if (name === 'audit') loadAudit(0);
     else if (name === 'sessions') loadSessions();
     else if (name === 'profile') loadProfile();
+    else if (name === 'persona') loadPersona();
   }
 
   document.querySelectorAll('.tab').forEach(function(tab) {
@@ -1101,6 +1282,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       else if (which === 'audit') loadAudit(0);
       else if (which === 'sessions') loadSessions();
       else if (which === 'profile') loadProfile();
+      else if (which === 'persona') loadPersona();
     });
   });
 
