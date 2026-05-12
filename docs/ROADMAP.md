@@ -635,6 +635,23 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
+## Phase 54 — Final Documentation Sweep (Chapter A Closer)
+
+**Active — see [PHASE_54.md](PHASE_54.md).** Closes Chapter A.
+Refreshes stale docs that fell out of sync with the
+implementation across 54 phases: root README, PRODUCT_ROADMAP
+Delivered section, DAEMON_IPC Phase 47 addendum, A3 scope-count
+addendum, walkthrough, and cross-doc consistency spot-check.
+Not a contract amendment.
+
+## Phase 53 — (skipped)
+
+Audit log rotation/compaction was scheduled here. Skipped at
+Phase 52 exit: audit chain growth is bounded by tool-call
+frequency × uptime; even at 10k turns/year the chain stays well
+under 1M rows. If chain-size pressure surfaces during real
+operation, a future cleanup phase will absorb it.
+
 ## Phase 52 — Tool Process Sandbox Layer [SHIPPED]
 
 **Frozen — see [PHASE_52.md](PHASE_52.md).** Added a generic
