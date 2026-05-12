@@ -240,3 +240,73 @@ async fn server_name_accessible() {
     assert_eq!(bridge.server_name(), "test-server");
     bridge.shutdown().await.expect("shutdown");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 55 — sandbox wrapper integration
+// ---------------------------------------------------------------------------
+
+/// The Phase 55 sandbox wiring works end-to-end. Uses POSIX
+/// `env` as a no-op wrapper so this test runs anywhere
+/// `cargo test` runs, without depending on bwrap / firejail /
+/// docker being installed.
+///
+/// Equivalent to running:
+///
+///     env AIVYX_MCP_SANDBOX_PROBE=1 python3 mock_mcp_server.py
+///
+/// — i.e., set a probe env var, then exec the real MCP server.
+/// The bridge handshake (initialize) + tool discovery must work
+/// identically to the no-sandbox path.
+#[tokio::test]
+async fn bridge_handshakes_through_env_sandbox_wrapper() {
+    use aivyx_mcp::SandboxConfig;
+
+    let sandbox = SandboxConfig {
+        wrapper: "env".into(),
+        args: vec!["AIVYX_MCP_SANDBOX_PROBE=1".into()],
+    };
+    let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
+        "python3",
+        &[mock_server_path().to_str().unwrap()],
+        Some(&sandbox),
+        "sandboxed-mock",
+    )
+    .await
+    .expect("bridge must start through env wrapper");
+
+    let tools = bridge
+        .discover_tools()
+        .await
+        .expect("tool discovery must work through the wrapper");
+    assert_eq!(
+        tools.len(),
+        2,
+        "wrapper must not interfere with tool discovery (got {} tools)",
+        tools.len(),
+    );
+
+    bridge.shutdown().await.expect("shutdown");
+}
+
+/// Sanity check: the `bridge.server_name()` identity is preserved
+/// through the sandboxed path.
+#[tokio::test]
+async fn sandboxed_bridge_preserves_server_name() {
+    use aivyx_mcp::SandboxConfig;
+
+    let sandbox = SandboxConfig {
+        wrapper: "env".into(),
+        args: vec![],
+    };
+    let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
+        "python3",
+        &[mock_server_path().to_str().unwrap()],
+        Some(&sandbox),
+        "named-sandboxed",
+    )
+    .await
+    .expect("bridge must start");
+
+    assert_eq!(bridge.server_name(), "named-sandboxed");
+    bridge.shutdown().await.expect("shutdown");
+}
