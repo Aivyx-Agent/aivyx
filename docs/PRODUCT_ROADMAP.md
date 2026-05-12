@@ -182,25 +182,26 @@ Untrusted channels) — neither requires a dedicated sub-
 phase and both can be picked up reactively whenever a
 future phase needs them.
 
-## Milestone — Mission Primitive
+## Milestone — Mission Primitive ✓
 
-**Forward commitment:** [`PRODUCT.md` P2](../PRODUCT.md). **Couples to:**
-Daemon Migration, Role-Config Migration.
+**Delivered across Phases 21, 23, 28, 35.** **Forward commitment:**
+[`PRODUCT.md` P2](../PRODUCT.md).
 
-The product contract distinguishes *bounded tasks* (single-turn,
-success defined by completion) from *open-ended missions*
-(multi-turn, success defined by an approval gate the operator
-issues somewhere along the way). Today's foundation only has
-bounded tasks; the mission milestone introduces the long-running
-work item as a first-class primitive — one that survives across
-process restarts (which means it sits on top of the Daemon
-Migration), runs under a specific role's envelope (which means
-it sits on top of the Role-Config Migration), and emits
-operator-visible approval gates as `StreamEvent`s the channel
-adapter renders distinctively. The shape of the approval gate
-itself (button? text command? structured tool call?) is the
-load-bearing question and is deliberately deferred to milestone
-open.
+Phase 21 introduced the mission state machine (six states:
+`Created → Running → GatePending → Completed | Failed |
+Cancelled`) with HMAC-bounded persistence under
+`KeyDomain::Missions`, two new capability bases
+(`mission.create`, `mission.gate`), IPC protocol extensions
+(`ApprovalGate`, `ResolveGate`, `MissionCreated`,
+`MissionStateChanged`, `GateResolved`), `MissionCreateTool` with
+the `OnceLock` factory pattern, daemon `ResolveGate` handler,
+CLI interactive gate prompt, and Telegram `/approve` / `/reject`
+text commands. Phase 23 added the escalation → gate turn-loop
+wiring. Phase 28 added `mission.list` / `mission.status`
+read-only inspection tools. Phase 35 wired
+`ToolOutcome::RequiresEscalation` through the turn loop to
+`TurnOutcome::Escalated` for the trigger path. P2 fully
+delivered.
 
 ## Milestone — Sub-Agent Role-Switching (shipped in Phase 14)
 
@@ -272,7 +273,7 @@ which is recorded as a Phase 14 deferral and gated on a
 concrete recursive-role-switching use case rather than a
 forward-commitment requirement.
 
-## Milestone — Reflection Layer
+## Milestone — Reflection Layer ✓ (shipped across Phases 28–30)
 
 **Forward commitments:** [`PRODUCT.md` P8](../PRODUCT.md), [`PRODUCT.md` G3](../PRODUCT.md).
 **Couples to:** Outcome history exposure, runtime role mutation.
@@ -329,7 +330,7 @@ memory writes and runtime role-config changes. See
 **Status: G3 / P8 — Reflection Layer is now fully delivered**
 across Phases 28–30.
 
-## Milestone — Channel SDK Surface
+## Milestone — Channel SDK Surface ✓ (shipped in Phase 48)
 
 **Forward commitment:** [`PRODUCT.md` P5](../PRODUCT.md). **Couples to:**
 Daemon Migration.
@@ -347,7 +348,7 @@ is expected to land *immediately after* the Daemon Migration's
 first phase and may share a phase with it if the daemon work
 turns out to be lighter than expected.
 
-## Milestone — Tool Process IPC
+## Milestone — Tool Process IPC ✓ (shipped in Phases 49–50, hardened in 52)
 
 **Forward commitment:** [`PRODUCT.md` P12](../PRODUCT.md). **Couples to:**
 Daemon Migration, Channel SDK Surface.
@@ -367,7 +368,7 @@ tool IPC into the channel SDK protocol (one wire format, two
 client roles) or to keep them separate (two protocols, easier
 to evolve independently). Deferred to milestone open.
 
-## Milestone — SDK Documentation Surface
+## Milestone — SDK Documentation Surface ✓ (shipped in Phases 48–49)
 
 **Forward commitment:** [`PRODUCT.md` P11](../PRODUCT.md).
 
@@ -429,7 +430,7 @@ between providers (tool-calling wire format) are handled
 internally by the adapter — no core type changes were needed.
 Delivered in 1 phase as predicted.
 
-## Milestone — Web UI Channel
+## Milestone — Web UI Channel ✓ (shipped across Phases 39, 47)
 
 **Forward commitment candidate:** not yet locked. **Couples
 to:** P4 (Daemon), P5 (Channel SDK).
@@ -453,7 +454,7 @@ approval-gate Approve/Deny buttons, cancel button.
 TOML config. 801 tests (+13), zero clippy warnings. All three
 byte-level streaks intact (DESIGN.md 16, PRODUCT.md 2, lib.rs 3).
 
-## Milestone — Scheduled Execution
+## Milestone — Scheduled Execution ✓ (shipped across Phases 26–27)
 
 **Forward commitment:** [`PRODUCT.md` G5](../PRODUCT.md).
 **Couples to:** Daemon Migration, Mission Primitive.
@@ -485,65 +486,166 @@ Nine storage domains. +30 tests (660→690). See
 **Status: G5 — Autonomous and Scheduled Execution is now
 fully delivered** across Phases 26–27.
 
-## Sequencing notes (revised at Phase 22 entry, 2026-04-17)
+## Sequencing notes (revised at Phase 54 exit, 2026-05-12)
 
-The first two keystones (Daemon Migration, Role-Config
-Migration) are **both delivered**. The sequencing picture is
-now driven by leverage and coupling rather than by prerequisite
-chains.
+**Every product-shape milestone in this document is now
+delivered.** The forward-commitment ledger closed at Phase 49
+exit (PRODUCT.md P12 foundation), the equivalence proof landed
+at Phase 50, and Chapter A (Phases 50–54) closed Foundation
+Closeout with cleanup, sandboxing, and a final docs sweep.
 
-- **Escalation→gate wiring (Phase 22 Task 8)** completes P2's
-  approval-gate lifecycle. Short, targeted.
-- **MCP Integration is the highest-leverage next milestone.**
-  One adapter unlocks the entire MCP ecosystem. Couples to
-  the `Tool` trait (already stable) and the daemon (delivered).
-  Expected ~2 phases.
-- **Multi-Provider is delivered** (Phase 25). ~1 phase as
-  predicted.
-- **Web UI Channel is high impact.** Daemon IPC makes it
-  cheap. ~2 phases.
-- **Scheduled Execution delivered** (Phases 26–27).
-  G5 fully shipped: cron timers, webhook endpoints, file-change
-  watchers, trigger unification, and mission wrapping.
-- **Reflection Layer is delivered** (Phases 28–30). Full P8:
-  audit introspection, reflection loop, runtime role mutation.
-- **Channel SDK Surface + Tool Process IPC** are documentation
-  and protocol phases. Best done after MCP Integration
-  validates the extension surface. ~1–2 phases each.
-- **SDK Documentation Surface is deliberately last.** ~1 phase.
+For the per-phase narrative including Chapter A, see
+[`ROADMAP.md`](ROADMAP.md). For the current implementation
+state of each commitment, see the Delivery Status section in
+[`../PRODUCT.md`](../PRODUCT.md).
+
+### Forward sequencing — what's left
+
+The roadmap below holds milestones for *product-shape* work.
+With every commitment delivered, future phases work against:
+
+- **Hardening & operator-facing polish** — items that have not
+  yet shown enough pressure to be milestones. Examples:
+  container-sandbox profile presets, audit log rotation if
+  chain size becomes load-bearing, additional channel adapters
+  (Matrix / Signal / Discord), additional tool-process
+  examples, signed third-party tool registries.
+- **Strategic conversations** — anything that would amend
+  DESIGN.md or PRODUCT.md goes through the amendment process
+  before opening a phase. Eight amendments stand as the
+  precedent.
+- **Operator feedback loops** — at this point the project
+  benefits more from real-world operator use than from
+  speculative forward work.
 
 ## Delivered
 
-- **Role-Config Migration** — shipped in Phase 13
-  (2026-04-15, exit commit `25a09de`). Per-role
-  capability envelope in a single TOML file with
-  single-inheritance, declared-set attenuation, worked
-  example, and `--print-role` debug flag. Delivered
-  **PRODUCT.md P9 — Per-Role Full Capability
-  Declaration** in full. (Backfilled into this section
-  by Phase 14's exit freeze; the Phase 13 freeze did
-  not populate the Delivered section, recorded as a
-  Phase 13 oversight rather than a Phase 14 scope
-  expansion.)
-- **Sub-Agent Role-Switching** — shipped in Phase 14
-  (2026-04-16, exit commit TBD-backfilled). Inline
-  sub-session nesting via an `OnceLock`-backed
-  `RoleSwitchTool` factory closure, one level deep,
-  with structural-impossibility-of-escalation pinned
-  by integration tests against narrowed-caps child
-  snapshots and by the `--print-role` reachable-
-  targets enumerator reading from the same envelope
-  source as the production dispatcher. Delivered the
-  in-process portion of **PRODUCT.md P1 — Sub-Agent
-  Mode via Role-Switching**. Multi-level nesting is
-  the single net-new Phase 14 deferral, low-urgency.
-- **Multi-Provider Support** — shipped in Phase 25
-  (2026-04-17). OpenAI-compatible `LlmProvider` adapter
-  (`provider-openai` feature in `aivyx-llm`) covering
-  GPT-4, Ollama, and any OpenAI-API-compatible endpoint.
-  Global provider selection via `--provider` CLI flag,
-  `AIVYX_PROVIDER` env var, or `[agent] provider` TOML
-  field. Shared `HttpTransport` seam for both providers.
-  No core type changes required — the adapter translates
-  between OpenAI and internal formats internally.
-  1 phase, 3 implementation tasks + 1 docs task.
+Every product-shape milestone shipped across the 54-phase arc.
+Grouped by commitment for traceability.
+
+### `PRODUCT.md` commitments
+
+- **P1 — Sub-Agent Role-Switching** — Phases 14, 33. Inline
+  sub-session nesting via an `OnceLock`-backed `RoleSwitchTool`
+  factory; multi-level nesting closed in Phase 33. Structural
+  impossibility of escalation pinned by integration tests +
+  `--print-role` reachable-targets enumerator.
+
+- **P2 — Mission Primitive** — Phases 21, 23, 28, 35. Six-state
+  machine, `mission.create` / `mission.gate` capability bases,
+  IPC extensions, CLI + Telegram gate prompts, escalation → gate
+  turn-loop wiring, `mission.list` / `mission.status` inspection.
+
+- **P3 — Goals and Non-Goals** — all 7 goal commitments (G1–G7)
+  shipped, see "Goal commitments" subsection below.
+
+- **P4 — Daemon-Default Architecture** — Phases 16–20. Protocol
+  settlement, production hardening, REPL wiring, multi-connection
+  + Telegram port, daemon management.
+
+- **P5 — Open First-Party Channel Surface** — Phase 48. v0
+  `CHANNEL_SDK.md` + `examples/python-channel/` + 15-test
+  conformance suite.
+
+- **P6 — OS-Level Operator Identity** — always true by
+  construction. IPC socket mode 0600 owned by operator UID.
+
+- **P7 — Single-Inheritance Role Tree** — Phases 11, 13. Strict
+  attenuation along every dimension, validated at config load.
+
+- **P8 — Outcome-Driven Audited Reflection** — Phases 28–30.
+  Audit introspection (`turn.history`), reflection loop
+  (`reflection.propose` / `reflection.apply`), runtime role
+  mutation (`role.update` + planner factory integration).
+
+- **P9 — Per-Role Full Capability Declaration** — Phase 13.
+  `capability_scopes` parsed via `Scope::parse` at config load.
+
+- **P10 — Substrate-Only Core, Eight Tools Forever** — true by
+  contract. `web.post` added in Phase 37, A5 amendment Phase 38.
+
+- **P11 — SDK Contract** — Phases 48 (channel half) + 49 (tool
+  half). `docs/CHANNEL_SDK.md` + `docs/TOOL_SDK.md` v0 contracts.
+
+- **P12 — Tools as Separate Processes Over Daemon IPC** —
+  Phase 49 foundation + Phase 50 closeout + Phase 52 sandbox
+  hardening. `aivyx-tool` crate, `ToolProcessBridge`,
+  `ToolProxy`, `run_tool_as_subprocess<T: Tool>` proven
+  equivalent in `p12_equivalence.rs`, optional
+  `[tool_process.sandbox]` wrapper layer.
+
+### Goal commitments (P3)
+
+- **G1 — Web interaction** — `web.fetch` (Phase 12), `web.post`
+  (Phase 37), binary body + redirects (Phase 37). Rich web
+  interaction (page rendering) not pursued — `web_search` and
+  `web_read` bundled MCP tools cover the operator-useful subset.
+- **G2 — Code interaction** — `fs.read`, `fs.write`,
+  `shell.exec` operational with role gating; shell hardened
+  in Phase 42.
+- **G3 — Memory Reflection** — Phases 28–30. Memory substrate,
+  reflection loop, runtime role mutation.
+- **G4 — Sub-agent orchestration** — Phases 14, 33. Multi-level
+  role-switching with capability attenuation.
+- **G5 — Autonomous and scheduled execution** — Phases 26–27.
+  Cron schedules, webhooks, file watchers, trigger unification,
+  mission wrapping.
+- **G6 — Local execution, privacy non-negotiable** — Phase 34
+  (Ollama first-class with health check). No hosted control
+  plane at any point.
+- **G7 — Third-party tool SDK** — Phases 48, 49. v0 channel SDK
+  + v0 tool SDK + MCP integration (Phases 23–24, 32) as a
+  parallel adapter.
+
+### Cross-cutting initiatives
+
+- **Daemon Migration** — Phases 16–20 (architecturally
+  complete). Five-phase keystone that reshaped the binary
+  lifecycle and unlocked P5, P12, P2, P1.
+- **Role-Config Migration** — Phase 13. Per-role envelope,
+  single-inheritance.
+- **MCP Integration** — Phases 23–24, 32. `aivyx-mcp` crate,
+  stdio + SSE transports, daemon-side bridge lifecycle.
+- **Multi-Provider Support** — Phases 25, 34. Anthropic,
+  OpenAI-compatible, Ollama-first-class.
+- **Web UI Channel** — Phases 39, 47. Localhost-only chat
+  surface + mission/audit/sessions inspection panes.
+- **Bundled MCP Web Search** — Phase 46. `aivyx mcp-server
+  web-search` with Brave / SerpAPI / DuckDuckGo backend chain.
+- **Rich Input (Multimodal)** — Phase 45. `ContentBlock`,
+  image input across Anthropic / OpenAI / Telegram / Web UI.
+- **`aivyx init` Wizard** — Phase 44. First-run interactive
+  setup, Ollama auto-detection.
+
+### Chapter A — Foundation Closeout (Phases 50–54)
+
+The arc that brought every loose end from Phases 0–49 to a
+close.
+
+- **Phase 50 — P12 closeout.** Wired the two Phase 49 deferred
+  bridge stubs (`ToolEvent` channel relay, per-call cancellation).
+  Added `run_tool_as_subprocess<T: Tool>` harness. Proved
+  "extractable without rewriting" with `p12_equivalence.rs`.
+- **Phase 51 — Cleanup.** Closed three pre-existing items:
+  `AivyxError::{Storage,Crypto}` typed nested errors (D6
+  honored after 50 phases), `handle_connection` parameter-struct
+  lift, `AIVYX_PASSPHRASE` TOML/env footgun (TOML path now
+  drives derivation).
+- **Phase 52 — Sandbox layer.** Generic command-wrapper
+  sandbox for `[[tool_process]]`. Operator supplies the policy
+  (bubblewrap / firejail / Docker / sandbox-exec). Narrowed
+  THREAT_MODEL.md §5.6.
+- **Phase 53 — (skipped).** Audit log rotation deferred
+  indefinitely; chain growth is bounded by tool-call frequency
+  × uptime.
+- **Phase 54 — Final docs sweep.** Brought the docs back in
+  sync with the substrate. Root README rewrite, this
+  PRODUCT_ROADMAP refresh, DAEMON_IPC Phase 47 addendum, A3
+  scope-base count addendum, walkthrough refresh, cross-doc
+  consistency spot-check.
+
+After Phase 54 the project sits at: 984 Rust tests + 24 Python
+conformance tests passing, zero clippy warnings, 12 workspace
+crates, 43 capability scope bases, 9 encrypted storage domains,
+8 contract amendments filed, 4 deferrals carried forward (none
+load-bearing).
