@@ -53,6 +53,7 @@ pub mod ollama_tools;
 mod daemon_session;
 mod local;
 pub mod passphrase;
+pub mod profile_prompt;
 mod render;
 mod role_envelope;
 mod role_render;
@@ -62,6 +63,7 @@ pub mod web_ui;
 
 pub use local::LocalChannel;
 pub use render::{render_finalize, render_stream_event, RenderMode};
+pub use profile_prompt::assemble_session_prompt;
 pub use role_envelope::{assemble_role_envelope, MAX_INHERITANCE_DEPTH};
 pub use role_render::{render_role_envelope, ChannelKind};
 pub use daemon_session::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};

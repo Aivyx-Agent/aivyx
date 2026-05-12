@@ -1252,11 +1252,12 @@ async fn run_async(
         // prompt and the resolution below picks it up normally.
         roles,
         active_role,
-        // Phase 57 Task 2 — the operator-declared identity layer per
-        // PRODUCT.md P13. Used by Task 3 to compose the
-        // assemble_session_prompt helper that flavors every turn's
-        // system prompt alongside (not inside) the role envelope.
-        profile: _profile_phase57,
+        // Phase 57 — operator-declared identity layer per PRODUCT.md
+        // P13. Task 3 wires this through `assemble_session_prompt` so
+        // Profile flavors every turn's system prompt alongside (not
+        // inside) the role envelope. Cloned once for the role-switch
+        // factory capture (`profile_for_factory`) below.
+        profile,
         // `warnings` is rendered by the banner in `print_startup_banner`
         // directly from `&config.warnings` before the destructure; by
         // the time we land here the banner has already printed any
@@ -1325,7 +1326,17 @@ async fn run_async(
     // role, a few `Sourced<T>` fields) and confines the move
     // discipline to two adjacent lines.
     let role_for_envelope = role.clone();
-    let system_prompt = role.system_prompt.value;
+    // Phase 57 Task 3 — assemble the final system prompt by layering
+    // Profile (operator-declared identity per PRODUCT.md P13) atop
+    // the active role's `system_prompt`. When Profile is at its
+    // synthesized default (no `[profile]` section in TOML), the
+    // helper returns the role's `system_prompt` unchanged — zero
+    // behavior change for pre-Phase-57 configs.
+    let system_prompt = aivyx_channel::assemble_session_prompt(
+        &profile,
+        &active_role_name,
+        &role.system_prompt.value,
+    );
     let tool_allowlist: Option<std::collections::BTreeSet<String>> =
         match role.tool_allowlist.value {
             ToolAllowlist::AllowAll => None,
@@ -1891,6 +1902,11 @@ async fn run_async(
     let model_for_factory = model.clone();
     let max_tokens_for_factory: u32 = DEFAULT_MAX_TOKENS;
     let memory_for_factory = Arc::clone(&memory);
+    // Phase 57 Task 3 — Profile flavors every turn's system prompt,
+    // including turns running inside a role-switch sub-session.
+    // Clone once for the factory closure to capture (Profile holds
+    // only owned data, no Arc indirection needed).
+    let profile_for_factory = profile.clone();
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -1928,7 +1944,16 @@ async fn run_async(
         // Destructure the target role's per-role config for the
         // child's planner and agent builder. Mirrors the parent
         // path at lines 1193-1199.
-        let child_system_prompt = target_role.system_prompt.value;
+        //
+        // Phase 57 Task 3 — same Profile injection as the parent
+        // path: layered "## About this assistant" + "## Active
+        // role: <target>" composition when the operator has
+        // declared a `[profile]` section, passthrough otherwise.
+        let child_system_prompt = aivyx_channel::assemble_session_prompt(
+            &profile_for_factory,
+            target,
+            &target_role.system_prompt.value,
+        );
         let child_tool_allowlist: Option<std::collections::BTreeSet<String>> =
             match target_role.tool_allowlist.value {
                 ToolAllowlist::AllowAll => None,

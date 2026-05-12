@@ -151,6 +151,50 @@ role text alone or with empty Profile placeholder (per Q3
 decision), (c) role-switch child session inherits same
 Profile injection as parent.
 
+## Task 3 ship record
+
+**Files modified:**
+- `crates/aivyx-config/src/lib.rs` (+19): `impl Profile`
+  with `pub fn is_operator_declared(&self) -> bool` — the
+  short-circuit used by `assemble_session_prompt` to keep the
+  substrate non-invasive for legacy configs. Returns `true`
+  if `assistant_name`'s source is `Toml` OR any other field
+  is non-empty / non-`None`.
+- `crates/aivyx-channel/src/profile_prompt.rs` (+217, new
+  module): `pub fn assemble_session_prompt(profile, role_name,
+  role_system_prompt) -> String` per Q3(c) labeled
+  composition. When Profile is at the synthesized default,
+  returns `role_system_prompt` unchanged (zero behavior
+  change for pre-Phase-57 configs). Otherwise renders
+  *"## About this assistant"* block (assistant_name +
+  declared categories) + *"## Active role: <role_name>"*
+  block + role's `system_prompt`. Seven unit tests cover
+  default-passthrough, operator-declared composition,
+  Active-role label rendering on empty role prompts,
+  assistant_name-only override, same-Profile-across-roles
+  invariant, sanity guard on `DEFAULT_ASSISTANT_NAME`.
+- `crates/aivyx-channel/src/lib.rs` (+2): registers
+  `pub mod profile_prompt` and re-exports
+  `assemble_session_prompt` for binary consumption.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+22, -3):
+  - Destructure binding renamed `_profile_phase57` →
+    `profile` (no longer unused after Task 3 wires it).
+  - Parent path at line ~1328 reassembles `system_prompt`
+    via the helper — `system_prompt` local var now carries
+    the labeled composition (or passthrough for legacy
+    configs); every downstream consumer
+    (`SessionConfig.system_prompt`, daemon-run
+    `LlmPlannerConfig.with_system_prompt`,
+    `TelegramSessionConfig.system_prompt`) automatically
+    receives the assembled value.
+  - Role-switch factory captures `profile_for_factory =
+    profile.clone()` and rebuilds `child_system_prompt` via
+    the helper per child invocation. Sub-sessions inherit
+    the same Profile section as the parent.
+
+**Test delta:** +7 in aivyx-channel (200 → 207). Workspace
+total: 995 → 1002. Zero clippy warnings.
+
 ### Task 4 — Init-wizard Profile bootstrap
 
 Extend `aivyx init` (`crates/aivyx-channel/src/bin/aivyx_modules/init.rs`)

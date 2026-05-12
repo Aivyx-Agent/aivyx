@@ -869,6 +869,27 @@ impl Default for Profile {
     }
 }
 
+impl Profile {
+    /// `true` if the operator declared any Profile content — i.e.
+    /// either `assistant_name` was supplied (so its source is `Toml`,
+    /// not `Default`) or any of the other five fields is non-empty.
+    ///
+    /// Phase 57 Task 3 consumer: when this returns `false`, the
+    /// system-prompt assembly path skips the Profile section
+    /// entirely and emits the role's `system_prompt` unchanged.
+    /// This keeps the substrate non-invasive — every pre-Phase-57
+    /// `aivyx.toml` sees zero behavior change unless it actually
+    /// declares a `[profile]` section.
+    pub fn is_operator_declared(&self) -> bool {
+        self.assistant_name.source != FieldSource::Default
+            || self.operator_profile.is_some()
+            || self.communication_style.is_some()
+            || !self.primary_use_cases.is_empty()
+            || !self.behavioral_preferences.is_empty()
+            || !self.behavioral_constraints.is_empty()
+    }
+}
+
 /// Telegram-specific configuration loaded as a sub-object.
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
