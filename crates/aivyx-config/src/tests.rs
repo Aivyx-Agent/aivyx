@@ -33,8 +33,8 @@ use secrecy::ExposeSecret;
 
 use crate::{
     AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, ProviderKind, Role,
-    ToolAllowlist, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME,
-    DEFAULT_SYSTEM_PROMPT,
+    ToolAllowlist, DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL,
+    DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -2756,5 +2756,150 @@ args = ["-y", "@modelcontextprotocol/server-github"]
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert_eq!(cfg.mcp_servers.len(), 1);
     assert!(!cfg.mcp_servers[0].bundled);
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Profile (Phase 57 — PRODUCT.md P13)
+// ------------------------------------------------------------------
+
+#[test]
+fn profile_section_populates_all_fields_with_toml_source() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("profile-full");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[profile]
+assistant_name = "Codex"
+operator_profile = "Senior Rust engineer focused on systems and AI agents."
+communication_style = "terse, conclusion-first, three-bullet lists"
+primary_use_cases = ["Rust systems programming", "AI agent design"]
+behavioral_preferences = [
+    "prefer integration tests over mocks",
+    "always cite sources when summarizing",
+]
+behavioral_constraints = [
+    "never autonomously commit code",
+    "always confirm destructive shell commands",
+]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.profile.assistant_name.value, "Codex");
+    assert_eq!(cfg.profile.assistant_name.source, FieldSource::Toml);
+    assert_eq!(
+        cfg.profile.operator_profile.as_deref(),
+        Some("Senior Rust engineer focused on systems and AI agents."),
+    );
+    assert_eq!(
+        cfg.profile.communication_style.as_deref(),
+        Some("terse, conclusion-first, three-bullet lists"),
+    );
+    assert_eq!(
+        cfg.profile.primary_use_cases,
+        vec![
+            "Rust systems programming".to_string(),
+            "AI agent design".to_string(),
+        ],
+    );
+    assert_eq!(cfg.profile.behavioral_preferences.len(), 2);
+    assert!(cfg
+        .profile
+        .behavioral_preferences
+        .iter()
+        .any(|s| s.contains("integration tests")));
+    assert_eq!(cfg.profile.behavioral_constraints.len(), 2);
+    assert!(cfg
+        .profile
+        .behavioral_constraints
+        .iter()
+        .any(|s| s.contains("autonomously commit code")));
+
+    drop(env);
+}
+
+#[test]
+fn profile_section_absent_synthesizes_default_with_assistant_name() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("profile-absent");
+    let toml_path = tmp.path().join("aivyx.toml");
+    // No [profile] section at all — legacy aivyx.toml shape.
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.profile.assistant_name.value, DEFAULT_ASSISTANT_NAME);
+    assert_eq!(cfg.profile.assistant_name.source, FieldSource::Default);
+    assert!(cfg.profile.operator_profile.is_none());
+    assert!(cfg.profile.communication_style.is_none());
+    assert!(cfg.profile.primary_use_cases.is_empty());
+    assert!(cfg.profile.behavioral_preferences.is_empty());
+    assert!(cfg.profile.behavioral_constraints.is_empty());
+
+    drop(env);
+}
+
+#[test]
+fn profile_section_partial_provides_some_defaults_some_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("profile-partial");
+    let toml_path = tmp.path().join("aivyx.toml");
+    // Only assistant_name + primary_use_cases declared. The other
+    // four fields must remain at their unset defaults.
+    std::fs::write(
+        &toml_path,
+        r#"
+[profile]
+assistant_name = "Mira"
+primary_use_cases = ["personal-finance analysis"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    // Declared fields carry FieldSource::Toml.
+    assert_eq!(cfg.profile.assistant_name.value, "Mira");
+    assert_eq!(cfg.profile.assistant_name.source, FieldSource::Toml);
+    assert_eq!(
+        cfg.profile.primary_use_cases,
+        vec!["personal-finance analysis".to_string()],
+    );
+
+    // Undeclared fields stay at default — Option::None for the
+    // two free-text fields, empty Vec for the two list fields.
+    assert!(cfg.profile.operator_profile.is_none());
+    assert!(cfg.profile.communication_style.is_none());
+    assert!(cfg.profile.behavioral_preferences.is_empty());
+    assert!(cfg.profile.behavioral_constraints.is_empty());
+
     drop(env);
 }

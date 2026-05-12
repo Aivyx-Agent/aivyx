@@ -1252,6 +1252,11 @@ async fn run_async(
         // prompt and the resolution below picks it up normally.
         roles,
         active_role,
+        // Phase 57 Task 2 — the operator-declared identity layer per
+        // PRODUCT.md P13. Used by Task 3 to compose the
+        // assemble_session_prompt helper that flavors every turn's
+        // system prompt alongside (not inside) the role envelope.
+        profile: _profile_phase57,
         // `warnings` is rendered by the banner in `print_startup_banner`
         // directly from `&config.warnings` before the destructure; by
         // the time we land here the banner has already printed any

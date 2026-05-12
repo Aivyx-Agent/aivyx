@@ -102,6 +102,36 @@ When the section is absent, synthesize a default Profile
 table, (b) absent section → defaults, (c) partial section →
 provided fields explicit, missing fields default.
 
+## Task 2 ship record
+
+**Files modified:**
+- `crates/aivyx-config/src/lib.rs` (+139): new `pub struct
+  Profile` with six P13-commit-5 fields (`assistant_name:
+  Sourced<String>`, `operator_profile: Option<String>`,
+  `communication_style: Option<String>`, `primary_use_cases:
+  Vec<String>`, `behavioral_preferences: Vec<String>`,
+  `behavioral_constraints: Vec<String>`); `impl Default for
+  Profile` synthesizing the Q5(b)-resolution default
+  (`assistant_name = DEFAULT_ASSISTANT_NAME`, all others
+  empty / `None`); new `pub const DEFAULT_ASSISTANT_NAME:
+  &str = "Aivyx"`; new `pub profile: Profile` field on
+  `AivyxConfig`; new `RawProfile` deserialization struct;
+  `profile: RawProfile` added to `RawToml`; loader integration
+  in `load_from_env_and_toml` mapping `RawProfile` →
+  `Profile` with `FieldSource::Toml` on declared fields and
+  `FieldSource::Default` on the synthesized name.
+- `crates/aivyx-config/src/tests.rs` (+131): three unit
+  tests — full TOML population (every field carries
+  `Toml` source), absent section (synthesized default with
+  `DEFAULT_ASSISTANT_NAME`, all-`None` / all-empty rest),
+  partial section (mix of `Toml` and `Default`).
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+5): destructure
+  pattern in `run_async` updated with `profile:
+  _profile_phase57,` binding (intentional `_`-prefix until
+  Task 3 wires the helper).
+
+**Test delta:** +3 in aivyx-config (71 → 74).
+
 ### Task 3 — Profile-into-system-prompt assembly
 
 Wire Profile into the system-prompt assembly path. The

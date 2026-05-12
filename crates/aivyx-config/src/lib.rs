@@ -203,6 +203,13 @@ pub const DEFAULT_MEMORY_MAX_PER_TOPIC: usize = 10_000;
 /// supplies a value.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 
+/// Default assistant name used by [`Profile`] when no `[profile]
+/// assistant_name` is declared in TOML. Matches the product name —
+/// operators who don't care about renaming get "Aivyx" by default;
+/// operators who want a named assistant override it explicitly. Q5(b)
+/// resolution at Phase 57 sign-off (PRODUCT.md P13 commit 5).
+pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx";
+
 /// Which LLM provider backend to use.
 ///
 /// `Ollama` is config-level sugar for the OpenAI-compatible
@@ -553,6 +560,18 @@ pub struct AivyxConfig {
     /// consumer can safely `self.roles.get(self.active_role.value())
     /// .expect("validated at load")` without re-checking.
     pub active_role: Sourced<String>,
+    /// Operator-declared identity layer per **PRODUCT.md P13**
+    /// (added by amendment A9, Phase 56). Phase 57 substrate.
+    ///
+    /// Always populated. Loaded from the `[profile]` TOML table
+    /// when present; otherwise [`Profile::default()`] synthesizes
+    /// a default carrying `assistant_name = `
+    /// [`DEFAULT_ASSISTANT_NAME`] and every other category empty.
+    ///
+    /// Q1(a) at Phase 57 sign-off: Profile lives in `aivyx.toml`
+    /// as a top-level `[profile]` table — single operator-facing
+    /// config file, plain-text-inspectable per P13 commit 4.
+    pub profile: Profile,
     /// Non-fatal warnings accumulated by the loader.
     ///
     /// Phase 11 Task 1 introduced this field so the loader can
@@ -774,6 +793,82 @@ pub enum ToolAllowlist {
     Only(Vec<String>),
 }
 
+/// Operator-declared identity layer per **PRODUCT.md P13**. Profile
+/// is loaded once per daemon lifetime from the `[profile]` table in
+/// `aivyx.toml` and injects into every turn's system prompt
+/// regardless of active role. Profile is the role-orthogonal identity
+/// layer — roles gate *what* the agent may do, Profile flavors *how*
+/// it speaks and judges.
+///
+/// Phase 57 lands the substrate; Phase 58 lands the operator-facing
+/// inspection surface (`aivyx profile show` / `edit`).
+///
+/// Profile carries no secrets per P13 commit 7 — it is plain-text-
+/// inspectable, lives in the operator-facing `aivyx.toml`, and is
+/// never used for API keys, passphrases, or tokens.
+///
+/// The agent **cannot** write to its own Profile (P13 commit 3).
+/// Profile changes are operator-driven only. Reflection writes
+/// (P8) shape Persona (P14), not Profile.
+#[derive(Debug, Clone)]
+pub struct Profile {
+    /// What the operator calls this specific assistant. Distinct
+    /// from the product name (*Aivyx*) and from role names. Always
+    /// populated — falls through to [`DEFAULT_ASSISTANT_NAME`] if
+    /// no source supplied one (tagged [`FieldSource::Default`]).
+    pub assistant_name: Sourced<String>,
+    /// Short description of who the operator is — role, expertise
+    /// level, primary work context. Drives domain-specific
+    /// language and assumed background knowledge in the
+    /// assistant's responses. `None` means "not declared."
+    pub operator_profile: Option<String>,
+    /// Operator preferences on verbosity, formality, citation
+    /// frequency, source referencing, list-vs-prose, etc. Free
+    /// text — the wizard offers presets but the TOML is
+    /// unstructured. `None` means "not declared."
+    pub communication_style: Option<String>,
+    /// The 1–3 use-case archetypes the assistant is being shaped
+    /// around (e.g. *"Rust systems programming"*, *"personal-
+    /// finance analysis"*). Drives default domain assumptions.
+    /// Empty `Vec` means "not declared."
+    pub primary_use_cases: Vec<String>,
+    /// Non-capability defaults that flavor the agent's judgment
+    /// (e.g. *"prefer integration tests over mocks"*, *"always
+    /// cite sources when summarizing"*). Empty `Vec` means "not
+    /// declared." Not the same thing as capability scopes — these
+    /// are voice-layer preferences, not authority gates.
+    pub behavioral_preferences: Vec<String>,
+    /// Non-capability guardrails the agent should respect across
+    /// every role (e.g. *"never autonomously commit code"*,
+    /// *"always confirm destructive shell commands"*). Empty `Vec`
+    /// means "not declared." Not the same thing as capability
+    /// ceilings — these are voice-layer constraints, not
+    /// authority gates.
+    pub behavioral_constraints: Vec<String>,
+}
+
+impl Default for Profile {
+    /// Q5(b) resolution at Phase 57 sign-off: synthesize a default
+    /// Profile with [`DEFAULT_ASSISTANT_NAME`] populated and every
+    /// other category empty. Matches the existing precedent
+    /// ([`DEFAULT_MODEL`], [`DEFAULT_ROLE_NAME`],
+    /// [`DEFAULT_SYSTEM_PROMPT`]) — every existing `aivyx.toml`
+    /// keeps working without a `[profile]` section.
+    fn default() -> Self {
+        Self {
+            assistant_name: Sourced::new(
+                DEFAULT_ASSISTANT_NAME.to_string(),
+                FieldSource::Default,
+            ),
+            operator_profile: None,
+            communication_style: None,
+            primary_use_cases: Vec::new(),
+            behavioral_preferences: Vec::new(),
+            behavioral_constraints: Vec::new(),
+        }
+    }
+}
+
 /// Telegram-specific configuration loaded as a sub-object.
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
@@ -943,6 +1038,12 @@ struct RawToml {
     /// `[daemon]` section. Phase 28 Task 3.
     #[serde(default)]
     daemon: RawDaemon,
+    /// `[profile]` section. Phase 57 (PRODUCT.md P13). Absent
+    /// section deserializes via `Default` into an all-`None` /
+    /// all-empty raw shape, which the loader then maps to
+    /// [`Profile::default()`].
+    #[serde(default)]
+    profile: RawProfile,
 }
 
 /// `[daemon]` section in the TOML file. Phase 28 Task 3.
@@ -952,6 +1053,31 @@ struct RawDaemon {
     webhook_port: Option<u16>,
     web_ui: Option<bool>,
     web_ui_port: Option<u16>,
+}
+
+/// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
+/// Every field optional — an absent section deserializes into the
+/// all-`None`/all-empty shape via `Default`, which the loader then
+/// maps to [`Profile::default()`].
+///
+/// The TOML keys match the six P13 commit-5 categories. Field names
+/// in the operator-facing TOML are spelled out (e.g.
+/// `behavioral_preferences`, not `preferences`) so the config file
+/// is self-documenting without per-key comments.
+#[derive(Debug, Default, Deserialize)]
+struct RawProfile {
+    #[serde(default)]
+    assistant_name: Option<String>,
+    #[serde(default)]
+    operator_profile: Option<String>,
+    #[serde(default)]
+    communication_style: Option<String>,
+    #[serde(default)]
+    primary_use_cases: Option<Vec<String>>,
+    #[serde(default)]
+    behavioral_preferences: Option<Vec<String>>,
+    #[serde(default)]
+    behavioral_constraints: Option<Vec<String>>,
 }
 
 /// One `[[role]]` entry in the TOML file. Mirrors the runtime
@@ -1853,6 +1979,40 @@ impl AivyxConfig {
             })
             .collect();
 
+        // --- profile (Phase 57, PRODUCT.md P13) -------------------
+        // Map the raw `[profile]` section to a `Profile` struct.
+        // Absent fields fall through to `Profile::default()` per
+        // Q5(b) — `assistant_name` defaults to
+        // `DEFAULT_ASSISTANT_NAME`, every other category defaults to
+        // empty. No env-var override surface in Phase 57: Profile is
+        // operator-declared via TOML only (Q1(a), Q6(a)).
+        let profile = Profile {
+            assistant_name: match toml.profile.assistant_name.clone() {
+                Some(v) => Sourced::new(v, FieldSource::Toml),
+                None => Sourced::new(
+                    DEFAULT_ASSISTANT_NAME.to_string(),
+                    FieldSource::Default,
+                ),
+            },
+            operator_profile: toml.profile.operator_profile.clone(),
+            communication_style: toml.profile.communication_style.clone(),
+            primary_use_cases: toml
+                .profile
+                .primary_use_cases
+                .clone()
+                .unwrap_or_default(),
+            behavioral_preferences: toml
+                .profile
+                .behavioral_preferences
+                .clone()
+                .unwrap_or_default(),
+            behavioral_constraints: toml
+                .profile
+                .behavioral_constraints
+                .clone()
+                .unwrap_or_default(),
+        };
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
@@ -1868,6 +2028,7 @@ impl AivyxConfig {
             telegram,
             roles,
             active_role,
+            profile,
             warnings,
             mcp_servers,
             tool_processes,
