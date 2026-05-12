@@ -112,6 +112,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 52 | Frozen  | [PHASE_52.md](PHASE_52.md) | `57f6c14`  |
 | Phase 53 | Skipped | (folded into Phase 54)     |            |
 | Phase 54 | Frozen  | [PHASE_54.md](PHASE_54.md) | `f4e47be`  |
+| Phase 55 | Open    | [PHASE_55.md](PHASE_55.md) |            |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

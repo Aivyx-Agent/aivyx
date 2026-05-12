@@ -610,6 +610,17 @@ DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
 Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
 remains as a forward commitment.
 
+## Phase 55 — MCP Server Sandbox Layer
+
+**Active — see [PHASE_55.md](PHASE_55.md).** First phase opened
+in response to operator-feedback-shaped pressure rather than as
+part of the Phase 0–54 forward arc. Ports the Phase 52 generic
+command-wrapper sandbox from `[[tool_process]]` to
+`[[mcp_server]]`, closing the THREAT_MODEL.md §5.2 gap the
+post-Phase-54 project review surfaced. Parallel `SandboxConfig`
+in `aivyx-mcp` matching the `aivyx-tool` pattern; no new dep
+edges between adapter crates.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
