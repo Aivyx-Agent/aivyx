@@ -297,6 +297,18 @@ Update `docs/README.md`:
 - Amendment-process section gains a one-line note that
   the directory now holds ten amendments (A1–A10).
 
+## Task 6 ship record
+
+**Files modified:**
+- `docs/README.md` (+18, -11): "Amendment process (not yet
+  used)" → "Amendment process" — the heading was stale since
+  Phase 22 first exercised the mechanism. Process steps
+  updated to mention both `DESIGN.md` and `PRODUCT.md` as
+  amendable contracts, and to acknowledge added (not just
+  superseded) sections. Closing paragraph rewritten from
+  *"directory does not yet exist"* to a current enumeration
+  of all ten amendments (A1–A10) with phase pointers.
+
 ### Task 7 — Exit freeze
 
 Standard exit procedure. Update `docs/README.md` Phase 56

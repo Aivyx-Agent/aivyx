@@ -124,17 +124,27 @@ as one-paragraph intents rather than as separate PHASE_N.md files.
 A phase gets its own doc only when it opens — that way there are no
 stale task lists sitting in files for phases we haven't started yet.
 
-## Amendment process (not yet used)
+## Amendment process
 
-When a Phase N decision needs to override a Phase 0 contract:
+When a Phase N decision needs to override a `DESIGN.md` or
+`PRODUCT.md` contract:
 
 1. Create `docs/amendments/<date>-<short-slug>.md` — one file per
    amendment, describing what changed, why, and which `DESIGN.md`
-   section it supersedes.
-2. Edit the relevant section of `DESIGN.md` to reference the amendment
-   inline (e.g., *"See amendment `2026-05-12-tool-required-scope.md`"*).
-3. Commit both files together with message
-   `docs(amendment): <slug>`.
+   or `PRODUCT.md` section it supersedes (or adds, if it introduces
+   a new commitment).
+2. Edit the relevant section of `DESIGN.md` or `PRODUCT.md` to
+   reference the amendment inline (blockquote-style pointer to the
+   amendment file). For added sections (e.g. a new Product
+   Commitment), the pointer appears at the head of the new section.
+3. Commit the amendment and the contract edit together with message
+   `docs(amendment): <slug>` for standalone amendment commits, or as
+   a task inside a phase using `docs(phase-N): task M — Ax <slug>`.
 
-The directory does not yet exist. It will be created the first time
-an amendment is needed.
+The directory holds **ten amendments** as of Phase 56 (2026-05-12):
+A1–A4 (Phase 22 — daemon IPC, mission state machine, capability
+taxonomy, workspace layout), A5 (Phase 38 — substrate tool count
+7→8), A6 (Phase 40 — parallel tool execution), A7 (Phase 41 —
+protocol negotiation), A8 (Phase 56 — PRODUCT.md pitch reframe),
+A9 (Phase 56 — P13 Assistant Profile), A10 (Phase 56 — P14
+Persona).
