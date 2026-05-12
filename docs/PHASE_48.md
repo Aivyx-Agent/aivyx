@@ -201,7 +201,8 @@ frozen with exit commit hash. Update `docs/README.md` row.
 | 1 | `c566ddb` | scaffold |
 | 2 | `0bda570` | `docs/CHANNEL_SDK.md` |
 | 3 | `0e84160` | `docs/ADAPTER_PATTERN.md` out-of-tree section |
-| 4 | _this commit_ | `examples/python-channel/` adapter |
+| 4 | `96b2271` | `examples/python-channel/` adapter |
+| 5 | _this commit_ | conformance suite (15 tests, daemon-free) |
 
 ## Deferrals carried into the phase
 

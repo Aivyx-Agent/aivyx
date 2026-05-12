@@ -73,11 +73,25 @@ all of those by talking to the daemon.
 
 ## Running the conformance tests
 
-The `tests/` directory holds replay-style scenarios that spawn a
-real daemon under the test harness. They require the `aivyx`
-binary to be on `$PATH` and a working LLM provider configured
-(Ollama is the zero-key option).
+The `tests/` directory exercises the protocol contract against a
+scripted "daemon" backed by `socket.socketpair()`. **No real
+daemon required, no LLM provider needed, no API keys** — they
+verify the SDK-level shapes (framing, lifecycle, unknown-variant
+skip, error surface).
 
 ```sh
-python3 -m unittest discover examples/python-channel/tests
+python3 -m unittest discover examples/python-channel/tests -v
 ```
+
+Fifteen scenarios at the time of writing:
+
+- `test_frame.py` — round-trip, BE u32 header, UTF-8 bodies,
+  size cap, partial reads (byte-dripfed frames)
+- `test_lifecycle.py` — happy path (`DaemonReady` → `StartSession`
+  → `submit_turn` → events → `TurnComplete`), cancellation,
+  approval gates, unknown-variant skip (both at the
+  `DaemonMessage` and `StreamEventPayload` layers), error surfaces
+
+To validate end-to-end against the real daemon, run the steps in
+the "Run it" section above — that's a manual smoke test, not a
+unittest suite.
