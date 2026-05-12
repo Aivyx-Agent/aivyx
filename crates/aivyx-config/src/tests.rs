@@ -2205,6 +2205,155 @@ command = "   "
     drop(env);
 }
 
+// ------------------------------------------------------------------
+// Phase 55 — [mcp_server.sandbox] schema
+// ------------------------------------------------------------------
+
+#[test]
+fn mcp_server_sandbox_block_loads() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-sandbox-basic");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "external-thing"
+command = "/usr/local/bin/external-mcp"
+
+[mcp_server.sandbox]
+wrapper = "bwrap"
+args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-parent", "--"]
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.mcp_servers.len(), 1);
+    let sandbox = cfg.mcp_servers[0]
+        .sandbox
+        .as_ref()
+        .expect("sandbox block must be Some");
+    assert_eq!(sandbox.wrapper, "bwrap");
+    assert!(sandbox.args.iter().any(|a| a == "--unshare-all"));
+    drop(env);
+}
+
+#[test]
+fn mcp_server_sandbox_empty_wrapper_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-sandbox-empty-wrapper");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "broken"
+command = "/usr/local/bin/mcp"
+
+[mcp_server.sandbox]
+wrapper = "   "
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("empty wrapper must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("sandbox.wrapper"), "error must name field: {msg}");
+    drop(env);
+}
+
+#[test]
+fn mcp_server_sandbox_on_sse_transport_is_error() {
+    // SSE has no local child to wrap; declaring a sandbox on it
+    // is operator confusion the loader should call out.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-sandbox-sse");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "remote"
+transport = "sse"
+url = "http://localhost:9000"
+
+[mcp_server.sandbox]
+wrapper = "bwrap"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("sandbox on SSE transport must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("stdio-only") || msg.contains("sandbox"),
+        "error must explain the stdio-only constraint: {msg}",
+    );
+    drop(env);
+}
+
+#[test]
+fn mcp_server_without_sandbox_is_none() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-no-sandbox");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "plain"
+command = "/usr/local/bin/mcp"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(
+        cfg.mcp_servers[0].sandbox.is_none(),
+        "omitting [mcp_server.sandbox] must yield None",
+    );
+    drop(env);
+}
+
 #[test]
 fn mcp_server_stdio_missing_command_is_error() {
     let env = EnvScope::new();

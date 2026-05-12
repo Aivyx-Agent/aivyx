@@ -1275,6 +1275,11 @@ async fn run_async(
             url: None,
             enabled: true,
             bundled: false,
+            // CLI-flag MCP servers don't carry a sandbox config —
+            // the `--mcp-server` flag is for quick experimentation,
+            // not for hardened deployments. Operators who want a
+            // sandbox use the TOML config path.
+            sandbox: None,
         });
     }
     for cli in cli_mcp_sse_servers {
@@ -1286,6 +1291,9 @@ async fn run_async(
             url: Some(cli.url),
             enabled: true,
             bundled: false,
+            // SSE has no local child to wrap; sandbox is always None
+            // for this transport kind.
+            sandbox: None,
         });
     }
     let model = model.value;
@@ -1566,8 +1574,23 @@ async fn run_async(
                 };
                 let args_ref: Vec<&str> =
                     mcp_cfg.args.iter().map(|s| s.as_str()).collect();
-                aivyx_mcp::McpServerBridge::start(&resolved_cmd, &args_ref, &mcp_cfg.name)
-                    .await
+                // Phase 55 — translate the operator's
+                // [mcp_server.sandbox] config into the runtime
+                // aivyx_mcp::SandboxConfig (parallel type per Phase
+                // 55 Q1 resolution).
+                let mcp_sandbox = mcp_cfg.sandbox.as_ref().map(|s| {
+                    aivyx_mcp::SandboxConfig {
+                        wrapper: s.wrapper.clone(),
+                        args: s.args.clone(),
+                    }
+                });
+                aivyx_mcp::McpServerBridge::start_with_sandbox(
+                    &resolved_cmd,
+                    &args_ref,
+                    mcp_sandbox.as_ref(),
+                    &mcp_cfg.name,
+                )
+                .await
             }
             aivyx_config::McpTransportKind::Sse => {
                 let url = mcp_cfg.url.as_deref().unwrap_or("");

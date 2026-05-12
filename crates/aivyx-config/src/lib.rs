@@ -810,6 +810,11 @@ pub struct McpServerConfig {
     /// When `true`, the binary resolves `command` to `std::env::current_exe()`
     /// before spawning. Used for bundled MCP servers (Phase 46).
     pub bundled: bool,
+    /// Phase 55 — optional sandbox wrapper for the stdio spawn.
+    /// `None` for SSE transport (no local child to wrap).
+    /// Reuses the same `SandboxConfig` type as
+    /// `[[tool_process]]` — see `docs/TOOL_SDK.md` §9.
+    pub sandbox: Option<SandboxConfig>,
 }
 
 /// One tool process to spawn at daemon startup. Phase 49 — delivers
@@ -1012,6 +1017,10 @@ struct RawMcpServer {
     /// Used for bundled MCP servers that ship inside the `aivyx` binary.
     #[serde(default)]
     bundled: bool,
+    /// Phase 55 — optional `[mcp_server.sandbox]` nested block.
+    /// Reuses `RawSandbox` from the `[[tool_process]]` schema.
+    #[serde(default)]
+    sandbox: Option<RawSandbox>,
 }
 
 /// One `[[tool_process]]` entry in the TOML file. Phase 49.
@@ -1696,6 +1705,38 @@ impl AivyxConfig {
                     ),
                 });
             }
+            // Phase 55 — sandbox is stdio-only; reject if declared
+            // on an SSE entry, same shape as the empty-wrapper
+            // validation in `[[tool_process]]`.
+            let sandbox = match r.sandbox {
+                Some(s) => {
+                    if transport == McpTransportKind::Sse {
+                        return Err(ConfigError::Invalid {
+                            field: "mcp_server.sandbox",
+                            reason: format!(
+                                "server {:?}: sandbox is stdio-only \
+                                 (no local child to wrap on SSE transport)",
+                                r.name,
+                            ),
+                        });
+                    }
+                    if s.wrapper.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "mcp_server.sandbox.wrapper",
+                            reason: format!(
+                                "server {:?}: `sandbox.wrapper` must be \
+                                 non-empty",
+                                r.name,
+                            ),
+                        });
+                    }
+                    Some(SandboxConfig {
+                        wrapper: s.wrapper,
+                        args: s.args.unwrap_or_default(),
+                    })
+                }
+                None => None,
+            };
             mcp_servers.push(McpServerConfig {
                 name: r.name,
                 transport,
@@ -1704,6 +1745,7 @@ impl AivyxConfig {
                 url: r.url,
                 enabled: true,
                 bundled: r.bundled,
+                sandbox,
             });
         }
 

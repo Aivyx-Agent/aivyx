@@ -211,7 +211,8 @@ frozen. Update `docs/README.md`. The Phase 55 trigger
 | Task | Commit | Notes |
 |---|---|---|
 | 1 | `eeaaad3` | scaffold |
-| 2 | _this commit_ | aivyx-mcp::SandboxConfig + StdioTransport wrapper — 986 tests |
+| 2 | `ef11e22` | aivyx-mcp::SandboxConfig + StdioTransport wrapper — 986 tests |
+| 3 | _this commit_ | [mcp_server.sandbox] TOML schema + binary wiring — 990 tests |
 
 ## Deferrals carried into the phase
 
