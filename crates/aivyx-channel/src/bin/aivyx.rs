@@ -98,6 +98,8 @@
 mod init;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
+#[path = "aivyx_modules/persona.rs"]
+mod persona;
 #[path = "aivyx_modules/profile.rs"]
 mod profile;
 
@@ -359,6 +361,28 @@ fn run() -> Result<(), String> {
             ProfileSubcommand::Show => profile::run_profile_show(),
             ProfileSubcommand::Edit => profile::run_profile_edit(),
         };
+    }
+
+    // ---- Phase 60: persona inspection / revert (PRODUCT.md P14) --------
+    // All three persona subcommands talk to the running daemon over
+    // IPC (the chain lives in encrypted storage; routing through the
+    // daemon avoids duplicating the master-key unlock path here and
+    // keeps the runtime state in sync after revert). A minimal tokio
+    // runtime is spun up just for the IPC round-trip.
+    if let CliMode::Persona(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            match sub {
+                PersonaSubcommand::Show => persona::run_persona_show().await,
+                PersonaSubcommand::List => persona::run_persona_list().await,
+                PersonaSubcommand::Revert { target_delta_id } => {
+                    persona::run_persona_revert(&target_delta_id).await
+                }
+            }
+        });
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -852,6 +876,26 @@ enum CliMode {
     /// [`ProfileSubcommand`] enum so future additions (e.g. `Reset`,
     /// `Reload`) stay additive without fragmenting `CliMode`.
     Profile(ProfileSubcommand),
+    /// `aivyx persona <subcommand>`: Persona inspection / revert
+    /// (Phase 60 — PRODUCT.md P14 closure). Q1(c) at sign-off:
+    /// nested enum with `Show`, `List`, and `Revert` variants.
+    /// Revert carries its target delta id inline. All three
+    /// subcommands talk to a running daemon over IPC.
+    Persona(PersonaSubcommand),
+}
+
+/// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum PersonaSubcommand {
+    /// `aivyx persona show` — print the effective Persona snapshot.
+    Show,
+    /// `aivyx persona list` — print every approved delta in chain
+    /// order with id, category, op, and approval timestamp.
+    List,
+    /// `aivyx persona revert <delta_id>` — operator-initiated
+    /// revert. Daemon appends a `Revert` op delta and recomputes
+    /// the shared runtime state so the next turn reflects the undo.
+    Revert { target_delta_id: String },
 }
 
 /// Subcommand discriminator under [`CliMode::Profile`]. Phase 58
@@ -981,6 +1025,70 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Init,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Check for `persona <subcommand>` — Phase 60 (PRODUCT.md P14).
+    // Q1(c) at sign-off: nested enum with show/list/revert variants.
+    if !args.is_empty() && args[0] == "persona" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx persona` requires a subcommand. Supported: show, list, revert"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "show" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx persona show` does not accept additional arguments. \
+                         Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                PersonaSubcommand::Show
+            }
+            "list" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx persona list` does not accept additional arguments. \
+                         Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                PersonaSubcommand::List
+            }
+            "revert" => {
+                let target = args.get(2).ok_or_else(|| {
+                    "`aivyx persona revert` requires a delta id. Usage: \
+                     `aivyx persona revert <delta_id>`"
+                        .to_string()
+                })?;
+                if args.len() > 3 {
+                    return Err(format!(
+                        "`aivyx persona revert` accepts exactly one delta id. \
+                         Got: `{}`",
+                        args[3..].join(" ")
+                    ));
+                }
+                PersonaSubcommand::Revert {
+                    target_delta_id: target.clone(),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized persona subcommand: `{other}`. \
+                     Supported: persona show, persona list, persona revert <id>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Persona(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -4037,6 +4145,86 @@ mod tests {
     #[test]
     fn profile_show_rejects_extra_args() {
         let err = parse_cli_args_from(&argv(&["profile", "show", "--verbose"]))
+            .expect_err("extra args must error");
+        assert!(
+            err.contains("does not accept additional arguments"),
+            "error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 60 — `aivyx persona <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn persona_show_parses_to_persona_show_mode() {
+        let parsed = parse_cli_args_from(&argv(&["persona", "show"]))
+            .expect("`persona show` must parse");
+        assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::Show));
+    }
+
+    #[test]
+    fn persona_list_parses_to_persona_list_mode() {
+        let parsed = parse_cli_args_from(&argv(&["persona", "list"]))
+            .expect("`persona list` must parse");
+        assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::List));
+    }
+
+    #[test]
+    fn persona_revert_parses_with_target_id() {
+        let parsed = parse_cli_args_from(&argv(&["persona", "revert", "pd-abc123"]))
+            .expect("`persona revert pd-abc123` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::Revert {
+                target_delta_id: "pd-abc123".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn persona_revert_without_target_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["persona", "revert"]))
+            .expect_err("`persona revert` without id must error");
+        assert!(
+            err.contains("requires a delta id"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn persona_revert_with_extra_args_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["persona", "revert", "pd-1", "pd-2"]))
+            .expect_err("extra revert args must error");
+        assert!(
+            err.contains("exactly one delta id"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn persona_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["persona"]))
+            .expect_err("`persona` alone must error");
+        assert!(
+            err.contains("show") && err.contains("list") && err.contains("revert"),
+            "error must list all subcommands: {err}"
+        );
+    }
+
+    #[test]
+    fn persona_unknown_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["persona", "delete"]))
+            .expect_err("`persona delete` must error");
+        assert!(
+            err.contains("unrecognized persona subcommand"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn persona_show_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["persona", "show", "--verbose"]))
             .expect_err("extra args must error");
         assert!(
             err.contains("does not accept additional arguments"),

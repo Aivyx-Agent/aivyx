@@ -19,8 +19,9 @@ use tokio::net::UnixStream;
 use std::sync::Arc;
 
 use crate::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
-    IpcAttachment, StreamEventPayload,
+    decode_frame, encode_frame, DaemonEnvelope, EffectivePersonaSummary, FrameError,
+    FrontendMessage, FrontendType, IpcAttachment, PersonaDeltaSummary, QueryPayload,
+    QueryResponsePayload, StreamEventPayload,
 };
 use crate::daemon_server::DaemonError;
 
@@ -392,6 +393,150 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, DaemonError> {
             Err(FrameError::IncompleteBuf) => {
                 read_more(&mut reader, &mut buf).await?;
             }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Phase 60 — fetch the daemon's current effective Persona snapshot
+/// over IPC. Used by `aivyx persona show` and by the Web UI's
+/// Persona pane.
+pub async fn get_effective_persona(
+    socket_path: &Path,
+) -> Result<EffectivePersonaSummary, DaemonError> {
+    let payload = send_query(socket_path, "p-show", QueryPayload::GetEffectivePersona).await?;
+    match payload {
+        QueryResponsePayload::GetEffectivePersona { persona } => Ok(persona),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected GetEffectivePersona, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 60 — paginated read of the persona delta chain over IPC.
+/// `from_seq` is zero-based; `limit` is capped server-side at 500.
+pub async fn list_persona_deltas(
+    socket_path: &Path,
+    from_seq: u64,
+    limit: u32,
+) -> Result<(Vec<PersonaDeltaSummary>, u64), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "p-list",
+        QueryPayload::ListPersonaDeltas { from_seq, limit },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ListPersonaDeltas { entries, total_len } => Ok((entries, total_len)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListPersonaDeltas, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 60 — operator-initiated Persona delta revert over IPC.
+/// Returns the chain sequence number of the appended Revert delta
+/// on success.
+pub async fn revert_persona_delta(
+    socket_path: &Path,
+    target_delta_id: &str,
+) -> Result<u64, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::RevertPersonaDelta {
+        id: "rv-cli".into(),
+        target_delta_id: target_delta_id.to_string(),
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::PersonaRevertResolved {
+                    ok, seq, error, ..
+                },
+                _,
+            )) => {
+                if ok {
+                    return seq.ok_or_else(|| {
+                        DaemonError::Protocol(
+                            "PersonaRevertResolved ok=true but seq is None".into(),
+                        )
+                    });
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "persona revert failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected PersonaRevertResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Shared helper: connect, send a `Query`, return the response
+/// payload. Used by the Persona inspection helpers above.
+async fn send_query(
+    socket_path: &Path,
+    id: &str,
+    query: QueryPayload,
+) -> Result<QueryResponsePayload, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let req = FrontendMessage::Query {
+        id: id.to_string(),
+        payload: query,
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, _)) => return Ok(payload),
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected QueryResponse, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
             Err(e) => return Err(e.into()),
         }
     }

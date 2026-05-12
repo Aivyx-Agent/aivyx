@@ -695,6 +695,13 @@ pub enum DaemonEnvelope {
         id: String,
         payload: QueryResponsePayload,
     },
+    // Phase 60 — Persona revert resolution.
+    PersonaRevertResolved {
+        id: String,
+        ok: bool,
+        seq: Option<u64>,
+        error: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
