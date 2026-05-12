@@ -103,6 +103,13 @@ pub enum KeyDomain {
     Webhooks,
     /// File-watch trigger records — filesystem-change-triggered entries (Phase 27).
     FileWatches,
+    /// Persona delta log — HMAC-chained operator-approved identity
+    /// deltas per PRODUCT.md P14 (Phase 59). Parallel to
+    /// [`KeyDomain::Audit`] per Q2(a) at Phase 59 sign-off. One row
+    /// per delta keyed by big-endian u64 sequence number; the chain
+    /// is replayed at daemon startup into an in-memory
+    /// `EffectivePersona`.
+    Persona,
 }
 
 impl KeyDomain {
@@ -123,6 +130,7 @@ impl KeyDomain {
             KeyDomain::Schedules => b"schedules",
             KeyDomain::Webhooks => b"webhooks",
             KeyDomain::FileWatches => b"file-watches",
+            KeyDomain::Persona => b"persona",
         }
     }
 
@@ -142,12 +150,13 @@ impl KeyDomain {
             KeyDomain::Schedules => "aivyx_schedules_v1",
             KeyDomain::Webhooks => "aivyx_webhooks_v1",
             KeyDomain::FileWatches => "aivyx_file_watches_v1",
+            KeyDomain::Persona => "aivyx_persona_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 9] = [
+    pub const ALL: [KeyDomain; 10] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -157,6 +166,7 @@ impl KeyDomain {
         KeyDomain::Schedules,
         KeyDomain::Webhooks,
         KeyDomain::FileWatches,
+        KeyDomain::Persona,
     ];
 }
 
@@ -342,7 +352,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 9],
+    subkeys: [SubKey; 10],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -419,7 +429,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 9], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 10], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -433,6 +443,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Schedules.as_bytes())?,
             master.derive_subkey(KeyDomain::Webhooks.as_bytes())?,
             master.derive_subkey(KeyDomain::FileWatches.as_bytes())?,
+            master.derive_subkey(KeyDomain::Persona.as_bytes())?,
         ])
     }
 
@@ -450,6 +461,7 @@ impl RedbStorage {
             KeyDomain::Schedules => &self.subkeys[6],
             KeyDomain::Webhooks => &self.subkeys[7],
             KeyDomain::FileWatches => &self.subkeys[8],
+            KeyDomain::Persona => &self.subkeys[9],
         }
     }
 }
@@ -850,9 +862,9 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a tenth `KeyDomain` variant, this
-        // test fails because `ALL` is a fixed-size array and the
-        // match below forces an update. Tripwire for "adding a
+        // If a future phase adds an eleventh `KeyDomain` variant,
+        // this test fails because `ALL` is a fixed-size array and
+        // the match below forces an update. Tripwire for "adding a
         // variant without updating ALL."
         for d in KeyDomain::ALL {
             match d {
@@ -864,7 +876,8 @@ mod tests {
                 | KeyDomain::Missions
                 | KeyDomain::Schedules
                 | KeyDomain::Webhooks
-                | KeyDomain::FileWatches => {}
+                | KeyDomain::FileWatches
+                | KeyDomain::Persona => {}
             }
         }
     }

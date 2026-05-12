@@ -127,6 +127,46 @@ Unit tests:
 - Two deltas chain correctly (`prev_mac` linkage)
 - Tampered delta fails verification
 
+## Task 2 ship record
+
+**Files modified:**
+- `crates/aivyx-storage/src/lib.rs` (+24, ~10): new
+  `KeyDomain::Persona` variant; updated `as_bytes`,
+  `table_name`, `ALL` (now length 10), `subkeys` array
+  (length 10), `derive_all_subkeys`, and the
+  variant-enumeration test tripwire.
+- `crates/aivyx-channel/src/persona.rs` (+665, new
+  module): `PersonaDeltaCategory` enum (10 variants per
+  Q3(c) — 6 Profile-mirror + 4 Persona-specific),
+  `PersonaDeltaOp` enum (`SetScalar`, `AppendList`,
+  `RemoveList`), `PersonaDelta` struct + `validate()`
+  pairing `(category, op)`, `SignedPersonaEntry` with
+  per-entry HMAC-SHA256 chain semantics
+  (`PERSONA_GENESIS_SEED` distinct from audit's seed —
+  chain-confusion attacks rejected structurally),
+  `PersonaChainError` typed errors, `PersonaChainLog`
+  (in-memory chain primitive parallel to
+  `aivyx_audit::HmacChainLog`), `PersistentPersonaLog`
+  (storage-backed wrapper writing one redb row per signed
+  entry keyed by big-endian seq), `EffectivePersona`
+  (replay state with `is_non_empty()` helper),
+  `compute_effective_persona` pure folder,
+  `ProposedPersonaDelta` (Phase 59 Task 3 input shape with
+  optional `reason` field), `synthesize_delta_id`
+  deterministic id helper. 16 unit tests cover validate
+  (4 cases), append/verify (5 cases), effective state
+  folding (4 cases), proposal validation (1 case),
+  id synthesis (2 cases).
+- `crates/aivyx-channel/src/lib.rs` (+1): registers
+  `pub mod persona`.
+- `crates/aivyx-channel/Cargo.toml` (+8): direct deps on
+  `hmac`, `sha2`, `serde_jcs` (already transitive via
+  aivyx-audit; listed explicitly now that aivyx-channel
+  uses them itself).
+
+**Test delta:** +16 in aivyx-channel lib. Workspace total:
+1023 → 1039. Zero clippy warnings.
+
 ### Task 3 — `persona.propose` scope + reflection.propose extension
 
 Add `persona.propose` to `aivyx-capability::KNOWN_BASES` and

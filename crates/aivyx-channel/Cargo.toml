@@ -118,6 +118,14 @@ http-body-util = { workspace = true }
 # on Windows). First genuinely new Cargo.lock entry since Phase 26's
 # `cron` crate.
 notify = { workspace = true }
+# Phase 59 — Persona substrate per PRODUCT.md P14. The Persona
+# chain is HMAC-SHA256-chained, structurally parallel to the audit
+# chain. We re-use the same crypto primitives `aivyx-audit` does
+# (already in Cargo.lock as transitive deps); listing them directly
+# here makes the dep relationship explicit.
+hmac = { workspace = true }
+sha2 = { workspace = true }
+serde_jcs = { workspace = true }
 # Phase 58 — `aivyx profile edit` uses `toml_edit` for surgical
 # updates to the `[profile]` section in `aivyx.toml` (preserves
 # comments, whitespace, and unrelated sections). Q2(a) at Phase 58

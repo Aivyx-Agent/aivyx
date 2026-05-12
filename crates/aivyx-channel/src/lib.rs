@@ -53,6 +53,7 @@ pub mod ollama_tools;
 mod daemon_session;
 mod local;
 pub mod passphrase;
+pub mod persona;
 pub mod profile_prompt;
 mod render;
 mod role_envelope;
