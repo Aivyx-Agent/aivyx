@@ -2571,6 +2571,14 @@ async fn run_async(
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
             audit_log: Some(Arc::clone(&persistent_audit_for_query)),
+            // Phase 60 — persona log + shared state for inspection
+            // queries (Query::ListPersonaDeltas /
+            // Query::GetEffectivePersona) and the revert flow
+            // (FrontendMessage::RevertPersonaDelta). Both were
+            // opened at the daemon startup path (Phase 59 Task 2 +
+            // Task 5).
+            persona_log: Some(Arc::clone(&persona_log)),
+            shared_persona: shared_persona.clone(),
             // Phase 58 — operator-declared Profile snapshot for the
             // `Query::GetProfile` IPC handler. `profile` was bound
             // at the AivyxConfig destructure (Phase 57 Task 2); a

@@ -125,6 +125,19 @@ pub enum QueryPayload {
     /// CLI `aivyx profile show` reads from disk directly; this
     /// query is the Web UI counterpart.
     GetProfile,
+    /// Phase 60 — fetch the daemon's current effective Persona
+    /// (PRODUCT.md P14). Read-only inspection. Returns the
+    /// folded state — same values the assemble_session_prompt
+    /// helper uses for the "## How I have learned to communicate"
+    /// section.
+    GetEffectivePersona,
+    /// Phase 60 — fetch the persona delta chain with pagination.
+    /// Mirrors `ListAuditEntries`. The daemon caps `limit`
+    /// server-side at 500 entries per response.
+    ListPersonaDeltas {
+        from_seq: u64,
+        limit: u32,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -175,6 +188,20 @@ pub enum QueryResponsePayload {
     /// snapshot includes `injection_enabled = false` in that case).
     GetProfile {
         profile: ProfileSummary,
+    },
+    /// Response to [`QueryPayload::GetEffectivePersona`]. Phase 60
+    /// — the current folded Persona state. Always populated; an
+    /// empty Persona returns an [`EffectivePersonaSummary`] with all
+    /// fields empty / `None`.
+    GetEffectivePersona {
+        persona: EffectivePersonaSummary,
+    },
+    /// Response to [`QueryPayload::ListPersonaDeltas`]. Phase 60
+    /// — paginated page of approved deltas. `total_len` is the full
+    /// chain length so the frontend knows when to stop paginating.
+    ListPersonaDeltas {
+        entries: Vec<PersonaDeltaSummary>,
+        total_len: u64,
     },
 }
 
@@ -282,6 +309,49 @@ pub struct ProfileSummary {
     pub injection_enabled: bool,
 }
 
+/// One signed persona delta as it appears over the wire. Mirrors
+/// the in-memory `aivyx_channel::persona::SignedPersonaEntry` but
+/// flattens the HMAC arrays to hex strings (so the JSON wire format
+/// stays uniform with other Summary types) and stringifies the
+/// `category` / `op` fields for stable cross-version compatibility.
+///
+/// Phase 60 — used by the `ListPersonaDeltas` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaDeltaSummary {
+    pub seq: u64,
+    pub delta_id: String,
+    pub proposed_at_unix_ms: u64,
+    pub approved_at_unix_ms: u64,
+    pub proposal_id: String,
+    /// Stable string label of `PersonaDeltaCategory` — e.g.
+    /// `"BehavioralPreferences"`, `"LearnedContext"`.
+    pub category: String,
+    /// Op as JSON object: `{ "kind": "SetScalar", "value": ... }`,
+    /// `{ "kind": "AppendList", "value": "..." }`, etc. The wire
+    /// shape mirrors `PersonaDeltaOp`'s serde repr.
+    pub op: serde_json::Value,
+    pub mac_hex: String,
+}
+
+/// Folded effective Persona snapshot. Phase 60 — returned by
+/// `GetEffectivePersona`. Mirrors `aivyx_channel::persona::EffectivePersona`
+/// shape directly; serializable so the Web UI can render it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct EffectivePersonaSummary {
+    pub assistant_name: Option<String>,
+    pub operator_profile: Option<String>,
+    pub communication_style: Option<String>,
+    pub primary_use_cases: Vec<String>,
+    pub behavioral_preferences: Vec<String>,
+    pub behavioral_constraints: Vec<String>,
+    pub learned_context: Vec<String>,
+    pub communication_adaptations: Vec<String>,
+    pub character_traits: Vec<String>,
+    pub relationship_milestones: Vec<String>,
+    /// Pre-computed flag — `true` when any field is non-empty.
+    pub is_non_empty: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
@@ -325,6 +395,19 @@ pub enum FrontendMessage {
     Query {
         id: String,
         payload: QueryPayload,
+    },
+    /// Phase 60 — operator-initiated Persona revert (PRODUCT.md P14
+    /// commit 4). The daemon appends a `Revert` op delta to the
+    /// persona chain referencing `target_delta_id` and recomputes
+    /// the shared runtime state so the next turn picks it up.
+    /// Per Q5(a) at Phase 60 sign-off: reverts are operator-only;
+    /// no gate prompt since the operator initiated.
+    ///
+    /// Reply: [`DaemonMessage::PersonaRevertResolved`] with the
+    /// same `id`.
+    RevertPersonaDelta {
+        id: String,
+        target_delta_id: String,
     },
 }
 
@@ -377,6 +460,18 @@ pub enum DaemonMessage {
     QueryResponse {
         id: String,
         payload: QueryResponsePayload,
+    },
+    /// Phase 60 — response to [`FrontendMessage::RevertPersonaDelta`].
+    /// `ok = true` on a successful append + shared-state recompute;
+    /// `ok = false` with `error` populated on failure (unknown
+    /// target_delta_id, storage error, lock poisoning).
+    PersonaRevertResolved {
+        id: String,
+        ok: bool,
+        /// Sequence number of the appended revert delta on success;
+        /// `None` on failure.
+        seq: Option<u64>,
+        error: Option<String>,
     },
 }
 
@@ -683,6 +778,23 @@ mod tests {
                 id: "q-006".into(),
                 payload: QueryPayload::GetProfile,
             },
+            // Phase 60 — Persona inspection queries.
+            FrontendMessage::Query {
+                id: "q-007".into(),
+                payload: QueryPayload::GetEffectivePersona,
+            },
+            FrontendMessage::Query {
+                id: "q-008".into(),
+                payload: QueryPayload::ListPersonaDeltas {
+                    from_seq: 0,
+                    limit: 50,
+                },
+            },
+            // Phase 60 — operator-initiated Persona revert.
+            FrontendMessage::RevertPersonaDelta {
+                id: "rv-1".into(),
+                target_delta_id: "pd-abc123".into(),
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -842,6 +954,63 @@ mod tests {
                         injection_enabled: true,
                     },
                 },
+            },
+            // Phase 60 — Persona inspection responses.
+            DaemonMessage::QueryResponse {
+                id: "q-012".into(),
+                payload: QueryResponsePayload::GetEffectivePersona {
+                    persona: EffectivePersonaSummary::default(),
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-013".into(),
+                payload: QueryResponsePayload::GetEffectivePersona {
+                    persona: EffectivePersonaSummary {
+                        behavioral_preferences: vec!["always cite sources".into()],
+                        learned_context: vec!["operator uses Vim".into()],
+                        is_non_empty: true,
+                        ..Default::default()
+                    },
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-014".into(),
+                payload: QueryResponsePayload::ListPersonaDeltas {
+                    entries: vec![],
+                    total_len: 0,
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-015".into(),
+                payload: QueryResponsePayload::ListPersonaDeltas {
+                    entries: vec![PersonaDeltaSummary {
+                        seq: 0,
+                        delta_id: "pd-abc".into(),
+                        proposed_at_unix_ms: 1_715_000_000_000,
+                        approved_at_unix_ms: 1_715_000_060_000,
+                        proposal_id: "rp-1".into(),
+                        category: "BehavioralPreferences".into(),
+                        op: serde_json::json!({
+                            "kind": "AppendList",
+                            "value": "prefer terse"
+                        }),
+                        mac_hex: "0".repeat(64),
+                    }],
+                    total_len: 1,
+                },
+            },
+            // Phase 60 — revert resolution responses.
+            DaemonMessage::PersonaRevertResolved {
+                id: "rv-1".into(),
+                ok: true,
+                seq: Some(2),
+                error: None,
+            },
+            DaemonMessage::PersonaRevertResolved {
+                id: "rv-2".into(),
+                ok: false,
+                seq: None,
+                error: Some("no persona delta found with id `pd-missing`".into()),
             },
             DaemonMessage::QueryResponse {
                 id: "q-006".into(),

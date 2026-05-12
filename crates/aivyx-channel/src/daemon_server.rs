@@ -144,6 +144,19 @@ pub struct DaemonConfig {
     /// inspection query. Always populated — the synthesized default
     /// is supplied when `aivyx.toml` has no `[profile]` section.
     pub profile: Arc<aivyx_config::Profile>,
+    /// Phase 60 — persistent Persona delta chain (PRODUCT.md P14).
+    /// The daemon uses it for both inspection queries
+    /// (`ListPersonaDeltas`) and revert operations
+    /// (`RevertPersonaDelta` appends to it). `None` is the test-
+    /// fixture path (POC daemon / round-trip tests) — both queries
+    /// return empty / default responses.
+    pub persona_log: Option<Arc<crate::persona::PersistentPersonaLog>>,
+    /// Phase 60 — shared runtime effective Persona. The planner
+    /// factory reads it per-turn; this handle exists on the daemon
+    /// side so `RevertPersonaDelta` and inspection queries can read
+    /// the current snapshot. Always present — defaults to an empty
+    /// state for test fixtures.
+    pub shared_persona: crate::persona::SharedEffectivePersona,
 }
 
 /// Run the daemon server.
@@ -174,6 +187,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         memory_ttl_secs,
         audit_log,
         profile,
+        persona_log,
+        shared_persona,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -342,6 +357,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             daemon_state: Arc::clone(&daemon_state),
             audit_log: audit_log.clone(),
             profile: Arc::clone(&profile),
+            persona_log: persona_log.clone(),
+            shared_persona: shared_persona.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -378,6 +395,12 @@ struct ConnectionContext {
     /// `Query::GetProfile`. Cloned-per-connection so the handler
     /// can read it without contending with the daemon's read path.
     profile: Arc<aivyx_config::Profile>,
+    /// Phase 60 — persistent Persona log for inspection queries +
+    /// revert append. `None` in test fixtures.
+    persona_log: Option<Arc<crate::persona::PersistentPersonaLog>>,
+    /// Phase 60 — shared effective Persona for inspection +
+    /// recompute after revert append.
+    shared_persona: crate::persona::SharedEffectivePersona,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -391,6 +414,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         daemon_state,
         audit_log,
         profile,
+        persona_log,
+        shared_persona,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -716,11 +741,45 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 mission_store.as_deref(),
                                 audit_log.as_deref(),
                                 &profile,
+                                persona_log.as_deref(),
+                                &shared_persona,
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
                                 id,
                                 payload: response_payload,
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::RevertPersonaDelta { id, target_delta_id } => {
+                            // Phase 60 — operator-initiated revert
+                            // (P14 commit 4). Append a `Revert` op
+                            // delta to the persona chain; on
+                            // success, recompute the shared state
+                            // so the next turn picks it up. Per
+                            // Q5(a) at Phase 60 sign-off: no gate
+                            // prompt — the operator is the
+                            // proposer.
+                            let resp = match resolve_persona_revert(
+                                persona_log.as_deref(),
+                                &shared_persona,
+                                &target_delta_id,
+                            )
+                            .await
+                            {
+                                Ok(seq) => DaemonMessage::PersonaRevertResolved {
+                                    id,
+                                    ok: true,
+                                    seq: Some(seq),
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::PersonaRevertResolved {
+                                    id,
+                                    ok: false,
+                                    seq: None,
+                                    error: Some(reason),
+                                },
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
@@ -812,6 +871,10 @@ async fn run_single_connection_daemon(
         daemon_state: empty_state,
         audit_log: None,
         profile: Arc::new(aivyx_config::Profile::default()),
+        persona_log: None,
+        shared_persona: crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        ),
     })
     .await
 }
@@ -840,6 +903,10 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         memory_ttl_secs: None,
         audit_log: None,
         profile: Arc::new(aivyx_config::Profile::default()),
+        persona_log: None,
+        shared_persona: crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        ),
     }).await
 }
 
@@ -991,6 +1058,8 @@ async fn handle_query(
     mission_store: Option<&DomainHandle>,
     audit_log: Option<&PersistentAuditLog>,
     profile: &aivyx_config::Profile,
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1098,6 +1167,83 @@ async fn handle_query(
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
             profile: profile_summary_from_profile(profile),
         },
+        QueryPayload::GetEffectivePersona => {
+            let summary = match shared_persona.read() {
+                Ok(state) => effective_persona_summary_from_state(&state),
+                Err(_) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "persona_state_poisoned".into(),
+                        message: "shared persona state lock poisoned".into(),
+                    };
+                }
+            };
+            QueryResponsePayload::GetEffectivePersona { persona: summary }
+        }
+        QueryPayload::ListPersonaDeltas { from_seq, limit } => {
+            const PERSONA_LIST_MAX_LIMIT: u32 = 500;
+            let Some(log) = persona_log else {
+                return QueryResponsePayload::ListPersonaDeltas {
+                    entries: Vec::new(),
+                    total_len: 0,
+                };
+            };
+            let entries = log.entries();
+            let total_len = entries.len() as u64;
+            let start = from_seq as usize;
+            let capped = (limit.min(PERSONA_LIST_MAX_LIMIT)) as usize;
+            let end = (start + capped).min(entries.len());
+            let page: Vec<crate::daemon_ipc::PersonaDeltaSummary> = if start >= entries.len() {
+                Vec::new()
+            } else {
+                entries[start..end]
+                    .iter()
+                    .map(persona_delta_summary_from_signed)
+                    .collect()
+            };
+            QueryResponsePayload::ListPersonaDeltas {
+                entries: page,
+                total_len,
+            }
+        }
+    }
+}
+
+/// Convert an in-memory effective Persona state into the wire
+/// [`EffectivePersonaSummary`]. Phase 60.
+fn effective_persona_summary_from_state(
+    state: &crate::persona::EffectivePersona,
+) -> crate::daemon_ipc::EffectivePersonaSummary {
+    crate::daemon_ipc::EffectivePersonaSummary {
+        assistant_name: state.assistant_name.clone(),
+        operator_profile: state.operator_profile.clone(),
+        communication_style: state.communication_style.clone(),
+        primary_use_cases: state.primary_use_cases.clone(),
+        behavioral_preferences: state.behavioral_preferences.clone(),
+        behavioral_constraints: state.behavioral_constraints.clone(),
+        learned_context: state.learned_context.clone(),
+        communication_adaptations: state.communication_adaptations.clone(),
+        character_traits: state.character_traits.clone(),
+        relationship_milestones: state.relationship_milestones.clone(),
+        is_non_empty: state.is_non_empty(),
+    }
+}
+
+/// Convert a signed persona chain entry into the wire summary
+/// shape. Phase 60.
+fn persona_delta_summary_from_signed(
+    entry: &crate::persona::SignedPersonaEntry,
+) -> crate::daemon_ipc::PersonaDeltaSummary {
+    let category_label = format!("{:?}", entry.delta.category);
+    let op_value = serde_json::to_value(&entry.delta.op).unwrap_or(serde_json::Value::Null);
+    crate::daemon_ipc::PersonaDeltaSummary {
+        seq: entry.seq,
+        delta_id: entry.delta.delta_id.clone(),
+        proposed_at_unix_ms: entry.delta.proposed_at_unix_ms,
+        approved_at_unix_ms: entry.delta.approved_at_unix_ms,
+        proposal_id: entry.delta.proposal_id.clone(),
+        category: category_label,
+        op: op_value,
+        mac_hex: entry.mac.iter().map(|b| format!("{b:02x}")).collect(),
     }
 }
 
@@ -1117,6 +1263,52 @@ fn profile_summary_from_profile(profile: &aivyx_config::Profile) -> ProfileSumma
         behavioral_constraints: profile.behavioral_constraints.clone(),
         injection_enabled: profile.is_operator_declared(),
     }
+}
+
+/// Phase 60 — append an operator-initiated revert delta and
+/// recompute the shared runtime state. Returns the new chain seq
+/// on success; a human-readable reason on failure.
+async fn resolve_persona_revert(
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    target_delta_id: &str,
+) -> Result<u64, String> {
+    let persona_log = persona_log
+        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    // Validate the target exists in the chain before appending the
+    // revert. Forward-pointing targets are rejected at fold time,
+    // but rejecting them at append time gives a better operator
+    // error message.
+    let entries = persona_log.entries();
+    let target = entries
+        .iter()
+        .find(|e| e.delta.delta_id == target_delta_id)
+        .ok_or_else(|| {
+            format!("no persona delta found with id `{target_delta_id}`")
+        })?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let revert = crate::persona::PersonaDelta {
+        delta_id: format!("pd-revert-{target_delta_id}"),
+        proposed_at_unix_ms: now_ms,
+        approved_at_unix_ms: now_ms,
+        proposal_id: format!("op-revert-{target_delta_id}"),
+        category: target.delta.category,
+        op: crate::persona::PersonaDeltaOp::Revert {
+            target_delta_id: target_delta_id.to_string(),
+        },
+    };
+    let seq = persona_log
+        .append(revert)
+        .await
+        .map_err(|e| format!("persona chain append failed: {e}"))?;
+    let entries_after = persona_log.entries();
+    if !crate::persona::recompute_shared_from_entries(shared_persona, &entries_after) {
+        return Err("shared persona state lock poisoned during recompute".into());
+    }
+    Ok(seq)
 }
 
 fn field_source_label(src: aivyx_config::FieldSource) -> &'static str {
