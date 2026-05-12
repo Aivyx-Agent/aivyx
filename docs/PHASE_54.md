@@ -121,9 +121,14 @@ added since A3's original 24.
 
 ### Task 6 — `docs/walkthrough.md` refresh or retire
 
-Inspect. If salvageable: refresh. If predates daemon
-migration: replace with a one-paragraph "see README + the
-contract docs" pointer.
+**Resolution: no action needed.** `docs/walkthrough.md` is in
+`.gitignore` as "Local-only audit / scratch doc (not part of
+frozen phase journals)." It never was a committed artifact; my
+plan for refresh/retire was based on a misread of the docs
+inventory.
+
+Phase 54 leaves it alone. Operators with a local copy can
+update it as they like; the repo is unchanged.
 
 ### Task 7 — Cross-doc consistency spot-check
 
@@ -155,7 +160,8 @@ Update `docs/README.md` row.
 | 2 | `802050f` | root README.md rewrite (179 lines, full refresh) |
 | 3 | `14068c2` | PRODUCT_ROADMAP.md Delivered refresh + Chapter A entries |
 | 4 | `188e603` | DAEMON_IPC.md Phase 47 Query/QueryResponse addendum |
-| 5 | _this commit_ | A3 amendment addendum (scope-base count 24 → 43) |
+| 5 | `afe3d15` | A3 amendment addendum (scope-base count 24 → 43) |
+| 6 | `1239e53` | walkthrough.md gitignored — no action needed |
 
 ## Deferrals carried into the phase
 
@@ -176,8 +182,8 @@ None expected. Phase 54 is purely a docs catch-up.
   envelope.
 - [ ] A3 amendment addendum filed; scope-base count matches
   `KNOWN_BASES`.
-- [ ] `docs/walkthrough.md` either refreshed or retired with a
-  pointer.
+- [x] `docs/walkthrough.md` reviewed — gitignored local-only
+  artifact, no committed action needed.
 - [ ] Cross-doc consistency spot-check complete; any drift
   fixed in-phase.
 - [ ] DESIGN.md break (A3 addendum) — predicted.
