@@ -214,7 +214,7 @@ frozen. Update `docs/README.md`. The Phase 55 trigger
 | 2 | `ef11e22` | aivyx-mcp::SandboxConfig + StdioTransport wrapper — 986 tests |
 | 3 | `c7d4080` | [mcp_server.sandbox] TOML schema + binary wiring — 990 tests |
 | 4 | `e460442` | sandbox e2e integration test with `env` wrapper — 992 tests |
-| 5 | _this commit_ | THREAT_MODEL §5.2 narrowing + TOOL_SDK.md §9 MCP subsection |
+| 5 | `4edd61d` | THREAT_MODEL §5.2 narrowing + TOOL_SDK.md §9 MCP subsection |
 
 ## Deferrals carried into the phase
 
@@ -230,22 +230,74 @@ architectural exploration that could surface new deferrals.
 
 ## Exit criteria
 
-- [ ] `aivyx-mcp::SandboxConfig` exists.
-- [ ] `StdioTransport::start` accepts an
+- [x] `aivyx-mcp::SandboxConfig` exists.
+- [x] `StdioTransport::start` accepts an
   `Option<SandboxConfig>` parameter; applies the wrapper
   when present.
-- [ ] `[mcp_server.sandbox]` TOML schema loads and validates.
-- [ ] Integration test using `env` as wrapper drives a
-  JSON-RPC `initialize` handshake end-to-end.
-- [ ] `THREAT_MODEL.md` §5.2 narrowed to acknowledge Phase 55.
-- [ ] `TOOL_SDK.md` §9 has a subsection on MCP sandbox with
+- [x] `[mcp_server.sandbox]` TOML schema loads and validates.
+- [x] Integration test using `env` as wrapper drives a
+  JSON-RPC `initialize` + `tools/list` handshake end-to-end.
+- [x] `THREAT_MODEL.md` §5.2 narrowed to acknowledge Phase 55.
+- [x] `TOOL_SDK.md` §9 has a subsection on MCP sandbox with
   a worked example.
-- [ ] DESIGN.md untouched (streak → 2).
-- [ ] PRODUCT.md untouched (streak → 6).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 4).
-- [ ] Zero clippy warnings.
-- [ ] Rust tests net-positive.
+- [x] DESIGN.md untouched (streak → 2).
+- [x] PRODUCT.md untouched (streak → 6).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 4).
+- [x] Zero clippy warnings.
+- [x] Rust tests 984 → 992 (+8).
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 984 → 992 (+8: 2 stdio unit, 4 config-load,
+  2 sandbox e2e)
+- Python conformance tests: 24 (unchanged)
+- Workspace crates: 12 (unchanged)
+- Clippy warnings: 0
+- Deferral backlog: 4 → 4
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (2) | untouched | 2 |
+| PRODUCT.md | untouched (6) | untouched | 6 |
+| `aivyx-core/src/lib.rs` | untouched (4) | untouched | **4** |
+
+All three predictions correct. lib.rs streak held at 4. Work
+lived entirely in `aivyx-mcp` + `aivyx-config` + binary + docs.
+
+### Items closed
+
+| Item | Source | What was closed |
+|---|---|---|
+| MCP supply-chain sandbox gap | THREAT_MODEL.md §5.2 | `[mcp_server.sandbox]` block parallel to Phase 52's `[tool_process.sandbox]`. Operators on hardened deployments can wrap MCP servers with bubblewrap / firejail / docker / sandbox-exec. |
+
+### Posture established
+
+Phase 55 is **the project's first post-Chapter-A phase**. It
+demonstrates that the "wait for pressure" posture from the
+Chapter A retrospective produces well-scoped, fast-shipping
+phases: the trigger was an audit finding from the
+post-Phase-54 project review; the design was already proven
+(Phase 52); execution took six tasks; nothing surprising
+surfaced. Future post-Chapter-A phases should aim for the
+same shape — operator-feedback-shaped need + proven-pattern
+port + small task list.
+
+### Deferrals carried forward (4)
+
+Unchanged from Phase 54 exit:
+
+1. Live audit push (P47 Q4)
+2. Read-write dashboard inspection (P47 Q6)
+3. Conformance harness as a Rust crate (P48 Q5)
+4. IPC stability window commitment (P48 Q6)
+
+### Operator-side verification
+
+A real-sandbox smoke test would spawn a real bwrap or firejail
+wrapper around an installed MCP server (e.g., a community
+MCP server like `mcp-server-everything`) and assert the
+sandbox actually blocks access to `~/.ssh/`. Recorded as
+non-urgent operator-discretion verification, same posture as
+the Phase 52 sandbox layer.

@@ -610,16 +610,22 @@ DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
 Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
 remains as a forward commitment.
 
-## Phase 55 — MCP Server Sandbox Layer
+## Phase 55 — MCP Server Sandbox Layer [SHIPPED]
 
-**Active — see [PHASE_55.md](PHASE_55.md).** First phase opened
-in response to operator-feedback-shaped pressure rather than as
-part of the Phase 0–54 forward arc. Ports the Phase 52 generic
-command-wrapper sandbox from `[[tool_process]]` to
-`[[mcp_server]]`, closing the THREAT_MODEL.md §5.2 gap the
-post-Phase-54 project review surfaced. Parallel `SandboxConfig`
-in `aivyx-mcp` matching the `aivyx-tool` pattern; no new dep
-edges between adapter crates.
+**Frozen — see [PHASE_55.md](PHASE_55.md).** First post-Chapter-A
+phase. Ported the Phase 52 generic command-wrapper sandbox from
+`[[tool_process]]` to `[[mcp_server]]`, closing THREAT_MODEL.md
+§5.2. New `aivyx-mcp::SandboxConfig` parallel to
+`aivyx-tool::SandboxConfig` (no new dep edges between adapter
+crates). `StdioTransport::start` gained an `Option<&SandboxConfig>`
+parameter; `McpServerBridge::start_with_sandbox` is the new
+entry point. `[mcp_server.sandbox]` TOML schema parallel to
+`[tool_process.sandbox]`. Loader rejects sandbox declared on
+SSE transport (no local child to wrap). 992 Rust tests (+8),
+zero clippy. All three streak predictions correct (DESIGN.md
+→ 2, PRODUCT.md → 6, lib.rs → 4). Demonstrates the post-
+Chapter-A posture: operator-feedback-shaped trigger +
+proven-pattern port + small task list.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
