@@ -210,7 +210,8 @@ frozen. Update `docs/README.md`. The Phase 55 trigger
 
 | Task | Commit | Notes |
 |---|---|---|
-| 1 | _this commit_ | scaffold |
+| 1 | `eeaaad3` | scaffold |
+| 2 | _this commit_ | aivyx-mcp::SandboxConfig + StdioTransport wrapper — 986 tests |
 
 ## Deferrals carried into the phase
 

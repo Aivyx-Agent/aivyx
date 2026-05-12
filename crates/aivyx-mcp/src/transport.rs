@@ -40,12 +40,30 @@ impl McpServerBridge {
 
     /// Convenience: spawn a child process over stdio and initialize.
     /// This is the Phase 23 entry point preserved for backwards compat.
+    ///
+    /// Phase 55: `sandbox` is `None` here for backwards
+    /// compatibility — callers that want sandboxing should use
+    /// [`Self::start_with_sandbox`].
     pub async fn start(
         command: &str,
         args: &[&str],
         server_name: impl Into<String>,
     ) -> Result<Self, String> {
-        let stdio = crate::stdio::StdioTransport::start(command, args).await?;
+        Self::start_with_sandbox(command, args, None, server_name).await
+    }
+
+    /// Phase 55 — spawn an MCP server through an optional command
+    /// wrapper. When `sandbox` is `Some`, the bridge spawns
+    /// `wrapper wrapper_args... command command_args...` instead of
+    /// the bare command. See `docs/TOOL_SDK.md` §9 for worked
+    /// examples.
+    pub async fn start_with_sandbox(
+        command: &str,
+        args: &[&str],
+        sandbox: Option<&crate::stdio::SandboxConfig>,
+        server_name: impl Into<String>,
+    ) -> Result<Self, String> {
+        let stdio = crate::stdio::StdioTransport::start(command, args, sandbox).await?;
         Self::from_transport(Arc::new(stdio), server_name).await
     }
 

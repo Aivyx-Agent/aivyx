@@ -14,6 +14,6 @@ mod transport;
 
 pub use proxy::McpToolProxy;
 pub use sse::SseTransport;
-pub use stdio::StdioTransport;
+pub use stdio::{SandboxConfig, StdioTransport};
 pub use transport::McpServerBridge;
 pub use transport_trait::McpTransport;
