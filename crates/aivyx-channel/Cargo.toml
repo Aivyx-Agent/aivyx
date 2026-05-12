@@ -118,6 +118,11 @@ http-body-util = { workspace = true }
 # on Windows). First genuinely new Cargo.lock entry since Phase 26's
 # `cron` crate.
 notify = { workspace = true }
+# Phase 58 — `aivyx profile edit` uses `toml_edit` for surgical
+# updates to the `[profile]` section in `aivyx.toml` (preserves
+# comments, whitespace, and unrelated sections). Q2(a) at Phase 58
+# sign-off.
+toml_edit = "0.22"
 # Phase 36 — Ollama model management tools use reqwest directly for
 # Ollama REST API calls (GET /api/tags, POST /api/show, POST /api/pull).
 # Already a workspace dep and transitive via aivyx-core.

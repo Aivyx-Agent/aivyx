@@ -41,11 +41,225 @@ pub fn run_profile_show() -> Result<(), String> {
     Ok(())
 }
 
-/// Entry point for `aivyx profile edit`. Stub for Task 2 — the real
-/// implementation lands in Task 3 (toml_edit-driven surgical
-/// `[profile]` section edit, `$EDITOR` invocation, restart reminder).
+/// Entry point for `aivyx profile edit`. Phase 58 Task 3 — Q2(a)
+/// resolution.
+///
+/// The flow:
+///
+/// 1. Read `aivyx.toml` (or initialize a synthesized empty document
+///    if the file does not exist).
+/// 2. Extract the current `[profile]` section as a standalone TOML
+///    chunk and write it to a tempfile.
+/// 3. Spawn `$EDITOR` (or `vi` if unset) against the tempfile and
+///    wait for the operator to save and exit.
+/// 4. Parse the edited content; reject TOML syntax errors with a
+///    clear message pointing at the tempfile so the operator can
+///    retry without losing their edits.
+/// 5. Splice the new `[profile]` table back into the original
+///    `aivyx.toml` document via `toml_edit` — preserving every
+///    other section, every comment, and the original whitespace.
+/// 6. Write the merged document back to disk with `0600` permissions.
+/// 7. Print a restart reminder per Q5(a) — Profile is load-time-only,
+///    same as role configs.
 pub fn run_profile_edit() -> Result<(), String> {
-    Err("`aivyx profile edit` is not yet wired — Task 3.".to_string())
+    let toml_path = Path::new(PROFILE_TOML_PATH);
+
+    // Read the existing aivyx.toml (or start with an empty document
+    // if the operator has not run `aivyx init` yet).
+    let original_text = if toml_path.exists() {
+        std::fs::read_to_string(toml_path)
+            .map_err(|e| format!("failed to read {}: {e}", toml_path.display()))?
+    } else {
+        String::new()
+    };
+
+    // Parse the original document, extract the current [profile]
+    // section as a starter chunk for the editor.
+    let current_profile_text = extract_profile_section_for_edit(&original_text)
+        .map_err(|e| {
+            format!(
+                "failed to parse {} as TOML: {e}\n\
+                 The existing config file is malformed. Fix it manually \
+                 before running `aivyx profile edit`.",
+                toml_path.display()
+            )
+        })?;
+
+    let edited_text = open_in_editor(&current_profile_text)?;
+
+    let merged_text = merge_edited_profile_into_aivyx_toml(&original_text, &edited_text)?;
+
+    write_aivyx_toml(toml_path, &merged_text)?;
+
+    eprintln!();
+    eprintln!("Profile updated in {}.", toml_path.display());
+    eprintln!(
+        "Restart the daemon for changes to take effect: \
+         `aivyx daemon stop && aivyx`."
+    );
+
+    Ok(())
+}
+
+/// Parse `original_text` (the existing `aivyx.toml`) and return the
+/// `[profile]` section as a standalone TOML document the operator can
+/// edit in a tempfile. If the original document has no `[profile]`
+/// section, returns [`default_profile_template`] so the operator
+/// sees the full shape pre-filled.
+///
+/// Pure function — extracted from `run_profile_edit` so tests can
+/// exercise the parsing logic without spawning an editor.
+fn extract_profile_section_for_edit(original_text: &str) -> Result<String, String> {
+    let document: toml_edit::DocumentMut = original_text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| e.to_string())?;
+    Ok(match document.get("profile") {
+        Some(item) => {
+            let mut doc = toml_edit::DocumentMut::new();
+            doc.insert("profile", item.clone());
+            doc.to_string()
+        }
+        None => default_profile_template(),
+    })
+}
+
+/// Splice the operator's edited `[profile]` section back into
+/// `original_text`, preserving every other section and every comment
+/// in the original document.
+///
+/// Pure function — extracted from `run_profile_edit` so tests can
+/// exercise the merge invariants (other sections preserved, profile
+/// replaced, comments retained, etc.) without filesystem or editor
+/// I/O. The `edited_text` argument must contain a `[profile]` table.
+fn merge_edited_profile_into_aivyx_toml(
+    original_text: &str,
+    edited_text: &str,
+) -> Result<String, String> {
+    let mut document: toml_edit::DocumentMut = original_text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| format!("original config is malformed: {e}"))?;
+
+    let edited_document: toml_edit::DocumentMut =
+        edited_text.parse().map_err(|e: toml_edit::TomlError| {
+            format!(
+                "edited Profile is not valid TOML: {e}\n\
+                 Your edits have not been applied. Re-run `aivyx profile \
+                 edit` to try again."
+            )
+        })?;
+
+    let new_profile_table = edited_document
+        .as_table()
+        .get("profile")
+        .ok_or_else(|| {
+            "edited Profile is missing the `[profile]` header. \
+             Re-run `aivyx profile edit` and keep the header line."
+                .to_string()
+        })?
+        .clone();
+
+    document.insert("profile", new_profile_table);
+    Ok(document.to_string())
+}
+
+/// Synthesize a starter `[profile]` template when the existing
+/// `aivyx.toml` carries no `[profile]` section. Includes one
+/// commented placeholder per category so the operator sees the
+/// full shape without typing it from scratch.
+fn default_profile_template() -> String {
+    "[profile]\n\
+     # Operator-declared identity layer per PRODUCT.md P13.\n\
+     # Each field is optional; remove the lines you do not want\n\
+     # to declare. Restart the daemon for changes to take effect.\n\
+     \n\
+     # assistant_name = \"Aivyx\"\n\
+     # operator_profile = \"\"\n\
+     # communication_style = \"\"\n\
+     # primary_use_cases = []\n\
+     # behavioral_preferences = []\n\
+     # behavioral_constraints = []\n"
+        .to_string()
+}
+
+/// Open `initial_contents` in the operator's `$EDITOR` (falling back
+/// to `vi`) and return whatever the editor writes back.
+///
+/// The tempfile lives in the OS temp directory and is removed when
+/// the function returns regardless of outcome. The tempfile path
+/// surfaces in error messages so the operator can recover edits
+/// from `/tmp` if the post-edit parse fails.
+fn open_in_editor(initial_contents: &str) -> Result<String, String> {
+    use std::io::Write;
+
+    let editor = std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "vi".to_string());
+
+    // Use a unique-enough filename inside the OS temp dir. We do not
+    // depend on the `tempfile` crate to keep the dep count low; a
+    // process-pid-based name is sufficient since the file is deleted
+    // before the function returns.
+    let tempdir = std::env::temp_dir();
+    let pid = std::process::id();
+    let temp_path = tempdir.join(format!("aivyx-profile-edit-{pid}.toml"));
+
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| format!("failed to create tempfile {}: {e}", temp_path.display()))?;
+    file.write_all(initial_contents.as_bytes())
+        .map_err(|e| format!("failed to write tempfile {}: {e}", temp_path.display()))?;
+    drop(file);
+
+    // Spawn the editor. We deliberately inherit stdin/stdout/stderr
+    // so interactive editors (vim, nano, emacs, etc.) work normally.
+    let status = std::process::Command::new(&editor)
+        .arg(&temp_path)
+        .status()
+        .map_err(|e| {
+            // Best-effort cleanup before returning the error.
+            let _ = std::fs::remove_file(&temp_path);
+            format!(
+                "failed to launch editor `{editor}`: {e}\n\
+                 Set the `EDITOR` environment variable to a valid \
+                 editor command and retry."
+            )
+        })?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!(
+            "editor `{editor}` exited with non-zero status: {status}. \
+             Edits not applied."
+        ));
+    }
+
+    let edited = std::fs::read_to_string(&temp_path).map_err(|e| {
+        format!(
+            "failed to read edited tempfile {}: {e}",
+            temp_path.display()
+        )
+    })?;
+
+    // Best-effort cleanup of the tempfile. Failure to remove is not
+    // fatal — it just leaves a stray file in /tmp.
+    let _ = std::fs::remove_file(&temp_path);
+
+    Ok(edited)
+}
+
+/// Write the merged TOML back to `aivyx.toml` with `0600` permissions
+/// on Unix. Mirrors the init wizard's `write_config` pattern.
+fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
+    std::fs::write(path, contents)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms).map_err(|e| {
+            format!("failed to set permissions on {}: {e}", path.display())
+        })?;
+    }
+
+    Ok(())
 }
 
 /// Load `AivyxConfig` with relaxed validation. The Profile-inspection
@@ -206,6 +420,153 @@ mod tests {
         assert!(out.contains("behavioral_constraints:\n    - never auto-commit code"));
 
         assert!(out.contains("Profile injection: ENABLED"));
+    }
+
+    // -------------------------------------------------------------
+    // Task 3 — `aivyx profile edit` merge logic tests.
+    // -------------------------------------------------------------
+
+    const ORIGINAL_WITH_PROFILE: &str = "\
+# Generated by `aivyx init`
+
+[agent]
+provider = \"anthropic\"
+model = \"claude-haiku-4-5-20251001\"
+
+[anthropic]
+api_key = \"sk-ant-test\"
+
+[fs]
+root = \"/home/op/aivyx-sandbox\"
+
+[profile]
+assistant_name = \"Codex\"
+primary_use_cases = [\"Rust systems programming\"]
+";
+
+    const ORIGINAL_WITHOUT_PROFILE: &str = "\
+[agent]
+provider = \"ollama\"
+model = \"llama3.2:latest\"
+
+[fs]
+root = \"/home/op/aivyx-sandbox\"
+";
+
+    #[test]
+    fn extract_profile_section_returns_existing_profile_table() {
+        let extracted =
+            extract_profile_section_for_edit(ORIGINAL_WITH_PROFILE).expect("parse");
+        assert!(extracted.contains("[profile]"));
+        assert!(extracted.contains("assistant_name = \"Codex\""));
+        assert!(extracted.contains("primary_use_cases = [\"Rust systems programming\"]"));
+        // The standalone chunk must NOT carry unrelated sections.
+        assert!(!extracted.contains("[agent]"));
+        assert!(!extracted.contains("[anthropic]"));
+        assert!(!extracted.contains("api_key"));
+    }
+
+    #[test]
+    fn extract_profile_section_returns_template_when_missing() {
+        let extracted =
+            extract_profile_section_for_edit(ORIGINAL_WITHOUT_PROFILE).expect("parse");
+        assert!(extracted.contains("[profile]"));
+        // The starter template is fully commented out so a no-op
+        // editor save leaves the file with no operator-declared
+        // content — same effect as not running edit at all.
+        assert!(extracted.contains("# assistant_name = \"Aivyx\""));
+        assert!(extracted.contains("# operator_profile = \"\""));
+        assert!(extracted.contains("# communication_style = \"\""));
+        assert!(extracted.contains("# primary_use_cases = []"));
+        assert!(extracted.contains("# behavioral_preferences = []"));
+        assert!(extracted.contains("# behavioral_constraints = []"));
+    }
+
+    #[test]
+    fn extract_profile_section_rejects_malformed_toml() {
+        let err =
+            extract_profile_section_for_edit("[profile\nassistant_name = \"oops\"")
+                .expect_err("malformed TOML must error");
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn merge_replaces_existing_profile_and_preserves_other_sections() {
+        let edited = "\
+[profile]
+assistant_name = \"Mira\"
+operator_profile = \"Senior Rust engineer\"
+behavioral_constraints = [\"never auto-commit\"]
+";
+        let merged =
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
+                .expect("merge");
+
+        // New profile values appear.
+        assert!(merged.contains("assistant_name = \"Mira\""));
+        assert!(merged.contains("operator_profile = \"Senior Rust engineer\""));
+        assert!(merged.contains("behavioral_constraints = [\"never auto-commit\"]"));
+
+        // Old profile values are gone (the section was replaced
+        // wholesale, not merged field-by-field).
+        assert!(!merged.contains("assistant_name = \"Codex\""));
+        assert!(!merged.contains("primary_use_cases = [\"Rust systems programming\"]"));
+
+        // Every other section survives intact.
+        assert!(merged.contains("[agent]"));
+        assert!(merged.contains("provider = \"anthropic\""));
+        assert!(merged.contains("[anthropic]"));
+        assert!(merged.contains("api_key = \"sk-ant-test\""));
+        assert!(merged.contains("[fs]"));
+        assert!(merged.contains("root = \"/home/op/aivyx-sandbox\""));
+
+        // The leading comment from the original document survives.
+        assert!(merged.contains("# Generated by `aivyx init`"));
+    }
+
+    #[test]
+    fn merge_inserts_profile_when_original_has_none() {
+        let edited = "\
+[profile]
+assistant_name = \"Newcomer\"
+";
+        let merged =
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITHOUT_PROFILE, edited)
+                .expect("merge");
+
+        assert!(merged.contains("[profile]"));
+        assert!(merged.contains("assistant_name = \"Newcomer\""));
+        // Original sections survive.
+        assert!(merged.contains("[agent]"));
+        assert!(merged.contains("provider = \"ollama\""));
+        assert!(merged.contains("[fs]"));
+    }
+
+    #[test]
+    fn merge_rejects_edited_text_without_profile_header() {
+        let edited = "\
+# operator deleted the [profile] line by mistake
+assistant_name = \"oops\"
+";
+        let err =
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
+                .expect_err("missing [profile] header must error");
+        assert!(
+            err.contains("missing the `[profile]` header"),
+            "error message must explain: {err}"
+        );
+    }
+
+    #[test]
+    fn merge_rejects_malformed_edited_toml() {
+        let edited = "[profile\nassistant_name = oops";
+        let err =
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
+                .expect_err("malformed edited TOML must error");
+        assert!(
+            err.contains("not valid TOML"),
+            "error message must explain: {err}"
+        );
     }
 
     #[test]

@@ -141,6 +141,54 @@ Tests for the parsing/merge path; manual test for the
 `$EDITOR` interaction (cannot unit-test `$EDITOR` spawning
 cleanly).
 
+## Task 3 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/Cargo.toml` (+5): new `toml_edit =
+  "0.22"` dependency per Q2(a) for surgical `[profile]`
+  section updates. First new workspace crate added since
+  Phase 27's `notify`.
+- `crates/aivyx-channel/src/bin/aivyx_modules/profile.rs`
+  (+264, ~10): replaced the Task 2 stub with the full edit
+  flow — read `aivyx.toml`, extract the current `[profile]`
+  section to a tempfile, spawn `$EDITOR` (or `vi`), parse
+  the edited result, splice back into the original
+  document via `toml_edit::DocumentMut::insert`, write the
+  merged TOML back with 0600 permissions, print a restart
+  reminder per Q5(a). Extracted two pure helpers
+  (`extract_profile_section_for_edit`,
+  `merge_edited_profile_into_aivyx_toml`) so the parsing /
+  merging invariants are unit-testable without spawning
+  an editor. Tempfile lives in `std::env::temp_dir()` with
+  PID-suffixed name; cleaned up on every exit path
+  (success, parse-error, editor-failure). When no
+  `[profile]` section exists in `aivyx.toml`, the edit
+  flow opens a starter template with all six categories
+  commented out so the operator sees the full shape.
+- `Cargo.lock` (+~20 transitive entries from toml_edit).
+
+**Test delta:** +7 unit tests covering extract (existing,
+absent, malformed) and merge (replace + preserve, insert,
+missing-header rejection, malformed-edit rejection).
+Workspace total: 1014 → 1021. Zero clippy warnings.
+
+**Edge cases handled:**
+- `aivyx.toml` does not exist → `original_text = ""`,
+  document parses as empty, editor opens the template.
+- `aivyx.toml` exists without `[profile]` → editor opens
+  template; merge inserts the new section.
+- `aivyx.toml` exists with `[profile]` → editor opens the
+  current section; merge replaces wholesale (no field-
+  by-field merge — preserves operator intent including
+  deletions).
+- Operator removes the `[profile]` header line → merge
+  rejects with a clear retry-instruction message.
+- Operator's edit contains TOML syntax error → merge
+  rejects with the parse error; original file untouched.
+- `$EDITOR` unset → falls back to `vi`.
+- Editor exits non-zero → edit rejected, original file
+  untouched, tempfile cleaned up.
+
 ### Task 4 — `Query::GetProfile` IPC + Web UI Profile pane
 
 Extend `daemon_ipc.rs` with `QueryPayload::GetProfile` and
