@@ -171,7 +171,8 @@ hash. Update `docs/README.md` row. Final commit.
 | 1 | `7c4db55` | 936 |
 | 2 | `230c47f` | 938 |
 | 3 | `276d96d` | 940 |
-| 4 | _this commit_ | 946 |
+| 4 | `d35279f` | 946 |
+| 5 | _this commit_ | 948 |
 
 ## Deferrals carried into the phase
 

@@ -26,7 +26,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 900px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 
@@ -48,7 +48,44 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 #status.connected { background: rgba(158, 206, 106, 0.15); color: var(--green); }
 
-/* Messages */
+/* Tab strip */
+#tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.tab {
+  padding: 10px 20px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab .refresh {
+  display: none;
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.tab.active .refresh { display: inline; }
+.tab .refresh:hover { color: var(--accent); }
+
+/* Panes */
+.pane {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pane.active { display: flex; }
+
+/* Messages (chat pane) */
 #messages {
   flex: 1;
   overflow-y: auto;
@@ -197,6 +234,132 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   background: var(--red);
   display: none;
 }
+
+/* Inspection panes (Missions / Audit / Sessions) */
+.list-pane {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+.list-pane .pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.list-pane .pane-title {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.list-pane .pane-action {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 10px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+}
+.list-pane .pane-action:hover { background: var(--accent-dim); }
+.list-pane .empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px;
+}
+.list-pane .error-banner {
+  background: rgba(247, 118, 142, 0.1);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.list-pane .ok-banner {
+  background: rgba(158, 206, 106, 0.1);
+  border: 1px solid var(--green);
+  color: var(--green);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* Cards used in mission/audit/session lists */
+.row-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.row-card .row-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.row-card .row-id { color: var(--accent); }
+.row-card .row-meta { color: var(--text-dim); }
+.row-card .badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: var(--surface2);
+  color: var(--text-dim);
+}
+.row-card .badge.running { background: rgba(122, 162, 247, 0.15); color: var(--accent); }
+.row-card .badge.pending { background: rgba(224, 175, 104, 0.15); color: var(--yellow); }
+.row-card .badge.completed { background: rgba(158, 206, 106, 0.15); color: var(--green); }
+.row-card .badge.failed,
+.row-card .badge.cancelled { background: rgba(247, 118, 142, 0.15); color: var(--red); }
+.row-card .row-detail {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Audit-specific */
+.audit-row .seq {
+  color: var(--text-dim);
+  min-width: 56px;
+}
+.audit-row .ev-type {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.audit-row .mac {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font);
+}
+.audit-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.audit-controls button {
+  padding: 4px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+}
+.audit-controls button:hover { background: var(--accent-dim); }
+.audit-controls button:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
@@ -207,12 +370,55 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <span id="status">disconnected</span>
   </div>
 
-  <div id="messages"></div>
+  <div id="tabs">
+    <div class="tab active" data-pane="chat">Chat</div>
+    <div class="tab" data-pane="missions">Missions <span class="refresh" data-refresh="missions">↻</span></div>
+    <div class="tab" data-pane="audit">Audit <span class="refresh" data-refresh="audit">↻</span></div>
+    <div class="tab" data-pane="sessions">Sessions <span class="refresh" data-refresh="sessions">↻</span></div>
+  </div>
 
-  <div id="input-area">
-    <textarea id="input" rows="1" placeholder="Send a message..." autofocus></textarea>
-    <button id="send-btn" disabled>Send</button>
-    <button id="cancel-btn">Cancel</button>
+  <!-- Chat pane (Phase 39) -->
+  <div class="pane active" data-pane="chat">
+    <div id="messages"></div>
+    <div id="input-area">
+      <textarea id="input" rows="1" placeholder="Send a message..." autofocus></textarea>
+      <button id="send-btn" disabled>Send</button>
+      <button id="cancel-btn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Missions pane -->
+  <div class="pane list-pane" data-pane="missions">
+    <div class="pane-header">
+      <span class="pane-title">Missions</span>
+      <span class="pane-action" data-refresh="missions">Refresh</span>
+    </div>
+    <div id="missions-body" class="empty">Click Refresh to load.</div>
+  </div>
+
+  <!-- Audit pane -->
+  <div class="pane list-pane" data-pane="audit">
+    <div class="pane-header">
+      <span class="pane-title">Audit chain</span>
+      <span class="pane-action" data-refresh="audit">Refresh</span>
+    </div>
+    <div class="audit-controls">
+      <button id="audit-verify">Verify chain</button>
+      <button id="audit-prev" disabled>← Prev</button>
+      <button id="audit-next" disabled>Next →</button>
+      <span id="audit-range"></span>
+    </div>
+    <div id="audit-verify-banner"></div>
+    <div id="audit-body" class="empty">Click Refresh to load.</div>
+  </div>
+
+  <!-- Sessions pane -->
+  <div class="pane list-pane" data-pane="sessions">
+    <div class="pane-header">
+      <span class="pane-title">Sessions</span>
+      <span class="pane-action" data-refresh="sessions">Refresh</span>
+    </div>
+    <div id="sessions-body" class="empty">Click Refresh to load.</div>
   </div>
 </div>
 
@@ -228,6 +434,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   let sessionId = null;
   let currentAssistantEl = null;
   let turnActive = false;
+
+  // Phase 47 — pending Query correlation table: id -> function(payload)
+  const pendingQueries = new Map();
+  let queryCounter = 0;
+  function nextQueryId(prefix) {
+    queryCounter += 1;
+    return prefix + '-' + queryCounter;
+  }
+
+  // Audit pane pagination state.
+  const AUDIT_PAGE_SIZE = 100;
+  let auditFromSeq = 0;
+  let auditTotalLen = 0;
 
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -296,6 +515,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       case 'ShuttingDown':
         addSystem('Daemon shutting down: ' + msg.reason);
         break;
+
+      case 'QueryResponse': {
+        const cb = pendingQueries.get(msg.id);
+        if (cb) {
+          pendingQueries.delete(msg.id);
+          cb(msg.payload);
+        }
+        break;
+      }
     }
 
     messages.scrollTop = messages.scrollHeight;
@@ -398,7 +626,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     if (card) {
       const outcome = document.createElement('div');
       outcome.className = 'tool-outcome';
-      outcome.textContent = '\u2190 ' + toolName + ' ' + outcomeSummary;
+      outcome.textContent = '← ' + toolName + ' ' + outcomeSummary;
       card.appendChild(outcome);
     }
   }
@@ -499,13 +727,314 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     return d.innerHTML;
   }
 
-  // Auto-resize textarea.
+  // ------------------------------------------------------------------
+  // Phase 47 — Query helpers + pane rendering
+  // ------------------------------------------------------------------
+
+  function sendQuery(prefix, payload, cb) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      cb({ kind: 'QueryError', code: 'disconnected', message: 'not connected' });
+      return;
+    }
+    const id = nextQueryId(prefix);
+    pendingQueries.set(id, cb);
+    ws.send(JSON.stringify({ type: 'Query', id: id, payload: payload }));
+  }
+
+  function formatUnixMs(ms) {
+    try {
+      return new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+    } catch (_) {
+      return String(ms);
+    }
+  }
+
+  function renderError(container, code, message) {
+    container.className = '';
+    container.innerHTML = '';
+    const banner = document.createElement('div');
+    banner.className = 'error-banner';
+    banner.textContent = '[' + code + '] ' + message;
+    container.appendChild(banner);
+  }
+
+  // ---- Missions ----
+
+  function loadMissions() {
+    const body = document.getElementById('missions-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+
+    sendQuery('m', { kind: 'ListMissions' }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'ListMissions') return;
+
+      renderMissions(body, payload.missions);
+    });
+  }
+
+  function renderMissions(body, missions) {
+    body.innerHTML = '';
+    if (!missions || missions.length === 0) {
+      body.className = 'empty';
+      body.textContent = 'No missions.';
+      return;
+    }
+    body.className = '';
+    missions.forEach(function(m) {
+      const card = document.createElement('div');
+      card.className = 'row-card';
+
+      const line = document.createElement('div');
+      line.className = 'row-line';
+      line.innerHTML =
+        '<span class="row-id">' + escapeHtml(m.mission_id) + '</span>' +
+        '<span><span class="badge ' + stateBadgeClass(m.state) + '">' + escapeHtml(m.state) + '</span>' +
+        (m.has_pending_gate ? ' <span class="badge pending">gate</span>' : '') + '</span>';
+
+      const meta = document.createElement('div');
+      meta.className = 'row-meta';
+      meta.style.marginTop = '4px';
+      meta.textContent = m.role_name + ' — ' + m.description;
+
+      const ts = document.createElement('div');
+      ts.className = 'row-meta';
+      ts.style.fontSize = '11px';
+      ts.style.marginTop = '4px';
+      ts.textContent = 'updated ' + formatUnixMs(m.updated_at);
+
+      card.appendChild(line);
+      card.appendChild(meta);
+      card.appendChild(ts);
+
+      // Click loads detail.
+      card.style.cursor = 'pointer';
+      card.onclick = function() {
+        const existing = card.querySelector('.row-detail');
+        if (existing) { existing.remove(); return; }
+        loadMissionDetail(m.mission_id, card);
+      };
+
+      body.appendChild(card);
+    });
+  }
+
+  function stateBadgeClass(state) {
+    const s = state.toLowerCase();
+    if (s === 'running') return 'running';
+    if (s === 'gatepending') return 'pending';
+    if (s === 'completed') return 'completed';
+    if (s === 'failed' || s === 'cancelled') return 'failed';
+    return '';
+  }
+
+  function loadMissionDetail(missionId, card) {
+    sendQuery('mget', { kind: 'GetMission', mission_id: missionId }, function(payload) {
+      if (payload.kind !== 'GetMission') return;
+      if (!payload.mission) return;
+
+      const detail = document.createElement('div');
+      detail.className = 'row-detail';
+      const lines = [];
+      lines.push('created: ' + formatUnixMs(payload.mission.created_at));
+      lines.push('updated: ' + formatUnixMs(payload.mission.updated_at));
+      lines.push('gates: ' + payload.mission.gates.length);
+      payload.mission.gates.forEach(function(g) {
+        lines.push('  · ' + g.gate_id + ' [' + g.state + '] ' + g.reason +
+          (g.scope ? ' (scope: ' + g.scope + ')' : ''));
+      });
+      detail.textContent = lines.join('\n');
+      card.appendChild(detail);
+    });
+  }
+
+  // ---- Audit ----
+
+  function loadAudit(fromSeq) {
+    auditFromSeq = fromSeq;
+    const body = document.getElementById('audit-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    document.getElementById('audit-verify-banner').innerHTML = '';
+
+    sendQuery('a', {
+      kind: 'ListAuditEntries',
+      from_seq: fromSeq,
+      limit: AUDIT_PAGE_SIZE
+    }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'ListAuditEntries') return;
+
+      auditTotalLen = payload.total_len;
+      renderAudit(body, payload.entries, payload.total_len);
+      updateAuditNav();
+    });
+  }
+
+  function renderAudit(body, entries, totalLen) {
+    body.innerHTML = '';
+    if (!entries || entries.length === 0) {
+      body.className = 'empty';
+      body.textContent = 'No audit entries.';
+      return;
+    }
+    body.className = '';
+    entries.forEach(function(e) {
+      const card = document.createElement('div');
+      card.className = 'row-card audit-row';
+
+      const line = document.createElement('div');
+      line.className = 'row-line';
+      line.innerHTML =
+        '<span><span class="seq">#' + e.seq + '</span> ' +
+        '<span class="ev-type">' + escapeHtml(e.event_type) + '</span></span>' +
+        '<span class="row-meta">' + escapeHtml(formatUnixMs(e.appended_at_unix_ms)) + '</span>';
+
+      const mac = document.createElement('div');
+      mac.className = 'mac';
+      mac.style.marginTop = '4px';
+      mac.textContent = 'mac: ' + e.mac_hex.substring(0, 16) + '…';
+
+      card.appendChild(line);
+      card.appendChild(mac);
+
+      // Click toggles event JSON.
+      card.style.cursor = 'pointer';
+      card.onclick = function() {
+        const existing = card.querySelector('.row-detail');
+        if (existing) { existing.remove(); return; }
+        const detail = document.createElement('div');
+        detail.className = 'row-detail';
+        detail.textContent = JSON.stringify(e.event, null, 2);
+        card.appendChild(detail);
+      };
+
+      body.appendChild(card);
+    });
+  }
+
+  function updateAuditNav() {
+    const prev = document.getElementById('audit-prev');
+    const next = document.getElementById('audit-next');
+    const range = document.getElementById('audit-range');
+    prev.disabled = (auditFromSeq === 0);
+    const lastShown = Math.min(auditFromSeq + AUDIT_PAGE_SIZE, auditTotalLen);
+    next.disabled = (lastShown >= auditTotalLen);
+    range.textContent = auditTotalLen === 0
+      ? ''
+      : 'showing ' + auditFromSeq + '..' + (lastShown - 1) + ' of ' + auditTotalLen;
+  }
+
+  function verifyAudit() {
+    sendQuery('av', { kind: 'VerifyAuditChain' }, function(payload) {
+      if (payload.kind !== 'VerifyAuditChain') return;
+      const banner = document.getElementById('audit-verify-banner');
+      banner.innerHTML = '';
+      const el = document.createElement('div');
+      if (payload.ok) {
+        el.className = 'ok-banner';
+        el.textContent = 'Chain verified — ' + payload.entries_verified + ' entries hashed clean';
+      } else {
+        el.className = 'error-banner';
+        el.textContent = 'Chain BROKEN: ' + (payload.error || 'unknown error');
+      }
+      banner.appendChild(el);
+    });
+  }
+
+  // ---- Sessions ----
+
+  function loadSessions() {
+    const body = document.getElementById('sessions-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+
+    sendQuery('s', { kind: 'ListSessions' }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'ListSessions') return;
+
+      body.innerHTML = '';
+      if (!payload.sessions || payload.sessions.length === 0) {
+        body.className = 'empty';
+        body.textContent = 'No active sessions.';
+        return;
+      }
+      body.className = '';
+      payload.sessions.forEach(function(s) {
+        const card = document.createElement('div');
+        card.className = 'row-card';
+        const line = document.createElement('div');
+        line.className = 'row-line';
+        line.innerHTML = '<span class="row-id">' + escapeHtml(s.session_id) + '</span>' +
+                         '<span class="row-meta">active</span>';
+        card.appendChild(line);
+        body.appendChild(card);
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Tab switching
+  // ------------------------------------------------------------------
+
+  function activatePane(name) {
+    document.querySelectorAll('.tab').forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-pane') === name);
+    });
+    document.querySelectorAll('.pane').forEach(function(p) {
+      p.classList.toggle('active', p.getAttribute('data-pane') === name);
+    });
+
+    // Auto-load on activation.
+    if (name === 'missions') loadMissions();
+    else if (name === 'audit') loadAudit(0);
+    else if (name === 'sessions') loadSessions();
+  }
+
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.addEventListener('click', function(ev) {
+      // Don't switch panes when clicking the refresh marker — handled below.
+      if (ev.target.classList && ev.target.classList.contains('refresh')) return;
+      activatePane(tab.getAttribute('data-pane'));
+    });
+  });
+  document.querySelectorAll('[data-refresh]').forEach(function(el) {
+    el.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      const which = el.getAttribute('data-refresh');
+      if (which === 'missions') loadMissions();
+      else if (which === 'audit') loadAudit(0);
+      else if (which === 'sessions') loadSessions();
+    });
+  });
+
+  // Audit pagination buttons.
+  document.getElementById('audit-prev').addEventListener('click', function() {
+    loadAudit(Math.max(0, auditFromSeq - AUDIT_PAGE_SIZE));
+  });
+  document.getElementById('audit-next').addEventListener('click', function() {
+    loadAudit(auditFromSeq + AUDIT_PAGE_SIZE);
+  });
+  document.getElementById('audit-verify').addEventListener('click', verifyAudit);
+
+  // ------------------------------------------------------------------
+  // Auto-resize textarea + key bindings.
+  // ------------------------------------------------------------------
+
   input.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
 
-  // Enter to send, Shift+Enter for newline.
   input.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

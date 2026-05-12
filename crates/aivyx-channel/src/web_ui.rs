@@ -453,4 +453,31 @@ mod tests {
         assert!(!HTML.is_empty(), "embedded HTML must not be empty");
         assert!(HTML.contains("<html"), "embedded HTML must contain <html tag");
     }
+
+    /// Phase 47 — the embedded HTML must wire the four inspection panes
+    /// (chat / missions / audit / sessions) and the Query/QueryResponse
+    /// JS layer. Pure substring smoke tests — they protect against
+    /// accidental gutting of the tab strip during future refactors.
+    #[test]
+    fn html_contains_phase_47_tab_structure() {
+        assert!(HTML.contains("data-pane=\"chat\""));
+        assert!(HTML.contains("data-pane=\"missions\""));
+        assert!(HTML.contains("data-pane=\"audit\""));
+        assert!(HTML.contains("data-pane=\"sessions\""));
+    }
+
+    #[test]
+    fn html_contains_phase_47_query_dispatch() {
+        // The JS layer must build Query frames and handle QueryResponse.
+        assert!(HTML.contains("'Query'"), "must construct Query frames");
+        assert!(
+            HTML.contains("'QueryResponse'"),
+            "must dispatch on QueryResponse type"
+        );
+        // The three query kinds the UI auto-issues on tab activation.
+        assert!(HTML.contains("'ListMissions'"));
+        assert!(HTML.contains("'ListAuditEntries'"));
+        assert!(HTML.contains("'ListSessions'"));
+        assert!(HTML.contains("'VerifyAuditChain'"));
+    }
 }
