@@ -340,30 +340,54 @@ not blocking. If Q5(b) or (c), no deferral.
 
 ## Prediction vs. reality
 
-*(Filled at exit.)*
+- **DESIGN.md** — Predicted: streak **extends to five**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 58 touched zero bytes of DESIGN.md as planned —
+  the surface landed entirely under existing
+  D-deliverables.
+
+- **PRODUCT.md** — Predicted: streak **ends at two**
+  (intentional via the Task 5 Delivery Status refresh).
+  **Reality: correct.** Streak held at 2 through Tasks 1–4
+  (untouched), broke in Task 5 as planned. The streak's
+  purpose (detecting silent drift) is fulfilled —
+  breaking it via the formal Delivery Status refresh is
+  the mechanism working as designed.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to seven**. **Reality: correct.** Hash
+  unchanged:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Phase 58's surface lives in `aivyx-channel` (binary CLI
+  + daemon IPC + Web UI HTML) and `Cargo.toml` (toml_edit
+  dependency); `aivyx-core` stays at its post-Phase-51
+  shape.
 
 ## Exit criteria
 
-*(Filled at exit.)*
-
-- [ ] `aivyx profile show` subcommand wired through
-  `parse_cli_args` + `run` (Task 2).
-- [ ] `aivyx profile edit` subcommand wired (Task 3).
-- [ ] `QueryPayload::GetProfile` +
+- [x] `aivyx profile show` subcommand wired through
+  `parse_cli_args` + `run` — Task 2, commit `d040dc6`.
+- [x] `aivyx profile edit` subcommand wired — Task 3,
+  commit `f239d4e`.
+- [x] `QueryPayload::GetProfile` +
   `QueryResponsePayload::GetProfile` defined and handled
-  (Task 4).
-- [ ] Web UI Profile pane rendering live Profile state
-  (Task 4).
-- [ ] PRODUCT.md Delivery Status refreshed with P13 in
-  Fully Delivered (Task 5).
-- [ ] PRODUCT_ROADMAP + ROADMAP refreshed; Profile
-  milestone closed (Task 6).
-- [ ] All five Q-block questions resolved.
-- [ ] DESIGN.md streak extends to five (untouched).
-- [ ] PRODUCT.md streak ends at two (Task 5 intentional).
-- [ ] Production-core streak extends to seven (untouched).
-- [ ] Test count delta recorded.
-- [ ] Prediction-vs-reality block filled.
+  — Task 4, commit `e694128`.
+- [x] Web UI Profile pane rendering live Profile state —
+  Task 4, commit `e694128`.
+- [x] PRODUCT.md Delivery Status refreshed with P13 in
+  Fully Delivered — Task 5, commit `c896273`.
+- [x] PRODUCT_ROADMAP + ROADMAP refreshed; Profile
+  milestone closed — Task 6, commit `1f3c3b4`.
+- [x] All five Q-block questions resolved (defaults
+  signed off pre-Task 2).
+- [x] DESIGN.md streak extends to five (untouched).
+- [x] PRODUCT.md streak ends at two (Task 5 intentional).
+- [x] Production-core streak extends to seven (untouched).
+- [x] Test count delta: +17 (1006 → 1023 across the
+  workspace), zero clippy warnings. First new workspace
+  crate dep since Phase 27's `notify`.
+- [x] Prediction-vs-reality block filled.
 
 ## Open questions
 
