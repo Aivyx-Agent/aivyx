@@ -239,7 +239,8 @@ deferral #1 first-party unification, plus the ToolEvent relay
 | 1 | `7c6132e` | scaffold |
 | 2 | `f2104b0` | ToolEvent relay + per-call cancellation (Tasks 2 + 3 fused) — 968 tests |
 | 4 | `305a392` | `run_tool_as_subprocess<T: Tool>` harness — 972 tests |
-| 5 | _this commit_ | P12 equivalence proof: `FsReadTool` in-process == subprocess — 973 tests |
+| 5 | `d87842e` | P12 equivalence proof: `FsReadTool` in-process == subprocess — 973 tests |
+| 6 | _this commit_ | Contract updates: TOOL_SDK.md §8.5 + PRODUCT.md P12 → Fully Delivered |
 
 ## Deferrals carried into the phase
 

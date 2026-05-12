@@ -1060,7 +1060,7 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 49 exit, 2026-05-12)
+## Delivery Status (as of Phase 50 exit, 2026-05-12)
 
 A traceability surface mapping each product commitment to its
 implementation state after 49 phases. The commitment text
@@ -1068,11 +1068,12 @@ above is unchanged (except P10's seven→eight amendment) —
 this section records what shipped, what partially shipped,
 and what remains forward.
 
-**As of Phase 49 exit, all twelve product commitments are
-shipped.** The forward-commitment ledger is closed. P12 ships
-as a foundation phase — the third-party tool-process path is
-operational; first-party in-process protocol unification is
-deferred to a future phase (Phase 49 Q5).
+**As of Phase 50 exit, all twelve product commitments are
+fully shipped.** The forward-commitment ledger is closed and
+P12's "extractable without rewriting" clause is now proven by
+the `p12_equivalence.rs` conformance test. Phase 50 also
+closed the two Phase 49 bridge deferrals (`ToolEvent` channel
+relay; per-call targeted cancellation).
 
 ### Fully Delivered
 
@@ -1145,17 +1146,25 @@ deferred to a future phase (Phase 49 Q5).
   posture ("stability deferred until real third-party use").
 
 - **P12 — Tools as Separate Processes Over Daemon IPC.**
-  Phase 49 foundation. `aivyx-tool` crate (12th workspace
-  member, A4 addendum); `ToolProcessBridge` spawns child
-  processes via tokio with `kill_on_drop`; `ToolProxy`
-  implements `aivyx_core::Tool` over a length-prefixed JSON
-  protocol on the child's stdin/stdout; operator declares
-  tools in `[[tool_process]]`; scope binding at handshake
-  with operator-narrowing overrides; `docs/TOOL_SDK.md` is
-  the v0 contract; `examples/python-tool/` ships the
-  worked wordcount reference. **Foundation phase — third-
-  party path complete; first-party in-process protocol
-  unification deferred to a future phase per Phase 49 Q5.**
+  Phase 49 foundation + Phase 50 closeout. `aivyx-tool` crate
+  (12th workspace member, A4 addendum); `ToolProcessBridge`
+  spawns child processes via tokio with `kill_on_drop`;
+  `ToolProxy` implements `aivyx_core::Tool` over a length-
+  prefixed JSON protocol on the child's stdin/stdout;
+  operator declares tools in `[[tool_process]]`; scope binding
+  at handshake with operator-narrowing overrides;
+  `docs/TOOL_SDK.md` is the v0 contract;
+  `examples/python-tool/` ships the worked wordcount
+  reference. Phase 50 closed the "extractable without
+  rewriting" clause: `run_tool_as_subprocess<T: Tool>`
+  wraps any `aivyx_core::Tool` impl as a subprocess,
+  proven equivalent to in-process execute() by the
+  `p12_equivalence.rs` conformance test against
+  `FsReadTool`. Phase 50 also wired the two foundation-
+  phase deferrals: `ToolEvent` frames now relay onto the
+  channel (`Status`/`OutputChunk` → `StreamEvent`), and
+  cancellation is targeted via `CancelInvocation { call_id }`
+  using a caller-supplied id. **Fully delivered.**
 
 ### Partially Delivered
 

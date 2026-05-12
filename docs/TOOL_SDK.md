@@ -344,6 +344,53 @@ The following are **not** stable:
 
 ---
 
+## 8.5 First-party tools speak this protocol too
+
+> *Section added at Phase 50 exit.*
+
+The Phase 49 foundation shipped the third-party path; Phase 50
+closed the symmetry by proving that any in-tree `Tool` impl can
+be served out-of-process **without any rewriting**.
+
+The proof lives in [`aivyx-tool::run_tool_as_subprocess`](../crates/aivyx-tool/src/harness.rs):
+
+```rust
+pub async fn run_tool_as_subprocess<T: Tool + 'static>(
+    tool: T,
+    tool_process_name: impl Into<String>,
+) -> Result<(), HarnessError>;
+```
+
+Pass any `aivyx_core::Tool` impl — including the eight P10
+substrate tools (`fs.read`, `fs.write`, `memory.*`, `shell.exec`,
+`web.fetch`, `web.post`) — and you get a process binary that
+speaks the wire protocol byte-for-byte equivalently to a
+hand-written tool process.
+
+The synthesized child-side `ToolContext`:
+
+| Field | What the harness provides |
+|---|---|
+| `channel` | A small `ChannelContext` impl that captures `StreamEvent::{Status, ToolOutput}` and relays them as `ToolEvent` frames on stdout. The parent's `ToolProxy` translates them back into channel events. |
+| `audit` | `NullAuditHook`. The parent records `AuditEvent::ToolCall` when it sees the terminal `ToolResult`. The child has no audit chain; double-recording would break the one-row-per-call audit invariant. |
+| `cancellation` | A per-call `CancellationToken`. `CancelInvocation { call_id }` fires it. |
+| `agent_id` / `session_id` / `turn_id` | Fresh per-call IDs. The parent's `turn_id` is the audit-bearing one; the child's is internal. |
+
+The canonical proof of equivalence is
+[`tests/p12_equivalence.rs`](../crates/aivyx-tool/tests/p12_equivalence.rs):
+the same `FsReadTool` invocation through in-process
+`execute(...)` and through the harness-wrapped subprocess
+produces byte-identical `ToolOutcome::Completed { output,
+verified }`.
+
+**Implication for first-party operators.** First-party tools
+continue to run in-process by default — the latency cost of the
+stdio hop is unnecessary when the daemon owns the tool's
+implementation. The harness exists to make the **option**
+available without restructuring: any substrate tool can be
+extracted into a separate process for fault isolation, sandbox
+hardening, or to test the protocol equivalence end-to-end.
+
 ## 9. Where to look next
 
 - The Python reference: `examples/python-tool/`
