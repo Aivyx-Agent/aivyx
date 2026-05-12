@@ -334,28 +334,52 @@ rolling-backlog item.
 
 ## Prediction vs. reality
 
-*(Filled at exit.)*
+- **DESIGN.md** — Predicted: streak **extends to four**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 57 touched zero bytes of DESIGN.md as planned; the
+  substrate landed entirely under existing D-deliverables.
+
+- **PRODUCT.md** — Predicted: streak **begins at one**
+  (untouched after the Phase 56 amendment break).
+  **Reality: correct.** Hash unchanged:
+  `0218f47c3beeae310a24eb14d005519996d560f030eafc6abf136aed41f80bb6`.
+  P13 was added by amendment A9 in Phase 56; Phase 57's
+  implementation requires no further PRODUCT.md edits.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to six** (conditional on Q2(a)
+  resolution). **Reality: correct.** Q2 resolved (a) at
+  sign-off (`Profile` lives in `aivyx-config`). Hash
+  unchanged:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  The Profile substrate touches `aivyx-config` and
+  `aivyx-channel` only; `aivyx-core` stays at its post-
+  Phase-51 shape.
 
 ## Exit criteria
 
-*(Filled at exit.)*
-
-- [ ] `Profile` struct + loader integration in
-  `aivyx-config` (Task 2).
-- [ ] `assemble_session_prompt` helper + binary wiring
-  composing Profile alongside role envelope (Task 3).
-- [ ] Init wizard extended with Profile bootstrap per Q4
-  resolution (Task 4).
-- [ ] Default Profile fallback synthesized when section is
-  absent (Task 5).
-- [ ] PRODUCT_ROADMAP + ROADMAP refreshed (Task 6).
-- [ ] All six Q-block questions resolved.
-- [ ] DESIGN.md streak extends to four (untouched).
-- [ ] PRODUCT.md streak begins at one (untouched).
-- [ ] Production-core streak prediction per Q2 resolution
-  (extends to six if Q2(a) holds).
-- [ ] Test count delta recorded.
-- [ ] Prediction-vs-reality block filled.
+- [x] `Profile` struct + loader integration in
+  `aivyx-config` — Task 2, commit `5ab83a7`.
+- [x] `assemble_session_prompt` helper + binary wiring
+  composing Profile alongside role envelope — Task 3,
+  commit `5da911c`.
+- [x] Init wizard extended with Profile bootstrap per Q4(c)
+  — Task 4, commit `681f71f`.
+- [x] Default Profile fallback synthesized when section is
+  absent — landed in Task 2; banner row surfacing
+  provenance in Task 5, commit `457f1a5`.
+- [x] PRODUCT_ROADMAP + ROADMAP refreshed — Task 6, commit
+  `8c533d5`.
+- [x] All six Q-block questions resolved (defaults
+  signed off pre-Task 2).
+- [x] DESIGN.md streak extends to four (untouched).
+- [x] PRODUCT.md streak begins at one (untouched).
+- [x] Production-core streak extends to six (untouched per
+  Q2(a)).
+- [x] Test count delta: +14 (992 → 1006 across workspace),
+  zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
 
 ## Open questions
 
