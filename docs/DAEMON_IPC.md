@@ -197,3 +197,93 @@ future SDK phase.
 |----------|------------|-----------|
 | **Q3** — Wire format | **(a)** Hand-rolled length-prefixed JSON | Debuggability over throughput for the PoC phase. `serde_json` already in tree. Zero new deps. |
 | **Q4** — Daemon lifecycle shape | **(a)** Separate message type, never crosses `StreamEvent` | Preserves production-core streak. Frontend demuxes on `"type"` discriminator. |
+
+---
+
+## Phase 47 addendum — Query/QueryResponse envelope
+
+> *Section added at Phase 54 to document the Phase 47 protocol
+> extension. The Phase 47 changes are additive — any Phase 16
+> frontend that didn't ask Query questions continued to work
+> unchanged.*
+
+Phase 47 added a **read-only inspection-query layer** on top of
+the existing event-stream IPC. The daemon's state — active
+sessions, persisted missions, the audit chain — became
+introspectable from any connected frontend without going
+through the turn loop.
+
+### Wire shape
+
+Two new variants on the existing envelopes:
+
+```rust
+// Frontend → Daemon
+FrontendMessage::Query { id: String, payload: QueryPayload }
+
+// Daemon → Frontend
+DaemonMessage::QueryResponse { id: String, payload: QueryResponsePayload }
+```
+
+`id` is a caller-supplied correlation string. The daemon echoes it
+verbatim in the response so concurrent queries can be
+demultiplexed.
+
+### `QueryPayload` variants
+
+| Variant | Returns | Notes |
+|---|---|---|
+| `ListSessions` | `Vec<SessionSummary>` from in-memory `DaemonState.sessions` | One entry per active connection. |
+| `ListMissions` | `Vec<MissionSummary>` from `KeyDomain::Missions` | Walks the redb scan; cheap at typical operator scales. |
+| `GetMission { mission_id }` | `Option<MissionDetail>` | `None` is not an error — it means the id is absent. |
+| `ListAuditEntries { from_seq, limit }` | `(Vec<AuditEntrySummary>, total_len)` | Server caps `limit` at 500 (Phase 47 Q3). `total_len` lets the frontend show "showing N..M of T." |
+| `VerifyAuditChain` | `{ ok: bool, entries_verified: u64, error: Option<String> }` | Runs `HmacChainLog::verify`. Tamper detection by walking the chain offline. |
+
+### Authorization
+
+**No capability check at the query layer.** The IPC socket is
+`mode 0600` owned by the operator UID; anyone who can `read(2)`
+the socket *is* the operator by definition (P6 +
+`THREAT_MODEL.md` §4.4). Gating queries against `audit.read`
+would only check the operator's own role envelope against their
+own inspection — not the threat model.
+
+This is the **Q2 resolution** from Phase 47's open doc and is
+documented inline at `aivyx-channel::daemon_server::handle_query`.
+
+### Audit entry projection
+
+`AuditEntrySummary` is a flattened view of `SignedEntry`:
+
+```rust
+pub struct AuditEntrySummary {
+    pub seq: u64,
+    pub appended_at_unix_ms: u64,        // SystemTime → millis at the IPC boundary
+    pub event_type: String,              // "ToolCall" / "ScopeDenied" / etc.
+    pub event: serde_json::Value,        // the structured event body
+    pub mac_hex: String,                 // hex-encoded HMAC tag for display
+}
+```
+
+The wire schema deliberately holds the event body as
+`serde_json::Value` so new `AuditEvent` variants land additively
+without bumping the protocol version. Frontends that don't
+recognize an event type can render `event_type` + the raw JSON.
+
+### Frontend perspective
+
+The Web UI (Phase 47) uses these queries to render the Missions,
+Audit, and Sessions tabs. Third-party frontends — including the
+Phase 48 Python channel reference — get the same surface via
+the same wire format. See `CHANNEL_SDK.md` §4 (the message
+envelope cheatsheet has `Query` and `QueryResponse` listed
+alongside the event-stream variants).
+
+### Forward compatibility
+
+New `QueryPayload` and `QueryResponsePayload` variants land
+additively. The recommended posture for frontends is the same
+as for `DaemonMessage` and `StreamEventPayload`: decode by tag,
+skip unknown variants gracefully. The Phase 48
+`examples/python-channel/` reference adapter demonstrates the
+pattern.

@@ -153,7 +153,8 @@ Update `docs/README.md` row.
 |---|---|---|
 | 1 | `ce6f613` | scaffold |
 | 2 | `802050f` | root README.md rewrite (179 lines, full refresh) |
-| 3 | _this commit_ | PRODUCT_ROADMAP.md Delivered refresh + Chapter A entries |
+| 3 | `14068c2` | PRODUCT_ROADMAP.md Delivered refresh + Chapter A entries |
+| 4 | _this commit_ | DAEMON_IPC.md Phase 47 Query/QueryResponse addendum |
 
 ## Deferrals carried into the phase
 
