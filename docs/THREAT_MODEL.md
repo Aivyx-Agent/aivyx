@@ -227,18 +227,51 @@ theirs. The threat model assumes the OS underneath Aivyx is sound.
 
 ### 5.2 A malicious MCP server
 
-Aivyx ships MCP support (Phases 23/24/32). MCP servers run as
-**child processes of the daemon**, under the operator's UID, with
-read access to everything the operator can read. There is **no
-signed-server registry, no sandboxing, no content-level scan of the
-server binary or its descriptor payload**.
+**Status update (Phase 55):** the worst-case posture of this gap
+has narrowed; the residual risk is operator-configurable.
 
-Tool calls into an MCP server are gated by capability scopes
-(`mcp.call:<server>:<tool>`), so an MCP tool that asks for
-`shell.exec` does not silently get it. But the server *process
-itself* runs with operator authority and can read whatever a
-shell command can. Treat each MCP server install with the same
-caution as installing a CLI tool from a stranger's tarball.
+Aivyx ships MCP support (Phases 23/24/32). MCP servers run as
+**child processes of the daemon**, spawned via `aivyx-mcp`'s
+stdio transport, under the operator's UID. There is **no
+signed-server registry, no content-level scan of the server
+binary, no Aivyx-curated allowlist**. The MCP ecosystem's
+discovery surface (GitHub search, blog posts, Slack threads) is
+the npm-style problem the Hermes threat model named explicitly.
+
+**What is defended at the protocol layer.** Tool calls into an
+MCP server are gated by capability scopes
+(`mcp.call:<server>:<tool>`); an MCP tool that asks for
+`shell.exec` does not silently get it. The capability check
+happens server-side in the daemon, before `tools/call` is
+dispatched.
+
+**What is now operator-defended at the process layer.** Phase 55
+added a `[mcp_server.sandbox]` config block parallel to Phase 52's
+`[tool_process.sandbox]`. When an operator declares a wrapper
+(bubblewrap, firejail, Docker, sandbox-exec), the daemon spawns
+`wrapper wrapper_args... mcp-server mcp-args...` instead of the
+bare MCP command. Operators on a hardened deployment can prevent
+a malicious MCP server from reading `~/.ssh/id_rsa` even though
+the agent never asked it to. See `docs/TOOL_SDK.md` §9 for worked
+examples.
+
+**Residual risk that remains in scope:**
+
+- An operator who installs an MCP server *without* configuring
+  `[mcp_server.sandbox]` is in the original threat shape: the
+  server runs with operator OS authority. Phase 55 makes
+  hardening *available*, not *automatic*.
+- A misconfigured wrapper that lets the MCP server retain access
+  to sensitive paths is the operator's responsibility. Aivyx
+  doesn't validate wrapper policies.
+- The SSE transport (remote MCP server over HTTP) is not
+  sandbox-able because there's no local child — its threat
+  profile sits under §5.4 instead.
+
+The operator-facing advice remains unchanged: **treat each MCP
+server install with the same caution as installing a CLI tool
+from a stranger's tarball.** Phase 55 just gives that caution
+teeth.
 
 ### 5.3 Prompt injection beyond capability gating
 

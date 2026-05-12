@@ -566,6 +566,71 @@ Note that the error names `bwrap` — the **wrapper**, not the
 wrapped command. This is deliberate: it tells you exactly which
 binary is missing.
 
+### Sandboxing MCP servers
+
+> *Added at Phase 55. Closes the THREAT_MODEL.md §5.2 sandbox gap
+> that the post-Phase-54 project review surfaced.*
+
+The same wrapper layer applies to `[[mcp_server]]` entries via a
+parallel `[mcp_server.sandbox]` block:
+
+```toml
+[[mcp_server]]
+name = "external-thing"
+command = "/usr/local/bin/external-mcp-server"
+args = ["--whatever"]
+
+[mcp_server.sandbox]
+wrapper = "bwrap"
+args = [
+  "--ro-bind", "/", "/",
+  "--proc", "/proc",
+  "--tmpfs", "/tmp",
+  "--unshare-all",
+  "--die-with-parent",
+  "--",
+]
+```
+
+Effective spawn:
+
+```
+bwrap --ro-bind / / --proc /proc --tmpfs /tmp \
+      --unshare-all --die-with-parent -- \
+      /usr/local/bin/external-mcp-server --whatever
+```
+
+The wrapper contract (stdio passthrough, signal forwarding,
+`exec`-not-fork) is identical to the `[tool_process.sandbox]`
+case described above. Same caveats apply — bind-mounted volumes
+remain readable; the kernel is shared with the host.
+
+**What's different from `[[tool_process]]`:**
+
+- **Stdio-only.** `[mcp_server.sandbox]` only applies to MCP
+  servers with `transport = "stdio"`. Declaring a sandbox on a
+  `transport = "sse"` entry is an operator config error and
+  fails at startup with a clear message — there's no local
+  child process to wrap on an SSE connection (the threat
+  profile sits under THREAT_MODEL §5.4 instead).
+- **MCP-specific protocol semantics.** The MCP server speaks
+  JSON-RPC 2.0 over stdio. The wrapper must not buffer or
+  transform stdio — `bwrap` and `firejail` default to this;
+  `docker run -i` needs the `-i` flag.
+- **No reflection through the Aivyx audit chain at the wrapper
+  layer.** The daemon records every `mcp.call` as a `ToolCall`
+  audit event regardless of whether the server was sandboxed.
+  The sandbox layer hardens the OS-level surface; the audit
+  layer is unchanged.
+
+**Per-MCP-server `kill_on_drop` still applies.** When the
+daemon shuts down, the wrapper process is killed via the same
+`kill_on_drop(true)` mechanism. A well-behaved wrapper
+propagates SIGTERM to the MCP server child; if it doesn't, the
+fallback is SIGKILL on the wrapper, which leaves the wrapped
+process orphaned and reapable by `init`. Worth knowing for
+tools like Docker that may leave detached containers.
+
 ---
 
 ## 10. Where to look next
