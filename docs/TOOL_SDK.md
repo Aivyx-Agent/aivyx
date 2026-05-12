@@ -1,0 +1,361 @@
+# Aivyx Tool SDK
+
+**v0 — subject to change without deprecation policy.** Phase 49
+ships the *contract*; API stability is deferred per
+[`PRODUCT.md` P11](../PRODUCT.md) until the SDK has stabilized in
+real third-party use. Expect minor breaking changes; expect
+integration guarantees to hold.
+
+This document is the third-party contract for building an Aivyx
+**tool process** — a process spawned by the daemon at startup
+that registers one or more tools and answers invocation requests
+during agent turns.
+
+It is the operator-facing sibling of the channel SDK:
+
+| Doc | Audience | What it covers |
+|---|---|---|
+| [`TOOL_SDK.md`](TOOL_SDK.md) (this doc) | Tool authors | What your tool process must do, and what you get for free. |
+| [`CHANNEL_SDK.md`](CHANNEL_SDK.md) | Channel adapter authors | The parallel contract for frontends. |
+| [`DAEMON_IPC.md`](DAEMON_IPC.md) | Protocol implementers | The framing layer (length-prefixed JSON) both SDKs share. |
+| [`THREAT_MODEL.md`](THREAT_MODEL.md) | Operators | The threat model your tool inherits. |
+
+If you're writing a tool process, read this doc first, then
+drop into the Python reference at `examples/python-tool/` for a
+worked example.
+
+---
+
+## 1. What a tool process is
+
+A tool process is a long-running OS process the daemon spawns
+at startup, communicating with it via JSON frames on its
+**stdin and stdout**. The daemon spawns one process per
+`[[tool_process]]` entry in `aivyx.toml`; the process is killed
+on daemon shutdown.
+
+Stdin = daemon-to-tool messages.
+Stdout = tool-to-daemon messages.
+Stderr = free for the tool's own logging (the daemon may
+forward it to its log).
+
+The framing layer is **identical** to the channel SDK
+(`docs/DAEMON_IPC.md`): 4-byte big-endian u32 length prefix,
+then UTF-8 JSON payload. Authors who shipped a Phase 48 channel
+adapter recognize the shape immediately.
+
+---
+
+## 2. Trust model — what your tool inherits
+
+Tool processes inherit OS-level identity from the daemon —
+they run as the same OS user. Per `PRODUCT.md` P12:
+
+> Operators install third-party tools knowing they run under
+> their own OS user. This is the same trust model as installing
+> any other software on a personal box.
+
+What's *different* from a generic subprocess is that:
+
+1. **Capability scope is bound at handshake.** Your tool
+   declares the scope it needs (e.g., `fs.read:/home/.../**`);
+   the operator confirms or attenuates in `[[tool_process]]`;
+   the daemon rejects scope requests outside the active role's
+   envelope. The agent cannot call your tool with authority you
+   didn't declare.
+
+2. **Audit is automatic.** Every invocation is recorded in the
+   HMAC-chained audit log as a `ToolCall` event before your
+   process even sees the request. You do not write audit
+   entries; you cannot bypass them.
+
+3. **Cancellation flows through.** When the operator cancels a
+   turn (`CancelTurn` frame on the channel side), the daemon
+   sends a `CancelInvocation` frame on your tool's stdin for
+   any in-flight `InvokeTool`. Your tool is expected to wind
+   down promptly; the daemon will not wait forever, but a
+   well-behaved tool returns `ToolError { code: "cancelled" }`
+   within a few hundred milliseconds.
+
+---
+
+## 3. Lifecycle
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  1. Daemon spawns the tool process                             │
+│  2. Daemon writes: ToolHello { protocol_version }              │
+│  3. Tool writes:  ToolRegister {                               │
+│                     tool_process_name,                         │
+│                     tools: [ToolDescriptor, ...]               │
+│                   }                                            │
+│     where each ToolDescriptor declares:                        │
+│       name, description, input_schema, required_scope          │
+│                                                                │
+│  4. Daemon validates each declared scope is grantable under    │
+│     at least one active role. Tools whose scope is rejected    │
+│     are logged + excluded from the registry; the rest are      │
+│     registered.                                                │
+│                                                                │
+│  ┌─── per invocation (any tool, any time) ──────────────┐      │
+│  │ Daemon writes: InvokeTool {                          │      │
+│  │   call_id, tool_name, input, turn_id                 │      │
+│  │ }                                                    │      │
+│  │ Tool writes (0..N): ToolEvent {                      │      │
+│  │   call_id, event: <streaming progress>               │      │
+│  │ }                                                    │      │
+│  │ Tool writes (terminal):                              │      │
+│  │   ToolResult { call_id, verified, output }           │      │
+│  │   ↑ or ↓                                             │      │
+│  │   ToolError { call_id, code, message }               │      │
+│  │                                                      │      │
+│  │ Daemon may interject: CancelInvocation { call_id }   │      │
+│  │   → tool must respond with ToolError                 │      │
+│  │     { code: "cancelled" } promptly                   │      │
+│  └──────────────────────────────────────────────────────┘      │
+│                                                                │
+│  5. On daemon shutdown:                                        │
+│     Daemon writes: ToolShutdown                                │
+│     Tool exits gracefully; daemon kills any process that       │
+│     does not exit within a short grace window.                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+A few invariants:
+
+- **`ToolHello` first, unsolicited.** Read it before writing.
+- **`ToolRegister` once.** Re-`ToolRegister` is a protocol error.
+- **`call_id` correlates each invocation.** Two invocations may
+  be in flight simultaneously (the agent may dispatch tool
+  calls in parallel — Amendment A6). Your tool must keep track
+  of `call_id` to send the right `ToolResult` back.
+- **Stdout writes must be framed.** Plain text written to stdout
+  will be interpreted as a length-prefixed frame and probably
+  panic the bridge. Use stderr for free-form logs.
+
+---
+
+## 4. Message envelopes
+
+The Rust authoritative source is `crates/aivyx-tool/src/wire.rs`.
+All frames are length-prefixed JSON per
+[`DAEMON_IPC.md`](DAEMON_IPC.md).
+
+### Daemon → tool
+
+| Variant | When | Fields |
+|---|---|---|
+| `ToolHello` | Once, immediately after spawn | `protocol_version: String` |
+| `InvokeTool` | Per invocation | `call_id: String`, `tool_name: String`, `input: serde_json::Value`, `turn_id: String` |
+| `CancelInvocation` | When operator cancels a turn mid-invocation | `call_id: String` |
+| `ToolShutdown` | On daemon shutdown | _empty_ |
+
+### Tool → daemon
+
+| Variant | When | Fields |
+|---|---|---|
+| `ToolRegister` | Once, after `ToolHello` | `tool_process_name: String`, `tools: Vec<ToolDescriptor>` |
+| `ToolEvent` | Streaming progress (0..N per invocation) | `call_id: String`, `event: ToolEventPayload` |
+| `ToolResult` | Terminal — success | `call_id: String`, `verified: Verification`, `output: serde_json::Value` |
+| `ToolError` | Terminal — failure | `call_id: String`, `code: String`, `message: String` |
+
+### `ToolDescriptor` shape
+
+```text
+{
+  "name": "wordcount",
+  "description": "Count words, chars, lines in a string.",
+  "input_schema": { ... JSON Schema for the input ... },
+  "required_scope": "tool.wordcount"
+}
+```
+
+- `name` must be a non-empty identifier; unique within the tool
+  process.
+- `description` is shown to the LLM. Keep it action-oriented.
+- `input_schema` is JSON Schema. The daemon validates input
+  against it before calling your tool; invalid input never
+  reaches the process.
+- `required_scope` is the capability scope the daemon checks
+  against the active role's envelope before dispatching. New
+  scope bases must be declared in `aivyx-capability`'s
+  `KNOWN_BASES` (or land via a future "open scope namespace"
+  amendment).
+
+### `Verification` semantics
+
+```text
+"Verified"      — your tool queried the system and confirmed the effect.
+"Unverified"    — your tool returned Ok but did not check.
+"NotApplicable" — verification is not meaningful (read-only query).
+```
+
+The verification kind lands in the audit chain. **Don't lie.**
+The point of the enum (per DESIGN.md D3) is that tool authors
+think about verification at the type level.
+
+### `ToolEventPayload`
+
+```text
+{ "kind": "Status",       "status": "indexing..." }
+{ "kind": "OutputChunk",  "chunk": "partial output..." }
+{ "kind": "Log",          "level": "warn", "message": "..." }
+```
+
+Streaming progress for long-running tools. The agent's render
+layer surfaces these to the operator. New variants may land;
+treat unknown kinds as "ignore" (see § 8).
+
+---
+
+## 5. What you get for free
+
+The daemon does *not* trust your tool process beyond its
+declared scope. Every invocation is still:
+
+1. **Scope-checked at handshake.** Tools that declare scopes
+   outside the active role's envelope are rejected at startup
+   — they do not appear in the agent's registry. The
+   tool process keeps running (in case the rejection was a
+   typo and the operator restarts with corrected config); it
+   just receives no invocations.
+
+2. **Audited.** `ToolCall { tool_id, scope_used, input_hash,
+   outcome, duration }` lands in the HMAC chain before your
+   process exits the invocation. There is no path that
+   bypasses audit.
+
+3. **Cancellable.** A `CancelInvocation` frame propagates the
+   turn-loop cancellation signal to your tool. Cancellation is
+   cooperative — the daemon expects you to respond promptly,
+   not synchronously kill in-flight work.
+
+4. **Verified-or-not.** Your `ToolResult.verified` field lands
+   directly in the `ToolOutcome::Completed { verified }` the
+   turn loop receives. The audit chain records it.
+
+5. **OS-level isolation.** Your tool runs as a separate
+   process. A crash, OOM, or stuck loop in your tool does not
+   take down the daemon. The daemon may surface a `ToolError {
+   code: "tool_process_dead" }` to the agent and continue.
+
+You **do not** need to:
+
+- implement a scope check (the daemon does it at dispatch time)
+- write audit entries
+- track turn IDs (you receive them; you don't construct them)
+- maintain capability sets
+- worry about input schema validation (the daemon does it
+  before your tool sees the input)
+
+---
+
+## 6. Capability scope declaration and operator override
+
+The tool declares `required_scope` per tool in `ToolRegister`.
+The operator's `aivyx.toml` may override:
+
+```toml
+[[tool_process]]
+name = "wordcount"
+command = "python3"
+args = ["/path/to/examples/python-tool/tool.py"]
+
+# Optional per-tool scope overrides.
+# Operator can only narrow, never widen.
+[tool_process.scope_overrides]
+wordcount = "tool.wordcount:read-only"  # tighter than the tool's declared "tool.wordcount"
+```
+
+**Narrowing rules:**
+- Operator overrides must be `is_granted_by(declared)` — i.e.,
+  strictly attenuated.
+- The daemon checks the *override-or-declared* scope against the
+  active role's envelope.
+- Tools whose effective scope is not granted are silently
+  excluded from the agent's tool registry. The daemon logs the
+  rejection.
+
+The narrowing rule is the integration guarantee that makes
+operator-side scope confinement meaningful — a malicious tool
+declaring overbroad scopes cannot trick the operator into
+granting them, because the operator's config is the floor.
+
+---
+
+## 7. Integration guarantees (committed) vs API surface (v0)
+
+Phase 49 commits to these properties — they hold across phase
+boundaries:
+
+| Property | Committed |
+|---|---|
+| Tool processes run as the operator's OS user | ✓ |
+| Capability scope checked at handshake against the role envelope | ✓ |
+| Capability scope checked at every dispatch | ✓ |
+| Every `ToolCall` recorded in the HMAC-chained audit log | ✓ |
+| `CancelInvocation` propagated for the active turn's cancellation | ✓ |
+| Tool process killed on daemon shutdown | ✓ |
+| One-tool-process-per-config-entry, spawn-once | ✓ |
+| `Verification` semantics surfaced verbatim in audit | ✓ |
+
+These properties are **stable** in the sense that a tool
+written against them today will continue to receive them in
+future phases. If a property weakens, that's an amendment.
+
+The following are **not** stable:
+
+| Surface | Why not |
+|---|---|
+| `ToolEventPayload` variants | New streaming variants may land. |
+| `ToolDescriptor` fields | May gain `#[serde(default)]` fields. |
+| `ToolError.code` values | New codes may land. Treat unknown codes as "failed for some reason." |
+| Per-tool `scope_overrides` config schema | May gain richer attenuation expressions. |
+| Wire schema for new daemon-to-tool variants | New variants may land; treat unknown ones as "ignore + continue." |
+
+---
+
+## 8. Common pitfalls
+
+- **Plain text on stdout.** Anything not framed is a protocol
+  error. Use stderr for logs.
+
+- **Forgetting `call_id`.** Two invocations can be in flight at
+  once. Your `ToolResult` must echo the `call_id` of the
+  request you're responding to.
+
+- **Crashing the process on unknown variants.** New variants
+  land in every phase. Build your decoder to skip unknown
+  `type` / `kind` values; do not error.
+
+- **Sending `ToolEvent` after `ToolResult`.** Once you've sent
+  a terminal frame for a `call_id`, that invocation is done.
+  Further frames for that `call_id` are ignored at best,
+  protocol errors at worst.
+
+- **Holding state across invocations.** Your process is long-
+  lived, but the agent treats each `InvokeTool` as independent
+  unless the tool's contract says otherwise. Per-process
+  caches are fine; cross-turn state is your responsibility.
+
+- **Slow shutdown.** When you receive `ToolShutdown`, exit
+  cleanly within a few seconds. The daemon will SIGKILL after
+  a grace window.
+
+---
+
+## 9. Where to look next
+
+- The Python reference: `examples/python-tool/`
+- The wire types: `crates/aivyx-tool/src/wire.rs`
+- The bridge implementation: `crates/aivyx-tool/src/bridge.rs`
+- The threat model your tool inherits:
+  [`THREAT_MODEL.md`](THREAT_MODEL.md)
+- The framing details: [`DAEMON_IPC.md`](DAEMON_IPC.md)
+- The channel SDK (sibling contract):
+  [`CHANNEL_SDK.md`](CHANNEL_SDK.md)
+
+If you want to verify your tool process is conforming, run the
+`examples/python-tool/tests/` suite against it as a template —
+those tests exercise the protocol-level contract without
+requiring a real daemon.

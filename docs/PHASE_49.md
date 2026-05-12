@@ -259,7 +259,10 @@ phase; first-party in-process unification deferred)".
 
 ## Ship records
 
-_Filled per task._
+| Task | Commit | Notes |
+|---|---|---|
+| 1 | `addc4eb` | scaffold |
+| 2 | _this commit_ | `docs/TOOL_SDK.md` |
 
 ## Deferrals carried into the phase
 
