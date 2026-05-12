@@ -627,6 +627,84 @@ zero clippy. All three streak predictions correct (DESIGN.md
 Chapter-A posture: operator-feedback-shaped trigger +
 proven-pattern port + small task list.
 
+## Phase 56 — Profile + Persona Amendments (P13 + P14)
+
+**Scheduled** — docs-only phase, same shape as Phase 22 (the
+contract-refresh precedent). Files two PRODUCT.md amendments:
+**P13 — Assistant Profile** (operator-declared static
+identity layer: name, operator_profile, communication_style,
+primary_use_cases, preferences, constraints) and **P14 —
+Persona** (reflection-written dynamic identity layer:
+seed_pointer to Profile, learned_context,
+communication_adaptations, character_traits,
+relationship_milestones, delta_log). Updates the PRODUCT.md
+pitch from "personal autonomous agent platform" to the
+operator's vision statement
+("self-learning, self-improving AI-personal assistant with
+a user-defined Profile and Persona based on the end-user
+use-case"). Adds Forward milestones to PRODUCT_ROADMAP.md.
+Adds Phase 57–60 entries to ROADMAP.md (this commit
+provides the entries themselves). Zero code changes. Expected
+streak break: PRODUCT.md streak ends by amendment (same
+precedent as Phase 22). DESIGN.md and lib.rs streaks should
+hold.
+
+## Phase 57 — Profile Foundation
+
+**Scheduled** — first code phase of the Profile + Persona
+arc. Storage shape Q-block (likely a new `KeyDomain::Profile`
+or extension to an existing domain; single-tenant — one
+Profile per Aivyx instance), Profile struct in `aivyx-config`
+or a new substrate location depending on Q-block resolution.
+Extends `aivyx init` interactive wizard (Phase 44) with
+use-case prompts populating Profile fields. Wires Profile
+injection into the system-prompt assembly path at turn
+start, composed alongside (not inside) the role-derived
+envelope description. The injection point is the load-bearing
+design decision — Profile must flavor every role's prompt
+without leaking into the per-role envelope, since Profile is
+identity-layer not capability-layer.
+
+## Phase 58 — Profile Inspection (closes P13)
+
+**Scheduled** — operator-facing inspection surface for
+Profile. `aivyx profile show` / `aivyx profile edit` CLI
+subcommands (read-only show is mechanical;
+edit may launch `$EDITOR` against a serialized form for the
+operator to revise, with reload-on-save). Web UI Profile
+pane mirroring the CLI surface using the existing
+Query/QueryResponse envelope (Phase 47). Closes the
+Assistant Profile milestone. After this phase the operator
+has a fully-shaped static identity layer driving every turn.
+
+## Phase 59 — Persona Foundation
+
+**Scheduled** — first code phase of the Persona half.
+Structured append-only `PersonaDelta` records (HMAC-chained
+like the audit log, possibly sharing the chain or a parallel
+chain — Q-block decision). Extends `reflection.propose`
+(Phase 29) with a new delta category for persona proposals.
+Gate threading reuses the Phase 21 / 28–30 mission-gate
+machinery — operator approves persona deltas the same way
+they approve missions today. Effective-identity assembly at
+turn start composes Profile + accumulated Persona deltas
+into a single voice layer for the system prompt. The
+load-bearing design decision is *delta granularity*: one
+delta per field-edit, one delta per approved-batch, or
+something in between.
+
+## Phase 60 — Persona Visualization (closes P14)
+
+**Scheduled** — closes the Profile + Persona arc. Web UI
+Persona pane visualizing the delta log over time (timeline
+view of how the assistant's voice has evolved). Possibly
+identity export/import (operator can back up or transfer
+their assistant's Profile + Persona — a deferred decision,
+since import re-binds the HMAC chain). After this phase the
+project sits at: every PRODUCT.md commitment (P1–P14)
+delivered, identity-layer fully shaped, operator-feedback
+posture re-established.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

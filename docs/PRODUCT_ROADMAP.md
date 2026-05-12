@@ -486,23 +486,151 @@ Nine storage domains. +30 tests (660→690). See
 **Status: G5 — Autonomous and Scheduled Execution is now
 fully delivered** across Phases 26–27.
 
-## Sequencing notes (revised at Phase 54 exit, 2026-05-12)
+## Milestone — Assistant Profile (forward, P13 candidate)
 
-**Every product-shape milestone in this document is now
-delivered.** The forward-commitment ledger closed at Phase 49
-exit (PRODUCT.md P12 foundation), the equivalence proof landed
-at Phase 50, and Chapter A (Phases 50–54) closed Foundation
-Closeout with cleanup, sandboxing, and a final docs sweep.
+**Forward commitment candidate:** PRODUCT.md P13 (to be filed
+as an amendment in Phase 56). **Couples to:** Per-Role
+Envelope (P9), `aivyx init` wizard, system-prompt assembly.
+**Status:** Forward — scheduled Phases 57–58.
+
+The operator's stated vision (post-Phase-55) reframes Aivyx
+from "personal autonomous agent platform" into a
+*self-learning, self-improving AI-personal assistant with a
+user-defined **Profile** and **Persona** based on the
+end-user use-case*. The **Profile** is the operator-declared,
+mostly-static layer: who this specific assistant is for,
+what use cases it serves, how the operator wants it to
+communicate, and the high-level constraints that flavor every
+turn. It is distinct from the *role envelope* (which gates
+capabilities) — Profile shapes the assistant's *identity*
+where roles shape its *authority*.
+
+The expected fields (subject to Phase 57 design):
+
+- `name` — what the operator calls this assistant
+- `operator_profile` — short paragraph about the operator
+  (role, expertise, primary work context). Drives
+  domain-specific language and assumed background knowledge
+- `communication_style` — terse / detailed, formal /
+  casual, with-source-citations / synthesized, etc.
+- `primary_use_cases` — the 1–3 use-case archetypes the
+  assistant is being shaped around (e.g. "Rust systems
+  programming," "personal-finance analysis," "research
+  synthesis")
+- `preferences` — non-capability behavioral preferences
+  ("prefer integration tests over mocks", "always cite
+  sources when summarizing")
+- `constraints` — non-capability behavioral constraints
+  ("never autonomously commit code", "always confirm
+  destructive shell commands")
+
+**Substrate coupling.** Profile injects into the system
+prompt at turn start (assembled alongside the role-derived
+envelope description). The per-role inheritance tree from
+P9 is unchanged — Profile is a peer concept that flavors
+the assistant's voice and judgment across every role.
+`aivyx init` extends with use-case prompts that populate
+Profile fields.
+
+**Expected phases:**
+
+- **Phase 57** — Foundation: storage shape, init-wizard
+  extension, profile-into-system-prompt injection at turn
+  start.
+- **Phase 58** — Inspection: `aivyx profile show` /
+  `aivyx profile edit` CLI; Web UI profile pane. Closes
+  the milestone.
+
+## Milestone — Persona (forward, P14 candidate)
+
+**Forward commitment candidate:** PRODUCT.md P14 (to be filed
+as an amendment in Phase 56). **Couples to:** Profile (P13),
+Reflection Layer (P8), Memory persistence (G3).
+**Status:** Forward — scheduled Phases 59–60.
+
+**Persona** (operator's framing: "Soul") is the dynamic
+counterpart to Profile — the evolving character-layer that
+emerges from accumulated reflection-approved deltas over the
+assistant's lifetime. Where Profile is operator-declared and
+mostly-static, Persona is *reflection-written* and
+*operator-gated*: the assistant proposes refinements to its
+own learned voice via `reflection.propose`, the operator
+approves them through the existing mission-gate machinery,
+and the deltas accumulate into the Persona surface that
+flavors future turns.
+
+**Why "Persona" not "Soul" in contract docs.** The operator's
+vision uses "Soul" as the evocative term; contract docs and
+code use "Persona" for the same concept. Both refer to the
+same evolving identity layer — Persona is the
+contract-document spelling.
+
+The expected fields (subject to Phase 59 design):
+
+- `seed_pointer` — Profile name this Persona is grown from
+  (Profile is the static seed; Persona is what it becomes)
+- `learned_context` — accumulated facts about the operator
+  and their domain that the assistant has internalized
+  (proposed by reflection, gated by operator)
+- `communication_adaptations` — refinements to
+  Profile.communication_style learned over time (e.g.
+  "operator prefers conclusion-first paragraphs", "operator
+  finds three-bullet lists optimal")
+- `character_traits` — emergent voice properties (e.g.
+  "leans toward conservative recommendations on
+  irreversible operations", "preempts ambiguity with
+  clarifying questions")
+- `relationship_milestones` — operator-significant events
+  the assistant references for continuity (the human
+  equivalent of "remember when we…")
+- `delta_log` — the append-only HMAC-chained history of
+  every approved Persona delta (audit-verifiable like the
+  rest of the chain)
+
+**Substrate coupling.** Persona delta proposals extend
+`reflection.propose` with a new delta category; gate
+threading reuses the Phase 21 / 28–30 machinery; the
+effective-identity assembly at turn start composes
+Profile + Persona deltas into the system-prompt voice
+layer.
+
+**Expected phases:**
+
+- **Phase 59** — Foundation: structured append-only deltas,
+  reflection.propose extended with persona-delta category,
+  gate threading, effective-identity assembly at turn start.
+- **Phase 60** — Visualization: Web UI panel showing
+  Persona evolution over time; possibly identity
+  export/import for backup/transfer. Closes the milestone.
+
+## Sequencing notes (revised at Phase 56 sign-off, 2026-05-12)
+
+Through Phase 55, every PRODUCT.md commitment (P1–P12) is
+delivered. Chapter A (Phases 50–54) closed Foundation
+Closeout. Phase 55 demonstrated the post-Chapter-A posture
+by porting the Phase 52 sandbox pattern to `[[mcp_server]]`
+in response to THREAT_MODEL §5.2.
+
+**Forward arc — Profile + Persona (Phases 56–60).** The
+operator's stated vision (self-learning, self-improving
+AI-personal assistant with a user-defined Profile and
+Persona) reframes the project's next phase block. Phase 56
+files the P13 + P14 amendments and updates PRODUCT.md (docs
+only, no code). Phases 57–58 deliver the Profile half.
+Phases 59–60 deliver the Persona half. After Phase 60, the
+project will have a full operator-declared + agent-learned
+identity layer composed against the existing
+substrate.
 
 For the per-phase narrative including Chapter A, see
 [`ROADMAP.md`](ROADMAP.md). For the current implementation
-state of each commitment, see the Delivery Status section in
-[`../PRODUCT.md`](../PRODUCT.md).
+state of each P1–P12 commitment, see the Delivery Status
+section in [`../PRODUCT.md`](../PRODUCT.md).
 
-### Forward sequencing — what's left
+### Other forward work (operator-feedback-shaped)
 
-The roadmap below holds milestones for *product-shape* work.
-With every commitment delivered, future phases work against:
+Beyond the Profile + Persona arc, future phases continue to
+work against:
 
 - **Hardening & operator-facing polish** — items that have not
   yet shown enough pressure to be milestones. Examples:
@@ -512,11 +640,11 @@ With every commitment delivered, future phases work against:
   examples, signed third-party tool registries.
 - **Strategic conversations** — anything that would amend
   DESIGN.md or PRODUCT.md goes through the amendment process
-  before opening a phase. Eight amendments stand as the
-  precedent.
+  before opening a phase. Seven amendments stand as the
+  precedent (Phase 56 will file the eighth and ninth).
 - **Operator feedback loops** — at this point the project
   benefits more from real-world operator use than from
-  speculative forward work.
+  speculative forward work outside the Profile + Persona arc.
 
 ## Delivered
 
