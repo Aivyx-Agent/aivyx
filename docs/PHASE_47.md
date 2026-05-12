@@ -168,7 +168,9 @@ hash. Update `docs/README.md` row. Final commit.
 
 | Task | Commit | Tests after |
 |---|---|---|
-| 1 | _this commit_ | 936 |
+| 1 | `7c4db55` | 936 |
+| 2 | `230c47f` | 938 |
+| 3 | _this commit_ | 940 |
 
 ## Deferrals carried into the phase
 

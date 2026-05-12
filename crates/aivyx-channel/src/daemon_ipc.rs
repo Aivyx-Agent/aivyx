@@ -101,6 +101,12 @@ pub struct IpcAttachment {
 pub enum QueryPayload {
     /// List active session IDs tracked by the daemon.
     ListSessions,
+    /// List all missions persisted under `KeyDomain::Missions`.
+    ListMissions,
+    /// Fetch a single mission by id, including all its gates.
+    GetMission {
+        mission_id: String,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -112,6 +118,15 @@ pub enum QueryResponsePayload {
     /// Response to [`QueryPayload::ListSessions`].
     ListSessions {
         sessions: Vec<SessionSummary>,
+    },
+    /// Response to [`QueryPayload::ListMissions`].
+    ListMissions {
+        missions: Vec<MissionSummary>,
+    },
+    /// Response to [`QueryPayload::GetMission`]. `mission` is `None`
+    /// when the mission id does not exist (not an error).
+    GetMission {
+        mission: Option<MissionDetail>,
     },
     /// The daemon could not answer the query. `code` is a stable
     /// machine-readable label; `message` is human-readable.
@@ -128,6 +143,50 @@ pub enum QueryResponsePayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,
+}
+
+/// Compact mission view for the dashboard list pane. Mirrors the
+/// fields needed for a row in a table; the full record (including
+/// gates) is fetched on demand via
+/// [`QueryPayload::GetMission`].
+///
+/// `state` is the rendered string form of `MissionState`
+/// (`"Created" | "Running" | "GatePending" | "Completed" |
+/// "Failed" | "Cancelled"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionSummary {
+    pub mission_id: String,
+    pub role_name: String,
+    pub description: String,
+    pub state: String,
+    pub has_pending_gate: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Full mission view including gate history. Returned by
+/// [`QueryResponsePayload::GetMission`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionDetail {
+    pub mission_id: String,
+    pub role_name: String,
+    pub description: String,
+    pub state: String,
+    pub gates: Vec<GateSummary>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// One gate within a `MissionDetail`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateSummary {
+    pub gate_id: String,
+    pub reason: String,
+    pub scope: Option<String>,
+    /// `"Pending" | "Approved" | "Rejected"`.
+    pub state: String,
+    pub created_at: u64,
+    pub resolved_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -500,10 +559,20 @@ mod tests {
             FrontendMessage::ProtocolNegotiation {
                 version: "0.1".into(),
             },
-            // Phase 47 — Query variant.
+            // Phase 47 — Query variants.
             FrontendMessage::Query {
                 id: "q-001".into(),
                 payload: QueryPayload::ListSessions,
+            },
+            FrontendMessage::Query {
+                id: "q-002".into(),
+                payload: QueryPayload::ListMissions,
+            },
+            FrontendMessage::Query {
+                id: "q-003".into(),
+                payload: QueryPayload::GetMission {
+                    mission_id: "m-abc".into(),
+                },
             },
         ];
         for msg in cases {
@@ -582,6 +651,45 @@ mod tests {
                 payload: QueryResponsePayload::QueryError {
                     code: "internal".into(),
                     message: "store unavailable".into(),
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-004".into(),
+                payload: QueryResponsePayload::ListMissions {
+                    missions: vec![MissionSummary {
+                        mission_id: "m-1".into(),
+                        role_name: "default".into(),
+                        description: "test".into(),
+                        state: "Running".into(),
+                        has_pending_gate: false,
+                        created_at: 1,
+                        updated_at: 2,
+                    }],
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-005".into(),
+                payload: QueryResponsePayload::GetMission { mission: None },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-006".into(),
+                payload: QueryResponsePayload::GetMission {
+                    mission: Some(MissionDetail {
+                        mission_id: "m-1".into(),
+                        role_name: "default".into(),
+                        description: "test".into(),
+                        state: "GatePending".into(),
+                        gates: vec![GateSummary {
+                            gate_id: "g-1".into(),
+                            reason: "approve please".into(),
+                            scope: Some("shell.exec".into()),
+                            state: "Pending".into(),
+                            created_at: 10,
+                            resolved_at: None,
+                        }],
+                        created_at: 1,
+                        updated_at: 5,
+                    }),
                 },
             },
         ];

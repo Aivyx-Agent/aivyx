@@ -22,8 +22,8 @@ use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
-    FrontendType, QueryPayload, QueryResponsePayload, SessionSummary, StreamEventPayload,
-    PROTOCOL_VERSION,
+    FrontendType, GateSummary, MissionDetail, MissionSummary, QueryPayload, QueryResponsePayload,
+    SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
 };
 use crate::mission;
 
@@ -670,7 +670,8 @@ async fn handle_connection(
                             // Phase 47 — inspection queries. Read-only; no
                             // capability check (IPC socket auth is the
                             // authorization boundary, per Q2).
-                            let response_payload = handle_query(payload, &daemon_state);
+                            let response_payload =
+                                handle_query(payload, &daemon_state, mission_store.as_deref()).await;
                             let resp = DaemonMessage::QueryResponse {
                                 id,
                                 payload: response_payload,
@@ -913,19 +914,22 @@ fn detect_crash_recovery(state_path: &Path) -> Option<DaemonState> {
 // Phase 47 — query dispatch
 // ---------------------------------------------------------------------------
 
-/// Phase 47 — answer a [`QueryPayload`] from the daemon's in-memory state.
+/// Phase 47 — answer a [`QueryPayload`] from the daemon's in-memory state
+/// and persistent stores.
 ///
 /// Read-only by contract. Authorization is enforced at the IPC socket
 /// boundary (mode 0600, operator-owned) — see `PRODUCT.md` P6 and
 /// `docs/THREAT_MODEL.md` §4.4. Per Q2 of the Phase 47 open doc, no
 /// capability check applies at the query layer.
 ///
-/// A poisoned `DaemonState` mutex is reported as `QueryError` rather
-/// than propagated as a panic; the daemon must stay alive even if one
-/// connection's state interaction tripped a panic earlier.
-fn handle_query(
+/// A poisoned `DaemonState` mutex, a missing mission store, or a
+/// storage error are all reported as [`QueryResponsePayload::QueryError`]
+/// rather than propagated as a panic. The daemon must stay alive even
+/// if one connection's state interaction tripped earlier.
+async fn handle_query(
     payload: QueryPayload,
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
+    mission_store: Option<&DomainHandle>,
 ) -> QueryResponsePayload {
     match payload {
         QueryPayload::ListSessions => match daemon_state.lock() {
@@ -942,6 +946,101 @@ fn handle_query(
                 message: "daemon state mutex poisoned".into(),
             },
         },
+        QueryPayload::ListMissions => {
+            let Some(store) = mission_store else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_mission_store".into(),
+                    message: "daemon has no mission store configured".into(),
+                };
+            };
+            match mission::list_missions(store).await {
+                Ok(records) => {
+                    let missions = records
+                        .into_iter()
+                        .map(mission_summary_from_record)
+                        .collect();
+                    QueryResponsePayload::ListMissions { missions }
+                }
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "list_missions_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::GetMission { mission_id } => {
+            let Some(store) = mission_store else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_mission_store".into(),
+                    message: "daemon has no mission store configured".into(),
+                };
+            };
+            match mission::get_mission(store, &mission_id).await {
+                Ok(Some(record)) => QueryResponsePayload::GetMission {
+                    mission: Some(mission_detail_from_record(record)),
+                },
+                Ok(None) => QueryResponsePayload::GetMission { mission: None },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "get_mission_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+    }
+}
+
+fn mission_state_label(state: mission::MissionState) -> &'static str {
+    match state {
+        mission::MissionState::Created => "Created",
+        mission::MissionState::Running => "Running",
+        mission::MissionState::GatePending => "GatePending",
+        mission::MissionState::Completed => "Completed",
+        mission::MissionState::Failed => "Failed",
+        mission::MissionState::Cancelled => "Cancelled",
+    }
+}
+
+fn gate_state_label(state: mission::GateState) -> &'static str {
+    match state {
+        mission::GateState::Pending => "Pending",
+        mission::GateState::Approved => "Approved",
+        mission::GateState::Rejected => "Rejected",
+    }
+}
+
+fn mission_summary_from_record(record: mission::MissionRecord) -> MissionSummary {
+    let has_pending_gate = record.pending_gate().is_some();
+    MissionSummary {
+        mission_id: record.mission_id,
+        role_name: record.role_name,
+        description: record.description,
+        state: mission_state_label(record.state).to_string(),
+        has_pending_gate,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn mission_detail_from_record(record: mission::MissionRecord) -> MissionDetail {
+    let gates = record
+        .gates
+        .into_iter()
+        .map(|g| GateSummary {
+            gate_id: g.gate_id,
+            reason: g.reason,
+            scope: g.scope,
+            state: gate_state_label(g.state).to_string(),
+            created_at: g.created_at,
+            resolved_at: g.resolved_at,
+        })
+        .collect();
+    MissionDetail {
+        mission_id: record.mission_id,
+        role_name: record.role_name,
+        description: record.description,
+        state: mission_state_label(record.state).to_string(),
+        gates,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
     }
 }
 

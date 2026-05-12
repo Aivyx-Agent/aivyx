@@ -22,8 +22,8 @@ use aivyx_capability::CapabilitySet;
 use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
 use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
 use aivyx_channel::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, QueryPayload,
-    QueryResponsePayload, StreamEventPayload,
+    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, MissionDetail,
+    QueryPayload, QueryResponsePayload, StreamEventPayload,
 };
 use aivyx_channel::daemon_ipc::FrontendType;
 use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory, DaemonConfig};
@@ -2075,6 +2075,7 @@ async fn list_sessions_query_round_trips_over_ipc() {
                     QueryResponsePayload::QueryError { code, message } => {
                         panic!("unexpected QueryError ({code}): {message}");
                     }
+                    other => panic!("expected ListSessions, got {other:?}"),
                 }
             }
             Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
@@ -2092,6 +2093,257 @@ async fn list_sessions_query_round_trips_over_ipc() {
         sessions[0].session_id, started_session_id,
         "session_id in response must match the started session"
     );
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 47 Task 3 — Mission queries (ListMissions, GetMission)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mission_queries_round_trip_over_ipc() {
+    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
+    use aivyx_channel::mission::{self, MissionRecord};
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let daemon_socket = socket_path.clone();
+
+    // Seed a mission in a real RedbStorage.
+    let store_path = scratch.path.join("missions.redb");
+    let storage: Arc<dyn Storage> =
+        RedbStorage::open(StorageConfig::new(store_path), MasterKey::from_raw([9u8; 32]))
+            .await
+            .expect("storage must open");
+    let mission_handle = storage.domain(KeyDomain::Missions);
+
+    let mission_id = format!("m-{}", uuid::Uuid::new_v4());
+    let record = MissionRecord::new(
+        mission_id.clone(),
+        "default".into(),
+        "phase-47 query test".into(),
+    );
+    mission::create_mission(&mission_handle, &record)
+        .await
+        .expect("create mission");
+
+    // Spin up the daemon with the seeded mission store.
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let daemon_agent = Arc::clone(&agent);
+    let shutdown = CancellationToken::new();
+    let daemon_shutdown = shutdown.clone();
+
+    let factory: ChannelFactory = Arc::new(move |_| {
+        let ch: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(LocalChannel::new("mq-test", Vec::<u8>::new()));
+        ch
+    });
+
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(DaemonConfig {
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: Some(mission_handle),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+            memory: None,
+            memory_ttl_secs: None,
+        })
+        .await
+        .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Consume DaemonReady.
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    // --- ListMissions ---
+    let q = FrontendMessage::Query {
+        id: "list-1".into(),
+        payload: QueryPayload::ListMissions,
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let (rid, missions) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListMissions { missions } => break (id, missions),
+                    QueryResponsePayload::QueryError { code, message } => {
+                        panic!("unexpected QueryError ({code}): {message}");
+                    }
+                    other => panic!("expected ListMissions, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+
+    assert_eq!(rid, "list-1");
+    assert_eq!(missions.len(), 1, "expected exactly one mission");
+    let summary = &missions[0];
+    assert_eq!(summary.mission_id, mission_id);
+    assert_eq!(summary.role_name, "default");
+    assert_eq!(summary.description, "phase-47 query test");
+    assert_eq!(summary.state, "Created");
+    assert!(!summary.has_pending_gate);
+
+    // --- GetMission (existing) ---
+    let q = FrontendMessage::Query {
+        id: "get-1".into(),
+        payload: QueryPayload::GetMission {
+            mission_id: mission_id.clone(),
+        },
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let (rid, detail): (String, Option<MissionDetail>) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::GetMission { mission } => break (id, mission),
+                    QueryResponsePayload::QueryError { code, message } => {
+                        panic!("unexpected QueryError ({code}): {message}");
+                    }
+                    other => panic!("expected GetMission, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+
+    assert_eq!(rid, "get-1");
+    let detail = detail.expect("mission must be Some(_)");
+    assert_eq!(detail.mission_id, mission_id);
+    assert_eq!(detail.state, "Created");
+    assert!(detail.gates.is_empty());
+
+    // --- GetMission (missing) ---
+    let q = FrontendMessage::Query {
+        id: "get-2".into(),
+        payload: QueryPayload::GetMission {
+            mission_id: "does-not-exist".into(),
+        },
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let (rid, detail): (String, Option<MissionDetail>) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::GetMission { mission } => break (id, mission),
+                    other => panic!("expected GetMission, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert_eq!(rid, "get-2");
+    assert!(detail.is_none(), "missing mission must be None, not error");
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[tokio::test]
+async fn mission_queries_without_store_return_query_error() {
+    // No mission_store configured — daemon must respond with QueryError,
+    // not crash, not hang.
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel = Arc::new(LocalChannel::new("mq-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    let q = FrontendMessage::Query {
+        id: "no-store".into(),
+        payload: QueryPayload::ListMissions,
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let code = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::QueryError { code, .. } => break code,
+                    other => panic!("expected QueryError, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert_eq!(code, "no_mission_store");
 
     let _ = writer
         .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
