@@ -196,7 +196,10 @@ frozen with exit commit hash. Update `docs/README.md` row.
 
 ## Ship records
 
-_Filled per task._
+| Task | Commit | Notes |
+|---|---|---|
+| 1 | `c566ddb` | scaffold |
+| 2 | _this commit_ | `docs/CHANNEL_SDK.md` |
 
 ## Deferrals carried into the phase
 
