@@ -22,7 +22,8 @@ use aivyx_capability::CapabilitySet;
 use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
 use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
 use aivyx_channel::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, StreamEventPayload,
+    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, QueryPayload,
+    QueryResponsePayload, StreamEventPayload,
 };
 use aivyx_channel::daemon_ipc::FrontendType;
 use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory, DaemonConfig};
@@ -1989,6 +1990,112 @@ async fn protocol_negotiation_accepted() {
 
     let disconnect = FrontendMessage::Disconnect;
     let _ = writer.write_all(&encode_frame(&disconnect).unwrap()).await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 47 Task 2 — Query/QueryResponse round trip (ListSessions)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_sessions_query_round_trips_over_ipc() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Open a connection and start a session so the daemon has at least
+    // one entry in DaemonState.sessions.
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Consume DaemonReady.
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    // Start a session so DaemonState.sessions has one entry.
+    let frame =
+        encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
+    writer.write_all(&frame).await.unwrap();
+    let started_session_id = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SessionStarted { session_id }, consumed)) => {
+                buf.drain(..consumed);
+                break session_id;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected SessionStarted, got {other:?}"),
+        }
+    };
+
+    // Send a Query{ListSessions}.
+    let query = FrontendMessage::Query {
+        id: "q-test-001".into(),
+        payload: QueryPayload::ListSessions,
+    };
+    writer
+        .write_all(&encode_frame(&query).unwrap())
+        .await
+        .unwrap();
+
+    // Expect QueryResponse with matching id and the started session listed.
+    let (rid, sessions) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListSessions { sessions } => break (id, sessions),
+                    QueryResponsePayload::QueryError { code, message } => {
+                        panic!("unexpected QueryError ({code}): {message}");
+                    }
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+
+    assert_eq!(rid, "q-test-001", "correlation id must echo");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "expected the started session to be listed, got {sessions:?}"
+    );
+    assert_eq!(
+        sessions[0].session_id, started_session_id,
+        "session_id in response must match the started session"
+    );
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }

@@ -80,6 +80,57 @@ pub struct IpcAttachment {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 47 — Query/QueryResponse envelope (Web UI Phase 2)
+// ---------------------------------------------------------------------------
+
+/// Inspection-side queries the frontend sends to the daemon. Carried
+/// inside [`FrontendMessage::Query`] with a correlation `id` the daemon
+/// echoes back in [`DaemonMessage::QueryResponse`].
+///
+/// All queries are read-only by contract — mutating operations stay on
+/// the existing turn-loop / gate-resolution paths.
+///
+/// **Authorization:** none at the query layer. The daemon IPC socket
+/// is `mode 0600` owned by the operator's UID (`PRODUCT.md` P6 /
+/// `docs/THREAT_MODEL.md` §4.4). Anyone who can `read(2)` the socket
+/// *is* the operator, so per-query capability gating would only check
+/// the operator's own role envelope against their own inspection —
+/// which is not the threat model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum QueryPayload {
+    /// List active session IDs tracked by the daemon.
+    ListSessions,
+}
+
+/// Response payload mirroring [`QueryPayload`]. Wrapped in
+/// [`DaemonMessage::QueryResponse`] with the same correlation `id`
+/// the query was sent with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum QueryResponsePayload {
+    /// Response to [`QueryPayload::ListSessions`].
+    ListSessions {
+        sessions: Vec<SessionSummary>,
+    },
+    /// The daemon could not answer the query. `code` is a stable
+    /// machine-readable label; `message` is human-readable.
+    QueryError {
+        code: String,
+        message: String,
+    },
+}
+
+/// Minimal per-session metadata returned by
+/// [`QueryResponsePayload::ListSessions`]. Will grow with later
+/// Phase 47 tasks (mission/audit) — kept additive so older frontends
+/// still deserialize new daemons.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+}
+
+// ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
 
@@ -116,6 +167,12 @@ pub enum FrontendMessage {
     /// For v0.1, the daemon always accepts.
     ProtocolNegotiation {
         version: String,
+    },
+    /// Phase 47 — read-only inspection query. The daemon answers with
+    /// [`DaemonMessage::QueryResponse`] carrying the same `id`.
+    Query {
+        id: String,
+        payload: QueryPayload,
     },
 }
 
@@ -161,6 +218,13 @@ pub enum DaemonMessage {
     /// with a supported version (Phase 41 Task 5).
     ProtocolRejected {
         supported: Vec<String>,
+    },
+    /// Phase 47 — response to a [`FrontendMessage::Query`]. The `id`
+    /// echoes the query's correlation id so the frontend can match
+    /// async responses without bookkeeping.
+    QueryResponse {
+        id: String,
+        payload: QueryResponsePayload,
     },
 }
 
@@ -379,6 +443,11 @@ pub enum DaemonEnvelope {
     ProtocolRejected {
         supported: Vec<String>,
     },
+    // Phase 47 — inspection query response.
+    QueryResponse {
+        id: String,
+        payload: QueryResponsePayload,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +499,11 @@ mod tests {
             FrontendMessage::Shutdown,
             FrontendMessage::ProtocolNegotiation {
                 version: "0.1".into(),
+            },
+            // Phase 47 — Query variant.
+            FrontendMessage::Query {
+                id: "q-001".into(),
+                payload: QueryPayload::ListSessions,
             },
         ];
         for msg in cases {
@@ -489,6 +563,27 @@ mod tests {
             DaemonMessage::ProtocolRejected {
                 supported: vec!["0.1".into(), "0.2".into()],
             },
+            // Phase 47 — QueryResponse variants.
+            DaemonMessage::QueryResponse {
+                id: "q-001".into(),
+                payload: QueryResponsePayload::ListSessions {
+                    sessions: vec![
+                        SessionSummary { session_id: "s-1".into() },
+                        SessionSummary { session_id: "s-2".into() },
+                    ],
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-002".into(),
+                payload: QueryResponsePayload::ListSessions { sessions: vec![] },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-003".into(),
+                payload: QueryResponsePayload::QueryError {
+                    code: "internal".into(),
+                    message: "store unavailable".into(),
+                },
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -496,6 +591,35 @@ mod tests {
                 decode_frame(&frame).expect("decode");
             assert_eq!(decoded, msg);
             assert_eq!(consumed, frame.len());
+        }
+    }
+
+    // ---- DaemonEnvelope must decode QueryResponse from a DaemonMessage frame ----
+
+    #[test]
+    fn daemon_envelope_decodes_query_response() {
+        let msg = DaemonMessage::QueryResponse {
+            id: "q-1".into(),
+            payload: QueryResponsePayload::ListSessions {
+                sessions: vec![SessionSummary { session_id: "abc".into() }],
+            },
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (envelope, consumed): (DaemonEnvelope, _) =
+            decode_frame(&frame).expect("decode");
+        assert_eq!(consumed, frame.len());
+        match envelope {
+            DaemonEnvelope::QueryResponse { id, payload } => {
+                assert_eq!(id, "q-1");
+                match payload {
+                    QueryResponsePayload::ListSessions { sessions } => {
+                        assert_eq!(sessions.len(), 1);
+                        assert_eq!(sessions[0].session_id, "abc");
+                    }
+                    other => panic!("expected ListSessions, got {other:?}"),
+                }
+            }
+            other => panic!("expected QueryResponse, got {other:?}"),
         }
     }
 

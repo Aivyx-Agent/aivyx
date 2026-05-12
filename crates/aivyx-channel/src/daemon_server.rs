@@ -22,7 +22,8 @@ use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
-    FrontendType, StreamEventPayload, PROTOCOL_VERSION,
+    FrontendType, QueryPayload, QueryResponsePayload, SessionSummary, StreamEventPayload,
+    PROTOCOL_VERSION,
 };
 use crate::mission;
 
@@ -665,6 +666,18 @@ async fn handle_connection(
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::Query { id, payload } => {
+                            // Phase 47 — inspection queries. Read-only; no
+                            // capability check (IPC socket auth is the
+                            // authorization boundary, per Q2).
+                            let response_payload = handle_query(payload, &daemon_state);
+                            let resp = DaemonMessage::QueryResponse {
+                                id,
+                                payload: response_payload,
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                     }
                 }
                 Err(FrameError::IncompleteBuf) => break,
@@ -894,6 +907,42 @@ fn detect_crash_recovery(state_path: &Path) -> Option<DaemonState> {
     let contents = std::fs::read_to_string(state_path).ok()?;
     let state: DaemonState = serde_json::from_str(&contents).ok()?;
     Some(state)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 47 — query dispatch
+// ---------------------------------------------------------------------------
+
+/// Phase 47 — answer a [`QueryPayload`] from the daemon's in-memory state.
+///
+/// Read-only by contract. Authorization is enforced at the IPC socket
+/// boundary (mode 0600, operator-owned) — see `PRODUCT.md` P6 and
+/// `docs/THREAT_MODEL.md` §4.4. Per Q2 of the Phase 47 open doc, no
+/// capability check applies at the query layer.
+///
+/// A poisoned `DaemonState` mutex is reported as `QueryError` rather
+/// than propagated as a panic; the daemon must stay alive even if one
+/// connection's state interaction tripped a panic earlier.
+fn handle_query(
+    payload: QueryPayload,
+    daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
+) -> QueryResponsePayload {
+    match payload {
+        QueryPayload::ListSessions => match daemon_state.lock() {
+            Ok(st) => {
+                let sessions = st
+                    .sessions
+                    .iter()
+                    .map(|s| SessionSummary { session_id: s.clone() })
+                    .collect();
+                QueryResponsePayload::ListSessions { sessions }
+            }
+            Err(_) => QueryResponsePayload::QueryError {
+                code: "state_poisoned".into(),
+                message: "daemon state mutex poisoned".into(),
+            },
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
