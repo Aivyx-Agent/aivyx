@@ -831,6 +831,22 @@ pub struct ToolProcessConfig {
     /// narrow what the tool declared; the daemon rejects widenings.
     pub scope_overrides: std::collections::HashMap<String, String>,
     pub enabled: bool,
+    /// Phase 52 — optional sandbox wrapper. When present, the daemon
+    /// spawns `wrapper wrapper_args... command command_args...`
+    /// instead of `command command_args...`. Aivyx supplies the
+    /// policy slot; the operator supplies the policy (bubblewrap,
+    /// firejail, docker run, sandbox-exec — see `docs/TOOL_SDK.md`
+    /// §10).
+    pub sandbox: Option<SandboxConfig>,
+}
+
+/// Phase 52 — operator-supplied command wrapper that hardens a
+/// `[[tool_process]]` spawn. Threaded into
+/// `aivyx_tool::SandboxConfig` at daemon startup.
+#[derive(Debug, Clone)]
+pub struct SandboxConfig {
+    pub wrapper: String,
+    pub args: Vec<String>,
 }
 
 /// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
@@ -1031,6 +1047,17 @@ struct RawToolProcess {
     scope_overrides: Option<std::collections::HashMap<String, String>>,
     #[serde(default = "default_true")]
     enabled: bool,
+    /// Phase 52 — optional `[tool_process.sandbox]` nested block.
+    #[serde(default)]
+    sandbox: Option<RawSandbox>,
+}
+
+/// `[tool_process.sandbox]` block. Phase 52.
+#[derive(Debug, Default, Deserialize)]
+struct RawSandbox {
+    wrapper: String,
+    #[serde(default)]
+    args: Option<Vec<String>>,
 }
 
 fn default_stdio_transport() -> String {
@@ -1698,6 +1725,27 @@ impl AivyxConfig {
                     ),
                 });
             }
+            // Phase 52 — validate and translate the optional sandbox
+            // wrapper. Empty `wrapper` is rejected with the same
+            // posture as empty `command`.
+            let sandbox = match r.sandbox {
+                Some(s) => {
+                    if s.wrapper.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "tool_process.sandbox.wrapper",
+                            reason: format!(
+                                "tool process {:?}: `sandbox.wrapper` must be non-empty",
+                                r.name,
+                            ),
+                        });
+                    }
+                    Some(SandboxConfig {
+                        wrapper: s.wrapper,
+                        args: s.args.unwrap_or_default(),
+                    })
+                }
+                None => None,
+            };
             let env: Vec<(String, String)> = r
                 .env
                 .unwrap_or_default()
@@ -1711,6 +1759,7 @@ impl AivyxConfig {
                 env,
                 scope_overrides,
                 enabled: true,
+                sandbox,
             });
         }
 

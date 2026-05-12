@@ -1629,14 +1629,19 @@ async fn run_async(
     // continues with the tools that registered successfully.
     let mut tool_bridges: Vec<std::sync::Arc<aivyx_tool::ToolProcessBridge>> = Vec::new();
     for tp_cfg in &config_tool_processes {
+        // Phase 52 — thread the operator's [tool_process.sandbox]
+        // through to the aivyx-tool spawn config. None when the
+        // operator omitted the nested block.
+        let spawn_sandbox = tp_cfg.sandbox.as_ref().map(|s| aivyx_tool::SandboxConfig {
+            wrapper: s.wrapper.clone(),
+            args: s.args.clone(),
+        });
         let spawn_cfg = aivyx_tool::ToolProcessConfig {
             name: tp_cfg.name.clone(),
             command: tp_cfg.command.clone(),
             args: tp_cfg.args.clone(),
             env: tp_cfg.env.clone(),
-            // Phase 52 — sandbox plumbing lands in Task 3 with
-            // the matching [tool_process.sandbox] TOML schema.
-            sandbox: None,
+            sandbox: spawn_sandbox,
         };
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),

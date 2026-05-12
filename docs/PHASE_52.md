@@ -198,7 +198,8 @@ closed.
 | Task | Commit | Notes |
 |---|---|---|
 | 1 | `05c1961` | scaffold |
-| 2 | _this commit_ | SandboxConfig + bridge wrapper application — 980 tests |
+| 2 | `f5e4fda` | SandboxConfig + bridge wrapper application — 980 tests |
+| 3 | _this commit_ | [tool_process.sandbox] TOML schema + binary wiring — 983 tests |
 
 ## Deferrals carried into the phase
 

@@ -2069,6 +2069,112 @@ enabled = false
 }
 
 #[test]
+fn tool_process_sandbox_block_loads() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-sandbox");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "sandboxed"
+command = "python3"
+args = ["/path/to/tool.py"]
+
+[tool_process.sandbox]
+wrapper = "bwrap"
+args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-parent", "--"]
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.tool_processes.len(), 1);
+    let sandbox = cfg.tool_processes[0]
+        .sandbox
+        .as_ref()
+        .expect("sandbox block must be Some");
+    assert_eq!(sandbox.wrapper, "bwrap");
+    assert!(sandbox.args.iter().any(|a| a == "--unshare-all"));
+    drop(env);
+}
+
+#[test]
+fn tool_process_sandbox_empty_wrapper_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-sandbox-empty");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "broken-sandbox"
+command = "python3"
+
+[tool_process.sandbox]
+wrapper = "   "
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("empty wrapper must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("sandbox.wrapper"), "error must name field: {msg}");
+    drop(env);
+}
+
+#[test]
+fn tool_process_without_sandbox_is_none() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-no-sandbox");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "plain"
+command = "python3"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(
+        cfg.tool_processes[0].sandbox.is_none(),
+        "omitting [tool_process.sandbox] must yield None",
+    );
+    drop(env);
+}
+
+#[test]
 fn tool_process_empty_command_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-empty-cmd");
