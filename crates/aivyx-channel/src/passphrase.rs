@@ -53,6 +53,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use aivyx_crypto::{derive_master_key as crypto_derive_master_key, Argon2Params, MasterKey};
+use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroize;
 
 /// Length of the Argon2id salt in bytes. 16 is the OWASP-recommended
@@ -139,11 +140,26 @@ pub enum PassphraseSource {
     /// [`DEFAULT_ENV_VAR`] for the standard `AIVYX_PASSPHRASE` name.
     Env { var_name: String },
 
+    /// Phase 51 Task 4 — passphrase supplied by the config loader.
+    ///
+    /// Previously `[aivyx] passphrase` in TOML was parsed by
+    /// `aivyx-config` but ignored at derivation time:
+    /// `select_passphrase_source` returned `Env` even when the
+    /// config had a value, so a TOML-only setup errored with
+    /// "passphrase env var not set." This variant closes that
+    /// inconsistency — the binary picks `FromConfig` whenever
+    /// the loader produced a passphrase, and the derive path
+    /// uses the secret directly.
+    ///
+    /// The `SecretString` is consumed on first use; its contents
+    /// are zeroized after the master key is derived.
+    FromConfig(SecretString),
+
     /// Test-only: invoke a caller-supplied closure to produce the
     /// passphrase bytes. The closure is called once and its return
     /// value is zeroized after the master key is derived. Production
     /// code should not use this variant — there's nothing stopping
-    /// it, but the idiomatic binary wiring is `Env`.
+    /// it, but the idiomatic binary wiring is `Env` or `FromConfig`.
     Fixture(Box<dyn FnOnce() -> Vec<u8> + Send>),
 
     /// Interactive TTY prompt via `rpassword::prompt_password`.
@@ -167,6 +183,10 @@ impl std::fmt::Debug for PassphraseSource {
                 .debug_struct("Env")
                 .field("var_name", var_name)
                 .finish(),
+            PassphraseSource::FromConfig(_) => {
+                // Never even hint at the secret contents.
+                f.debug_struct("FromConfig").finish_non_exhaustive()
+            }
             PassphraseSource::Fixture(_) => {
                 f.debug_struct("Fixture").finish_non_exhaustive()
             }
@@ -302,6 +322,21 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             Ok(s) => Ok(s.into_bytes()),
             Err(_) => Err(PassphraseError::EnvNotSet(var_name)),
         },
+        PassphraseSource::FromConfig(secret) => {
+            // Read the secret into an owned Vec<u8>. The SecretString
+            // itself zeroizes on drop; we additionally zeroize the
+            // intermediate clone via the standard derive path
+            // (`derive_master_key` already zeroizes the Vec after
+            // hashing).
+            let bytes = secret.expose_secret().as_bytes().to_vec();
+            if bytes.is_empty() {
+                // Same posture as EnvEmpty: empty passphrase is
+                // refused outright. Argon2id would happily hash it.
+                Err(PassphraseError::EnvEmpty("config:[aivyx]passphrase".into()))
+            } else {
+                Ok(bytes)
+            }
+        }
         PassphraseSource::Fixture(f) => Ok(f()),
         PassphraseSource::InteractivePrompt => {
             // `rpassword::prompt_password` opens `/dev/tty` on Unix,
@@ -538,6 +573,88 @@ mod tests {
         unsafe {
             std::env::remove_var("AIVYX_PASSPHRASE_TEST_EMPTY");
         }
+    }
+
+    // ---- FromConfig source (Phase 51 Task 4) ------------------------
+    //
+    // The PassphraseSource::FromConfig variant is what makes the
+    // [aivyx] passphrase TOML field actually drive derivation. Phase
+    // 47 visual-pass discovered a footgun: TOML was parsed but the
+    // binary required AIVYX_PASSPHRASE in env anyway. Phase 51
+    // fixes it; these tests pin the fix.
+
+    #[test]
+    fn from_config_source_derives_master_key() {
+        use secrecy::SecretString;
+        let dir = TestDir::new();
+        let master = derive_master_key(
+            PassphraseSource::FromConfig(SecretString::from("toml-passphrase".to_string())),
+            &dir.salt(),
+            Argon2Params::weak_for_tests(),
+        )
+        .expect("FromConfig source must succeed");
+        let _sub = master
+            .derive_subkey(b"sessions")
+            .expect("derive_subkey from a FromConfig-derived master must work");
+    }
+
+    #[test]
+    fn from_config_and_env_produce_same_master_key_for_same_bytes() {
+        use secrecy::SecretString;
+        let _lock = env_lock();
+        let dir = TestDir::new();
+        let phrase = "shared-bytes-1234";
+
+        // Derive via FromConfig.
+        let master_from_config = derive_master_key(
+            PassphraseSource::FromConfig(SecretString::from(phrase.to_string())),
+            &dir.salt(),
+            Argon2Params::weak_for_tests(),
+        )
+        .expect("FromConfig");
+
+        // Derive via Env over the same salt sidecar.
+        unsafe {
+            std::env::set_var("AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV", phrase);
+        }
+        let master_from_env = derive_master_key(
+            PassphraseSource::Env {
+                var_name: "AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV".to_string(),
+            },
+            &dir.salt(),
+            Argon2Params::weak_for_tests(),
+        )
+        .expect("Env");
+        unsafe {
+            std::env::remove_var("AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV");
+        }
+
+        // Two MasterKeys derived from the same bytes + same salt
+        // must produce the same subkey for any domain — that's the
+        // determinism property aivyx-crypto guarantees.
+        let sub_a = master_from_config.derive_subkey(b"audit").unwrap();
+        let sub_b = master_from_env.derive_subkey(b"audit").unwrap();
+        assert_eq!(
+            sub_a.as_bytes(),
+            sub_b.as_bytes(),
+            "FromConfig and Env paths must derive identical master keys \
+             from identical bytes (the whole point of the Phase 51 fix)",
+        );
+    }
+
+    #[test]
+    fn from_config_empty_string_fails_cleanly() {
+        use secrecy::SecretString;
+        let dir = TestDir::new();
+        let err = derive_master_key(
+            PassphraseSource::FromConfig(SecretString::from(String::new())),
+            &dir.salt(),
+            Argon2Params::weak_for_tests(),
+        )
+        .unwrap_err();
+        // Empty passphrase is rejected with the same posture as
+        // Env-empty — Argon2id would happily hash it.
+        assert!(matches!(err, PassphraseError::EnvEmpty(_)));
     }
 
     // ---- Fixture source ---------------------------------------------

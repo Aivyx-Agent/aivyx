@@ -202,7 +202,8 @@ pass observation all close).
 |---|---|---|
 | 1 | `e7893dc` | scaffold |
 | 2 | `a616af6` | AivyxError typed nested errors (D6 finally honored) — 976 tests, lib.rs streak broken |
-| 3 | _this commit_ | handle_connection ConnectionContext lift — 976 tests |
+| 3 | `b821e7c` | handle_connection ConnectionContext lift — 976 tests |
+| 4 | _this commit_ | AIVYX_PASSPHRASE TOML path actually drives derivation — 979 tests |
 
 ## Deferrals carried into the phase
 

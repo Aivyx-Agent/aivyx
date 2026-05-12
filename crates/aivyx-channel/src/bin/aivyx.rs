@@ -463,7 +463,7 @@ fn run() -> Result<(), String> {
     //    tty means we have no interactive user *and* no configured
     //    source — continuing would either hang on a tty read that
     //    never comes, or crash with an opaque Argon2 error.
-    let passphrase_source = select_passphrase_source(config.passphrase.is_some())?;
+    let passphrase_source = select_passphrase_source(config.passphrase.as_ref())?;
     let master_key = derive_master_key(
         passphrase_source,
         &salt_path,
@@ -1123,36 +1123,46 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
 /// Decide which `PassphraseSource` to hand to `derive_master_key`.
 ///
-/// Phase 9 Task 3 change: the "did a source supply a passphrase"
-/// check moved out of this helper into `aivyx-config`. This helper
-/// now receives a boolean `config_has_passphrase` — `true` means the
-/// config layer already resolved env / TOML and found a value, so we
-/// can use `PassphraseSource::Env` (the `passphrase` module still
-/// re-reads `AIVYX_PASSPHRASE` when honored, which is fine: if
-/// `aivyx-config` saw it, the env var is still set). `false` means
-/// config found nothing, so we decide between the interactive prompt
-/// (tty) and a hard error (non-tty).
+/// Phase 9 Task 3 introduced the "config-aware" shape — the helper
+/// receives a hint from `aivyx-config` about whether *some* source
+/// (env or TOML) supplied a passphrase. Phase 51 Task 4 fixes a
+/// quiet bug from that change: the helper always returned
+/// `PassphraseSource::Env` when the config had a value, even if
+/// the value came from TOML. That worked when `AIVYX_PASSPHRASE`
+/// was set; it errored at startup with "env var not set" when
+/// only TOML was set, contradicting the config-loader contract.
+///
+/// The fix: take the actual `SourcedSecret` (or `None`), and when
+/// it's present pick the right source kind based on `FieldSource`.
+/// Env → `PassphraseSource::Env` (re-read to honor any env-var
+/// rotation between config-load and derive); TOML or
+/// EncryptedStore → `PassphraseSource::FromConfig(secret)` so the
+/// value is used directly.
 ///
 /// Policy:
-/// 1. `config_has_passphrase == true` → `Env`.
-/// 2. `config_has_passphrase == false` and stdin is a tty →
-///    `InteractivePrompt`.
-/// 3. Otherwise → `Err` with a clear operator-facing message.
+/// 1. `passphrase = Some(env)` → `Env` (re-read AIVYX_PASSPHRASE).
+/// 2. `passphrase = Some(non-env)` → `FromConfig(secret.clone())`.
+/// 3. `passphrase = None` and stdin is a tty → `InteractivePrompt`.
+/// 4. Otherwise → `Err` with a clear operator-facing message.
 fn select_passphrase_source(
-    config_has_passphrase: bool,
+    passphrase: Option<&aivyx_config::SourcedSecret>,
 ) -> Result<PassphraseSource, String> {
-    if config_has_passphrase {
-        return Ok(PassphraseSource::Env {
-            var_name: DEFAULT_ENV_VAR.to_string(),
-        });
+    if let Some(secret) = passphrase {
+        return match secret.source {
+            aivyx_config::FieldSource::Env => Ok(PassphraseSource::Env {
+                var_name: DEFAULT_ENV_VAR.to_string(),
+            }),
+            _ => Ok(PassphraseSource::FromConfig(secret.value.clone())),
+        };
     }
     if io::stdin().is_terminal() {
         Ok(PassphraseSource::InteractivePrompt)
     } else {
         Err(format!(
-            "no passphrase available: `{DEFAULT_ENV_VAR}` is not set and \
-             stdin is not a terminal. Export the env var or run aivyx \
-             from an interactive shell."
+            "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
+             no `[aivyx] passphrase` in the TOML config, and stdin is \
+             not a terminal. Export the env var, set the TOML field, \
+             or run aivyx from an interactive shell."
         ))
     }
 }
