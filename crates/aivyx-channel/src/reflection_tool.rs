@@ -61,36 +61,43 @@ use aivyx_storage::{DomainHandle, KeyDomain};
 use crate::mission::{
     self, GateState, MissionRecord, MissionState,
 };
+use crate::persona::ProposedPersonaDelta;
 
 // ---------------------------------------------------------------------------
 // Proposal record — serialized into the mission description
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProposalRecord {
-    proposal_id: String,
-    observations: Vec<String>,
-    memory_writes: Vec<ProposedWrite>,
+pub(crate) struct ProposalRecord {
+    pub(crate) proposal_id: String,
+    pub(crate) observations: Vec<String>,
+    pub(crate) memory_writes: Vec<ProposedWrite>,
     /// Phase 30 — text to append to the system prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    prompt_append: Option<String>,
+    pub(crate) prompt_append: Option<String>,
     /// Phase 30 — tool allowlist additions and removals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    allowlist_changes: Option<AllowlistChanges>,
+    pub(crate) allowlist_changes: Option<AllowlistChanges>,
+    /// Phase 59 — Persona deltas the agent proposes for operator
+    /// approval. Each is a single field-edit per Q1(a) on Phase 59
+    /// sign-off; on gate approval, `reflection.apply` writes them to
+    /// the Persona chain via `PersistentPersonaLog::append`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) persona_deltas: Vec<ProposedPersonaDelta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProposedWrite {
-    topic: String,
-    content: String,
+pub(crate) struct ProposedWrite {
+    pub(crate) topic: String,
+    pub(crate) content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AllowlistChanges {
+pub(crate) struct AllowlistChanges {
     #[serde(default)]
-    add: Vec<String>,
+    pub(crate) add: Vec<String>,
     #[serde(default)]
-    remove: Vec<String>,
+    pub(crate) remove: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +137,47 @@ impl ReflectionProposeTool {
                     "lookback": {
                         "type": "integer",
                         "description": "Number of recent turns to analyze (default 20)"
+                    },
+                    "persona_deltas": {
+                        "type": "array",
+                        "description": "Phase 59 — operator-approval-bound persona deltas. \
+                                        Each item is a single field-edit on the assistant's identity \
+                                        layer (PRODUCT.md P14). Requires the persona.propose capability \
+                                        scope. The gate approval flow surfaces deltas to the operator \
+                                        for explicit consent before reflection.apply writes them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "category": {
+                                    "type": "string",
+                                    "enum": [
+                                        "AssistantName",
+                                        "OperatorProfile",
+                                        "CommunicationStyle",
+                                        "PrimaryUseCases",
+                                        "BehavioralPreferences",
+                                        "BehavioralConstraints",
+                                        "LearnedContext",
+                                        "CommunicationAdaptations",
+                                        "CharacterTraits",
+                                        "RelationshipMilestones"
+                                    ]
+                                },
+                                "op": {
+                                    "type": "object",
+                                    "description": "One of: \
+                                        { kind: 'SetScalar', value: <string|null> } for scalar categories \
+                                        (AssistantName / OperatorProfile / CommunicationStyle), \
+                                        { kind: 'AppendList', value: <string> } / \
+                                        { kind: 'RemoveList', value: <string> } for list categories."
+                                },
+                                "reason": {
+                                    "type": "string",
+                                    "description": "Short rationale shown to the operator at the gate."
+                                }
+                            },
+                            "required": ["category", "op"]
+                        }
                     }
                 },
                 "required": []
@@ -179,8 +227,23 @@ impl Tool for ReflectionProposeTool {
         &self.schema
     }
 
-    fn required_scope(&self, _input: &Value) -> Scope {
-        Scope::parse("reflection.propose").expect("known base")
+    fn required_scope(&self, input: &Value) -> Scope {
+        // Phase 59 — when the call carries `persona_deltas`, the
+        // stricter `persona.propose` scope is required (the agent
+        // is extending the identity layer, not just memory). Roles
+        // that have reflection.propose but not persona.propose can
+        // still call this tool without deltas; the per-tool gate
+        // rejects only the persona-bearing variant.
+        let has_persona = input
+            .get("persona_deltas")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if has_persona {
+            Scope::parse("persona.propose").expect("known base")
+        } else {
+            Scope::parse("reflection.propose").expect("known base")
+        }
     }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
@@ -201,6 +264,38 @@ impl Tool for ReflectionProposeTool {
             .get("lookback")
             .and_then(|v| v.as_u64())
             .unwrap_or(20) as usize;
+
+        // Phase 59 — parse and validate the agent-supplied persona
+        // deltas. Each delta must pass `ProposedPersonaDelta::validate`
+        // (category/op pairing); a single bad delta fails the whole
+        // call to avoid landing a partial proposal in the mission
+        // record.
+        let persona_deltas: Vec<ProposedPersonaDelta> = match input.get("persona_deltas") {
+            Some(v) if !v.is_null() => match serde_json::from_value::<Vec<ProposedPersonaDelta>>(v.clone()) {
+                Ok(list) => {
+                    for (idx, d) in list.iter().enumerate() {
+                        if let Err(reason) = d.validate() {
+                            return ToolOutcome::Failed(AivyxError::Tool {
+                                tool: self.id,
+                                detail: format!(
+                                    "reflection.propose: persona_deltas[{idx}] invalid: {reason}"
+                                ),
+                            });
+                        }
+                    }
+                    list
+                }
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "reflection.propose: persona_deltas deserialization failed: {e}"
+                        ),
+                    });
+                }
+            },
+            _ => Vec::new(),
+        };
 
         // Collect recent turn outcomes by scanning the audit chain.
         let total = log.len();
@@ -249,14 +344,28 @@ impl Tool for ReflectionProposeTool {
         // Count outcome types.
         let total_turns = turn_outcomes.len();
         if total_turns == 0 {
-            return ToolOutcome::Completed {
-                output: json!({
-                    "proposal_id": null,
-                    "observations": ["No recent turns found — nothing to reflect on."],
-                    "memory_writes": []
-                }),
-                verified: Verification::NotApplicable,
-            };
+            // Phase 59 — even on "no recent turns", a non-empty
+            // persona_deltas input still produces a mission. The
+            // agent's reasoning may have come from inputs outside
+            // the audit chain (operator transcript review, memory
+            // walk, etc.) — we trust the agent's proposal and let
+            // the operator gate it.
+            if persona_deltas.is_empty() {
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "proposal_id": null,
+                        "observations": ["No recent turns found — nothing to reflect on."],
+                        "memory_writes": [],
+                        "persona_deltas": [],
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
+            observations.push(
+                "No recent turn patterns to reflect on, but agent has \
+                 supplied persona deltas for operator approval."
+                    .to_string(),
+            );
         }
 
         let failed_count = turn_outcomes
@@ -342,13 +451,16 @@ impl Tool for ReflectionProposeTool {
             }
         }
 
-        // If no actionable patterns, return without creating a mission.
-        if memory_writes.is_empty() {
+        // If no actionable patterns AND no agent-supplied persona
+        // deltas, return without creating a mission. Phase 59 adds
+        // the persona_deltas leg to the short-circuit condition.
+        if memory_writes.is_empty() && persona_deltas.is_empty() {
             return ToolOutcome::Completed {
                 output: json!({
                     "proposal_id": null,
                     "observations": observations,
-                    "memory_writes": []
+                    "memory_writes": [],
+                    "persona_deltas": [],
                 }),
                 verified: Verification::NotApplicable,
             };
@@ -364,6 +476,7 @@ impl Tool for ReflectionProposeTool {
             memory_writes: memory_writes.clone(),
             prompt_append: None,
             allowlist_changes: None,
+            persona_deltas: persona_deltas.clone(),
         };
 
         let proposal_json = match serde_json::to_string(&proposal) {
@@ -401,13 +514,35 @@ impl Tool for ReflectionProposeTool {
             .iter()
             .map(|w| w.topic.clone())
             .collect();
+        let mut gate_description = format!("Reflection proposal {proposal_id}: ");
+        let mut parts: Vec<String> = Vec::new();
+        if !writes_summary.is_empty() {
+            parts.push(format!(
+                "memory writes to topics [{}]",
+                writes_summary.join(", ")
+            ));
+        }
+        if !persona_deltas.is_empty() {
+            // Phase 59 — surface the persona delta count in the gate
+            // prompt so the operator sees what they're approving. The
+            // full per-delta detail is in the mission record's
+            // serialized ProposalRecord; the gate prompt is a
+            // glance-summary.
+            parts.push(format!(
+                "{} persona delta(s) ({})",
+                persona_deltas.len(),
+                persona_deltas
+                    .iter()
+                    .map(|d| format!("{:?}", d.category))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        gate_description.push_str(&format!("approve {}", parts.join(" + ")));
         if let Err(e) = mission::add_gate(
             &mut record,
             gate_id,
-            format!(
-                "Reflection proposal {proposal_id}: approve writing to topics: {}",
-                writes_summary.join(", ")
-            ),
+            gate_description,
             Some("reflection.apply".to_string()),
         ) {
             return ToolOutcome::Failed(AivyxError::Tool {
@@ -427,6 +562,16 @@ impl Tool for ReflectionProposeTool {
             .iter()
             .map(|w| json!({ "topic": w.topic, "content": w.content }))
             .collect();
+        let output_persona_deltas: Vec<Value> = persona_deltas
+            .iter()
+            .map(|d| {
+                json!({
+                    "category": d.category,
+                    "op": d.op,
+                    "reason": d.reason,
+                })
+            })
+            .collect();
 
         ToolOutcome::Completed {
             output: json!({
@@ -434,6 +579,7 @@ impl Tool for ReflectionProposeTool {
                 "mission_id": mission_id,
                 "observations": observations,
                 "memory_writes": output_writes,
+                "persona_deltas": output_persona_deltas,
             }),
             verified: Verification::NotApplicable,
         }
@@ -718,5 +864,117 @@ mod tests {
         assert_eq!(tool.name(), "reflection.apply");
         let schema = tool.input_schema();
         assert!(schema["required"].as_array().unwrap().contains(&json!("proposal_id")));
+    }
+
+    // -- Phase 59 Task 3 — persona_deltas integration tests --------
+
+    #[test]
+    fn propose_schema_advertises_persona_deltas_field() {
+        let tool = ReflectionProposeTool::new();
+        let schema = tool.input_schema();
+        let persona_deltas = &schema["properties"]["persona_deltas"];
+        assert!(persona_deltas.is_object());
+        assert_eq!(persona_deltas["type"], "array");
+
+        // The enum constraint advertises every Phase 59 category so
+        // the model picks valid categories without trial-and-error.
+        let categories = &persona_deltas["items"]["properties"]["category"]["enum"];
+        let cats: Vec<&str> = categories
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(cats.contains(&"AssistantName"));
+        assert!(cats.contains(&"BehavioralPreferences"));
+        assert!(cats.contains(&"LearnedContext"));
+        assert!(cats.contains(&"CommunicationAdaptations"));
+        assert_eq!(cats.len(), 10);
+    }
+
+    #[test]
+    fn propose_required_scope_escalates_to_persona_propose_when_deltas_present() {
+        let tool = ReflectionProposeTool::new();
+
+        // Empty deltas → reflection.propose suffices.
+        let with_empty = json!({ "persona_deltas": [] });
+        assert_eq!(
+            tool.required_scope(&with_empty).as_str(),
+            "reflection.propose"
+        );
+
+        // Absent field → reflection.propose suffices.
+        let absent = json!({ "lookback": 10 });
+        assert_eq!(
+            tool.required_scope(&absent).as_str(),
+            "reflection.propose"
+        );
+
+        // Non-empty deltas → persona.propose required.
+        let with_deltas = json!({
+            "persona_deltas": [{
+                "category": "BehavioralPreferences",
+                "op": { "kind": "AppendList", "value": "prefer terse" }
+            }]
+        });
+        assert_eq!(
+            tool.required_scope(&with_deltas).as_str(),
+            "persona.propose"
+        );
+    }
+
+    #[test]
+    fn proposal_record_serializes_persona_deltas_through_mission_description() {
+        // The ProposalRecord serde round-trip is what bridges
+        // reflection.propose (writer) and reflection.apply (reader).
+        // Task 4 will consume the serialized representation; Task 3
+        // verifies the byte-level contract.
+        let record = ProposalRecord {
+            proposal_id: "rp-test".into(),
+            observations: vec!["test obs".into()],
+            memory_writes: vec![ProposedWrite {
+                topic: "t".into(),
+                content: "c".into(),
+            }],
+            prompt_append: None,
+            allowlist_changes: None,
+            persona_deltas: vec![ProposedPersonaDelta {
+                category: crate::persona::PersonaDeltaCategory::BehavioralPreferences,
+                op: crate::persona::PersonaDeltaOp::AppendList {
+                    value: "prefer terse".into(),
+                },
+                reason: Some("operator revised 3 verbose answers".into()),
+            }],
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let parsed: ProposalRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.persona_deltas.len(), 1);
+        assert_eq!(
+            parsed.persona_deltas[0].category,
+            crate::persona::PersonaDeltaCategory::BehavioralPreferences,
+        );
+    }
+
+    #[test]
+    fn proposal_record_persona_deltas_field_omitted_when_empty() {
+        // Backwards compat: pre-Phase-59 proposal records had no
+        // `persona_deltas` field. The `skip_serializing_if =
+        // "Vec::is_empty"` attribute keeps the serialized output free
+        // of an empty array for missions that don't touch persona.
+        let record = ProposalRecord {
+            proposal_id: "rp-test".into(),
+            observations: vec![],
+            memory_writes: vec![],
+            prompt_append: None,
+            allowlist_changes: None,
+            persona_deltas: vec![],
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("persona_deltas"));
+
+        // ...and the parser tolerates the missing field on the
+        // read path.
+        let parsed: ProposalRecord = serde_json::from_str(&json).unwrap();
+        assert!(parsed.persona_deltas.is_empty());
     }
 }

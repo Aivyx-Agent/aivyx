@@ -187,6 +187,42 @@ Tests:
 - Propose without persona.propose scope when scope is
   required — denied at the existing per-tool gate
 
+## Task 3 ship record
+
+**Files modified:**
+- `crates/aivyx-capability/src/lib.rs` (+8): new
+  `"persona.propose"` entry in `KNOWN_BASES` (alongside the
+  reflection/role scopes) and in `CEILING_TRUSTED`.
+  Capability tests pass unchanged (54).
+- `crates/aivyx-channel/src/reflection_tool.rs` (+148, ~12):
+  `ProposalRecord` gains a `persona_deltas:
+  Vec<ProposedPersonaDelta>` field with `#[serde(default,
+  skip_serializing_if = "Vec::is_empty")]` for backwards
+  compatibility (pre-Phase-59 records read clean; phase-59
+  records without persona deltas write clean). Visibility
+  on `ProposalRecord` / `ProposedWrite` / `AllowlistChanges`
+  bumped to `pub(crate)` so Task 4's apply path can read
+  the deserialized record across the module boundary.
+  Tool schema extended with a `persona_deltas` array
+  property; the enum constraint advertises all 10
+  `PersonaDeltaCategory` variants. `required_scope`
+  inspects the input and returns `persona.propose` when
+  the deltas array is non-empty (escalating from the
+  base `reflection.propose`). Execute parses the input
+  field via `serde_json::from_value` (fail-fast on any
+  invalid delta), folds the deltas into the
+  `ProposalRecord`, and surfaces a per-category summary
+  in the gate prompt. The "no actionable patterns"
+  short-circuit was extended — a call with persona deltas
+  and zero pattern-derived memory writes still creates a
+  mission. Output JSON now includes a `persona_deltas`
+  array mirroring the proposal record.
+
+**Test delta:** +4 in aivyx-channel
+(schema-advertises-deltas, scope-escalates,
+serde-round-trip, omits-when-empty). Workspace total:
+1039 → 1043. Zero clippy warnings.
+
 ### Task 4 — `reflection.apply` writes approved deltas
 
 Extend `ReflectionApplyTool` to, on an approved mission

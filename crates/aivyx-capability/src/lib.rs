@@ -126,6 +126,13 @@ const KNOWN_BASES: &[&str] = &[
     // reflection (Phase 29 — PRODUCT.md G3/P8)
     "reflection.propose",
     "reflection.apply",
+    // persona proposal (Phase 59 — PRODUCT.md P14). Granted alongside
+    // reflection.propose for roles authorized to extend the agent's
+    // identity layer. Without this scope, a role's
+    // reflection.propose calls cannot include `persona_deltas` —
+    // mismatches are rejected at the per-tool gate. Gate-side
+    // approval still goes through P2's mission machinery.
+    "persona.propose",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
     // ollama model management (Phase 36 — local LLM story completion)
@@ -602,6 +609,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "mcp.call",
         "reflection.propose",
         "reflection.apply",
+        "persona.propose",
         "role.update",
         "ollama.list",
         "ollama.show",
