@@ -610,6 +610,41 @@ DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
 Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
 remains as a forward commitment.
 
+## Chapter A — Foundation Closeout (Phases 50–54)
+
+After Phase 49 closed the PRODUCT.md forward-commitment ledger,
+the project pivots from "deliver remaining commitments" to
+"close out Phase 0–49 loose ends." Chapter A is the
+finish-the-job arc: pay down the deferral backlog, close the
+P12 deferred half, harden the tool-process surface with
+container isolation, and exit with a documentation sweep.
+
+Five phases planned:
+
+- **Phase 50** — P12 closeout (first-party in-process
+  protocol unification).
+- **Phase 51** — Cleanup: `AivyxError` typed nested errors,
+  `handle_connection` parameter struct, `AIVYX_PASSPHRASE`
+  TOML inconsistency.
+- **Phase 52** — Container sandbox layer for tool processes.
+- **Phase 53** — Audit log rotation/compaction *(optional —
+  decide at Phase 52 exit)*.
+- **Phase 54** — Final documentation sweep.
+
+After Chapter A, the project has a clean closing surface: no
+lingering deferrals, all contracts in sync, documentation
+matching the implementation.
+
+## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification
+
+**Active — see [PHASE_50.md](PHASE_50.md).** Wires the two
+Phase 49 deferred bridge stubs (ToolEvent → channel relay,
+per-call CancelInvocation). Adds `run_tool_as_subprocess<T:
+Tool>` harness. Proves the "extractable without rewriting"
+clause of P12 with an in-process-vs-subprocess conformance
+test against `FsReadTool`. Moves PRODUCT.md P12 from
+"foundation phase" to "fully delivered."
+
 ## Phase 49 — Tool Process IPC Foundation (P12) [SHIPPED]
 
 **Frozen — see [PHASE_49.md](PHASE_49.md).** Delivered the
