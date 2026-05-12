@@ -777,17 +777,61 @@ shared-state plumbing went through aivyx-channel + the
 existing planner factory pattern without touching core).
 Phase 60 (Persona Visualization) is next.
 
-## Phase 60 — Persona Visualization (closes P14)
+## Phase 60 — Persona Visualization (closes P14 + ledger) [SHIPPED]
 
-**Scheduled** — closes the Profile + Persona arc. Web UI
-Persona pane visualizing the delta log over time (timeline
-view of how the assistant's voice has evolved). Possibly
-identity export/import (operator can back up or transfer
-their assistant's Profile + Persona — a deferred decision,
-since import re-binds the HMAC chain). After this phase the
-project sits at: every PRODUCT.md commitment (P1–P14)
-delivered, identity-layer fully shaped, operator-feedback
-posture re-established.
+**Frozen — see [PHASE_60.md](PHASE_60.md).** Closes the
+Profile + Persona forward arc and the entire PRODUCT.md
+forward-commitment ledger. Delivered across five Q-block
+resolutions:
+
+- **Q1(c) — nested CLI enum.** New `CliMode::Persona(PersonaSubcommand)`
+  with `Show` / `List` / `Revert { target_delta_id }`
+  variants. `aivyx persona show` prints the effective
+  state; `list` prints the chain; `revert` operator-
+  initiated undo.
+- **Q2(a) — direct closure capture.** Per-turn planner-
+  factory refresh threaded through three sites (parent
+  run_session, daemon-run path, role-switch child factory)
+  via captured Arc<RwLock<EffectivePersona>> clones reading
+  per-turn. Closes the Phase 59 Q5(a) hot-reload deferral.
+- **Q3(a) — Web UI click-to-revert.** New Persona tab
+  rendering the effective state + delta timeline with
+  per-entry Revert buttons. `FrontendMessage::RevertPersonaDelta`
+  via the existing WebSocket bridge;
+  `DaemonMessage::PersonaRevertResolved` reply.
+- **Q4(a) — Revert as a chain op.** New
+  `PersonaDeltaOp::Revert { target_delta_id }` variant.
+  Folder consults the chain and applies the inverse of
+  the target's op; revert-of-revert restores the original
+  effect (recursive resolution, termination guaranteed by
+  strictly-decreasing index).
+- **Q5(a) — operator-only reverts.** Agent cannot propose
+  Revert via `reflection.propose`; reverts come from the
+  CLI / Web UI surfaces and are auto-approved (no gate
+  prompt since the operator is the proposer).
+
+Other surface: `Query::GetEffectivePersona` +
+`Query::ListPersonaDeltas` IPC envelopes;
+`EffectivePersonaSummary` + `PersonaDeltaSummary` wire
+types; `recompute_shared_from_entries` (replaces the Phase
+59 single-delta `apply_delta_to_shared` because Revert
+needs chain context); 19 new tests (7 revert folder + 4
+render + 8 parser); zero clippy warnings. **Tests
+1052 → 1071.** All three streak predictions correct:
+DESIGN.md → 7 (untouched), PRODUCT.md → broke at 2 (Task 7
+Delivery Status refresh, intentional), lib.rs → 8
+(untouched).
+
+**Identity export/import** is the one deferred piece — P14
+permits it and Phase 60 flagged it optional. Re-binding the
+HMAC chain on import is the load-bearing question; lands as
+a focused future micro-phase if operator pressure surfaces.
+
+After Phase 60 the project sits at every PRODUCT.md
+commitment (P1–P14) fully delivered, identity layer fully
+shaped, and the forward-commitment ledger closed. Future
+numbered phases land in response to operator feedback or as
+amendment-introduced commitments.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 

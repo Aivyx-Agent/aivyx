@@ -209,31 +209,57 @@ Task 3.
 
 ## Prediction vs. reality
 
-*(Filled at exit.)*
+- **DESIGN.md** — Predicted: streak **extends to seven**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 60 shipped under existing D-deliverables.
+
+- **PRODUCT.md** — Predicted: streak **ends at two**
+  (Task 7 Delivery Status refresh, intentional). **Reality:
+  correct.** Hash at entry:
+  `6bd91519f28370d72b382f9a87044230d7073f276e83d79c1dfb413235c54977`.
+  PRODUCT.md held byte-identical through Tasks 1–6 and broke
+  intentionally in Task 7 (`d97bf1b`) when P14 moved from
+  Forward to Fully Delivered and the ledger-closure
+  language landed.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to eight**. **Reality: correct.** Hash
+  unchanged:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  All Phase 60 surface routed through `aivyx-channel` (CLI
+  + IPC + Web UI HTML + revert folder) without touching
+  `aivyx-core`.
 
 ## Exit criteria
 
-*(Filled at exit.)*
-
-- [ ] `aivyx persona show` + `aivyx persona list` CLI
-  subcommands wired through `parse_cli_args` + `run` (Task 2).
-- [ ] Per-turn planner refresh in all four planner-factory
-  sites (Task 3); approved delta visible on next turn.
-- [ ] `QueryPayload::ListPersonaDeltas` +
-  `QueryPayload::GetEffectivePersona` + handlers (Task 4).
-- [ ] Web UI Persona pane rendering live state + click-to-
-  revert (Task 5).
-- [ ] Revert delta mechanism + folder integration (Task 6).
-- [ ] PRODUCT.md Delivery Status: P14 → Fully Delivered
-  (Task 7).
-- [ ] PRODUCT_ROADMAP + ROADMAP refreshed; milestone closed
-  (Task 8).
-- [ ] All five Q-block questions resolved.
-- [ ] DESIGN.md streak extends to seven (untouched).
-- [ ] PRODUCT.md streak ends at two (Task 7 intentional).
-- [ ] Production-core streak extends to eight (untouched).
-- [ ] Test count delta recorded.
-- [ ] Prediction-vs-reality block filled.
+- [x] `aivyx persona show` + `aivyx persona list` + `aivyx
+  persona revert` CLI subcommands wired through
+  `parse_cli_args` + `run` — Task 2, commit `8600c04`.
+- [x] Per-turn planner refresh in three planner-factory
+  sites (parent / daemon-run / role-switch child) — Task 3,
+  commit `25a9bf8`. Telegram in-process fallback deferred
+  per the scope note in Task 3 ship record.
+- [x] `QueryPayload::ListPersonaDeltas` +
+  `QueryPayload::GetEffectivePersona` + handlers + `FrontendMessage::RevertPersonaDelta`
+  + `DaemonMessage::PersonaRevertResolved` — Task 4, commit
+  `b7f356d`.
+- [x] Web UI Persona pane rendering live state + click-to-
+  revert — Task 5, commit `879efbc`.
+- [x] Revert delta mechanism (`PersonaDeltaOp::Revert` +
+  inverse-apply folder + revert-of-revert) — Task 6, commit
+  `65e7951`.
+- [x] PRODUCT.md Delivery Status: P14 → Fully Delivered —
+  Task 7, commit `d97bf1b`.
+- [x] PRODUCT_ROADMAP + ROADMAP refreshed; milestone closed.
+- [x] All five Q-block questions resolved (defaults
+  signed off pre-Task 6).
+- [x] DESIGN.md streak extends to seven.
+- [x] PRODUCT.md streak ends at two (Task 7 intentional).
+- [x] Production-core streak extends to eight.
+- [x] Test count delta: +19 (1052 → 1071 across the
+  workspace), zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
 
 ## Open questions
 

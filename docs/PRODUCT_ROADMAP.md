@@ -576,13 +576,14 @@ Profile fields.
   correct: DESIGN.md → 5, PRODUCT.md → broke at 2
   (Task 5, intentional), lib.rs → 7.
 
-## Milestone — Persona (P14, partially delivered)
+## Milestone — Persona ✓ (delivered across Phases 59–60)
 
 **Forward commitment:** PRODUCT.md P14 (amendment A10, Phase 56).
 **Couples to:** Profile (P13), Reflection Layer (P8), Memory
 persistence (G3).
-**Status:** Foundation delivered Phase 59. Visualization half
-(Phase 60) closes the milestone.
+**Status:** Fully delivered. P14 closed at Phase 60 exit
+(2026-05-12). After Phase 60, **P1–P14 are all fully shipped**;
+the PRODUCT.md forward-commitment ledger closes.
 
 **Persona** (operator's framing: "Soul") is the dynamic
 counterpart to Profile — the evolving character-layer that
@@ -666,15 +667,28 @@ layer.
   Phase 60** — Phase 59 ships snapshot-at-session-build;
   the planner-factory per-turn re-call lands alongside
   the Web UI / revert / CLI surfaces.
-- **Phase 60 (Visualization, next):** Web UI Persona
-  panel timeline view of the delta log; click-to-revert
-  via a structured revert delta (P14 commit 4);
-  `aivyx persona show` / `list` CLI subcommands;
-  per-turn planner-factory refresh so approved deltas
-  take effect on the next turn without daemon restart;
-  optional identity export/import. Closes the
-  milestone. After Phase 60, **P1–P14 are all
-  fully delivered**.
+- **Phase 60 (Visualization, shipped 2026-05-12):** closes
+  the milestone and the entire forward-commitment ledger.
+  `PersonaDeltaOp::Revert { target_delta_id }` variant +
+  inverse-apply folder for revert semantics including
+  revert-of-revert (P14 commit 4); per-turn planner-factory
+  refresh (closes Phase 59 Q5(a) deferral — approved deltas
+  take effect on next turn without restart);
+  `Query::GetEffectivePersona` + `Query::ListPersonaDeltas`
+  IPC envelopes + `FrontendMessage::RevertPersonaDelta`;
+  `aivyx persona show / list / revert` CLI subcommands
+  (daemon-IPC-backed per Q3(a) at sign-off); Web UI Persona
+  pane with effective-state rendering and click-to-revert.
+  Reverts are operator-only per Q5(a), auto-approved (the
+  operator is the proposer). Per Q4(a), revert appends a
+  delta to the append-only chain rather than mutating in
+  place. Identity export/import deferred to a future
+  micro-phase if pressure surfaces. Tests +19 (1052 → 1071).
+  All three streak predictions correct: DESIGN.md → 7,
+  PRODUCT.md → broke at 2 (Task 7 Delivery Status refresh,
+  intentional), lib.rs → 8. After Phase 60, **P1–P14 are
+  all fully shipped**. The PRODUCT.md forward-commitment
+  ledger closes here.
 
 ## Sequencing notes (revised at Phase 56 sign-off, 2026-05-12)
 
