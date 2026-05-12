@@ -203,7 +203,7 @@ frozen with exit commit hash. Update `docs/README.md` row.
 | 3 | `0e84160` | `docs/ADAPTER_PATTERN.md` out-of-tree section |
 | 4 | `96b2271` | `examples/python-channel/` adapter |
 | 5 | `4895485` | conformance suite (15 tests, daemon-free) |
-| 6 | _this commit_ | exit freeze |
+| 6 | `7fbb534` | exit freeze |
 
 ## Deferrals carried into the phase
 
