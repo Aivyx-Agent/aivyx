@@ -143,6 +143,16 @@ pub struct SessionConfig {
     /// are dropped during context-window pruning. `None` means pruned
     /// messages are silently discarded.
     pub prune_sink: Option<Arc<dyn aivyx_core::llm_planner::PruneSink>>,
+    /// Phase 60 — per-turn system-prompt refresh closure. When
+    /// `Some`, the planner factory invokes this on each turn to
+    /// rebuild the `system_prompt` from the current state of
+    /// Profile, Persona, and the active role. This is the
+    /// hot-reload hook for reflection-approved Persona deltas
+    /// (P14 commit 3) and closes the Phase 59 Q5(a) deferral.
+    /// `None` means "use the static `system_prompt` baked at
+    /// session-build time" — backwards-compatible with pre-Phase-60
+    /// callers.
+    pub prompt_refresher: Option<Arc<dyn Fn() -> String + Send + Sync>>,
 }
 
 /// Summary of what the session did, returned after EOF.
@@ -213,6 +223,13 @@ where
         planner_config = planner_config.with_prune_sink(sink);
     }
     let role_overrides_for_factory = config.role_overrides.clone();
+    // Phase 60 — per-turn Persona refresh. When `prompt_refresher`
+    // is `Some`, the factory closure invokes it on each turn to
+    // rebuild the system prompt; otherwise the static config baked
+    // at session-build time is used. Approved Persona deltas
+    // applied mid-session take effect on the next turn via this
+    // path, closing the Phase 59 Q5(a) hot-reload deferral.
+    let prompt_refresher_for_factory = config.prompt_refresher.clone();
 
     let agent = ConcreteAgent::new(
         AgentId::new(),
@@ -221,6 +238,9 @@ where
         audit,
         move || {
             let mut cfg = planner_config.clone();
+            if let Some(ref refresher) = prompt_refresher_for_factory {
+                cfg.system_prompt = Some(refresher());
+            }
             if let Some(ref shared) = role_overrides_for_factory {
                 if let Ok(overrides) = shared.read() {
                     if !overrides.is_empty() {

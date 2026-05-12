@@ -2150,11 +2150,31 @@ async fn run_async(
             ));
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
+        // Phase 60 Task 3 — per-turn Persona refresh inside the
+        // role-switch child agent. Each sub-session turn rebuilds
+        // its system prompt from the current shared state, so an
+        // operator-approved delta lands across the entire role
+        // tree (parent + every active child).
+        let child_refresher_profile = profile_for_factory.clone();
+        let child_refresher_role_name = target.to_string();
+        let child_refresher_role_prompt = target_role.system_prompt.value.clone();
+        let child_refresher_shared = persona_for_factory.clone();
         let child_planner_factory = move || {
+            let mut cfg = planner_config.clone();
+            let snap = child_refresher_shared
+                .read()
+                .expect("persona lock not poisoned at child turn build");
+            cfg.system_prompt = Some(aivyx_channel::assemble_session_prompt(
+                &child_refresher_profile,
+                Some(&*snap),
+                &child_refresher_role_name,
+                &child_refresher_role_prompt,
+            ));
+            drop(snap);
             Box::new(LlmPlanner::new(
                 Arc::clone(&planner_provider),
                 Arc::clone(&planner_tools),
-                planner_config.clone(),
+                cfg,
             )) as Box<dyn aivyx_core::TurnPlanner>
         };
 
@@ -2382,8 +2402,25 @@ async fn run_async(
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
         let daemon_overrides = shared_role_overrides.clone();
+        // Phase 60 Task 3 — per-turn Persona refresh, same shape
+        // as the local-CLI session config above.
+        let daemon_refresher_profile = profile.clone();
+        let daemon_refresher_role_name = active_role_name.clone();
+        let daemon_refresher_role_prompt = role_for_envelope.system_prompt.value.clone();
+        let daemon_refresher_shared = shared_persona.clone();
         let planner_factory = move || {
             let mut cfg = planner_config.clone();
+            // Per-turn rebuild from current Persona state.
+            let snap = daemon_refresher_shared
+                .read()
+                .expect("persona lock not poisoned at turn build");
+            cfg.system_prompt = Some(aivyx_channel::assemble_session_prompt(
+                &daemon_refresher_profile,
+                Some(&*snap),
+                &daemon_refresher_role_name,
+                &daemon_refresher_role_prompt,
+            ));
+            drop(snap);
             if let Ok(overrides) = daemon_overrides.read() {
                 if !overrides.is_empty() {
                     aivyx_channel::role_overrides::apply_to_planner_config(
@@ -2674,6 +2711,28 @@ async fn run_async(
                 }
             });
 
+            // Phase 60 Task 3 — assemble a per-turn refresher
+            // closure that re-runs assemble_session_prompt with the
+            // current shared_persona state. Approved Persona deltas
+            // applied via reflection.apply take effect on the next
+            // turn through this path.
+            let refresher_profile = profile.clone();
+            let refresher_role_name = active_role_name.clone();
+            let refresher_role_prompt = role_for_envelope.system_prompt.value.clone();
+            let refresher_shared = shared_persona.clone();
+            let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
+                Arc::new(move || {
+                    let snap = refresher_shared
+                        .read()
+                        .expect("persona lock not poisoned at turn build");
+                    aivyx_channel::assemble_session_prompt(
+                        &refresher_profile,
+                        Some(&*snap),
+                        &refresher_role_name,
+                        &refresher_role_prompt,
+                    )
+                });
+
             let session_config = SessionConfig {
                 model,
                 system_prompt,
@@ -2696,6 +2755,7 @@ async fn run_async(
                 tool_allowlist,
                 memory_topic_prefix,
                 role_overrides: Some(shared_role_overrides),
+                prompt_refresher: Some(prompt_refresher),
                 context_window_tokens: Some(provider_kind.value.default_context_window()),
                 prune_sink: Some(Arc::new(
                     aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
