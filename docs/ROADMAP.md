@@ -635,6 +635,15 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
+## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path
+
+**Active — see [PHASE_51.md](PHASE_51.md).** Mechanical
+Chapter A cleanup phase. Closes three independent items: the
+pre-Phase-1 `AivyxError::{Storage,Crypto}` TODOs in
+`aivyx-core/lib.rs` (typed nested errors per D6), the Phase 47
+`handle_connection` parameter-struct lift, and the Phase 47
+visual-pass-surfaced `AIVYX_PASSPHRASE` TOML/env inconsistency.
+
 ## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification [SHIPPED]
 
 **Frozen — see [PHASE_50.md](PHASE_50.md).** Wired the two Phase
