@@ -241,6 +241,27 @@ P14 should pin (subject to Q3 + Q4 resolution):
   - Does not commit Persona deltas to redb specifically;
     storage shape is implementation choice.
 
+## Task 4 ship record
+
+**Files modified:**
+- `docs/amendments/2026-05-12-product-commitment-p14-persona.md`
+  (+227, new file): A10 amendment adding P14 to PRODUCT.md
+  as the reflection-written dynamic identity layer growing
+  from Profile under P8-gated, P2-approved, HMAC-chained
+  operator-reversible delta accumulation. Includes a
+  prominent Terminology Note mapping operator's "Soul" to
+  contract's "Persona" per Q4(b). Pins seven commitments and
+  seven "deliberately does not say" carve-outs. Documents
+  composition with Profile, roles, memory, and reflection
+  and the "most differentiating commitment after P8" framing.
+- `PRODUCT.md` (+118): new P14 section inserted between P13
+  and Status. Terminology Note at the section head. Rule
+  sentence, seven numbered commitments (both HMAC-chained
+  *and* gate-threading properties pinned per Q3(c)), seven
+  "deliberately does not say" entries, composition note,
+  "most differentiating after P8" rationale, inline
+  amendment pointer.
+
 ### Task 5 — PRODUCT.md Delivery Status refresh
 
 Refresh the Delivery Status section (currently *"as of Phase

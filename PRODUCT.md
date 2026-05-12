@@ -1007,6 +1007,138 @@ tools into core.
 
 ---
 
+## Product Commitment 14 — Persona (LOCKED 2026-05-12)
+
+> *Added by amendment
+> [`2026-05-12-product-commitment-p14-persona.md`](docs/amendments/2026-05-12-product-commitment-p14-persona.md)
+> — filed in Phase 56 alongside A8 (pitch reframe) and A9
+> (P13 — Assistant Profile).*
+
+> **Terminology note:** The operator's vision uses **"Soul"**
+> for the evolving character-layer. The contract spelling is
+> **"Persona"**. Both refer to the same concept; contract
+> docs, phase journals, and code use "Persona."
+
+### The Rule
+
+> **Persona is the reflection-written dynamic identity layer
+> that grows from Profile (P13) over the assistant's
+> lifetime. Every Persona modification is a structured delta
+> proposed by the agent via the P8 reflection layer,
+> approved by the operator through the P2 mission-gate
+> machinery, and recorded in an HMAC-chained append-only
+> delta log audit-verifiable like the existing audit chain.
+> There is no silent Persona modification, no unaudited
+> Persona modification, and no operator-bypassed Persona
+> modification.**
+
+### What this commits us to
+
+1. **Persona modifications are P8-gated and P2-approved.**
+   The agent proposes Persona deltas through the same
+   `reflection.propose` surface that proposes memory and
+   role-config edits today. The operator approves them
+   through the same mission-gate machinery that approves
+   missions today. Silent agent-driven Persona evolution
+   is structurally impossible.
+
+2. **Persona deltas form an append-only HMAC-chained log
+   audit-verifiable like the existing audit chain.** The
+   chain may share the existing audit chain or live as a
+   parallel chain (implementation choice for Phase 59); the
+   contract pins HMAC-chained, append-only,
+   offline-verifiable as load-bearing security properties.
+
+3. **Effective Persona at turn start is `Profile + sum(approved
+   deltas)`.** Persona augments Profile, never overwrites
+   it. The effective-identity layer composed at the start of
+   every turn is Profile plus the deterministic application
+   of every approved delta from the log.
+
+4. **Persona is operator-reversible.** Because the delta log
+   is append-only but the effective Persona is computed by
+   *applying* deltas, the operator can revert to a prior
+   effective Persona by appending a structured revert delta
+   that nullifies one or more previous approved deltas.
+   The audit chain remains immutable; the agent's effective
+   voice returns to a prior state.
+
+5. **Persona is single-instance per operator.** Per **P1**
+   and **P6**, there is exactly one Persona delta log per
+   Aivyx daemon, parallel to the single Profile.
+
+6. **Persona writes are capability-secured.** The agent
+   needs an explicit capability (e.g., `persona.propose`,
+   exact base name TBD by Phase 59) to propose a delta.
+   Operators who do not want autonomous voice-evolution
+   simply do not grant this scope to any role; the
+   substrate degrades to "Profile drives the voice, delta
+   log stays empty forever."
+
+7. **Persona is plain-text-inspectable in its effective
+   form.** The operator can view the current effective
+   Persona without unlocking the redb store. The delta log
+   itself may be HMAC-chained and encrypted-at-rest; the
+   *effective* state is operator-readable.
+
+### What this commitment deliberately does not say
+
+- **It does not pin the delta categories.** Phase 59 chooses
+  whether deltas cover communication adaptations, learned
+  context, character traits, relationship milestones, or
+  other categories.
+- **It does not say reflection *must* propose Persona
+  deltas.** An operator may run Aivyx for years with an
+  empty delta log.
+- **It does not pin the storage backend.** Whether the log
+  lives in a new `KeyDomain::Persona`, shares the audit
+  chain's domain, or uses a separate file is implementation
+  choice.
+- **It does not preclude future delta export/import.** The
+  contract pins the security property, not the locality.
+- **It does not commit to a specific approval-gate UX.**
+  P2's mission-gate substrate already exists; Persona delta
+  approvals reuse it.
+- **It does not say Persona changes are autonomous by
+  default.** The capability gate is the operator's lever.
+- **It does not commit to a global Persona scope.** Per
+  **P7**'s attenuation rules, child roles' Persona writes
+  are scoped to the child's state.
+
+### Why this is the most differentiating commitment after P8
+
+**P8** already commits Aivyx to outcome-driven audited
+self-improvement at the *behavior* level (memory, role
+overrides). **P14** extends that posture to the *identity*
+level: the assistant's *voice* itself can evolve, but every
+evolution step is operator-approved and audit-verifiable.
+Together P8 and P14 define a single load-bearing property:
+**the assistant can become more useful over time, and every
+step of that becoming is legible to the operator and
+reversible by the operator.** No other agent product in the
+lane offers both.
+
+### How Persona composes with Profile, roles, memory, and reflection
+
+- **Profile (P13)** is the static seed; Persona is the
+  dynamic growth on top. Profile is *who the operator
+  declared the assistant to be*; Persona is *who the
+  assistant becomes*.
+- **Roles (P7 + P9)** gate capabilities; Persona has no
+  envelope. A Persona delta shapes *how* the agent
+  communicates, never *what* it may do.
+- **Memory (G3)** captures observations; Persona captures
+  voice refinements. Memory is dynamic substrate; Persona
+  is dynamic identity.
+- **Reflection (P8)** is the *engine* that proposes
+  Persona deltas. P14 commits to nothing new in reflection
+  machinery beyond a new delta category.
+- **Effective system prompt at turn start** = Profile +
+  sum(approved Persona deltas) + active-role
+  `system_prompt` + role-derived envelope description.
+
+---
+
 ## Status
 
 This document is the **locked product contract**. Edits require
