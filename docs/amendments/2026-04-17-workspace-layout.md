@@ -11,9 +11,13 @@ additive only.
 ## What changed
 
 D8's repo skeleton described a 9-crate workspace of stubs.
-The workspace now has **11 crates** with substantial module
+The workspace now has **12 crates** with substantial module
 growth, most of it concentrated in `aivyx-channel` which
 serves as the platform's integration hub.
+
+> **Phase 49 addendum (2026-05-12):** crate count bumped
+> from 11 to 12 with the addition of `aivyx-tool`. See the
+> traceability row for Phase 49 below.
 
 ---
 
@@ -52,7 +56,8 @@ serves as the platform's integration hub.
     ├── aivyx-memory/     memory.{read,write,forget} tools
     ├── aivyx-channel/    platform integration hub (see module map below)
     ├── aivyx-telegram/   Telegram transport: ReqwestTransport, scripted mock
-    └── aivyx-mcp/        MCP client adapter: McpServerBridge, McpToolProxy
+    ├── aivyx-mcp/        MCP client adapter: McpServerBridge, McpToolProxy
+    └── aivyx-tool/       Tool process IPC: ToolProcessBridge, ToolProxy (Phase 49)
 ```
 
 ### New crate: `aivyx-telegram` (Phase 8)
@@ -124,3 +129,4 @@ preserves the production-core streak by keeping
 | Phase 21 | +`mission.rs`, `mission_tool.rs` |
 | Phase 23 | +`aivyx-mcp` crate (11 crates), `mcp.call` scope base |
 | Phase 24 | `[[mcp_server]]` config entries, daemon-side MCP bridge lifecycle |
+| Phase 49 | +`aivyx-tool` crate (**12 crates**), `[[tool_process]]` config, `ToolProcessBridge` for third-party out-of-process tool IPC — delivers PRODUCT.md P12 |

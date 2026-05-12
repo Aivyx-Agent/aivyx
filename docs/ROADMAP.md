@@ -610,10 +610,22 @@ DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
 Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
 remains as a forward commitment.
 
-## Phase 49 — Tool Process IPC Foundation (P12)
+## Phase 49 — Tool Process IPC Foundation (P12) [SHIPPED]
 
-**Active — see [PHASE_49.md](PHASE_49.md).** Third-party tools
-as separate OS processes speaking the daemon's IPC protocol.
-`ToolProcessBridge`, tool process lifecycle, `TOOL_SDK.md`,
-example Python tool. Foundation phase — first-party in-process
-unification deferred. Completes all 12 product commitments.
+**Frozen — see [PHASE_49.md](PHASE_49.md).** Delivered the
+last `PRODUCT.md` forward commitment. New 12th workspace crate
+`aivyx-tool` shipping `ToolProcessBridge` (spawns + handshakes a
+child over length-prefixed JSON on stdin/stdout, `kill_on_drop`
+safety net), `ToolProxy` (implements `aivyx_core::Tool` by
+delegating to the bridge), `[[tool_process]]` TOML config with
+operator scope-narrowing overrides, `docs/TOOL_SDK.md` as the
+v0 third-party contract, and `examples/python-tool/` — a stdlib-
+only Python wordcount reference with a 9-test conformance suite
+driving the real subprocess. Foundation phase: first-party
+in-process protocol unification deferred to a future phase per
+Q5. **All twelve PRODUCT.md commitments now shipped — the
+forward-commitment ledger is closed.** DESIGN.md A4 addendum
+filed (11 → 12 crates); PRODUCT.md Delivery Status refreshed
+(both streak predictions broken deliberately, lib.rs streak
+held at 4). 966 Rust tests + 24 Python conformance tests, zero
+clippy.

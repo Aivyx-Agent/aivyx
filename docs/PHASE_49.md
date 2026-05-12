@@ -267,7 +267,8 @@ phase; first-party in-process unification deferred)".
 | 4 | `ba8c7dd` | `ToolProxy` (aivyx_core::Tool impl) + 3 e2e tests — 963 tests |
 | 5 | `584a349` | `[[tool_process]]` config + daemon spawn loop — 966 tests |
 | 6 | `67cc7c8` | `examples/python-tool/` wordcount reference |
-| 7 | _this commit_ | conformance suite (9 tests, real subprocess) |
+| 7 | `6673afc` | conformance suite (9 tests, real subprocess) |
+| 8 | _this commit_ | exit freeze — A4 addendum + PRODUCT.md refresh |
 
 ## Deferrals carried into the phase
 
@@ -291,22 +292,102 @@ phase; first-party in-process unification deferred)".
 
 ## Exit criteria
 
-- [ ] `docs/TOOL_SDK.md` exists and documents the contract.
-- [ ] `aivyx-tool` crate builds, has serde round-trip tests for
+- [x] `docs/TOOL_SDK.md` exists and documents the contract.
+- [x] `aivyx-tool` crate builds, has serde round-trip tests for
   every wire variant.
-- [ ] `ToolProcessBridge` spawns and handshakes against a
+- [x] `ToolProcessBridge` spawns and handshakes against a
   fake child process in integration tests.
-- [ ] `[[tool_process]]` TOML loads + spawns at daemon startup.
-- [ ] `examples/python-tool/` runs and demonstrates an
-  invocation end-to-end.
-- [ ] Conformance scenarios pass.
-- [ ] DESIGN.md untouched modulo A4 amendment addendum
-  (streak → 8).
-- [ ] PRODUCT.md untouched (streak → 13).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 4).
-- [ ] Zero clippy warnings; 948 Rust tests + new tests still
-  passing.
+- [x] `[[tool_process]]` TOML loads + spawns at daemon startup.
+- [x] `examples/python-tool/` runs and demonstrates an
+  invocation end-to-end *(verified end-to-end with an inline
+  harness during Task 6)*.
+- [x] Conformance scenarios pass — 9/9 Python tests.
+- [x] DESIGN.md A4 addendum filed for the 12-crate workspace.
+- [x] PRODUCT.md Delivery Status refreshed (prediction broken
+  — PRODUCT.md streak ends, see Streak outcomes).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 4).
+- [x] Zero clippy warnings.
+- [x] Rust tests 948 → 966 (+18); Python conformance suites:
+  channel 15, tool 9 (new).
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 948 → 966 (+18: 12 aivyx-tool unit + 3 proxy_e2e
+  integration + 3 aivyx-config tool_process loader tests)
+- Python conformance tests: 15 (channel) → 24 (channel + tool, +9 new)
+- Workspace crates: 11 → 12 (aivyx-tool added)
+- Clippy warnings: 0
+- Deferral backlog: 5 → 7 (two new entries below)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (8) | A4 addendum filed | **0 (broken)** |
+| PRODUCT.md | untouched (13) | Delivery Status refreshed (P5/P11/P12 moved to Fully Delivered, header line updated to Phase 49 exit) | **0 (broken)** |
+| `aivyx-core/src/lib.rs` | untouched (4) | untouched | 4 |
+
+Two predictions broken — both deliberate.
+
+**DESIGN.md break:** The A4 amendment was always going to need
+an addendum for the 12th crate (Phase 49 plan flagged this
+explicitly). The addendum is a single Phase 49 row at the
+bottom of the traceability table plus a one-paragraph note
+near the top — narrow surface, contract still load-bearing.
+
+**PRODUCT.md break:** When a phase delivers a forward
+commitment, the Delivery Status section gets refreshed. Phase
+35 and Phase 38 established this pattern. The header line
+(*"as of Phase 38 exit"*) is necessarily wrong after Phase
+49 ships the last three commitments. Honesty over streak
+preservation (Phase 6 Q5).
+
+The production-core `aivyx-core/src/lib.rs` streak held at 4 —
+the at-risk prediction from the Q-block survived. All Phase
+49 code lives in the new `aivyx-tool` crate plus
+`aivyx-config` and the binary; the `Tool` trait was
+deliberately not reshaped per Q5.
+
+### Net-new deferrals carried forward
+
+1. **First-party in-process protocol unification.** Per Q5.
+   The 8 substrate tools (`fs.read`, `fs.write`, `memory.*`,
+   `shell.exec`, `web.fetch`, `web.post`) currently implement
+   `Tool` directly; P12 commits they speak "the same protocol
+   third-party tools speak." A future phase rewires them
+   without bumping the API contract.
+2. **Per-tool sandboxing on top of process isolation.** Phase
+   49 ships process isolation only. seccomp / containers /
+   separate UIDs are valid future hardening on top, per
+   `PRODUCT.md` P12 ("a future phase may add OS-level
+   sandboxing on top of the IPC isolation"). Out of scope
+   here.
+
+### Operator-side verification still pending
+
+The Python tool example has a documented manual smoke-test
+recipe in `examples/python-tool/README.md` (add to
+`aivyx.toml`, run `aivyx daemon run`, ask the agent to call
+the tool). Not run in-phase. Recommended for the first
+operator who picks up Phase 49's work.
+
+### Forward commitments status
+
+`PRODUCT.md` forward-commitment ledger after Phase 49:
+
+- ~~P1~~ ✓ (Phase 14, 33)
+- ~~P2~~ ✓ (Phases 21, 23, 28, 35)
+- ~~P4~~ ✓ (Phases 16–20)
+- ~~P5~~ ✓ (Phase 48)
+- ~~P6~~ ✓ (always — construction)
+- ~~P7~~ ✓ (Phases 11, 13)
+- ~~P8~~ ✓ (Phases 28–30)
+- ~~P9~~ ✓ (Phase 13)
+- ~~P10~~ ✓ (always; A5 at Phase 38)
+- ~~P11~~ ✓ (Phases 48, 49)
+- ~~P12~~ ✓ (Phase 49 foundation)
+- ~~P3~~ ✓ vision document, all seven goals (G1–G7) shipped
+
+**The forward-commitment ledger is closed.** Future phases
+work against deferrals, hardening, and post-P12 refinements
+rather than against new product-shape commitments.

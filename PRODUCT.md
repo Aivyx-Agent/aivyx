@@ -1060,13 +1060,19 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 38 exit, 2026-04-20)
+## Delivery Status (as of Phase 49 exit, 2026-05-12)
 
 A traceability surface mapping each product commitment to its
-implementation state after 38 phases. The commitment text
+implementation state after 49 phases. The commitment text
 above is unchanged (except P10's seven→eight amendment) —
 this section records what shipped, what partially shipped,
 and what remains forward.
+
+**As of Phase 49 exit, all twelve product commitments are
+shipped.** The forward-commitment ledger is closed. P12 ships
+as a foundation phase — the third-party tool-process path is
+operational; first-party in-process protocol unification is
+deferred to a future phase (Phase 49 Q5).
 
 ### Fully Delivered
 
@@ -1123,6 +1129,34 @@ and what remains forward.
   Infrastructure tools and third-party MCP tools are separate
   categories.
 
+- **P5 — Open First-Party Channel Surface.** Phase 48.
+  `docs/CHANNEL_SDK.md` is the v0 third-party contract;
+  `examples/python-channel/` is the worked reference (Python
+  3, stdlib only, 15-test conformance suite). The substrate
+  was always present (Phase 16 daemon IPC, Phase 19
+  multi-connection, Phase 39 Web UI proves it works for
+  out-of-Rust adapters) — Phase 48 *published* it.
+
+- **P11 — SDK Contract: Interface + Integration.** Phase 48
+  (channel half) + Phase 49 (tool half). Each SDK's
+  `docs/*_SDK.md` declares integration guarantees (capability
+  gating, audit logging, cancellation) as stable while
+  explicitly deferring API stability per the original P11
+  posture ("stability deferred until real third-party use").
+
+- **P12 — Tools as Separate Processes Over Daemon IPC.**
+  Phase 49 foundation. `aivyx-tool` crate (12th workspace
+  member, A4 addendum); `ToolProcessBridge` spawns child
+  processes via tokio with `kill_on_drop`; `ToolProxy`
+  implements `aivyx_core::Tool` over a length-prefixed JSON
+  protocol on the child's stdin/stdout; operator declares
+  tools in `[[tool_process]]`; scope binding at handshake
+  with operator-narrowing overrides; `docs/TOOL_SDK.md` is
+  the v0 contract; `examples/python-tool/` ships the
+  worked wordcount reference. **Foundation phase — third-
+  party path complete; first-party in-process protocol
+  unification deferred to a future phase per Phase 49 Q5.**
+
 ### Partially Delivered
 
 - **P3 — Goals and Non-Goals.** Vision document — partially
@@ -1143,27 +1177,19 @@ and what remains forward.
     trigger unification, mission wrapping.
   - **G6 (Local execution, privacy):** Shipped (Phase 34).
     Ollama first-class support with health check.
-  - **G7 (Third-party tool SDK):** `Tool` trait exists. MCP
-    integration shipped (Phases 23–24, 32). SDK documentation
-    and process IPC not yet started.
+  - **G7 (Third-party tool SDK):** Shipped (Phases 48, 49).
+    `docs/CHANNEL_SDK.md` and `docs/TOOL_SDK.md` document the
+    v0 contracts; `examples/python-channel/` and
+    `examples/python-tool/` are the worked references. MCP
+    integration remains as a parallel adapter (Phases 23–24, 32).
 
 ### Forward (Not Yet Started)
 
-- **P5 — Open First-Party Channel Surface.** The
-  `ChannelContext` trait is the de facto adapter interface, but
-  no documented SDK surface, no versioned contract, no
-  third-party-consumable crate exists yet. Blocked on SDK
-  documentation pass.
-
-- **P11 — SDK Contract: Interface + Integration.** The `Tool`
-  trait is the in-tree SDK surface. No published documentation,
-  no worked examples for third-party authors, no stability
-  commitment. Blocked on P5 + P12 landing.
-
-- **P12 — Tools as Separate Processes Over Daemon IPC.** All
-  tools are in-process. The daemon IPC protocol exists but has
-  no tool-process extension. Blocked on IPC protocol extension
-  for tool registration and dispatch.
+*(Empty as of Phase 49 exit. The Phase 49 deferral list —
+first-party in-process protocol unification, per-tool
+sandboxing on top of process isolation — lives in the
+phase journal and the rolling roadmap deferral backlog,
+not in the product contract's Forward column.)*
 
 ### Forward Commitment Candidates — Status Update
 
@@ -1188,6 +1214,10 @@ candidates. Several have since been delivered:
   watchers, `TriggerDispatch` unification, opt-in mission
   wrapping.
 
-- **Web UI Channel.** Not yet started. The daemon architecture
-  and `FrontendType` enum are designed to make this cheap.
-  Highest-impact undelivered user-facing feature.
+- **Web UI Channel.** Delivered (Phases 39, 47). Phase 39
+  shipped the chat surface (localhost-only `127.0.0.1:7843`,
+  `FrontendType::Web`, embedded HTML/CSS/JS, WebSocket bridge
+  to the daemon IPC). Phase 47 extended it into a full
+  operator inspection surface (mission dashboard, audit
+  viewer with verify-chain banner, sessions list) by adding
+  the `Query`/`QueryResponse` IPC envelope.

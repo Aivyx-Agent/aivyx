@@ -67,6 +67,7 @@ dependencies = [
  "aivyx-memory",
  "aivyx-storage",
  "aivyx-telegram",
+ "aivyx-tool",
  "async-trait",
  "base64",
  "chrono",
