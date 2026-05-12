@@ -240,7 +240,7 @@ deferral #1 first-party unification, plus the ToolEvent relay
 | 2 | `f2104b0` | ToolEvent relay + per-call cancellation (Tasks 2 + 3 fused) — 968 tests |
 | 4 | `305a392` | `run_tool_as_subprocess<T: Tool>` harness — 972 tests |
 | 5 | `d87842e` | P12 equivalence proof: `FsReadTool` in-process == subprocess — 973 tests |
-| 6 | _this commit_ | Contract updates: TOOL_SDK.md §8.5 + PRODUCT.md P12 → Fully Delivered |
+| 6 | `6e59e94` | Contract updates: TOOL_SDK.md §8.5 + PRODUCT.md P12 → Fully Delivered |
 
 ## Deferrals carried into the phase
 
@@ -261,20 +261,76 @@ deferral #1 first-party unification, plus the ToolEvent relay
 
 ## Exit criteria
 
-- [ ] `ToolEvent::{Status, OutputChunk, Log}` relay through the
+- [x] `ToolEvent::{Status, OutputChunk, Log}` relay through the
   bridge, observable from the channel.
-- [ ] `CancelInvocation { call_id }` sent when the proxy's
+- [x] `CancelInvocation { call_id }` sent when the proxy's
   cancellation fires mid-invocation.
-- [ ] `run_tool_as_subprocess<T: Tool>` lives in `aivyx-tool`.
-- [ ] Conformance test: `FsReadTool` in-process and subprocess
-  paths produce identical `ToolOutcome`.
-- [ ] `docs/TOOL_SDK.md` documents the first-party symmetry.
-- [ ] `PRODUCT.md` Delivery Status reflects P12 fully delivered.
-- [ ] DESIGN.md untouched (streak → 2).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 6).
-- [ ] Zero clippy warnings.
-- [ ] Rust tests net-positive.
+- [x] `run_tool_as_subprocess<T: Tool>` lives in `aivyx-tool`.
+- [x] Conformance test: `FsReadTool` in-process and subprocess
+  paths produce identical `ToolOutcome`
+  (`tests/p12_equivalence.rs`).
+- [x] `docs/TOOL_SDK.md` documents the first-party symmetry
+  (new §8.5).
+- [x] `PRODUCT.md` Delivery Status reflects P12 fully delivered.
+- [x] DESIGN.md untouched (streak → 2).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 6).
+- [x] Zero clippy warnings.
+- [x] Rust tests 966 → 973 (+7).
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 966 → 973 (+7: 4 harness unit + 2 proxy_e2e + 1
+  p12_equivalence)
+- Python conformance tests: 24 (unchanged)
+- Workspace crates: 12 (unchanged)
+- Clippy warnings: 0
+- Deferral backlog: 7 → 4
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (2) | untouched | 2 |
+| PRODUCT.md | break (0) | Delivery Status refreshed | **0 (broken)** |
+| `aivyx-core/src/lib.rs` | untouched (6) | untouched | **6** |
+
+All three predictions correct. The lib.rs streak — the at-risk
+one per Q4 — survived. Phase 50 lived entirely inside
+`aivyx-tool` plus contract-doc edits.
+
+### Deferrals closed by Phase 50 (3 of 7)
+
+| # | Source | What was closed |
+|---|---|---|
+| 6 | P49 Q5 | First-party in-process protocol unification — proven by `p12_equivalence.rs` |
+| — | P49 bridge TODO | `ToolEvent` relay onto channel |
+| — | P49 proxy TODO | Per-call targeted `CancelInvocation` |
+
+(The two bridge TODOs were Phase 49 implementation deferrals
+recorded in code comments rather than the formal backlog —
+their closure is documented in the Task 2/3 commit message and
+the file-level docstrings in `bridge.rs` and `proxy.rs`.)
+
+### Deferrals carried forward (4)
+
+1. Live audit push (P47 Q4)
+2. Read-write dashboard inspection (P47 Q6)
+3. `handle_connection` parameter-struct lift (P47 T4)
+4. Conformance harness as a Rust crate (P48 Q5)
+5. IPC stability window commitment (P48 Q6)
+6. ~~First-party in-process protocol unification (P49 Q5)~~ **closed**
+7. Per-tool sandboxing on top of process isolation (P49)
+
+Phase 51 (cleanup) is well-positioned to absorb #1, #3, and the
+pre-Phase-1 `AivyxError::{Storage,Crypto}` TODOs in
+`aivyx-core/lib.rs:689,693` plus the `AIVYX_PASSPHRASE`
+TOML/env inconsistency. Phase 52 absorbs #7 (container
+sandboxing). Phase 54 closes the documentation arc.
+
+### Operator-side verification still pending
+
+The Phase 49 + 50 surface is structurally complete. End-to-end
+verification against a live daemon under Ollama — calling a
+real out-of-process tool from the agent, watching events render
+in the Web UI audit pane — is recommended at Chapter A exit.
+That fits naturally under Phase 54.

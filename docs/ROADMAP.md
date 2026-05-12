@@ -635,15 +635,26 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
-## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification
+## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification [SHIPPED]
 
-**Active — see [PHASE_50.md](PHASE_50.md).** Wires the two
-Phase 49 deferred bridge stubs (ToolEvent → channel relay,
-per-call CancelInvocation). Adds `run_tool_as_subprocess<T:
-Tool>` harness. Proves the "extractable without rewriting"
-clause of P12 with an in-process-vs-subprocess conformance
-test against `FsReadTool`. Moves PRODUCT.md P12 from
-"foundation phase" to "fully delivered."
+**Frozen — see [PHASE_50.md](PHASE_50.md).** Wired the two Phase
+49 deferred bridge stubs: `ToolEvent` frames now relay onto the
+channel (`Status`/`OutputChunk` → `StreamEvent`), and
+cancellation is targeted via `CancelInvocation { call_id }`
+using a caller-supplied id. Added `run_tool_as_subprocess<T:
+Tool>` harness in `aivyx-tool::harness` — a generic function
+that wraps any `aivyx_core::Tool` impl as a tool-process binary
+with a synthesized `ToolContext` (channel relays events back as
+`ToolEvent` frames; audit is null per the one-row-per-call
+invariant). The canonical proof of P12's "extractable without
+rewriting" clause is `tests/p12_equivalence.rs`, which drives
+the same `FsReadTool` invocation through in-process `execute()`
+and through the harness-wrapped subprocess via
+`ToolProcessBridge` + `ToolProxy`, then asserts byte-identical
+`ToolOutcome::Completed`. PRODUCT.md P12 moved to **Fully
+Delivered**. 973 tests, zero clippy. lib.rs streak held at 6;
+DESIGN.md held at 2; PRODUCT.md broke at delivery-status
+refresh (honest break, predicted).
 
 ## Phase 49 — Tool Process IPC Foundation (P12) [SHIPPED]
 
