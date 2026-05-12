@@ -21,12 +21,14 @@
 
 pub mod bridge;
 pub mod frame;
+pub mod proxy;
 pub mod wire;
 
 pub use bridge::{
     InvocationOutcome, ToolBridgeError, ToolProcessBridge, ToolProcessConfig,
 };
 pub use frame::{encode_frame, read_frame, write_frame, FrameError, MAX_PAYLOAD_SIZE};
+pub use proxy::ToolProxy;
 pub use wire::{
     DaemonToTool, ToolDescriptor, ToolEventPayload, ToolToDaemon, Verification,
     TOOL_PROTOCOL_VERSION,

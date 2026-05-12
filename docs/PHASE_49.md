@@ -263,7 +263,8 @@ phase; first-party in-process unification deferred)".
 |---|---|---|
 | 1 | `addc4eb` | scaffold |
 | 2 | `a6cb144` | `docs/TOOL_SDK.md` |
-| 3 | _this commit_ | `aivyx-tool` crate (wire + frame + bridge) — 959 tests |
+| 3 | `8e3e55a` | `aivyx-tool` crate (wire + frame + bridge) — 959 tests |
+| 4 | _this commit_ | `ToolProxy` (aivyx_core::Tool impl) + 3 e2e tests — 963 tests |
 
 ## Deferrals carried into the phase
 
