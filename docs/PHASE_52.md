@@ -201,7 +201,7 @@ closed.
 | 2 | `f5e4fda` | SandboxConfig + bridge wrapper application — 980 tests |
 | 3 | `1dce6cc` | [tool_process.sandbox] TOML schema + binary wiring — 983 tests |
 | 4 | `1c74a80` | Integration test with `env` no-op wrapper — 984 tests |
-| 5 | _this commit_ | TOOL_SDK.md §9 + THREAT_MODEL.md §5.6 update |
+| 5 | `5a9a72a` | TOOL_SDK.md §9 + THREAT_MODEL.md §5.6 update |
 
 ## Deferrals carried into the phase
 
@@ -219,20 +219,76 @@ closed.
 
 ## Exit criteria
 
-- [ ] `SandboxConfig { wrapper, args }` exists in `aivyx-tool`.
-- [ ] `ToolProcessConfig.sandbox: Option<SandboxConfig>` plumbs
+- [x] `SandboxConfig { wrapper, args }` exists in `aivyx-tool`.
+- [x] `ToolProcessConfig.sandbox: Option<SandboxConfig>` plumbs
   through `ToolProcessBridge::spawn`.
-- [ ] `[tool_process.sandbox]` TOML schema loads and validates.
-- [ ] Integration test using `env` as wrapper drives the
-  Python wordcount tool end-to-end.
-- [ ] `docs/TOOL_SDK.md` has a §10 with three worked examples.
-- [ ] `docs/THREAT_MODEL.md` §5.6 points at §10.
-- [ ] DESIGN.md untouched (streak → 4).
-- [ ] PRODUCT.md untouched (streak → 3).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 1).
-- [ ] Zero clippy warnings.
-- [ ] Rust tests net-positive.
+- [x] `[tool_process.sandbox]` TOML schema loads and validates.
+- [x] Integration test using `env` as wrapper drives the inline
+  Python echo tool end-to-end (closer to the wordcount tool in
+  spirit; the inline harness keeps the test self-contained).
+- [x] `docs/TOOL_SDK.md` has a §9 (renumbered from §10 to keep
+  file order monotonic) with three worked examples.
+- [x] `docs/THREAT_MODEL.md` §5.6 rewritten to acknowledge
+  Phase 49 + 50 + 52 narrowing.
+- [x] DESIGN.md untouched (streak → 4).
+- [x] PRODUCT.md untouched (streak → 3).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 1).
+- [x] Zero clippy warnings.
+- [x] Rust tests 979 → 984 (+5).
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 979 → 984 (+5: 1 bridge unit, 3 config-load,
+  1 e2e sandbox-wrapper)
+- Python conformance tests: 24 (unchanged)
+- Workspace crates: 12 (unchanged)
+- Clippy warnings: 0
+- Deferral backlog: 4 → 4 (P49 sandboxing closed; no net change
+  because it had not made it into the rolling backlog as a
+  numbered item — only into the PHASE_49.md exit list)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (4) | untouched | 4 |
+| PRODUCT.md | untouched (3) | untouched | 3 |
+| `aivyx-core/src/lib.rs` | untouched (1) | untouched | **1** |
+
+All three predictions correct. lib.rs was at risk (any change
+to error types or substrate trait shape touches it) but the
+sandbox layer lives entirely in `aivyx-tool` + `aivyx-config` +
+binary — no core trait churn.
+
+### Items closed
+
+| Item | Source | What was closed |
+|---|---|---|
+| Per-tool sandboxing | Phase 49 net-new deferral | Generic command-wrapper layer in `aivyx-tool`; `[tool_process.sandbox]` TOML; `TOOL_SDK.md` §9 |
+| THREAT_MODEL §5.6 narrowing | Threat-model gap | Rewritten to acknowledge Phases 49/50/52 |
+
+### Deferrals carried forward (4)
+
+1. Live audit push (P47 Q4)
+2. Read-write dashboard inspection (P47 Q6)
+3. Conformance harness as a Rust crate (P48 Q5)
+4. IPC stability window commitment (P48 Q6)
+
+### Operator-side verification
+
+The Phase 52 sandbox wiring works end-to-end against a real
+sandbox tool — needs a manual smoke test on an actual Linux box
+with `bwrap` installed. Recommended verification at Chapter A
+exit (Phase 54).
+
+### Chapter A position
+
+Three of five Chapter A phases shipped:
+
+- ~~Phase 50~~ ✓ — P12 closeout (first-party in-process protocol unification)
+- ~~Phase 51~~ ✓ — Cleanup (error typing + ConnectionContext + passphrase path)
+- ~~Phase 52~~ ✓ — Tool process sandbox layer
+- **Phase 53** — Audit log rotation/compaction *(optional)*
+- **Phase 54** — Final documentation sweep
+
+If Phase 53 is skipped, Phase 54 follows directly.

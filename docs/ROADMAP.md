@@ -635,15 +635,22 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
-## Phase 52 — Tool Process Sandbox Layer
+## Phase 52 — Tool Process Sandbox Layer [SHIPPED]
 
-**Active — see [PHASE_52.md](PHASE_52.md).** Adds a generic
-command-wrapper sandbox layer to `[[tool_process]]` —
-`[tool_process.sandbox] wrapper = "..." args = [...]` is
-prepended to the spawn. Closes the Phase 49 per-tool
-sandboxing deferral. Aivyx supplies the policy slot; the
-operator supplies the policy (bubblewrap / firejail / docker /
-sandbox-exec).
+**Frozen — see [PHASE_52.md](PHASE_52.md).** Added a generic
+command-wrapper sandbox layer to `[[tool_process]]`.
+`[tool_process.sandbox] { wrapper, args }` is prepended to the
+spawn — `wrapper wrapper_args... command command_args...`.
+Aivyx supplies the policy slot; the operator supplies the
+policy (bubblewrap, firejail, docker, sandbox-exec). Closes
+the Phase 49 sandboxing deferral and narrows THREAT_MODEL.md
+§5.6. New `aivyx-tool::SandboxConfig` + matching `aivyx-config`
+type + binary wiring. Integration test uses POSIX `env` as a
+universal no-op wrapper so the suite runs anywhere `cargo test`
+runs. `docs/TOOL_SDK.md` §9 documents three worked examples
+(bwrap / firejail / docker). 984 tests, zero clippy. All three
+streak predictions correct (DESIGN.md → 4, PRODUCT.md → 3,
+lib.rs → 1).
 
 ## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path [SHIPPED]
 
