@@ -12,6 +12,7 @@ members = [
     "crates/aivyx-channel",
     "crates/aivyx-telegram",
     "crates/aivyx-mcp",
+    "crates/aivyx-tool",
 ]
 
 [workspace.package]

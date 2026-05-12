@@ -218,6 +218,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-tool"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "async-trait",
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

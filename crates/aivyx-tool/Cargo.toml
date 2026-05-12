@@ -1,0 +1,31 @@
+[package]
+name = "aivyx-tool"
+description = "Tool process IPC bridge — third-party tools as separate OS processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# Phase 49 — Tool Process IPC Foundation (P12). This crate mirrors
+# aivyx-mcp's shape (Phase 23): a bridge that spawns subprocess
+# tools and proxies them as aivyx_core::Tool impls. Direction is
+# opposite — MCP is a client to MCP servers; aivyx-tool is the
+# host of Aivyx-native tool processes — but the substrate is the
+# same shape: tokio process spawning + length-prefixed JSON over
+# stdio + a Tool impl that delegates over a channel.
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "sync", "rt", "time"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "process", "io-util"] }

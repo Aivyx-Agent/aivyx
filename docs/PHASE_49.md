@@ -262,7 +262,8 @@ phase; first-party in-process unification deferred)".
 | Task | Commit | Notes |
 |---|---|---|
 | 1 | `addc4eb` | scaffold |
-| 2 | _this commit_ | `docs/TOOL_SDK.md` |
+| 2 | `a6cb144` | `docs/TOOL_SDK.md` |
+| 3 | _this commit_ | `aivyx-tool` crate (wire + frame + bridge) — 959 tests |
 
 ## Deferrals carried into the phase
 
