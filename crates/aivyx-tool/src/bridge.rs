@@ -5,9 +5,13 @@
 //! `ToolRegister` handshake on startup, and routes per-invocation
 //! `InvokeTool` → `ToolResult`/`ToolError` traffic on demand.
 //!
-//! Phase 49 — foundation phase. The bridge ships the third-party
-//! path only (P12); first-party in-process unification is
-//! deferred per Q5.
+//! Phase 49 — foundation phase shipped the third-party path.
+//!
+//! Phase 50 (P12 closeout) wired the two deferred refinements:
+//! `ToolEvent` frames are now relayed to the caller via an mpsc
+//! channel (so a `ToolProxy` can forward them to its
+//! `ChannelContext`), and the caller-supplied `call_id` lets
+//! cancellation be targeted at a specific in-flight invocation.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -15,11 +19,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::frame::{read_frame, write_frame, FrameError};
 use crate::wire::{
-    DaemonToTool, ToolDescriptor, ToolToDaemon, TOOL_PROTOCOL_VERSION,
+    DaemonToTool, ToolDescriptor, ToolEventPayload, ToolToDaemon, TOOL_PROTOCOL_VERSION,
 };
 
 #[derive(Debug, Error)]
@@ -60,6 +64,17 @@ pub enum InvocationOutcome {
     },
 }
 
+/// One message pumped from the reader loop to a pending invocation.
+/// Phase 50 — Phase 49's reader_loop dropped `ToolEvent` frames on
+/// the floor; Phase 50 surfaces them on the same channel as the
+/// terminal `Outcome` variant so `invoke_with_events` can deliver
+/// both kinds in order.
+#[derive(Debug, Clone)]
+enum BridgeMessage {
+    Event(ToolEventPayload),
+    Outcome(InvocationOutcome),
+}
+
 /// Configuration for spawning a tool process.
 #[derive(Debug, Clone)]
 pub struct ToolProcessConfig {
@@ -84,7 +99,7 @@ pub struct ToolProcessBridge {
     config: ToolProcessConfig,
     descriptors: Vec<ToolDescriptor>,
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<InvocationOutcome>>>>,
+    pending: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>>,
     _child: Child,
     _reader_handle: tokio::task::JoinHandle<()>,
 }
@@ -122,7 +137,7 @@ impl ToolProcessBridge {
 
         let stdin = Arc::new(Mutex::new(stdin));
         let pending: Arc<
-            Mutex<HashMap<String, oneshot::Sender<InvocationOutcome>>>,
+            Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>,
         > = Arc::new(Mutex::new(HashMap::new()));
 
         // Send ToolHello.
@@ -179,7 +194,14 @@ impl ToolProcessBridge {
 
     /// Send an `InvokeTool` and await the matching `ToolResult` or
     /// `ToolError`. Concurrent calls are safe — the bridge
-    /// demultiplexes responses by `call_id`.
+    /// demultiplexes responses by `call_id`. Any `ToolEvent`
+    /// frames the tool emits mid-invocation are silently absorbed;
+    /// use [`Self::invoke_with_events`] to surface them.
+    ///
+    /// Generates a fresh UUID `call_id` per call. Callers that need
+    /// to send a targeted `CancelInvocation` while the invocation is
+    /// in flight should use [`Self::invoke_with_events`] and pass
+    /// their own `call_id`.
     pub async fn invoke(
         &self,
         tool_name: &str,
@@ -187,31 +209,59 @@ impl ToolProcessBridge {
         turn_id: &str,
     ) -> Result<InvocationOutcome, ToolBridgeError> {
         let call_id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel();
+        self.invoke_with_events(&call_id, tool_name, input, turn_id, |_| {})
+            .await
+    }
+
+    /// Phase 50 — full-fidelity invocation. `call_id` is
+    /// caller-supplied so cancellation can be targeted from outside
+    /// (e.g., when a turn-loop cancellation token fires). Every
+    /// `ToolEventPayload` the tool emits mid-invocation is delivered
+    /// to `on_event` in order, before the terminal `InvocationOutcome`
+    /// returns.
+    ///
+    /// **Concurrency:** safe with other invocations on the same
+    /// bridge — each call_id has its own mpsc lane.
+    pub async fn invoke_with_events<F>(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        turn_id: &str,
+        mut on_event: F,
+    ) -> Result<InvocationOutcome, ToolBridgeError>
+    where
+        F: FnMut(ToolEventPayload),
+    {
+        // Per-call mpsc; the reader_loop writes Events + the terminal
+        // Outcome into it in order. We drain until we see Outcome.
+        let (tx, mut rx) = mpsc::unbounded_channel::<BridgeMessage>();
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(call_id.clone(), tx);
+            pending.insert(call_id.to_string(), tx);
         }
 
         // Send the invocation.
         {
             let mut guard = self.stdin.lock().await;
             let frame = DaemonToTool::InvokeTool {
-                call_id: call_id.clone(),
+                call_id: call_id.to_string(),
                 tool_name: tool_name.into(),
                 input,
                 turn_id: turn_id.into(),
             };
             if let Err(e) = write_frame(&mut *guard, &frame).await {
-                // Drop the pending entry so the slot doesn't leak.
-                self.pending.lock().await.remove(&call_id);
+                self.pending.lock().await.remove(call_id);
                 return Err(e.into());
             }
         }
 
-        match rx.await {
-            Ok(outcome) => Ok(outcome),
-            Err(_) => Err(ToolBridgeError::InvocationClosed),
+        loop {
+            match rx.recv().await {
+                Some(BridgeMessage::Event(ev)) => on_event(ev),
+                Some(BridgeMessage::Outcome(o)) => return Ok(o),
+                None => return Err(ToolBridgeError::InvocationClosed),
+            }
         }
     }
 
@@ -240,11 +290,16 @@ impl ToolProcessBridge {
     }
 }
 
-/// Background reader loop — demultiplexes ToolToDaemon frames into
-/// per-call_id oneshot senders.
+/// Background reader loop — demultiplexes `ToolToDaemon` frames
+/// into per-call_id mpsc senders.
+///
+/// Phase 50 — events and terminal outcomes share the same lane
+/// (`BridgeMessage`). The terminal outcome variants
+/// (`ToolResult` / `ToolError`) also drop the pending entry so a
+/// follow-up `CancelInvocation` on that call_id is a no-op.
 async fn reader_loop(
     mut reader: BufReader<ChildStdout>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<InvocationOutcome>>>>,
+    pending: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>>,
 ) {
     loop {
         let body = match read_frame(&mut reader).await {
@@ -276,7 +331,9 @@ async fn reader_loop(
                 output,
             } => {
                 if let Some(tx) = pending.lock().await.remove(&call_id) {
-                    let _ = tx.send(InvocationOutcome::Completed { verified, output });
+                    let _ = tx.send(BridgeMessage::Outcome(
+                        InvocationOutcome::Completed { verified, output },
+                    ));
                 }
             }
             ToolToDaemon::ToolError {
@@ -285,14 +342,22 @@ async fn reader_loop(
                 message,
             } => {
                 if let Some(tx) = pending.lock().await.remove(&call_id) {
-                    let _ = tx.send(InvocationOutcome::ToolError { code, message });
+                    let _ = tx.send(BridgeMessage::Outcome(
+                        InvocationOutcome::ToolError { code, message },
+                    ));
                 }
             }
-            ToolToDaemon::ToolEvent { .. } => {
-                // Phase 49 foundation does not surface mid-call events
-                // to the channel layer — that's a follow-up wiring.
-                // For now the event is consumed silently; the channel
-                // still sees ToolCallStarted/Finished bracketing.
+            ToolToDaemon::ToolEvent { call_id, event } => {
+                // Phase 50 — relay the event on the per-call mpsc
+                // so `invoke_with_events` can forward it to the
+                // caller (a `ToolProxy` typically routes it onto
+                // `ChannelContext::stream_event`). If the pending
+                // slot is gone (terminal already delivered, or the
+                // caller dropped), drop the event silently.
+                let pending = pending.lock().await;
+                if let Some(tx) = pending.get(&call_id) {
+                    let _ = tx.send(BridgeMessage::Event(event));
+                }
             }
             ToolToDaemon::ToolRegister { .. } => {
                 // Spurious — the handshake already consumed this. Ignore.

@@ -7,8 +7,12 @@
 //! loop's perspective, it is indistinguishable from an in-tree tool.
 //!
 //! Phase 49 — Tool Process IPC Foundation (P12). Foundation phase
-//! ships the third-party path; first-party in-process unification
-//! is deferred.
+//! shipped the third-party path.
+//!
+//! Phase 50 — full-fidelity execute(): `ToolEvent` frames are now
+//! relayed to the channel via `invoke_with_events`, and
+//! mid-invocation cancellation is targeted via
+//! `CancelInvocation { call_id }` using a caller-supplied id.
 
 use std::sync::Arc;
 
@@ -16,10 +20,12 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use aivyx_capability::Scope;
-use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
+use aivyx_core::{
+    AivyxError, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, Verification,
+};
 
 use crate::bridge::{InvocationOutcome, ToolProcessBridge};
-use crate::wire::Verification as WireVerification;
+use crate::wire::{ToolEventPayload, Verification as WireVerification};
 
 /// Bridges one registered tool (one `ToolDescriptor`) onto the
 /// `aivyx_core::Tool` trait.
@@ -111,9 +117,8 @@ impl Tool for ToolProxy {
         // round-trip the invocation through the bridge and map the
         // result back into a ToolOutcome.
 
-        // Cancellation: if the turn was already cancelled before
-        // we started, short-circuit. Mid-invocation cancellation is
-        // wired below via tokio::select.
+        // Phase 50 — short-circuit cancellation before we even
+        // generate a call_id.
         if context.cancellation.is_cancelled() {
             return ToolOutcome::Failed(AivyxError::Cancelled);
         }
@@ -121,26 +126,108 @@ impl Tool for ToolProxy {
         let turn_id = context.turn_id.to_string();
         let bridge = Arc::clone(&self.bridge);
         let tool_name = self.name.clone();
+        let tool_id = self.id;
 
-        // Issue the invocation. If cancellation fires while the
-        // call is in flight, send CancelInvocation upstream and
-        // bail.
-        let invoke_future = bridge.invoke(&tool_name, input, &turn_id);
-        let cancelled = context.cancellation.cancelled();
+        // Phase 50 — caller-supplied call_id so a targeted
+        // CancelInvocation can be sent if the cancellation token
+        // fires mid-invocation.
+        let call_id = uuid::Uuid::new_v4().to_string();
 
-        let outcome = tokio::select! {
-            biased;
-            _ = cancelled => {
-                // Best-effort: the bridge does not currently expose
-                // the auto-generated call_id to the caller, so we
-                // can't send a targeted CancelInvocation here yet.
-                // The dropped invoke_future causes the pending slot
-                // to be cleaned up when the child eventually
-                // responds. Wiring a per-call cancellation hook is
-                // a deferred refinement.
-                return ToolOutcome::Failed(AivyxError::Cancelled);
+        // Phase 50 — event relay shape.
+        //
+        // `ChannelContext::stream_event` is async; the bridge's
+        // `on_event` callback is sync. We use a tokio mpsc as the
+        // sync-to-async bridge, spawn the bridge invocation as
+        // its own task (so the bridge can advance independently
+        // of the proxy's drain loop), and drain events on the
+        // proxy side.
+        //
+        // Spawning the invocation also cleanly decouples the
+        // drain order from the bridge's progress: even if the
+        // bridge has already produced the terminal outcome, any
+        // events still buffered in the mpsc are drained before
+        // the proxy returns. That's the property the conformance
+        // test exercises.
+        let (ev_tx, mut ev_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ToolEventPayload>();
+        let on_event = move |ev: ToolEventPayload| {
+            let _ = ev_tx.send(ev);
+        };
+
+        let bridge_for_invoke = Arc::clone(&bridge);
+        let tool_name_for_invoke = tool_name.clone();
+        let call_id_for_invoke = call_id.clone();
+        let invoke_handle = tokio::spawn(async move {
+            bridge_for_invoke
+                .invoke_with_events(
+                    &call_id_for_invoke,
+                    &tool_name_for_invoke,
+                    input,
+                    &turn_id,
+                    on_event,
+                )
+                .await
+        });
+
+        let channel = context.channel;
+        let cancellation = context.cancellation;
+
+        // Drain events and watch cancellation. Exit the loop when
+        // `ev_rx.recv()` returns None (event sender dropped, which
+        // happens when the spawned task completes and drops the
+        // closure that owns ev_tx).
+        let mut cancelled_flag = false;
+        loop {
+            tokio::select! {
+                _ = cancellation.cancelled(), if !cancelled_flag => {
+                    cancelled_flag = true;
+                    let _ = bridge.cancel(&call_id).await;
+                    // Don't return yet — keep draining so the tool's
+                    // ToolError{code:"cancelled"} response gets through
+                    // and the spawned task completes cleanly.
+                }
+                ev_opt = ev_rx.recv() => {
+                    match ev_opt {
+                        Some(ToolEventPayload::Status { status }) => {
+                            let _ = channel
+                                .stream_event(StreamEvent::Status(&status))
+                                .await;
+                        }
+                        Some(ToolEventPayload::OutputChunk { chunk }) => {
+                            let _ = channel
+                                .stream_event(StreamEvent::ToolOutput {
+                                    tool: tool_id,
+                                    tool_name: &tool_name,
+                                    chunk: &chunk,
+                                })
+                                .await;
+                        }
+                        Some(ToolEventPayload::Log { level, message }) => {
+                            eprintln!(
+                                "aivyx tool {tool_name:?} [{level}]: {message}"
+                            );
+                        }
+                        None => break,
+                    }
+                }
             }
-            res = invoke_future => res,
+        }
+
+        if cancelled_flag {
+            // Ensure the spawned task completes (it will, because
+            // we sent CancelInvocation and the tool is contracted
+            // to respond promptly). Drop the join handle's result.
+            let _ = invoke_handle.await;
+            return ToolOutcome::Failed(AivyxError::Cancelled);
+        }
+
+        let outcome = match invoke_handle.await {
+            Ok(r) => r,
+            Err(_) => {
+                return ToolOutcome::Failed(AivyxError::Internal(format!(
+                    "tool bridge task panicked for `{tool_name}`"
+                )));
+            }
         };
 
         match outcome {

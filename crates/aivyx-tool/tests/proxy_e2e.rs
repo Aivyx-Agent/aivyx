@@ -243,3 +243,189 @@ async fn proxy_returns_failed_when_already_cancelled() {
     );
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 50 — ToolEvent → channel relay
+// ---------------------------------------------------------------------------
+
+const PYTHON_TOOL_WITH_EVENTS: &str = r#"
+import sys, json, struct
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4: return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+assert read_frame()["type"] == "ToolHello"
+write_frame({"type":"ToolRegister","tool_process_name":"event-tool","tools":[
+    {"name":"streamy","description":"emits chunks.","input_schema":{"type":"object"},"required_scope":"memory.read"}
+]})
+
+inv = read_frame()
+# Emit two OutputChunks plus a Status, then the terminal result.
+write_frame({"type":"ToolEvent","call_id":inv["call_id"],
+             "event":{"kind":"Status","status":"thinking..."}})
+write_frame({"type":"ToolEvent","call_id":inv["call_id"],
+             "event":{"kind":"OutputChunk","chunk":"part-1 "}})
+write_frame({"type":"ToolEvent","call_id":inv["call_id"],
+             "event":{"kind":"OutputChunk","chunk":"part-2"}})
+write_frame({"type":"ToolResult","call_id":inv["call_id"],
+             "verified":"NotApplicable","output":{"done":True}})
+sys.exit(0)
+"#;
+
+#[tokio::test]
+async fn proxy_relays_tool_events_to_channel() {
+    let config = ToolProcessConfig {
+        name: "events".into(),
+        command: "python3".into(),
+        args: vec!["-c".into(), PYTHON_TOOL_WITH_EVENTS.into()],
+        env: vec![],
+    };
+    let bridge = match ToolProcessBridge::spawn(config).await {
+        Ok(b) => Arc::new(b),
+        Err(_) => return,
+    };
+    let descriptor = bridge.descriptors()[0].clone();
+    let proxy = ToolProxy::new(
+        Arc::clone(&bridge),
+        descriptor.name.clone(),
+        descriptor.description.clone(),
+        descriptor.input_schema.clone(),
+        &descriptor.required_scope,
+    )
+    .expect("scope parses");
+
+    let channel = FakeChannel::new();
+    let audit = NullAudit;
+    let token = channel.cancellation_token();
+    let ctx = ToolContext {
+        agent_id: AgentId::new(),
+        session_id: channel.session,
+        turn_id: TurnId::new(),
+        channel: &channel,
+        audit: &audit,
+        cancellation: &token,
+    };
+
+    let outcome = proxy.execute(serde_json::json!({"x": 1}), &ctx).await;
+    assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+
+    let captured = channel.events.lock().unwrap().clone();
+    // Look for Status + two ToolOutput events in order.
+    let has_status = captured.iter().any(|s| s.contains("Status") && s.contains("thinking"));
+    let chunks: Vec<_> = captured
+        .iter()
+        .filter(|s| s.contains("ToolOutput"))
+        .cloned()
+        .collect();
+    assert!(has_status, "expected Status event, captured: {captured:?}");
+    assert_eq!(chunks.len(), 2, "expected 2 ToolOutput events, captured: {captured:?}");
+    assert!(chunks[0].contains("part-1"));
+    assert!(chunks[1].contains("part-2"));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 50 — Per-call CancelInvocation
+// ---------------------------------------------------------------------------
+
+const PYTHON_TOOL_RESPECTS_CANCEL: &str = r#"
+import sys, json, struct, time
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4: return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+assert read_frame()["type"] == "ToolHello"
+write_frame({"type":"ToolRegister","tool_process_name":"slow-tool","tools":[
+    {"name":"slow","description":"slow.","input_schema":{"type":"object"},"required_scope":"memory.read"}
+]})
+
+inv = read_frame()
+# Wait for a CancelInvocation; if it arrives, reply with ToolError.
+import select
+deadline = time.time() + 3.0
+saw_cancel = False
+while time.time() < deadline:
+    rlist, _, _ = select.select([sys.stdin.buffer], [], [], 0.1)
+    if rlist:
+        next_frame = read_frame()
+        if next_frame and next_frame["type"] == "CancelInvocation":
+            write_frame({"type":"ToolError","call_id":inv["call_id"],
+                         "code":"cancelled","message":"got CancelInvocation"})
+            saw_cancel = True
+            break
+
+if not saw_cancel:
+    # Timeout — never got cancelled. Reply normally so the test
+    # surfaces "cancellation wasn't propagated" rather than hang.
+    write_frame({"type":"ToolResult","call_id":inv["call_id"],
+                 "verified":"NotApplicable","output":{"cancel_received":False}})
+
+sys.exit(0)
+"#;
+
+#[tokio::test]
+async fn proxy_sends_cancel_invocation_when_token_fires() {
+    let config = ToolProcessConfig {
+        name: "slow".into(),
+        command: "python3".into(),
+        args: vec!["-c".into(), PYTHON_TOOL_RESPECTS_CANCEL.into()],
+        env: vec![],
+    };
+    let bridge = match ToolProcessBridge::spawn(config).await {
+        Ok(b) => Arc::new(b),
+        Err(_) => return,
+    };
+    let descriptor = bridge.descriptors()[0].clone();
+    let proxy = ToolProxy::new(
+        Arc::clone(&bridge),
+        descriptor.name.clone(),
+        descriptor.description.clone(),
+        descriptor.input_schema.clone(),
+        &descriptor.required_scope,
+    )
+    .unwrap();
+
+    let channel = FakeChannel::new();
+    let audit = NullAudit;
+    let token = channel.cancellation_token();
+
+    // Cancel after a short delay so the invocation is in flight.
+    let token_for_cancel = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        token_for_cancel.cancel();
+    });
+
+    let ctx = ToolContext {
+        agent_id: AgentId::new(),
+        session_id: channel.session,
+        turn_id: TurnId::new(),
+        channel: &channel,
+        audit: &audit,
+        cancellation: &token,
+    };
+
+    let outcome = proxy.execute(serde_json::json!({}), &ctx).await;
+    assert!(
+        matches!(
+            outcome,
+            ToolOutcome::Failed(aivyx_core::AivyxError::Cancelled)
+        ),
+        "expected Failed(Cancelled), got {outcome:?}"
+    );
+}

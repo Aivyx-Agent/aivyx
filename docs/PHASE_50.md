@@ -236,7 +236,8 @@ deferral #1 first-party unification, plus the ToolEvent relay
 
 | Task | Commit | Notes |
 |---|---|---|
-| 1 | _this commit_ | scaffold |
+| 1 | `7c6132e` | scaffold |
+| 2 | _this commit_ | ToolEvent relay + per-call cancellation (Tasks 2 + 3 fused) — 968 tests |
 
 ## Deferrals carried into the phase
 
