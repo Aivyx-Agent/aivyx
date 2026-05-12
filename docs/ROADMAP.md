@@ -635,14 +635,28 @@ After Chapter A, the project has a clean closing surface: no
 lingering deferrals, all contracts in sync, documentation
 matching the implementation.
 
-## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path
+## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path [SHIPPED]
 
-**Active — see [PHASE_51.md](PHASE_51.md).** Mechanical
-Chapter A cleanup phase. Closes three independent items: the
-pre-Phase-1 `AivyxError::{Storage,Crypto}` TODOs in
-`aivyx-core/lib.rs` (typed nested errors per D6), the Phase 47
-`handle_connection` parameter-struct lift, and the Phase 47
-visual-pass-surfaced `AIVYX_PASSPHRASE` TOML/env inconsistency.
+**Frozen — see [PHASE_51.md](PHASE_51.md).** Mechanical
+Chapter A cleanup phase. Closed three independent items:
+
+1. **`AivyxError::{Storage,Crypto}` typed nested errors.** The
+   two TODOs in `aivyx-core/lib.rs:689,693` that have sat in
+   production code since Phase 1. D6 prescribed `#[from]
+   StorageError` / `CryptoError`; Phase 51 finally wires them.
+   `StorageError` and `CryptoError` gained `Clone` derives;
+   `aivyx-core` gained intra-workspace deps on both.
+2. **`handle_connection` → `ConnectionContext` lift.** Removes
+   the Phase 47 Task 4 `#[allow(clippy::too_many_arguments)]`
+   shortcut; same shape as Phase 41 `DaemonConfig`.
+3. **`AIVYX_PASSPHRASE` TOML/env inconsistency.** New
+   `PassphraseSource::FromConfig(SecretString)` makes the
+   `[aivyx] passphrase` TOML field actually drive Argon2id
+   derivation. Phase 47 visual-pass footgun closed.
+
+979 Rust tests (+6), zero clippy. lib.rs streak broke at 6
+(deliberate, Q1 honored D6 after 50 phases of stub). DESIGN.md
+streak → 3, PRODUCT.md streak → 2.
 
 ## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification [SHIPPED]
 

@@ -203,7 +203,7 @@ pass observation all close).
 | 1 | `e7893dc` | scaffold |
 | 2 | `a616af6` | AivyxError typed nested errors (D6 finally honored) — 976 tests, lib.rs streak broken |
 | 3 | `b821e7c` | handle_connection ConnectionContext lift — 976 tests |
-| 4 | _this commit_ | AIVYX_PASSPHRASE TOML path actually drives derivation — 979 tests |
+| 4 | `d20b8be` | AIVYX_PASSPHRASE TOML path actually drives derivation — 979 tests |
 
 ## Deferrals carried into the phase
 
@@ -220,22 +220,71 @@ new surface.
 
 ## Exit criteria
 
-- [ ] `AivyxError::Storage` and `Crypto` wrap typed nested
+- [x] `AivyxError::Storage` and `Crypto` wrap typed nested
   errors via `#[from]`.
-- [ ] `aivyx-core/src/lib.rs:689,693` TODO comments are gone.
-- [ ] `handle_connection` takes a single `ConnectionContext`
+- [x] `aivyx-core/src/lib.rs:689,693` TODO comments are gone.
+- [x] `handle_connection` takes a single `ConnectionContext`
   parameter; the `#[allow(clippy::too_many_arguments)]` is
   removed.
-- [ ] `PassphraseSource::FromConfig(SecretString)` exists and
+- [x] `PassphraseSource::FromConfig(SecretString)` exists and
   is selected when the TOML config carries a passphrase.
-- [ ] A TOML-only passphrase setup successfully derives a
-  master key in a focused test.
-- [ ] DESIGN.md untouched (streak → 3).
-- [ ] PRODUCT.md untouched (streak → 2).
-- [ ] `aivyx-core/src/lib.rs` streak broken (0) — deliberate.
-- [ ] Zero clippy warnings.
-- [ ] Rust tests net-positive.
+- [x] A TOML-only passphrase setup successfully derives a
+  master key (three focused tests).
+- [x] DESIGN.md untouched (streak → 3).
+- [x] PRODUCT.md untouched (streak → 2).
+- [x] `aivyx-core/src/lib.rs` streak broken (0) — deliberate.
+- [x] Zero clippy warnings.
+- [x] Rust tests 973 → 979 (+6).
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 973 → 979 (+6: 3 AivyxError From impls,
+  3 PassphraseSource::FromConfig)
+- Python conformance tests: 24 (unchanged)
+- Workspace crates: 12 (unchanged — added two intra-workspace
+  dep edges: aivyx-core → aivyx-storage, aivyx-core →
+  aivyx-crypto)
+- Clippy warnings: 0
+- Deferral backlog: 4 → 4 (these three items pre-dated the
+  rolling deferral tracking; their closure is captured in the
+  file-level TODOs and the Phase 47 footgun note)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (3) | untouched | 3 |
+| PRODUCT.md | untouched (2) | untouched | 2 |
+| `aivyx-core/src/lib.rs` | **break (0)** | broken (Q1) | **0** |
+
+All three predictions correct. The lib.rs break was Q1's
+deliberate decision — D6 was wrong-shaped for 50 phases; Phase
+51 honors it. The DESIGN.md and PRODUCT.md streaks both
+extended cleanly because Phase 51 was *implementation* of
+existing-contract intent, not contract amendment.
+
+### Items closed
+
+| Item | Source | What was closed |
+|---|---|---|
+| `AivyxError::Storage` TODO | Phase 1, `aivyx-core/lib.rs:689` | `String` → `#[from] StorageError` |
+| `AivyxError::Crypto` TODO | Phase 1, `aivyx-core/lib.rs:693` | `String` → `#[from] CryptoError` |
+| `handle_connection` 8-param lift | Phase 47 Task 4 | New `ConnectionContext` struct; `#[allow]` removed |
+| `AIVYX_PASSPHRASE` TOML/env footgun | Phase 47 visual pass | New `PassphraseSource::FromConfig`; TOML now drives derivation |
+
+### Deferrals carried forward (4)
+
+1. Live audit push (P47 Q4)
+2. Read-write dashboard inspection (P47 Q6)
+3. Conformance harness as a Rust crate (P48 Q5)
+4. IPC stability window commitment (P48 Q6)
+5. Per-tool sandboxing → scheduled for Phase 52
+
+### Operator-side verification
+
+The TOML-passphrase fix is the most operator-visible change. A
+manual smoke test is straightforward: set `[aivyx] passphrase
+= "..."` in `aivyx.toml`, unset `AIVYX_PASSPHRASE`, run
+`aivyx daemon run`. Expected: derivation succeeds and the
+daemon starts. Recorded as recommended verification at Chapter
+A exit (Phase 54).
