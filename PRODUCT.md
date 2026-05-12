@@ -1305,10 +1305,10 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 58, 2026-05-12)
+## Delivery Status (as of Phase 60, 2026-05-12)
 
 A traceability surface mapping each product commitment to its
-implementation state after 57 phases. The commitment text
+implementation state after 59 phases. The commitment text
 above carries six amendments: A5 (P10 seven→eight, Phase 38),
 A6 (parallel tool execution, Phase 40), A7 (protocol
 negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
@@ -1316,23 +1316,19 @@ negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
 This section records what shipped, what partially shipped,
 and what remains forward.
 
-**P1–P13 are all fully shipped.** The original forward-
-commitment ledger closed at Phase 49 (P12 foundation) + Phase
-50 (equivalence proof). Chapter A (Phases 50–54) closed
-Foundation Closeout with cleanup, sandbox layer, and a final
-docs sweep. Phase 55 demonstrated the post-Chapter-A posture
-by porting the Phase 52 sandbox pattern to `[[mcp_server]]`.
-Phase 57 shipped the Profile substrate (`aivyx-config::Profile`
-struct, `[profile]` TOML table, `assemble_session_prompt`
-helper, init-wizard bootstrap, banner row). Phase 58 closed
-the milestone with the operator-facing inspection surface
-(`aivyx profile show` / `aivyx profile edit` CLI subcommands
-and Web UI Profile pane via `Query::GetProfile`).
+**Every PRODUCT.md commitment (P1–P14) is fully shipped.**
+The forward-commitment ledger closes at Phase 60. The
+original Phase 49 closure covered P1–P12; Chapter A (Phases
+50–54) closed Foundation Closeout; Phase 55 demonstrated the
+post-Chapter-A posture; Phases 56–60 delivered the Profile +
+Persona forward arc (P13 + P14 amendment + substrate +
+operator surfaces).
 
-**P14 (Persona) is the last forward commitment** — its
-implementation phases (59 Foundation, 60 Visualization) are
-scaffolded in ROADMAP.md and close the Profile + Persona
-forward arc.
+After Phase 60, future work is driven by operator feedback
+or contract amendments rather than scheduled forward
+commitments. Phase 60 also closes the Phase 59 Q5(a) hot-
+reload deferral — reflection-approved Persona deltas now
+take effect on the next turn without daemon restart.
 
 ### Fully Delivered
 
@@ -1447,6 +1443,41 @@ forward arc.
   (matches existing role-config behavior). **Fully
   delivered.**
 
+- **P14 — Persona.** Phase 59 (Foundation) + Phase 60
+  (Visualization). Reflection-written dynamic identity layer
+  growing from Profile via P8-gated, P2-approved, HMAC-chained
+  operator-reversible delta accumulation. Substrate
+  (Phase 59): new `KeyDomain::Persona` (10th storage domain)
+  with parallel HMAC chain (distinct genesis seed from
+  audit), `PersonaDelta` records with 10
+  `PersonaDeltaCategory` variants (6 Profile-mirror + 4
+  Persona-specific per Q3(c)), `PersonaDeltaOp` with
+  `SetScalar` / `AppendList` / `RemoveList`, validation +
+  chain verification + replay into `EffectivePersona`,
+  `persona.propose` capability scope, `reflection.propose`
+  schema extension with required_scope escalation,
+  `reflection.apply` writes approved deltas to the chain
+  and the `SharedEffectivePersona` runtime state, and a
+  three-section `assemble_session_prompt` layout per Q6(a)
+  (`## About this assistant` + `## How I have learned to
+  communicate` + `## Active role`). Operator surfaces
+  (Phase 60): per-turn planner-factory refresh closing the
+  Phase 59 Q5(a) deferral (approved deltas take effect on
+  next turn without restart); `PersonaDeltaOp::Revert {
+  target_delta_id }` variant + inverse-apply folder for
+  revert semantics (P14 commit 4) including revert-of-revert
+  restoring the original; `Query::GetEffectivePersona` +
+  `Query::ListPersonaDeltas` IPC envelopes;
+  `FrontendMessage::RevertPersonaDelta` for
+  operator-initiated revert; `aivyx persona show` / `list`
+  / `revert` CLI subcommands; Web UI Persona pane with
+  effective-state rendering and click-to-revert per Q3(a).
+  Reverts are operator-only per Q5(a) — auto-approved
+  since the operator is the proposer. Q4(a) chain shape:
+  reverts append a `Revert` delta rather than mutating the
+  chain in place, preserving the append-only invariant.
+  **Fully delivered.**
+
 ### Partially Delivered
 
 - **P3 — Goals and Non-Goals.** Vision document — partially
@@ -1475,16 +1506,12 @@ forward arc.
 
 ### Forward (Not Yet Started)
 
-- **P14 — Persona.** Added Phase 56. Reflection-written
-  dynamic identity layer growing from Profile via P8-gated
-  / P2-approved / HMAC-chained operator-reversible delta
-  accumulation. Foundation shipping in Phase 59 (delta
-  storage, `reflection.propose` extension with persona
-  category, effective-identity assembly). Visualization
-  shipping in Phase 60 (Web UI Persona timeline,
-  identity export/import candidate). Closes after Phase
-  60. After Phase 60, the entire forward-commitment ledger
-  is closed (P1–P14 all delivered).
+*(Empty as of Phase 60 exit. **The PRODUCT.md forward-
+commitment ledger is closed.** Every P1–P14 commitment is
+fully shipped. Future work lands as operator-feedback
+driven phases or as contract amendments that introduce new
+commitments; both go through the existing amendment
+process before opening a phase.)*
 
 ### Forward Commitment Candidates — Status Update
 
@@ -1613,3 +1640,55 @@ deliver P13:
 
 `toml_edit = "0.22"` is the first new workspace crate added
 since Phase 27's `notify`.
+
+### Phases 59–60 — Persona Foundation + Visualization (P14 closed, ledger closed)
+
+The Persona arc's two implementation phases, which together
+deliver P14 and close the forward-commitment ledger.
+
+- **Phase 59 (Foundation, shipped 2026-05-12).**
+  `KeyDomain::Persona` (10th storage domain) parallel to
+  `KeyDomain::Audit`, distinct genesis seed; `PersonaDelta`
+  + `PersonaDeltaCategory` (10 variants — 6 Profile-mirror +
+  4 Persona-specific per Q3(c)) + `PersonaDeltaOp`
+  (`SetScalar` / `AppendList` / `RemoveList`) +
+  `PersonaChainLog` + `PersistentPersonaLog`;
+  `EffectivePersona` runtime state + `compute_effective_persona`
+  pure folder; `SharedEffectivePersona = Arc<RwLock<...>>`;
+  `persona.propose` capability scope; `reflection.propose`
+  schema extension with `required_scope` escalation when
+  deltas present; `reflection.apply` writes approved deltas
+  to chain + shared state; `assemble_session_prompt`
+  three-section labeled layout per Q6(a); chain key derived
+  from master key (same shape as audit chain key) with
+  startup replay into shared state, plumbed through
+  `ReflectionApplyTool` and the planner-factory snapshot
+  read at session build.
+
+- **Phase 60 (Visualization, shipped 2026-05-12).** Closed
+  the forward-commitment ledger.
+  `PersonaDeltaOp::Revert { target_delta_id }` variant +
+  `apply_inverse_of_entry` folder for revert semantics
+  including revert-of-revert restoring the original (P14
+  commit 4). Per-turn planner-factory refresh — approved
+  deltas take effect on the next turn without restart
+  (closes Phase 59 Q5(a)). `Query::GetEffectivePersona` +
+  `Query::ListPersonaDeltas` IPC envelopes;
+  `FrontendMessage::RevertPersonaDelta` +
+  `DaemonMessage::PersonaRevertResolved` for
+  operator-initiated revert. `aivyx persona show / list /
+  revert` CLI subcommands (daemon-IPC-backed). Web UI
+  Persona pane with effective-state rendering and
+  click-to-revert per Q3(a). Reverts are operator-only per
+  Q5(a) and auto-approved (operator is the proposer). Per
+  Q4(a), reverts append a delta to the append-only chain
+  rather than mutating it.
+
+**P1–P14 all fully shipped. The forward-commitment ledger
+closes here.** Future numbered phases land as operator-
+feedback-driven work or as amendment-introduced commitments
+through the existing process. The Profile + Persona arc
+(Phases 56–60) was the last forward arc; after Phase 60 the
+project sits at every commitment delivered, every operator
+surface visible, and every reflection-written change
+audit-verifiable and operator-reversible.
