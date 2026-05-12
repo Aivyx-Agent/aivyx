@@ -599,9 +599,10 @@ dashboard, `handle_connection` parameter-struct lift.
 
 ## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11)
 
-Channel adapter contract documentation, adapter conformance
-test suite, example Python adapter. Delivers P5 (channel SDK)
-and P11 (SDK documentation).
+**Active — see [PHASE_48.md](PHASE_48.md).** Channel adapter
+contract documentation, adapter conformance test suite, example
+Python adapter. Delivers P5 (channel SDK) and P11 (SDK
+documentation).
 
 ## Phase 49 — Tool Process IPC Foundation (P12)
 
