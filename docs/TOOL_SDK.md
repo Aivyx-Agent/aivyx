@@ -391,7 +391,184 @@ available without restructuring: any substrate tool can be
 extracted into a separate process for fault isolation, sandbox
 hardening, or to test the protocol equivalence end-to-end.
 
-## 9. Where to look next
+## 9. Sandboxing tool processes
+
+> *Section added at Phase 52. Generic-wrapper design — Aivyx
+> supplies the policy slot; the operator supplies the policy.*
+
+Phase 49 ships **process isolation** for third-party tools:
+each `[[tool_process]]` runs as its own OS process. Phase 52
+adds an optional **wrapper layer** on top — the daemon spawns
+your sandbox tool first, which then `exec`s the real command.
+
+### Config shape
+
+```toml
+[[tool_process]]
+name = "wordcount"
+command = "python3"
+args = ["/path/to/tool.py"]
+
+[tool_process.sandbox]
+wrapper = "bwrap"
+args = [
+  "--ro-bind", "/", "/",
+  "--proc", "/proc",
+  "--dev", "/dev",
+  "--tmpfs", "/tmp",
+  "--unshare-all",
+  "--die-with-parent",
+  "--",
+]
+```
+
+The effective spawn becomes:
+
+```
+bwrap --ro-bind / / --proc /proc --dev /dev --tmpfs /tmp \
+      --unshare-all --die-with-parent -- python3 /path/to/tool.py
+```
+
+The trailing `--` separator between wrapper args and command is
+the wrapper's convention, not Aivyx's — it lives in
+`tool_process.sandbox.args`. Aivyx makes no assumptions about
+wrapper-arg shape; whatever you put in `args` goes verbatim
+before the wrapped command.
+
+### What the wrapper must do
+
+1. **Pass stdin/stdout/stderr through unchanged.** The tool IPC
+   protocol uses stdio; the wrapper must not buffer, transform,
+   or close them. `bwrap`, `firejail`, and `docker run -i`
+   default to this.
+2. **Forward signals** so the daemon's `kill_on_drop` can clean
+   up the whole chain. Most sandbox tools do this by default;
+   `docker run --init` may need extra wiring for proper PID-1
+   semantics.
+3. **`exec` rather than fork-and-supervise.** A wrapper that
+   `fork`s and waits will break the parent-process-tracking the
+   bridge uses. `bwrap` and `firejail` `exec` by default;
+   `docker run` is the exception (runs as a child of the
+   daemon).
+
+### Worked examples
+
+#### Bubblewrap (Linux, native, no daemon)
+
+```toml
+[tool_process.sandbox]
+wrapper = "bwrap"
+args = [
+  # Read-only view of the host filesystem.
+  "--ro-bind", "/", "/",
+  # Standard pseudo-filesystems.
+  "--proc", "/proc",
+  "--dev", "/dev",
+  # Writable tmpfs at /tmp — tool can buffer here.
+  "--tmpfs", "/tmp",
+  # No network namespace, no IPC, no user namespace pass-through.
+  "--unshare-all",
+  # If the daemon dies, take the tool with it.
+  "--die-with-parent",
+  # End of wrapper args.
+  "--",
+]
+```
+
+What it isolates: filesystem writes outside `/tmp`, network
+access, IPC visibility to other host processes, signals from
+unrelated processes.
+
+What it does **not** isolate: anything inside the read-only
+mounts that the tool can read (e.g., your `~/.ssh/`,
+`~/.aws/credentials`, the redb store). If a tool needs
+*confidentiality*, mount the home directory `--bind` to a
+scrubbed copy.
+
+#### Firejail (Linux, profile-driven)
+
+```toml
+[tool_process.sandbox]
+wrapper = "firejail"
+args = [
+  "--quiet",
+  "--profile=default",
+  "--",
+]
+```
+
+`firejail` ships profiles for common tools; the system-wide
+`default` profile is a reasonable starting point. Profiles can
+allowlist specific paths, deny network, enforce seccomp filters,
+etc. — see `man firejail-profile`.
+
+#### Docker (cross-platform, heavyweight)
+
+```toml
+[tool_process.sandbox]
+wrapper = "docker"
+args = [
+  "run",
+  "--rm",
+  "-i",                              # keep stdin open
+  "--network=none",                  # no network
+  "--read-only",                     # read-only root filesystem
+  "--tmpfs=/tmp",                    # writable tmpfs
+  "--cap-drop=ALL",                  # drop all caps
+  "--security-opt=no-new-privileges:true",
+  "python:3.12-slim",                # image to run
+]
+
+# IMPORTANT: this REPLACES the command. Move the actual command
+# into the image's ENTRYPOINT, or use a wrapper image that
+# CMD's to your tool entrypoint.
+command = "tool-entrypoint.sh"
+args = ["/path/to/tool.py"]
+```
+
+What this isolates: filesystem writes, network, capabilities,
+privilege escalation. Plus everything Docker isolates by default
+(PID namespace, mount namespace, etc.).
+
+What it does **not** isolate: kernel exploits (the container
+shares the host kernel), bind-mounted volumes (none in this
+example).
+
+### Sandboxing affects nothing in the protocol
+
+The sandbox layer is invisible to the IPC protocol itself.
+`ToolEvent` frames, `CancelInvocation` semantics, and the
+handshake all work identically through a wrapper as through a
+bare spawn. The conformance suite at
+`crates/aivyx-tool/tests/proxy_e2e.rs::sandbox_wrapper_passes_through_stdio_end_to_end`
+proves this against POSIX `env` (no-op wrapper).
+
+### Choosing a wrapper
+
+| Wrapper | Linux | macOS | Windows | Notes |
+|---|---|---|---|---|
+| `bwrap` | ✓ | — | — | Native, no daemon, scriptable. The default choice on Linux. |
+| `firejail` | ✓ | — | — | Profile-driven; sane defaults out of the box. |
+| `sandbox-exec` | — | ✓ | — | macOS-native; profile-driven via `.sb` files. |
+| `docker run` | ✓ | ✓ | ✓ | Cross-platform, image-based, heavyweight. |
+| `podman run` | ✓ | ✓ | ✓ | Daemonless Docker drop-in. |
+| `(none)` | n/a | n/a | n/a | Phase 49 default. Use when the tool is trusted (e.g., first-party). |
+
+### When the wrapper itself fails
+
+If `bwrap` is not on `$PATH` the daemon's startup log shows:
+
+```
+aivyx: tool process "wordcount" failed to start: failed to spawn tool process `bwrap`: No such file or directory (os error 2)
+```
+
+Note that the error names `bwrap` — the **wrapper**, not the
+wrapped command. This is deliberate: it tells you exactly which
+binary is missing.
+
+---
+
+## 10. Where to look next
 
 - The Python reference: `examples/python-tool/`
 - The wire types: `crates/aivyx-tool/src/wire.rs`

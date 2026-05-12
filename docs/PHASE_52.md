@@ -200,7 +200,8 @@ closed.
 | 1 | `05c1961` | scaffold |
 | 2 | `f5e4fda` | SandboxConfig + bridge wrapper application — 980 tests |
 | 3 | `1dce6cc` | [tool_process.sandbox] TOML schema + binary wiring — 983 tests |
-| 4 | _this commit_ | Integration test with `env` no-op wrapper — 984 tests |
+| 4 | `1c74a80` | Integration test with `env` no-op wrapper — 984 tests |
+| 5 | _this commit_ | TOOL_SDK.md §9 + THREAT_MODEL.md §5.6 update |
 
 ## Deferrals carried into the phase
 

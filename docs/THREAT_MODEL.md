@@ -277,15 +277,44 @@ prompts, with the API key you supplied, under your account"*
 
 ### 5.6 Tools running in the same address space as the daemon
 
-`PRODUCT.md` P12 commits to tool-process IPC isolation, but that
-work has not shipped. Every tool today (including third-party MCP
-proxies) runs **in the daemon's process**. A buffer overflow in a
-tool can in principle corrupt daemon memory.
+**Status update (Phase 49, 50, 52):** the strict reading of this
+gap has narrowed substantially.
 
-`#![forbid(unsafe_code)]` in `aivyx-crypto` and the absence of
-unsafe blocks elsewhere mean this is harder than in C, but it is
-not impossible. P12 is the long-term mitigation; until it lands,
-tool authors are inside the daemon's trust boundary.
+- **Phase 49** shipped PRODUCT.md P12: third-party tool
+  processes now run as separate OS processes (spawned with
+  `kill_on_drop`, communicating via length-prefixed JSON over
+  stdio). The first-party in-process path is preserved for
+  latency reasons, but the equivalence is proven by Phase 50's
+  `p12_equivalence.rs` test.
+- **Phase 52** added an optional command-wrapper sandbox layer
+  on top of process isolation. Operators declare
+  `[tool_process.sandbox] wrapper = "..." args = [...]` and the
+  daemon spawns `wrapper wrapper_args... command command_args...`
+  instead of the bare command. Bubblewrap, firejail, Docker,
+  sandbox-exec — Aivyx supplies the policy slot; the operator
+  supplies the policy. See `docs/TOOL_SDK.md` §9 for worked
+  examples.
+
+**What is still in scope of this section:**
+
+- **First-party tools** still run in the daemon's address space
+  by default (the eight P10 substrate tools, infrastructure
+  tools like `mission.*`/`reflection.*`, MCP proxies). Buffer
+  overflows in any of these would corrupt daemon memory in
+  principle. `#![forbid(unsafe_code)]` in `aivyx-crypto` and
+  the absence of `unsafe` blocks elsewhere make this harder
+  than in C; it does not make it impossible.
+- **Third-party tools without an operator-configured wrapper**
+  run with the operator's full OS authority (file access,
+  network access, etc.) within their own process. The Phase 49
+  capability gate prevents the agent from calling a tool with
+  authority the tool didn't declare, but the tool process
+  itself runs with the operator's UID and can read whatever
+  files the operator can read.
+
+The Phase 52 sandbox layer narrows the second item — operators
+who care about confinement can wrap with their tool of choice
+without Aivyx prescribing one.
 
 ### 5.7 Side channels (timing, power, electromagnetic)
 

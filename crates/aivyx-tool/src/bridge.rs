@@ -97,7 +97,7 @@ pub struct ToolProcessConfig {
 /// namespaces, network namespaces, seccomp filters, etc.) and
 /// then `exec`'ing the real command. Standard sandbox tools all
 /// support this `wrapper [wrapper-args...] command [command-args...]`
-/// shape natively — see `docs/TOOL_SDK.md` §10 for worked examples.
+/// shape natively — see `docs/TOOL_SDK.md` §9 for worked examples.
 ///
 /// The wrapper must:
 /// 1. Pass stdin/stdout/stderr through to the wrapped command

@@ -836,7 +836,7 @@ pub struct ToolProcessConfig {
     /// instead of `command command_args...`. Aivyx supplies the
     /// policy slot; the operator supplies the policy (bubblewrap,
     /// firejail, docker run, sandbox-exec — see `docs/TOOL_SDK.md`
-    /// §10).
+    /// §9).
     pub sandbox: Option<SandboxConfig>,
 }
 
