@@ -187,7 +187,7 @@ Update `docs/README.md` row.
 | 4 | `188e603` | DAEMON_IPC.md Phase 47 Query/QueryResponse addendum |
 | 5 | `afe3d15` | A3 amendment addendum (scope-base count 24 → 43) |
 | 6 | `d78afc8` | walkthrough.md gitignored — no action needed |
-| 7 | _this commit_ | cross-doc consistency spot-check — no drift |
+| 7 | `3b0591c` | cross-doc consistency spot-check — no drift |
 
 ## Deferrals carried into the phase
 
@@ -202,22 +202,96 @@ None expected. Phase 54 is purely a docs catch-up.
 
 ## Exit criteria
 
-- [ ] Root `README.md` reflects current state.
-- [ ] `docs/PRODUCT_ROADMAP.md` Delivered section refreshed.
-- [ ] `docs/DAEMON_IPC.md` documents the Phase 47 Query
+- [x] Root `README.md` reflects current state.
+- [x] `docs/PRODUCT_ROADMAP.md` Delivered section refreshed.
+- [x] `docs/DAEMON_IPC.md` documents the Phase 47 Query
   envelope.
-- [ ] A3 amendment addendum filed; scope-base count matches
-  `KNOWN_BASES`.
+- [x] A3 amendment addendum filed; scope-base count matches
+  `KNOWN_BASES` (43).
 - [x] `docs/walkthrough.md` reviewed — gitignored local-only
   artifact, no committed action needed.
-- [ ] Cross-doc consistency spot-check complete; any drift
-  fixed in-phase.
-- [ ] DESIGN.md break (A3 addendum) — predicted.
-- [ ] PRODUCT.md untouched (streak → 4).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 2).
-- [ ] Zero clippy warnings.
-- [ ] Chapter A retrospective added to ROADMAP.
+- [x] Cross-doc consistency spot-check complete; no drift
+  found.
+- [x] DESIGN.md break (A3 addendum) — predicted, landed.
+- [x] PRODUCT.md untouched (streak → 4).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 2).
+- [x] Zero clippy warnings.
+- [x] Chapter A retrospective added to ROADMAP.
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 984 → 984 (unchanged — docs-only phase)
+- Python conformance tests: 24 (unchanged)
+- Workspace crates: 12 (unchanged)
+- Clippy warnings: 0
+- Deferral backlog: 4 → 4 (no closures, no openings)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | break (0) | A3 addendum landed | **0** |
+| PRODUCT.md | untouched (4) | untouched | 4 |
+| `aivyx-core/src/lib.rs` | untouched (2) | untouched | 2 |
+
+All three predictions correct. The DESIGN.md break was the
+deliberate Q6 outcome — A3 needed its scope-count addendum;
+the alternative was leaving the contract document silently
+stale.
+
+### Operator-side verification
+
+The README's five-minute setup recipe is the most operator-
+relevant artifact of this phase. **Not** run in-session. The
+recipe was assembled from prior phase READMEs (Phase 47 visual
+pass setup, Phase 44 init wizard) plus the Phase 51 TOML
+passphrase fix, so each individual line has been operator-
+verified earlier. A fresh-clone-to-running-daemon walkthrough
+is recommended at the operator's discretion.
+
+### Deferrals carried forward (4)
+
+1. Live audit push (P47 Q4)
+2. Read-write dashboard inspection (P47 Q6)
+3. Conformance harness as a Rust crate (P48 Q5)
+4. IPC stability window commitment (P48 Q6)
+
+None of these is load-bearing. All four are "would be nice"
+items rather than open architectural questions; each opens as
+needed.
+
+### Chapter A retrospective
+
+Five phases, six weeks of work (Phase 50 opened 2026-05-12;
+Phase 54 closed 2026-05-12 — Chapter A was deliberately tight).
+
+| Phase | Goal | What shipped |
+|---|---|---|
+| 50 | P12 closeout | Bridge stub closures, harness, equivalence proof |
+| 51 | Cleanup | AivyxError typed errors, ConnectionContext, passphrase TOML |
+| 52 | Sandbox layer | Generic command-wrapper, three worked examples |
+| 53 | Audit rotation | Skipped — no pressure |
+| 54 | Docs sweep | README rewrite, PRODUCT_ROADMAP refresh, A3 addendum |
+
+**What worked:** small, scoped phases with explicit Q-block
+sign-off before code. Each phase had a clear deliverable and
+a clear "this is closed" finish line. The streak-tracking
+discipline forced honest predictions; honest predictions
+forced honest scope decisions.
+
+**What broke as predicted:** the lib.rs streak at Phase 51 Q1.
+D6's `AivyxError` shape had been wrong for 50 phases; Phase 51
+honored the contract. The streak break was the right break.
+
+**What didn't break:** the substrate. The 49-phase forward
+arc (Phase 0-49) ended at 966 Rust tests; Chapter A closed at
+984. No regression-induced rollbacks; no contract amendments
+that required reshaping shipped surface.
+
+**What's next:** the project sits at "every contract honored,
+every PRODUCT.md commitment shipped, every visible loose end
+closed." Future work is operator-feedback-driven (real use
+surfacing real pressure) and amendment-driven (strategic
+expansion of PRODUCT.md commitments). Neither is on the
+roadmap as a numbered phase. The next numbered phase, when
+it opens, will be in response to a specific need.

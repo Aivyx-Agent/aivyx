@@ -610,39 +610,48 @@ DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
 Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
 remains as a forward commitment.
 
-## Chapter A — Foundation Closeout (Phases 50–54)
+## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
-the project pivots from "deliver remaining commitments" to
-"close out Phase 0–49 loose ends." Chapter A is the
+the project pivoted from "deliver remaining commitments" to
+"close out Phase 0–49 loose ends." Chapter A was the
 finish-the-job arc: pay down the deferral backlog, close the
 P12 deferred half, harden the tool-process surface with
 container isolation, and exit with a documentation sweep.
 
-Five phases planned:
+| Phase | Status | Headline |
+|---|---|---|
+| 50 | ✓ shipped | P12 closeout — `run_tool_as_subprocess<T: Tool>` + `p12_equivalence.rs` |
+| 51 | ✓ shipped | Cleanup — typed `AivyxError`, `ConnectionContext`, TOML passphrase |
+| 52 | ✓ shipped | Sandbox layer — generic command wrapper for `[[tool_process]]` |
+| 53 | skipped | Audit log rotation — no pressure to date |
+| 54 | ✓ shipped | Final documentation sweep |
 
-- **Phase 50** — P12 closeout (first-party in-process
-  protocol unification).
-- **Phase 51** — Cleanup: `AivyxError` typed nested errors,
-  `handle_connection` parameter struct, `AIVYX_PASSPHRASE`
-  TOML inconsistency.
-- **Phase 52** — Container sandbox layer for tool processes.
-- **Phase 53** — Audit log rotation/compaction *(optional —
-  decide at Phase 52 exit)*.
-- **Phase 54** — Final documentation sweep.
+**Chapter A retrospective.** The arc ended with the project at
+*every PRODUCT.md commitment honored, every visible loose end
+closed, every doc in sync with the substrate*. Five phases held
+the discipline of small scopes + Q-block sign-off + honest
+streak predictions. The deliberate break (lib.rs streak at
+Phase 51 Q1) was the right call: D6's `AivyxError` shape had
+been wrong for 50 phases; honoring it was overdue. No
+regression-induced rollbacks; no contract amendments that
+required reshaping shipped surface. The substrate held. Future
+work is operator-feedback-driven and amendment-driven rather
+than speculative — the next numbered phase opens in response
+to a specific need.
 
-After Chapter A, the project has a clean closing surface: no
-lingering deferrals, all contracts in sync, documentation
-matching the implementation.
+## Phase 54 — Final Documentation Sweep (Chapter A Closer) [SHIPPED]
 
-## Phase 54 — Final Documentation Sweep (Chapter A Closer)
-
-**Active — see [PHASE_54.md](PHASE_54.md).** Closes Chapter A.
-Refreshes stale docs that fell out of sync with the
-implementation across 54 phases: root README, PRODUCT_ROADMAP
-Delivered section, DAEMON_IPC Phase 47 addendum, A3 scope-count
-addendum, walkthrough, and cross-doc consistency spot-check.
-Not a contract amendment.
+**Frozen — see [PHASE_54.md](PHASE_54.md).** Closed Chapter A
+with a docs catch-up. Root README rewritten (179 lines, current
+state + five-minute setup). PRODUCT_ROADMAP Delivered section
+refreshed with all 12 PRODUCT.md commitments grouped by category
++ Chapter A entries. DAEMON_IPC Phase 47 Query/QueryResponse
+addendum. A3 amendment addendum brings scope-base count from
+"24" to the current 43 with a full enumeration grouped by tier.
+Cross-doc consistency spot-check found no drift. DESIGN.md
+streak broke at 4 (A3 addendum, predicted); PRODUCT.md and
+lib.rs streaks held at 4 and 2. No code changes.
 
 ## Phase 53 — (skipped)
 
