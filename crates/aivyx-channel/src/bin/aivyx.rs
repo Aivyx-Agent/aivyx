@@ -1455,17 +1455,45 @@ async fn run_async(
     // role, a few `Sourced<T>` fields) and confines the move
     // discipline to two adjacent lines.
     let role_for_envelope = role.clone();
-    // Phase 57 Task 3 — assemble the final system prompt by layering
-    // Profile (operator-declared identity per PRODUCT.md P13) atop
-    // the active role's `system_prompt`. When Profile is at its
-    // synthesized default (no `[profile]` section in TOML), the
-    // helper returns the role's `system_prompt` unchanged — zero
-    // behavior change for pre-Phase-57 configs.
-    let system_prompt = aivyx_channel::assemble_session_prompt(
-        &profile,
-        &active_role_name,
-        &role.system_prompt.value,
+    // Phase 59 — open the persistent Persona chain (PRODUCT.md P14)
+    // and replay it into a SharedEffectivePersona before the
+    // system-prompt assembly. The reflection.apply tool gets a
+    // handle on both the chain and the shared state further down
+    // (the setters need the constructed Arc<ReflectionApplyTool>,
+    // which is built later in the startup path).
+    let persona_log = match aivyx_channel::persona::PersistentPersonaLog::open(
+        storage.domain(KeyDomain::Persona),
+        persona_chain_key.to_vec(),
+    )
+    .await
+    {
+        Ok(log) => Arc::new(log),
+        Err(e) => {
+            return Err(format!(
+                "failed to open persona chain (KeyDomain::Persona): {e}"
+            ));
+        }
+    };
+    let shared_persona = aivyx_channel::persona::shared_effective_persona(
+        aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
+    // Phase 57 Task 3 — assemble the final system prompt by layering
+    // Profile (operator-declared identity per PRODUCT.md P13), Persona
+    // (reflection-written identity per PRODUCT.md P14, Phase 59 Task 6),
+    // and the active role's `system_prompt`. When Profile is at its
+    // synthesized default AND the Persona chain is empty, the helper
+    // returns the role's `system_prompt` unchanged — zero behavior
+    // change for pre-Phase-57 configs that haven't started accumulating
+    // Persona deltas yet.
+    let system_prompt = {
+        let persona_snapshot = shared_persona.read().expect("persona lock not poisoned at startup");
+        aivyx_channel::assemble_session_prompt(
+            &profile,
+            Some(&*persona_snapshot),
+            &active_role_name,
+            &role.system_prompt.value,
+        )
+    };
     let tool_allowlist: Option<std::collections::BTreeSet<String>> =
         match role.tool_allowlist.value {
             ToolAllowlist::AllowAll => None,
@@ -1702,32 +1730,9 @@ async fn run_async(
     let role_update_tool: Arc<RoleUpdateTool> = Arc::new(RoleUpdateTool::new());
     tool_list.push(Arc::clone(&role_update_tool) as Arc<dyn Tool>);
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
-
-    // Phase 59 — open the persistent Persona chain (PRODUCT.md P14).
-    // The HMAC key is `persona_chain_key`, derived from the master
-    // key at startup alongside the audit chain key (same pattern, so
-    // a passphrase rotation invalidates both chains together).
-    // Empty chains return Ok with length-0 — first-run behavior.
-    let persona_log = match aivyx_channel::persona::PersistentPersonaLog::open(
-        storage.domain(KeyDomain::Persona),
-        persona_chain_key.to_vec(),
-    )
-    .await
-    {
-        Ok(log) => Arc::new(log),
-        Err(e) => {
-            return Err(format!(
-                "failed to open persona chain (KeyDomain::Persona): {e}"
-            ));
-        }
-    };
-    // Replay the chain into a SharedEffectivePersona — the planner
-    // factory captures a clone of this Arc and reads under the read
-    // lock per-turn; reflection.apply writes under the write lock
-    // on each approved delta (Phase 59 Task 4).
-    let shared_persona = aivyx_channel::persona::shared_effective_persona(
-        aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
-    );
+    // `persona_log` + `shared_persona` were created earlier (right
+    // after the role assemble) so the system-prompt path could read
+    // the startup snapshot. The apply-tool setters land just below.
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -2062,6 +2067,11 @@ async fn run_async(
     // Clone once for the factory closure to capture (Profile holds
     // only owned data, no Arc indirection needed).
     let profile_for_factory = profile.clone();
+    // Phase 59 Task 6 — same shape: the SharedEffectivePersona is
+    // captured by the factory so child sessions see Persona-shaped
+    // prompts identical to the parent. The clone is an `Arc<RwLock<_>>`
+    // — cheap, lock-free at construction time.
+    let persona_for_factory = shared_persona.clone();
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -2100,15 +2110,22 @@ async fn run_async(
         // child's planner and agent builder. Mirrors the parent
         // path at lines 1193-1199.
         //
-        // Phase 57 Task 3 — same Profile injection as the parent
-        // path: layered "## About this assistant" + "## Active
-        // role: <target>" composition when the operator has
-        // declared a `[profile]` section, passthrough otherwise.
+        // Phase 57 Task 3 + Phase 59 Task 6 — same Profile and
+        // Persona injection as the parent path: layered three-section
+        // composition when either Profile or Persona has content,
+        // passthrough otherwise. Reading under the read lock per
+        // child-session build is cheap; the lock is contended only
+        // when reflection.apply lands a new delta.
+        let persona_snapshot = persona_for_factory
+            .read()
+            .expect("persona lock not poisoned at child session build");
         let child_system_prompt = aivyx_channel::assemble_session_prompt(
             &profile_for_factory,
+            Some(&*persona_snapshot),
             target,
             &target_role.system_prompt.value,
         );
+        drop(persona_snapshot);
         let child_tool_allowlist: Option<std::collections::BTreeSet<String>> =
             match target_role.tool_allowlist.value {
                 ToolAllowlist::AllowAll => None,

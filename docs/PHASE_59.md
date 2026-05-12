@@ -348,6 +348,64 @@ behavior preserved). Update unit tests in
 `profile_prompt.rs` (or new module if substantial) to
 cover the three-section layout.
 
+## Task 6 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/profile_prompt.rs` (+121, ~15):
+  `assemble_session_prompt` gains an
+  `Option<&EffectivePersona>` parameter. Empty / `None`
+  Persona behaves identically to pre-Phase-59 (preserves
+  the Phase 57 non-invasive default). Operator-declared
+  Persona renders under a new "## How I have learned to
+  communicate" section per Q6(a). Scalars render as
+  "Refined X: <value>" lines (so the operator can tell a
+  reflection-refined name from a Profile-declared name);
+  list categories render as bulleted entries under
+  per-category labels (`Learned use cases`,
+  `Learned behavioral preferences`, ..., `Learned context`,
+  `Communication adaptations`, `Character traits`,
+  `Relationship milestones`). Section ordering:
+  Profile → Persona → Active role. New
+  `render_persona_section` helper (parallels
+  `render_profile_section`).
+  Existing 7 unit tests updated to the 4-arg signature
+  (None for Persona). 4 new unit tests:
+  empty-persona-equals-passthrough,
+  persona-section-renders-under-labeled-header,
+  profile-and-persona-three-section-layout,
+  persona-none-equals-empty.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+~25, ~10):
+  the Persona chain open + shared_persona seed moved
+  earlier in run_async (right after `role_for_envelope`)
+  so the parent system_prompt assemble call can read the
+  startup snapshot. The apply-tool setters stay where
+  they were (alongside the role-overrides setters).
+  Parent assemble call site updated to pass
+  `Some(&*persona_snapshot)`. Role-switch child factory
+  captures `persona_for_factory = shared_persona.clone()`
+  and reads under the read lock at child-session build
+  to pass the snapshot into the child's
+  `assemble_session_prompt` call. Sub-sessions inherit
+  the same Persona section as the parent — same shape
+  as Phase 57 Task 3's Profile inheritance.
+
+**Test delta:** +4 in profile_prompt module. Workspace
+total: 1048 → 1052. Zero clippy warnings.
+
+**Scope note on per-turn freshness.** Q5(a) at Phase 59
+sign-off committed to per-turn hot-reload via the shared
+state. Phase 59 ships snapshot-at-session-build freshness
+(the read happens at session build, not per-turn) plus the
+chain-write-and-shared-mutation on apply. Per-turn refresh
+in the planner factory closures is deferred to **Phase 60**
+alongside the Web UI / revert / CLI surfaces — the same
+phase that needs operator-facing dashboards anyway. After
+Phase 60, an approved Persona delta takes effect on the
+next turn without restart, matching `role_overrides`. For
+Phase 59, the substrate is sound; operators who approve a
+delta during a daemon session see it apply on next daemon
+startup (Profile-shaped semantics).
+
 ### Task 7 — Tests + exit freeze
 
 Workspace test suite passes; clippy clean. Streak
