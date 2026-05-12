@@ -325,19 +325,19 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             }
         };
 
-        let agent = Arc::clone(&agent);
-        let factory = Arc::clone(&channel_factory);
-        let conn_shutdown = shutdown.clone();
-        let conn_mission_store = mission_store.clone();
-        let conn_recovery = Arc::clone(&pending_recovery);
-        let conn_state = Arc::clone(&daemon_state);
-        let conn_audit_log = audit_log.clone();
+        let ctx = ConnectionContext {
+            stream,
+            agent: Arc::clone(&agent),
+            channel_factory: Arc::clone(&channel_factory),
+            shutdown: shutdown.clone(),
+            mission_store: mission_store.clone(),
+            pending_recovery: Arc::clone(&pending_recovery),
+            daemon_state: Arc::clone(&daemon_state),
+            audit_log: audit_log.clone(),
+        };
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = handle_connection(
-                stream, agent, factory, conn_shutdown, conn_mission_store,
-                conn_recovery, conn_state, conn_audit_log,
-            ).await {
+            if let Err(e) = handle_connection(ctx).await {
                 eprintln!("aivyx daemon: connection handler error: {e}");
             }
         });
@@ -351,13 +351,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     Ok(())
 }
 
-// Eight parameters because the connection handler needs access to every
-// per-connection store the daemon owns. The right long-term shape is a
-// `ConnectionContext` parameter struct (same pattern as Phase 41's
-// `DaemonConfig`); deferred to keep Phase 47 Task 4 scoped to query
-// dispatch.
-#[allow(clippy::too_many_arguments)]
-async fn handle_connection(
+/// Per-connection state the daemon hands to `handle_connection`.
+///
+/// Phase 51 Task 3 — lifted from `handle_connection`'s 8-parameter
+/// signature into a parameter struct, same pattern Phase 41 Task 2
+/// used for `DaemonConfig`. The `#[allow(clippy::too_many_arguments)]`
+/// shortcut from Phase 47 Task 4 is gone.
+struct ConnectionContext {
     stream: tokio::net::UnixStream,
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
@@ -366,7 +366,19 @@ async fn handle_connection(
     pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>>,
     daemon_state: Arc<std::sync::Mutex<DaemonState>>,
     audit_log: Option<Arc<PersistentAuditLog>>,
-) -> Result<(), DaemonError> {
+}
+
+async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
+    let ConnectionContext {
+        stream,
+        agent,
+        channel_factory,
+        shutdown,
+        mission_store,
+        pending_recovery,
+        daemon_state,
+        audit_log,
+    } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
     let ready = DaemonLifecycleEvent::DaemonReady {
@@ -776,16 +788,16 @@ async fn run_single_connection_daemon(
         sessions: Vec::new(),
         in_flight_turns: Vec::new(),
     }));
-    handle_connection(
+    handle_connection(ConnectionContext {
         stream,
         agent,
         channel_factory,
         shutdown,
-        None,
-        no_recovery,
-        empty_state,
-        None,
-    )
+        mission_store: None,
+        pending_recovery: no_recovery,
+        daemon_state: empty_state,
+        audit_log: None,
+    })
     .await
 }
 
