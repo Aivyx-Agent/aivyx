@@ -151,7 +151,8 @@ Update `docs/README.md` row.
 
 | Task | Commit | Notes |
 |---|---|---|
-| 1 | _this commit_ | scaffold |
+| 1 | `ce6f613` | scaffold |
+| 2 | _this commit_ | root README.md rewrite (179 lines, full refresh) |
 
 ## Deferrals carried into the phase
 
