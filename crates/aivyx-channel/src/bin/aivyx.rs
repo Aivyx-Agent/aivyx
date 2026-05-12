@@ -700,6 +700,26 @@ fn print_config_banner(config: &AivyxConfig) {
         config.active_role.value,
         source_label(config.active_role.source),
     );
+    // Phase 57 Task 5 — Profile row. Shows the assistant_name with
+    // provenance so the operator can tell at startup whether a
+    // `[profile]` section was loaded or the synthesized default is
+    // in effect. The trailing detail counts the *additional*
+    // operator-declared fields (operator_profile,
+    // communication_style, primary_use_cases,
+    // behavioral_preferences, behavioral_constraints) so the
+    // operator knows whether Profile-injection is shaping every
+    // turn's prompt.
+    let extra_declared = count_extra_profile_fields(&config.profile);
+    eprintln!(
+        "  profile           = name={:?} ({}){}",
+        config.profile.assistant_name.value,
+        source_label(config.profile.assistant_name.source),
+        if extra_declared == 0 {
+            String::new()
+        } else {
+            format!(", +{extra_declared} operator-declared field(s)")
+        },
+    );
     if !config.warnings.is_empty() {
         eprintln!();
         eprintln!("config warnings:");
@@ -716,6 +736,31 @@ fn source_label(src: FieldSource) -> &'static str {
         FieldSource::EncryptedStore => "encrypted-store",
         FieldSource::Default => "default",
     }
+}
+
+/// Count the number of operator-declared Profile fields other than
+/// `assistant_name` (which already has its own banner cell). Phase
+/// 57 Task 5 — feeds the trailing detail of the `profile` banner row
+/// so the operator can see at startup how many categories beyond
+/// the assistant name are shaping every turn's prompt.
+fn count_extra_profile_fields(p: &aivyx_config::Profile) -> usize {
+    let mut n = 0;
+    if p.operator_profile.is_some() {
+        n += 1;
+    }
+    if p.communication_style.is_some() {
+        n += 1;
+    }
+    if !p.primary_use_cases.is_empty() {
+        n += 1;
+    }
+    if !p.behavioral_preferences.is_empty() {
+        n += 1;
+    }
+    if !p.behavioral_constraints.is_empty() {
+        n += 1;
+    }
+    n
 }
 
 fn truncate_for_log(s: &str, max: usize) -> String {

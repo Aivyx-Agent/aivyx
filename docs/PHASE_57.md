@@ -247,6 +247,34 @@ Unit test: legacy `aivyx.toml` (no `[profile]` section)
 loads cleanly with the synthesized default; banner output
 shows the synthesized fields.
 
+## Task 5 ship record
+
+**Note on Task 5 scope.** The synthesized default Profile per
+Q5(b) was already implemented as part of Task 2 — `Profile::
+default()` returns the all-empty / assistant_name-defaults
+shape, and the loader uses it when the `[profile]` section is
+absent (covered by
+`profile_section_absent_synthesizes_default_with_assistant_name`).
+Task 5 ships the **startup banner row** that surfaces Profile
+provenance to the operator at startup.
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+38): new `profile`
+  row in `print_startup_banner` showing the assistant name with
+  source label (`default` vs `toml`) and a trailing count of
+  *additional* operator-declared fields (`+N operator-declared
+  field(s)` when any of operator_profile,
+  communication_style, primary_use_cases,
+  behavioral_preferences, behavioral_constraints are
+  non-default). New `count_extra_profile_fields` helper near
+  `truncate_for_log`. Operators see at startup whether Profile-
+  injection is shaping every turn's prompt or the substrate is
+  at its passthrough default.
+
+**Test delta:** 0 (banner is operator-facing rendering;
+existing loader tests cover the underlying defaults).
+Workspace total unchanged at 1006. Zero clippy warnings.
+
 ### Task 6 — Documentation pass
 
 Update three docs:
