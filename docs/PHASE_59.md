@@ -295,6 +295,38 @@ defers hot-reload there and only loads at startup, since
 the in-process path has fewer turns per session and a
 restart is cheap.
 
+## Task 5 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+58): derive
+  `persona_chain_key: [u8; 32]` from the master key
+  alongside the audit chain key (same pattern, same
+  subkey-bytes lifecycle). Thread it through
+  `runtime.block_on`'s closure into `run_async`'s new
+  `persona_chain_key` parameter. At startup,
+  `PersistentPersonaLog::open(storage.domain(KeyDomain::
+  Persona), persona_chain_key.to_vec())` either opens an
+  empty log or replays the existing chain. The chain
+  entries fold into a `SharedEffectivePersona` via
+  `compute_effective_persona` + `shared_effective_persona`.
+  Both `Arc<PersistentPersonaLog>` and
+  `SharedEffectivePersona` are then registered on the
+  `ReflectionApplyTool` via `set_persona_log` /
+  `set_effective_persona`. After this commit a
+  daemon that approves a persona delta writes to the
+  persistent chain AND mutates the shared runtime state
+  under the write lock; the per-turn planner-factory
+  integration that READS from the shared state (so the
+  next turn's system prompt reflects the new state)
+  ships in Task 6 alongside the
+  `assemble_session_prompt` extension.
+
+**Test delta:** 0 in this task (workspace stays at 1048).
+Zero clippy warnings. Task 6 will exercise the full
+read-write loop with new tests covering
+assemble-with-persona output and the planner-factory
+per-turn re-call.
+
 ### Task 6 — `assemble_session_prompt` extends with Persona section
 
 Per Q6, extend the system-prompt assembly to compose three

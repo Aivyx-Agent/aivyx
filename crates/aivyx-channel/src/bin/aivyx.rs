@@ -500,6 +500,19 @@ fn run() -> Result<(), String> {
         out.copy_from_slice(subkey.as_bytes());
         out
     };
+    // Phase 59 — derive the Persona chain HMAC key from the same
+    // master, against `KeyDomain::Persona::as_bytes()`. Same pattern
+    // as the audit chain key above; raw bytes live on the stack
+    // until handed to `PersistentPersonaLog::open`, which clones
+    // them into the chain log and zeroes on drop.
+    let persona_chain_key: [u8; 32] = {
+        let subkey = master_key
+            .derive_subkey(b"persona")
+            .map_err(|e| format!("failed to derive persona chain key: {e}"))?;
+        let mut out = [0u8; 32];
+        out.copy_from_slice(subkey.as_bytes());
+        out
+    };
 
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
@@ -550,6 +563,7 @@ fn run() -> Result<(), String> {
             config,
             storage,
             audit_chain_key,
+            persona_chain_key,
             channel_kind,
             mode,
             no_daemon,
@@ -1326,6 +1340,7 @@ async fn run_async(
     config: AivyxConfig,
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
+    persona_chain_key: [u8; 32],
     channel_kind: ChannelKind,
     mode: CliMode,
     no_daemon: bool,
@@ -1687,6 +1702,32 @@ async fn run_async(
     let role_update_tool: Arc<RoleUpdateTool> = Arc::new(RoleUpdateTool::new());
     tool_list.push(Arc::clone(&role_update_tool) as Arc<dyn Tool>);
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
+
+    // Phase 59 — open the persistent Persona chain (PRODUCT.md P14).
+    // The HMAC key is `persona_chain_key`, derived from the master
+    // key at startup alongside the audit chain key (same pattern, so
+    // a passphrase rotation invalidates both chains together).
+    // Empty chains return Ok with length-0 — first-run behavior.
+    let persona_log = match aivyx_channel::persona::PersistentPersonaLog::open(
+        storage.domain(KeyDomain::Persona),
+        persona_chain_key.to_vec(),
+    )
+    .await
+    {
+        Ok(log) => Arc::new(log),
+        Err(e) => {
+            return Err(format!(
+                "failed to open persona chain (KeyDomain::Persona): {e}"
+            ));
+        }
+    };
+    // Replay the chain into a SharedEffectivePersona — the planner
+    // factory captures a clone of this Arc and reads under the read
+    // lock per-turn; reflection.apply writes under the write lock
+    // on each approved delta (Phase 59 Task 4).
+    let shared_persona = aivyx_channel::persona::shared_effective_persona(
+        aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
+    );
 
     let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
     for mcp_cfg in &mcp_servers {
@@ -2277,6 +2318,23 @@ async fn run_async(
         .map_err(|_| {
             "reflection.apply role_overrides was already set — startup path \
              bug, should be called exactly once"
+                .to_string()
+        })?;
+    // Phase 59 — apply tool gets the persistent Persona chain (for
+    // delta append on approval) and the shared runtime state (for
+    // immediate hot-reload of the next turn's effective Persona).
+    reflection_apply_tool
+        .set_persona_log(Arc::clone(&persona_log))
+        .map_err(|_| {
+            "reflection.apply persona_log was already set — startup path \
+             bug, should be called exactly once"
+                .to_string()
+        })?;
+    reflection_apply_tool
+        .set_effective_persona(shared_persona.clone())
+        .map_err(|_| {
+            "reflection.apply effective_persona was already set — startup \
+             path bug, should be called exactly once"
                 .to_string()
         })?;
 
