@@ -23,8 +23,8 @@ use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError,
-    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary, QueryPayload,
-    QueryResponsePayload, SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
+    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary, ProfileSummary,
+    QueryPayload, QueryResponsePayload, SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
 };
 use crate::mission;
 
@@ -138,6 +138,12 @@ pub struct DaemonConfig {
     /// inspection queries from the Web UI. When `None`, those queries
     /// return `QueryError { code: "no_audit_log", .. }`.
     pub audit_log: Option<Arc<PersistentAuditLog>>,
+    /// Phase 58 — operator-declared identity layer (PRODUCT.md P13).
+    /// Read-only at daemon runtime per Q5(a) load-time semantics;
+    /// served to the Web UI Profile pane via the `GetProfile`
+    /// inspection query. Always populated — the synthesized default
+    /// is supplied when `aivyx.toml` has no `[profile]` section.
+    pub profile: Arc<aivyx_config::Profile>,
 }
 
 /// Run the daemon server.
@@ -167,6 +173,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         memory,
         memory_ttl_secs,
         audit_log,
+        profile,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -334,6 +341,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             pending_recovery: Arc::clone(&pending_recovery),
             daemon_state: Arc::clone(&daemon_state),
             audit_log: audit_log.clone(),
+            profile: Arc::clone(&profile),
         };
 
         let handle = tokio::spawn(async move {
@@ -366,6 +374,10 @@ struct ConnectionContext {
     pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>>,
     daemon_state: Arc<std::sync::Mutex<DaemonState>>,
     audit_log: Option<Arc<PersistentAuditLog>>,
+    /// Phase 58 — operator-declared Profile snapshot for
+    /// `Query::GetProfile`. Cloned-per-connection so the handler
+    /// can read it without contending with the daemon's read path.
+    profile: Arc<aivyx_config::Profile>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -378,6 +390,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         pending_recovery,
         daemon_state,
         audit_log,
+        profile,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -702,6 +715,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &daemon_state,
                                 mission_store.as_deref(),
                                 audit_log.as_deref(),
+                                &profile,
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -797,6 +811,7 @@ async fn run_single_connection_daemon(
         pending_recovery: no_recovery,
         daemon_state: empty_state,
         audit_log: None,
+        profile: Arc::new(aivyx_config::Profile::default()),
     })
     .await
 }
@@ -824,6 +839,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         memory: None,
         memory_ttl_secs: None,
         audit_log: None,
+        profile: Arc::new(aivyx_config::Profile::default()),
     }).await
 }
 
@@ -974,6 +990,7 @@ async fn handle_query(
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
     mission_store: Option<&DomainHandle>,
     audit_log: Option<&PersistentAuditLog>,
+    profile: &aivyx_config::Profile,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1078,6 +1095,36 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
+            profile: profile_summary_from_profile(profile),
+        },
+    }
+}
+
+/// Convert an in-memory [`aivyx_config::Profile`] to the
+/// [`ProfileSummary`] wire shape. Phase 58 — flattens `Sourced<T>`
+/// into plain serializable fields and pre-computes the
+/// `injection_enabled` predicate so the Web UI does not need to
+/// re-implement the rule.
+fn profile_summary_from_profile(profile: &aivyx_config::Profile) -> ProfileSummary {
+    ProfileSummary {
+        assistant_name: profile.assistant_name.value.clone(),
+        assistant_name_source: field_source_label(profile.assistant_name.source).to_string(),
+        operator_profile: profile.operator_profile.clone(),
+        communication_style: profile.communication_style.clone(),
+        primary_use_cases: profile.primary_use_cases.clone(),
+        behavioral_preferences: profile.behavioral_preferences.clone(),
+        behavioral_constraints: profile.behavioral_constraints.clone(),
+        injection_enabled: profile.is_operator_declared(),
+    }
+}
+
+fn field_source_label(src: aivyx_config::FieldSource) -> &'static str {
+    match src {
+        aivyx_config::FieldSource::Env => "env",
+        aivyx_config::FieldSource::Toml => "toml",
+        aivyx_config::FieldSource::EncryptedStore => "encrypted-store",
+        aivyx_config::FieldSource::Default => "default",
     }
 }
 
@@ -1371,5 +1418,55 @@ mod tests {
 
         drop(guard);
         assert!(!path.exists());
+    }
+
+    // -------------------------------------------------------------
+    // Phase 58 — Profile inspection query helpers.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn profile_summary_renders_default_profile_with_injection_disabled() {
+        let summary = profile_summary_from_profile(&aivyx_config::Profile::default());
+        assert_eq!(summary.assistant_name, "Aivyx");
+        assert_eq!(summary.assistant_name_source, "default");
+        assert!(summary.operator_profile.is_none());
+        assert!(summary.communication_style.is_none());
+        assert!(summary.primary_use_cases.is_empty());
+        assert!(summary.behavioral_preferences.is_empty());
+        assert!(summary.behavioral_constraints.is_empty());
+        assert!(!summary.injection_enabled);
+    }
+
+    #[test]
+    fn profile_summary_renders_operator_declared_profile_with_injection_enabled() {
+        let profile = aivyx_config::Profile {
+            assistant_name: aivyx_config::Sourced::new(
+                "Codex".to_string(),
+                aivyx_config::FieldSource::Toml,
+            ),
+            operator_profile: Some("Senior Rust engineer".to_string()),
+            communication_style: Some("terse, conclusion-first".to_string()),
+            primary_use_cases: vec!["Rust systems".to_string()],
+            behavioral_preferences: vec!["prefer integration tests".to_string()],
+            behavioral_constraints: vec!["never auto-commit".to_string()],
+        };
+        let summary = profile_summary_from_profile(&profile);
+        assert_eq!(summary.assistant_name, "Codex");
+        assert_eq!(summary.assistant_name_source, "toml");
+        assert_eq!(summary.operator_profile.as_deref(), Some("Senior Rust engineer"));
+        assert_eq!(
+            summary.communication_style.as_deref(),
+            Some("terse, conclusion-first"),
+        );
+        assert_eq!(summary.primary_use_cases, vec!["Rust systems".to_string()]);
+        assert_eq!(
+            summary.behavioral_preferences,
+            vec!["prefer integration tests".to_string()],
+        );
+        assert_eq!(
+            summary.behavioral_constraints,
+            vec!["never auto-commit".to_string()],
+        );
+        assert!(summary.injection_enabled);
     }
 }

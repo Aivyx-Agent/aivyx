@@ -375,6 +375,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="missions">Missions <span class="refresh" data-refresh="missions">↻</span></div>
     <div class="tab" data-pane="audit">Audit <span class="refresh" data-refresh="audit">↻</span></div>
     <div class="tab" data-pane="sessions">Sessions <span class="refresh" data-refresh="sessions">↻</span></div>
+    <div class="tab" data-pane="profile">Profile <span class="refresh" data-refresh="profile">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -419,6 +420,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <span class="pane-action" data-refresh="sessions">Refresh</span>
     </div>
     <div id="sessions-body" class="empty">Click Refresh to load.</div>
+  </div>
+
+  <!-- Profile pane (Phase 58 — PRODUCT.md P13) -->
+  <div class="pane list-pane" data-pane="profile">
+    <div class="pane-header">
+      <span class="pane-title">Profile</span>
+      <span class="pane-action" data-refresh="profile">Refresh</span>
+    </div>
+    <div id="profile-body" class="empty">Click Refresh to load.</div>
   </div>
 </div>
 
@@ -982,6 +992,81 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     });
   }
 
+  // ---- Profile (Phase 58 — PRODUCT.md P13) ----
+
+  function loadProfile() {
+    const body = document.getElementById('profile-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+
+    sendQuery('p', { kind: 'GetProfile' }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'GetProfile') return;
+
+      const profile = payload.profile;
+      body.innerHTML = '';
+      body.className = '';
+
+      // Injection-status banner — surfaces whether Profile is
+      // shaping every turn's system prompt right now.
+      const banner = document.createElement('div');
+      banner.className = 'row-card';
+      if (profile.injection_enabled) {
+        banner.innerHTML =
+          '<div class="row-line"><span class="row-id">Profile injection: ENABLED</span>' +
+          '<span class="row-meta">flavoring every turn’s system prompt</span></div>';
+      } else {
+        banner.innerHTML =
+          '<div class="row-line"><span class="row-id">Profile injection: DISABLED</span>' +
+          '<span class="row-meta">no operator content declared</span></div>';
+      }
+      body.appendChild(banner);
+
+      // Scalar fields.
+      appendProfileField(body, 'assistant_name',
+        escapeHtml(profile.assistant_name) + ' (' + escapeHtml(profile.assistant_name_source) + ')');
+      appendProfileField(body, 'operator_profile',
+        profile.operator_profile ? escapeHtml(profile.operator_profile) : '<em>unset</em>');
+      appendProfileField(body, 'communication_style',
+        profile.communication_style ? escapeHtml(profile.communication_style) : '<em>unset</em>');
+
+      // List fields.
+      appendProfileList(body, 'primary_use_cases', profile.primary_use_cases);
+      appendProfileList(body, 'behavioral_preferences', profile.behavioral_preferences);
+      appendProfileList(body, 'behavioral_constraints', profile.behavioral_constraints);
+    });
+  }
+
+  function appendProfileField(body, label, valueHtml) {
+    const card = document.createElement('div');
+    card.className = 'row-card';
+    card.innerHTML =
+      '<div class="row-line"><span class="row-id">' + label + '</span>' +
+      '<span class="row-meta">' + valueHtml + '</span></div>';
+    body.appendChild(card);
+  }
+
+  function appendProfileList(body, label, items) {
+    const card = document.createElement('div');
+    card.className = 'row-card';
+    if (!items || items.length === 0) {
+      card.innerHTML =
+        '<div class="row-line"><span class="row-id">' + label + '</span>' +
+        '<span class="row-meta"><em>unset</em></span></div>';
+    } else {
+      const lines = items.map(function(item) {
+        return '<div>&middot; ' + escapeHtml(item) + '</div>';
+      }).join('');
+      card.innerHTML =
+        '<div class="row-line"><span class="row-id">' + label + '</span></div>' +
+        '<div class="row-meta">' + lines + '</div>';
+    }
+    body.appendChild(card);
+  }
+
   // ------------------------------------------------------------------
   // Tab switching
   // ------------------------------------------------------------------
@@ -998,6 +1083,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     if (name === 'missions') loadMissions();
     else if (name === 'audit') loadAudit(0);
     else if (name === 'sessions') loadSessions();
+    else if (name === 'profile') loadProfile();
   }
 
   document.querySelectorAll('.tab').forEach(function(tab) {
@@ -1014,6 +1100,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       if (which === 'missions') loadMissions();
       else if (which === 'audit') loadAudit(0);
       else if (which === 'sessions') loadSessions();
+      else if (which === 'profile') loadProfile();
     });
   });
 

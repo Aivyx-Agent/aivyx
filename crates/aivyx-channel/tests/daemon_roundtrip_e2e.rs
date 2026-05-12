@@ -27,6 +27,10 @@ use aivyx_channel::daemon_ipc::{
 };
 use aivyx_channel::daemon_ipc::FrontendType;
 use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory, DaemonConfig};
+// Phase 58 — `DaemonConfig.profile` field for Profile inspection
+// query support. Tests construct daemons with the synthesized
+// default Profile, except the dedicated Phase 58 Profile-query test.
+use aivyx_config::Profile;
 use aivyx_channel::LocalChannel;
 use aivyx_core::{
     Agent, AgentId, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome,
@@ -802,6 +806,7 @@ async fn two_concurrent_connections() {
                 memory: None,
                 memory_ttl_secs: None,
                 audit_log: None,
+                profile: Arc::new(Profile::default()),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1079,6 +1084,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
                 memory: None,
                 memory_ttl_secs: None,
                 audit_log: None,
+                profile: Arc::new(Profile::default()),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1154,6 +1160,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
                 memory: None,
                 memory_ttl_secs: None,
                 audit_log: None,
+                profile: Arc::new(Profile::default()),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1553,6 +1560,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
+            profile: Arc::new(Profile::default()),
         })
         .await
         .expect("daemon must complete successfully");
@@ -1805,6 +1813,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
+            profile: Arc::new(Profile::default()),
         })
         .await
         .expect("daemon must complete");
@@ -2169,6 +2178,7 @@ async fn mission_queries_round_trip_over_ipc() {
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
+            profile: Arc::new(Profile::default()),
         })
         .await
         .expect("daemon must complete successfully");
@@ -2437,6 +2447,7 @@ async fn audit_queries_round_trip_over_ipc() {
             memory: None,
             memory_ttl_secs: None,
             audit_log: Some(daemon_audit),
+            profile: Arc::new(Profile::default()),
         })
         .await
         .expect("daemon must complete successfully");

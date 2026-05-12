@@ -118,6 +118,13 @@ pub enum QueryPayload {
     /// hashes match, the number of entries verified, and the first
     /// error encountered if any.
     VerifyAuditChain,
+    /// Phase 58 — fetch the daemon's loaded `Profile`
+    /// (PRODUCT.md P13). Read-only inspection. Returns a
+    /// [`ProfileSummary`] snapshot of the in-memory state; same
+    /// values the daemon is using for system-prompt assembly. The
+    /// CLI `aivyx profile show` reads from disk directly; this
+    /// query is the Web UI counterpart.
+    GetProfile,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -159,6 +166,15 @@ pub enum QueryResponsePayload {
     QueryError {
         code: String,
         message: String,
+    },
+    /// Response to [`QueryPayload::GetProfile`]. Phase 58 — the
+    /// daemon's currently-loaded Profile snapshot. The Web UI
+    /// renders this into the Profile pane mirroring `aivyx profile
+    /// show`. Always populated — even on a daemon with no `[profile]`
+    /// section in TOML, the synthesized default is returned (the
+    /// snapshot includes `injection_enabled = false` in that case).
+    GetProfile {
+        profile: ProfileSummary,
     },
 }
 
@@ -234,6 +250,36 @@ pub struct AuditEntrySummary {
     pub event: serde_json::Value,
     /// HMAC tag, hex-encoded for display.
     pub mac_hex: String,
+}
+
+/// Operator-declared Profile snapshot returned by
+/// [`QueryResponsePayload::GetProfile`]. Phase 58 (PRODUCT.md P13).
+///
+/// Wire-shaped mirror of `aivyx_config::Profile` — flattens
+/// `Sourced<T>` into plain serializable fields and pre-computes the
+/// `injection_enabled` predicate (the runtime
+/// `Profile::is_operator_declared()` result) so the Web UI does not
+/// need to re-implement the rule.
+///
+/// `assistant_name_source` is the stringified [`aivyx_config::FieldSource`]:
+/// `"toml"`, `"default"`, `"env"`, or `"encrypted-store"`. Other
+/// fields do not carry per-field provenance — Profile fields other
+/// than `assistant_name` are either declared in `[profile]` or
+/// absent, never sourced from env or the encrypted store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfileSummary {
+    pub assistant_name: String,
+    pub assistant_name_source: String,
+    pub operator_profile: Option<String>,
+    pub communication_style: Option<String>,
+    pub primary_use_cases: Vec<String>,
+    pub behavioral_preferences: Vec<String>,
+    pub behavioral_constraints: Vec<String>,
+    /// `true` when the daemon's `Profile::is_operator_declared()`
+    /// returned `true` — i.e. Profile is shaping every turn's system
+    /// prompt via `assemble_session_prompt`. `false` means the
+    /// substrate is at its passthrough default.
+    pub injection_enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +678,11 @@ mod tests {
                 id: "q-005".into(),
                 payload: QueryPayload::VerifyAuditChain,
             },
+            // Phase 58 — Profile inspection query.
+            FrontendMessage::Query {
+                id: "q-006".into(),
+                payload: QueryPayload::GetProfile,
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -756,6 +807,40 @@ mod tests {
                     ok: false,
                     entries_verified: 0,
                     error: Some("chain broken at seq 3".into()),
+                },
+            },
+            // Phase 58 — Profile inspection response (default snapshot,
+            // injection disabled).
+            DaemonMessage::QueryResponse {
+                id: "q-010".into(),
+                payload: QueryResponsePayload::GetProfile {
+                    profile: ProfileSummary {
+                        assistant_name: "Aivyx".into(),
+                        assistant_name_source: "default".into(),
+                        operator_profile: None,
+                        communication_style: None,
+                        primary_use_cases: vec![],
+                        behavioral_preferences: vec![],
+                        behavioral_constraints: vec![],
+                        injection_enabled: false,
+                    },
+                },
+            },
+            // Phase 58 — Profile inspection response with operator-
+            // declared content (injection enabled).
+            DaemonMessage::QueryResponse {
+                id: "q-011".into(),
+                payload: QueryResponsePayload::GetProfile {
+                    profile: ProfileSummary {
+                        assistant_name: "Codex".into(),
+                        assistant_name_source: "toml".into(),
+                        operator_profile: Some("Senior Rust engineer".into()),
+                        communication_style: Some("terse".into()),
+                        primary_use_cases: vec!["Rust systems".into()],
+                        behavioral_preferences: vec!["prefer integration tests".into()],
+                        behavioral_constraints: vec!["never auto-commit".into()],
+                        injection_enabled: true,
+                    },
                 },
             },
             DaemonMessage::QueryResponse {

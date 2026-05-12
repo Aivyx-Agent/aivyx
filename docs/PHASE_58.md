@@ -202,6 +202,60 @@ Integration test: drive a `Query::GetProfile` against a
 test-fixture daemon and assert the response matches the
 loaded Profile.
 
+## Task 4 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/daemon_ipc.rs` (+58): new
+  `QueryPayload::GetProfile` enum variant; new
+  `QueryResponsePayload::GetProfile { profile: ProfileSummary
+  }` variant; new `pub struct ProfileSummary` mirroring
+  `aivyx_config::Profile` in plain-serializable wire form
+  (flat `Sourced<T>` → `(String, source_label_String)` for
+  `assistant_name`; pre-computed `injection_enabled` bool).
+  Round-trip tests gained one `GetProfile` request case and
+  two `GetProfile` response cases (default snapshot,
+  operator-declared snapshot).
+- `crates/aivyx-channel/src/daemon_server.rs` (+93): new
+  `profile: Arc<aivyx_config::Profile>` field on
+  `DaemonConfig`; new `profile: Arc<aivyx_config::Profile>`
+  field on `ConnectionContext`; threading `profile` through
+  `run_daemon` and `handle_connection`; `handle_query`
+  gains a `profile: &aivyx_config::Profile` parameter; new
+  `GetProfile` arm calling a new
+  `profile_summary_from_profile` conversion helper; new
+  `field_source_label` helper; two `run_poc_daemon` /
+  `run_daemon_compat` test fixtures updated with
+  `Arc::new(Profile::default())`. Two unit tests cover the
+  conversion helper (default → injection_enabled=false,
+  operator-declared → injection_enabled=true).
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+7): the daemon
+  branch's `run_daemon(DaemonConfig {...})` construction
+  gains `profile: Arc::new(profile.clone())` reusing the
+  same `profile` value Phase 57 Task 3 already destructured
+  out of `AivyxConfig`.
+- `crates/aivyx-channel/tests/daemon_roundtrip_e2e.rs`
+  (+11, -0): `use aivyx_config::Profile` import; seven
+  existing `DaemonConfig` literal sites gain `profile:
+  Arc::new(Profile::default())` (the six unconditional
+  ones via two replace_all edits, the one
+  `audit_log: Some(daemon_audit)` site individually).
+- `crates/aivyx-channel/src/web_ui_static.html` (+87, -2):
+  new Profile tab in the tab bar; new `<div
+  class="pane">` Profile pane after Sessions; new
+  `loadProfile()` function rendering the
+  `GetProfile`-query response into an injection-status
+  banner plus six field cards (three scalars, three
+  lists); tab-switch and refresh handlers extended to
+  route `profile` to `loadProfile`.
+
+**Test delta:** +2 in aivyx-channel lib tests
+(profile_summary_renders_default_profile_with_injection_disabled,
+profile_summary_renders_operator_declared_profile_with_injection_enabled).
+Workspace total: 1021 → 1023. Zero clippy warnings. Web UI
+HTML change is operator-facing only — no Rust test
+coverage; relies on the IPC contract tests for backend
+correctness.
+
 ### Task 5 — PRODUCT.md Delivery Status refresh (P13 → Delivered)
 
 Move P13 from the **Forward** section to **Fully Delivered**

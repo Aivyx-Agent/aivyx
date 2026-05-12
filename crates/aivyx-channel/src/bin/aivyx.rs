@@ -2459,6 +2459,12 @@ async fn run_async(
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
             audit_log: Some(Arc::clone(&persistent_audit_for_query)),
+            // Phase 58 — operator-declared Profile snapshot for the
+            // `Query::GetProfile` IPC handler. `profile` was bound
+            // at the AivyxConfig destructure (Phase 57 Task 2); a
+            // clone here lives alongside `profile_for_factory` the
+            // role-switch path captured.
+            profile: Arc::new(profile.clone()),
         })
             .await;
 
