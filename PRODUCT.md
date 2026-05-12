@@ -22,11 +22,19 @@ working-session transcript.
 
 ---
 
-## The one-line pitch (LOCKED 2026-04-15)
+## The one-line pitch (LOCKED 2026-04-15, amended 2026-05-12)
 
-> **Aivyx is a personal autonomous agent platform that runs on your
-> hardware, talks to cloud LLMs under your own API key, and never
-> compromises privacy or auditability for the sake of a feature.**
+> **Aivyx is a self-learning, self-improving AI-personal assistant
+> with a user-defined Profile and Persona, running on your hardware,
+> talking to cloud or local LLMs under your own credentials, and
+> never compromising privacy or auditability for the sake of a feature.**
+>
+> *See amendment
+> [`2026-05-12-pitch-reframe.md`](docs/amendments/2026-05-12-pitch-reframe.md)
+> — the original pitch was reframed in Phase 56 to reflect the
+> operator's restated vision (self-learning, self-improving
+> AI-personal assistant with Profile + Persona). The privacy /
+> auditability / local-first constraints are preserved unchanged.*
 
 Every commitment below either supports this sentence or constrains
 what features the platform may grow without contradicting it. Future

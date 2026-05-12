@@ -107,6 +107,24 @@ agent's identity from *"autonomous agent platform"* to
 *"AI-personal assistant with user-defined Profile and
 Persona"*.
 
+## Task 2 ship record
+
+**Files modified:**
+- `docs/amendments/2026-05-12-pitch-reframe.md` (+78, new
+  file): amendment narrowing the locked pitch from "personal
+  autonomous agent platform" to "AI-personal assistant with
+  user-defined Profile and Persona." Three substantive
+  shifts documented (platform→assistant, cloud LLMs→cloud
+  or local, addition of Profile/Persona). Privacy /
+  auditability / local-first spine preserved.
+- `PRODUCT.md` (+9, -3): pitch section header updated to
+  *"LOCKED 2026-04-15, amended 2026-05-12"*; pitch sentence
+  replaced; blockquote-style amendment pointer added in the
+  same A5/A8 convention.
+
+**PRODUCT.md byte-identity streak ended at 6 phases
+(intentional).**
+
 ### Task 3 — Amendment A9: Product Commitment P13 — Assistant Profile
 
 Create `docs/amendments/2026-05-12-product-commitment-p13-profile.md`.
