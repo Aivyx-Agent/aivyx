@@ -268,7 +268,7 @@ phase; first-party in-process unification deferred)".
 | 5 | `584a349` | `[[tool_process]]` config + daemon spawn loop — 966 tests |
 | 6 | `67cc7c8` | `examples/python-tool/` wordcount reference |
 | 7 | `6673afc` | conformance suite (9 tests, real subprocess) |
-| 8 | _this commit_ | exit freeze — A4 addendum + PRODUCT.md refresh |
+| 8 | `8cadab8` | exit freeze — A4 addendum + PRODUCT.md refresh |
 
 ## Deferrals carried into the phase
 
