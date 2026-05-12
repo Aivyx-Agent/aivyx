@@ -686,13 +686,15 @@ pub enum AivyxError {
     #[error("configuration error: {0}")]
     Config(String),
 
-    // TODO(phase-storage): wrap StorageError from aivyx-storage
+    // Phase 51 Task 2 — D6 typed nested errors. Replaces the
+    // Phase 1 String placeholders. `#[from]` lets `?` operators
+    // throughout the workspace convert `StorageError` and
+    // `CryptoError` into `AivyxError` transparently.
     #[error("storage error: {0}")]
-    Storage(String),
+    Storage(#[from] aivyx_storage::StorageError),
 
-    // TODO(phase-crypto): wrap CryptoError from aivyx-crypto
     #[error("crypto error: {0}")]
-    Crypto(String),
+    Crypto(#[from] aivyx_crypto::CryptoError),
 
     // Capability & Trust
     #[error("capability denied: scope {scope} not held")]
@@ -749,6 +751,51 @@ impl From<ChannelError> for AivyxError {
 mod tests {
     use super::*;
     use aivyx_capability::{CapabilitySet, TrustTier};
+
+    // ---- Phase 51 — typed nested errors ----
+
+    #[test]
+    fn storage_error_converts_into_aivyx_error_via_from() {
+        // The Storage variant now wraps the typed StorageError.
+        // ? in any function returning Result<_, AivyxError> can
+        // propagate StorageError directly.
+        let storage_err = aivyx_storage::StorageError::Redb(
+            "table not found".into(),
+        );
+        let aivyx_err: AivyxError = storage_err.into();
+        match aivyx_err {
+            AivyxError::Storage(inner) => {
+                assert!(inner.to_string().contains("table not found"));
+            }
+            other => panic!("expected Storage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crypto_error_converts_into_aivyx_error_via_from() {
+        let crypto_err = aivyx_crypto::CryptoError::AeadOpenFailed;
+        let aivyx_err: AivyxError = crypto_err.into();
+        match aivyx_err {
+            AivyxError::Crypto(inner) => {
+                assert!(matches!(
+                    inner,
+                    aivyx_crypto::CryptoError::AeadOpenFailed
+                ));
+            }
+            other => panic!("expected Crypto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn storage_error_display_includes_nested_message() {
+        let storage_err = aivyx_storage::StorageError::Redb(
+            "blocked by reader".into(),
+        );
+        let aivyx_err: AivyxError = storage_err.into();
+        let rendered = aivyx_err.to_string();
+        assert!(rendered.starts_with("storage error:"));
+        assert!(rendered.contains("blocked by reader"));
+    }
 
     // ---- IDs ----
 

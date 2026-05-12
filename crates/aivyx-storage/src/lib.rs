@@ -210,7 +210,7 @@ fn next_lex(prefix: &[u8]) -> Option<Vec<u8>> {
 /// at the `aivyx-core` boundary — the top-level `AivyxError` enum
 /// already reserves a `Storage(String)` slot for exactly this
 /// purpose (D6 12-variant cap).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StorageError {
     /// The redb backend refused to open, create, or commit. Wraps
     /// the upstream string because redb's error enum is larger than

@@ -68,7 +68,7 @@ pub const NONCE_LEN: usize = 12;
 /// is 12 `AivyxError` variants total and this crate contributes
 /// exactly one (`CryptoFailed`) at the top level. Everything here is
 /// a subcategory of that.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum CryptoError {
     /// Argon2id refused the parameters (e.g., memory cost below the
     /// algorithm's minimum). Wraps the upstream error string.

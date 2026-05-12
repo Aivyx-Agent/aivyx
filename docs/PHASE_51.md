@@ -200,7 +200,8 @@ pass observation all close).
 
 | Task | Commit | Notes |
 |---|---|---|
-| 1 | _this commit_ | scaffold |
+| 1 | `e7893dc` | scaffold |
+| 2 | _this commit_ | AivyxError typed nested errors (D6 finally honored) — 976 tests, lib.rs streak broken |
 
 ## Deferrals carried into the phase
 

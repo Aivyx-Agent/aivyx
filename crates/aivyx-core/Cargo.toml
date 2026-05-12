@@ -12,6 +12,13 @@ readme.workspace = true
 [dependencies]
 aivyx-capability = { path = "../aivyx-capability" }
 aivyx-llm = { path = "../aivyx-llm" }
+# Phase 51 Task 2 — D6 typed nested errors for AivyxError::Storage /
+# Crypto. The Phase 1 TODOs in lib.rs:689,693 are finally closed.
+# Adding these as deps was deliberately deferred at Phase 1; both
+# crates are leaf-side (aivyx-storage → aivyx-crypto, aivyx-crypto →
+# nothing in-workspace) so the dep graph remains acyclic.
+aivyx-storage = { path = "../aivyx-storage" }
+aivyx-crypto = { path = "../aivyx-crypto" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
