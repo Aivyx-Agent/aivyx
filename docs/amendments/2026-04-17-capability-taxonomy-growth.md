@@ -128,3 +128,70 @@ rejects any base not in the array at parse time.
 | Phase 11 | `tool.allowlist` (role primitive) | `16422e2` |
 | Phase 14 | `role.switch` (sub-agent role-switching) | `0d94d32` |
 | Phase 21 | `mission.create`, `mission.gate` (mission primitive) | `05cc349` |
+
+---
+
+## Phase 54 addendum — current scope-base count (2026-05-12)
+
+> *Added at Phase 54 exit during the Chapter A docs sweep. The
+> traceability table above stopped at Phase 21 and the
+> "12 → 23" headline figure has been wrong for ~30 phases.
+> This addendum brings the count current.*
+
+`aivyx-capability::KNOWN_BASES.len() = 43` as of Phase 54 exit.
+
+### What changed since the table above
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 26 | `schedule.create`, `schedule.list`, `schedule.delete`, `schedule.update` | Scheduled execution G5 |
+| Phase 27 | `webhook.create`, `webhook.list`, `webhook.delete`, `file_watch.create`, `file_watch.list`, `file_watch.delete` | Webhook + file-watch triggers G5 |
+| Phase 23 | `mcp.call` | MCP client adapter |
+| Phase 28 | `mission.list`, `mission.status` | Mission read-only inspection (P2 deferral closure) |
+| Phase 29 | `reflection.propose`, `reflection.apply` | Reflection loop G3/P8 |
+| Phase 30 | `role.update` | Runtime role mutation P8 completion |
+| Phase 36 | `ollama.list`, `ollama.show`, `ollama.pull` | Ollama model management |
+| Phase 37 | `net.post` | Web post primitive (substrate cap raised from 7→8, A5) |
+| Phase 42 | `memory.gc` | Memory garbage collection |
+
+### Current full enumeration
+
+Substrate (8, capped by P10 + A5):
+- `fs.read`, `fs.write`, `memory.read`, `memory.write`,
+  `memory.forget`, `shell.exec`, `web.fetch`, `web.post`
+
+Other operator-facing scopes (8):
+- `fs.delete`, `fs.metadata`, `net.fetch`, `net.dns`,
+  `shell.spawn`, `llm.call`, `llm.embed`, `memory.gc`
+
+Channel / audit / config (5):
+- `channel.send`, `channel.receive`, `audit.read`,
+  `config.read`, `config.write`
+
+Infrastructure tools (22, allowed to grow per P10's three-tier
+taxonomy):
+- Role primitive: `tool.allowlist`, `role.switch`, `role.update`
+- Mission: `mission.create`, `mission.gate`, `mission.list`,
+  `mission.status`
+- Scheduling: `schedule.create`, `schedule.list`,
+  `schedule.delete`, `schedule.update`
+- Triggers: `webhook.create`, `webhook.list`, `webhook.delete`,
+  `file_watch.create`, `file_watch.list`, `file_watch.delete`
+- MCP: `mcp.call`
+- Reflection: `reflection.propose`, `reflection.apply`
+- Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
+
+(`turn.history` from Phase 28 reuses `audit.read` rather than
+declaring its own base — recorded here so a future reader
+doesn't go hunting for it in `KNOWN_BASES`.)
+
+Total: 8 + 8 + 5 + 22 = 43.
+
+### Drift posture
+
+The traceability table above is no longer maintained
+per-base — at ~3 bases/phase it became more noise than signal.
+The single source of truth is `KNOWN_BASES` in
+`aivyx-capability/src/lib.rs`. This addendum is the
+backwards-looking reconciliation; future amendments need not
+duplicate per-base provenance.
