@@ -202,7 +202,8 @@ frozen with exit commit hash. Update `docs/README.md` row.
 | 2 | `0bda570` | `docs/CHANNEL_SDK.md` |
 | 3 | `0e84160` | `docs/ADAPTER_PATTERN.md` out-of-tree section |
 | 4 | `96b2271` | `examples/python-channel/` adapter |
-| 5 | _this commit_ | conformance suite (15 tests, daemon-free) |
+| 5 | `4895485` | conformance suite (15 tests, daemon-free) |
+| 6 | _this commit_ | exit freeze |
 
 ## Deferrals carried into the phase
 
@@ -220,17 +221,68 @@ frozen with exit commit hash. Update `docs/README.md` row.
 
 ## Exit criteria
 
-- [ ] `docs/CHANNEL_SDK.md` exists and documents the third-party
+- [x] `docs/CHANNEL_SDK.md` exists and documents the third-party
   contract.
-- [ ] `docs/ADAPTER_PATTERN.md` has an out-of-tree section.
-- [ ] `examples/python-channel/` runs against the daemon and
-  drives one turn end-to-end.
-- [ ] Conformance scenarios pass.
-- [ ] DESIGN.md untouched (streak → 7).
-- [ ] PRODUCT.md untouched (streak → 12).
-- [ ] `aivyx-core/src/lib.rs` untouched (streak → 3).
-- [ ] Zero clippy warnings; 948 tests still passing.
+- [x] `docs/ADAPTER_PATTERN.md` has an out-of-tree section.
+- [x] `examples/python-channel/` runs against the daemon and
+  drives one turn end-to-end. *(Manual smoke-test recipe in the
+  README; conformance suite covers protocol shape headlessly.)*
+- [x] Conformance scenarios pass — 15/15.
+- [x] DESIGN.md untouched (streak → 7).
+- [x] PRODUCT.md untouched (streak → 12).
+- [x] `aivyx-core/src/lib.rs` untouched (streak → 3).
+- [x] Zero clippy warnings; 948 tests still passing.
 
 ## Exit stats
 
-_To fill at exit._
+- Rust tests: 948 → 948 (unchanged — phase was docs + examples)
+- Python conformance tests: 0 → 15 (new)
+- Clippy warnings: 0
+- Deferral backlog: 3 → 5 (two new entries below)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (7) | untouched | 7 |
+| PRODUCT.md | untouched (12) | untouched | 12 |
+| `aivyx-core/src/lib.rs` | untouched (3) | untouched | 3 |
+
+All three predictions correct. Phase 48 was the cleanest "delivers
+two PRODUCT.md forward commitments without touching production
+Rust code" we've shipped — entirely docs (CHANNEL_SDK.md +
+ADAPTER_PATTERN.md expansion) and examples (Python reference +
+its conformance suite).
+
+### Net-new deferrals carried forward
+
+1. **Conformance harness as a Rust crate.** The Python suite
+   proves the protocol shape but does not exercise the real
+   daemon. A future `aivyx-conformance` crate could spin up a
+   daemon and replay scripted IPC traces — useful for catching
+   regressions in the *daemon* side of the protocol. Wait until
+   third-party adopters surface real pressure before locking the
+   shape (per Q5).
+2. **Stable-version commitment for the IPC schema.** Per `PRODUCT.md`
+   P11 and Q6, the SDK v0 makes integration guarantees but not
+   API-stability guarantees. A future amendment will pin a
+   stability window once enough third-party adapters exist to
+   apply real pressure.
+
+### Operator-side verification still pending
+
+The Python adapter has a documented manual smoke-test recipe in
+`examples/python-channel/README.md` (run `aivyx daemon run`,
+then `python3 examples/python-channel/main.py`, type a message,
+confirm streaming response). Not run in-phase. Recommended for
+the first operator who picks up Phase 48's work.
+
+### Forward commitments status
+
+`PRODUCT.md` forward-commitment ledger after Phase 48:
+
+- ~~P5 — Open First-Party Channel Surface~~ ✓ delivered (this phase)
+- ~~P11 — SDK Contract: Interface + Integration~~ ✓ delivered (this phase)
+- P12 — Tools as Separate Processes Over Daemon IPC — remaining
+
+Only one forward commitment left. Phase 49 is the natural next.

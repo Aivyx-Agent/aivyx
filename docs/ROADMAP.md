@@ -597,12 +597,18 @@ PRODUCT.md streak → 11, lib.rs streak → 2. Three net-new
 deferrals: live audit push, read-write inspection from the
 dashboard, `handle_connection` parameter-struct lift.
 
-## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11)
+## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11) [SHIPPED]
 
-**Active — see [PHASE_48.md](PHASE_48.md).** Channel adapter
-contract documentation, adapter conformance test suite, example
-Python adapter. Delivers P5 (channel SDK) and P11 (SDK
-documentation).
+**Frozen — see [PHASE_48.md](PHASE_48.md).** Shipped
+`docs/CHANNEL_SDK.md` (the v0 third-party contract document),
+extended `docs/ADAPTER_PATTERN.md` with an out-of-tree section,
+and built `examples/python-channel/` — a stdlib-only Python
+reference adapter with a 15-test conformance suite that runs
+daemon-free. 948 Rust tests unchanged, 15 new Python tests,
+zero clippy warnings. All three streak predictions held:
+DESIGN.md → 7, PRODUCT.md → 12, `aivyx-core/lib.rs` → 3.
+Delivers PRODUCT.md P5 + P11 — only P12 (Tool Process IPC)
+remains as a forward commitment.
 
 ## Phase 49 — Tool Process IPC Foundation (P12)
 
