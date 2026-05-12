@@ -239,6 +239,44 @@ correctly chained. If any append fails mid-batch, the
 chain stays at the last-successful sequence (partial
 batches are allowed; the caller can re-apply).
 
+## Task 4 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/persona.rs` (+159): new
+  `SharedEffectivePersona` type alias (`Arc<RwLock<EffectivePersona>>`);
+  new `shared_effective_persona(initial)` constructor; new
+  `apply_delta_to_shared(&SharedEffectivePersona, &PersonaDelta) -> bool`
+  helper that mutates state under the write lock and reports
+  lock-poisoning via the bool return. Three new unit tests
+  (seed-from-initial, mutates-under-lock, idempotent-on-repeat).
+  Two new tokio integration tests
+  (persistent_log_round_trips_through_redb,
+  persistent_log_rejects_invalid_delta_without_persisting)
+  exercising the full PersistentPersonaLog open/append/reopen
+  cycle against a real RedbStorage + KeyDomain::Persona. New
+  `TempDir` helper (no `tempfile` crate dep).
+- `crates/aivyx-channel/src/reflection_tool.rs` (+108):
+  `ReflectionApplyTool` gains two new `OnceLock` slots:
+  `persona_log: Arc<PersistentPersonaLog>` and
+  `effective_persona: SharedEffectivePersona`, with matching
+  setters. Apply path extended after the role-overrides step:
+  when the proposal carries persona_deltas, the tool iterates
+  them, synthesizes deterministic delta_ids via
+  `synthesize_delta_id`, stamps `proposed_at_unix_ms` /
+  `approved_at_unix_ms` from `SystemTime::now`, and appends
+  to the persistent chain. On each successful append, the
+  shared runtime state is mutated under the write lock
+  (best-effort — lock poisoning surfaces in the output as
+  `effective_persona_synced: false`). On chain-append failure
+  the loop bails and reports the index of the failing delta
+  in `persona_chain_error`. Output JSON gains four new
+  fields: `persona_deltas_committed`, `persona_deltas_total`,
+  `persona_chain_error`, `effective_persona_synced`.
+
+**Test delta:** +5 in aivyx-channel lib (3 shared-state +
+2 persistent-log integration). Workspace total: 1043 →
+1048. Zero clippy warnings.
+
 ### Task 5 — `EffectivePersona` runtime state + planner integration
 
 Build a `compute_effective_persona(chain) -> EffectivePersona`

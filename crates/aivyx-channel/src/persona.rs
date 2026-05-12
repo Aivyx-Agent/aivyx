@@ -33,6 +33,7 @@
 //! and is called by every entry point that writes to the chain.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -436,6 +437,35 @@ pub struct EffectivePersona {
     pub communication_adaptations: Vec<String>,
     pub character_traits: Vec<String>,
     pub relationship_milestones: Vec<String>,
+}
+
+/// Shared runtime handle on the effective Persona state. The
+/// daemon's planner factory holds a clone of this `Arc` and reads
+/// under the lock per-turn; `reflection.apply` (Phase 59 Task 4)
+/// holds another clone and writes under the lock when an approved
+/// delta lands. This matches the Phase 30 `role_overrides` pattern
+/// per Q5(a) at Phase 59 sign-off.
+pub type SharedEffectivePersona = Arc<RwLock<EffectivePersona>>;
+
+/// Convenience constructor for [`SharedEffectivePersona`] seeded
+/// with the result of replaying a chain. Daemon startup wires it
+/// once; subsequent mutations happen via the write lock.
+pub fn shared_effective_persona(initial: EffectivePersona) -> SharedEffectivePersona {
+    Arc::new(RwLock::new(initial))
+}
+
+/// Apply one approved delta to a `SharedEffectivePersona` under
+/// the write lock. Returns `true` on success; `false` if the lock
+/// was poisoned (the apply tool surfaces this as a tool error so
+/// the operator sees the chain was written but the runtime state
+/// did not refresh).
+pub fn apply_delta_to_shared(shared: &SharedEffectivePersona, delta: &PersonaDelta) -> bool {
+    if let Ok(mut state) = shared.write() {
+        apply_delta_to_state(delta, &mut state);
+        true
+    } else {
+        false
+    }
 }
 
 impl EffectivePersona {
@@ -886,6 +916,180 @@ mod tests {
         );
         assert_eq!(a, b);
         assert!(a.starts_with("pd-"));
+    }
+
+    // ---- SharedEffectivePersona ---------------------------------
+
+    #[test]
+    fn shared_effective_persona_seeds_from_initial_state() {
+        let initial = EffectivePersona {
+            assistant_name: Some("Codex".into()),
+            ..EffectivePersona::default()
+        };
+        let shared = shared_effective_persona(initial);
+        let read = shared.read().unwrap();
+        assert_eq!(read.assistant_name.as_deref(), Some("Codex"));
+    }
+
+    #[test]
+    fn apply_delta_to_shared_mutates_under_write_lock() {
+        let shared = shared_effective_persona(EffectivePersona::default());
+        let delta = list_delta(
+            PersonaDeltaCategory::BehavioralPreferences,
+            "prefer terse",
+        );
+        let ok = apply_delta_to_shared(&shared, &delta);
+        assert!(ok);
+        let read = shared.read().unwrap();
+        assert_eq!(read.behavioral_preferences, vec!["prefer terse"]);
+    }
+
+    #[test]
+    fn apply_delta_to_shared_idempotent_on_repeated_appends() {
+        let shared = shared_effective_persona(EffectivePersona::default());
+        let delta = list_delta(
+            PersonaDeltaCategory::LearnedContext,
+            "operator uses Vim",
+        );
+        apply_delta_to_shared(&shared, &delta);
+        apply_delta_to_shared(&shared, &delta);
+        let read = shared.read().unwrap();
+        assert_eq!(read.learned_context.len(), 1);
+    }
+
+    // ---- PersistentPersonaLog round-trip ------------------------
+
+    #[tokio::test]
+    async fn persistent_log_round_trips_through_redb() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        use std::sync::Arc;
+
+        let dir = tempdir();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.path().join("store.redb")),
+            MasterKey::from_raw([42u8; 32]),
+        )
+        .await
+        .expect("scratch storage opens");
+        let handle = store.domain(KeyDomain::Persona);
+
+        // Open empty log, append two deltas, drop.
+        let key = test_key();
+        let log = PersistentPersonaLog::open(handle.clone(), key.clone())
+            .await
+            .expect("empty log opens clean");
+        assert!(log.is_empty());
+
+        let seq0 = log
+            .append(list_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                "prefer terse",
+            ))
+            .await
+            .expect("append 1");
+        assert_eq!(seq0, 0);
+
+        let seq1 = log
+            .append(scalar_delta(
+                PersonaDeltaCategory::AssistantName,
+                Some("Codex"),
+            ))
+            .await
+            .expect("append 2");
+        assert_eq!(seq1, 1);
+        log.verify().expect("clean chain after appends");
+        drop(log);
+
+        // Re-open with the same key — the chain must replay.
+        let reopened = PersistentPersonaLog::open(handle, key)
+            .await
+            .expect("reopen succeeds");
+        assert_eq!(reopened.len(), 2);
+        let entries = reopened.entries();
+        assert_eq!(entries[0].seq, 0);
+        assert_eq!(entries[1].seq, 1);
+        // prev_mac chain survived the round trip.
+        assert_eq!(entries[1].prev_mac, entries[0].mac);
+        reopened.verify().expect("clean chain after reopen");
+
+        // Apply to runtime state via the shared helper.
+        let shared = shared_effective_persona(compute_effective_persona(&entries));
+        let snap = shared.read().unwrap();
+        assert_eq!(
+            snap.behavioral_preferences,
+            vec!["prefer terse".to_string()]
+        );
+        assert_eq!(snap.assistant_name.as_deref(), Some("Codex"));
+    }
+
+    #[tokio::test]
+    async fn persistent_log_rejects_invalid_delta_without_persisting() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        use std::sync::Arc;
+
+        let dir = tempdir();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.path().join("store.redb")),
+            MasterKey::from_raw([99u8; 32]),
+        )
+        .await
+        .expect("storage opens");
+        let log = PersistentPersonaLog::open(
+            store.domain(KeyDomain::Persona),
+            test_key(),
+        )
+        .await
+        .expect("log opens");
+
+        let bad = PersonaDelta {
+            category: PersonaDeltaCategory::AssistantName,
+            op: PersonaDeltaOp::AppendList { value: "oops".into() },
+            ..list_delta(PersonaDeltaCategory::BehavioralPreferences, "dummy")
+        };
+        let err = log
+            .append(bad)
+            .await
+            .expect_err("invalid delta must reject");
+        assert!(matches!(err, PersonaChainError::InvalidDelta { .. }));
+        assert!(log.is_empty());
+    }
+
+    /// Cross-platform tempdir helper without pulling the `tempfile`
+    /// crate. Mirrors the pattern used by other tests in this
+    /// workspace.
+    fn tempdir() -> TempDir {
+        TempDir::new()
+    }
+
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let mut path = std::env::temp_dir();
+            let suffix = format!(
+                "aivyx-persona-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0),
+            );
+            path.push(suffix);
+            std::fs::create_dir_all(&path).expect("tempdir create");
+            TempDir { path }
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]

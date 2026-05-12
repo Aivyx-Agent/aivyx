@@ -61,7 +61,10 @@ use aivyx_storage::{DomainHandle, KeyDomain};
 use crate::mission::{
     self, GateState, MissionRecord, MissionState,
 };
-use crate::persona::ProposedPersonaDelta;
+use crate::persona::{
+    synthesize_delta_id, PersistentPersonaLog, PersonaDelta, ProposedPersonaDelta,
+    SharedEffectivePersona,
+};
 
 // ---------------------------------------------------------------------------
 // Proposal record — serialized into the mission description
@@ -596,6 +599,19 @@ pub struct ReflectionApplyTool {
     mission_store: OnceLock<DomainHandle>,
     memory: OnceLock<std::sync::Arc<dyn Memory>>,
     role_overrides: OnceLock<crate::role_overrides::SharedRoleOverrides>,
+    /// Phase 59 — persistent Persona chain. When configured, approved
+    /// `persona_deltas` from the proposal are appended here on apply.
+    /// `None` means the daemon was launched without Persona support
+    /// (e.g. tests, in-process minimal paths) — persona deltas in a
+    /// proposal are surfaced in the output but not written, leaving
+    /// the operator a recoverable state.
+    persona_log: OnceLock<std::sync::Arc<PersistentPersonaLog>>,
+    /// Phase 59 — shared runtime state mutated under the write lock
+    /// on apply. Planner factory reads from a clone of this `Arc`
+    /// per-turn per Q5(a). `None` falls back to "write the chain
+    /// but skip the runtime mutation" (operator restart picks up
+    /// the new state).
+    effective_persona: OnceLock<SharedEffectivePersona>,
 }
 
 impl std::fmt::Debug for ReflectionApplyTool {
@@ -629,6 +645,8 @@ impl ReflectionApplyTool {
             mission_store: OnceLock::new(),
             memory: OnceLock::new(),
             role_overrides: OnceLock::new(),
+            persona_log: OnceLock::new(),
+            effective_persona: OnceLock::new(),
         }
     }
 
@@ -646,6 +664,25 @@ impl ReflectionApplyTool {
         overrides: crate::role_overrides::SharedRoleOverrides,
     ) -> Result<(), crate::role_overrides::SharedRoleOverrides> {
         self.role_overrides.set(overrides)
+    }
+
+    /// Phase 59 — register the persistent Persona chain. When set,
+    /// approved persona_deltas from a proposal are appended on apply.
+    pub fn set_persona_log(
+        &self,
+        log: std::sync::Arc<PersistentPersonaLog>,
+    ) -> Result<(), std::sync::Arc<PersistentPersonaLog>> {
+        self.persona_log.set(log)
+    }
+
+    /// Phase 59 — register the shared runtime state. When set,
+    /// approved persona deltas mutate the in-memory state alongside
+    /// the chain append so the next turn's planner factory sees them.
+    pub fn set_effective_persona(
+        &self,
+        shared: SharedEffectivePersona,
+    ) -> Result<(), SharedEffectivePersona> {
+        self.effective_persona.set(shared)
     }
 }
 
@@ -809,6 +846,64 @@ impl Tool for ReflectionApplyTool {
             }
         }
 
+        // Phase 59 — apply approved persona deltas. The chain
+        // append is authoritative; the shared runtime state update
+        // is best-effort (a poisoned lock surfaces in the output
+        // but does not block the chain commit). Each delta lands
+        // at consecutive chain seqs; partial batches are allowed
+        // so the caller can retry by re-applying the proposal.
+        let mut persona_deltas_committed = 0usize;
+        let mut persona_chain_error: Option<String> = None;
+        let mut effective_persona_synced = true;
+        if !proposal.persona_deltas.is_empty() {
+            if let Some(log) = self.persona_log.get() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                for (idx, proposed) in proposal.persona_deltas.iter().enumerate() {
+                    let delta = PersonaDelta {
+                        delta_id: synthesize_delta_id(
+                            &proposal_id,
+                            proposed.category,
+                            &proposed.op,
+                            idx as u32,
+                        ),
+                        proposed_at_unix_ms: now_ms,
+                        approved_at_unix_ms: now_ms,
+                        proposal_id: proposal_id.clone(),
+                        category: proposed.category,
+                        op: proposed.op.clone(),
+                    };
+                    match log.append(delta.clone()).await {
+                        Ok(_seq) => {
+                            persona_deltas_committed += 1;
+                            // Mirror the chain append into the shared
+                            // runtime state. Skipping this is a soft
+                            // failure surfaced via
+                            // `effective_persona_synced = false`.
+                            if let Some(shared) = self.effective_persona.get() {
+                                if !crate::persona::apply_delta_to_shared(shared, &delta) {
+                                    effective_persona_synced = false;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            persona_chain_error =
+                                Some(format!("persona delta {idx} append failed: {e}"));
+                            break;
+                        }
+                    }
+                }
+            } else {
+                persona_chain_error = Some(
+                    "persona deltas present in proposal but no persona log configured \
+                     (in-process or test deployment); deltas were not written"
+                        .to_string(),
+                );
+            }
+        }
+
         // Complete the mission.
         let mut updated = record.clone();
         if updated.state == MissionState::Running {
@@ -821,6 +916,10 @@ impl Tool for ReflectionApplyTool {
                 "applied": true,
                 "writes_executed": writes_executed,
                 "role_updated": role_updated,
+                "persona_deltas_committed": persona_deltas_committed,
+                "persona_deltas_total": proposal.persona_deltas.len(),
+                "persona_chain_error": persona_chain_error,
+                "effective_persona_synced": effective_persona_synced,
                 "proposal_id": proposal_id,
             }),
             verified: Verification::Verified,
