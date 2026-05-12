@@ -327,29 +327,53 @@ Phase 57 onward.
 
 ## Prediction vs. reality
 
-*(Filled at exit.)*
+- **DESIGN.md** — Predicted: streak **extends to three**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 56 touched zero bytes of DESIGN.md as planned —
+  the contract changes were entirely PRODUCT.md-shaped.
+
+- **PRODUCT.md** — Predicted: streak **ends at six**
+  (intentional). **Reality: correct.** Hash at entry:
+  `b5beb16ef0014e32c4e805cd842380ffa68f7e8a79ec40d979e04628a375530b`.
+  Hash at exit:
+  `0218f47c3beeae310a24eb14d005519996d560f030eafc6abf136aed41f80bb6`.
+  Three amendments (A8, A9, A10) each added inline
+  blockquote references plus their respective body
+  edits. Same shape as Phase 22 — break via the formal
+  amendment process is the mechanism working as
+  designed.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to five**. **Reality: correct.** Hash
+  unchanged:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Phase 56 modified zero Rust files (docs-only phase).
 
 ## Exit criteria
 
-*(Filled at exit.)*
-
-- [ ] Three amendments created in `docs/amendments/`:
-  - A8: Pitch Reframe (supersedes PRODUCT.md pitch line)
-  - A9: P13 — Assistant Profile
-  - A10: P14 — Persona
-- [ ] PRODUCT.md edited with inline amendment references at
-  the pitch section, between P12 and Status (P13), and
-  between P13 and Status (P14).
-- [ ] PRODUCT.md Delivery Status section refreshed to Phase
-  55 exit; P13 and P14 added with Forward status.
-- [ ] docs/README.md updated to reflect Phase 56 Frozen and
-  amendment count update.
-- [ ] All Q-block questions resolved.
-- [ ] DESIGN.md streak extends to three.
-- [ ] PRODUCT.md streak ends at six (intentional).
-- [ ] Production-core streak extends to five.
-- [ ] Test count unchanged (docs-only phase).
-- [ ] Prediction-vs-reality block filled.
+- [x] Three amendments created in `docs/amendments/`:
+  - A8: Pitch Reframe (supersedes PRODUCT.md pitch line) —
+    Task 2, commit `93998a1`.
+  - A9: P13 — Assistant Profile — Task 3, commit `ee20113`.
+  - A10: P14 — Persona — Task 4, commit `c074773`.
+- [x] PRODUCT.md edited with inline amendment references at
+  the pitch section (A8), between P12 and Status (P13),
+  and between P13 and Status (P14).
+- [x] PRODUCT.md Delivery Status section refreshed (Phase 50
+  exit → Phase 56), with P13 and P14 added with Forward
+  status — Task 5, commit `6154edb`.
+- [x] docs/README.md updated to reflect Phase 56 Frozen and
+  amendment count update (10 amendments enumerated) —
+  Task 6, commit `dfd1d69`, plus this exit-freeze commit
+  for the Frozen row.
+- [x] All five Q-block questions resolved before Task 2.
+- [x] DESIGN.md streak extends to three.
+- [x] PRODUCT.md streak ends at six (intentional).
+- [x] Production-core streak extends to five.
+- [x] Test count unchanged (992 Rust + 24 Python, same as
+  Phase 55 exit — docs-only phase).
+- [x] Prediction-vs-reality block filled.
 
 ## Open questions
 
