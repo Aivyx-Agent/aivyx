@@ -172,7 +172,7 @@ hash. Update `docs/README.md` row. Final commit.
 | 2 | `230c47f` | 938 |
 | 3 | `276d96d` | 940 |
 | 4 | `d35279f` | 946 |
-| 5 | _this commit_ | 948 |
+| 5 | `87095ad` | 948 |
 
 ## Deferrals carried into the phase
 
@@ -193,19 +193,63 @@ None. Backlog entered at 0.
 
 ## Exit criteria
 
-- [ ] `FrontendMessage::Query` and `DaemonMessage::QueryResponse`
+- [x] `FrontendMessage::Query` and `DaemonMessage::QueryResponse`
   variants land with serde round-trip tests.
-- [ ] `ListSessions`, `ListMissions`, `GetMission`,
+- [x] `ListSessions`, `ListMissions`, `GetMission`,
   `ListAuditEntries`, `VerifyAuditChain` all work end-to-end
   over the Unix socket.
-- [ ] Web UI shows four tabs; Missions/Audit/Sessions panes load
+- [x] Web UI shows four tabs; Missions/Audit/Sessions panes load
   data from the daemon and render it.
-- [ ] All tests pass with net-positive delta.
-- [ ] Zero clippy warnings under rust 1.95.
-- [ ] DESIGN.md untouched (streak → 6).
-- [ ] PRODUCT.md untouched (streak → 11).
-- [ ] lib.rs untouched (streak → 2).
+- [x] All tests pass with net-positive delta.
+- [x] Zero clippy warnings under rust 1.95.
+- [x] DESIGN.md untouched (streak → 6).
+- [x] PRODUCT.md untouched (streak → 11).
+- [x] lib.rs untouched (streak → 2).
 
 ## Exit stats
 
-_To fill at exit._
+- Tests: 936 → 948 (+12)
+- Clippy warnings: 0
+- Deferral backlog: 0 → 3 (net-new entries noted below)
+
+### Streak outcomes
+
+| Streak target | Predicted | Actual | New streak |
+|---|---|---|---|
+| DESIGN.md | untouched (6) | untouched | 6 |
+| PRODUCT.md | untouched (11) | untouched | 11 |
+| lib.rs | untouched (2) | untouched | 2 |
+
+All three predictions correct. `aivyx-core/src/lib.rs` byte-identical
+across the phase as predicted — the work landed entirely in
+`aivyx-channel` (IPC types, daemon dispatch, frontend asset) and
+`aivyx-audit` (one new method on `HmacChainLog`/`PersistentAuditLog`).
+
+### Net-new deferrals carried forward
+
+1. **Live audit push (Q4).** The frontend polls via Refresh; the
+   daemon does not push new `SignedEntry` rows to subscribed clients.
+   Adding this needs an audit-bridge tap plus per-client subscription
+   bookkeeping. No urgency — operator-driven refresh is enough today.
+2. **Read-write inspection (Q6).** Cancel mission, delete schedule,
+   edit role config from the dashboard. Sized as a small follow-up
+   phase; the substrate (mission/schedule CRUD APIs) already exists.
+3. **`handle_connection` parameter struct.** Threading `audit_log`
+   pushed the function past clippy's `too_many_arguments`. `#[allow]`'d
+   in place with a comment pointing at Phase 41-style `DaemonConfig`
+   lift as the long-term shape.
+
+### Operator-side verification still pending
+
+The new tabs and the audit pagination behavior were tested at the
+embed level (HTML substring smoke tests, IPC e2e tests verifying
+the daemon answers correctly), but **the page itself was not loaded
+in a browser during the phase**. First operator session against a
+real daemon should verify:
+- All four tabs render and switch
+- Missions tab loads after creating a mission via the chat pane
+- Audit tab paginates correctly past the 100-entry page boundary
+- Verify-chain banner appears and reports OK on a clean chain
+
+If any of those fail, file as Phase 47 hot-fix issues, not as
+forward work.

@@ -584,12 +584,18 @@ Self-spawning embedded server with `bundled = true` config flag.
 Init wizard integration. 936 tests, zero clippy. DESIGN.md
 streak → 5, PRODUCT.md streak → 10, lib.rs streak → 1.
 
-## Phase 47 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
+## Phase 47 — Web UI Phase 2 (Mission Dashboard + Audit Viewer) [SHIPPED]
 
-**Active — see [PHASE_47.md](PHASE_47.md).** IPC query messages,
-mission dashboard, audit viewer, session history. Makes the Web
-UI a full operator inspection surface. Delivers P2 (mission
-legibility) and P4 (daemon inspection).
+**Frozen — see [PHASE_47.md](PHASE_47.md).** Extended the daemon
+IPC protocol with a read-only `Query`/`QueryResponse` envelope and
+shipped four backend queries (`ListSessions`, `ListMissions`,
+`GetMission`, `ListAuditEntries`, `VerifyAuditChain`). Added
+`HmacChainLog::entries_range` for paginated audit reads. Rebuilt
+`web_ui_static.html` as a tabbed SPA over the existing WebSocket
+bridge. 948 tests, zero clippy warnings. DESIGN.md streak → 6,
+PRODUCT.md streak → 11, lib.rs streak → 2. Three net-new
+deferrals: live audit push, read-write inspection from the
+dashboard, `handle_connection` parameter-struct lift.
 
 ## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11)
 
