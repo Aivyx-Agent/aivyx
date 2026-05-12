@@ -97,6 +97,34 @@ Unit tests cover the rendering helper against fixtures from
 the existing `aivyx-config` test suite (full Profile, default
 Profile, partial Profile).
 
+## Task 2 ship record
+
+**Files modified:**
+- `crates/aivyx-channel/src/bin/aivyx_modules/profile.rs`
+  (+202, new file): `pub fn run_profile_show()` loads
+  `aivyx.toml` via the existing `aivyx-config` loader path
+  with relaxed validation (no api_key / telegram_token
+  required), then writes the labeled rendering to stdout.
+  Pure `render_profile_for_show(&Profile) -> String`
+  function powers three unit tests (default profile,
+  fully-declared profile, partial profile). `pub fn
+  run_profile_edit()` is a Task 3 stub returning an
+  explanatory error.
+- `crates/aivyx-channel/src/bin/aivyx.rs` (+108): new
+  `#[path = "aivyx_modules/profile.rs"] mod profile;`
+  declaration; new `CliMode::Profile(ProfileSubcommand)`
+  variant per Q1(a); new `ProfileSubcommand { Show, Edit }`
+  enum; new `profile <subcommand>` parsing block following
+  the `daemon`/`mcp-server` precedent; new early dispatch
+  arm in `run()` that calls into `profile::run_profile_show`
+  / `profile::run_profile_edit` without spinning up tokio.
+  Five new parser tests cover `profile show` / `profile
+  edit` happy paths, missing-subcommand error,
+  unknown-subcommand error, and extra-args rejection.
+
+**Test delta:** +8 in aivyx-channel binary (3 render + 5
+parser). Workspace total: 1006 → 1014. Zero clippy warnings.
+
 ### Task 3 — `aivyx profile edit` CLI subcommand
 
 New CliMode variant. The `edit` subcommand:

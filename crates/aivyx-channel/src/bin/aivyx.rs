@@ -98,6 +98,8 @@
 mod init;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
+#[path = "aivyx_modules/profile.rs"]
+mod profile;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -344,6 +346,19 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(mcp_server::run_mcp_server(name));
+    }
+
+    // ---- Phase 58: profile inspection / edit (PRODUCT.md P13) ----------
+    // The profile subcommands are synchronous file operations — no
+    // tokio runtime, no daemon dispatch, no API key required. `show`
+    // reads `aivyx.toml` and prints the resolved Profile to stdout
+    // (Q3(a)); `edit` opens `$EDITOR` against the `[profile]` section
+    // (Q2(a), wired in Task 3).
+    if let CliMode::Profile(sub) = mode {
+        return match sub {
+            ProfileSubcommand::Show => profile::run_profile_show(),
+            ProfileSubcommand::Edit => profile::run_profile_edit(),
+        };
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -818,6 +833,24 @@ enum CliMode {
     Init,
     /// `aivyx mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
+    /// `aivyx profile <subcommand>`: Profile inspection / edit
+    /// (Phase 58 — PRODUCT.md P13). Q1(a) at sign-off: nested
+    /// [`ProfileSubcommand`] enum so future additions (e.g. `Reset`,
+    /// `Reload`) stay additive without fragmenting `CliMode`.
+    Profile(ProfileSubcommand),
+}
+
+/// Subcommand discriminator under [`CliMode::Profile`]. Phase 58
+/// — PRODUCT.md P13.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ProfileSubcommand {
+    /// `aivyx profile show` — print the current Profile to stdout
+    /// in a labeled human-readable form. Reads `aivyx.toml` from
+    /// disk per Q3(a) at sign-off.
+    Show,
+    /// `aivyx profile edit` — surgical `[profile]` section edit in
+    /// `$EDITOR` per Q2(a) at sign-off (wired in Task 3).
+    Edit,
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -934,6 +967,42 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Init,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Check for `profile <subcommand>` — Phase 58 (PRODUCT.md P13).
+    // Q1(a) at sign-off: nested `ProfileSubcommand` enum with Show
+    // and Edit variants today; future variants land additively.
+    if !args.is_empty() && args[0] == "profile" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx profile` requires a subcommand. Supported: show, edit".to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "show" => ProfileSubcommand::Show,
+            "edit" => ProfileSubcommand::Edit,
+            other => {
+                return Err(format!(
+                    "unrecognized profile subcommand: `{other}`. \
+                     Supported: profile show, profile edit"
+                ));
+            }
+        };
+        if args.len() > 2 {
+            return Err(format!(
+                "`aivyx profile {sub}` does not accept additional arguments. \
+                 Got: `{}`",
+                args[2..].join(" ")
+            ));
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Profile(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -3778,4 +3847,51 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // Phase 58 — `aivyx profile <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn profile_show_parses_to_profile_show_mode() {
+        let parsed = parse_cli_args_from(&argv(&["profile", "show"]))
+            .expect("`profile show` must parse");
+        assert_eq!(parsed.mode, CliMode::Profile(ProfileSubcommand::Show));
+    }
+
+    #[test]
+    fn profile_edit_parses_to_profile_edit_mode() {
+        let parsed = parse_cli_args_from(&argv(&["profile", "edit"]))
+            .expect("`profile edit` must parse");
+        assert_eq!(parsed.mode, CliMode::Profile(ProfileSubcommand::Edit));
+    }
+
+    #[test]
+    fn profile_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["profile"]))
+            .expect_err("`profile` alone must error");
+        assert!(
+            err.contains("show") && err.contains("edit"),
+            "error must list both subcommands: {err}"
+        );
+    }
+
+    #[test]
+    fn profile_unknown_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["profile", "delete"]))
+            .expect_err("`profile delete` must error");
+        assert!(
+            err.contains("unrecognized profile subcommand"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn profile_show_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["profile", "show", "--verbose"]))
+            .expect_err("extra args must error");
+        assert!(
+            err.contains("does not accept additional arguments"),
+            "error: {err}"
+        );
+    }
 }
