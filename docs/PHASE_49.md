@@ -266,7 +266,8 @@ phase; first-party in-process unification deferred)".
 | 3 | `8e3e55a` | `aivyx-tool` crate (wire + frame + bridge) — 959 tests |
 | 4 | `ba8c7dd` | `ToolProxy` (aivyx_core::Tool impl) + 3 e2e tests — 963 tests |
 | 5 | `584a349` | `[[tool_process]]` config + daemon spawn loop — 966 tests |
-| 6 | _this commit_ | `examples/python-tool/` wordcount reference |
+| 6 | `67cc7c8` | `examples/python-tool/` wordcount reference |
+| 7 | _this commit_ | conformance suite (9 tests, real subprocess) |
 
 ## Deferrals carried into the phase
 
