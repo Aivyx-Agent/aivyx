@@ -200,7 +200,8 @@ frozen with exit commit hash. Update `docs/README.md` row.
 |---|---|---|
 | 1 | `c566ddb` | scaffold |
 | 2 | `0bda570` | `docs/CHANNEL_SDK.md` |
-| 3 | _this commit_ | `docs/ADAPTER_PATTERN.md` out-of-tree section |
+| 3 | `0e84160` | `docs/ADAPTER_PATTERN.md` out-of-tree section |
+| 4 | _this commit_ | `examples/python-channel/` adapter |
 
 ## Deferrals carried into the phase
 
