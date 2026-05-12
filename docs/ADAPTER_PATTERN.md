@@ -7,6 +7,17 @@ two adapters in the tree (`LocalChannel` in `aivyx-channel` and
 concrete line in one of those two adapters so a future contributor can
 copy shapes rather than re-derive them.
 
+**There are two ways to adapt a channel:**
+
+| Where you live | Use this | Audience |
+|---|---|---|
+| **In-tree, Rust** — your adapter lives in this workspace and implements `ChannelContext` directly | This whole document — read top to bottom | First-party adapter authors |
+| **Out-of-tree, any language** — your adapter is a separate process that talks to the daemon over IPC | Jump to [§ Out-of-tree adapters](#out-of-tree-adapters) at the bottom + read [`CHANNEL_SDK.md`](CHANNEL_SDK.md) | Third-party adapter authors |
+
+The in-tree sections below focus on Rust `ChannelContext` impls.
+The out-of-tree section explains where the rules differ when your
+adapter speaks the daemon's IPC protocol from another process.
+
 Status: **tentative**. Two data points is not a pattern in the
 software-architecture sense — it's a hypothesis waiting for a third
 adapter to either confirm or break. Phase 9's explicit choice (Q1 =
@@ -379,3 +390,141 @@ When you sit down to add adapter #3, the concrete steps:
   shutdown token + per-turn rotation per chat. A future adapter
   with a different connection model (persistent websocket, gRPC
   stream) may need a different story — revisit at that point.
+
+---
+
+## Out-of-tree adapters
+
+This section was added in Phase 48. Everything above assumes you
+are writing a Rust adapter that lives in this workspace and
+implements `ChannelContext` directly. Out-of-tree adapters —
+written in any language, living in their own repo, talking to
+the daemon over the same Unix-socket IPC protocol the in-tree
+adapters use — follow a different (smaller) checklist.
+
+The contract document for out-of-tree adapters is
+[`CHANNEL_SDK.md`](CHANNEL_SDK.md); the wire format is
+[`DAEMON_IPC.md`](DAEMON_IPC.md); a reference implementation in
+Python lives at `examples/python-channel/`.
+
+### What stays the same
+
+Out-of-tree adapters inherit, by construction:
+
+- **The trust tier** — declared via the `FrontendType` field on
+  `StartSession`. The daemon enforces the per-tier capability
+  ceiling server-side, exactly as it does for in-tree adapters.
+- **The audit chain** — every tool call, every scope check, every
+  outcome lands in the HMAC-chained audit log inside the daemon's
+  turn loop. Your adapter has no way to bypass this; there is no
+  audit-writer API exposed across the IPC.
+- **Cancellation** — `CancelTurn` propagates through a
+  `CancellationToken` the tool implementations check between
+  steps. Same mechanism the in-tree adapters use, surfaced as a
+  one-line IPC message.
+- **Role attenuation** — the `role` field on `StartSession`
+  selects which role config applies, and the daemon intersects
+  that role's declared scopes with the tier ceiling before the
+  LLM sees anything.
+
+You do *not* implement these; you receive them by talking to the
+daemon.
+
+### What changes
+
+- **You do not implement `ChannelContext`.** That trait is the
+  in-tree contract. The IPC protocol is the out-of-tree contract,
+  and the daemon side has an in-tree `IpcChannelBridge` that
+  implements `ChannelContext` *for* your remote adapter, mapping
+  the wire messages into the trait surface.
+- **You do not maintain interior mutexes for `stream_event`
+  buffers.** Streaming is one direction over the wire — the
+  daemon emits `StreamEvent` frames, your adapter renders them
+  to whatever transport you own. No `&self`-mutex pattern.
+- **You do not call `tier.default_ceiling()`.** The daemon does.
+  You declare your `FrontendType` and the daemon picks the
+  ceiling.
+- **You do not write audit entries.** The daemon writes them
+  before your adapter even sees the result.
+- **You handle protocol-level concerns** the in-tree adapters
+  don't: partial frame reads, JSON decode errors, reconnect on
+  daemon restart, unknown variant graceful skip. See
+  [`CHANNEL_SDK.md` §8](CHANNEL_SDK.md) for the common pitfalls.
+
+### Trust-tier selection
+
+Same four rungs (Kernel / Trusted / SemiTrusted / Untrusted), but
+the choice is wrapped in a `FrontendType`:
+
+| Your adapter shape | Suggested `FrontendType` | Resulting tier |
+|---|---|---|
+| CLI REPL on the operator's machine | `Local` | `Trusted` |
+| Localhost web/IPC bridge for a browser | `Web` | `Trusted` |
+| Authenticated remote messenger (Telegram-like) | `Telegram` | `SemiTrusted` |
+| Anything anonymous (webhook-driven, public chat) | _(not yet — needs a new variant + a phase to add it)_ | `Untrusted` |
+
+If your adapter doesn't cleanly fit one of the existing variants,
+**don't lie about the tier** — file a phase to add the right
+`FrontendType` enum value. The tier is the entire capability
+story (see § The tier-ceiling contract above); a misclassified
+adapter is the same as a hostile one.
+
+### Audit / observability
+
+The same audit chain that records in-tree adapter activity
+records yours. There is no out-of-tree-specific audit surface.
+What's special is that, from the audit chain's perspective, an
+out-of-tree adapter looks identical to an in-tree one — the
+`TurnStarted` event records the `channel: ChannelPlatform`,
+which for now maps every `FrontendType::{Local, Web}` to
+`ChannelPlatform::Local` and `FrontendType::Telegram` to
+`ChannelPlatform::Telegram`. A future phase that wants forensic
+discrimination between "I ran my own CLI" and "someone else's
+Python REPL drove a turn" can extend `ChannelPlatform`.
+
+### Where to look for examples
+
+| Adapter | Where | Language | Notes |
+|---|---|---|---|
+| `LocalChannel` | `crates/aivyx-channel/src/local.rs` | Rust | In-tree, in-process, `ChannelContext` impl. |
+| `TelegramChannel` | `crates/aivyx-telegram/` | Rust | In-tree, in-process, with daemon frontend wrapper. |
+| Web UI | `crates/aivyx-channel/src/web_ui.rs` + `web_ui_static.html` | Rust + JS | In-tree daemon frontend; the JS side is effectively an out-of-tree adapter speaking the IPC protocol over WebSocket. |
+| Python reference | `examples/python-channel/` | Python | Out-of-tree, drives the daemon IPC directly. The canonical worked example for this section. |
+
+### Conformance — minimum bar for "this works"
+
+A correct out-of-tree adapter can drive a complete turn against
+a live daemon end-to-end under each of the following scenarios:
+
+1. **Happy path.** Connect → read `DaemonReady` →
+   (optional) `ProtocolNegotiation` → `StartSession` → receive
+   `SessionStarted` → `SubmitInput` → receive `StreamEvent`
+   frames → receive `TurnComplete` → `Disconnect`.
+2. **Cancellation.** Send `CancelTurn` mid-turn; receive
+   `TurnComplete` with cancelled outcome; reconnect-free
+   continuation works.
+3. **Approval gate.** Receive a `StreamEvent::ApprovalGate`
+   mid-turn; respond with `ResolveGate`; turn continues or
+   aborts depending on `approved`.
+4. **Unknown variants are skipped gracefully** — the adapter
+   handles a frame whose `type` or `kind` it doesn't recognize
+   without crashing.
+
+`examples/python-channel/tests/` exercises these scenarios; use
+them as a template for your own adapter's conformance suite.
+
+### The integration guarantees that ride with you
+
+These hold regardless of language, library, transport-on-top,
+or distribution form:
+
+- The IPC socket is authenticated by file-mode 0600 + UID match
+  via `SO_PEERCRED` (Linux). No Aivyx-level password.
+- Every tool call is scope-checked before execution.
+- Every tool call, scope check, and outcome lands in the audit
+  chain synchronously.
+- `CancelTurn` is honored.
+- The tier ceiling is computed once per turn and is authoritative.
+
+If any of those properties weakened between phases, you'd see an
+amendment in `docs/amendments/` and an explicit migration note.

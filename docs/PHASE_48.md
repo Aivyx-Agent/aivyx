@@ -199,7 +199,8 @@ frozen with exit commit hash. Update `docs/README.md` row.
 | Task | Commit | Notes |
 |---|---|---|
 | 1 | `c566ddb` | scaffold |
-| 2 | _this commit_ | `docs/CHANNEL_SDK.md` |
+| 2 | `0bda570` | `docs/CHANNEL_SDK.md` |
+| 3 | _this commit_ | `docs/ADAPTER_PATTERN.md` out-of-tree section |
 
 ## Deferrals carried into the phase
 
