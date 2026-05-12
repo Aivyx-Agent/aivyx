@@ -902,6 +902,111 @@ tools into core.
 
 ---
 
+## Product Commitment 13 — Assistant Profile (LOCKED 2026-05-12)
+
+> *Added by amendment
+> [`2026-05-12-product-commitment-p13-profile.md`](docs/amendments/2026-05-12-product-commitment-p13-profile.md)
+> — filed in Phase 56 alongside A8 (pitch reframe) and A10
+> (P14 — Persona).*
+
+### The Rule
+
+> **Every Aivyx instance carries an operator-declared
+> Profile that pins who this assistant is for and how it
+> communicates. Profile is loaded once per daemon lifetime
+> and injects into every turn's system prompt regardless of
+> active role. Profile is mutable only by the operator, and
+> only through operator-facing surfaces (CLI subcommands,
+> Web UI panes); the agent cannot modify its own Profile.**
+
+### What this commits us to
+
+1. **Profile is a contract-level concept distinct from the
+   role envelope.** A role's `system_prompt` field per **P9**
+   may further specialize the agent's voice for that role's
+   specific task, but Profile is the role-orthogonal
+   identity layer. Switching roles does not switch Profiles.
+
+2. **Profile is single-instance per operator.** Per **P6**
+   (OS-Level Operator Identity) and **P1** (Single Operator,
+   Single Primary Agent), there is exactly one Profile per
+   Aivyx daemon. There is no "switch profile" gesture
+   parallel to "switch role."
+
+3. **Profile is operator-declared at install/init time and
+   operator-mutable thereafter.** The agent cannot write to
+   its own Profile. Profile changes are operator-driven
+   through CLI or Web UI surfaces, *not* through the
+   reflection layer (**P8**) or any in-turn mechanism.
+   Reflection writes shape Persona (**P14**), not Profile.
+
+4. **Profile is plain-text-inspectable.** Profile lives in a
+   plain-text operator-readable file. The operator can read
+   their Profile without unlocking the redb store, the same
+   way they read role configurations today.
+
+5. **Profile carries operator-declared identity fields in
+   (at minimum) these categories:**
+   - **Operator profile** — who the operator is (role,
+     expertise level, primary work context).
+   - **Communication style** — verbosity, formality,
+     citation frequency, source referencing, etc.
+   - **Primary use cases** — the 1–3 use-case archetypes
+     the assistant is being shaped around.
+   - **Behavioral preferences** — non-capability defaults
+     that flavor the agent's judgment.
+   - **Behavioral constraints** — non-capability guardrails
+     the agent should respect across every role.
+   - **Assistant name** — what the operator calls this
+     specific assistant (distinct from product name and
+     role names).
+
+   The contract pins these **categories**, not the field
+   names or the on-disk shape, per the **P9** precedent.
+
+6. **Profile injects into every turn's system prompt.** The
+   system-prompt assembly pipeline at turn start composes
+   Profile alongside (not inside) the role-derived envelope
+   description.
+
+7. **Profile carries no secrets.** Profile must not be used
+   for API keys, passphrases, tokens, or any secret
+   material. Secret storage remains the AEAD-encrypted redb
+   store.
+
+### What this commitment deliberately does not say
+
+- **It does not pin the field names or the exact storage
+  shape.** Per **P9** precedent. Phase 57 chooses the on-
+  disk shape and field naming.
+- **It does not require Profile to be encrypted.** Profile
+  carries no secrets per Commit 7.
+- **It does not require `aivyx init` to be the only entry
+  point.** Phase 57 extends the init wizard with use-case
+  prompts, but other channels may bootstrap Profile.
+- **It does not preclude Profile from referencing other
+  state** (memory entries, role names, scheduled tasks).
+- **It does not commit Profile to the audit chain.**
+  Whether operator-driven Profile changes get audit
+  entries is an implementation decision.
+
+### How Profile composes with roles, capabilities, memory, and Persona
+
+- **Role envelope (P7 + P9)** gates capabilities. Profile
+  does not. Profile has no envelope of its own.
+- **System prompt (P9 dimension)** is the per-role prompt
+  override. Profile injects *alongside* the role's
+  `system_prompt`, not inside it.
+- **Memory (G3)** is dynamic and observation-driven.
+  Profile is static and operator-declared.
+- **Persona (P14)** is the dynamic counterpart of Profile.
+  Profile is the static seed; Persona is the evolving voice
+  that grows from Profile + accumulated reflection-approved
+  deltas. Effective voice at turn start = Profile + sum(approved
+  Persona deltas).
+
+---
+
 ## Status
 
 This document is the **locked product contract**. Edits require

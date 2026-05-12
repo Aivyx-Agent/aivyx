@@ -172,6 +172,22 @@ P13 should pin (subject to Q2 resolution):
     facts (memory entries, role names) — Profile may
     *point at* other state, it just isn't *that* state.
 
+## Task 3 ship record
+
+**Files modified:**
+- `docs/amendments/2026-05-12-product-commitment-p13-profile.md`
+  (+199, new file): A9 amendment adding P13 to PRODUCT.md as
+  the operator-declared static identity layer distinct from
+  role envelope (P7+P9), memory (G3), and Persona (P14).
+  Pins seven commitments and six "deliberately does not say"
+  carve-outs. Documents composition with roles, capabilities,
+  memory, and Persona.
+- `PRODUCT.md` (+109): new P13 section inserted between P12
+  and Status. Rule sentence, seven numbered commitments
+  (categories pinned per Q2(b) without field-naming), five
+  "deliberately does not say" entries, composition note,
+  inline amendment pointer in the same A5/A8 convention.
+
 ### Task 4 — Amendment A10: Product Commitment P14 — Persona
 
 Create `docs/amendments/2026-05-12-product-commitment-p14-persona.md`.
