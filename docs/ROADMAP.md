@@ -586,9 +586,10 @@ streak → 5, PRODUCT.md streak → 10, lib.rs streak → 1.
 
 ## Phase 47 — Web UI Phase 2 (Mission Dashboard + Audit Viewer)
 
-IPC query messages, mission dashboard, audit viewer, session
-history. Makes the Web UI a full operator inspection surface.
-Delivers P2 (mission legibility) and P4 (daemon inspection).
+**Active — see [PHASE_47.md](PHASE_47.md).** IPC query messages,
+mission dashboard, audit viewer, session history. Makes the Web
+UI a full operator inspection surface. Delivers P2 (mission
+legibility) and P4 (daemon inspection).
 
 ## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11)
 
