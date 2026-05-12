@@ -16,7 +16,7 @@ verifiable offline.
 
 | | |
 |---|---|
-| Phases shipped | 54 (Phase 0 → Phase 54, plus 8 contract amendments) |
+| Phases shipped | 54 (Phase 0 → Phase 54, plus 7 contract amendments) |
 | Forward-commitment ledger | **Closed** — all 12 PRODUCT.md commitments (P1–P12) and all 7 goal commitments (G1–G7) shipped |
 | Workspace crates | 12 |
 | Rust tests | 984 passing |
@@ -134,7 +134,7 @@ Twelve crates in the workspace:
   the daemon's IPC protocol.
 
 **For architects** wanting to understand the design:
-- [`DESIGN.md`](DESIGN.md) — locked technical contract (8 amendments)
+- [`DESIGN.md`](DESIGN.md) — locked technical contract (7 amendments)
 - [`PRODUCT.md`](PRODUCT.md) — locked product contract (P1–P12)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase-by-phase narrative
 - [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) — product-shape milestone narrative

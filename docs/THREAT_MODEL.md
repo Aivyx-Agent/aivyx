@@ -301,9 +301,22 @@ gap has narrowed substantially.
   by default (the eight P10 substrate tools, infrastructure
   tools like `mission.*`/`reflection.*`, MCP proxies). Buffer
   overflows in any of these would corrupt daemon memory in
-  principle. `#![forbid(unsafe_code)]` in `aivyx-crypto` and
-  the absence of `unsafe` blocks elsewhere make this harder
-  than in C; it does not make it impossible.
+  principle. The defense-in-depth picture is:
+  - `#![forbid(unsafe_code)]` on `aivyx-crypto`, `aivyx-storage`,
+    and `aivyx-telegram`.
+  - The only production `unsafe` is in `aivyx-core::tools::shell`
+    — `libc::killpg` for process-group teardown when a shell
+    invocation times out (Phase 42, narrowly scoped).
+  - Test-only `unsafe` blocks for `std::env::set_var` /
+    `remove_var` exist in `aivyx-channel::passphrase` and
+    `aivyx-config::tests`. Rust 2024 marks env-var mutation
+    unsafe; these blocks never compile into production binaries.
+
+  This is harder than in C; it does not make it impossible. If a
+  first-party tool grows a real `unsafe` need beyond the
+  killpg call, it should be wrapped behind a typed safe API in
+  a leaf crate with `#![forbid(unsafe_code)]` elsewhere, the
+  same posture `aivyx-crypto` takes.
 - **Third-party tools without an operator-configured wrapper**
   run with the operator's full OS authority (file access,
   network access, etc.) within their own process. The Phase 49

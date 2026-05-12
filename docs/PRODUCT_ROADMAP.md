@@ -647,5 +647,5 @@ close.
 After Phase 54 the project sits at: 984 Rust tests + 24 Python
 conformance tests passing, zero clippy warnings, 12 workspace
 crates, 43 capability scope bases, 9 encrypted storage domains,
-8 contract amendments filed, 4 deferrals carried forward (none
+7 contract amendments filed, 4 deferrals carried forward (none
 load-bearing).

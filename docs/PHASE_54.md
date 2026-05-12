@@ -154,7 +154,7 @@ Findings recorded for the record:
 | 43 scope bases | A3 addendum (Task 5) | `KNOWN_BASES.len()` |
 | 12 workspace crates | README + A4 addendum | `crates/*` directory listing |
 | 984 Rust + 24 Python tests | README + PRODUCT_ROADMAP | `cargo test --workspace` + Python suites |
-| 8 amendments filed | README | `docs/amendments/` directory |
+| 7 amendments filed | README | `docs/amendments/` directory |
 
 **Phase-status claims** — checked across PRODUCT_ROADMAP,
 ROADMAP, README, and SDK docs. Every milestone marked ✓
