@@ -72,6 +72,12 @@ aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider
 # history stays readable.
 aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-mcp = { path = "../aivyx-mcp" }
+# Phase 49 — Tool Process IPC Foundation (PRODUCT.md P12). The
+# binary spawns one ToolProcessBridge per `[[tool_process]]` entry
+# at startup, registers their ToolProxy instances into the
+# ToolRegistry, and SIGKILLs them via kill_on_drop on shutdown.
+# Same shape as the MCP wiring above.
+aivyx-tool = { path = "../aivyx-tool" }
 
 # Phase 9 Task 3 — unified config loader. The binary's ten
 # `std::env::var` call sites collapse into a single

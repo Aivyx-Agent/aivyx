@@ -1980,6 +1980,125 @@ transport = "sse"
     drop(env);
 }
 
+// ------------------------------------------------------------------
+// Phase 49 — [[tool_process]] config
+// ------------------------------------------------------------------
+
+#[test]
+fn tool_process_basic_entry_loads() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-basic");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "wordcount"
+command = "python3"
+args = ["/path/to/tool.py"]
+
+[tool_process.env]
+LOG_LEVEL = "info"
+
+[tool_process.scope_overrides]
+wordcount = "memory.read:topic:wc/**"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.tool_processes.len(), 1);
+    let t = &cfg.tool_processes[0];
+    assert_eq!(t.name, "wordcount");
+    assert_eq!(t.command, "python3");
+    assert_eq!(t.args, vec!["/path/to/tool.py"]);
+    assert!(t.enabled);
+    assert_eq!(t.env.len(), 1);
+    assert_eq!(t.env[0].0, "LOG_LEVEL");
+    assert_eq!(t.env[0].1, "info");
+    assert_eq!(t.scope_overrides.len(), 1);
+    assert_eq!(
+        t.scope_overrides.get("wordcount").map(String::as_str),
+        Some("memory.read:topic:wc/**"),
+    );
+    drop(env);
+}
+
+#[test]
+fn tool_process_disabled_entries_filtered() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-disabled");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "active"
+command = "python3"
+
+[[tool_process]]
+name = "skipped"
+command = "python3"
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.tool_processes.len(), 1);
+    assert_eq!(cfg.tool_processes[0].name, "active");
+    drop(env);
+}
+
+#[test]
+fn tool_process_empty_command_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tool-process-empty-cmd");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[tool_process]]
+name = "broken"
+command = "   "
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("empty command must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("command"), "error must mention command: {msg}");
+    drop(env);
+}
+
 #[test]
 fn mcp_server_stdio_missing_command_is_error() {
     let env = EnvScope::new();

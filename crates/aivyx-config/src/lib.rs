@@ -576,6 +576,9 @@ pub struct AivyxConfig {
     /// MCP server configurations from `[[mcp_server]]` entries.
     /// Empty when no entries are configured.
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Tool process configurations from `[[tool_process]]` entries.
+    /// Phase 49 — PRODUCT.md P12. Empty when no entries are configured.
+    pub tool_processes: Vec<ToolProcessConfig>,
     /// Scheduled execution entries from `[[schedule]]` entries.
     /// Empty when no entries are configured.
     pub schedules: Vec<ScheduleConfig>,
@@ -809,6 +812,27 @@ pub struct McpServerConfig {
     pub bundled: bool,
 }
 
+/// One tool process to spawn at daemon startup. Phase 49 — delivers
+/// PRODUCT.md P12 (Tools as Separate Processes Over Daemon IPC).
+/// Loaded from `[[tool_process]]` entries in `aivyx.toml`.
+///
+/// `scope_overrides` lets the operator narrow (never widen) the scopes
+/// the tool declares at handshake. Keys are tool names within the
+/// tool process; values are scope strings that must `is_granted_by`
+/// the declared scope. The daemon enforces the narrowing rule at
+/// registration time — see `docs/TOOL_SDK.md` §6.
+#[derive(Debug, Clone)]
+pub struct ToolProcessConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    /// Per-tool scope overrides keyed by tool name. Operator may only
+    /// narrow what the tool declared; the daemon rejects widenings.
+    pub scope_overrides: std::collections::HashMap<String, String>,
+    pub enabled: bool,
+}
+
 /// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
 #[derive(Debug, Clone)]
 pub struct ScheduleConfig {
@@ -883,6 +907,9 @@ struct RawToml {
     /// `[[mcp_server]]` table-array. Phase 24 Task 2.
     #[serde(default, rename = "mcp_server")]
     mcp_servers: Option<Vec<RawMcpServer>>,
+    /// `[[tool_process]]` table-array. Phase 49 — PRODUCT.md P12.
+    #[serde(default, rename = "tool_process")]
+    tool_processes: Option<Vec<RawToolProcess>>,
     /// `[[schedule]]` table-array. Phase 26 Task 2.
     #[serde(default, rename = "schedule")]
     schedules: Option<Vec<RawSchedule>>,
@@ -969,6 +996,41 @@ struct RawMcpServer {
     /// Used for bundled MCP servers that ship inside the `aivyx` binary.
     #[serde(default)]
     bundled: bool,
+}
+
+/// One `[[tool_process]]` entry in the TOML file. Phase 49.
+///
+/// Layout:
+///
+/// ```toml
+/// [[tool_process]]
+/// name = "wordcount"
+/// command = "python3"
+/// args = ["/path/to/tool.py"]
+///
+/// # Optional environment additions.
+/// env = { LOG_LEVEL = "info" }
+///
+/// # Optional per-tool scope narrowing. Keys are tool names declared
+/// # in the process's ToolRegister; values are scope strings that
+/// # must be granted by the declared scope.
+/// [tool_process.scope_overrides]
+/// wordcount = "memory.read:topic:wordcount/**"
+///
+/// enabled = true   # default
+/// ```
+#[derive(Debug, Default, Deserialize)]
+struct RawToolProcess {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    scope_overrides: Option<std::collections::HashMap<String, String>>,
+    #[serde(default = "default_true")]
+    enabled: bool,
 }
 
 fn default_stdio_transport() -> String {
@@ -1618,6 +1680,40 @@ impl AivyxConfig {
             });
         }
 
+        // --- tool processes ---------------------------------------
+        // Phase 49 — PRODUCT.md P12. One entry per `[[tool_process]]`
+        // table-array. Disabled entries are filtered out at load
+        // time (same pattern as schedules / mcp_servers).
+        let mut tool_processes: Vec<ToolProcessConfig> = Vec::new();
+        for r in toml.tool_processes.unwrap_or_default() {
+            if !r.enabled {
+                continue;
+            }
+            if r.command.trim().is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "tool_process.command",
+                    reason: format!(
+                        "tool process {:?}: `command` must be non-empty",
+                        r.name,
+                    ),
+                });
+            }
+            let env: Vec<(String, String)> = r
+                .env
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let scope_overrides = r.scope_overrides.unwrap_or_default();
+            tool_processes.push(ToolProcessConfig {
+                name: r.name,
+                command: r.command,
+                args: r.args.unwrap_or_default(),
+                env,
+                scope_overrides,
+                enabled: true,
+            });
+        }
+
         // --- schedules ---------------------------------------------
         let schedules: Vec<ScheduleConfig> = toml
             .schedules
@@ -1683,6 +1779,7 @@ impl AivyxConfig {
             active_role,
             warnings,
             mcp_servers,
+            tool_processes,
             schedules,
             webhooks,
             file_watches,

@@ -1248,6 +1248,7 @@ async fn run_async(
         // load-time warnings, so we drop the field on the floor.
         warnings: _,
         mut mcp_servers,
+        tool_processes: config_tool_processes,
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
@@ -1603,6 +1604,99 @@ async fn run_async(
                 );
             }
         }
+    }
+
+    // ---- Phase 49: tool processes (PRODUCT.md P12) ----------------------
+    // Same shape as the MCP block above. One ToolProcessBridge per
+    // `[[tool_process]]` entry. Each tool the process registers
+    // becomes a ToolProxy in the registry. The bridge holds the
+    // child via kill_on_drop, so SIGKILL fires automatically when
+    // the bridge vec is dropped at daemon shutdown.
+    //
+    // Failure mode: a tool process that fails to spawn, fails the
+    // handshake, or declares a scope outside the active role's
+    // envelope is **logged and skipped**, not fatal. The daemon
+    // continues with the tools that registered successfully.
+    let mut tool_bridges: Vec<std::sync::Arc<aivyx_tool::ToolProcessBridge>> = Vec::new();
+    for tp_cfg in &config_tool_processes {
+        let spawn_cfg = aivyx_tool::ToolProcessConfig {
+            name: tp_cfg.name.clone(),
+            command: tp_cfg.command.clone(),
+            args: tp_cfg.args.clone(),
+            env: tp_cfg.env.clone(),
+        };
+        let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
+            Ok(b) => std::sync::Arc::new(b),
+            Err(e) => {
+                eprintln!(
+                    "aivyx: tool process {:?} failed to start: {e}",
+                    tp_cfg.name,
+                );
+                continue;
+            }
+        };
+
+        let mut registered = 0usize;
+        for descriptor in bridge.descriptors() {
+            // Resolve the effective scope: operator override (if
+            // any) or the declared scope. Operator overrides must
+            // be `is_granted_by(declared)` — anything wider is a
+            // configuration error and the tool is skipped.
+            let declared = match aivyx_capability::Scope::parse(&descriptor.required_scope) {
+                Some(s) => s,
+                None => {
+                    eprintln!(
+                        "aivyx: tool process {:?} tool {:?} declared unparseable scope {:?} — \
+                         skipped",
+                        tp_cfg.name, descriptor.name, descriptor.required_scope,
+                    );
+                    continue;
+                }
+            };
+            let effective_scope = match tp_cfg.scope_overrides.get(&descriptor.name) {
+                Some(override_str) => {
+                    let parsed = match aivyx_capability::Scope::parse(override_str) {
+                        Some(s) => s,
+                        None => {
+                            eprintln!(
+                                "aivyx: tool process {:?} tool {:?} has unparseable \
+                                 scope_override {:?} — skipped",
+                                tp_cfg.name, descriptor.name, override_str,
+                            );
+                            continue;
+                        }
+                    };
+                    if !parsed.is_granted_by(&declared) {
+                        eprintln!(
+                            "aivyx: tool process {:?} tool {:?} scope_override {:?} is not \
+                             narrower than declared {:?} — skipped",
+                            tp_cfg.name,
+                            descriptor.name,
+                            override_str,
+                            descriptor.required_scope,
+                        );
+                        continue;
+                    }
+                    parsed
+                }
+                None => declared,
+            };
+
+            let proxy = aivyx_tool::ToolProxy::with_override_scope(
+                std::sync::Arc::clone(&bridge),
+                descriptor.name.clone(),
+                descriptor.description.clone(),
+                descriptor.input_schema.clone(),
+                effective_scope,
+            );
+            tool_list.push(std::sync::Arc::new(proxy) as std::sync::Arc<dyn Tool>);
+            registered += 1;
+        }
+        eprintln!(
+            "aivyx: tool process {:?} — {} tool(s) registered",
+            tp_cfg.name, registered,
+        );
+        tool_bridges.push(bridge);
     }
 
     // ---- Phase 36: Ollama model management tools ----------------------
@@ -2186,6 +2280,13 @@ async fn run_async(
         for bridge in mcp_bridges {
             let _ = bridge.shutdown().await;
         }
+        // Phase 49 — tool processes get a polite ToolShutdown; the
+        // kill_on_drop safety net SIGKILLs anything that doesn't
+        // exit cleanly when the Vec drops.
+        for bridge in &tool_bridges {
+            let _ = bridge.shutdown().await;
+        }
+        drop(tool_bridges);
         return result.map_err(|e| e.to_string());
     }
 
