@@ -275,6 +275,21 @@ This is the same shape as Phase 22 Task 6 and Phase 38's
 post-amendment status refresh — additive, no existing text
 edited.
 
+## Task 5 ship record
+
+**Files modified:**
+- `PRODUCT.md` (+71, -10): Delivery Status header refreshed
+  from *"as of Phase 50 exit"* to *"as of Phase 56,
+  2026-05-12"*. Intro paragraph rewritten to reflect five
+  amendments (A5/A6/A7/A8/A9/A10) and 55-phase span. "All
+  twelve P1-P12 fully shipped + P13/P14 forward" status
+  statement. Forward (Not Yet Started) section gains P13 and
+  P14 entries with phase pointers. New "Phase 51–55 —
+  Chapter A Foundation Closeout + MCP sandbox" subsection
+  documents Phases 51–55 with one-paragraph each. New
+  "Phase 56 — Profile + Persona contract amendments"
+  subsection records this phase's three amendments inline.
+
 ### Task 6 — docs/README.md amendment + phase pointer
 
 Update `docs/README.md`:

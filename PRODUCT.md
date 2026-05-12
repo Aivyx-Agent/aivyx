@@ -1305,20 +1305,28 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 50 exit, 2026-05-12)
+## Delivery Status (as of Phase 56, 2026-05-12)
 
 A traceability surface mapping each product commitment to its
-implementation state after 49 phases. The commitment text
-above is unchanged (except P10's seven→eight amendment) —
-this section records what shipped, what partially shipped,
+implementation state after 55 phases. The commitment text
+above carries five amendments: A5 (P10 seven→eight, Phase 38),
+A6 (parallel tool execution, Phase 40), A7 (protocol
+negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
+(P13 — Profile, Phase 56), A10 (P14 — Persona, Phase 56).
+This section records what shipped, what partially shipped,
 and what remains forward.
 
-**As of Phase 50 exit, all twelve product commitments are
-fully shipped.** The forward-commitment ledger is closed and
-P12's "extractable without rewriting" clause is now proven by
-the `p12_equivalence.rs` conformance test. Phase 50 also
-closed the two Phase 49 bridge deferrals (`ToolEvent` channel
-relay; per-call targeted cancellation).
+**P1–P12 are all fully shipped.** The original forward-
+commitment ledger closed at Phase 49 (P12 foundation) + Phase
+50 (equivalence proof). Chapter A (Phases 50–54) closed
+Foundation Closeout with cleanup, sandbox layer, and a final
+docs sweep. Phase 55 demonstrated the post-Chapter-A posture
+by porting the Phase 52 sandbox pattern to `[[mcp_server]]`
+in response to THREAT_MODEL §5.2.
+
+**P13 and P14 were added in Phase 56 (this phase) and are
+forward — their implementation phases (57–58 for Profile,
+59–60 for Persona) are scaffolded in ROADMAP.md.**
 
 ### Fully Delivered
 
@@ -1439,11 +1447,25 @@ relay; per-call targeted cancellation).
 
 ### Forward (Not Yet Started)
 
-*(Empty as of Phase 49 exit. The Phase 49 deferral list —
-first-party in-process protocol unification, per-tool
-sandboxing on top of process isolation — lives in the
-phase journal and the rolling roadmap deferral backlog,
-not in the product contract's Forward column.)*
+- **P13 — Assistant Profile.** Added Phase 56. Operator-
+  declared static identity layer (operator profile,
+  communication style, primary use cases, behavioral
+  preferences, behavioral constraints, assistant name)
+  injecting into every turn's system prompt. Foundation
+  shipping in Phase 57 (storage shape, init-wizard
+  extension, system-prompt assembly). Inspection shipping
+  in Phase 58 (`aivyx profile show`/`edit` CLI, Web UI
+  pane). Closes after Phase 58.
+
+- **P14 — Persona.** Added Phase 56. Reflection-written
+  dynamic identity layer growing from Profile via P8-gated
+  / P2-approved / HMAC-chained operator-reversible delta
+  accumulation. Foundation shipping in Phase 59 (delta
+  storage, `reflection.propose` extension with persona
+  category, effective-identity assembly). Visualization
+  shipping in Phase 60 (Web UI Persona timeline,
+  identity export/import candidate). Closes after Phase
+  60.
 
 ### Forward Commitment Candidates — Status Update
 
@@ -1475,3 +1497,66 @@ candidates. Several have since been delivered:
   operator inspection surface (mission dashboard, audit
   viewer with verify-chain banner, sessions list) by adding
   the `Query`/`QueryResponse` IPC envelope.
+
+### Phase 51–55 — Chapter A Foundation Closeout + MCP sandbox
+
+After Phase 50 closed P12, the project pivoted from "deliver
+remaining commitments" to "close out Phase 0–49 loose ends."
+Phases 51–54 are Chapter A; Phase 55 is the first
+post-Chapter-A phase.
+
+- **Phase 51 — Cleanup.** Closed three pre-existing items:
+  `AivyxError::{Storage,Crypto}` typed nested errors (D6
+  honored after 50 phases of stub), `handle_connection`
+  parameter-struct lift (`ConnectionContext`),
+  `AIVYX_PASSPHRASE` TOML/env footgun (`PassphraseSource::
+  FromConfig`).
+- **Phase 52 — Sandbox layer.** Generic command-wrapper
+  sandbox for `[[tool_process]]`. Operator supplies the
+  policy (bubblewrap / firejail / docker / sandbox-exec).
+  Narrowed THREAT_MODEL.md §5.6.
+- **Phase 53 — (skipped).** Audit log rotation deferred
+  indefinitely; chain growth is bounded by tool-call
+  frequency × uptime.
+- **Phase 54 — Final docs sweep.** Root README rewrite,
+  PRODUCT_ROADMAP delivered-section refresh, DAEMON_IPC
+  Phase 47 addendum, A3 amendment scope-base count
+  addendum, walkthrough refresh, cross-doc consistency
+  spot-check.
+- **Phase 55 — MCP Server Sandbox Layer.** Ported the
+  Phase 52 sandbox pattern from `[[tool_process]]` to
+  `[[mcp_server]]`, closing THREAT_MODEL §5.2. New
+  `aivyx-mcp::SandboxConfig`, parallel `[mcp_server.sandbox]`
+  TOML schema. Demonstrated the post-Chapter-A posture
+  (operator-feedback-shaped trigger + proven-pattern port
+  + small task list).
+
+### Phase 56 — Profile + Persona contract amendments (docs-only)
+
+This phase. Three amendments to `PRODUCT.md` filed in a
+single batch (the second contract amendment batch in project
+history; Phase 22 was the first):
+
+- **A8 — Pitch Reframe.** Narrows the LOCKED 2026-04-15 pitch
+  from "personal autonomous agent platform" to "AI-personal
+  assistant with user-defined Profile and Persona." Updates
+  "cloud LLMs ... your own API key" to "cloud or local LLMs
+  ... your own credentials" (reflecting Ollama support from
+  Phase 34).
+- **A9 — Product Commitment P13 (Assistant Profile).** Adds
+  P13 as the operator-declared, mostly-static identity
+  layer. Pins seven commitments and pins field
+  *categories* (per P9 precedent) without pinning field
+  names.
+- **A10 — Product Commitment P14 (Persona).** Adds P14 as
+  the reflection-written, dynamic identity layer growing
+  from Profile under P8-gated, P2-approved, HMAC-chained
+  operator-reversible delta accumulation. Pins both the
+  storage property (HMAC-chained, append-only) and the
+  gating property (P8-proposed, P2-approved). Carries a
+  Terminology Note mapping the operator's "Soul" framing
+  to the contract's "Persona" spelling.
+
+Zero code changes. PRODUCT.md byte-identity streak ended at
+six phases (intentional, via the formal amendment process).
+DESIGN.md and `aivyx-core/src/lib.rs` streaks held.
