@@ -878,12 +878,18 @@ impl Tool for ReflectionApplyTool {
                     match log.append(delta.clone()).await {
                         Ok(_seq) => {
                             persona_deltas_committed += 1;
-                            // Mirror the chain append into the shared
-                            // runtime state. Skipping this is a soft
-                            // failure surfaced via
-                            // `effective_persona_synced = false`.
+                            // Phase 60: recompute the runtime state
+                            // from the full chain. Per-delta apply is
+                            // no longer sufficient since Revert ops
+                            // need chain context to find their target.
+                            // The recompute is cheap (chain is small)
+                            // and gives Revert semantics for free.
                             if let Some(shared) = self.effective_persona.get() {
-                                if !crate::persona::apply_delta_to_shared(shared, &delta) {
+                                let entries = log.entries();
+                                if !crate::persona::recompute_shared_from_entries(
+                                    shared,
+                                    &entries,
+                                ) {
                                     effective_persona_synced = false;
                                 }
                             }

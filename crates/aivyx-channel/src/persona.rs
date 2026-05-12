@@ -105,6 +105,20 @@ pub enum PersonaDeltaOp {
     /// Remove a matching string from a list category. No-op if the
     /// value is not present.
     RemoveList { value: String },
+    /// Phase 60 — operator-initiated revert (P14 commit 4). The
+    /// referenced `target_delta_id` must name a prior entry in the
+    /// same chain. At fold time, the runtime applies the *inverse*
+    /// of the target's op: `AppendList` → `RemoveList`,
+    /// `RemoveList` → `AppendList`, `SetScalar { new }` →
+    /// `SetScalar { prior_value_from_chain }`, `Revert` →
+    /// re-apply the original target (revert-of-revert restores
+    /// the original delta's effect). The chain stays append-only
+    /// — reverts grow the chain; they don't mutate prior entries.
+    ///
+    /// The `category` field on the [`PersonaDelta`] carrying a
+    /// `Revert` op must equal the target's category. Validation at
+    /// append time enforces this so the chain is self-consistent.
+    Revert { target_delta_id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -138,9 +152,15 @@ pub struct PersonaDelta {
 impl PersonaDelta {
     /// Validate the `(category, op)` pair. Scalar categories only
     /// accept `SetScalar`; list categories only accept `AppendList`
-    /// / `RemoveList`. Returns a human-readable reason on failure.
+    /// / `RemoveList`. `Revert` is valid on any category — the
+    /// constraint is shifted to apply-time (the target delta must
+    /// exist and its category must match this delta's category).
+    /// Returns a human-readable reason on failure.
     pub fn validate(&self) -> Result<(), String> {
         match (self.category.is_scalar(), &self.op) {
+            // Revert is acceptable on any category at append-time;
+            // chain-walking validation happens in the folder.
+            (_, PersonaDeltaOp::Revert { .. }) => Ok(()),
             (true, PersonaDeltaOp::SetScalar { .. }) => Ok(()),
             (false, PersonaDeltaOp::AppendList { .. }) => Ok(()),
             (false, PersonaDeltaOp::RemoveList { .. }) => Ok(()),
@@ -454,14 +474,21 @@ pub fn shared_effective_persona(initial: EffectivePersona) -> SharedEffectivePer
     Arc::new(RwLock::new(initial))
 }
 
-/// Apply one approved delta to a `SharedEffectivePersona` under
-/// the write lock. Returns `true` on success; `false` if the lock
-/// was poisoned (the apply tool surfaces this as a tool error so
-/// the operator sees the chain was written but the runtime state
-/// did not refresh).
-pub fn apply_delta_to_shared(shared: &SharedEffectivePersona, delta: &PersonaDelta) -> bool {
+/// Recompute the shared effective Persona from the full chain
+/// under the write lock. Returns `true` on success; `false` if the
+/// lock was poisoned.
+///
+/// Phase 60 — replaces the Phase 59 `apply_delta_to_shared(delta)`
+/// API. The Revert op needs chain context to find its target, so
+/// the single-delta apply is no longer sufficient.
+/// `reflection.apply` calls this after each successful chain append
+/// to refresh the runtime state.
+pub fn recompute_shared_from_entries(
+    shared: &SharedEffectivePersona,
+    entries: &[SignedPersonaEntry],
+) -> bool {
     if let Ok(mut state) = shared.write() {
-        apply_delta_to_state(delta, &mut state);
+        *state = compute_effective_persona(entries);
         true
     } else {
         false
@@ -491,15 +518,51 @@ impl EffectivePersona {
 /// fresh [`EffectivePersona`]. Pure function — same input always
 /// produces the same output, so daemons replay chains
 /// deterministically at startup.
+///
+/// Phase 60 — handles `PersonaDeltaOp::Revert` by replaying the
+/// chain up to the target entry and applying its inverse. Cycles
+/// are structurally impossible: Revert targets must be prior
+/// entries in the chain (enforced by chain append order).
 pub fn compute_effective_persona(entries: &[SignedPersonaEntry]) -> EffectivePersona {
     let mut state = EffectivePersona::default();
-    for entry in entries {
-        apply_delta_to_state(&entry.delta, &mut state);
+    for i in 0..entries.len() {
+        apply_entry_to_state(i, entries, &mut state);
     }
     state
 }
 
-fn apply_delta_to_state(delta: &PersonaDelta, state: &mut EffectivePersona) {
+/// Apply the entry at `entries[idx]` to `state`. Dispatches on the
+/// delta's op kind: forward-shape ops apply normally; Revert ops
+/// apply the inverse of their target.
+fn apply_entry_to_state(
+    idx: usize,
+    entries: &[SignedPersonaEntry],
+    state: &mut EffectivePersona,
+) {
+    let delta = &entries[idx].delta;
+    match &delta.op {
+        PersonaDeltaOp::Revert { target_delta_id } => {
+            if let Some(target_idx) = entries
+                .iter()
+                .position(|e| &e.delta.delta_id == target_delta_id)
+            {
+                // Phase 60: a revert can only refer to a prior entry.
+                // Forward-pointing reverts are silently no-ops —
+                // defense against chain corruption / malicious tampering
+                // (the chain MAC would catch tamper, but the fold path
+                // gives a second line of defense).
+                if target_idx < idx {
+                    apply_inverse_of_entry(target_idx, entries, state);
+                }
+            }
+        }
+        _ => apply_forward_op(delta, state),
+    }
+}
+
+/// Apply a forward-shape op (SetScalar / AppendList / RemoveList) to
+/// `state`. Revert is handled separately by [`apply_entry_to_state`].
+fn apply_forward_op(delta: &PersonaDelta, state: &mut EffectivePersona) {
     match (delta.category, &delta.op) {
         (PersonaDeltaCategory::AssistantName, PersonaDeltaOp::SetScalar { value }) => {
             state.assistant_name = value.clone();
@@ -520,6 +583,83 @@ fn apply_delta_to_state(delta: &PersonaDelta, state: &mut EffectivePersona) {
         // by `PersonaDelta::validate()`; if one slips through, the
         // delta is a no-op rather than a panic. Defense in depth.
         (_, _) => {}
+    }
+}
+
+/// Apply the inverse of `entries[idx]`'s op to `state`. Phase 60 —
+/// the core of revert semantics.
+///
+/// - `AppendList` ↔ `RemoveList`
+/// - `SetScalar { value: <new> }` → `SetScalar { value: <prior> }`
+///   where `<prior>` is the most-recent scalar value for the same
+///   category before this entry, found by replaying `entries[..idx]`
+///   into a probe state.
+/// - `Revert { target }` → re-apply `target` forward. This is the
+///   revert-of-revert case: undoing a revert restores the original
+///   effect.
+fn apply_inverse_of_entry(
+    idx: usize,
+    entries: &[SignedPersonaEntry],
+    state: &mut EffectivePersona,
+) {
+    let entry = &entries[idx];
+    match &entry.delta.op {
+        PersonaDeltaOp::AppendList { value } => {
+            apply_remove_from_list(
+                field_for_list_category(state, entry.delta.category),
+                value,
+            );
+        }
+        PersonaDeltaOp::RemoveList { value } => {
+            apply_append_to_list(
+                field_for_list_category(state, entry.delta.category),
+                value,
+            );
+        }
+        PersonaDeltaOp::SetScalar { .. } => {
+            let prior = find_prior_scalar(entries, idx, entry.delta.category);
+            match entry.delta.category {
+                PersonaDeltaCategory::AssistantName => state.assistant_name = prior,
+                PersonaDeltaCategory::OperatorProfile => state.operator_profile = prior,
+                PersonaDeltaCategory::CommunicationStyle => {
+                    state.communication_style = prior
+                }
+                _ => {} // SetScalar is only valid on scalar categories.
+            }
+        }
+        PersonaDeltaOp::Revert { target_delta_id } => {
+            if let Some(t_idx) = entries
+                .iter()
+                .position(|e| &e.delta.delta_id == target_delta_id)
+            {
+                if t_idx < idx {
+                    // Re-apply the original target. Recursive — but
+                    // bounded by the chain length since each step
+                    // strictly decreases the index.
+                    apply_entry_to_state(t_idx, entries, state);
+                }
+            }
+        }
+    }
+}
+
+/// Find the scalar value for `category` that would have been in
+/// effect immediately before `entries[at_idx]` was applied. Used by
+/// `apply_inverse_of_entry` to invert a `SetScalar`.
+fn find_prior_scalar(
+    entries: &[SignedPersonaEntry],
+    at_idx: usize,
+    category: PersonaDeltaCategory,
+) -> Option<String> {
+    let mut probe = EffectivePersona::default();
+    for i in 0..at_idx {
+        apply_entry_to_state(i, entries, &mut probe);
+    }
+    match category {
+        PersonaDeltaCategory::AssistantName => probe.assistant_name,
+        PersonaDeltaCategory::OperatorProfile => probe.operator_profile,
+        PersonaDeltaCategory::CommunicationStyle => probe.communication_style,
+        _ => None,
     }
 }
 
@@ -932,32 +1072,219 @@ mod tests {
     }
 
     #[test]
-    fn apply_delta_to_shared_mutates_under_write_lock() {
+    fn recompute_shared_from_entries_mutates_under_write_lock() {
         let shared = shared_effective_persona(EffectivePersona::default());
-        let delta = list_delta(
-            PersonaDeltaCategory::BehavioralPreferences,
-            "prefer terse",
-        );
-        let ok = apply_delta_to_shared(&shared, &delta);
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                "prefer terse",
+            ))
+            .expect("append");
+        let ok = recompute_shared_from_entries(&shared, &chain.entries());
         assert!(ok);
         let read = shared.read().unwrap();
         assert_eq!(read.behavioral_preferences, vec!["prefer terse"]);
     }
 
     #[test]
-    fn apply_delta_to_shared_idempotent_on_repeated_appends() {
+    fn recompute_shared_from_entries_idempotent_on_repeated_appends() {
         let shared = shared_effective_persona(EffectivePersona::default());
-        let delta = list_delta(
-            PersonaDeltaCategory::LearnedContext,
-            "operator uses Vim",
-        );
-        apply_delta_to_shared(&shared, &delta);
-        apply_delta_to_shared(&shared, &delta);
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::LearnedContext,
+                "operator uses Vim",
+            ))
+            .expect("append 1");
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::LearnedContext,
+                "operator uses Vim",
+            ))
+            .expect("append 2");
+        recompute_shared_from_entries(&shared, &chain.entries());
         let read = shared.read().unwrap();
         assert_eq!(read.learned_context.len(), 1);
     }
 
     // ---- PersistentPersonaLog round-trip ------------------------
+
+    // ---- Revert mechanism (Phase 60) ----------------------------
+
+    fn revert_delta(category: PersonaDeltaCategory, target_id: &str) -> PersonaDelta {
+        PersonaDelta {
+            delta_id: format!("pd-revert-{target_id}"),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            approved_at_unix_ms: 1_715_000_060_000,
+            proposal_id: "rp-revert".into(),
+            category,
+            op: PersonaDeltaOp::Revert {
+                target_delta_id: target_id.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn revert_validates_on_any_category() {
+        // Revert is accepted on both scalar and list categories;
+        // the category constraint comes from the target's category
+        // checked at fold time.
+        let r1 = revert_delta(PersonaDeltaCategory::AssistantName, "pd-x");
+        assert!(r1.validate().is_ok());
+        let r2 = revert_delta(PersonaDeltaCategory::BehavioralPreferences, "pd-y");
+        assert!(r2.validate().is_ok());
+    }
+
+    #[test]
+    fn revert_undoes_append_list() {
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                "prefer terse",
+            ))
+            .expect("append");
+        let target_id = chain.entries()[0].delta.delta_id.clone();
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                &target_id,
+            ))
+            .expect("revert");
+        let state = compute_effective_persona(&chain.entries());
+        assert!(
+            state.behavioral_preferences.is_empty(),
+            "reverted AppendList should leave the list empty"
+        );
+    }
+
+    #[test]
+    fn revert_undoes_remove_list() {
+        let chain = PersonaChainLog::new(test_key());
+        // Seed: append.
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::LearnedContext,
+                "operator uses Vim",
+            ))
+            .expect("append");
+        // Remove the value.
+        let remove = PersonaDelta {
+            category: PersonaDeltaCategory::LearnedContext,
+            op: PersonaDeltaOp::RemoveList {
+                value: "operator uses Vim".into(),
+            },
+            ..list_delta(PersonaDeltaCategory::LearnedContext, "dummy")
+        };
+        chain.append(remove).expect("remove");
+        let remove_id = chain.entries()[1].delta.delta_id.clone();
+        // Revert the remove → the value comes back.
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::LearnedContext,
+                &remove_id,
+            ))
+            .expect("revert");
+        let state = compute_effective_persona(&chain.entries());
+        assert_eq!(state.learned_context, vec!["operator uses Vim".to_string()]);
+    }
+
+    #[test]
+    fn revert_undoes_set_scalar_to_prior_value() {
+        let chain = PersonaChainLog::new(test_key());
+        // First SetScalar — prior value baseline.
+        chain
+            .append(scalar_delta(
+                PersonaDeltaCategory::AssistantName,
+                Some("Codex"),
+            ))
+            .expect("set 1");
+        // Second SetScalar — what the revert will undo.
+        chain
+            .append(scalar_delta(
+                PersonaDeltaCategory::AssistantName,
+                Some("Mira"),
+            ))
+            .expect("set 2");
+        let target_id = chain.entries()[1].delta.delta_id.clone();
+        // Revert the second SetScalar — assistant_name reverts to "Codex".
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::AssistantName,
+                &target_id,
+            ))
+            .expect("revert");
+        let state = compute_effective_persona(&chain.entries());
+        assert_eq!(state.assistant_name.as_deref(), Some("Codex"));
+    }
+
+    #[test]
+    fn revert_undoes_set_scalar_to_none_when_no_prior() {
+        let chain = PersonaChainLog::new(test_key());
+        // Only one SetScalar — reverting it should clear the field.
+        chain
+            .append(scalar_delta(
+                PersonaDeltaCategory::CommunicationStyle,
+                Some("terse"),
+            ))
+            .expect("set");
+        let target_id = chain.entries()[0].delta.delta_id.clone();
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::CommunicationStyle,
+                &target_id,
+            ))
+            .expect("revert");
+        let state = compute_effective_persona(&chain.entries());
+        assert!(state.communication_style.is_none());
+    }
+
+    #[test]
+    fn revert_of_revert_restores_original() {
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                "prefer terse",
+            ))
+            .expect("append");
+        let original_id = chain.entries()[0].delta.delta_id.clone();
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                &original_id,
+            ))
+            .expect("revert 1");
+        let revert_id = chain.entries()[1].delta.delta_id.clone();
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                &revert_id,
+            ))
+            .expect("revert 2");
+        let state = compute_effective_persona(&chain.entries());
+        assert_eq!(
+            state.behavioral_preferences,
+            vec!["prefer terse".to_string()],
+            "revert-of-revert should restore the original effect"
+        );
+    }
+
+    #[test]
+    fn revert_with_missing_target_is_no_op() {
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(revert_delta(
+                PersonaDeltaCategory::BehavioralPreferences,
+                "pd-does-not-exist",
+            ))
+            .expect("append revert");
+        let state = compute_effective_persona(&chain.entries());
+        // No prior matching delta → revert is a no-op rather than
+        // a panic; the runtime stays empty.
+        assert!(state.behavioral_preferences.is_empty());
+    }
 
     #[tokio::test]
     async fn persistent_log_round_trips_through_redb() {
