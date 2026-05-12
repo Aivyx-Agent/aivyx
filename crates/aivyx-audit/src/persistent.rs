@@ -227,6 +227,17 @@ impl PersistentAuditLog {
         self.chain.entries()
     }
 
+    /// Ranged snapshot — delegates to [`HmacChainLog::entries_range`].
+    /// Phase 47 — used by the daemon's `ListAuditEntries` query to
+    /// paginate the audit chain into the Web UI viewer.
+    pub fn entries_range(
+        &self,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<SignedEntry>, AuditError> {
+        self.chain.entries_range(from_seq, limit)
+    }
+
     /// Cold-start chain verification over `KeyDomain::Audit`.
     ///
     /// Runs the same scan + decode + HMAC-replay pipeline that

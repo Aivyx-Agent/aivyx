@@ -801,6 +801,7 @@ async fn two_concurrent_connections() {
                 web_ui_port: None,
                 memory: None,
                 memory_ttl_secs: None,
+                audit_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1077,6 +1078,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
                 web_ui_port: None,
                 memory: None,
                 memory_ttl_secs: None,
+                audit_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1151,6 +1153,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
                 web_ui_port: None,
                 memory: None,
                 memory_ttl_secs: None,
+                audit_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1549,6 +1552,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             web_ui_port: None,
             memory: None,
             memory_ttl_secs: None,
+            audit_log: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1800,6 +1804,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             web_ui_port: None,
             memory: None,
             memory_ttl_secs: None,
+            audit_log: None,
         })
         .await
         .expect("daemon must complete");
@@ -2163,6 +2168,7 @@ async fn mission_queries_round_trip_over_ipc() {
             web_ui_port: None,
             memory: None,
             memory_ttl_secs: None,
+            audit_log: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2344,6 +2350,265 @@ async fn mission_queries_without_store_return_query_error() {
         }
     };
     assert_eq!(code, "no_mission_store");
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 47 Task 4 — Audit queries (ListAuditEntries, VerifyAuditChain)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn audit_queries_round_trip_over_ipc() {
+    use aivyx_audit::{AuditEvent, AuditWriter, PersistentAuditLog, TrustTierSummary};
+    use aivyx_capability::TrustTier;
+    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
+    use aivyx_core::{ChannelPlatform, SessionId, TurnId};
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let daemon_socket = socket_path.clone();
+
+    // Open storage + persistent audit log; seed two events.
+    let store_path = scratch.path.join("audit.redb");
+    let storage: Arc<dyn Storage> =
+        RedbStorage::open(StorageConfig::new(store_path), MasterKey::from_raw([5u8; 32]))
+            .await
+            .expect("storage open");
+    let audit_key: [u8; 32] = [42u8; 32];
+    let audit_log = PersistentAuditLog::open(Arc::clone(&storage), audit_key)
+        .await
+        .expect("audit log open");
+    let audit_log = Arc::new(audit_log);
+
+    audit_log
+        .append(AuditEvent::TurnStarted {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            channel: ChannelPlatform::Local,
+            trust_tier: TrustTierSummary::from(TrustTier::Trusted),
+            effective_capabilities: CapabilitySet::empty(),
+        })
+        .expect("append TurnStarted");
+    audit_log
+        .append(AuditEvent::TurnEnded {
+            turn_id: TurnId::new(),
+            outcome: aivyx_core::TurnOutcomeSummary::Completed,
+            tool_calls_made: 0,
+            duration: Duration::from_millis(10),
+            usage: aivyx_core::TokenUsage::default(),
+        })
+        .expect("append TurnEnded");
+
+    // Spin up the daemon with audit_log threaded in.
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let daemon_agent = Arc::clone(&agent);
+    let shutdown = CancellationToken::new();
+    let daemon_shutdown = shutdown.clone();
+
+    let factory: ChannelFactory = Arc::new(move |_| {
+        let ch: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(LocalChannel::new("audit-test", Vec::<u8>::new()));
+        ch
+    });
+
+    let daemon_audit = Arc::clone(&audit_log);
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon(DaemonConfig {
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: None,
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+            memory: None,
+            memory_ttl_secs: None,
+            audit_log: Some(daemon_audit),
+        })
+        .await
+        .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Consume DaemonReady.
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    // --- ListAuditEntries (from_seq=0, limit=100) ---
+    let q = FrontendMessage::Query {
+        id: "audit-list".into(),
+        payload: QueryPayload::ListAuditEntries { from_seq: 0, limit: 100 },
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let (rid, entries, total_len) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListAuditEntries { entries, total_len } => {
+                        break (id, entries, total_len);
+                    }
+                    QueryResponsePayload::QueryError { code, message } => {
+                        panic!("unexpected QueryError ({code}): {message}");
+                    }
+                    other => panic!("expected ListAuditEntries, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert_eq!(rid, "audit-list");
+    assert_eq!(total_len, 2);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].seq, 0);
+    assert_eq!(entries[0].event_type, "TurnStarted");
+    assert_eq!(entries[1].seq, 1);
+    assert_eq!(entries[1].event_type, "TurnEnded");
+    assert_eq!(entries[0].mac_hex.len(), 64, "mac must be 32 bytes hex");
+
+    // --- ListAuditEntries (from_seq=1, limit=10) — short read ---
+    let q = FrontendMessage::Query {
+        id: "audit-page2".into(),
+        payload: QueryPayload::ListAuditEntries { from_seq: 1, limit: 10 },
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let entries = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListAuditEntries { entries, .. } => break entries,
+                    other => panic!("expected ListAuditEntries, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].seq, 1);
+
+    // --- VerifyAuditChain — must report ok=true, 2 entries ---
+    let q = FrontendMessage::Query {
+        id: "audit-verify".into(),
+        payload: QueryPayload::VerifyAuditChain,
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let (ok, entries_verified, error) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::VerifyAuditChain { ok, entries_verified, error } => {
+                        break (ok, entries_verified, error);
+                    }
+                    other => panic!("expected VerifyAuditChain, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert!(ok, "chain must verify");
+    assert_eq!(entries_verified, 2);
+    assert!(error.is_none());
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+#[tokio::test]
+async fn audit_queries_without_log_return_query_error() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel = Arc::new(LocalChannel::new("audit-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    let q = FrontendMessage::Query {
+        id: "no-audit".into(),
+        payload: QueryPayload::ListAuditEntries { from_seq: 0, limit: 50 },
+    };
+    writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+    let code = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::QueryError { code, .. } => break code,
+                    other => panic!("expected QueryError, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+    assert_eq!(code, "no_audit_log");
 
     let _ = writer
         .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())

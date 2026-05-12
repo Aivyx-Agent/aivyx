@@ -170,7 +170,8 @@ hash. Update `docs/README.md` row. Final commit.
 |---|---|---|
 | 1 | `7c4db55` | 936 |
 | 2 | `230c47f` | 938 |
-| 3 | _this commit_ | 940 |
+| 3 | `276d96d` | 940 |
+| 4 | _this commit_ | 946 |
 
 ## Deferrals carried into the phase
 
@@ -182,6 +183,12 @@ None. Backlog entered at 0.
   deferral backlog.
 - **Read-write inspection.** Per Q6. Cancel mission, delete
   schedule, etc. — sized at a small follow-up phase, not urgent.
+- **`handle_connection` parameter struct.** Surfaced in Task 4
+  when the audit-log threading pushed the function over the
+  `too_many_arguments` clippy threshold. `#[allow]`'d for now
+  with the lift documented at the function. Same pattern as
+  Phase 41 Task 2's `DaemonConfig` lift — recommended for a
+  future cleanup phase, not urgent.
 
 ## Exit criteria
 

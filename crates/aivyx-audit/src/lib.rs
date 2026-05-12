@@ -302,6 +302,28 @@ impl HmacChainLog {
             .clone())
     }
 
+    /// Ranged snapshot — clone at most `limit` entries starting at
+    /// `from_seq`. Returns an empty vec if `from_seq` is past the end.
+    ///
+    /// Phase 47 — used by the daemon's `ListAuditEntries` query to
+    /// satisfy the Web UI audit viewer without ever materializing the
+    /// full chain into a single response. Caller-supplied `limit` is
+    /// capped by the daemon at 500 (Phase 47 Q3); this method itself
+    /// imposes no upper bound — short reads are returned verbatim.
+    pub fn entries_range(
+        &self,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<SignedEntry>, AuditError> {
+        let inner = self.inner.lock().map_err(|_| AuditError::LockPoisoned)?;
+        let start = from_seq as usize;
+        if start >= inner.entries.len() {
+            return Ok(Vec::new());
+        }
+        let end = (start + limit).min(inner.entries.len());
+        Ok(inner.entries[start..end].to_vec())
+    }
+
     fn compute_mac(&self, prev_mac: &[u8; 32], event_bytes: &[u8]) -> [u8; 32] {
         let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&self.key)
             .expect("HMAC accepts any key length");
@@ -696,6 +718,54 @@ mod tests {
         .unwrap();
         assert_eq!(AuditLog::len(&log), 3);
         log.verify().unwrap();
+    }
+
+    // ---- Phase 47 — entries_range ----
+
+    #[test]
+    fn entries_range_returns_requested_window() {
+        let log = HmacChainLog::new(test_key());
+        for _ in 0..5 {
+            log.append(sample_tool_call()).unwrap();
+        }
+        // First two entries.
+        let window = log.entries_range(0, 2).unwrap();
+        assert_eq!(window.len(), 2);
+        assert_eq!(window[0].seq, 0);
+        assert_eq!(window[1].seq, 1);
+
+        // Middle slice.
+        let window = log.entries_range(2, 2).unwrap();
+        assert_eq!(window.len(), 2);
+        assert_eq!(window[0].seq, 2);
+        assert_eq!(window[1].seq, 3);
+    }
+
+    #[test]
+    fn entries_range_short_read_when_limit_exceeds_chain() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(sample_tool_call()).unwrap();
+        // Asking for 10 from seq 1 should yield only 1.
+        let window = log.entries_range(1, 10).unwrap();
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].seq, 1);
+    }
+
+    #[test]
+    fn entries_range_returns_empty_when_from_seq_past_end() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        let window = log.entries_range(5, 10).unwrap();
+        assert!(window.is_empty());
+    }
+
+    #[test]
+    fn entries_range_zero_limit_returns_empty() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        let window = log.entries_range(0, 0).unwrap();
+        assert!(window.is_empty());
     }
 
     #[test]

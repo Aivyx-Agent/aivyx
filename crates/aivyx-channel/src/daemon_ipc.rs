@@ -107,6 +107,17 @@ pub enum QueryPayload {
     GetMission {
         mission_id: String,
     },
+    /// Paginated read of the persistent audit chain. Returns at most
+    /// `limit` entries starting at `from_seq`. `limit` is capped
+    /// server-side at 500 (Phase 47 Q3). Read-only.
+    ListAuditEntries {
+        from_seq: u64,
+        limit: u32,
+    },
+    /// Cold-verify the in-memory audit chain. Returns whether the chain
+    /// hashes match, the number of entries verified, and the first
+    /// error encountered if any.
+    VerifyAuditChain,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -127,6 +138,21 @@ pub enum QueryResponsePayload {
     /// when the mission id does not exist (not an error).
     GetMission {
         mission: Option<MissionDetail>,
+    },
+    /// Response to [`QueryPayload::ListAuditEntries`]. `entries` is the
+    /// page of summaries; `total_len` is the full chain length so the
+    /// frontend can show "showing N..M of T" and know when to stop
+    /// paginating.
+    ListAuditEntries {
+        entries: Vec<AuditEntrySummary>,
+        total_len: u64,
+    },
+    /// Response to [`QueryPayload::VerifyAuditChain`].
+    VerifyAuditChain {
+        ok: bool,
+        entries_verified: u64,
+        /// Human-readable failure description on `ok == false`.
+        error: Option<String>,
     },
     /// The daemon could not answer the query. `code` is a stable
     /// machine-readable label; `message` is human-readable.
@@ -187,6 +213,27 @@ pub struct GateSummary {
     pub state: String,
     pub created_at: u64,
     pub resolved_at: Option<u64>,
+}
+
+/// One row of the audit log as exposed over IPC. Projected from
+/// `aivyx_audit::SignedEntry` — the wire shape intentionally keeps
+/// the event body as `serde_json::Value` so additions to the
+/// `AuditEvent` enum do not break the IPC schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditEntrySummary {
+    pub seq: u64,
+    /// Unix millis. `SystemTime` is converted at the daemon boundary
+    /// so the wire format does not depend on platform clock encoding.
+    pub appended_at_unix_ms: u64,
+    /// String label of the `AuditEvent` variant — `"ToolCall"`,
+    /// `"ScopeDenied"`, `"TurnStarted"`, `"TurnEnded"`,
+    /// `"MemoryAccess"`. Stable; new variants append new labels.
+    pub event_type: String,
+    /// Full event payload as JSON. Schema follows `AuditEvent`'s
+    /// serde repr.
+    pub event: serde_json::Value,
+    /// HMAC tag, hex-encoded for display.
+    pub mac_hex: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +621,17 @@ mod tests {
                     mission_id: "m-abc".into(),
                 },
             },
+            FrontendMessage::Query {
+                id: "q-004".into(),
+                payload: QueryPayload::ListAuditEntries {
+                    from_seq: 0,
+                    limit: 100,
+                },
+            },
+            FrontendMessage::Query {
+                id: "q-005".into(),
+                payload: QueryPayload::VerifyAuditChain,
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -670,6 +728,35 @@ mod tests {
             DaemonMessage::QueryResponse {
                 id: "q-005".into(),
                 payload: QueryResponsePayload::GetMission { mission: None },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-007".into(),
+                payload: QueryResponsePayload::ListAuditEntries {
+                    entries: vec![AuditEntrySummary {
+                        seq: 0,
+                        appended_at_unix_ms: 1_700_000_000_000,
+                        event_type: "TurnStarted".into(),
+                        event: serde_json::json!({"type": "TurnStarted"}),
+                        mac_hex: "deadbeef".repeat(8),
+                    }],
+                    total_len: 1,
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-008".into(),
+                payload: QueryResponsePayload::VerifyAuditChain {
+                    ok: true,
+                    entries_verified: 42,
+                    error: None,
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-009".into(),
+                payload: QueryResponsePayload::VerifyAuditChain {
+                    ok: false,
+                    entries_verified: 0,
+                    error: Some("chain broken at seq 3".into()),
+                },
             },
             DaemonMessage::QueryResponse {
                 id: "q-006".into(),

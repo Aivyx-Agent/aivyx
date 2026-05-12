@@ -16,14 +16,15 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
+use aivyx_audit::PersistentAuditLog;
 use aivyx_core::{Agent, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome};
 
 use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
-    decode_frame, encode_frame, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
-    FrontendType, GateSummary, MissionDetail, MissionSummary, QueryPayload, QueryResponsePayload,
-    SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
+    decode_frame, encode_frame, AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError,
+    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary, QueryPayload,
+    QueryResponsePayload, SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
 };
 use crate::mission;
 
@@ -132,6 +133,11 @@ pub struct DaemonConfig {
     /// If set, entries older than this many seconds are expired by a
     /// background 1-hour timer.  Requires `memory` to be `Some`.
     pub memory_ttl_secs: Option<u64>,
+    /// Phase 47 — optional handle on the persistent audit log so the
+    /// daemon can answer `ListAuditEntries` / `VerifyAuditChain`
+    /// inspection queries from the Web UI. When `None`, those queries
+    /// return `QueryError { code: "no_audit_log", .. }`.
+    pub audit_log: Option<Arc<PersistentAuditLog>>,
 }
 
 /// Run the daemon server.
@@ -160,6 +166,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         web_ui_port,
         memory,
         memory_ttl_secs,
+        audit_log,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -324,11 +331,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let conn_mission_store = mission_store.clone();
         let conn_recovery = Arc::clone(&pending_recovery);
         let conn_state = Arc::clone(&daemon_state);
+        let conn_audit_log = audit_log.clone();
 
         let handle = tokio::spawn(async move {
             if let Err(e) = handle_connection(
                 stream, agent, factory, conn_shutdown, conn_mission_store,
-                conn_recovery, conn_state,
+                conn_recovery, conn_state, conn_audit_log,
             ).await {
                 eprintln!("aivyx daemon: connection handler error: {e}");
             }
@@ -343,6 +351,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     Ok(())
 }
 
+// Eight parameters because the connection handler needs access to every
+// per-connection store the daemon owns. The right long-term shape is a
+// `ConnectionContext` parameter struct (same pattern as Phase 41's
+// `DaemonConfig`); deferred to keep Phase 47 Task 4 scoped to query
+// dispatch.
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     agent: Arc<dyn Agent>,
@@ -351,6 +365,7 @@ async fn handle_connection(
     mission_store: Option<Arc<DomainHandle>>,
     pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>>,
     daemon_state: Arc<std::sync::Mutex<DaemonState>>,
+    audit_log: Option<Arc<PersistentAuditLog>>,
 ) -> Result<(), DaemonError> {
     let (mut reader, mut writer) = stream.into_split();
 
@@ -670,8 +685,13 @@ async fn handle_connection(
                             // Phase 47 — inspection queries. Read-only; no
                             // capability check (IPC socket auth is the
                             // authorization boundary, per Q2).
-                            let response_payload =
-                                handle_query(payload, &daemon_state, mission_store.as_deref()).await;
+                            let response_payload = handle_query(
+                                payload,
+                                &daemon_state,
+                                mission_store.as_deref(),
+                                audit_log.as_deref(),
+                            )
+                            .await;
                             let resp = DaemonMessage::QueryResponse {
                                 id,
                                 payload: response_payload,
@@ -756,7 +776,17 @@ async fn run_single_connection_daemon(
         sessions: Vec::new(),
         in_flight_turns: Vec::new(),
     }));
-    handle_connection(stream, agent, channel_factory, shutdown, None, no_recovery, empty_state).await
+    handle_connection(
+        stream,
+        agent,
+        channel_factory,
+        shutdown,
+        None,
+        no_recovery,
+        empty_state,
+        None,
+    )
+    .await
 }
 
 /// Backward-compatible single-channel daemon with shutdown token.
@@ -781,6 +811,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         web_ui_port: None,
         memory: None,
         memory_ttl_secs: None,
+        audit_log: None,
     }).await
 }
 
@@ -930,7 +961,13 @@ async fn handle_query(
     payload: QueryPayload,
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
     mission_store: Option<&DomainHandle>,
+    audit_log: Option<&PersistentAuditLog>,
 ) -> QueryResponsePayload {
+    /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
+    /// audit queries. Prevents a single query from monopolizing the
+    /// daemon on a long chain.
+    const AUDIT_QUERY_MAX_LIMIT: u32 = 500;
+
     match payload {
         QueryPayload::ListSessions => match daemon_state.lock() {
             Ok(st) => {
@@ -985,6 +1022,83 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::ListAuditEntries { from_seq, limit } => {
+            let Some(log) = audit_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_audit_log".into(),
+                    message: "daemon has no audit log configured".into(),
+                };
+            };
+            let capped = limit.min(AUDIT_QUERY_MAX_LIMIT) as usize;
+            match log.entries_range(from_seq, capped) {
+                Ok(rows) => {
+                    let entries: Vec<AuditEntrySummary> =
+                        rows.into_iter().map(audit_entry_summary_from_signed).collect();
+                    QueryResponsePayload::ListAuditEntries {
+                        entries,
+                        total_len: log.len() as u64,
+                    }
+                }
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "list_audit_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::VerifyAuditChain => {
+            let Some(log) = audit_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_audit_log".into(),
+                    message: "daemon has no audit log configured".into(),
+                };
+            };
+            let total_len = log.len() as u64;
+            match log.verify() {
+                Ok(()) => QueryResponsePayload::VerifyAuditChain {
+                    ok: true,
+                    entries_verified: total_len,
+                    error: None,
+                },
+                Err(e) => QueryResponsePayload::VerifyAuditChain {
+                    ok: false,
+                    entries_verified: 0,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+    }
+}
+
+fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntrySummary {
+    let appended_at_unix_ms = entry
+        .appended_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let event_type = match &entry.event {
+        aivyx_audit::AuditEvent::ToolCall { .. } => "ToolCall",
+        aivyx_audit::AuditEvent::ScopeDenied { .. } => "ScopeDenied",
+        aivyx_audit::AuditEvent::TurnStarted { .. } => "TurnStarted",
+        aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
+        aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
+    }
+    .to_string();
+
+    // `event` serializes to JSON unconditionally — the body is `Serialize`.
+    let event = serde_json::to_value(&entry.event).unwrap_or(serde_json::Value::Null);
+
+    let mut mac_hex = String::with_capacity(64);
+    for b in entry.mac.iter() {
+        mac_hex.push_str(&format!("{b:02x}"));
+    }
+
+    AuditEntrySummary {
+        seq: entry.seq,
+        appended_at_unix_ms,
+        event_type,
+        event,
+        mac_hex,
     }
 }
 

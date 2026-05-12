@@ -1374,6 +1374,11 @@ async fn run_async(
     let persistent_audit = Arc::new(persistent_audit);
     let audit_log_for_tool: Arc<dyn aivyx_audit::AuditLog + Send + Sync> =
         Arc::clone(&persistent_audit) as _;
+    // Phase 47 — daemon needs a concrete `Arc<PersistentAuditLog>` for the
+    // `ListAuditEntries` / `VerifyAuditChain` queries (the
+    // `entries_range` API lives on the concrete type, not the
+    // `AuditWriter` / `AuditLog` traits).
+    let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
 
     // ---- Tools --------------------------------------------------------
@@ -2174,6 +2179,7 @@ async fn run_async(
             web_ui_port: cli_web_ui_port.or(config_web_ui_port),
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
+            audit_log: Some(Arc::clone(&persistent_audit_for_query)),
         })
             .await;
 
