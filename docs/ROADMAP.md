@@ -612,7 +612,8 @@ remains as a forward commitment.
 
 ## Phase 49 — Tool Process IPC Foundation (P12)
 
-Third-party tools as separate OS processes speaking the daemon's
-IPC protocol. `ToolProcessBridge`, tool process lifecycle,
-`TOOL_SDK.md`, example Python tool. Completes all 12 product
-commitments.
+**Active — see [PHASE_49.md](PHASE_49.md).** Third-party tools
+as separate OS processes speaking the daemon's IPC protocol.
+`ToolProcessBridge`, tool process lifecycle, `TOOL_SDK.md`,
+example Python tool. Foundation phase — first-party in-process
+unification deferred. Completes all 12 product commitments.
