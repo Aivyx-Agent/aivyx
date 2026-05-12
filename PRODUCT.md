@@ -1305,28 +1305,34 @@ because the foundation already supports them:
 
 ---
 
-## Delivery Status (as of Phase 56, 2026-05-12)
+## Delivery Status (as of Phase 58, 2026-05-12)
 
 A traceability surface mapping each product commitment to its
-implementation state after 55 phases. The commitment text
-above carries five amendments: A5 (P10 seven→eight, Phase 38),
+implementation state after 57 phases. The commitment text
+above carries six amendments: A5 (P10 seven→eight, Phase 38),
 A6 (parallel tool execution, Phase 40), A7 (protocol
 negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
 (P13 — Profile, Phase 56), A10 (P14 — Persona, Phase 56).
 This section records what shipped, what partially shipped,
 and what remains forward.
 
-**P1–P12 are all fully shipped.** The original forward-
+**P1–P13 are all fully shipped.** The original forward-
 commitment ledger closed at Phase 49 (P12 foundation) + Phase
 50 (equivalence proof). Chapter A (Phases 50–54) closed
 Foundation Closeout with cleanup, sandbox layer, and a final
 docs sweep. Phase 55 demonstrated the post-Chapter-A posture
-by porting the Phase 52 sandbox pattern to `[[mcp_server]]`
-in response to THREAT_MODEL §5.2.
+by porting the Phase 52 sandbox pattern to `[[mcp_server]]`.
+Phase 57 shipped the Profile substrate (`aivyx-config::Profile`
+struct, `[profile]` TOML table, `assemble_session_prompt`
+helper, init-wizard bootstrap, banner row). Phase 58 closed
+the milestone with the operator-facing inspection surface
+(`aivyx profile show` / `aivyx profile edit` CLI subcommands
+and Web UI Profile pane via `Query::GetProfile`).
 
-**P13 and P14 were added in Phase 56 (this phase) and are
-forward — their implementation phases (57–58 for Profile,
-59–60 for Persona) are scaffolded in ROADMAP.md.**
+**P14 (Persona) is the last forward commitment** — its
+implementation phases (59 Foundation, 60 Visualization) are
+scaffolded in ROADMAP.md and close the Profile + Persona
+forward arc.
 
 ### Fully Delivered
 
@@ -1419,6 +1425,28 @@ forward — their implementation phases (57–58 for Profile,
   cancellation is targeted via `CancelInvocation { call_id }`
   using a caller-supplied id. **Fully delivered.**
 
+- **P13 — Assistant Profile.** Phase 57 (Foundation) +
+  Phase 58 (Inspection). Operator-declared static identity
+  layer in `aivyx-config::Profile` with six P13-commit-5
+  fields (`assistant_name`, `operator_profile`,
+  `communication_style`, `primary_use_cases`,
+  `behavioral_preferences`, `behavioral_constraints`).
+  `[profile]` TOML table per Q1(a). `Profile::default()`
+  synthesizes Q5(b) fallback (`assistant_name = "Aivyx"`,
+  all other categories empty) — every pre-Phase-57
+  `aivyx.toml` keeps working unchanged. `assemble_session_prompt`
+  helper composes Profile + role envelope into a labeled
+  *"## About this assistant"* + *"## Active role:
+  <name>"* system prompt per Q3(c). Operator surface:
+  `aivyx init` extension (Phase 57 Q4(c) — three opt-in
+  prompts), `aivyx profile show` (read aivyx.toml, print
+  labeled), `aivyx profile edit` (toml_edit-driven
+  surgical `[profile]` section update in `$EDITOR` per
+  Q2(a)), Web UI Profile pane via `Query::GetProfile` IPC
+  per Q4(a). Reload semantics: load-time-only per Q5(a)
+  (matches existing role-config behavior). **Fully
+  delivered.**
+
 ### Partially Delivered
 
 - **P3 — Goals and Non-Goals.** Vision document — partially
@@ -1447,16 +1475,6 @@ forward — their implementation phases (57–58 for Profile,
 
 ### Forward (Not Yet Started)
 
-- **P13 — Assistant Profile.** Added Phase 56. Operator-
-  declared static identity layer (operator profile,
-  communication style, primary use cases, behavioral
-  preferences, behavioral constraints, assistant name)
-  injecting into every turn's system prompt. Foundation
-  shipping in Phase 57 (storage shape, init-wizard
-  extension, system-prompt assembly). Inspection shipping
-  in Phase 58 (`aivyx profile show`/`edit` CLI, Web UI
-  pane). Closes after Phase 58.
-
 - **P14 — Persona.** Added Phase 56. Reflection-written
   dynamic identity layer growing from Profile via P8-gated
   / P2-approved / HMAC-chained operator-reversible delta
@@ -1465,7 +1483,8 @@ forward — their implementation phases (57–58 for Profile,
   category, effective-identity assembly). Visualization
   shipping in Phase 60 (Web UI Persona timeline,
   identity export/import candidate). Closes after Phase
-  60.
+  60. After Phase 60, the entire forward-commitment ledger
+  is closed (P1–P14 all delivered).
 
 ### Forward Commitment Candidates — Status Update
 
@@ -1560,3 +1579,37 @@ history; Phase 22 was the first):
 Zero code changes. PRODUCT.md byte-identity streak ended at
 six phases (intentional, via the formal amendment process).
 DESIGN.md and `aivyx-core/src/lib.rs` streaks held.
+
+### Phase 57–58 — Profile Foundation + Inspection (P13 closed)
+
+The Profile arc's two implementation phases, which together
+deliver P13:
+
+- **Phase 57 (Foundation, shipped 2026-05-12).** `aivyx-config::Profile`
+  struct with six P13-commit-5 fields; `[profile]` TOML table
+  parser per Q1(a); `Profile::default()` synthesizing
+  `assistant_name = "Aivyx"` + empty rest per Q5(b);
+  `aivyx-channel::assemble_session_prompt` helper per Q3(c)
+  composing Profile + role envelope into a labeled
+  *"## About this assistant"* + *"## Active role:
+  <name>"* layout (with non-invasive passthrough when
+  Profile is at its synthesized default); wiring through
+  both parent and role-switch child planner factories so
+  sub-sessions inherit the same Profile section; `aivyx
+  init` extension with three opt-in Profile prompts per
+  Q4(c); startup-banner `profile` row.
+
+- **Phase 58 (Inspection, shipped 2026-05-12).** Closes
+  the milestone with the operator surface: `aivyx profile
+  show` (read `aivyx.toml`, labeled banner-style format
+  per Q3(a)); `aivyx profile edit` (`toml_edit`-driven
+  surgical `[profile]` section update in `$EDITOR` per
+  Q2(a), preserves comments and other sections); Web UI
+  Profile pane via `Query::GetProfile` IPC envelope +
+  `ProfileSummary` wire-shape per Q4(a); restart-required
+  reload semantics per Q5(a). P13 moves to **Fully
+  Delivered**; only P14 (Persona, Phases 59–60) remains
+  forward.
+
+`toml_edit = "0.22"` is the first new workspace crate added
+since Phase 27's `notify`.

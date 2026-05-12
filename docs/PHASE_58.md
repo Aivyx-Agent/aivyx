@@ -266,6 +266,29 @@ subsection to note P13 is now closed.
 This is the streak-breaking edit per the PRODUCT.md
 prediction above.
 
+## Task 5 ship record
+
+**Files modified:**
+- `PRODUCT.md` (+47, -33): Delivery Status header refreshed
+  from *"as of Phase 56, 2026-05-12"* to *"as of Phase 58,
+  2026-05-12"*; intro rewritten to reflect six amendments
+  and 57-phase span; "**P1–P12 are all fully shipped**"
+  bumped to "**P1–P13 are all fully shipped**"; P13 entry
+  added to Fully Delivered with Phase 57+58 phase
+  references and Q-block resolution notes (Q1(a)/Q2(a)/
+  Q3(a/c)/Q4(a)/Q5(a)); P13 removed from Forward (only
+  P14 remains there); new "Phase 57–58 — Profile
+  Foundation + Inspection (P13 closed)" subsection in
+  the phase-history block documenting both phases.
+
+**Test delta:** 0 (docs-only edit). Workspace total
+unchanged at 1023.
+
+**PRODUCT.md byte-identity streak ended at two phases
+(intentional, predicted).** Hash at entry to Task 5:
+`0218f47c3beeae310a24eb14d005519996d560f030eafc6abf136aed41f80bb6`
+(unchanged through Phase 57; touched in Phase 58 Task 5).
+
 ### Task 6 — Roadmap refresh
 
 Update `docs/PRODUCT_ROADMAP.md` Assistant Profile milestone
