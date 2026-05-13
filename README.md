@@ -12,71 +12,75 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Phase 54 exit, 2026-05-12)
+## Status (Phase 61 exit, 2026-05-13)
 
 | | |
 |---|---|
-| Phases shipped | 54 (Phase 0 → Phase 54, plus 7 contract amendments) |
-| Forward-commitment ledger | **Closed** — all 12 PRODUCT.md commitments (P1–P12) and all 7 goal commitments (G1–G7) shipped |
+| Phases shipped | 61 (Phase 0 → Phase 61, plus 10 contract amendments) |
+| Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped |
+| First published release | **v0.1.0** (Phase 61) — prebuilt binaries for Linux x86_64/aarch64 + macOS x86_64/aarch64 |
 | Workspace crates | 12 |
-| Rust tests | 984 passing |
+| Rust tests | 1074 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 43 |
-| Encrypted storage domains | 9 |
+| Capability scope bases | 44 |
+| Encrypted storage domains | 10 |
 
-The 54-phase arc divides into two halves: **Phases 0–49** built
-out the full PRODUCT.md commitment surface (channels, daemon,
+The 61-phase arc divides into three halves: **Phases 0–49** built
+out the original PRODUCT.md commitment surface (channels, daemon,
 missions, reflection, scheduling, MCP, multi-provider, web UI,
 multimodal input, bundled tools, channel/tool SDKs, tool process
 IPC). **Phases 50–54 (Chapter A — Foundation Closeout)**
 finished the deferred refinements, paid down the cleanup
 backlog, added the sandbox layer, and brought the documentation
-back in sync with the implementation.
+back in sync with the implementation. **Phases 56–60 (Profile +
+Persona arc)** delivered the operator-declared identity layer
+(P13) and the reflection-written character layer (P14), shaping
+Aivyx into a *self-learning, self-improving AI personal
+assistant with a user-defined Profile and Persona based on the
+end-user use-case*. **Phase 61 (Distribution)** cuts the first
+published release with prebuilt binaries — the first phase past
+the closed forward-commitment ledger, addressing the largest
+adoption-shape gap.
 
 ## Five-minute setup
 
-Aivyx ships zero hosted dependencies. The fastest path is via a
-local Ollama install (no API key required):
+Aivyx ships zero hosted dependencies and one prebuilt binary per
+platform. The fastest path is a one-line installer:
 
 ```sh
-# 1. Install Ollama and pull a model
-ollama pull llama3.1
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/AivyxDev/aivyx/releases/latest/download/aivyx-channel-installer.sh \
+  | sh
 
-# 2. Drop a minimal config in your CWD
-cat > aivyx.toml <<'EOF'
-[agent]
-provider = "ollama"
-model = "llama3.1"
-
-[fs]
-root = "/tmp/aivyx-sandbox"
-
-[storage]
-path = "/tmp/aivyx-store.redb"
-
-[daemon]
-web_ui = true   # enable the localhost-only web UI on :7843
-
-[aivyx]
-passphrase = "set-a-real-passphrase"
-EOF
-
-# 3. Create the fs sandbox
-mkdir -p /tmp/aivyx-sandbox
-
-# 4. Launch the daemon (foreground; ctrl-C to stop)
-cargo run --release --bin aivyx -- daemon run
+aivyx init    # interactive wizard: picks provider, paths, Profile
+aivyx         # auto-spawns the daemon and drops you into a session
 ```
 
-Then open http://127.0.0.1:7843/ in a browser — that's the Web
-UI. Type a message in the **Chat** tab. Click **Audit** to watch
-events land in the HMAC-chained log; click **Verify chain** to
-cold-verify the chain offline.
+`aivyx init` detects a local Ollama install (no API key needed)
+or walks you through an Anthropic / OpenAI key. With `web_ui =
+true` in the generated config, open `http://127.0.0.1:7843/` in a
+browser — click **Chat**, **Missions**, **Audit** (chain
+verification), **Profile**, or **Persona**. The default in-CLI
+REPL works without a browser.
 
-For a config that uses Anthropic or OpenAI instead, see
-[`examples/aivyx.toml`](examples/aivyx.toml). For a Telegram
-adapter, see [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
+**macOS first launch (Gatekeeper).** Unsigned binaries are
+quarantined by default. Either right-click → Open the binary
+once, or strip the quarantine attribute:
+
+```sh
+xattr -d com.apple.quarantine "$(command -v aivyx)"
+```
+
+**No native Windows binary in Phase 61.** Use WSL2 for now;
+native Windows support is a deferred follow-up phase (daemon IPC
+needs a NamedPipe port from Unix sockets).
+
+**Build from source** is still supported for contributors and
+unsupported platforms — see [`docs/INSTALL.md`](docs/INSTALL.md)
+for the matrix. For a non-Ollama provider config, see
+[`examples/aivyx.toml`](examples/aivyx.toml); for a Telegram
+adapter, [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
 
 ## Architecture at a glance
 
