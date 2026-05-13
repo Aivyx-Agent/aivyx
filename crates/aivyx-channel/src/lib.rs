@@ -57,6 +57,7 @@ pub mod ollama_tools;
 /// lives in `notify_tool` (Phase 62 Task 7).
 pub mod notify_dispatcher;
 pub mod notify_telegram;
+pub mod notify_webhook;
 mod daemon_session;
 mod local;
 pub mod passphrase;
