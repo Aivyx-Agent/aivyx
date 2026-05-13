@@ -369,3 +369,61 @@ parent_role = "researcher"
 # name = "filesystem"
 # command = "npx"
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+# ----------------------------------------------------------------
+# Notification targets (Phase 62 — Reach Milestone)
+# ----------------------------------------------------------------
+#
+# Each `[[notify_target]]` entry declares an outbound notification
+# destination the agent can push to via the `notify.send` tool.
+# Two kinds in v1:
+#
+#   kind = "telegram"  — uses the operator's existing bot (the
+#                        same [telegram] token below) to send a
+#                        message to the configured `chat_id`.
+#                        Multiple Telegram targets share one bot
+#                        token; each just names a different chat.
+#
+#   kind = "webhook"   — HTTP POST with a JSON body
+#                        {source, target, subject?, message,
+#                        timestamp} to the configured `url`.
+#                        Suitable for ntfy.sh, Pushover, IFTTT,
+#                        Slack incoming webhooks (with caveat),
+#                        and custom endpoints. 5-second timeout.
+#
+# Required keys per kind:
+#   - telegram: `name`, `kind = "telegram"`, `chat_id` (string)
+#   - webhook:  `name`, `kind = "webhook"`, `url`
+#                (must start with http:// or https://)
+#
+# Optional: `enabled` (default true — set false to keep the
+# entry but skip dispatcher registration).
+#
+# Capability gating: the `notify.send` scope is in CEILING_TRUSTED
+# only. A role can attenuate to a specific target by declaring
+# `notify.send:<name>` in `capability_scopes`; the unqualified
+# `notify.send` grants any configured target.
+#
+# Uncomment to enable. Replace placeholder values with real ones.
+#
+# [[notify_target]]
+# name = "phone"
+# kind = "telegram"
+# chat_id = "123456789"   # your Telegram chat_id (positive for DMs,
+#                         # negative for groups, e.g. -1001234567890)
+#
+# [[notify_target]]
+# name = "ops-alerts"
+# kind = "webhook"
+# url = "https://ntfy.sh/aivyx-personal-2026"
+#
+# Example: granting the `coder` role permission to notify the
+# `phone` target only (no access to `ops-alerts`):
+#
+#   [[role]]
+#   name = "coder"
+#   capability_scopes = [
+#     # ... other scopes ...
+#     "notify.send:phone",
+#   ]
+#   tool_allowlist = ["notify.send", ...]

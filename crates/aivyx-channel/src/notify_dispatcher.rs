@@ -57,6 +57,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use aivyx_config::{NotifyTargetConfig, NotifyTargetKind};
+use aivyx_telegram::transport::TelegramTransport;
+
+use crate::notify_telegram::NotifyTelegramBackend;
+use crate::notify_webhook::NotifyWebhookBackend;
+
 /// Trait every notification backend implements. One impl per
 /// kind: Telegram (Task 5), Webhook (Task 6), future kinds
 /// (email SMTP, Web UI desktop, OS-level) land as additional
@@ -221,6 +227,53 @@ impl Default for NotifyDispatcher {
     }
 }
 
+/// Phase 62 Task 8 — build a dispatcher from the operator's
+/// configured `[[notify_target]]` entries.
+///
+/// Constructs one backend per target:
+///
+/// - `NotifyTargetKind::Telegram { chat_id }` → [`NotifyTelegramBackend`]
+///   wrapping the supplied `telegram_transport`. If no transport
+///   is supplied (the operator didn't configure `[telegram]
+///   token`), returns an error naming the offending target.
+/// - `NotifyTargetKind::Webhook { url }` → [`NotifyWebhookBackend`]
+///   with a default reqwest sender (5s timeout).
+///
+/// Returns an empty dispatcher if `targets` is empty — the
+/// `notify.send` tool then surfaces `UnknownTarget` for every
+/// call, which is the operator-correct behavior (the agent will
+/// learn from the system prompt or its tool description that no
+/// targets are configured).
+pub fn build_notify_dispatcher(
+    targets: &[NotifyTargetConfig],
+    telegram_transport: Option<Arc<dyn TelegramTransport>>,
+) -> Result<Arc<NotifyDispatcher>, String> {
+    let mut d = NotifyDispatcher::new();
+    for target in targets {
+        let backend: Arc<dyn NotifyBackend> = match &target.kind {
+            NotifyTargetKind::Telegram { chat_id } => {
+                let transport = telegram_transport.clone().ok_or_else(|| {
+                    format!(
+                        "notify_target `{}` (kind = telegram) requires a configured \
+                         [telegram] token; either remove the target or add \
+                         `[telegram] token = \"...\"` to aivyx.toml",
+                        target.name
+                    )
+                })?;
+                let backend = NotifyTelegramBackend::new(transport, chat_id)
+                    .map_err(|e| format!("notify_target `{}`: {e}", target.name))?;
+                Arc::new(backend)
+            }
+            NotifyTargetKind::Webhook { url } => Arc::new(NotifyWebhookBackend::new(
+                target.name.clone(),
+                url.clone(),
+            )),
+        };
+        d.register(&target.name, backend);
+    }
+    Ok(Arc::new(d))
+}
+
 // ---------------------------------------------------------------------------
 // Tests — exercise the dispatcher's dispatch routing using a
 // MockBackend. Tasks 5 and 6 add real backend impls; their tests
@@ -364,5 +417,118 @@ mod tests {
         let d = NotifyDispatcher::new();
         assert_eq!(d.len(), 0);
         assert!(d.is_empty());
+    }
+
+    // ---- build_notify_dispatcher (Phase 62 Task 8) -----------
+
+    use aivyx_telegram::transport::{IncomingMessage, OutgoingMessage, TransportError};
+
+    struct NoopTransport;
+
+    #[async_trait]
+    impl TelegramTransport for NoopTransport {
+        async fn get_updates(
+            &self,
+            _offset: i64,
+            _timeout_secs: u32,
+        ) -> Result<Vec<IncomingMessage>, TransportError> {
+            Ok(Vec::new())
+        }
+        async fn send_message(&self, _msg: OutgoingMessage) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn build_empty_targets_returns_empty_dispatcher() {
+        let d = build_notify_dispatcher(&[], None).expect("ok");
+        assert_eq!(d.len(), 0);
+    }
+
+    #[test]
+    fn build_webhook_only_does_not_require_telegram_transport() {
+        let targets = vec![NotifyTargetConfig {
+            name: "alerts".into(),
+            kind: NotifyTargetKind::Webhook {
+                url: "https://example.com/x".into(),
+            },
+            enabled: true,
+        }];
+        let d = build_notify_dispatcher(&targets, None).expect("ok");
+        assert_eq!(d.len(), 1);
+        let pairs = d.list_targets();
+        assert_eq!(pairs[0], ("alerts", "webhook"));
+    }
+
+    #[test]
+    fn build_telegram_without_transport_returns_descriptive_error() {
+        let targets = vec![NotifyTargetConfig {
+            name: "phone".into(),
+            kind: NotifyTargetKind::Telegram {
+                chat_id: "123".into(),
+            },
+            enabled: true,
+        }];
+        let err = build_notify_dispatcher(&targets, None).expect_err("must error");
+        assert!(err.contains("`phone`"), "error: {err}");
+        assert!(err.contains("[telegram] token"), "error: {err}");
+    }
+
+    #[test]
+    fn build_telegram_with_transport_succeeds() {
+        let targets = vec![NotifyTargetConfig {
+            name: "phone".into(),
+            kind: NotifyTargetKind::Telegram {
+                chat_id: "123".into(),
+            },
+            enabled: true,
+        }];
+        let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
+        let d = build_notify_dispatcher(&targets, Some(transport)).expect("ok");
+        assert_eq!(d.len(), 1);
+        let pairs = d.list_targets();
+        assert_eq!(pairs[0], ("phone", "telegram"));
+    }
+
+    #[test]
+    fn build_telegram_with_invalid_chat_id_returns_construction_error() {
+        let targets = vec![NotifyTargetConfig {
+            name: "phone".into(),
+            kind: NotifyTargetKind::Telegram {
+                chat_id: "not-a-number".into(),
+            },
+            enabled: true,
+        }];
+        let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
+        let err =
+            build_notify_dispatcher(&targets, Some(transport)).expect_err("must error");
+        assert!(err.contains("phone"), "error: {err}");
+        assert!(err.contains("invalid telegram chat_id"), "error: {err}");
+    }
+
+    #[test]
+    fn build_mixed_kinds_registers_each() {
+        let targets = vec![
+            NotifyTargetConfig {
+                name: "phone".into(),
+                kind: NotifyTargetKind::Telegram {
+                    chat_id: "1".into(),
+                },
+                enabled: true,
+            },
+            NotifyTargetConfig {
+                name: "alerts".into(),
+                kind: NotifyTargetKind::Webhook {
+                    url: "https://example.com/".into(),
+                },
+                enabled: true,
+            },
+        ];
+        let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
+        let d = build_notify_dispatcher(&targets, Some(transport)).expect("ok");
+        assert_eq!(d.len(), 2);
+        let mut pairs = d.list_targets();
+        pairs.sort();
+        assert_eq!(pairs, vec![("alerts", "webhook"), ("phone", "telegram")]);
     }
 }

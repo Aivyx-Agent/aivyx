@@ -1544,9 +1544,9 @@ async fn run_async(
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
-        // Phase 62 Task 3 — destructured but not yet consumed.
-        // The dispatcher + tool wiring lands in Tasks 4–8.
-        notify_targets: _config_notify_targets,
+        // Phase 62 Task 8 — consumed below at the notify
+        // dispatcher / NotifySendTool wiring site.
+        notify_targets: config_notify_targets,
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,
@@ -2081,6 +2081,52 @@ async fn run_async(
             .map_err(|e| format!("failed to build ollama.pull tool: {e}"))?;
         tool_list.push(Arc::new(pull_tool) as Arc<dyn Tool>);
     }
+
+    // ---- Phase 62 — notify dispatcher + notify.send tool -------------
+    // Build the dispatcher from the operator's `[[notify_target]]`
+    // entries. For Telegram targets we share a single
+    // `ReqwestTransport` constructed from `[telegram] token` (the
+    // same bot client the channel-mode Telegram adapter uses).
+    // Webhook targets are kind-independent of telegram config.
+    //
+    // If the operator has no `[[notify_target]]` entries, the
+    // dispatcher is empty and every `notify.send` call surfaces
+    // `UnknownTarget` — the operator-correct behavior (the agent
+    // learns from the tool's `unknown_target` error_kind that no
+    // targets exist).
+    let notify_telegram_transport: Option<Arc<dyn aivyx_telegram::transport::TelegramTransport>> =
+        if config_notify_targets.iter().any(|t| matches!(
+            t.kind,
+            aivyx_config::NotifyTargetKind::Telegram { .. }
+        )) {
+            // Build a transport iff there's at least one telegram
+            // notify_target. The token is sourced from the same
+            // `[telegram] token` slot the channel-mode adapter
+            // uses; if it's absent here the dispatcher build below
+            // returns a descriptive error.
+            if let Some(token) = telegram.as_ref().and_then(|t| t.token.as_ref()) {
+                use secrecy::ExposeSecret;
+                Some(Arc::new(
+                    aivyx_telegram::transport::ReqwestTransport::new(
+                        token.value.expose_secret(),
+                    ),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    let notify_dispatcher = aivyx_channel::notify_dispatcher::build_notify_dispatcher(
+        &config_notify_targets,
+        notify_telegram_transport,
+    )?;
+    let notify_send_tool: Arc<aivyx_channel::notify_tool::NotifySendTool> =
+        Arc::new(aivyx_channel::notify_tool::NotifySendTool::new());
+    notify_send_tool
+        .set_dispatcher(notify_dispatcher)
+        .map_err(|_| "notify.send dispatcher was set twice (programming error)")?;
+    tool_list.push(Arc::clone(&notify_send_tool) as Arc<dyn Tool>);
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
