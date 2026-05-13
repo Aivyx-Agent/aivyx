@@ -896,6 +896,81 @@ Phase 60's 8). Test count +3 (1071 → 1074) — Task 2's
 three `--version` parser tests. Zero clippy warnings. One
 net-new deferral (Task 7 — v0.1.0 publication).
 
+## Phase 62 — Reach: Agent-Initiated Outbound Notifications
+
+**Frozen — see [PHASE_62.md](PHASE_62.md).** Second phase past
+the closed forward-commitment ledger and the first phase of the
+new **Reach Milestone**. Gives the agent a `notify.send`
+infrastructure tool that pushes a message to an
+operator-configured `[[notify_target]]` (Telegram chat or
+generic webhook URL). Transforms Aivyx from purely reactive
+("I talk to it") to proactive ("it can wake my phone").
+
+Delivered across seven engineering tasks:
+
+- **Task 2 — `notify.send` capability scope** in
+  `aivyx-capability`: new base in KNOWN_BASES with
+  `<target_name>` qualifier (matches `role.switch:<name>`
+  precedent), included in CEILING_TRUSTED only. Wildcard form
+  `notify.send:*` rejected at parse time alongside
+  `role.switch:*` — same Rule 2 rationale.
+- **Task 3 — `[[notify_target]]` TOML config surface** in
+  `aivyx-config`: `NotifyTargetConfig` + `NotifyTargetKind`
+  enum making invalid kind/field combinations unrepresentable
+  at the runtime layer; load-time validations for unique
+  names, non-empty fields, kind-required fields, and
+  http(s)-scheme URLs.
+- **Task 4 — `NotifyDispatcher` + `NotifyBackend` trait** in
+  `aivyx-channel`: async trait with `send(message, subject)
+  -> Result<(), NotifyError>` and a `kind()` discriminator;
+  five-variant `NotifyError` (Transport / Auth / Rejected /
+  Timeout / UnknownTarget) classified for agent retry
+  guidance; name-keyed registry with `register` /
+  `dispatch` / `list_targets`.
+- **Task 5 — Telegram outbound backend** wraps the existing
+  `aivyx-telegram` `ReqwestTransport`. Per-target backend
+  shares the transport across multiple Telegram targets;
+  `chat_id` parses from config string to `i64` at
+  construction; negative group chat_ids supported; heuristic
+  status-code classification mapping `TransportError::Platform`
+  strings to the right `NotifyError` variant.
+- **Task 6 — Generic webhook backend** posts JSON
+  `{source, target, subject?, message, timestamp}` per
+  Q5(a). Trait abstraction (`WebhookSender`) so tests don't
+  need a real HTTP server; production `ReqwestWebhookSender`
+  uses a 5s timeout. `map_http_status` pure-function tested
+  across all status ranges.
+- **Task 7 — `NotifySendTool`** with OnceLock factory pattern
+  matching `MissionCreateTool` / `RoleSwitchTool`. Input
+  schema `{target, message, subject?}` per Q3(b). Output
+  per Q4(a): `Completed` with `success: bool` so the agent
+  reads structured retry data without `ToolOutcome::Failed`
+  escalating up the turn loop. `required_scope` builds
+  `notify.send:<target>` from input.
+- **Task 8 — daemon wiring + worked example.**
+  `build_notify_dispatcher` factory walks the config and
+  constructs the right backend per target. Binary's
+  session-build path builds a dedicated `ReqwestTransport`
+  when Telegram targets exist, constructs the dispatcher,
+  registers `NotifySendTool` with it. `examples/aivyx.toml`
+  gains a documented `[[notify_target]]` section (commented
+  out by default).
+
+Streak predictions all correct: DESIGN.md → 9 (extended);
+PRODUCT.md → 2 (extended); `aivyx-core/src/lib.rs` → 10 (new
+record, beating Phase 61's 9). Tests +65 (1074 → 1139) —
+underestimated at open (predicted ~+20); the six concurrent
+new surfaces each carried ~10 tests. Zero clippy warnings.
+Zero new workspace deps.
+
+**Scope adjustment at exit:** the `assemble_session_prompt`
+extension originally planned for Task 8 (the agent learns
+target names from the system prompt) deferred to a follow-on
+phase. The tool is fully functional without it — the agent
+learns from the input schema; the operator's
+`[profile] communication_style` or role `system_prompt` can
+name specific targets when needed.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

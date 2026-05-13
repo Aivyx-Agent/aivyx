@@ -283,50 +283,129 @@ Execute path:
   posture.
 - Identity export/import (Phase 60) — multi-device portability.
 
-**Likely Phase 62 deferrals (filled in at exit):**
+**Phase 62 deferrals (recorded at exit):**
 
-- Web UI desktop notification kind (needs WebPush or polling).
-- Email SMTP outbound kind (new dep, separate phase).
-- OS-level notifications (per-platform code).
-- "Default target" sugar (`notify.send {message: "..."}`
+- **System-prompt `## Notification targets` block.** The Task
+  8 plan called for `assemble_session_prompt` to enumerate
+  reachable targets so the agent learns them from the prompt
+  itself. Implementation revealed six `assemble_session_prompt`
+  call sites in the binary plus a handful in
+  `profile_prompt.rs` tests; adding the parameter mechanically
+  is straightforward but the actual *wiring* of "which role
+  reaches which targets" needs per-call-site capability checks
+  that are scope-creepy for one phase. Deferred. The tool is
+  fully functional without it: the agent learns `target` is a
+  configured-target-name from the input schema, and the
+  operator's role `system_prompt` or `[profile]
+  communication_style` can name specific targets when relevant.
+  A future phase can lift the prompt enumeration when adoption
+  shape demands.
+- **Web UI desktop notification kind** (needs WebPush or
+  aggressive polling).
+- **Email SMTP outbound kind** (new dep like `lettre`,
+  separate phase).
+- **OS-level notifications** (per-platform code; marginal
+  value vs webhook-out to ntfy.sh).
+- **"Default target" sugar** (`notify.send {message: "..."}`
   without target arg).
-- Per-target rate limits.
-- Trigger-config `notify_target` sugar (the deferred Q3
-  alternative — schedule/webhook/file-watcher configs gaining
-  `notify_target = "..."` for automatic post-turn push).
-- Notification templates / per-target body formatting.
-- Slack-flavored webhook payload (mismatch between the
-  generic `{message}` shape and Slack's `{text}`).
+- **Per-target rate limits** — could surface if abusive
+  agents send too frequently.
+- **Trigger-config `notify_target` sugar** (the deferred Q3
+  alternative — `[[schedule]]` / `[[webhook]]` / `[[file_watch]]`
+  configs gaining a `notify_target = "..."` field for
+  automatic post-turn push without agent involvement).
+- **Notification templates / per-target body formatting**.
+- **Slack-flavored webhook payload** — mismatch between the
+  generic `{message}` shape and Slack incoming webhooks'
+  `{text}`. Lands as a separate `kind` if real Slack use
+  surfaces.
+- **Shared Telegram transport between channel-mode and
+  notify-mode.** Phase 62 builds a separate `ReqwestTransport`
+  for notify when telegram targets exist. Both transports use
+  the same bot token and talk to the same API; the duplication
+  is wasteful but correct. Sharing would require lifting the
+  transport construction earlier in the binary's session-build
+  path.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to nine**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 62 shipped entirely as infrastructure under existing
+  D-deliverables — no contract reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to two**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  No commitment-text edits, no Delivery Status refresh.
+  P1–P14 stay Fully Delivered. The new "Reach Milestone" entry
+  landed in `docs/PRODUCT_ROADMAP.md`, not in the contract
+  document.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to ten** (new record). **Reality: correct.**
+  Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Every Phase 62 surface routed through `aivyx-capability`
+  (notify.send scope), `aivyx-config` (`[[notify_target]]`
+  parsing), `aivyx-channel` (dispatcher + backends + tool +
+  daemon wiring), and `aivyx-telegram` (existing transport
+  consumed unchanged). Ten consecutive phases beats the prior
+  Phase 61 record of nine.
+
+- **Test count** — Predicted: positive (~+20). **Reality:
+  +65** (1074 → 1139), more than triple the prediction. The
+  underestimate came from the per-task test density:
+    * Task 2 — scope (6 tests)
+    * Task 3 — config parsing (8 tests)
+    * Task 4 — dispatcher + build helper (7 + 6 tests)
+    * Task 5 — Telegram backend (15 tests)
+    * Task 6 — Webhook backend (12 tests)
+    * Task 7 — tool integration (11 tests)
+  The prediction was reasonable for one or two of these
+  surfaces; six concurrent surfaces each carrying ~10 tests
+  added up.
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** No new Rust crates added. The new code uses
+  `reqwest`, `serde`, `serde_json`, `chrono`, `async-trait`,
+  `thiserror`, `secrecy`, and `aivyx-telegram` — all already
+  in tree.
 
 ## Exit criteria
 
-- [ ] `notify.send` capability scope wired into KNOWN_BASES
-  and CEILING_TRUSTED with `<target_name>` qualifier — Task 2.
-- [ ] `[[notify_target]]` TOML config surface with load-time
-  validation (unique names, kind-required fields) — Task 3.
-- [ ] `NotifyDispatcher` + `NotifyBackend` trait + name-keyed
-  registry — Task 4.
-- [ ] Telegram outbound backend wraps the existing bot
-  client's `sendMessage` — Task 5.
-- [ ] Generic webhook outbound backend POSTs the Q5(a) JSON
-  body with 5s timeout — Task 6.
-- [ ] `NotifySendTool` `Tool` impl with OnceLock factory,
+## Exit criteria
+
+- [x] `notify.send` capability scope wired into KNOWN_BASES
+  and CEILING_TRUSTED with `<target_name>` qualifier — Task 2,
+  commit `17c7e7d`.
+- [x] `[[notify_target]]` TOML config surface with load-time
+  validation (unique names, kind-required fields) — Task 3,
+  commit `cc0fb2b`.
+- [x] `NotifyDispatcher` + `NotifyBackend` trait + name-keyed
+  registry — Task 4, commit `2559234`.
+- [x] Telegram outbound backend wraps the existing bot
+  client's `sendMessage` — Task 5, commit `74ca8fd`.
+- [x] Generic webhook outbound backend POSTs the Q5(a) JSON
+  body with 5s timeout — Task 6, commit `9abb5d1`.
+- [x] `NotifySendTool` `Tool` impl with OnceLock factory,
   `{target, message, subject?}` schema, Q4(a) failure
-  semantics — Task 7.
-- [ ] Worked example with both kinds in `examples/aivyx.toml`;
-  `assemble_session_prompt` surfaces configured targets to
-  the agent — Task 8.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md (new Reach Milestone) +
-  docs/README.md refreshed — Task 9.
-- [ ] All five Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to nine.
-- [ ] PRODUCT.md streak extends to two.
-- [ ] Production-core streak extends to ten (new record).
-- [ ] Test count delta: positive (~+20).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+  semantics — Task 7, commit `7ee0651`.
+- [x] Worked example with both kinds in `examples/aivyx.toml`;
+  daemon wiring builds dispatcher + registers tool — Task 8,
+  commit `630136d`. **Scope adjustment:** the
+  `assemble_session_prompt` extension originally planned for
+  Task 8 deferred to a follow-up phase (see Deferrals).
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md (new Reach Milestone) +
+  docs/README.md refreshed — Task 9 (this commit).
+- [x] All five Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(a) single-level qualifier, Q2(a)
+  Trusted only, Q3(b) `{target, message, subject?}`, Q4(a)
+  Completed-with-success-false, Q5(a) generic JSON body).
+- [x] DESIGN.md streak extends to nine.
+- [x] PRODUCT.md streak extends to two.
+- [x] Production-core streak extends to ten (new record).
+- [x] Test count delta: +65 (1074 → 1139).
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

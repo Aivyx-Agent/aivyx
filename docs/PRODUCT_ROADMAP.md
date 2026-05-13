@@ -749,6 +749,92 @@ focused phase rather than one monolithic distribution effort.
   Developer account).** Removes the Gatekeeper friction at
   first launch.
 
+## Milestone — Reach (in progress, agent-initiated outbound)
+
+**Forward commitment:** none — operator-feedback-shaped work
+on the "what does the agent reach OUT to" axis.
+**Couples to:** `aivyx-telegram` channel adapter (Phase 8),
+operator identity layer (P13 + P14), schedules / webhooks /
+file-watchers (Phases 26–27).
+**Status:** Phase 1 of N delivered as "agent-driven notify.send
++ Telegram + webhook." Future sub-phases extend the reach
+surface (trigger-config sugar, new channels, system-prompt
+enumeration).
+
+The post-Phase-60 codebase review surfaced **reach** as the
+next-largest adoption-shape gap after distribution: schedules,
+webhooks, and file-watchers fire turns, but the agent's output
+stops at the audit log — there's no path from "agent has
+something to say" to "operator's phone buzzes." This milestone
+gives the agent the substrate to *initiate* contact, not just
+respond to it. Closing the gap is the inflection point between
+"thing I talk to" and "thing that talks to me."
+
+**Expected sub-phases / micro-phases:**
+
+- **Phase 62 (Agent-Initiated Outbound Notifications, shipped
+  2026-05-13).** First phase of the milestone. Shipped the
+  `notify.send` infrastructure tool, the `[[notify_target]]`
+  config surface, and two backends (Telegram + generic
+  webhook). Substrate: `notify.send` capability scope
+  (CEILING_TRUSTED only) with `<target_name>` qualifier,
+  `NotifyDispatcher` + `NotifyBackend` trait + 5-variant
+  `NotifyError` classification, `build_notify_dispatcher`
+  factory consuming the loaded config. Behavior: agent calls
+  `notify.send {target, message, subject?}`; on success the
+  tool returns `Completed` with `{success: true,
+  delivered_at}`; on delivery failure the tool returns
+  `Completed` with `{success: false, error_kind,
+  error_message}` so the agent gets structured retry
+  guidance. Daemon wired end-to-end. Tests +65 (1074 → 1139).
+  All three streak predictions correct: DESIGN.md → 9,
+  PRODUCT.md → 2, lib.rs → 10 (new record). Zero new
+  workspace deps.
+
+- **System-prompt enumeration (deferred from Phase 62 Task 8).**
+  The `assemble_session_prompt` extension that surfaces
+  reachable target names to the agent. Originally planned for
+  Phase 62 Task 8 but deferred at implementation time —
+  threading the dispatcher through six call sites with proper
+  per-role capability checks was scope-creepy for one phase.
+  Lands as a follow-on micro-phase when adoption surfaces
+  friction.
+
+- **Trigger-config `notify_target` sugar (future).** The
+  deferred Q3 alternative from Phase 62 open: a
+  `[[schedule]]` / `[[webhook]]` / `[[file_watch]]` config
+  entry gains an optional `notify_target = "..."` field; when
+  the trigger fires and the turn produces output, the daemon
+  auto-pushes the output to the named target without the
+  agent thinking about it. Useful for operators who want
+  "schedule fires at 9am, summary lands on my phone"
+  without instructing the agent each time.
+
+- **Email SMTP outbound (future).** Adds a `kind = "email"`
+  backend. New dep (`lettre` or similar) plus SMTP config
+  surface (host, port, auth). One worked example covering
+  the common case (Fastmail, ProtonMail, Gmail app password).
+
+- **Web UI desktop notifications (future).** Adds a
+  `kind = "web-ui"` backend that pushes a WebSocket
+  notification to the running Web UI session, surfaced via
+  the browser's `Notification` API. Needs WebPush
+  registration or aggressive polling.
+
+- **Slack-flavored webhook payload (future, gated on use).**
+  Slack incoming webhooks expect `{text: ...}` not
+  `{message: ...}` — a real shape mismatch. Lands as a
+  separate `kind = "slack-webhook"` if Slack-using
+  operators surface.
+
+- **Agent-initiated proactive Telegram session (future,
+  speculative).** Today's Telegram adapter reacts to inbound
+  messages. A future evolution would let the agent open a
+  session-of-its-own-initiative — e.g. on a schedule-fired
+  turn that wants to start a multi-turn conversation, not
+  just push a single notification. Architecturally heavier;
+  not on the current sub-phase ladder.
+
 ## Sequencing notes (revised at Phase 56 sign-off, 2026-05-12)
 
 Through Phase 55, every PRODUCT.md commitment (P1–P12) is
