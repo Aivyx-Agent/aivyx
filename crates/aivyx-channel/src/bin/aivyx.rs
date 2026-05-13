@@ -2123,8 +2123,12 @@ async fn run_async(
     )?;
     let notify_send_tool: Arc<aivyx_channel::notify_tool::NotifySendTool> =
         Arc::new(aivyx_channel::notify_tool::NotifySendTool::new());
+    // Phase 63 Task 3: the same dispatcher is shared between
+    // the agent-facing tool (Phase 62) and the trigger dispatch
+    // path's auto-notify (Phase 63). Arc::clone for the tool;
+    // a second clone goes to DaemonConfig below.
     notify_send_tool
-        .set_dispatcher(notify_dispatcher)
+        .set_dispatcher(Arc::clone(&notify_dispatcher))
         .map_err(|_| "notify.send dispatcher was set twice (programming error)")?;
     tool_list.push(Arc::clone(&notify_send_tool) as Arc<dyn Tool>);
 
@@ -2713,6 +2717,7 @@ async fn run_async(
                             wh_cfg.prompt.clone(),
                         );
                         record.wrap_mission = wh_cfg.wrap_mission;
+                        record.notify_target = wh_cfg.notify_target.clone();
                         if let Err(e) = aivyx_channel::webhook::create_webhook(
                             &webhook_domain,
                             &record,
@@ -2759,6 +2764,11 @@ async fn run_async(
             channel_factory,
             shutdown,
             mission_store: Some(storage.domain(KeyDomain::Missions)),
+            // Phase 63 Task 3 — pass the same NotifyDispatcher
+            // the NotifySendTool got (Task 8 / Phase 62) so the
+            // trigger dispatch path can auto-notify on
+            // trigger-fired turns.
+            notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
             schedule_store: Some(schedule_domain),
             webhook_store: Some(webhook_domain),
             file_watch_store: Some(file_watch_domain),

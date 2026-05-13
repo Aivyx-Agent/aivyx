@@ -28,6 +28,9 @@ pub struct FileWatchRecord {
     pub debounce_ms: u64,
     pub created_at: u64,
     pub last_fired_at: Option<u64>,
+    /// Phase 63 Task 3 — see [`crate::schedule::ScheduleRecord::notify_target`].
+    #[serde(default)]
+    pub notify_target: Option<String>,
 }
 
 /// Default debounce interval: 2 seconds. Prevents rapid re-fires from
@@ -51,6 +54,7 @@ impl FileWatchRecord {
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             created_at: now_millis(),
             last_fired_at: None,
+            notify_target: None,
         }
     }
 

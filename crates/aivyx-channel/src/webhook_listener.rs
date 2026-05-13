@@ -159,9 +159,18 @@ async fn fire_webhook(
     let dispatch = dispatch.clone();
     let id = record.webhook_id.clone();
     let prompt = record.prompt.clone();
+    let notify_target = record.notify_target.clone();
     let store_clone = store.clone();
     tokio::spawn(async move {
-        dispatch.fire(TriggerSource::Webhook, &id, &prompt, record.wrap_mission).await;
+        dispatch
+            .fire(
+                TriggerSource::Webhook,
+                &id,
+                &prompt,
+                record.wrap_mission,
+                notify_target.as_deref(),
+            )
+            .await;
 
         // Update last_fired_at.
         let now_ms = std::time::SystemTime::now()

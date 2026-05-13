@@ -26,6 +26,13 @@ pub struct ScheduleRecord {
     pub wrap_mission: bool,
     pub created_at: u64,
     pub last_fired_at: Option<u64>,
+    /// Phase 63 Task 3 — when `Some(name)`, the daemon auto-
+    /// dispatches the turn's final response to the named
+    /// `[[notify_target]]` after firing. `#[serde(default)]` so
+    /// pre-Phase-63 stored records (which lack the field)
+    /// deserialize as `None`.
+    #[serde(default)]
+    pub notify_target: Option<String>,
 }
 
 impl ScheduleRecord {
@@ -45,6 +52,7 @@ impl ScheduleRecord {
             wrap_mission: false,
             created_at: now_millis(),
             last_fired_at: None,
+            notify_target: None,
         })
     }
 

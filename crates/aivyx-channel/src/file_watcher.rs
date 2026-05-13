@@ -66,6 +66,7 @@ pub fn config_to_records(
             if let Some(ms) = c.debounce_ms {
                 r.debounce_ms = ms;
             }
+            r.notify_target = c.notify_target.clone();
             r
         })
         .collect()
@@ -117,9 +118,18 @@ pub async fn run_file_watcher(
                             let id = watch_id.clone();
                             let prompt = state.prompt.clone();
                             let wrap = state.wrap_mission;
+                            let notify_target = state.notify_target.clone();
                             let store = store.clone();
                             tokio::spawn(async move {
-                                dispatch.fire(TriggerSource::FileWatch, &id, &prompt, wrap).await;
+                                dispatch
+                                    .fire(
+                                        TriggerSource::FileWatch,
+                                        &id,
+                                        &prompt,
+                                        wrap,
+                                        notify_target.as_deref(),
+                                    )
+                                    .await;
                                 // Update last_fired_at in storage.
                                 update_last_fired(&store, &id).await;
                             });
@@ -137,6 +147,10 @@ struct WatchState {
     debounce_ms: u64,
     wrap_mission: bool,
     last_fired_ms: Option<u64>,
+    /// Phase 63 Task 3 — copied from `FileWatchRecord::notify_target`
+    /// at reconcile time; passed to `TriggerDispatch::fire` when the
+    /// watcher fires.
+    notify_target: Option<String>,
 }
 
 impl WatchState {
@@ -248,6 +262,7 @@ fn reconcile_watches(
                             debounce_ms: r.debounce_ms,
                             wrap_mission: r.wrap_mission,
                             last_fired_ms: r.last_fired_at,
+                            notify_target: r.notify_target.clone(),
                         });
                     }
                     Err(e) => {

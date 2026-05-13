@@ -60,6 +60,7 @@ pub fn config_to_records(
             .map(|mut r| {
                 r.enabled = c.enabled;
                 r.wrap_mission = c.wrap_mission;
+                r.notify_target = c.notify_target.clone();
                 r
             })
         })
@@ -186,7 +187,13 @@ async fn fire_schedule(
     sched: &ScheduleRecord,
 ) {
     dispatch
-        .fire(TriggerSource::Cron, &sched.schedule_id, &sched.prompt, sched.wrap_mission)
+        .fire(
+            TriggerSource::Cron,
+            &sched.schedule_id,
+            &sched.prompt,
+            sched.wrap_mission,
+            sched.notify_target.as_deref(),
+        )
         .await;
 
     // Update last_fired_at regardless of outcome.

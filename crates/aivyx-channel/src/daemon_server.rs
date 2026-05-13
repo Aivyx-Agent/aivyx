@@ -118,6 +118,11 @@ pub struct DaemonConfig {
     pub shutdown: CancellationToken,
     /// Optional encrypted storage domain for mission state.
     pub mission_store: Option<DomainHandle>,
+    /// Phase 63 Task 3 — optional notify dispatcher passed to
+    /// `TriggerDispatch::with_notify_dispatcher` so trigger
+    /// configs with `notify_target = Some(name)` auto-push the
+    /// turn's final response after firing.
+    pub notify_dispatcher: Option<Arc<crate::notify_dispatcher::NotifyDispatcher>>,
     /// Optional encrypted storage domain for cron schedules.
     pub schedule_store: Option<DomainHandle>,
     /// Optional encrypted storage domain for webhook triggers.
@@ -178,6 +183,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         channel_factory,
         shutdown,
         mission_store,
+        notify_dispatcher,
         schedule_store,
         webhook_store,
         file_watch_store,
@@ -231,6 +237,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         crate::trigger::TriggerDispatch::new(Arc::clone(&agent), Arc::clone(&channel_factory));
     if let Some(ref ms) = mission_store {
         trigger_dispatch = trigger_dispatch.with_mission_store(ms.clone());
+    }
+    // Phase 63 Task 3 — auto-notify on trigger fire if the
+    // operator configured `notify_target` on the trigger.
+    if let Some(ref nd) = notify_dispatcher {
+        trigger_dispatch = trigger_dispatch.with_notify_dispatcher(Arc::clone(nd));
     }
 
     // Spawn the scheduler loop if a schedule store is provided.
@@ -894,6 +905,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         channel_factory: factory,
         shutdown,
         mission_store: None,
+        notify_dispatcher: None,
         schedule_store: None,
         webhook_store: None,
         file_watch_store: None,

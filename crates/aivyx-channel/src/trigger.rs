@@ -19,6 +19,7 @@ use aivyx_storage::DomainHandle;
 use crate::daemon_ipc::FrontendType;
 use crate::daemon_server::ChannelFactory;
 use crate::mission;
+use crate::notify_dispatcher::NotifyDispatcher;
 
 // ---------------------------------------------------------------------------
 // Trigger source tag — carried through dispatch for logging / audit.
@@ -59,6 +60,10 @@ pub struct TriggerDispatch {
     turn_lock: Arc<Mutex<()>>,
     /// Optional mission store for automatic mission wrapping.
     mission_store: Option<DomainHandle>,
+    /// Optional notify dispatcher for Phase 63 auto-notify sugar.
+    /// When set, a trigger with `notify_target = Some(name)` fires
+    /// the named target's backend after the turn completes.
+    notify_dispatcher: Option<Arc<NotifyDispatcher>>,
 }
 
 impl TriggerDispatch {
@@ -68,6 +73,7 @@ impl TriggerDispatch {
             channel_factory,
             turn_lock: Arc::new(Mutex::new(())),
             mission_store: None,
+            notify_dispatcher: None,
         }
     }
 
@@ -75,6 +81,14 @@ impl TriggerDispatch {
     /// can create missions automatically.
     pub fn with_mission_store(mut self, store: DomainHandle) -> Self {
         self.mission_store = Some(store);
+        self
+    }
+
+    /// Phase 63 Task 3 — attach a `NotifyDispatcher` so triggers
+    /// with `notify_target = Some(name)` can auto-dispatch their
+    /// turn's final response after completion.
+    pub fn with_notify_dispatcher(mut self, dispatcher: Arc<NotifyDispatcher>) -> Self {
+        self.notify_dispatcher = Some(dispatcher);
         self
     }
 
@@ -87,12 +101,20 @@ impl TriggerDispatch {
     /// When `wrap_mission` is true and a mission store is configured,
     /// a `MissionRecord` is created before the turn (state Created →
     /// Running) and completed or failed after the turn finishes.
+    ///
+    /// Phase 63 Task 3: when `notify_target` is `Some` and a notify
+    /// dispatcher is configured, after the turn completes the
+    /// agent's final response is auto-pushed to the named target.
+    /// Q2(a): empty agent response skips the dispatch.
+    /// Q3(a): failed turns dispatch a synthesized body.
+    /// Q4(a): subject is `<kind>: <trigger-id>`.
     pub async fn fire(
         &self,
         source: TriggerSource,
         trigger_id: &str,
         prompt: &str,
         wrap_mission: bool,
+        notify_target: Option<&str>,
     ) -> Duration {
         eprintln!(
             "aivyx trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
@@ -196,7 +218,65 @@ impl TriggerDispatch {
             }
         }
 
+        // ---- Phase 63 Task 3: auto-notify ------------------------
+        // If the trigger declared a notify_target AND a dispatcher
+        // is configured, push the turn's outcome to the named
+        // target. Failure surfaces as eprintln; one attempt, no
+        // retry (Phase 63 sign-off). Audit-chain integration is
+        // deferred — see Phase 63 deferrals.
+        if let (Some(target), Some(dispatcher)) = (notify_target, &self.notify_dispatcher) {
+            let body = render_notify_body(&outcome);
+            let subject = format!("{source}: {trigger_id}");
+            if body.is_empty() {
+                // Q2(a) — skip empty responses.
+                eprintln!(
+                    "aivyx trigger: auto-notify skipped (empty response) for \
+                     {source} {trigger_id:?} → target `{target}`",
+                );
+            } else {
+                match dispatcher.dispatch(target, &body, Some(&subject)).await {
+                    Ok(()) => {
+                        eprintln!(
+                            "aivyx trigger: auto-notify dispatched for \
+                             {source} {trigger_id:?} → target `{target}`",
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx trigger: auto-notify FAILED for \
+                             {source} {trigger_id:?} → target `{target}`: {e}",
+                        );
+                    }
+                }
+            }
+        }
+
         elapsed
+    }
+}
+
+/// Render the body of an auto-notify message from a `TurnOutcome`.
+/// Public for testing.
+///
+/// - `Completed` → the agent's `final_message` text.
+/// - `Escalated` → "Turn escalated: <reason>" so the operator
+///   sees the agent needed approval.
+/// - `Failed` → "Turn failed: <error>" per Q3(a) at sign-off.
+/// - `TimedOut` → "Turn timed out after <duration>".
+/// - `Cancelled` → "Turn cancelled".
+///
+/// Empty string → caller should skip the dispatch (Q2(a)).
+pub fn render_notify_body(outcome: &TurnOutcome) -> String {
+    match outcome {
+        TurnOutcome::Completed { final_message, .. } => final_message.clone(),
+        TurnOutcome::Escalated { reason, .. } => {
+            format!("Turn escalated: {reason}")
+        }
+        TurnOutcome::Failed(e) => format!("Turn failed: {e}"),
+        TurnOutcome::TimedOut { elapsed, .. } => {
+            format!("Turn timed out after {elapsed:.1?}")
+        }
+        TurnOutcome::Cancelled { .. } => "Turn cancelled".to_string(),
     }
 }
 
@@ -207,6 +287,71 @@ impl TriggerDispatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivyx_core::{AivyxError, ToolId};
+    use std::time::Duration;
+
+    #[test]
+    fn render_completed_returns_final_message_verbatim() {
+        let outcome = TurnOutcome::Completed {
+            final_message: "Daily summary: 3 commits, 2 PRs reviewed.".into(),
+            tool_calls_made: 0,
+            duration: Duration::from_secs(2),
+        };
+        assert_eq!(
+            render_notify_body(&outcome),
+            "Daily summary: 3 commits, 2 PRs reviewed."
+        );
+    }
+
+    #[test]
+    fn render_completed_empty_message_returns_empty_string() {
+        // Caller (TriggerDispatch::fire) checks for empty body
+        // and skips the dispatch per Q2(a).
+        let outcome = TurnOutcome::Completed {
+            final_message: String::new(),
+            tool_calls_made: 0,
+            duration: Duration::from_secs(1),
+        };
+        assert!(render_notify_body(&outcome).is_empty());
+    }
+
+    #[test]
+    fn render_failed_returns_turn_failed_prefix() {
+        let outcome = TurnOutcome::Failed(AivyxError::Channel(
+            "provider unreachable".into(),
+        ));
+        let body = render_notify_body(&outcome);
+        assert!(body.starts_with("Turn failed:"), "body: {body}");
+        assert!(body.contains("provider unreachable"), "body: {body}");
+    }
+
+    #[test]
+    fn render_escalated_returns_escalation_summary() {
+        let outcome = TurnOutcome::Escalated {
+            reason: "destructive shell command refused".into(),
+            pending_tool: ToolId::new(),
+            tool_calls_made: 1,
+        };
+        let body = render_notify_body(&outcome);
+        assert!(body.starts_with("Turn escalated:"), "body: {body}");
+        assert!(body.contains("destructive"), "body: {body}");
+    }
+
+    #[test]
+    fn render_timed_out_includes_elapsed() {
+        let outcome = TurnOutcome::TimedOut {
+            tool_calls_made: 5,
+            elapsed: Duration::from_secs(120),
+        };
+        let body = render_notify_body(&outcome);
+        assert!(body.starts_with("Turn timed out"), "body: {body}");
+    }
+
+    #[test]
+    fn render_cancelled_returns_cancelled_marker() {
+        let outcome = TurnOutcome::Cancelled { tool_calls_made: 2 };
+        assert_eq!(render_notify_body(&outcome), "Turn cancelled");
+    }
 
     #[test]
     fn trigger_source_display() {
