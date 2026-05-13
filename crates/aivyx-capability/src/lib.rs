@@ -139,6 +139,36 @@ const KNOWN_BASES: &[&str] = &[
     "ollama.list",
     "ollama.show",
     "ollama.pull",
+    // Phase 62 Task 2 — Agent-Initiated Outbound Notifications
+    // (Reach Milestone, first phase past the closed
+    // forward-commitment ledger). `notify.send` gates the
+    // `notify.send` infrastructure tool that pushes a message to
+    // an operator-configured `[[notify_target]]` (Telegram chat
+    // or generic webhook URL). The qualifier (if present) is a
+    // target-name string identifying which configured target the
+    // role may reach: `notify.send:phone` grants pushing to the
+    // `phone` target specifically, while unqualified
+    // `notify.send` is the "any configured target" wildcard.
+    //
+    // **Dispatch shape.** Target names are bare identifiers
+    // (the same shape as role names — no `/`, no `://`, no `,`),
+    // so under `QualifierKind::of` they fall through to
+    // `SimpleGlob`, which collapses to exact-string equality
+    // for metacharacter-free needles. No new `QualifierKind`
+    // variant is needed; the `role.switch` precedent applies.
+    //
+    // **Wildcard form.** `notify.send:*` is rejected at parse
+    // time alongside `role.switch:*` per the same rationale —
+    // the unqualified form already is the wildcard under Rule 2.
+    //
+    // **Tier restriction.** Present only in `CEILING_TRUSTED`
+    // (Q2(a) at sign-off). SemiTrusted roles cannot notify
+    // because notifications can leak data across trust
+    // boundaries (a SemiTrusted Telegram operator must not be
+    // able to coerce the agent into POSTing the address book to
+    // a webhook). Relaxation to SemiTrusted is a Phase 63+
+    // consideration if real use surfaces.
+    "notify.send",
 ];
 
 // ---------------------------------------------------------------------------
@@ -176,10 +206,20 @@ impl Scope {
         // qualifier) already is the wildcard under Rule 2, so a
         // literal `:*` qualifier is redundant and ambiguous. See
         // the `role.switch` entry in `KNOWN_BASES` for the full
-        // rationale. This is the only base with this restriction
-        // today — every other base accepts `:*` as a legal (if
-        // unusual) qualifier.
-        if base == "role.switch" && qualifier == Some("*") {
+        // rationale.
+        //
+        // Phase 62 Task 2 extends the same restriction to
+        // `notify.send:*` for the same reason — the unqualified
+        // form already grants "any configured target" under
+        // Rule 2; a literal `:*` qualifier is redundant and
+        // ambiguous (would it mean "any target named `*`" or
+        // "any target"?). The list will likely grow with each
+        // new target-name-qualified base added; the structural
+        // pattern is "bases whose qualifier is an external-name
+        // identifier reject literal `:*`."
+        if qualifier == Some("*")
+            && (base == "role.switch" || base == "notify.send")
+        {
             return None;
         }
         Some(Scope(s.to_string()))
@@ -614,6 +654,10 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "ollama.list",
         "ollama.show",
         "ollama.pull",
+        // Phase 62 Task 2 — Trusted-tier only (Q2(a) sign-off).
+        // notifications can leak data across trust boundaries,
+        // so SemiTrusted does not inherit this base.
+        "notify.send",
     ])
 });
 
@@ -1281,6 +1325,85 @@ mod tests {
         // Kernel holds every KNOWN_BASES entry including this
         // one — the `ceiling_kernel_grants_everything` invariant.
         assert!(TrustTier::Kernel.default_ceiling().grants(&s("role.switch")));
+    }
+
+    // ---- Phase 62 Task 2: `notify.send` scope base ----
+
+    #[test]
+    fn notify_send_parses_bare_and_qualified_forms() {
+        let bare = Scope::parse("notify.send").expect("bare form must parse");
+        assert_eq!(bare.base(), "notify.send");
+        assert_eq!(bare.qualifier(), None);
+
+        let qualified = Scope::parse("notify.send:phone").expect("qualified form must parse");
+        assert_eq!(qualified.base(), "notify.send");
+        assert_eq!(qualified.qualifier(), Some("phone"));
+    }
+
+    #[test]
+    fn notify_send_rejects_wildcard_qualifier() {
+        // Same Phase 14 / Phase 62 design rationale as
+        // role.switch:* — the unqualified form is already the
+        // wildcard under Rule 2, so a literal `:*` qualifier is
+        // redundant and ambiguous. Reject at parse time.
+        assert!(
+            Scope::parse("notify.send:*").is_none(),
+            "notify.send:* must be rejected; use bare notify.send \
+             for the any-target wildcard"
+        );
+    }
+
+    #[test]
+    fn notify_send_unqualified_grants_qualified_target() {
+        // Rule 2 (unqualified held grants qualified needed)
+        // dispatches through SimpleGlob and works for free.
+        assert!(s("notify.send:phone").is_granted_by(&s("notify.send")));
+        assert!(s("notify.send:ops-webhook").is_granted_by(&s("notify.send")));
+    }
+
+    #[test]
+    fn notify_send_qualified_does_not_grant_unqualified() {
+        // Rule 4: a role holding only `notify.send:phone` cannot
+        // claim unqualified notify rights. Matches the
+        // `role.switch:researcher` attenuation guarantee.
+        assert!(!s("notify.send").is_granted_by(&s("notify.send:phone")));
+    }
+
+    #[test]
+    fn notify_send_qualified_grants_same_target_only() {
+        // Rule 3 via SimpleGlob dispatch. Target-name qualifiers
+        // are bare identifiers — exact-string equality after
+        // glob_matches collapses on metacharacter-free needles.
+        assert!(s("notify.send:phone").is_granted_by(&s("notify.send:phone")));
+        assert!(!s("notify.send:phone").is_granted_by(&s("notify.send:laptop")));
+    }
+
+    #[test]
+    fn notify_send_is_in_trusted_ceiling_only() {
+        // Q2(a) at sign-off: Trusted only. SemiTrusted and
+        // Untrusted both omit it — notifications can leak data
+        // across trust boundaries (a SemiTrusted Telegram
+        // operator must not be able to coerce the agent into
+        // POSTing the address book to a webhook).
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s("notify.send")));
+        assert!(TrustTier::Trusted
+            .default_ceiling()
+            .grants(&s("notify.send:phone")));
+
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("notify.send")));
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("notify.send:phone")));
+
+        assert!(!TrustTier::Untrusted
+            .default_ceiling()
+            .grants(&s("notify.send")));
+
+        // Kernel holds every KNOWN_BASES entry — the
+        // `ceiling_kernel_grants_everything` invariant.
+        assert!(TrustTier::Kernel.default_ceiling().grants(&s("notify.send")));
     }
 
     // ---- Reflexivity: grants(&self, &self) ----
