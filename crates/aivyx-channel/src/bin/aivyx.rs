@@ -1544,6 +1544,9 @@ async fn run_async(
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
+        // Phase 62 Task 3 — destructured but not yet consumed.
+        // The dispatcher + tool wiring lands in Tasks 4–8.
+        notify_targets: _config_notify_targets,
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,

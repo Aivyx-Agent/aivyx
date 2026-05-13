@@ -607,6 +607,12 @@ pub struct AivyxConfig {
     /// File-watch trigger entries from `[[file_watch]]` entries.
     /// Empty when no entries are configured.
     pub file_watches: Vec<FileWatchConfig>,
+    /// Notification-target entries from `[[notify_target]]`
+    /// entries. Phase 62 Task 3 — Reach Milestone phase 1. Empty
+    /// when no entries are configured; the `notify.send` tool
+    /// then dispatches with "unknown target" failures for any
+    /// target name the agent provides.
+    pub notify_targets: Vec<NotifyTargetConfig>,
     /// Webhook listener port override. `None` means use the default
     /// (7842). Loaded from `[daemon] webhook_port` in the TOML file.
     pub webhook_port: Option<u16>,
@@ -1005,6 +1011,45 @@ pub struct FileWatchConfig {
     pub wrap_mission: bool,
 }
 
+/// One notification-target entry loaded from `[[notify_target]]` in
+/// the TOML file. Phase 62 Task 3 — operator-feedback-shaped Reach
+/// Milestone phase 1. The agent calls `notify.send` (Phase 62 Task
+/// 7) to push a message to one of these targets.
+///
+/// Invalid combinations (e.g. `kind = "telegram"` without a
+/// `chat_id`) are rejected at config-load time and never
+/// represented in the runtime [`NotifyTargetConfig`] / [`NotifyTargetKind`]
+/// pair — the kind enum carries kind-specific fields directly so
+/// the runtime cannot observe an inconsistent state.
+#[derive(Debug, Clone)]
+pub struct NotifyTargetConfig {
+    pub name: String,
+    pub kind: NotifyTargetKind,
+    pub enabled: bool,
+}
+
+/// Per-kind notification target configuration. Phase 62 ships two
+/// kinds: Telegram (uses the operator's existing bot client to
+/// push a message to the named `chat_id`) and Webhook (HTTP POST
+/// with a small JSON body to the configured `url`). Additional
+/// kinds (email SMTP, Web UI desktop notification, OS-level
+/// notification) are recorded as Phase 62 deferrals.
+#[derive(Debug, Clone)]
+pub enum NotifyTargetKind {
+    /// Telegram bot outbound. `chat_id` is the operator-owned chat
+    /// the bot is already authorized to message — typically the
+    /// same `chat_id` declared under `[telegram]` for the inbound
+    /// path, but explicitly named here so multiple chats can be
+    /// configured independently.
+    Telegram { chat_id: String },
+    /// Generic HTTP webhook. The dispatcher POSTs a JSON body of
+    /// shape `{source, target, subject?, message, timestamp}` per
+    /// Q5(a) at sign-off. Suitable for ntfy.sh, Pushover, IFTTT,
+    /// and custom endpoints. Slack-flavored payload (`{text: ...}`)
+    /// is a Phase 62 deferral.
+    Webhook { url: String },
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1056,6 +1101,11 @@ struct RawToml {
     /// `[[file_watch]]` table-array. Phase 27 Task 4.
     #[serde(default, rename = "file_watch")]
     file_watches: Option<Vec<RawFileWatch>>,
+    /// `[[notify_target]]` table-array. Phase 62 Task 3 —
+    /// operator-configured notification destinations the agent
+    /// can reach via `notify.send`.
+    #[serde(default, rename = "notify_target")]
+    notify_targets: Option<Vec<RawNotifyTarget>>,
     /// `[daemon]` section. Phase 28 Task 3.
     #[serde(default)]
     daemon: RawDaemon,
@@ -1260,6 +1310,34 @@ struct RawFileWatch {
     debounce_ms: Option<u64>,
     #[serde(default)]
     wrap_mission: bool,
+}
+
+/// One `[[notify_target]]` entry in the TOML file. Phase 62 Task 3.
+///
+/// The shape is intentionally flat (all kind-specific fields are
+/// optional at the deserialize layer) so that an operator can
+/// declare any `[[notify_target]]` block and get a precise
+/// load-time error if required fields are missing for the chosen
+/// `kind`. The loader (in `AivyxConfig::from_sources_with_paths`)
+/// validates the kind/field correspondence and emits
+/// [`ConfigError::Invalid`] with a field name that points to the
+/// offending entry.
+#[derive(Debug, Default, Deserialize)]
+struct RawNotifyTarget {
+    name: String,
+    /// Lowercase string discriminator. Accepted values:
+    /// `"telegram"`, `"webhook"`. Anything else is rejected at
+    /// load time.
+    kind: String,
+    /// Required when `kind = "telegram"`. The operator-owned
+    /// Telegram chat the bot is authorized to message.
+    #[serde(default)]
+    chat_id: Option<String>,
+    /// Required when `kind = "webhook"`. The endpoint to POST to.
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
 }
 
 fn default_role_name() -> String {
@@ -2000,6 +2078,99 @@ impl AivyxConfig {
             })
             .collect();
 
+        // --- notify targets (Phase 62 Task 3) ----------------------
+        // Walk every [[notify_target]] entry. For each:
+        //   1. Validate `kind` is a recognized discriminator.
+        //   2. Validate kind-required fields are present.
+        //   3. Build the typed `NotifyTargetKind`.
+        // After the per-entry walk, validate name uniqueness across
+        // the surviving set (disabled entries don't count — they
+        // were never going to dispatch anyway).
+        let mut notify_targets: Vec<NotifyTargetConfig> = Vec::new();
+        for raw in toml.notify_targets.unwrap_or_default() {
+            if !raw.enabled {
+                continue;
+            }
+            if raw.name.trim().is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "notify_target.name",
+                    reason: "name must be non-empty".into(),
+                });
+            }
+            let kind = match raw.kind.as_str() {
+                "telegram" => {
+                    let chat_id = raw.chat_id.ok_or_else(|| ConfigError::Invalid {
+                        field: "notify_target.chat_id",
+                        reason: format!(
+                            "kind = \"telegram\" requires `chat_id` \
+                             (target `{}`)",
+                            raw.name
+                        ),
+                    })?;
+                    if chat_id.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "notify_target.chat_id",
+                            reason: format!(
+                                "`chat_id` must be non-empty \
+                                 (target `{}`)",
+                                raw.name
+                            ),
+                        });
+                    }
+                    NotifyTargetKind::Telegram { chat_id }
+                }
+                "webhook" => {
+                    let url = raw.url.ok_or_else(|| ConfigError::Invalid {
+                        field: "notify_target.url",
+                        reason: format!(
+                            "kind = \"webhook\" requires `url` \
+                             (target `{}`)",
+                            raw.name
+                        ),
+                    })?;
+                    if !url.starts_with("http://") && !url.starts_with("https://") {
+                        return Err(ConfigError::Invalid {
+                            field: "notify_target.url",
+                            reason: format!(
+                                "`url` must start with http:// or https:// \
+                                 (target `{}`, got `{}`)",
+                                raw.name, url
+                            ),
+                        });
+                    }
+                    NotifyTargetKind::Webhook { url }
+                }
+                other => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.kind",
+                        reason: format!(
+                            "unknown notify_target kind `{}` \
+                             (target `{}`); supported: telegram, webhook",
+                            other, raw.name
+                        ),
+                    });
+                }
+            };
+            // Reject duplicate names eagerly so the error names the
+            // collision rather than letting the dispatcher pick one
+            // silently at startup.
+            if notify_targets.iter().any(|t| t.name == raw.name) {
+                return Err(ConfigError::Invalid {
+                    field: "notify_target.name",
+                    reason: format!(
+                        "duplicate notify_target name `{}` — names must \
+                         be unique across all [[notify_target]] entries",
+                        raw.name
+                    ),
+                });
+            }
+            notify_targets.push(NotifyTargetConfig {
+                name: raw.name,
+                kind,
+                enabled: true,
+            });
+        }
+
         // --- profile (Phase 57, PRODUCT.md P13) -------------------
         // Map the raw `[profile]` section to a `Profile` struct.
         // Absent fields fall through to `Profile::default()` per
@@ -2056,6 +2227,7 @@ impl AivyxConfig {
             schedules,
             webhooks,
             file_watches,
+            notify_targets,
             webhook_port: toml.daemon.webhook_port,
             web_ui_port: match (toml.daemon.web_ui, toml.daemon.web_ui_port) {
                 // Explicit port always wins (and implicitly enables).

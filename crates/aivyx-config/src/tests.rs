@@ -32,9 +32,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, ProviderKind, Role,
-    ToolAllowlist, DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL,
-    DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
+    AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, NotifyTargetKind,
+    ProviderKind, Role, ToolAllowlist, DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC,
+    DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -2901,5 +2901,309 @@ primary_use_cases = ["personal-finance analysis"]
     assert!(cfg.profile.behavioral_preferences.is_empty());
     assert!(cfg.profile.behavioral_constraints.is_empty());
 
+    drop(env);
+}
+
+// ==============================================================
+// Phase 62 Task 3 — `[[notify_target]]` entries
+// ==============================================================
+
+#[test]
+fn notify_target_entries_parse_telegram_and_webhook() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-cfg");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "telegram"
+chat_id = "123456789"
+
+[[notify_target]]
+name = "ops-alerts"
+kind = "webhook"
+url = "https://ntfy.sh/aivyx-personal-2026"
+
+[[notify_target]]
+name = "disabled-one"
+kind = "telegram"
+chat_id = "987654321"
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.notify_targets.len(), 2, "disabled target filtered out");
+
+    let phone = &cfg.notify_targets[0];
+    assert_eq!(phone.name, "phone");
+    assert!(phone.enabled);
+    match &phone.kind {
+        NotifyTargetKind::Telegram { chat_id } => assert_eq!(chat_id, "123456789"),
+        other => panic!("expected Telegram, got {other:?}"),
+    }
+
+    let webhook = &cfg.notify_targets[1];
+    assert_eq!(webhook.name, "ops-alerts");
+    match &webhook.kind {
+        NotifyTargetKind::Webhook { url } => {
+            assert_eq!(url, "https://ntfy.sh/aivyx-personal-2026");
+        }
+        other => panic!("expected Webhook, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+#[test]
+fn no_notify_target_section_gives_empty_vec() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("no-notify");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(cfg.notify_targets.is_empty());
+    drop(env);
+}
+
+#[test]
+fn notify_target_telegram_missing_chat_id_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-bad-telegram");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "telegram"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.chat_id");
+            assert!(
+                reason.contains("requires `chat_id`"),
+                "reason was: {reason}"
+            );
+            assert!(reason.contains("phone"), "reason should name target: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn notify_target_webhook_missing_url_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-bad-webhook");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "alerts"
+kind = "webhook"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "notify_target.url"));
+    drop(env);
+}
+
+#[test]
+fn notify_target_webhook_rejects_non_http_url() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-bad-scheme");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "weird"
+kind = "webhook"
+url = "ftp://example.com/notify"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.url");
+            assert!(
+                reason.contains("must start with http:// or https://"),
+                "reason was: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn notify_target_unknown_kind_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-bad-kind");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "signal"
+chat_id = "x"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.kind");
+            assert!(
+                reason.contains("unknown notify_target kind"),
+                "reason was: {reason}"
+            );
+            assert!(reason.contains("signal"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn notify_target_duplicate_names_are_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-dup");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "telegram"
+chat_id = "1"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.name");
+            assert!(
+                reason.contains("duplicate"),
+                "reason was: {reason}"
+            );
+            assert!(reason.contains("phone"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn notify_target_empty_name_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-empty-name");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = ""
+kind = "webhook"
+url = "https://example.com/x"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "notify_target.name"));
     drop(env);
 }
