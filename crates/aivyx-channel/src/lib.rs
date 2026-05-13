@@ -50,6 +50,12 @@ pub mod role_overrides;
 pub mod role_update_tool;
 pub mod turn_history_tool;
 pub mod ollama_tools;
+/// Phase 62 — Agent-Initiated Outbound Notifications. The
+/// dispatcher and `NotifyBackend` trait live here; per-kind
+/// backend impls live in `notify_telegram` (Phase 62 Task 5) and
+/// `notify_webhook` (Phase 62 Task 6); the `notify.send` tool
+/// lives in `notify_tool` (Phase 62 Task 7).
+pub mod notify_dispatcher;
 mod daemon_session;
 mod local;
 pub mod passphrase;
