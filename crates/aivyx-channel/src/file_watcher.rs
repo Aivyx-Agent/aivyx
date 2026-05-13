@@ -314,6 +314,7 @@ mod tests {
             enabled: true,
             debounce_ms: Some(5000),
             wrap_mission: false,
+            notify_target: None,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records.len(), 1);
@@ -332,6 +333,7 @@ mod tests {
             enabled: true,
             debounce_ms: None,
             wrap_mission: false,
+            notify_target: None,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records[0].debounce_ms, file_watch::DEFAULT_DEBOUNCE_MS);
@@ -347,6 +349,7 @@ mod tests {
             enabled: false,
             debounce_ms: None,
             wrap_mission: false,
+            notify_target: None,
         }];
         let records = config_to_records(&configs);
         assert!(!records[0].enabled);
@@ -362,6 +365,7 @@ mod tests {
             enabled: true,
             debounce_ms: None,
             wrap_mission: true,
+            notify_target: None,
         }];
         let records = config_to_records(&configs);
         assert!(records[0].wrap_mission);

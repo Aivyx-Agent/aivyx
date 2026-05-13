@@ -305,6 +305,7 @@ mod tests {
             prompt: "check system health".into(),
             enabled: true,
             wrap_mission: false,
+            notify_target: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert_eq!(records.len(), 1);
@@ -322,6 +323,7 @@ mod tests {
             prompt: "test".into(),
             enabled: true,
             wrap_mission: false,
+            notify_target: None,
         }];
         assert!(config_to_records(&configs).is_err());
     }
@@ -335,6 +337,7 @@ mod tests {
             prompt: "test".into(),
             enabled: false,
             wrap_mission: false,
+            notify_target: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(!records[0].enabled);
@@ -349,6 +352,7 @@ mod tests {
             prompt: "test".into(),
             enabled: true,
             wrap_mission: true,
+            notify_target: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(records[0].wrap_mission);

@@ -985,6 +985,14 @@ pub struct ScheduleConfig {
     pub prompt: String,
     pub enabled: bool,
     pub wrap_mission: bool,
+    /// Phase 63 Task 2 — when `Some(name)`, the daemon
+    /// auto-dispatches the trigger-fired turn's final response
+    /// to the named `[[notify_target]]` after the turn
+    /// completes. Validated at config-load time: the named
+    /// target must exist and the trigger's `role` must have
+    /// `notify.send` (qualified to the target, or unqualified)
+    /// in its declared envelope.
+    pub notify_target: Option<String>,
 }
 
 /// One webhook trigger entry loaded from `[[webhook]]` in the TOML file.
@@ -996,6 +1004,8 @@ pub struct WebhookConfig {
     pub prompt: String,
     pub enabled: bool,
     pub wrap_mission: bool,
+    /// Phase 63 Task 2 — see [`ScheduleConfig::notify_target`].
+    pub notify_target: Option<String>,
 }
 
 /// One file-watch trigger entry loaded from `[[file_watch]]` in the TOML file.
@@ -1009,6 +1019,8 @@ pub struct FileWatchConfig {
     pub enabled: bool,
     pub debounce_ms: Option<u64>,
     pub wrap_mission: bool,
+    /// Phase 63 Task 2 — see [`ScheduleConfig::notify_target`].
+    pub notify_target: Option<String>,
 }
 
 /// One notification-target entry loaded from `[[notify_target]]` in
@@ -1271,6 +1283,7 @@ fn default_stdio_transport() -> String {
 }
 
 /// One `[[schedule]]` entry in the TOML file. Phase 26 Task 2.
+/// Phase 63 Task 2 added the optional `notify_target` field.
 #[derive(Debug, Default, Deserialize)]
 struct RawSchedule {
     name: String,
@@ -1282,9 +1295,16 @@ struct RawSchedule {
     enabled: bool,
     #[serde(default)]
     wrap_mission: bool,
+    /// Phase 63 Task 2 — name of a configured `[[notify_target]]`.
+    /// When set, the daemon auto-dispatches the trigger-fired
+    /// turn's final response to the named target after the turn
+    /// completes.
+    #[serde(default)]
+    notify_target: Option<String>,
 }
 
 /// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
+/// Phase 63 Task 2 added the optional `notify_target` field.
 #[derive(Debug, Default, Deserialize)]
 struct RawWebhook {
     name: String,
@@ -1295,9 +1315,13 @@ struct RawWebhook {
     enabled: bool,
     #[serde(default)]
     wrap_mission: bool,
+    /// Phase 63 Task 2 — see `RawSchedule::notify_target`.
+    #[serde(default)]
+    notify_target: Option<String>,
 }
 
 /// One `[[file_watch]]` entry in the TOML file. Phase 27 Task 4.
+/// Phase 63 Task 2 added the optional `notify_target` field.
 #[derive(Debug, Default, Deserialize)]
 struct RawFileWatch {
     name: String,
@@ -1310,6 +1334,9 @@ struct RawFileWatch {
     debounce_ms: Option<u64>,
     #[serde(default)]
     wrap_mission: bool,
+    /// Phase 63 Task 2 — see `RawSchedule::notify_target`.
+    #[serde(default)]
+    notify_target: Option<String>,
 }
 
 /// One `[[notify_target]]` entry in the TOML file. Phase 62 Task 3.
@@ -2043,6 +2070,7 @@ impl AivyxConfig {
                 prompt: r.prompt,
                 enabled: true,
                 wrap_mission: r.wrap_mission,
+                notify_target: r.notify_target,
             })
             .collect();
 
@@ -2058,6 +2086,7 @@ impl AivyxConfig {
                 prompt: r.prompt,
                 enabled: true,
                 wrap_mission: r.wrap_mission,
+                notify_target: r.notify_target,
             })
             .collect();
 
@@ -2075,6 +2104,7 @@ impl AivyxConfig {
                 enabled: true,
                 debounce_ms: r.debounce_ms,
                 wrap_mission: r.wrap_mission,
+                notify_target: r.notify_target,
             })
             .collect();
 
@@ -2170,6 +2200,23 @@ impl AivyxConfig {
                 enabled: true,
             });
         }
+
+        // --- Phase 63 Task 2: cross-validate trigger.notify_target
+        //     against notify_targets + role envelopes. --------------
+        //
+        // Q5(a) at Phase 63 sign-off: validate at config-load time
+        // rather than daemon startup. The operator gets the error
+        // at `aivyx daemon run` startup, not at 9am the next
+        // morning when the schedule fires silently. Mirrors the
+        // load-time-not-runtime discipline of
+        // `validate_role_inheritance` above.
+        validate_trigger_notify_targets(
+            &schedules,
+            &webhooks,
+            &file_watches,
+            &notify_targets,
+            &roles,
+        )?;
 
         // --- profile (Phase 57, PRODUCT.md P13) -------------------
         // Map the raw `[profile]` section to a `Profile` struct.
@@ -2619,6 +2666,140 @@ fn validate_role_inheritance(roles: &BTreeMap<String, Role>) -> Result<(), Confi
         }
     }
 
+    Ok(())
+}
+
+/// Phase 63 Task 2 — cross-validate every trigger's
+/// `notify_target` against the loaded `[[notify_target]]` set
+/// and the trigger's role envelope.
+///
+/// Two failure modes per trigger with a non-`None`
+/// `notify_target`:
+///
+/// 1. **Unknown target.** The string doesn't match any
+///    configured `[[notify_target]] name = "..."`. Error
+///    field: `<trigger-kind>.notify_target`.
+///
+/// 2. **Missing capability.** The trigger's role (the one its
+///    turn runs under) doesn't declare `notify.send`
+///    (qualified to the target, or unqualified) anywhere in
+///    its parent chain — OR its `trust_ceiling` excludes
+///    `notify.send` (it is `CEILING_TRUSTED` only at Phase
+///    62 sign-off). Error field:
+///    `<trigger-kind>.notify_target`.
+///
+/// Walks the role's parent chain accumulating declared scopes
+/// into a `CapabilitySet`, then intersects with the role's
+/// `trust_ceiling`. The intersection is the deceleration of
+/// what `assemble_role_envelope` produces at runtime, modulo
+/// the backcompat floor (which doesn't add `notify.send` and
+/// so doesn't change the answer for this check). A role using
+/// the empty `capability_scopes = []` sentinel does NOT get
+/// `notify.send` from the floor — the floor predates the
+/// scope.
+///
+/// `O(triggers * (targets + role_depth))`. Realistic configs
+/// have a handful of each; cheap.
+fn validate_trigger_notify_targets(
+    schedules: &[ScheduleConfig],
+    webhooks: &[WebhookConfig],
+    file_watches: &[FileWatchConfig],
+    notify_targets: &[NotifyTargetConfig],
+    roles: &BTreeMap<String, Role>,
+) -> Result<(), ConfigError> {
+    use aivyx_capability::CapabilitySet;
+
+    // Helper: walk the role chain accumulating declared scopes
+    // into a CapabilitySet, intersect with trust ceiling, check
+    // grant.
+    let role_can_notify = |role_name: &str, target: &str| -> Result<bool, ConfigError> {
+        let Some(start) = roles.get(role_name) else {
+            // Caller (validate_role_inheritance / active-role
+            // resolution) has already caught dangling role
+            // names, but defend against being called before
+            // those checks by erroring distinctly.
+            return Err(ConfigError::Invalid {
+                field: "trigger.role",
+                reason: format!("trigger references unknown role `{role_name}`"),
+            });
+        };
+        // Accumulate every ancestor's declared scopes.
+        let mut accumulated: Vec<Scope> = Vec::new();
+        let mut cursor: Option<&Role> = Some(start);
+        let mut visited: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        while let Some(role) = cursor {
+            let n = role.name.value.as_str();
+            if !visited.insert(n) {
+                // Cycle — already caught upstream; bail out
+                // so we don't loop.
+                break;
+            }
+            accumulated.extend(role.capability_scopes.value.iter().cloned());
+            cursor = role
+                .parent_role
+                .value
+                .as_deref()
+                .and_then(|p| roles.get(p));
+        }
+        let declared = CapabilitySet::from_scopes(accumulated);
+        let ceiling = start.trust_ceiling.value.default_ceiling();
+        let effective = declared.intersect(ceiling);
+        let needed = Scope::parse(&format!("notify.send:{target}")).ok_or_else(|| {
+            ConfigError::Invalid {
+                field: "notify_target.name",
+                reason: format!(
+                    "cannot construct capability scope for target `{target}`; \
+                     target names must be bare identifiers compatible with \
+                     Scope::parse"
+                ),
+            }
+        })?;
+        Ok(effective.grants(&needed))
+    };
+
+    let check =
+        |role_name: &str, target: &str, kind: &str, name: &str, field: &'static str| -> Result<(), ConfigError> {
+            if !notify_targets.iter().any(|t| t.name == target) {
+                return Err(ConfigError::Invalid {
+                    field,
+                    reason: format!(
+                        "{kind} `{name}` references unknown notify_target \
+                         `{target}` — declare a matching [[notify_target]] \
+                         entry or remove the field"
+                    ),
+                });
+            }
+            if !role_can_notify(role_name, target)? {
+                return Err(ConfigError::Invalid {
+                    field,
+                    reason: format!(
+                        "role `{role_name}` used by {kind} `{name}` lacks \
+                         `notify.send` capability required for notify_target \
+                         `{target}` — declare `notify.send` or \
+                         `notify.send:{target}` in the role's \
+                         `capability_scopes` (Trusted tier only)"
+                    ),
+                });
+            }
+            Ok(())
+        };
+
+    for s in schedules {
+        if let Some(target) = &s.notify_target {
+            check(&s.role, target, "schedule", &s.name, "schedule.notify_target")?;
+        }
+    }
+    for w in webhooks {
+        if let Some(target) = &w.notify_target {
+            check(&w.role, target, "webhook", &w.name, "webhook.notify_target")?;
+        }
+    }
+    for f in file_watches {
+        if let Some(target) = &f.notify_target {
+            check(&f.role, target, "file_watch", &f.name, "file_watch.notify_target")?;
+        }
+    }
     Ok(())
 }
 

@@ -3207,3 +3207,384 @@ url = "https://example.com/x"
     assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "notify_target.name"));
     drop(env);
 }
+
+// ==============================================================
+// Phase 63 Task 2 — trigger.notify_target field + cross-validation
+// ==============================================================
+
+#[test]
+fn schedule_notify_target_loads_when_role_has_capability() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("schedule-notify-ok");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.schedules.len(), 1);
+    assert_eq!(cfg.schedules[0].notify_target.as_deref(), Some("phone"));
+    drop(env);
+}
+
+#[test]
+fn schedule_notify_target_unknown_target_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("schedule-notify-unknown");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "schedule.notify_target");
+            assert!(reason.contains("unknown notify_target"), "reason: {reason}");
+            assert!(reason.contains("phone"), "reason: {reason}");
+            assert!(reason.contains("morning-summary"), "reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn schedule_notify_target_role_lacks_capability_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("schedule-notify-noscope");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["memory.read"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "schedule.notify_target");
+            assert!(reason.contains("lacks `notify.send`"), "reason: {reason}");
+            assert!(reason.contains("default"), "reason: {reason}");
+            assert!(reason.contains("morning-summary"), "reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn schedule_notify_target_qualified_scope_grants_named_target() {
+    // Role declares `notify.send:phone` (qualified). The
+    // schedule with notify_target = "phone" passes; if the
+    // schedule named a different target it would fail.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("schedule-notify-qualified");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send:phone"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.schedules[0].notify_target.as_deref(), Some("phone"));
+    drop(env);
+}
+
+#[test]
+fn schedule_notify_target_semitrusted_role_is_error() {
+    // notify.send is in CEILING_TRUSTED only; a SemiTrusted
+    // role declaring notify.send loses it after intersection.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("schedule-notify-semi");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "SemiTrusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "schedule.notify_target"));
+    drop(env);
+}
+
+#[test]
+fn webhook_notify_target_validated_the_same_way() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("webhook-notify");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "ops"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[webhook]]
+name = "ci-events"
+prompt = "Process CI event"
+notify_target = "ops"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.webhooks[0].notify_target.as_deref(), Some("ops"));
+    drop(env);
+}
+
+#[test]
+fn file_watch_notify_target_validated_the_same_way() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("filewatch-notify");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "alerts"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[file_watch]]
+name = "notes-dir"
+path = "/tmp/notes"
+prompt = "React to note change"
+notify_target = "alerts"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.file_watches[0].notify_target.as_deref(), Some("alerts"));
+    drop(env);
+}
+
+#[test]
+fn trigger_without_notify_target_loads_normally() {
+    // Phase 63 doesn't change behavior for triggers that don't
+    // opt in to notify_target. Regression test.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("no-notify-target");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[schedule]]
+name = "plain-old-schedule"
+cron = "0 0 9 * * * *"
+prompt = "Do the thing"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.schedules[0].notify_target, None);
+    drop(env);
+}
+
+#[test]
+fn notify_send_via_parent_role_grants_inherited_capability() {
+    // Inheritance: child role doesn't declare notify.send, but
+    // its parent does. Should be granted via the parent chain.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-inherited");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[role]]
+name = "child"
+capability_scopes = []
+trust_ceiling = "Trusted"
+parent_role = "default"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "morning-summary"
+cron = "0 0 9 * * * *"
+role = "child"
+prompt = "Summarize my day"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.schedules[0].role, "child");
+    assert_eq!(cfg.schedules[0].notify_target.as_deref(), Some("phone"));
+    drop(env);
+}
