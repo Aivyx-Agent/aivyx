@@ -29,3 +29,12 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Phase 61 Task 4 — make the release pipeline's `plan` job depend
+# on the shared quality-gate reusable workflow at
+# `.github/workflows/quality-gate.yml`. This causes the entire
+# release pipeline (build-local-artifacts, build-global-artifacts,
+# host, announce) to short-circuit if `cargo test --workspace` or
+# `cargo clippy --workspace --all-targets -- -D warnings` fails.
+# Mirrors the local pre-commit hook discipline; defense in depth
+# alongside `.github/workflows/ci.yml`.
+plan-jobs = ["./quality-gate"]

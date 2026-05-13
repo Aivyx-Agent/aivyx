@@ -1,0 +1,24 @@
+# Phase 61 Task 4 — CI caller.
+#
+# Runs the shared quality-gate workflow on every push to main and
+# every pull request. The same workflow gates the release pipeline
+# (see `release.yml`'s `plan` job, wired via `plan-jobs` in
+# `dist-workspace.toml`) so the rule is uniform: nothing ships
+# without `cargo test --workspace` and `cargo clippy -- -D warnings`
+# passing.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    uses: ./.github/workflows/quality-gate.yml

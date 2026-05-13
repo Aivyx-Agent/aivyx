@@ -1,0 +1,50 @@
+# Phase 61 Task 4 — Quality Gate (reusable workflow).
+#
+# Mirrors the local pre-commit hook discipline (the workspace has
+# held at zero clippy warnings since the Phase 9 hook). Runs
+# `cargo clippy --workspace --all-targets -- -D warnings` and
+# `cargo test --workspace`. Consumed by two callers:
+#
+#   - `.github/workflows/ci.yml` — every push to main + every PR.
+#   - `.github/workflows/release.yml` — wired in via the
+#     `plan-jobs = ["./quality-gate"]` hook in
+#     `dist-workspace.toml`. dist makes the plan job depend on
+#     this workflow, which means NO release artifact gets built
+#     unless `cargo test --workspace` and clippy both pass.
+#
+# Defense in depth: ci.yml catches failures at commit time;
+# release.yml's wiring catches them at tag time even if the
+# operator skipped the PR-time check.
+
+name: Quality Gate
+
+on:
+  workflow_call:
+
+jobs:
+  test-and-clippy:
+    name: cargo test + clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test --workspace
+        run: cargo test --workspace
