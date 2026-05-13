@@ -134,6 +134,19 @@ pub struct NotifyDispatcher {
     backends: HashMap<String, Arc<dyn NotifyBackend>>,
 }
 
+impl std::fmt::Debug for NotifyDispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `dyn NotifyBackend` isn't Debug, so we surface what's
+        // observable: target names + kinds. Useful in tests and
+        // for the daemon's startup log.
+        let mut targets: Vec<(&str, &'static str)> = self.list_targets();
+        targets.sort();
+        f.debug_struct("NotifyDispatcher")
+            .field("targets", &targets)
+            .finish()
+    }
+}
+
 impl NotifyDispatcher {
     /// New empty dispatcher. Callers register backends with
     /// [`register`](Self::register) per loaded target. The

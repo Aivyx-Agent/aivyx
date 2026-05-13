@@ -58,6 +58,7 @@ pub mod ollama_tools;
 pub mod notify_dispatcher;
 pub mod notify_telegram;
 pub mod notify_webhook;
+pub mod notify_tool;
 mod daemon_session;
 mod local;
 pub mod passphrase;
