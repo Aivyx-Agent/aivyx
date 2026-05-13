@@ -18,7 +18,7 @@ verifiable offline.
 |---|---|
 | Phases shipped | 61 (Phase 0 → Phase 61, plus 10 contract amendments) |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped |
-| First published release | **v0.1.0** (Phase 61) — prebuilt binaries for Linux x86_64/aarch64 + macOS x86_64/aarch64 |
+| Release pipeline | **Wired, not yet firing** (Phase 61) — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64. First published release pending public hosting. |
 | Workspace crates | 12 |
 | Rust tests | 1074 passing |
 | Python conformance tests | 24 passing |
@@ -38,49 +38,81 @@ Persona arc)** delivered the operator-declared identity layer
 (P13) and the reflection-written character layer (P14), shaping
 Aivyx into a *self-learning, self-improving AI personal
 assistant with a user-defined Profile and Persona based on the
-end-user use-case*. **Phase 61 (Distribution)** cuts the first
-published release with prebuilt binaries — the first phase past
-the closed forward-commitment ledger, addressing the largest
-adoption-shape gap.
+end-user use-case*. **Phase 61 (Distribution — Pipeline Ready)**
+wired the release substrate (CI gates, dist config, four-target
+matrix, install script generation) but holds the first published
+release until public hosting goes live — a follow-up micro-phase
+will cut v0.1.0.
 
 ## Five-minute setup
 
-Aivyx ships zero hosted dependencies and one prebuilt binary per
-platform. The fastest path is a one-line installer:
+Aivyx ships zero hosted dependencies. Today's path is
+build-from-source; a prebuilt-binary installer is wired and
+waiting on public hosting (see [Release pipeline status](#release-pipeline-status)).
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/AivyxDev/aivyx/releases/latest/download/aivyx-channel-installer.sh \
-  | sh
+# 1. Install Ollama and pull a model (no API key required)
+ollama pull llama3.1
 
-aivyx init    # interactive wizard: picks provider, paths, Profile
-aivyx         # auto-spawns the daemon and drops you into a session
+# 2. Build aivyx
+git clone <repo-url>
+cd aivyx
+cargo build --release --bin aivyx
+
+# 3. Drop a minimal config in your CWD
+cat > aivyx.toml <<'EOF'
+[agent]
+provider = "ollama"
+model = "llama3.1"
+
+[fs]
+root = "/tmp/aivyx-sandbox"
+
+[storage]
+path = "/tmp/aivyx-store.redb"
+
+[daemon]
+web_ui = true   # enable the localhost-only web UI on :7843
+
+[aivyx]
+passphrase = "set-a-real-passphrase"
+EOF
+
+# 4. Create the fs sandbox and launch
+mkdir -p /tmp/aivyx-sandbox
+./target/release/aivyx init    # interactive wizard (or skip if you already wrote aivyx.toml)
+./target/release/aivyx         # auto-spawns the daemon, drops into a session
 ```
 
-`aivyx init` detects a local Ollama install (no API key needed)
-or walks you through an Anthropic / OpenAI key. With `web_ui =
-true` in the generated config, open `http://127.0.0.1:7843/` in a
-browser — click **Chat**, **Missions**, **Audit** (chain
-verification), **Profile**, or **Persona**. The default in-CLI
-REPL works without a browser.
+Then open `http://127.0.0.1:7843/` in a browser — that's the
+Web UI. Type a message in the **Chat** tab. Click **Audit** to
+watch events land in the HMAC-chained log; click **Verify chain**
+to cold-verify the chain offline.
 
-**macOS first launch (Gatekeeper).** Unsigned binaries are
-quarantined by default. Either right-click → Open the binary
-once, or strip the quarantine attribute:
+For a config that uses Anthropic or OpenAI instead, see
+[`examples/aivyx.toml`](examples/aivyx.toml). For a Telegram
+adapter, see [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
+For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
-```sh
-xattr -d com.apple.quarantine "$(command -v aivyx)"
-```
+## Release pipeline status
 
-**No native Windows binary in Phase 61.** Use WSL2 for now;
-native Windows support is a deferred follow-up phase (daemon IPC
-needs a NamedPipe port from Unix sockets).
+Phase 61 wired the release substrate but did not publish a
+release. The pipeline is dormant until public hosting is configured:
 
-**Build from source** is still supported for contributors and
-unsupported platforms — see [`docs/INSTALL.md`](docs/INSTALL.md)
-for the matrix. For a non-Ollama provider config, see
-[`examples/aivyx.toml`](examples/aivyx.toml); for a Telegram
-adapter, [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
+- `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
+  for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
+  `v*.*.*` tag push.
+- `.github/workflows/ci.yml` runs `cargo clippy --workspace --all-targets
+  -- -D warnings` and `cargo test --workspace` on every push to
+  main and every PR.
+- `.github/workflows/quality-gate.yml` is the shared reusable
+  workflow both CI and release pipelines call.
+
+When the project goes public, cutting a release will be: push a
+remote, push a `v0.1.0` tag, the workflow auto-publishes
+prebuilt binaries + a one-line shell installer. That handoff is
+the deferred Task 7 of Phase 61 and reopens as a focused
+micro-phase.
 
 ## Architecture at a glance
 

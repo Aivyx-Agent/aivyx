@@ -9,11 +9,22 @@ hosted dependencies — your binary talks directly to your LLM
 provider (Anthropic / OpenAI-compatible / Ollama) and stores
 everything locally in an encrypted redb file.
 
+## Current install state
+
+Phase 61 wired the release pipeline (cargo-dist, GitHub Actions
+CI, four-target matrix, install-script generation) but did
+**not** publish a release. Until public hosting is configured
+and Task 7 lands, the only supported install path is
+[build from source](#build-from-source-currently-the-only-path).
+
+The shell-installer section below documents the path that will
+become primary once `v0.1.0` is published.
+
 ## Supported targets
 
-Phase 61's first release covers four targets. All Linux builds
-are musl-static, so a single Linux binary works on every distro
-without glibc version drift.
+When the release pipeline fires, it will cover four targets. All
+Linux builds are musl-static, so a single Linux binary works on
+every distro without glibc version drift.
 
 | Target | Binary | Notes |
 |---|---|---|
@@ -28,58 +39,10 @@ port needs a NamedPipe replacement. Until that lands, run Aivyx
 inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) — it
 behaves as a regular Linux x86_64 install.
 
-## Recommended: shell installer
+## Build from source (currently the only path)
 
-The cargo-dist-generated installer detects your arch, downloads
-the right tarball, verifies its checksum, and drops `aivyx` into
-`$CARGO_HOME/bin/` (typically `~/.cargo/bin/`).
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/AivyxDev/aivyx/releases/latest/download/aivyx-channel-installer.sh \
-  | sh
-```
-
-The installer prints a `PATH` update line if `~/.cargo/bin/` isn't
-already on your shell `PATH`. Reload your shell or `source ~/.bashrc`
-(or your shell's equivalent) and verify:
-
-```sh
-aivyx --version
-# aivyx 0.1.0
-```
-
-If you want a specific version, replace `latest` with the tag:
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/AivyxDev/aivyx/releases/download/v0.1.0/aivyx-channel-installer.sh \
-  | sh
-```
-
-## macOS first launch: Gatekeeper
-
-The Phase 61 release does not include code signing or
-notarization. macOS quarantines unsigned binaries downloaded
-from the network. Two ways past the warning:
-
-**(a) Strip the quarantine attribute** (one-shot, recommended):
-
-```sh
-xattr -d com.apple.quarantine "$(command -v aivyx)"
-```
-
-**(b) Right-click → Open** the binary once from Finder. macOS
-asks for confirmation; after that, future invocations work.
-
-Signing + notarization is on the deferred-distribution list. It
-requires an Apple Developer account and a CI-side cert pipeline;
-it lands in a follow-up phase once operator pressure surfaces.
-
-## Build from source
-
-For contributors, unsupported platforms (Windows native,
-FreeBSD, other Linux libc combinations), or if you just prefer it:
+This is the supported install path today. Cargo build from a
+clone of the repository:
 
 **Prerequisites:**
 - Rust toolchain 1.85+ (`rustup` recommended)
@@ -104,6 +67,53 @@ The pre-commit hook (`./scripts/install-hooks.sh`) is optional
 for end users; it enforces `cargo clippy --workspace --all-targets
 -- -D warnings` on every commit and is recommended for
 contributors.
+
+## Shell installer (when published)
+
+This section documents the path that becomes primary once
+`v0.1.0` is published. **It does not work yet** — the URL
+returns 404. The pipeline is in place to fire on the first tag
+push to a public GitHub remote.
+
+The cargo-dist-generated installer will detect your arch,
+download the right tarball, verify its checksum, and drop
+`aivyx` into `$CARGO_HOME/bin/` (typically `~/.cargo/bin/`).
+
+```sh
+# Will work post-publication:
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/AivyxDev/aivyx/releases/latest/download/aivyx-channel-installer.sh \
+  | sh
+aivyx --version
+# aivyx 0.1.0
+```
+
+For a specific version, replace `latest` with the tag:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/AivyxDev/aivyx/releases/download/v0.1.0/aivyx-channel-installer.sh \
+  | sh
+```
+
+### macOS first launch: Gatekeeper
+
+Phase 61's release will not include code signing or notarization.
+macOS quarantines unsigned binaries downloaded from the network.
+Two ways past the warning:
+
+**(a) Strip the quarantine attribute** (one-shot, recommended):
+
+```sh
+xattr -d com.apple.quarantine "$(command -v aivyx)"
+```
+
+**(b) Right-click → Open** the binary once from Finder. macOS
+asks for confirmation; after that, future invocations work.
+
+Signing + notarization is on the deferred-distribution list. It
+requires an Apple Developer account and a CI-side cert pipeline;
+it lands in a follow-up phase once operator pressure surfaces.
 
 ## Where files land
 
