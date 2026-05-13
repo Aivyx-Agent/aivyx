@@ -120,6 +120,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 60 | Frozen  | [PHASE_60.md](PHASE_60.md) | `cff2c4c`  |
 | Phase 61 | Frozen  | [PHASE_61.md](PHASE_61.md) | `4e68a06`  |
 | Phase 62 | Frozen  | [PHASE_62.md](PHASE_62.md) | `f3ec668`  |
+| Phase 63 | Open    | [PHASE_63.md](PHASE_63.md) |            |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
