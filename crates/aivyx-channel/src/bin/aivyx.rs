@@ -317,6 +317,17 @@ fn run() -> Result<(), String> {
         web_ui_port: cli_web_ui_port,
     } = parse_cli_args()?;
 
+    // ---- Phase 61: --version short-circuit -----------------------------
+    // Prints `aivyx <CARGO_PKG_VERSION>` to stdout and exits 0. Runs
+    // before every other dispatch path so the probe never touches the
+    // config loader, the storage layer, or the daemon socket — the
+    // installer smoke test must succeed on a host with no config and
+    // no running daemon.
+    if mode == CliMode::Version {
+        println!("aivyx {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // ---- Lightweight daemon management subcommands ----------------------
     // These need only the socket path — no API key, no config, no store.
     // A minimal tokio runtime is spun up just for the IPC round-trip.
@@ -882,6 +893,11 @@ enum CliMode {
     /// Revert carries its target delta id inline. All three
     /// subcommands talk to a running daemon over IPC.
     Persona(PersonaSubcommand),
+    /// `aivyx --version` / `aivyx -V`: print `aivyx <version>` and
+    /// exit 0 (Phase 61 Task 2). Standard hygiene for binaries
+    /// shipped via package managers and required by cargo-dist's
+    /// installer smoke test.
+    Version,
 }
 
 /// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
@@ -962,6 +978,29 @@ fn parse_cli_args() -> Result<CliArgs, String> {
 
 /// Testable core of [`parse_cli_args`].
 fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
+    // Phase 61 Task 2 — `--version` / `-V` short-circuit. Matches
+    // before every subcommand and flag so the version probe is
+    // stable regardless of future surface additions.
+    if !args.is_empty() && (args[0] == "--version" || args[0] == "-V") {
+        if args.len() > 1 {
+            return Err(format!(
+                "`{}` does not accept additional arguments. Got: `{}`",
+                args[0],
+                args[1..].join(" ")
+            ));
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Version,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
     // Check for `daemon <subcommand>` first.
     if args.len() >= 2 && args[0] == "daemon" {
         let (mode, subcmd) = match args[1].as_str() {
@@ -4030,6 +4069,34 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
             .expect("must parse");
         assert_eq!(parsed.web_ui_port, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 61 — `aivyx --version` / `-V` flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_version_long_flag() {
+        let parsed = parse_cli_args_from(&argv(&["--version"]))
+            .expect("--version must parse");
+        assert_eq!(parsed.mode, CliMode::Version);
+    }
+
+    #[test]
+    fn parse_version_short_flag() {
+        let parsed = parse_cli_args_from(&argv(&["-V"]))
+            .expect("-V must parse");
+        assert_eq!(parsed.mode, CliMode::Version);
+    }
+
+    #[test]
+    fn parse_version_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["--version", "--channel", "local"]))
+            .expect_err("--version with flags must error");
+        assert!(
+            err.contains("does not accept additional arguments"),
+            "error: {err}"
+        );
     }
 
     // -----------------------------------------------------------------------
