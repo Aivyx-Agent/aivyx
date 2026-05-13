@@ -427,3 +427,46 @@ parent_role = "researcher"
 #     "notify.send:phone",
 #   ]
 #   tool_allowlist = ["notify.send", ...]
+
+# ----------------------------------------------------------------
+# Auto-notify on trigger fire (Phase 63 — Reach Phase 2)
+# ----------------------------------------------------------------
+#
+# `[[schedule]]`, `[[webhook]]`, and `[[file_watch]]` entries
+# each accept an optional `notify_target = "..."` field. When
+# set, the daemon auto-dispatches the trigger-fired turn's final
+# response to the named target after the turn completes — no
+# agent involvement, no system-prompt instruction needed. The
+# subject is auto-generated as `<kind>: <trigger-name>`
+# (e.g. `cron: morning-summary`).
+#
+# Capability gate: the trigger's role must have `notify.send`
+# (qualified to the target, or unqualified) in its effective
+# envelope. The config loader validates this at startup; a
+# mismatch produces a load-time error naming both the role and
+# the target rather than silently failing at 9am the next
+# morning.
+#
+# Failure behavior: one attempt per fire. Dispatch failures are
+# logged via stderr; the trigger itself is unaffected (a
+# scheduled summary that did its work successfully isn't marked
+# Failed just because Telegram was unreachable).
+#
+# Special outcomes:
+# - Empty agent response → skip the dispatch (no point sending
+#   an empty notification).
+# - Failed turn → notification body is "Turn failed: <reason>"
+#   so the operator knows their job blew up.
+# - Escalated turn → "Turn escalated: <reason>".
+#
+# Uncomment to enable. Requires:
+#  1. A matching [[notify_target]] entry above.
+#  2. The trigger's role (default if unspecified) declaring
+#     `notify.send` in capability_scopes.
+#
+# [[schedule]]
+# name = "morning-summary"
+# cron = "0 0 9 * * * *"   # 9:00 AM daily
+# prompt = "Summarize my day's calendar, unread mail, and open issues. Reply with the summary."
+# notify_target = "phone"
+# wrap_mission = false
