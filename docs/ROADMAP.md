@@ -833,6 +833,69 @@ shaped, and the forward-commitment ledger closed. Future
 numbered phases land in response to operator feedback or as
 amendment-introduced commitments.
 
+## Phase 61 — Distribution: Release Pipeline (Pipeline Ready, Publication Held)
+
+**Frozen — see [PHASE_61.md](PHASE_61.md).** First phase past
+the closed forward-commitment ledger. Operator-feedback-shaped
+work on the post-Phase-60 substrate-ergonomics axis, opening
+the **Distribution Milestone** (phase 1 of N).
+
+Delivered across six engineering tasks + one mid-phase fixup:
+
+- **Task 2 — `aivyx --version` / `-V` CLI flag.** New
+  `CliMode::Version` variant in the hand-rolled parser; prints
+  `aivyx <CARGO_PKG_VERSION>` and exits 0 without touching the
+  config loader, storage layer, or daemon socket. Three parser
+  tests (long, short, extra-args rejection).
+- **Task 3 — `cargo-dist` initialization.** Q1(a) sign-off:
+  cargo-dist v0.31.0 (binary name `dist`) over hand-rolled CI.
+  `dist init` generates `dist-workspace.toml` + `.github/
+  workflows/release.yml`. Two cleanups on top of the bare
+  output: target matrix trimmed to Q2(a) musl-static + macOS
+  only (no gnu variants, no `x86_64-pc-windows-msvc`); and
+  `aivyx-tool` marked `[package.metadata.dist] dist = false`
+  to exclude the `fs_read_subprocess_fixture` test binary
+  from release artifacts.
+- **Task 4 — CI gates.** Three workflow files for defense in
+  depth: `quality-gate.yml` (reusable `workflow_call`,
+  `cargo clippy --workspace --all-targets -- -D warnings` +
+  `cargo test --workspace`), `ci.yml` (calls quality-gate on
+  every push to main and every PR), and a `plan-jobs =
+  ["./quality-gate"]` entry in `dist-workspace.toml` that
+  wires the same gate into the release pipeline's `plan` job
+  — every release-pipeline artifact transitively depends on
+  the gate.
+- **Task 5 — README rewrite.** Status table refreshed
+  (Phase 54 → Phase 61 numbers); Five-minute setup quickstart
+  framing prepared for prebuilt binaries.
+- **Task 6 — `docs/INSTALL.md`.** New file. Full install
+  matrix: supported targets, build-from-source path, where
+  files land, first-run checklist, uninstall.
+- **Task 5/6 fixup — pipeline-ready framing.** Mid-phase
+  the operator pivoted to a "VPS-private-first,
+  GitHub-later" posture. Tasks 5 and 6 had landed a
+  "v0.1.0 published" framing that was no longer true; the
+  fixup reverted README's Five-minute setup to the
+  build-from-source primary path and reframed `docs/
+  INSTALL.md` with a "Current install state" disclaimer +
+  shell-installer-as-forward-looking.
+
+**Task 7 deferred indefinitely.** Phase 61's stated goal at
+open was to cut `v0.1.0` on GitHub Releases. Under the
+VPS-first pivot, the operator-side publication step (create
+public repo, push history, tag `v0.1.0`) is held until
+public hosting is configured. The release substrate is
+in place and fires the first time a `v*.*.*` tag is pushed
+to a public GitHub remote — a focused micro-phase
+(numbered later) ships the actual `v0.1.0` when ready.
+
+All three streak predictions correct: DESIGN.md → 8,
+PRODUCT.md → 1 (recovered after Phase 60's intentional
+break), `aivyx-core/src/lib.rs` → 9 (new record, beating
+Phase 60's 8). Test count +3 (1071 → 1074) — Task 2's
+three `--version` parser tests. Zero clippy warnings. One
+net-new deferral (Task 7 — v0.1.0 publication).
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

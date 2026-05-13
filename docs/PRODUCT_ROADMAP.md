@@ -690,6 +690,65 @@ layer.
   all fully shipped**. The PRODUCT.md forward-commitment
   ledger closes here.
 
+## Milestone — Distribution (in progress, Pipeline Ready)
+
+**Forward commitment:** none — operator-feedback-shaped
+substrate-ergonomics work post-ledger-closure.
+**Couples to:** `aivyx init` (Phase 44 wizard), the operator
+identity layer (P13 + P14).
+**Status:** Phase 1 of N delivered as "Pipeline Ready,
+Publication Held." First published release pending public
+hosting; future micro-phases extend reach.
+
+After Phase 60 closed the forward-commitment ledger, the
+codebase review surfaced **distribution** as the largest
+adoption-shape gap: end users had to run `cargo run --release
+--bin aivyx` from source because there were no prebuilt
+binaries on any platform. This milestone closes that gap
+incrementally — release pipeline first, then publication,
+then platform expansion (Windows, Homebrew, Docker, signing),
+then the long-tail polish (signed third-party tool
+registries, automated update channels). Each item lands as a
+focused phase rather than one monolithic distribution effort.
+
+**Expected sub-phases / micro-phases:**
+
+- **Phase 61 (Release Pipeline, shipped 2026-05-13 as
+  "Pipeline Ready").** First phase of the milestone. Wired
+  the release substrate: `aivyx --version` flag, cargo-dist
+  config (`dist-workspace.toml`), four-target matrix (Linux
+  x86_64/aarch64 musl + macOS x86_64/aarch64), three
+  workflow files (`ci.yml`, `quality-gate.yml`, dist's
+  `release.yml`), and the `plan-jobs = ["./quality-gate"]`
+  wiring that gates every release-pipeline artifact behind
+  `cargo clippy --workspace --all-targets -- -D warnings` +
+  `cargo test --workspace`. README's "Five-minute setup"
+  refresh prepared the install-script framing; mid-phase
+  the operator pivoted to a VPS-private-first posture and
+  the Task 5/6 fixup reframed the docs to honest
+  "build-from-source primary, shell-installer when
+  published." Tests +3 (1071 → 1074). All three streak
+  predictions correct: DESIGN.md → 8, PRODUCT.md → 1,
+  lib.rs → 9 (new record).
+- **v0.1.0 publication (deferred to future micro-phase).**
+  Operator-side: create public GitHub repo, push history,
+  tag `v0.1.0`. The pipeline fires automatically and
+  publishes prebuilt binaries + shell installer. Re-opens
+  when public hosting goes live.
+- **Native Windows port (future).** Daemon IPC NamedPipe
+  replacement for the Unix-socket-only substrate;
+  platform-conditional spawn for `shell.exec`; parallel CI
+  matrix. Most architecturally heavy item on the milestone.
+- **Package manager presence (future).** Homebrew tap;
+  optionally crates.io publishing (12-crate namespace
+  check + versioning policy); optionally Linux distro
+  packages (AUR / `.deb` / `.rpm`).
+- **Container distribution (future).** Docker image with
+  the daemon as the entrypoint.
+- **macOS signing + notarization (future, gated on Apple
+  Developer account).** Removes the Gatekeeper friction at
+  first launch.
+
 ## Sequencing notes (revised at Phase 56 sign-off, 2026-05-12)
 
 Through Phase 55, every PRODUCT.md commitment (P1–P12) is

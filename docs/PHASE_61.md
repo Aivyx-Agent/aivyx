@@ -8,14 +8,23 @@ see [`../PRODUCT.md`](../PRODUCT.md).
 
 ## Goal
 
-Cut the first published release (`v0.1.0`) on GitHub Releases and
-replace the `cargo run --release --bin aivyx` quickstart with a
-one-line `curl … | sh && aivyx init` installer path. First phase
-of the **Distribution Milestone** — operator-feedback-shaped work
-on the post-Phase-60 substrate-ergonomics axis.
+**Original goal** (at phase open): Cut the first published release
+(`v0.1.0`) on GitHub Releases and replace the `cargo run --release
+--bin aivyx` quickstart with a one-line `curl … | sh && aivyx
+init` installer path. First phase of the **Distribution
+Milestone** — operator-feedback-shaped work on the post-Phase-60
+substrate-ergonomics axis.
 
-After Phase 61, an end user can install Aivyx without a Rust
-toolchain on the four supported targets:
+**Revised outcome** (at phase close, 2026-05-13): Phase 61 ships
+the release-pipeline **substrate** — `--version` flag, cargo-dist
+config, CI gates, release workflow, install matrix docs — but
+does **not** publish a release. Mid-phase the operator pivoted
+to a "VPS-private-first, GitHub-later" posture, holding the
+public publication step (Task 7) indefinitely. Publication
+re-opens as a focused micro-phase whenever public hosting goes
+live.
+
+Target matrix when the pipeline does fire:
 
 - `x86_64-unknown-linux-musl`
 - `aarch64-unknown-linux-musl`
@@ -23,10 +32,16 @@ toolchain on the four supported targets:
 - `aarch64-apple-darwin`
 
 Native Windows, Homebrew, crates.io publishing, Docker images,
-and macOS code-signing/notarization are explicitly **deferred to
-follow-up phases** per the Phase 61 scope sign-off (Windows is a
-real engineering project — daemon IPC is Unix-domain-socket-only
+and macOS code-signing/notarization remain explicitly **deferred
+to follow-up phases** per the Phase 61 scope sign-off (Windows is
+a real engineering project — daemon IPC is Unix-domain-socket-only
 today). Windows-via-WSL is documented but not packaged.
+
+The fixup commit reverting the premature "v0.1.0 published"
+README/INSTALL.md claims (commit `7ac8cd8`) sits between Task 6
+and Task 8 and is recorded as a phase commit, not a `chore:`
+chore, because it materially changes the operator-facing framing
+of the phase outcome.
 
 ## Why now
 
@@ -233,35 +248,95 @@ are operator decisions, not Claude's.
 
 ## Deferrals
 
-To be filled in at phase exit.
+**Net-new deferrals from Phase 61:**
+
+- **v0.1.0 publication (Task 7).** The operator-side action of
+  creating a public GitHub repo, pushing history, and tagging
+  `v0.1.0` is held indefinitely under the operator's
+  VPS-private-first posture. The substrate (CI gates, dist
+  config, release workflow) sits ready and fires the first time
+  a `v*.*.*` tag is pushed to a public GitHub remote. Re-opens
+  as a focused micro-phase when public hosting is configured.
+- **Native Windows port** (out of Phase 61 scope per sign-off).
+  Daemon IPC is Unix-domain-socket-only (`UnixListener` /
+  `UnixStream` throughout `daemon_server.rs` / `daemon_client.rs`,
+  `#[cfg(unix)]` across `aivyx-channel`). A Windows port needs
+  a `NamedPipe` replacement layer, platform-conditional spawn
+  paths for `shell.exec`, and a parallel CI matrix.
+- **Homebrew tap** (out of Phase 61 scope per sign-off). Adds a
+  `homebrew-aivyx` repository plus formula maintenance overhead.
+- **crates.io publishing** (out of Phase 61 scope per sign-off).
+  Twelve workspace crates need namespace-availability checks
+  plus a workspace-wide versioning policy.
+- **Docker image** (out of Phase 61 scope per sign-off). Adds
+  a Dockerfile + image build job in CI.
+- **macOS signing + notarization** (out of Phase 61 scope per
+  sign-off). Requires an Apple Developer account ($99/yr) plus
+  a cert pipeline in CI.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to eight**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 61 shipped under existing D-deliverables; zero
+  contract touch.
+
+- **PRODUCT.md** — Predicted: streak **recovers to one**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  No commitment-text edits, no Delivery Status refresh (P1–P14
+  stay Fully Delivered). The forthcoming "Distribution"
+  milestone landed in `docs/PRODUCT_ROADMAP.md`, not in the
+  contract document.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted: streak
+  **extends to nine** (new record). **Reality: correct.** Hash
+  unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Task 2's `--version` flag landed in `aivyx-channel`'s binary
+  file as predicted; every other task landed in CI yaml, dist
+  config, root Cargo.toml, or docs. Nine consecutive phases
+  beats the prior Phase 60 record of eight.
+
+- **Test count** — Predicted: small positive (~+1). **Reality:
+  +3** (1071 → 1074). Three parser tests for `--version`:
+  long-flag, short-flag (`-V`), and the extra-args rejection
+  path. Zero clippy warnings throughout.
+
+- **Pipeline-vs-publication outcome** — Not predicted at open.
+  Phase 61's stated goal was to publish v0.1.0; the actual
+  outcome is pipeline-ready-but-not-firing under the VPS-first
+  pivot. This is the most material deviation from the open
+  doc's framing and is recorded in the Goal section's
+  "Revised outcome" addendum.
 
 ## Exit criteria
 
-- [ ] `aivyx --version` flag wired and tested — Task 2.
-- [ ] `.github/workflows/release.yml` + `dist-workspace.toml`
-  generated or hand-written — Task 3.
-- [ ] CI gates run `cargo test --workspace` +
+- [x] `aivyx --version` flag wired and tested — Task 2,
+  commit `aa198f7`.
+- [x] `.github/workflows/release.yml` + `dist-workspace.toml`
+  generated — Task 3, commit `05bf044`.
+- [x] CI gates run `cargo test --workspace` +
   `cargo clippy --workspace --all-targets -- -D warnings`
-  before artifact upload — Task 4.
-- [ ] README quickstart uses the install-script path; status
-  table refreshed to Phase 60 numbers; macOS Gatekeeper
-  workaround documented inline — Task 5.
-- [ ] `docs/INSTALL.md` covers the full install matrix —
-  Task 6.
+  before artifact upload — Task 4, commit `8b2c6eb`.
+- [x] README quickstart refreshed; status table updated; macOS
+  Gatekeeper workaround documented — Task 5, commit `cde239a`
+  + Task 5/6 fixup `7ac8cd8`.
+- [x] `docs/INSTALL.md` covers the install matrix — Task 6,
+  commit `93ec379` + Task 5/6 fixup `7ac8cd8`.
 - [ ] v0.1.0 tagged + pushed; release workflow fires; install
   script downloads and runs on at least one verified host —
-  Task 7 (operator-side).
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 8.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 3.
-- [ ] DESIGN.md streak extends to eight.
-- [ ] PRODUCT.md streak recovers to one.
-- [ ] Production-core streak extends to nine (new record).
-- [ ] Test count delta: small positive (~+1 for `--version`
-  parser test).
-- [ ] Prediction-vs-reality block filled.
+  **Task 7, deferred** to a focused micro-phase under the
+  VPS-first posture.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 8 (this commit).
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 3 (Q1(a) cargo-dist, Q2(a) musl-static,
+  Q3(b) phase-driven user-visible cadence, Q4(a)
+  `~/.cargo/bin/`).
+- [x] DESIGN.md streak extends to eight.
+- [x] PRODUCT.md streak recovers to one.
+- [x] Production-core streak extends to nine (new record).
+- [x] Test count delta: +3 (1071 → 1074).
+- [x] Prediction-vs-reality block filled.
