@@ -800,15 +800,26 @@ respond to it. Closing the gap is the inflection point between
   Lands as a follow-on micro-phase when adoption surfaces
   friction.
 
-- **Trigger-config `notify_target` sugar (future).** The
-  deferred Q3 alternative from Phase 62 open: a
-  `[[schedule]]` / `[[webhook]]` / `[[file_watch]]` config
-  entry gains an optional `notify_target = "..."` field; when
-  the trigger fires and the turn produces output, the daemon
-  auto-pushes the output to the named target without the
-  agent thinking about it. Useful for operators who want
-  "schedule fires at 9am, summary lands on my phone"
-  without instructing the agent each time.
+- **Phase 63 (Trigger-Config Notify Sugar, shipped
+  2026-05-13).** Closes the Phase 62-deferred trigger-config
+  alternative. `[[schedule]]`, `[[webhook]]`,
+  `[[file_watch]]` entries each accept an optional
+  `notify_target = "..."`. When the trigger fires, the daemon
+  auto-dispatches the agent's final response to the named
+  target after the turn completes — operator-correct subject
+  `<kind>: <trigger-id>`, no agent involvement, no
+  system-prompt instruction. Config-load-time capability
+  validation (Q5(a)) catches role/target mismatches at startup
+  rather than at 9am the next morning. Three Record types
+  gain `notify_target` with `#[serde(default)]` for backward
+  compat. Tests +15. All three streak predictions correct:
+  DESIGN.md → 10, PRODUCT.md → 3, lib.rs → 11 (new record).
+  **Q1(a) audit-event variant scope-adjusted at exit:**
+  `AuditEventKind::AutoNotifyDispatched` deferred to a
+  follow-on phase because `TriggerDispatch` doesn't hold an
+  audit-hook reference today and wiring one in is materially
+  larger than the notify hook itself. Auto-notify is
+  eprintln-logged matching the existing trigger.rs patterns.
 
 - **Email SMTP outbound (future).** Adds a `kind = "email"`
   backend. New dep (`lettre` or similar) plus SMTP config

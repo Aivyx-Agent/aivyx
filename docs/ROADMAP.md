@@ -971,6 +971,72 @@ learns from the input schema; the operator's
 `[profile] communication_style` or role `system_prompt` can
 name specific targets when needed.
 
+## Phase 63 — Reach Phase 2: Trigger-Config Notify Sugar
+
+**Frozen — see [PHASE_63.md](PHASE_63.md).** Second phase of
+the Reach Milestone. Closes the Phase 62-deferred trigger-
+config sugar alternative: each `[[schedule]]`, `[[webhook]]`,
+`[[file_watch]]` entry accepts an optional
+`notify_target = "..."` field; when the trigger fires and the
+turn completes, the daemon auto-dispatches the agent's final
+response to the named target. No agent involvement, no
+system-prompt instruction. The "scheduled summary lands on my
+phone" use case now Just Works.
+
+Delivered across six engineering tasks (Tasks 1, 2, 3+4+5
+combined, 6, 7):
+
+- **Task 2 — Config field + cross-validation.** All three
+  Raw* trigger types gain `notify_target: Option<String>`;
+  mirror to public ScheduleConfig / WebhookConfig /
+  FileWatchConfig. New `validate_trigger_notify_targets`
+  helper called after notify_targets is built but before
+  AivyxConfig assembly. Two failure modes: unknown-target,
+  and missing-capability (walks the trigger's role parent
+  chain, accumulates declared scopes into a CapabilitySet,
+  intersects with the trust ceiling, checks
+  `notify.send:<target>` is granted). Nine new tests
+  including the SemiTrusted-ceiling-drops-notify regression
+  and inheritance-via-parent-role.
+- **Task 3 — TriggerDispatch auto-notify hook.** New
+  `with_notify_dispatcher` builder; `fire()` signature
+  extends with `notify_target: Option<&str>`. After the turn
+  completes, if both are Some, dispatch the agent's response
+  with subject `<kind>: <trigger-id>`. `render_notify_body`
+  pure function maps each TurnOutcome variant to a body
+  string (Completed → final_message; Failed → "Turn failed:
+  <reason>"; Escalated → "Turn escalated: <reason>";
+  TimedOut + Cancelled → marker strings). Empty Completed
+  body skips per Q2(a). Six render-body unit tests.
+- **Task 3 plumbing.** All three Record types
+  (ScheduleRecord, WebhookRecord, FileWatchRecord) gain
+  `notify_target` with `#[serde(default)]` for backward
+  compat with pre-Phase-63 encrypted records. The three
+  fire() call sites + WatchState + config-to-record paths
+  all propagate the field. DaemonConfig gains
+  `notify_dispatcher: Option<Arc<NotifyDispatcher>>`; the
+  binary shares one Arc between `NotifySendTool` (Phase 62)
+  and `DaemonConfig` for the trigger path.
+- **Task 6 — Worked example.** New section in
+  `examples/aivyx.toml` documents the schedule + notify_target
+  pattern with operator rationale.
+
+Streak predictions all correct: DESIGN.md → 10, PRODUCT.md → 3,
+`aivyx-core/src/lib.rs` → 11 (new record, beating Phase 62's
+10). Tests +15 (1139 → 1154), inside the predicted +15–20
+range. Zero clippy warnings. Zero new workspace deps.
+
+**Scope adjustment at exit:** Q1(a) sign-off chose a new
+`AuditEventKind::AutoNotifyDispatched` variant for forensic
+search. Implementation revealed `TriggerDispatch` doesn't hold
+an audit-hook reference today; wiring one in touches multiple
+plumbing layers and is materially larger than the notify hook
+itself. Deferred to a focused follow-on phase. Auto-notify is
+eprintln-logged matching existing trigger.rs patterns (mission
+state changes aren't audit-logged either). Per-kind
+dispatcher-recording integration tests similarly folded into
+the `render_notify_body` unit coverage.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

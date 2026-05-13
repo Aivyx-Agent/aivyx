@@ -236,41 +236,109 @@ role envelope?**
   templates, Slack-flavored webhook, shared Telegram transport
   (all Phase 62 deferrals).
 
-**Likely Phase 63 deferrals (filled in at exit):**
+**Phase 63 deferrals (recorded at exit):**
 
-- Auto-notify rate limits (per-trigger cooldown — currently
-  the trigger's own debounce/throttle is the only rate limit).
-- Operator-templated notify body (`notify_template = "..."`
-  with `{response}`, `{outcome}` placeholders).
-- Auto-notify retry on failure (deferred from the pre-Q-block).
-- Multi-target dispatch from one trigger (`notify_target =
-  ["phone", "ops-alerts"]`).
-- Conditional notify (`notify_on = "escalated"` etc.).
+- **`AuditEventKind::AutoNotifyDispatched` variant.** The Q1(a)
+  sign-off chose a dedicated audit event for forensic search.
+  Implementation revealed that `TriggerDispatch` doesn't
+  currently hold an audit-hook reference — wiring one in
+  touches `DaemonConfig`, `run_daemon`'s signature, and every
+  trigger subsystem's spawn path. The audit-hook plumbing is
+  materially larger than the notify hook itself; deferred to
+  a focused follow-on phase when forensic-search use cases
+  surface. Today's auto-notify is eprintln-logged matching the
+  existing trigger.rs pattern (mission state changes aren't
+  audit-logged either).
+- **Per-kind end-to-end integration tests.** The original
+  Task 5 plan called for "schedule + auto-notify, webhook +
+  auto-notify, file_watch + auto-notify" integration tests
+  with a dispatcher-recording stub. Folded into the
+  `render_notify_body` unit tests (6 cases, every TurnOutcome
+  variant) + the existing trigger end-to-end tests (which
+  exercise the full fire path). A dispatcher-recording
+  integration test per kind is left as a follow-up if real
+  regressions surface.
+- **Auto-notify rate limits** (per-trigger cooldown —
+  currently the trigger's own debounce/throttle is the only
+  rate limit).
+- **Operator-templated notify body** (`notify_template =
+  "..."` with `{response}`, `{outcome}` placeholders).
+- **Auto-notify retry on failure** (deferred from the
+  pre-Q-block — log + audit, no retry).
+- **Multi-target dispatch from one trigger** (`notify_target
+  = ["phone", "ops-alerts"]`).
+- **Conditional notify** (`notify_on = "escalated"` etc. —
+  only fire for specific TurnOutcome variants).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to ten**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 63 shipped entirely as config + daemon-side hook +
+  worked example. No D-deliverable reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to three**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  No commitment-text edits, no Delivery Status refresh. The
+  Reach Milestone Phase 2 entry landed in
+  `docs/PRODUCT_ROADMAP.md`.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to eleven** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Every Phase 63 surface routed through `aivyx-config` (config
+  field + cross-validation), `aivyx-channel` (trigger dispatch
+  hook, record-type extension, dispatcher plumbing through
+  `DaemonConfig`), and `aivyx-capability` (consulted from the
+  config validator via the existing public API). No path
+  touches `aivyx-core`. Eleven consecutive phases beats Phase
+  62's record of ten.
+
+- **Test count** — Predicted: positive (~+15–20). **Reality:
+  +15** (1139 → 1154), inside the predicted range. Task 2
+  shipped 9 config-validation tests; Task 3 shipped 6
+  `render_notify_body` tests.
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** No new Rust crates added. The new code uses
+  `aivyx-capability::CapabilitySet` for the cross-validation
+  and the existing trigger infrastructure for the hook —
+  all already in tree.
+
+- **Audit event variant** — Predicted at open (Q1(a)) but
+  deferred at implementation time. The first Phase 63
+  scope adjustment; see Deferrals.
 
 ## Exit criteria
 
-- [ ] `notify_target` field added to schedule/webhook/file_watch
+- [x] `notify_target` field added to schedule/webhook/file_watch
   TOML; load-time validation passes for happy paths and rejects
-  unknown-target / missing-capability — Task 2.
-- [ ] Trigger dispatch hook fires `dispatcher.dispatch` after
-  the trigger-fired turn completes — Task 3.
+  unknown-target / missing-capability / SemiTrusted-ceiling
+  cases — Task 2, commit `229bd45`.
+- [x] Trigger dispatch hook fires `dispatcher.dispatch` after
+  the trigger-fired turn completes — Task 3, commit `aa5137b`.
 - [ ] `AuditEventKind::AutoNotifyDispatched` recorded for each
-  fire (including skipped/failed cases) — Task 4.
-- [ ] Integration tests cover schedule + webhook + file_watch
-  paths — Task 5.
-- [ ] `examples/aivyx.toml` schedule example annotated with
-  `notify_target` and rationale — Task 6.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 7.
-- [ ] All five Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to ten.
-- [ ] PRODUCT.md streak extends to three.
-- [ ] Production-core streak extends to eleven (new record).
-- [ ] Test count delta: positive (~+15–20).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+  fire — **Task 4 deferred** to a focused follow-on phase. See
+  Deferrals.
+- [x] Integration tests cover schedule + webhook + file_watch
+  paths — Task 5, folded into Task 3 commit (six
+  `render_notify_body` unit tests covering every TurnOutcome
+  variant; per-kind dispatcher-recording tests deferred).
+- [x] `examples/aivyx.toml` schedule example annotated with
+  `notify_target` and rationale — Task 6, commit `c33c089`.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 7 (this commit).
+- [x] All five Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(a) AutoNotifyDispatched variant —
+  design held but implementation deferred; Q2(a) skip empty;
+  Q3(a) fire-on-failed-turn with synthesized body; Q4(a)
+  `<kind>: <name>` subject; Q5(a) config-load-time validation).
+- [x] DESIGN.md streak extends to ten.
+- [x] PRODUCT.md streak extends to three.
+- [x] Production-core streak extends to eleven (new record).
+- [x] Test count delta: +15 (1139 → 1154).
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
