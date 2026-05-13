@@ -9,6 +9,15 @@ authors.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+# Phase 61 Task 3 — exclude this crate from `dist` release artifacts.
+# The lone `src/bin/fs_read_subprocess_fixture.rs` binary is a
+# Cargo-auto-detected test fixture for `tests/p12_equivalence.rs`,
+# not an end-user-installable tool. Without this opt-out, `dist`
+# would publish a `aivyx-tool-<target>.tar.xz` alongside the real
+# `aivyx-channel-<target>.tar.xz`.
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 # Phase 49 — Tool Process IPC Foundation (P12). This crate mirrors
 # aivyx-mcp's shape (Phase 23): a bridge that spawns subprocess

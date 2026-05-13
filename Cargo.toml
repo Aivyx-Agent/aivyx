@@ -76,3 +76,8 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 
 # Unix process-group signaling for shell.exec (Phase 42)
 libc = "0.2"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
