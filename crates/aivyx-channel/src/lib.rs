@@ -59,6 +59,10 @@ pub mod notify_dispatcher;
 pub mod notify_telegram;
 pub mod notify_webhook;
 pub mod notify_tool;
+/// Phase 64 — Identity export/import format. Closes the Phase 60
+/// deferral; lets operators move Profile + Persona between hosts
+/// by re-signing the chain on import (Q1(a) at sign-off).
+pub mod identity_export;
 mod daemon_session;
 mod local;
 pub mod passphrase;

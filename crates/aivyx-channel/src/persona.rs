@@ -445,7 +445,11 @@ impl PersistentPersonaLog {
 /// delta clears the field. Lists hold `Vec<String>` in insertion
 /// order with duplicates removed (last-wins on
 /// `AppendList`-after-`RemoveList`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` added in Phase 64 Task 2 so the identity
+/// export format can embed the effective state directly (instead of
+/// projecting through a parallel wire type).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectivePersona {
     pub assistant_name: Option<String>,
     pub operator_profile: Option<String>,
