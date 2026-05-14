@@ -154,6 +154,51 @@ against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
 
+## Moving Aivyx to a new machine
+
+Phase 64 ships **identity export**: a portable snapshot of your
+operator-declared Profile and the reflection-approved Persona
+chain. Useful for backup before risky changes, for migrating
+between machines (laptop → VPS, old host → new host), or for
+inspecting the chain offline with `jq`.
+
+```sh
+# On the source host (daemon must be running):
+aivyx identity export ~/aivyx-snapshot.json
+# Wrote N deltas + Profile to ~/aivyx-snapshot.json
+# File permissions: 0600 (owner-only).
+```
+
+The file is pretty-printed JSON with the following shape:
+
+```json
+{
+  "schema_version": 1,
+  "exported_at": "2026-05-14T14:30:00Z",
+  "source_host": "laptop.local",
+  "profile": { "assistant_name": "...", "..." : "..." },
+  "persona": {
+    "deltas": [ { "seq": 0, "delta": { "..." : "..." } }, ... ],
+    "effective_at_export": { "..." : "..." }
+  }
+}
+```
+
+The chain's HMAC MACs are deliberately omitted from the export
+— the per-host HMAC key is not portable. On import (forthcoming
+in Phase 65), the chain is re-signed with the target host's
+key. Trust comes from operator authority, not cross-host
+cryptographic provenance.
+
+**Phase 65 will ship `aivyx identity import <path>`** with
+conflict resolution and a `--force` flag for destructive
+overwrites. Until then, the export file is a one-way snapshot
+— useful for backup and inspection, not yet restorable.
+
+For an interim restore path, hand-edit `aivyx.toml`'s
+`[profile]` section to match the exported profile; the Persona
+chain stays separate until import lands.
+
 ## Uninstall
 
 ```sh
