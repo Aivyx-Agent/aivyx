@@ -69,6 +69,7 @@ mod daemon_session;
 mod local;
 pub mod passphrase;
 pub mod persona;
+pub mod persona_proposal;
 pub mod profile_prompt;
 mod render;
 mod role_envelope;
