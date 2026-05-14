@@ -754,6 +754,51 @@ focused phase rather than one monolithic distribution effort.
   Developer account).** Removes the Gatekeeper friction at
   first launch.
 
+## Milestone — Onboarding Templates (Phase 66 shipped)
+
+**Forward commitment:** none — operator-feedback-shaped
+substrate from the post-Phase-60 codebase review.
+**Couples to:** `aivyx init` (Phase 44 wizard).
+**Status:** Phase 66 delivered the substrate + three starter
+templates (2026-05-14). Future phases extend the template
+library and add parameter substitution / web UI surface /
+sharing primitives as adoption shape demands.
+
+The original codebase review named three adoption-shape gaps
+post-Phase-60: Distribution (Phases 61), Reach (Phases 62–63),
+and Use-case onboarding. Phase 66 closes the third — operators
+no longer write `aivyx.toml` from scratch; the starter
+templates ship sensible defaults for the common archetypes.
+
+**Expected sub-phases / micro-phases:**
+
+- **Phase 66 (Starter Profile Templates, shipped
+  2026-05-14).** Template registry substrate (bundled +
+  user-dir hybrid), CLI flags (`--template`,
+  `--list-templates`), wizard pre-fill via
+  `TemplateDefaults` + `render_with_template` splice-back,
+  three bundled templates (`coder` / `researcher` /
+  `personal`). Operator can run
+  `aivyx init --template coder` and get a useful
+  `aivyx.toml` with role declarations, MCP web search,
+  and behavioral preferences baked in. Tests +18 (1176 →
+  1194). All four streak predictions correct: DESIGN.md
+  → 13, PRODUCT.md → 6, lib.rs → 14 (new record).
+
+- **More starter templates (future).** `data-analyst`,
+  `writer`, `student`, `devops-on-call`, etc. The substrate
+  supports arbitrary additions — each is just a complete
+  `aivyx.toml` with archetype-appropriate defaults.
+- **Template parameter substitution (future).**
+  `{{operator_name}}` placeholders prompted at init time
+  (vs Phase 66's literal-default-per-prompt approach).
+- **Web UI template selection (future).** Today the
+  template picker is CLI-only.
+- **Template sharing primitives (future).** Today operators
+  copy `.toml` files into `~/.local/share/aivyx/templates/`
+  manually. A curl-from-URL or community registry would let
+  templates spread.
+
 ## Milestone — Reach (in progress, agent-initiated outbound)
 
 **Forward commitment:** none — operator-feedback-shaped work

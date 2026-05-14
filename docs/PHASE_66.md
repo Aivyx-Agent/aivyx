@@ -259,45 +259,97 @@ focus:
   merge-strategy imports, selective imports, force-flag
   scoping).
 
-**Likely Phase 66 deferrals:**
+**Phase 66 deferrals (recorded at exit):**
 
-- More templates beyond the initial three (e.g. `data-analyst`,
-  `writer`, `student`).
-- Template parameter substitution (e.g. `{{operator_name}}`
-  placeholders prompted at init time).
+- More templates beyond the initial three (e.g.
+  `data-analyst`, `writer`, `student`). The substrate
+  supports arbitrary additions; future phases or community
+  contributions add them as use cases surface.
+- Template parameter substitution (`{{operator_name}}`
+  placeholders prompted at init time). Phase 66 ships literal
+  defaults; wizard prompts let operators override per-field.
 - Template tagging / search ("list all templates that include
-  notify.send").
-- Web UI surface for template selection.
+  `notify.send`").
+- Web UI surface for template selection. CLI-only in v1.
 - Versioned template registry (multiple template versions
   available; operator picks one).
 - Sharing templates between operators (curl-from-URL,
-  community registry, etc.).
+  community registry). Today operators copy `.toml` files
+  manually into `~/.local/share/aivyx/templates/`.
+- Schema migration for template format changes (Phase 66
+  ships v1; future revisions need migration paths).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to thirteen**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 66 shipped operator-facing substrate (CLI flags,
+  template registry, wizard pre-fill, three template fixtures)
+  with no D-deliverable reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to six**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  Starter templates are operator-feedback-shaped substrate,
+  not a P1–P14 commitment; no Delivery Status refresh.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to fourteen** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Every Phase 66 surface routed through
+  `crates/aivyx-channel/src/bin/aivyx_modules/init_templates.rs`,
+  `init.rs`, `aivyx.rs` and the three `examples/templates/*.toml`
+  files. Fourteen consecutive phases — longest production-core
+  run in project history; beats Phase 65's 13.
+
+- **Test count** — Predicted: positive (~+20–30). **Reality:
+  +18** (1176 → 1194). Slight undershoot from prediction;
+  the substrate is heavy in template TOML content (which
+  tests once for parse validity) and tooling/wizard plumbing
+  (which has integration coverage via parse_cli_args_from
+  tests + the registry's listing tests).
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** All new code reuses `toml_edit` (existing
+  Phase 58 dep), `std::fs`, `serde_json` etc. — no Cargo.toml
+  changes.
+
+- **Scope ambition** — Operator chose the more ambitious
+  options across the Q-block (hybrid location, three
+  templates, pre-fill wizard, both discovery modes). The
+  ambitious choices delivered cleanly — no scope adjustments
+  at implementation time, all four sign-offs held.
 
 ## Exit criteria
 
-- [ ] Template registry substrate (bundled + user-dir
-  override + listing + lookup) — Task 2.
-- [ ] CLI flags `--template <name>`, `--template` (no name),
-  `--list-templates` — Task 3.
-- [ ] Wizard pre-fill integration — Task 4.
-- [ ] `coder` template — Task 5.
-- [ ] `researcher` template — Task 6.
-- [ ] `personal` template — Task 7.
-- [ ] Unit tests for registry + parser + pre-fill + every
-  bundled template's TOML validity — Task 8.
-- [ ] `docs/INSTALL.md` + new `docs/TEMPLATES.md` + README
-  refresh — Task 9.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 10.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirteen.
-- [ ] PRODUCT.md streak extends to six.
-- [ ] Production-core streak extends to fourteen (new record).
-- [ ] Test count delta: positive (~+20–30).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+- [x] Template registry substrate (bundled + user-dir
+  override + listing + lookup) — Task 2, commit `ccfdbcd`.
+- [x] CLI flags `--template <name>`, `--template` (no name),
+  `--list-templates` — Task 3, commit `ccfdbcd`.
+- [x] Wizard pre-fill integration via `TemplateDefaults` +
+  `render_with_template` splice-back — Task 4, commit
+  `ccfdbcd`.
+- [x] `coder` template — Task 5, commit `ccfdbcd`.
+- [x] `researcher` template — Task 6, commit `ccfdbcd`.
+- [x] `personal` template — Task 7, commit `ccfdbcd`.
+- [x] 14 registry tests + 6 parser tests = 20 unit tests
+  across registry, parser, and pre-fill flow — Task 8,
+  commit `ccfdbcd`. Every bundled template tested for TOML
+  validity at test time.
+- [x] `docs/INSTALL.md` First-run checklist updated; new
+  `docs/TEMPLATES.md` describing each starter + custom-
+  template path; README quickstart points at the template
+  fast-path — Task 9, commit `c5b25eb`.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 10 (this commit).
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(c) hybrid, Q2(c) three templates,
+  Q3(b) pre-fill wizard, Q4(c) both discovery modes).
+- [x] DESIGN.md streak extends to thirteen.
+- [x] PRODUCT.md streak extends to six.
+- [x] Production-core streak extends to fourteen (new record).
+- [x] Test count delta: +18 (1176 → 1194).
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

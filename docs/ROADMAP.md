@@ -1153,6 +1153,67 @@ feedback-shaped (merge-strategy imports, encrypted export
 format, multi-source merge, schema migrations, real atomic
 import).
 
+## Phase 66 — Starter Profile Templates
+
+**Frozen — see [PHASE_66.md](PHASE_66.md).** Closes the third
+post-Phase-60 codebase-review direction (after Distribution
+and Reach). Ships `aivyx init --template <name>` so a fresh
+operator gets from "downloaded the binary" to "useful agent"
+without writing aivyx.toml from scratch. Three starter
+templates cover the common archetypes: `coder` (software
+engineering), `researcher` (research + synthesis), `personal`
+(personal task management + briefings).
+
+Delivered across three engineering commits (Open, Tasks 2–8
+combined, Tasks 9+10):
+
+- **Template registry substrate.** New
+  `init_templates.rs` module with `Template { name,
+  description, source, toml_content }`, `bundled_templates()`
+  via `include_str!`, `user_templates()` reading from
+  `$XDG_DATA_HOME/aivyx/templates/` or
+  `~/.local/share/aivyx/templates/`, `list_templates()`
+  unioning both with user-dir winning on collision,
+  `load_template(name)` with descriptive miss error, and
+  `parse_description` reading the `# description: …` marker
+  from leading TOML comments.
+- **CLI flags.** `CliMode::Init` becomes `Init(InitMode)`
+  with `Interactive`, `InteractiveFromTemplate { name }`,
+  `ListTemplates` variants. Parser accepts `aivyx init`,
+  `aivyx init --template <name>`, `aivyx init --template`
+  (no name → list), `aivyx init --list-templates`.
+- **Wizard pre-fill.** New `TemplateDefaults` extracts
+  provider, model, fs_root, storage_path, assistant_name,
+  primary_use_case, communication_style from a template's
+  TOML via `toml_edit`. Each wizard prompt's default
+  switches to the template-sourced value when present.
+  `render_with_template` splices wizard answers into the
+  template's `DocumentMut` and serializes — comments, role
+  declarations, MCP server blocks, commented-out sections
+  all survive.
+- **Three starter templates** in `examples/templates/`. Each
+  is a complete `aivyx.toml` with archetype-appropriate
+  Profile content, role envelope, and MCP/notify defaults
+  (commented-out where appropriate).
+- **20 unit tests** (14 registry + 6 parser) including
+  per-template TOML validity checks.
+- **`docs/TEMPLATES.md`** as the operator-facing reference.
+  `INSTALL.md` First-run checklist + README quickstart
+  updated to point at the fast-path.
+
+Streak predictions all correct: DESIGN.md → 13, PRODUCT.md →
+6, `aivyx-core/src/lib.rs` → 14 (new record, longest
+production-core run in project history — beats Phase 65's
+13). Tests +18 (1176 → 1194), slightly under the predicted
++20–30 range. Zero clippy warnings. Zero new workspace deps.
+
+**Q-block sign-off ambition held cleanly.** The operator
+chose the more ambitious options across all four questions
+at design time (hybrid location, three templates, pre-fill
+wizard, both discovery modes). All four sign-offs delivered
+as designed; no scope adjustments at implementation time.
+Phase 66 substantial-scope-but-clean shape.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
