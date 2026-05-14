@@ -683,9 +683,11 @@ layer.
   operator is the proposer). Per Q4(a), revert appends a
   delta to the append-only chain rather than mutating in
   place. Identity export/import deferred to a future
-  micro-phase if pressure surfaces — **the export half landed
-  in Phase 64 (2026-05-14); the import half lands in Phase 65
-  per the implementation-time scope adjustment.** Tests +19
+  micro-phase if pressure surfaces — **fully closed:** export
+  shipped in Phase 64 (2026-05-14), import shipped in Phase
+  65 (2026-05-14). Operators can now transfer Profile +
+  Persona between hosts via `aivyx identity export <path>` +
+  `aivyx identity import <path> [--force]`. Tests +19
   (1052 → 1071).
   All three streak predictions correct: DESIGN.md → 7,
   PRODUCT.md → broke at 2 (Task 7 Delivery Status refresh,

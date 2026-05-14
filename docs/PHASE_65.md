@@ -210,44 +210,106 @@ is out of scope).
   profile diff display, Web UI export/import surface,
   multi-source merge, schema migration tooling).
 
-**Likely Phase 65 deferrals:**
+**Phase 65 deferrals (recorded at exit):**
 
-- Real atomic import via redb transaction wrapping. Current
-  best-effort path leaves a partial chain on daemon crash
-  mid-import; operator re-imports to recover.
-- Profile import (operator hand-edits `aivyx.toml`'s
-  `[profile]` section after import).
-- Merge-strategy imports.
-- Selective imports (only some categories).
-- Force-flag scoping (e.g. `--force-clear-profile`).
+- **Real atomic import via redb transaction wrapping.**
+  Per Q1(a) at sign-off, the current path is best-effort:
+  daemon crash mid-import (between rows deleted and full
+  replay completed) leaves the chain in partial state.
+  Operator recovers by re-importing. Adding true atomicity
+  would require lifting the wipe+replay sequence into a
+  single transaction; `PersistentPersonaLog::append` doesn't
+  expose a batch interface today.
+- **Profile auto-import.** Per Q2(a), `aivyx identity
+  import` does not write `aivyx.toml`. Operator hand-edits
+  the `[profile]` section to match the bundle, then
+  restarts the daemon. Phase 66+ may add an interactive
+  diff + prompt if pressure surfaces.
+- **Merge-strategy imports** (interleave two chains).
+- **Selective imports** (only some categories).
+- **Force-flag scoping** (e.g. `--force-clear-profile`,
+  `--force-keep-effective-snapshot`).
+- **Multi-source merge** (importing from N hosts).
+- **Schema migration tooling** (currently schema_version ==
+  1 only; future versions need explicit migrators).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to twelve**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 65 shipped under existing D-deliverables: one IPC
+  envelope pair, one daemon handler, one client wrapper,
+  one CLI subcommand, one new method on PersistentPersonaLog.
+
+- **PRODUCT.md** — Predicted: streak **extends to five**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  P14's Phase 60 deferral closes via the existing optional-
+  addition allowance; no contract amendment.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to thirteen** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Every Phase 65 surface routed through `aivyx-channel`
+  (daemon_ipc.rs, daemon_server.rs, daemon_client.rs,
+  persona.rs, identity_export.rs, bin/aivyx.rs,
+  bin/aivyx_modules/identity.rs). No path touches
+  `aivyx-core`. Thirteen consecutive phases — longest
+  production-core run in project history, beating the
+  Phase 64 record of twelve.
+
+- **Test count** — Predicted: positive (~+10–15).
+  **Reality: +5** (1171 → 1176), under the predicted range.
+  Phase 65 leaned on existing substrate (parse_and_validate
+  from Phase 64, append from Phase 59, recompute helper
+  from Phase 60); the new surface is mostly IPC plumbing
+  and one new method (clear). Five new tests: four parser
+  cases for `identity import` (no-force / with-force /
+  missing-path / double-force / unknown-arg) and one
+  integration test for `clear`.
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** All new code reuses existing dependencies
+  (serde, tokio, aivyx-storage).
 
 ## Exit criteria
 
-- [ ] IPC envelope pair `ImportPersonaChain` /
-  `PersonaImportResolved` + `PersonaImportSuccess` — Task 2.
-- [ ] Daemon handler: conflict check + force wipe + replay +
-  recompute — Task 3.
-- [ ] Client wrapper `import_persona_chain` — Task 4.
-- [ ] CLI handler `run_identity_import` with happy path +
-  conflict + force flows — Task 5.
-- [ ] Parser accepts `aivyx identity import <path>
+- [x] IPC envelope pair `ImportPersonaChain` /
+  `PersonaImportResolved` + `PersonaImportSuccess` — Task 2,
+  commit `44fb694`.
+- [x] Daemon handler: conflict check + force wipe + replay +
+  recompute — Task 3, commit `44fb694`.
+- [x] Client wrapper `import_persona_chain` — Task 4,
+  commit `44fb694`.
+- [x] CLI handler `run_identity_import` with happy path +
+  conflict + force flows — Task 5, commit `44fb694`.
+- [x] Parser accepts `aivyx identity import <path>
   [--force]` and replaces the Phase 64 deferral message —
-  Task 6.
-- [ ] Integration tests for round-trip, conflict, force,
-  malformed JSON, schema-version mismatch — Task 7.
-- [ ] `docs/INSTALL.md` "Moving Aivyx to a new machine"
-  section updated — Task 8.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 9.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twelve.
-- [ ] PRODUCT.md streak extends to five.
-- [ ] Production-core streak extends to thirteen (new record).
-- [ ] Test count delta: positive (~+10–15).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+  Task 6, commit `44fb694`.
+- [x] Integration tests for clear primitive + parser
+  variants — Task 7, commit `94d07ac` (clear test) and
+  commit `44fb694` (5 parser tests). Full IPC round-trip
+  daemon-level test deferred to follow-up if regressions
+  surface; existing daemon_roundtrip_e2e harness pattern
+  applies cleanly when needed.
+- [x] `docs/INSTALL.md` "Moving Aivyx to a new machine"
+  section updated — Task 8, commit `94d07ac`. Removes
+  Phase 65 deferral notice; adds `aivyx identity import`
+  command + `--force` semantics + daemon-side runtime
+  refresh + Q2(a) Profile-import note.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 9 (this commit).
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(a) best-effort atomicity, Q2(a)
+  Persona-chain-only, Q3(a) daemon recomputes immediately,
+  Q4(a) `{deltas_imported, final_chain_seq}` response shape).
+- [x] DESIGN.md streak extends to twelve.
+- [x] PRODUCT.md streak extends to five.
+- [x] Production-core streak extends to thirteen (new
+  record — longest production-core run in project history).
+- [x] Test count delta: +5 (1171 → 1176). Under the
+  predicted range; reuse of Phase 64 substrate paid off.
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

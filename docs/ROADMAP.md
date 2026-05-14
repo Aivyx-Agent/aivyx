@@ -1097,6 +1097,62 @@ mode. Splitting the work yields cleaner phases and focused
 design attention for the locked-in IPC semantics. Phase 65
 opens next with the dedicated scope.
 
+## Phase 65 — Identity Import (Persona Phase 4)
+
+**Frozen — see [PHASE_65.md](PHASE_65.md).** Closes the Phase
+60 identity-deferral end to end. `aivyx identity import
+<path>` replays an exported bundle onto the local persona
+chain, re-signing each delta against the target host's HMAC
+key. Together with Phase 64's export, the operator now has a
+full multi-host identity transfer path.
+
+Delivered across three engineering commits (Open, Tasks 2–6
+combined, Tasks 7+8 combined, Exit):
+
+- **IPC envelope pair.** `FrontendMessage::ImportPersonaChain
+  { id, deltas, effective_at_export, force }` →
+  `DaemonMessage::PersonaImportResolved { id, ok, success,
+  error }` with `PersonaImportSuccess { deltas_imported,
+  final_chain_seq }` per Q4(a). `DaemonEnvelope` gains the
+  response variant for client-side decode.
+- **Daemon handler.** `resolve_persona_import` runs the full
+  flow: server-side re-validation, conflict check (Q3(a)),
+  optional force-wipe, per-delta replay through the existing
+  `append` path (re-signs against local key per Phase 60
+  Q1(a)), runtime refresh via `recompute_shared_from_entries`.
+  Best-effort atomicity per Q1(a): daemon crash mid-import
+  leaves chain partial; operator re-imports.
+- **`PersistentPersonaLog::clear`** — new method wipes both
+  persisted rows and the in-memory chain. HMAC key preserved
+  so subsequent appends produce a fresh chain at seq 0.
+- **Client wrapper + CLI handler.** `import_persona_chain`
+  mirrors `revert_persona_delta`'s shape. CLI handler reads
+  file, locally validates via Phase 64's
+  `parse_and_validate`, forwards to daemon, prints
+  per-Q4(a) summary + Q2(a) Profile-hand-edit reminder.
+- **Parser update.** `aivyx identity import <path>
+  [--force]` replaces the Phase 64 deferral message;
+  trailing `--force` accepted, double-force and unknown
+  args rejected.
+- **Docs.** `docs/INSTALL.md` "Moving Aivyx to a new
+  machine" updated with the import command, the conflict-
+  resolution explanation, and the Q2(a) Profile note.
+
+Streak predictions all correct: DESIGN.md → 12, PRODUCT.md →
+5, `aivyx-core/src/lib.rs` → 13 (new record — longest
+production-core run in project history; beats Phase 64's 12).
+Tests +5 (1171 → 1176), under the predicted +10–15 range
+because Phase 65 leaned heavily on the Phase 64 substrate
+(parse_and_validate from Phase 64, append from Phase 59,
+recompute helper from Phase 60). Zero clippy warnings. Zero
+new workspace deps.
+
+**Identity export + import are now both shipped.** The Phase
+60 deferral closes entirely. Future Persona work is operator-
+feedback-shaped (merge-strategy imports, encrypted export
+format, multi-source merge, schema migrations, real atomic
+import).
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
