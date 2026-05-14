@@ -417,6 +417,37 @@ parent_role = "researcher"
 # kind = "webhook"
 # url = "https://ntfy.sh/aivyx-personal-2026"
 #
+# Phase 68 — email notify_target.
+#
+# Requires the [email] block below for the shared SMTP
+# credentials. Each email target carries just the recipient;
+# multiple targets share one [email] account.
+#
+# Provider notes:
+#   - Gmail: SMTP host smtp.gmail.com, port 587 (STARTTLS).
+#     Use an "app password" — Google requires it for SMTP
+#     access when 2FA is enabled. Account settings →
+#     Security → App passwords.
+#   - Fastmail: SMTP host smtp.fastmail.com, port 587.
+#     App password from Settings → Privacy & Security.
+#   - ProtonMail: requires the ProtonMail Bridge running
+#     locally (the bridge exposes SMTP on 127.0.0.1).
+#   - Self-hosted Postfix / AWS SES / etc.: whatever your
+#     provider documents for SMTP submission.
+#
+# [[notify_target]]
+# name = "my-inbox"
+# kind = "email"
+# to = "you@example.com"
+#
+# [email]
+# host = "smtp.fastmail.com"
+# port = 587                            # default; can omit
+# tls_mode = "starttls"                 # default; "implicit" → 465
+# username = "you@example.com"
+# password = "<app-password>"           # SMTP / app password
+# from = "aivyx@example.com"
+#
 # Example: granting the `coder` role permission to notify the
 # `phone` target only (no access to `ops-alerts`):
 #

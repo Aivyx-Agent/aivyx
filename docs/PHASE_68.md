@@ -225,7 +225,7 @@ SMTP).
   alternative).
 - Other Phase 62 / 63 / 64 / 65 / 66 / 67 deferrals.
 
-**Likely Phase 68 deferrals:**
+**Phase 68 deferrals (recorded at exit):**
 
 - **XOAUTH2 / OAuth2 device-flow auth.** Gmail and Office
   365 increasingly require this for non-app-password access.
@@ -234,44 +234,90 @@ SMTP).
 - **HTML email bodies.** Phase 68 ships plain text only.
 - **Attachments.** Substrate would need agent-facing input
   schema changes on `notify.send`.
-- **Multiple `[email]` accounts.** v1 ships one SMTP account;
-  multi-account requires reshaping the config (`[[email]]`
-  table-array vs `[email]` table).
-- **Email-reply parsing** (inbound from email). This is
-  channel-side, not notify-side — would be a separate phase
-  if pressure surfaces (similar to the Telegram inbound
-  adapter).
+- **Multiple `[email]` accounts.** v1 ships one SMTP account
+  per deployment; multi-account requires reshaping the
+  config (`[[email]]` table-array vs `[email]` table).
+- **Email-reply parsing** (inbound from email). Channel-side,
+  not notify-side — would be a separate phase if pressure
+  surfaces (similar to the Telegram inbound adapter).
+- **End-to-end SMTP integration test.** Phase 68 ships
+  scripted-sender unit tests; full SMTP server smoke test
+  is dogfooding territory rather than a CI fixture.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to fifteen**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 68 added a TOML config surface + a new
+  `NotifyTargetKind` variant + a new backend module. No
+  D-deliverable reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to eight**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  The Reach Milestone is operator-feedback-shaped, no
+  P1–P14 commitment touched.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to sixteen** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Email substrate lives in `aivyx-config` (config types) and
+  `aivyx-channel` (backend + dispatcher integration). No
+  path touches `aivyx-core`. Sixteen consecutive phases —
+  longest production-core run in project history; beats
+  Phase 67's 15.
+
+- **Test count** — Predicted: positive (~+20–30). **Reality:
+  +19** (1203 → 1222). Slight undershoot — 9 config tests
+  + 9 backend tests + 1 helper test, with the existing
+  `build_notify_dispatcher` tests updated for the new
+  argument (no new test count from those updates).
+
+- **New workspace deps** — Predicted: `lettre`. **Reality:
+  correct.** First net-new workspace dep since Phase 58's
+  `toml_edit` (six phases ago). Cargo.lock grew with
+  lettre + its transitives (mostly rustls + auth machinery
+  already partially present from reqwest). **Verified zero
+  openssl pulls** via `grep -E "^name = \"(openssl|openssl-sys|native-tls)\"" Cargo.lock`
+  returning no matches — TLS stays uniformly rustls across
+  reqwest + lettre.
 
 ## Exit criteria
 
-- [ ] `EmailConfig` + `TlsMode` + `NotifyTargetKind::Email`
-  in `aivyx-config` with load-time validation — Task 2.
-- [ ] `notify_email.rs` with `EmailSender` trait,
+- [x] `EmailConfig` + `TlsMode` + `NotifyTargetKind::Email`
+  in `aivyx-config` with load-time validation — Task 2,
+  commit `c7fd906`.
+- [x] `notify_email.rs` with `EmailSender` trait,
   `LettreEmailSender` impl, `NotifyEmailBackend`,
-  `map_lettre_error` — Task 3.
-- [ ] `build_notify_dispatcher` accepts
-  `Option<&EmailConfig>` and routes email targets through
-  a shared `LettreEmailSender` — Task 4.
-- [ ] Binary wires the email config through — Task 5.
-- [ ] Unit tests across config validation, backend, and
-  dispatcher integration — Task 6.
-- [ ] `examples/aivyx.toml` includes commented `[email]` +
-  email `[[notify_target]]` blocks — Task 7.
-- [ ] `docs/INSTALL.md` updated with email setup notes —
-  Task 8.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 9.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to fifteen.
-- [ ] PRODUCT.md streak extends to eight.
-- [ ] Production-core streak extends to sixteen (new record).
-- [ ] Test count delta: positive (~+20–30).
-- [ ] Zero clippy warnings.
-- [ ] `lettre` is the only new workspace dep; verify no
-  transitive openssl pulls (rustls TLS).
-- [ ] Prediction-vs-reality block filled.
+  `map_lettre_error` — Task 3, commit `c7fd906`.
+- [x] `build_notify_dispatcher` accepts an
+  `EmailDispatchContext` and routes email targets through
+  a shared `LettreEmailSender` — Task 4, commit `c7fd906`.
+- [x] Binary wires the email config through — Task 5,
+  commit `c7fd906`.
+- [x] 9 config tests + 9 backend tests + 1 helper test, all
+  passing — Task 6, commit `c7fd906`.
+- [x] `examples/aivyx.toml` includes commented `[email]` +
+  email `[[notify_target]]` blocks with provider-specific
+  setup notes (Gmail / Fastmail / ProtonMail / SES) —
+  Task 7 (this commit's sibling).
+- [x] `docs/INSTALL.md` updated with email setup notes
+  (provider quick-setup + TLS-mandatory + no-OAuth2-yet
+  caveats) — Task 8 (this commit's sibling).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 9 (this commit).
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(a) lettre, Q2(a) shared section
+  + per-target recipient, Q3(a) STARTTLS port 587 default,
+  Q4(a) PLAIN+LOGIN with TLS required).
+- [x] DESIGN.md streak extends to fifteen.
+- [x] PRODUCT.md streak extends to eight.
+- [x] Production-core streak extends to sixteen (new record).
+- [x] Test count delta: +19 (1203 → 1222). Slight undershoot
+  of the predicted +20–30 range.
+- [x] Zero clippy warnings.
+- [x] `lettre` added; `grep ^name openssl Cargo.lock` returns
+  empty (rustls TLS only).
+- [x] Prediction-vs-reality block filled.

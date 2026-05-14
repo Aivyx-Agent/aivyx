@@ -1285,6 +1285,64 @@ and recorded on `TurnStarted` audit entries. Same forensic
 payoff; no upstream refactor. `turn_id` correlation recorded
 as a dedicated future-phase deferral.
 
+## Phase 68 — Email SMTP Notify Backend (Reach Phase 3)
+
+**Frozen — see [PHASE_68.md](PHASE_68.md).** Third notify
+backend after Phase 62's Telegram + webhook. Closes the
+largest remaining adoption-shape gap on the Reach axis:
+every operator has email; most don't run Telegram bots.
+After Phase 68 the supported notify kinds are `telegram`,
+`webhook`, and `email`.
+
+Delivered across three engineering commits (Open, Tasks 2–5
+combined, Exit):
+
+- **Config in `aivyx-config`.** `EmailConfig` + `TlsMode`
+  enum + `NotifyTargetKind::Email { to }` variant.
+  `[email]` section parses via a `RawEmail` shape;
+  `build_email_config` validates required-when-present
+  semantics + the security rules (tls_mode = "none"
+  rejected per Q4; default port from tls_mode; address
+  `@` checks; email target without `[email]` section is a
+  load-time error naming the offending target).
+- **`notify_email.rs` in `aivyx-channel`.** `EmailSender`
+  trait + `LettreEmailSender` production impl (built once
+  per deployment, shared via `Arc`) + `NotifyEmailBackend`
+  wrapping the shared sender with per-target from/to.
+  `map_lettre_error` classifies lettre errors into the
+  five-variant `NotifyError` taxonomy `notify.send`
+  already uses. Auth mechanisms declared explicitly as
+  PLAIN + LOGIN.
+- **Dispatcher + binary wiring.** `build_notify_dispatcher`
+  gains an `EmailDispatchContext` parameter; binary builds
+  the `LettreEmailSender` once if any email target exists.
+- **Docs + worked example.** `examples/aivyx.toml` gains
+  commented `[email]` + email `[[notify_target]]` blocks
+  with provider-specific setup (Gmail / Fastmail /
+  ProtonMail Bridge / SES / self-hosted). `docs/INSTALL.md`
+  "Email notifications" section walks operators through
+  quick-setup, the TLS-mandatory rule, and the
+  no-OAuth2-yet caveat.
+
+Streak predictions all correct: DESIGN.md → 15, PRODUCT.md →
+8, `aivyx-core/src/lib.rs` → 16 (new record, longest
+production-core run in project history — beats Phase 67's
+15). Tests +19 (1203 → 1222). Zero clippy warnings.
+
+**New workspace dep:** `lettre` with `default-features =
+false` + explicit rustls features. First net-new workspace
+dep since Phase 58's `toml_edit` (six phases ago). Verified
+zero openssl pulls; TLS stays uniformly rustls across
+reqwest + lettre.
+
+After Phase 68 the Reach Milestone covers the three most
+common operator channels (Telegram for chat-style, webhook
+for tooling-style, email for everyone else). Remaining
+Reach-axis deferrals (Web UI desktop notify, OS-level
+notify, default-target sugar, retry semantics, multi-target
+dispatch, conditional notify) are operator-feedback-shaped
+follow-ups; the substrate is extensible.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

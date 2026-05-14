@@ -873,10 +873,19 @@ respond to it. Closing the gap is the inflection point between
   Auto-notify still eprintln-logs for live visibility, but
   the audit chain is now the canonical record.
 
-- **Email SMTP outbound (future).** Adds a `kind = "email"`
-  backend. New dep (`lettre` or similar) plus SMTP config
-  surface (host, port, auth). One worked example covering
-  the common case (Fastmail, ProtonMail, Gmail app password).
+- **Phase 68 (Email SMTP backend, shipped 2026-05-15).**
+  Adds the `kind = "email"` notify_target backend.
+  `lettre` workspace dep with rustls TLS (no openssl
+  pulls). Shared `[email]` config + per-target recipient
+  (Q2(a)). STARTTLS port 587 default (Q3(a)). PLAIN+LOGIN
+  auth with TLS required (Q4(a)). `LettreEmailSender`
+  built once per deployment, shared via Arc into each
+  email target's `NotifyEmailBackend`. Provider-specific
+  setup notes in `docs/INSTALL.md` (Gmail / Fastmail /
+  ProtonMail Bridge / AWS SES / self-hosted). Tests +19
+  (1203 → 1222). All three streak predictions correct:
+  DESIGN.md → 15, PRODUCT.md → 8, lib.rs → 16 (new
+  record). First net-new workspace dep since Phase 58.
 
 - **Web UI desktop notifications (future).** Adds a
   `kind = "web-ui"` backend that pushes a WebSocket

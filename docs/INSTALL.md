@@ -255,6 +255,41 @@ field:
 Correlate by `session_id` to find the corresponding
 `TurnStarted` / `TurnEnded` events for the same trigger fire.
 
+## Email notifications (Phase 68)
+
+Most operators don't run a Telegram bot but everyone has email.
+The `email` notify kind covers that. Add a `[[notify_target]]
+kind = "email"` block + a top-level `[email]` section with
+SMTP credentials, and the `notify.send` tool / trigger
+auto-notify path both route through it.
+
+**Quick setup by provider:**
+
+- **Gmail / Google Workspace** — host `smtp.gmail.com`, port
+  `587`, `tls_mode = "starttls"` (default). With 2FA enabled
+  (which it should be), generate an app password at
+  *Account → Security → App passwords* and use it as
+  `[email] password`.
+- **Fastmail** — host `smtp.fastmail.com`, port `587`. App
+  password from *Settings → Privacy & Security → Integrations*.
+- **ProtonMail** — run the ProtonMail Bridge locally; SMTP
+  goes to `127.0.0.1` with the bridge-supplied credentials.
+- **Self-hosted Postfix / Mailcow** — whatever your
+  submission port is (usually 587), STARTTLS, plain
+  username + password.
+- **AWS SES** — host `email-smtp.<region>.amazonaws.com`,
+  port `587`, IAM-derived SMTP credentials.
+
+**TLS is mandatory.** Aivyx rejects `tls_mode = "none"` at
+config-load time because PLAIN/LOGIN auth over cleartext
+leaks credentials. If you need a plain-text relay for testing,
+use a localhost SMTP capture tool instead.
+
+**No OAuth2 yet.** Phase 68 ships PLAIN/LOGIN auth only.
+Gmail/Office 365 users with strict workspace policies that
+prohibit app passwords need to wait for the OAuth2 phase or
+use a different provider in the meantime.
+
 ## Uninstall
 
 ```sh
