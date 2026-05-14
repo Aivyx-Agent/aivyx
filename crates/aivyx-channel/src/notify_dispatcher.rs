@@ -252,6 +252,7 @@ pub fn build_notify_dispatcher(
     targets: &[NotifyTargetConfig],
     telegram_transport: Option<Arc<dyn TelegramTransport>>,
     email_context: Option<EmailDispatchContext>,
+    web_ui_broadcaster: Option<Arc<crate::notify_webui::WebUiBroadcaster>>,
 ) -> Result<Arc<NotifyDispatcher>, String> {
     let mut d = NotifyDispatcher::new();
     for target in targets {
@@ -288,17 +289,24 @@ pub fn build_notify_dispatcher(
                     to.clone(),
                 ))
             }
-            // Phase 69 — Task 6 will replace this stub with the
-            // WebUiBroadcaster-backed `NotifyWebUiBackend`. Task 3
-            // adds only the variant + IPC envelope; the broadcaster
-            // ships in Task 4, dispatcher routing in Task 6.
+            // Phase 69 — Web UI desktop notification. Multiple
+            // `kind = "web-ui"` targets all funnel into the same
+            // broadcaster (one Web UI server per daemon); the
+            // dispatcher registers a distinct backend per target
+            // name so the agent's `notify.send` tool addresses
+            // them individually for audit purposes.
             NotifyTargetKind::WebUi => {
-                return Err(format!(
-                    "notify_target `{}` (kind = web-ui) not yet routable; \
-                     Phase 69 Task 6 wires the WebUiBroadcaster into the \
-                     dispatcher",
-                    target.name,
-                ));
+                let bc = web_ui_broadcaster.as_ref().ok_or_else(|| {
+                    format!(
+                        "notify_target `{}` (kind = web-ui) requires the \
+                         Web UI server to be enabled; either remove the \
+                         target or enable the Web UI in aivyx.toml",
+                        target.name,
+                    )
+                })?;
+                Arc::new(crate::notify_webui::NotifyWebUiBackend::new(
+                    Arc::clone(bc),
+                ))
             }
         };
         d.register(&target.name, backend);
@@ -485,7 +493,7 @@ mod tests {
 
     #[test]
     fn build_empty_targets_returns_empty_dispatcher() {
-        let d = build_notify_dispatcher(&[], None, None).expect("ok");
+        let d = build_notify_dispatcher(&[], None, None, None).expect("ok");
         assert_eq!(d.len(), 0);
     }
 
@@ -498,7 +506,7 @@ mod tests {
             },
             enabled: true,
         }];
-        let d = build_notify_dispatcher(&targets, None, None).expect("ok");
+        let d = build_notify_dispatcher(&targets, None, None, None).expect("ok");
         assert_eq!(d.len(), 1);
         let pairs = d.list_targets();
         assert_eq!(pairs[0], ("alerts", "webhook"));
@@ -513,7 +521,7 @@ mod tests {
             },
             enabled: true,
         }];
-        let err = build_notify_dispatcher(&targets, None, None).expect_err("must error");
+        let err = build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
         assert!(err.contains("`phone`"), "error: {err}");
         assert!(err.contains("[telegram] token"), "error: {err}");
     }
@@ -528,7 +536,7 @@ mod tests {
             enabled: true,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
-        let d = build_notify_dispatcher(&targets, Some(transport), None).expect("ok");
+        let d = build_notify_dispatcher(&targets, Some(transport), None, None).expect("ok");
         assert_eq!(d.len(), 1);
         let pairs = d.list_targets();
         assert_eq!(pairs[0], ("phone", "telegram"));
@@ -545,7 +553,7 @@ mod tests {
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let err =
-            build_notify_dispatcher(&targets, Some(transport), None).expect_err("must error");
+            build_notify_dispatcher(&targets, Some(transport), None, None).expect_err("must error");
         assert!(err.contains("phone"), "error: {err}");
         assert!(err.contains("invalid telegram chat_id"), "error: {err}");
     }
@@ -569,10 +577,58 @@ mod tests {
             },
         ];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
-        let d = build_notify_dispatcher(&targets, Some(transport), None).expect("ok");
+        let d = build_notify_dispatcher(&targets, Some(transport), None, None).expect("ok");
         assert_eq!(d.len(), 2);
         let mut pairs = d.list_targets();
         pairs.sort();
         assert_eq!(pairs, vec![("alerts", "webhook"), ("phone", "telegram")]);
+    }
+
+    // ---- Phase 69 — Web UI dispatcher arm -----------------
+
+    #[test]
+    fn build_web_ui_without_broadcaster_returns_descriptive_error() {
+        let targets = vec![NotifyTargetConfig {
+            name: "desktop".into(),
+            kind: NotifyTargetKind::WebUi,
+            enabled: true,
+        }];
+        let err =
+            build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
+        assert!(err.contains("`desktop`"), "error: {err}");
+        assert!(err.contains("Web UI"), "error: {err}");
+    }
+
+    #[test]
+    fn build_web_ui_with_broadcaster_registers_backend() {
+        let targets = vec![NotifyTargetConfig {
+            name: "desktop".into(),
+            kind: NotifyTargetKind::WebUi,
+            enabled: true,
+        }];
+        let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
+        let d = build_notify_dispatcher(&targets, None, None, Some(bc)).expect("ok");
+        assert_eq!(d.len(), 1);
+        let pairs = d.list_targets();
+        assert_eq!(pairs[0], ("desktop", "web-ui"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_web_ui_target_to_broadcaster() {
+        let targets = vec![NotifyTargetConfig {
+            name: "desktop".into(),
+            kind: NotifyTargetKind::WebUi,
+            enabled: true,
+        }];
+        let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let d = build_notify_dispatcher(&targets, None, None, Some(Arc::clone(&bc)))
+            .expect("ok");
+        d.dispatch("desktop", "build done", Some("Aivyx"))
+            .await
+            .expect("dispatch");
+        let frame = rx.recv().await.expect("recv");
+        assert_eq!(frame.title, "Aivyx");
+        assert_eq!(frame.body, "build done");
     }
 }

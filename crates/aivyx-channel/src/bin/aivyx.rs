@@ -2355,10 +2355,23 @@ async fn run_async(
         } else {
             None
         };
+    // Phase 69 — Web UI desktop notify broadcaster. Constructed
+    // here when the Web UI server is configured so the same
+    // `Arc<WebUiBroadcaster>` is shared between the notify
+    // dispatcher (push side, below) and the Web UI WS handler
+    // (subscribe side, threaded through `DaemonConfig`).
+    let web_ui_enabled = cli_web_ui_port.or(config_web_ui_port).is_some();
+    let web_ui_broadcaster: Option<Arc<aivyx_channel::notify_webui::WebUiBroadcaster>> =
+        if web_ui_enabled {
+            Some(Arc::new(aivyx_channel::notify_webui::WebUiBroadcaster::new()))
+        } else {
+            None
+        };
     let notify_dispatcher = aivyx_channel::notify_dispatcher::build_notify_dispatcher(
         &config_notify_targets,
         notify_telegram_transport,
         email_context,
+        web_ui_broadcaster.clone(),
     )?;
     let notify_send_tool: Arc<aivyx_channel::notify_tool::NotifySendTool> =
         Arc::new(aivyx_channel::notify_tool::NotifySendTool::new());
@@ -3030,11 +3043,13 @@ async fn run_async(
             // clone here lives alongside `profile_for_factory` the
             // role-switch path captured.
             profile: Arc::new(profile.clone()),
-            // Phase 69 — Task 7 will replace this None with the
-            // single Arc<WebUiBroadcaster> shared between the
-            // dispatcher and the WS handler when Web UI desktop
-            // notify is enabled.
-            web_ui_broadcaster: None,
+            // Phase 69 — same Arc<WebUiBroadcaster> the notify
+            // dispatcher above received. Threading the single
+            // instance into both sides is what gives Web UI
+            // desktop notify its fan-out: the dispatcher pushes
+            // and the WS handler subscribes one receiver per
+            // browser connection.
+            web_ui_broadcaster: web_ui_broadcaster.clone(),
         })
             .await;
 
