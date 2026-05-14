@@ -866,10 +866,12 @@ respond to it. Closing the gap is the inflection point between
   DESIGN.md → 10, PRODUCT.md → 3, lib.rs → 11 (new record).
   **Q1(a) audit-event variant scope-adjusted at exit:**
   `AuditEventKind::AutoNotifyDispatched` deferred to a
-  follow-on phase because `TriggerDispatch` doesn't hold an
-  audit-hook reference today and wiring one in is materially
-  larger than the notify hook itself. Auto-notify is
-  eprintln-logged matching the existing trigger.rs patterns.
+  follow-on phase because `TriggerDispatch` didn't hold an
+  audit-hook reference. **Closed by Phase 67 (2026-05-14):**
+  the variant shipped, the plumbing landed, and every
+  trigger-fired auto-notify now records to the audit chain.
+  Auto-notify still eprintln-logs for live visibility, but
+  the audit chain is now the canonical record.
 
 - **Email SMTP outbound (future).** Adds a `kind = "email"`
   backend. New dep (`lettre` or similar) plus SMTP config

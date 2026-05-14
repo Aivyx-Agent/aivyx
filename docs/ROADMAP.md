@@ -1214,6 +1214,77 @@ wizard, both discovery modes). All four sign-offs delivered
 as designed; no scope adjustments at implementation time.
 Phase 66 substantial-scope-but-clean shape.
 
+## Phase 67 — Auto-Notify Audit Event
+
+**Frozen — see [PHASE_67.md](PHASE_67.md).** Closes the Phase
+63 deferred Q1(a) sign-off: shipping
+`AuditEvent::AutoNotifyDispatched` as a new variant of the
+audit chain enum + wiring `TriggerDispatch` with the audit
+hook needed to emit it.
+
+After Phase 67, every trigger-fired auto-notify (delivered,
+skipped-empty-response, or failed) lands as an entry in the
+persistent audit chain alongside `TurnStarted` / `TurnEnded`.
+Operators can answer "why didn't my morning briefing arrive?"
+from the audit chain alone — eprintln moves from primary
+evidence to debugging supplement.
+
+Delivered across four engineering commits (Open, Tasks 2–4
+combined, Tasks 5+6, Exit):
+
+- **Audit variant in `aivyx-audit`.** New
+  `AuditEvent::AutoNotifyDispatched { session_id,
+  trigger_kind, trigger_id, target_name, outcome,
+  dispatched_at_unix_ms }` + supporting
+  `TriggerKindSummary` (Cron / Webhook / FileWatch) +
+  `AutoNotifyOutcomeSummary` (Delivered /
+  SkippedEmptyResponse / Failed { error_kind,
+  error_message }) enums. All `#[serde(tag = "kind")]` so
+  existing chain readers (Web UI Audit tab, `aivyx
+  --verify-only`) parse the new variant without per-reader
+  changes.
+- **Plumbing.** `TriggerDispatch` gains an
+  `audit_log: Option<Arc<PersistentAuditLog>>` field +
+  `with_audit_log` builder. `run_daemon` wires
+  `DaemonConfig::audit_log` (Phase 47 field) through to the
+  dispatch instance.
+- **Emission.** New `emit_auto_notify_audit` method on
+  `TriggerDispatch`; the three auto-notify branches
+  (skip-empty / dispatch-Ok / dispatch-Err) all converge on
+  it. Append failures are eprintln-logged per Q3(a) — the
+  notify already happened or didn't; audit failure shouldn't
+  conflate the outcome.
+- **Conversion helpers.** `From<TriggerSource>` for
+  `TriggerKindSummary`; `outcome_from_notify_error` maps
+  the five `NotifyError` variants to the
+  `AutoNotifyOutcomeSummary::Failed` shape using the same
+  `error_kind` labels (`transport` / `auth` / `rejected` /
+  `timeout` / `unknown_target`) the `notify.send` tool
+  emits — forensic searches grep across both
+  agent-initiated and daemon-initiated notify failures
+  uniformly.
+- **Docs.** New "Debugging missing notifications" section
+  in `docs/INSTALL.md` walks operators through the audit
+  chain + the three outcome shapes + `session_id`
+  correlation back to `TurnStarted` / `TurnEnded`.
+
+Streak predictions all correct: DESIGN.md → 14, PRODUCT.md →
+7, `aivyx-core/src/lib.rs` → 15 (new record, longest
+production-core run in project history — beats Phase 66's 14).
+Tests +9 (1194 → 1203), slight undershoot of the predicted
++10–15 (3 audit + 6 conversion-helper unit tests; full
+end-to-end fire integration deferred to dogfooding). Zero
+clippy warnings. Zero new workspace deps.
+
+**Implementation-time scope adjustment held cleanly.** Q1
+sign-off chose rich event with turn_id; investigation
+revealed `TurnOutcome` doesn't carry `turn_id` (lifting it
+would touch 120 match sites). Solved at design time with
+`session_id` correlation — already minted per trigger fire
+and recorded on `TurnStarted` audit entries. Same forensic
+payoff; no upstream refactor. `turn_id` correlation recorded
+as a dedicated future-phase deferral.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

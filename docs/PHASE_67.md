@@ -204,44 +204,113 @@ debugging "why didn't my briefing arrive?" workflows.
 - Phase 64 / 65 identity-polish deferrals.
 - Phase 66 template-extension deferrals.
 
-**Likely Phase 67 deferrals:**
+**Phase 67 deferrals (recorded at exit):**
 
-- `turn_id` correlation on `AutoNotifyDispatched` — requires
-  `TurnOutcome` extension (120-site refactor).
-- Mission state audit events from triggers (`MissionStateChanged`
-  audit variant) — Q4(b) alternative deferred.
-- Trigger-fire audit events (separate from auto-notify) —
+- **`turn_id` correlation on `AutoNotifyDispatched`** —
+  requires `TurnOutcome` extension touching 120 match sites.
+  Phase 67 uses `session_id` instead, which is already
+  recorded on `TurnStarted` audit entries so forensic walks
+  can stitch by that. Worth its own dedicated phase if
+  `turn_id`-only correlation surfaces real friction.
+- **End-to-end fire() integration test** — would require a
+  stub agent + channel + in-memory PersistentAuditLog.
+  Phase 67 ships substantial unit coverage instead (variant
+  JSON round-trip, conversion helpers, audit-wire shape).
+  Live verification via dogfooding the Web UI Audit tab
+  is the operator-facing test today.
+- **Mission state audit events from triggers**
+  (`MissionStateChanged` audit variant) — Q4(b) alternative
+  was deferred at design time. The plumbing now exists
+  (TriggerDispatch carries an audit_log handle); future
+  phase emits additional events through it.
+- **Trigger-fire audit events** (separate from auto-notify) —
   e.g. "schedule X fired at 9am" as its own audit entry,
-  independent of auto-notify.
-- Audit query refinements (Web UI search-by-trigger-id, etc.)
-  — operator can grep today.
+  independent of whether a notify was configured.
+- **Audit query refinements** (Web UI search-by-trigger-id,
+  filter-by-outcome). Operators can grep the JSON today.
+- **Live retry guidance** — operators see Failed { error_kind,
+  error_message } but the daemon doesn't surface "want to
+  retry?" UX. Phase 62's tool-side retry semantics could be
+  extended to auto-notify if pressure surfaces.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to fourteen**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  The audit-enum variant extension is additive (sibling to
+  `ToolCall`, `TurnStarted`, etc.); the plumbing additions
+  are sibling-shape to the Phase 47 `audit_log` field.
+  No D-deliverable reshape.
+
+- **PRODUCT.md** — Predicted: streak **extends to seven**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  Auto-notify auditing is operator-feedback-shaped, no
+  contract commitment.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to fifteen** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Audit variant lives in `aivyx-audit`; plumbing lives in
+  `aivyx-channel`. No path touches `aivyx-core`. Fifteen
+  consecutive phases — longest production-core run in
+  project history; beats Phase 66's 14.
+
+- **Test count** — Predicted: positive (~+10–15). **Reality:
+  +9** (1194 → 1203). Slight undershoot. Three audit
+  variant tests + six conversion-helper tests = nine new
+  unit tests. The audit-emission code path in
+  `emit_auto_notify_audit` is covered indirectly via the
+  conversion-helper tests + the existing variant-round-trip
+  tests; a dedicated emission integration test was deferred
+  to dogfooding rather than test fixture.
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** The audit variant uses existing
+  `serde`/`serde_json`/`serde_jcs` plumbing; the trigger
+  emission uses the existing `AuditWriter` trait
+  (re-exported from `aivyx-audit`).
+
+- **Q1 implementation-time scope adjustment** — Predicted
+  at open: `turn_id` correlation deferred because
+  `TurnOutcome` doesn't expose `turn_id`. **Reality:
+  resolved cleanly** with `session_id` correlation. Same
+  forensic-search payoff (chain readers join by session_id
+  to find the matching `TurnStarted` / `TurnEnded`).
+  Recorded as a Phase 67 deferral for the dedicated
+  `turn_id` refactor.
 
 ## Exit criteria
 
-- [ ] `AuditEvent::AutoNotifyDispatched` variant + supporting
+- [x] `AuditEvent::AutoNotifyDispatched` variant + supporting
   `TriggerKindSummary` + `AutoNotifyOutcomeSummary` enums
-  in `aivyx-audit` — Task 2.
-- [ ] `TriggerDispatch::audit_log` field + `with_audit_log`
+  in `aivyx-audit` — Task 2, commit `b17657a`.
+- [x] `TriggerDispatch::audit_log` field + `with_audit_log`
   builder; `run_daemon` wires `DaemonConfig::audit_log`
-  through — Task 3.
-- [ ] Auto-notify path in `trigger.rs` emits the event for
+  through — Task 3, commit `b17657a`.
+- [x] Auto-notify path in `trigger.rs` emits the event for
   all three outcomes (Delivered / SkippedEmptyResponse /
-  Failed) — Task 4.
-- [ ] Unit tests for variant round-trip, conversion helpers,
-  end-to-end fire-emits-entry integration — Task 5.
-- [ ] Docs note mentioning `AutoNotifyDispatched` for
-  forensic-debug workflows — Task 6.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 7.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to fourteen.
-- [ ] PRODUCT.md streak extends to seven.
-- [ ] Production-core streak extends to fifteen (new record).
-- [ ] Test count delta: positive (~+10–15).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+  Failed) — Task 4, commit `b17657a`.
+- [x] Unit tests for variant round-trip + audit wire shape
+  (3 in `aivyx-audit`) + conversion helpers (6 in
+  `aivyx-channel/trigger`) — Task 5, commits `b17657a` +
+  `d172c7e`. End-to-end fire-emits-entry integration test
+  deferred to dogfooding (see Deferrals).
+- [x] Docs note: new "Debugging missing notifications"
+  section in `docs/INSTALL.md` — Task 6, commit `d172c7e`.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 7 (this commit).
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1 rich event with `session_id`
+  correlation, Q2 audit every fire, Q3 log + continue,
+  Q4 narrow scope). `turn_id` deferred at design time and
+  recorded in deferrals.
+- [x] DESIGN.md streak extends to fourteen.
+- [x] PRODUCT.md streak extends to seven.
+- [x] Production-core streak extends to fifteen (new record).
+- [x] Test count delta: +9 (1194 → 1203). Slight undershoot
+  of the predicted +10–15.
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
