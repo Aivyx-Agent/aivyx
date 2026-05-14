@@ -50,6 +50,14 @@ Aivyx ships zero hosted dependencies. Today's path is
 build-from-source; a prebuilt-binary installer is wired and
 waiting on public hosting (see [Release pipeline status](#release-pipeline-status)).
 
+**Phase 66 onboarding fast-path:** after `cargo build --release
+--bin aivyx`, run `./target/release/aivyx init --template
+coder` (or `researcher` / `personal`) to skip the from-scratch
+config and run the wizard pre-filled from a starter archetype.
+See [`docs/TEMPLATES.md`](docs/TEMPLATES.md) for what each
+template contains. The manual path below is shown for
+reference.
+
 ```sh
 # 1. Install Ollama and pull a model (no API key required)
 ollama pull llama3.1

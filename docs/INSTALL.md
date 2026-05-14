@@ -138,6 +138,16 @@ After install:
    name, primary use case, communication style) seed your
    operator identity layer.
 
+   **Faster path with a starter template** (Phase 66):
+   `aivyx init --list-templates` to discover available starters
+   (`coder`, `researcher`, `personal`), then
+   `aivyx init --template <name>` to run the wizard with
+   pre-filled defaults from the template. The generated
+   `aivyx.toml` includes the template's role declarations, MCP
+   blocks, and commented-out automation hints. See
+   [`docs/TEMPLATES.md`](TEMPLATES.md) for the full template
+   reference.
+
 2. **`aivyx`** — auto-spawns the daemon (foreground or
    background depending on flag), drops you into a REPL session,
    and serves the Web UI on `127.0.0.1:7843` if you enabled it.
