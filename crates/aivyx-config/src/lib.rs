@@ -1073,6 +1073,12 @@ pub enum NotifyTargetKind {
     /// `LettreEmailSender` is constructed at daemon startup and
     /// Arc-cloned into each email target's backend.
     Email { to: String },
+    /// Phase 69 — Web UI desktop notification. Pushes onto a
+    /// broadcast channel that the Web UI WebSocket connection
+    /// handlers subscribe to; browser-side JS triggers the
+    /// `Notification` API + an in-page toast. No per-target
+    /// fields — one Web UI per daemon. `kind = "web-ui"`.
+    WebUi,
 }
 
 /// Phase 68 — SMTP TLS mode discriminator. Defaults to
@@ -2264,6 +2270,19 @@ impl AivyxConfig {
                     }
                     NotifyTargetKind::Webhook { url }
                 }
+                "web-ui" => {
+                    // Phase 69 — Web UI desktop notification.
+                    // No per-target fields; one Web UI per
+                    // daemon. Defensive: if the operator
+                    // supplied `to`, `url`, or `chat_id`, that
+                    // means they typed the wrong kind for the
+                    // fields they were trying to use. We
+                    // tolerate the unused fields silently
+                    // because TOML doesn't strict-mode by
+                    // default and the loader already accepts
+                    // them as `Option`.
+                    NotifyTargetKind::WebUi
+                }
                 "email" => {
                     // Phase 68 — email target. Requires `to` and
                     // the `[email]` section to be configured.
@@ -2302,7 +2321,7 @@ impl AivyxConfig {
                         field: "notify_target.kind",
                         reason: format!(
                             "unknown notify_target kind `{}` \
-                             (target `{}`); supported: telegram, webhook, email",
+                             (target `{}`); supported: telegram, webhook, email, web-ui",
                             other, raw.name
                         ),
                     });

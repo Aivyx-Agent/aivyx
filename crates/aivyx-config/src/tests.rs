@@ -3909,3 +3909,75 @@ from = "a@example.com"
     }
     drop(env);
 }
+
+// ==============================================================
+// Phase 69 — kind = "web-ui" notify_target
+// ==============================================================
+
+#[test]
+fn web_ui_notify_target_parses_with_no_extra_fields() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("webui-target");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "desktop"
+kind = "web-ui"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.notify_targets.len(), 1);
+    assert_eq!(cfg.notify_targets[0].name, "desktop");
+    assert!(matches!(
+        cfg.notify_targets[0].kind,
+        NotifyTargetKind::WebUi
+    ));
+    drop(env);
+}
+
+#[test]
+fn unknown_notify_target_kind_error_mentions_web_ui() {
+    // Regression: the helpful "supported kinds" list in the
+    // unknown-kind error message must include web-ui.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-unknown-kind");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "bogus"
+kind = "carrier-pigeon"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { reason, .. } => {
+            assert!(reason.contains("web-ui"), "reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
