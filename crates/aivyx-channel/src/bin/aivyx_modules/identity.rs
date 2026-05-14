@@ -21,9 +21,11 @@
 
 use std::path::Path;
 
-use aivyx_channel::daemon_client::{daemon_is_running, export_persona_chain};
+use aivyx_channel::daemon_client::{
+    daemon_is_running, export_persona_chain, import_persona_chain,
+};
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::identity_export::build;
+use aivyx_channel::identity_export::{build, parse_and_validate};
 use aivyx_config::{AivyxConfig, LoadOptions};
 
 const PROFILE_TOML_PATH: &str = "aivyx.toml";
@@ -82,6 +84,74 @@ pub async fn run_identity_export(path: &Path) -> Result<(), String> {
         path.display(),
     );
     eprintln!("File permissions: 0600 (owner-only).");
+    Ok(())
+}
+
+/// Entry point for `aivyx identity import <path> [--force]`.
+/// Phase 65. Reads + validates the file locally, then forwards
+/// to the running daemon for the destructive write. The daemon
+/// refuses on a non-empty existing chain unless `force` is set.
+///
+/// Profile half remains a hand-edit per Q2(a) sign-off — the
+/// CLI does not touch `aivyx.toml`. The exported `[profile]`
+/// is included in the bundle for the operator to reference.
+pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String> {
+    // Local parse + validate first. Fail fast on local issues
+    // (malformed JSON, schema mismatch, gap in seq, etc.) before
+    // opening an IPC connection.
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let bundle = parse_and_validate(&raw)
+        .map_err(|e| format!("import validation failed: {e}"))?;
+
+    let socket_path = default_socket_path()?;
+    if !daemon_is_running(&socket_path).await {
+        return Err(format!(
+            "aivyx identity import: no daemon running on socket {} — \
+             start the daemon first with `aivyx daemon run` (or just `aivyx`)",
+            socket_path.display(),
+        ));
+    }
+
+    // Forward to the daemon. The CLI is a thin wrapper —
+    // conflict resolution, wipe, replay, and runtime refresh
+    // all happen daemon-side.
+    let success = import_persona_chain(
+        &socket_path,
+        bundle.persona.deltas,
+        bundle.persona.effective_at_export,
+        force,
+    )
+    .await
+    .map_err(|e| format!("persona import failed: {e}"))?;
+
+    eprintln!(
+        "aivyx identity import: imported {} deltas. \
+         Chain is now at seq {}.",
+        success.deltas_imported, success.final_chain_seq,
+    );
+    eprintln!(
+        "Daemon's runtime persona state refreshed — the next \
+         agent turn sees the imported persona without restart."
+    );
+    if bundle.profile.assistant_name != "Aivyx"
+        || bundle.profile.operator_profile.is_some()
+        || bundle.profile.communication_style.is_some()
+        || !bundle.profile.primary_use_cases.is_empty()
+        || !bundle.profile.behavioral_preferences.is_empty()
+        || !bundle.profile.behavioral_constraints.is_empty()
+    {
+        eprintln!();
+        eprintln!(
+            "Note: the export bundle includes a Profile section. \
+             Phase 65 does not auto-import Profile (Q2(a) at sign-off)."
+        );
+        eprintln!(
+            "To apply the imported Profile, hand-edit `aivyx.toml`'s \
+             `[profile]` section to match the bundle's `profile` block, \
+             then restart the daemon (`aivyx daemon stop && aivyx`)."
+        );
+    }
     Ok(())
 }
 

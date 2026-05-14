@@ -428,6 +428,34 @@ pub enum FrontendMessage {
         id: String,
         target_delta_id: String,
     },
+    /// Phase 65 — operator-driven Persona chain import (Phase 60
+    /// identity-deferral closer). Replays a parsed export bundle
+    /// onto the local chain. Without `force` the daemon refuses if
+    /// the local chain is non-empty. With `force` the daemon wipes
+    /// the chain before replaying. Each delta is re-signed against
+    /// the local HMAC key during replay (Phase 60 Q1(a)).
+    ///
+    /// Daemon-side flow (best-effort, no atomic-tx wrapping per
+    /// Phase 65 Q1(a)): re-validate → conflict check → optional
+    /// wipe → per-delta append → recompute shared runtime state.
+    ///
+    /// Reply: [`DaemonMessage::PersonaImportResolved`] with the
+    /// same `id`.
+    ImportPersonaChain {
+        id: String,
+        /// Deltas to replay in order. Each is appended via the
+        /// existing `PersistentPersonaLog::append` path so the new
+        /// chain's MACs bind to the target host's key.
+        deltas: Vec<crate::identity_export::DeltaExport>,
+        /// Expected effective state after replay; the daemon
+        /// echoes this back in the response for the CLI to verify.
+        /// Already validated against the deltas at parse time by
+        /// the CLI, but carried to the daemon for completeness.
+        effective_at_export: crate::persona::EffectivePersona,
+        /// If `false` and the local chain is non-empty, refuse.
+        /// If `true`, wipe and replace.
+        force: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +520,34 @@ pub enum DaemonMessage {
         seq: Option<u64>,
         error: Option<String>,
     },
+    /// Phase 65 — response to [`FrontendMessage::ImportPersonaChain`].
+    /// On success carries `deltas_imported` (count from the
+    /// request, useful for the CLI's tally output) and
+    /// `final_chain_seq` (the last seq in the new chain).
+    /// On failure carries `error` describing what went wrong
+    /// (conflict without force, validation failure, append
+    /// error mid-stream).
+    PersonaImportResolved {
+        id: String,
+        ok: bool,
+        /// On success: `{deltas_imported, final_chain_seq}` per
+        /// Phase 65 Q4(a). `None` on failure.
+        success: Option<PersonaImportSuccess>,
+        error: Option<String>,
+    },
+}
+
+/// Phase 65 — success payload for [`DaemonMessage::PersonaImportResolved`].
+/// Mirrors the operator-feedback shape requested at Q4(a) sign-off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaImportSuccess {
+    /// How many deltas the daemon appended. Equals the length
+    /// of the request's `deltas` array on a full import.
+    pub deltas_imported: u64,
+    /// The seq of the final appended delta. After a successful
+    /// import, `final_chain_seq + 1` is the chain's current
+    /// length (since seqs are zero-indexed).
+    pub final_chain_seq: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +775,13 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         seq: Option<u64>,
+        error: Option<String>,
+    },
+    // Phase 65 — Persona import resolution.
+    PersonaImportResolved {
+        id: String,
+        ok: bool,
+        success: Option<PersonaImportSuccess>,
         error: Option<String>,
     },
 }

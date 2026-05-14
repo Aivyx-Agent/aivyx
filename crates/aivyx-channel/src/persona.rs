@@ -288,6 +288,15 @@ impl PersonaChainLog {
         self.entries.lock().unwrap().is_empty()
     }
 
+    /// Phase 65 — wipe every entry from the in-memory chain.
+    /// Used by [`PersistentPersonaLog::clear`] after the storage
+    /// rows are deleted. The HMAC key is preserved; subsequent
+    /// `append` calls produce a chain starting at seq 0 again,
+    /// signing against the same key.
+    pub fn clear(&self) {
+        self.entries.lock().unwrap().clear();
+    }
+
     /// Walk every entry; check `prev_mac` linkage and recompute every
     /// `mac`. Returns the first broken link, or `Ok(())` on a clean
     /// chain.
@@ -430,6 +439,34 @@ impl PersistentPersonaLog {
     /// `Ok(())` on a clean chain.
     pub fn verify(&self) -> Result<(), PersonaChainError> {
         self.chain.verify()
+    }
+
+    /// Phase 65 — wipe the chain. Deletes every persisted row under
+    /// the underlying `KeyDomain::Persona` handle, then clears the
+    /// in-memory chain. The HMAC key is preserved — subsequent
+    /// appends produce a fresh chain starting at seq 0 signed
+    /// against the same key.
+    ///
+    /// **Not atomic.** A daemon crash partway through the per-row
+    /// deletes leaves the chain in an inconsistent state (some
+    /// rows gone from storage, the in-memory chain still showing
+    /// them). The Phase 65 Q1(a) sign-off accepted this: real
+    /// atomic-tx wrapping is deferred to a follow-on phase if
+    /// pressure surfaces. Operators can recover by re-importing.
+    ///
+    /// Used by the `ImportPersonaChain` IPC handler when `force =
+    /// true`.
+    pub async fn clear(&self) -> Result<(), PersonaChainError> {
+        let current_entries = self.chain.entries();
+        for entry in &current_entries {
+            let key = entry.seq.to_be_bytes();
+            self.storage
+                .delete(&key)
+                .await
+                .map_err(|e| PersonaChainError::Storage(e.to_string()))?;
+        }
+        self.chain.clear();
+        Ok(())
     }
 }
 

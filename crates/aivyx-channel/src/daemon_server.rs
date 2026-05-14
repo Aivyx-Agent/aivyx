@@ -795,6 +795,41 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::ImportPersonaChain {
+                            id,
+                            deltas,
+                            effective_at_export: _,
+                            force,
+                        } => {
+                            // Phase 65 Task 3 — replay an exported
+                            // chain. Best-effort (Q1(a)): no
+                            // transaction wrapping; daemon crash
+                            // mid-import leaves chain partial.
+                            // Operator re-imports to recover.
+                            let resp = match resolve_persona_import(
+                                persona_log.as_deref(),
+                                &shared_persona,
+                                deltas,
+                                force,
+                            )
+                            .await
+                            {
+                                Ok(success) => DaemonMessage::PersonaImportResolved {
+                                    id,
+                                    ok: true,
+                                    success: Some(success),
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::PersonaImportResolved {
+                                    id,
+                                    ok: false,
+                                    success: None,
+                                    error: Some(reason),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                     }
                 }
                 Err(FrameError::IncompleteBuf) => break,
@@ -1365,6 +1400,77 @@ async fn resolve_persona_revert(
         return Err("shared persona state lock poisoned during recompute".into());
     }
     Ok(seq)
+}
+
+/// Phase 65 — daemon-side import handler. Validates → conflict
+/// checks → optionally wipes → replays → recomputes shared state.
+/// Best-effort per Q1(a): no atomic-tx wrapping. Returns
+/// `PersonaImportSuccess { deltas_imported, final_chain_seq }`
+/// on success.
+async fn resolve_persona_import(
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    deltas: Vec<crate::identity_export::DeltaExport>,
+    force: bool,
+) -> Result<crate::daemon_ipc::PersonaImportSuccess, String> {
+    let persona_log = persona_log
+        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+
+    // Re-validate each delta server-side — defense against the
+    // CLI sending us a frame that bypassed parse_and_validate
+    // (a malicious client, or a CLI bug).
+    for (index, d) in deltas.iter().enumerate() {
+        d.delta.validate().map_err(|reason| {
+            format!(
+                "incoming delta at index {index} (seq {seq}) failed validation: {reason}",
+                seq = d.seq,
+            )
+        })?;
+    }
+
+    // Conflict check (Q3(a) at sign-off): refuse to overwrite
+    // unless --force.
+    let existing = persona_log.entries();
+    if !existing.is_empty() && !force {
+        return Err(format!(
+            "persona chain not empty ({} entries); pass --force to overwrite",
+            existing.len(),
+        ));
+    }
+
+    // Force wipe.
+    if force && !existing.is_empty() {
+        persona_log
+            .clear()
+            .await
+            .map_err(|e| format!("persona chain wipe failed: {e}"))?;
+    }
+
+    // Replay. Each append re-signs against the local HMAC key —
+    // Phase 60 Q1(a) re-bind made concrete.
+    let count = deltas.len() as u64;
+    let mut last_seq: u64 = 0;
+    for (index, d) in deltas.into_iter().enumerate() {
+        let assigned_seq = persona_log.append(d.delta).await.map_err(|e| {
+            format!(
+                "persona chain append failed at index {index} (expected seq {}): {e}",
+                d.seq,
+            )
+        })?;
+        last_seq = assigned_seq;
+    }
+
+    // Refresh runtime state (Q3 — refresh: daemon recomputes
+    // immediately). The next agent turn sees the imported state.
+    let entries_after = persona_log.entries();
+    if !crate::persona::recompute_shared_from_entries(shared_persona, &entries_after) {
+        return Err("shared persona state lock poisoned during recompute".into());
+    }
+
+    Ok(crate::daemon_ipc::PersonaImportSuccess {
+        deltas_imported: count,
+        final_chain_seq: last_seq,
+    })
 }
 
 fn field_source_label(src: aivyx_config::FieldSource) -> &'static str {

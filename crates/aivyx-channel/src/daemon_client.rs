@@ -529,6 +529,75 @@ pub async fn revert_persona_delta(
     }
 }
 
+/// Phase 65 — operator-driven Persona chain import over IPC.
+/// Closes the Phase 60 identity-deferral end to end. Sends the
+/// parsed export bundle to the daemon for replay against the
+/// local store. The daemon refuses on a non-empty chain unless
+/// `force` is set, then wipes and replays. On success returns
+/// the daemon's `PersonaImportSuccess` payload with
+/// `deltas_imported` + `final_chain_seq` per Q4(a).
+pub async fn import_persona_chain(
+    socket_path: &Path,
+    deltas: Vec<crate::identity_export::DeltaExport>,
+    effective_at_export: crate::persona::EffectivePersona,
+    force: bool,
+) -> Result<crate::daemon_ipc::PersonaImportSuccess, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::ImportPersonaChain {
+        id: "im-cli".into(),
+        deltas,
+        effective_at_export,
+        force,
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::PersonaImportResolved {
+                    ok, success, error, ..
+                },
+                _,
+            )) => {
+                if ok {
+                    return success.ok_or_else(|| {
+                        DaemonError::Protocol(
+                            "PersonaImportResolved ok=true but success is None".into(),
+                        )
+                    });
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "persona import failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected PersonaImportResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Shared helper: connect, send a `Query`, return the response
 /// payload. Used by the Persona inspection helpers above.
 async fn send_query(

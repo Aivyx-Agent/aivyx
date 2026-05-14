@@ -412,6 +412,9 @@ fn run() -> Result<(), String> {
                 IdentitySubcommand::Export { path } => {
                     identity::run_identity_export(&path).await
                 }
+                IdentitySubcommand::Import { path, force } => {
+                    identity::run_identity_import(&path, force).await
+                }
             }
         });
     }
@@ -935,6 +938,12 @@ enum IdentitySubcommand {
     /// `0600` permissions. Daemon must be running (the Persona
     /// half is fetched over IPC).
     Export { path: PathBuf },
+    /// `aivyx identity import <path> [--force]` — Phase 65.
+    /// Replays the exported bundle onto the local chain. The
+    /// daemon refuses on a non-empty existing chain unless
+    /// `force` is set. Profile half remains a hand-edit per
+    /// Q2(a) at Phase 65 sign-off.
+    Import { path: PathBuf, force: bool },
 }
 
 /// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
@@ -1118,12 +1127,35 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "import" => {
-                return Err(
-                    "`aivyx identity import` is not yet available — Phase 64 ships \
-                     export only (the destructive-write side lands in Phase 65 \
-                     with focused conflict-resolution + --force semantics)."
-                        .to_string(),
-                );
+                // Phase 65 — replaces the Phase 64 deferral
+                // message. `aivyx identity import <path>
+                // [--force]`. The --force flag may appear in
+                // any trailing position; reject extras.
+                let path = args.get(2).ok_or_else(|| {
+                    "`aivyx identity import` requires a path. Usage: \
+                     `aivyx identity import <path> [--force]`"
+                        .to_string()
+                })?;
+                let mut force = false;
+                for extra in args.iter().skip(3) {
+                    if extra == "--force" {
+                        if force {
+                            return Err(
+                                "`--force` specified more than once".into(),
+                            );
+                        }
+                        force = true;
+                    } else {
+                        return Err(format!(
+                            "`aivyx identity import` accepts a path and \
+                             optional --force. Got unexpected arg: `{extra}`",
+                        ));
+                    }
+                }
+                IdentitySubcommand::Import {
+                    path: PathBuf::from(path),
+                    force,
+                }
             }
             other => {
                 return Err(format!(
@@ -4489,13 +4521,56 @@ mod tests {
     }
 
     #[test]
-    fn identity_import_announces_phase_65_deferral() {
-        // Phase 64 ships export only; import is recognized by
-        // the parser but returns a descriptive deferral message.
-        let err = parse_cli_args_from(&argv(&["identity", "import", "/tmp/x"]))
-            .expect_err("`identity import` must error in Phase 64");
-        assert!(err.contains("Phase 64 ships export only"), "error: {err}");
-        assert!(err.contains("Phase 65"), "error: {err}");
+    fn identity_import_parses_with_path_no_force() {
+        // Phase 65 — import is real now (no longer a deferral).
+        let parsed = parse_cli_args_from(&argv(&["identity", "import", "/tmp/x.json"]))
+            .expect("`identity import` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Identity(IdentitySubcommand::Import {
+                path: PathBuf::from("/tmp/x.json"),
+                force: false,
+            })
+        );
+    }
+
+    #[test]
+    fn identity_import_parses_with_force_flag() {
+        let parsed =
+            parse_cli_args_from(&argv(&["identity", "import", "/tmp/x.json", "--force"]))
+                .expect("`identity import --force` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Identity(IdentitySubcommand::Import {
+                path: PathBuf::from("/tmp/x.json"),
+                force: true,
+            })
+        );
+    }
+
+    #[test]
+    fn identity_import_without_path_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["identity", "import"]))
+            .expect_err("`identity import` without path must error");
+        assert!(err.contains("requires a path"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_import_rejects_double_force() {
+        let err = parse_cli_args_from(&argv(&[
+            "identity", "import", "/tmp/x", "--force", "--force",
+        ]))
+        .expect_err("double --force must error");
+        assert!(err.contains("more than once"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_import_rejects_unknown_trailing_arg() {
+        let err = parse_cli_args_from(&argv(&[
+            "identity", "import", "/tmp/x", "--bogus",
+        ]))
+        .expect_err("unknown trailing arg must error");
+        assert!(err.contains("unexpected arg"), "error: {err}");
     }
 
     #[test]
