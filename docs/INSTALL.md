@@ -185,19 +185,34 @@ The file is pretty-printed JSON with the following shape:
 ```
 
 The chain's HMAC MACs are deliberately omitted from the export
-— the per-host HMAC key is not portable. On import (forthcoming
-in Phase 65), the chain is re-signed with the target host's
-key. Trust comes from operator authority, not cross-host
-cryptographic provenance.
+— the per-host HMAC key is not portable. On import the chain
+is re-signed with the target host's key. Trust comes from
+operator authority, not cross-host cryptographic provenance.
 
-**Phase 65 will ship `aivyx identity import <path>`** with
-conflict resolution and a `--force` flag for destructive
-overwrites. Until then, the export file is a one-way snapshot
-— useful for backup and inspection, not yet restorable.
+To restore a snapshot on a target host (Phase 65):
 
-For an interim restore path, hand-edit `aivyx.toml`'s
-`[profile]` section to match the exported profile; the Persona
-chain stays separate until import lands.
+```sh
+# On the target host (daemon must be running):
+aivyx identity import ~/aivyx-snapshot.json
+
+# If the target host already has a Persona chain, the import
+# refuses by default to avoid silent overwrite. Pass --force
+# to wipe and replace:
+aivyx identity import ~/aivyx-snapshot.json --force
+```
+
+On success the daemon refreshes its runtime persona state
+immediately — the next agent turn sees the imported persona
+without a restart.
+
+**Profile import is operator-driven.** The export bundle
+includes the source host's `[profile]` section for reference,
+but `aivyx identity import` does not auto-write `aivyx.toml`.
+To apply the imported Profile, hand-edit the target host's
+`aivyx.toml` to match the bundle's `profile` block, then
+`aivyx daemon stop && aivyx` to reload. This keeps the
+destructive-write scope tight to one on-disk artifact (the
+encrypted Persona chain).
 
 ## Uninstall
 

@@ -1424,6 +1424,66 @@ mod tests {
         assert!(log.is_empty());
     }
 
+    #[tokio::test]
+    async fn persistent_log_clear_wipes_storage_and_memory() {
+        // Phase 65 — `PersistentPersonaLog::clear` is the
+        // load-bearing primitive for the import-with-force
+        // path. Verify it removes both the in-memory chain
+        // and the persisted rows.
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        use std::sync::Arc;
+
+        let dir = tempdir();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.path().join("store.redb")),
+            MasterKey::from_raw([77u8; 32]),
+        )
+        .await
+        .expect("storage opens");
+        let handle = store.domain(KeyDomain::Persona);
+
+        let key = test_key();
+        let log = PersistentPersonaLog::open(handle.clone(), key.clone())
+            .await
+            .expect("log opens");
+        log.append(scalar_delta(
+            PersonaDeltaCategory::AssistantName,
+            Some("Codex"),
+        ))
+        .await
+        .expect("append 1");
+        log.append(list_delta(
+            PersonaDeltaCategory::BehavioralPreferences,
+            "prefer tests over mocks",
+        ))
+        .await
+        .expect("append 2");
+        assert_eq!(log.len(), 2);
+
+        // Clear.
+        log.clear().await.expect("clear ok");
+        assert_eq!(log.len(), 0);
+        assert!(log.is_empty());
+        drop(log);
+
+        // Re-open: the persisted rows are gone too.
+        let reopened = PersistentPersonaLog::open(handle, key)
+            .await
+            .expect("reopen succeeds");
+        assert_eq!(reopened.len(), 0);
+
+        // Subsequent append produces seq 0 (fresh chain).
+        let seq = reopened
+            .append(scalar_delta(
+                PersonaDeltaCategory::AssistantName,
+                Some("Mira"),
+            ))
+            .await
+            .expect("append after clear");
+        assert_eq!(seq, 0);
+    }
+
     /// Cross-platform tempdir helper without pulling the `tempfile`
     /// crate. Mirrors the pattern used by other tests in this
     /// workspace.
