@@ -1717,6 +1717,10 @@ async fn run_async(
         memory_max_per_topic,
         passphrase: _,
         telegram,
+        // Phase 68 — shared SMTP config consumed by
+        // `build_notify_dispatcher` when any
+        // `[[notify_target]] kind = "email"` exists.
+        email,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2317,9 +2321,44 @@ async fn run_async(
         } else {
             None
         };
+    // Phase 68 — build the shared SMTP transport once if any
+    // email notify_target exists. Mirrors the Telegram pattern
+    // above: shared client, Arc-cloned into each email backend.
+    let email_context: Option<aivyx_channel::notify_dispatcher::EmailDispatchContext> =
+        if config_notify_targets.iter().any(|t| matches!(
+            t.kind,
+            aivyx_config::NotifyTargetKind::Email { .. }
+        )) {
+            // The config loader already rejected
+            // email-target-without-[email]-section, so `email`
+            // is guaranteed Some here. Defense-in-depth fall-
+            // through: build_notify_dispatcher returns a
+            // descriptive error if email_context is None and
+            // an email target is present.
+            email.as_ref().and_then(|cfg| {
+                match aivyx_channel::notify_email::LettreEmailSender::from_config(cfg) {
+                    Ok(sender) => Some(
+                        aivyx_channel::notify_dispatcher::EmailDispatchContext {
+                            sender: Arc::new(sender),
+                            from: cfg.from.clone(),
+                        },
+                    ),
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx: failed to build SMTP transport from \
+                             [email] config: {e}"
+                        );
+                        None
+                    }
+                }
+            })
+        } else {
+            None
+        };
     let notify_dispatcher = aivyx_channel::notify_dispatcher::build_notify_dispatcher(
         &config_notify_targets,
         notify_telegram_transport,
+        email_context,
     )?;
     let notify_send_tool: Arc<aivyx_channel::notify_tool::NotifySendTool> =
         Arc::new(aivyx_channel::notify_tool::NotifySendTool::new());

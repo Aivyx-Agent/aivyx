@@ -533,6 +533,12 @@ pub struct AivyxConfig {
     /// any Telegram fields are set, so the startup banner can warn
     /// about orphan config.
     pub telegram: Option<TelegramConfig>,
+    /// Phase 68 — shared SMTP configuration for the email notify
+    /// backend. `None` when no `[email]` section is declared.
+    /// Required when any `[[notify_target]] kind = "email"` exists;
+    /// the loader rejects email targets without `[email]` at load
+    /// time.
+    pub email: Option<EmailConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1060,6 +1066,57 @@ pub enum NotifyTargetKind {
     /// and custom endpoints. Slack-flavored payload (`{text: ...}`)
     /// is a Phase 62 deferral.
     Webhook { url: String },
+    /// Phase 68 — SMTP email outbound. `to` is the recipient
+    /// address; the SMTP server, credentials, and `from` address
+    /// live in the top-level `[email]` config section (shared
+    /// across every email target per Q2(a) at sign-off). One
+    /// `LettreEmailSender` is constructed at daemon startup and
+    /// Arc-cloned into each email target's backend.
+    Email { to: String },
+}
+
+/// Phase 68 — SMTP TLS mode discriminator. Defaults to
+/// `Starttls` (modern submission standard supported by Gmail,
+/// Fastmail, ProtonMail bridge, AWS SES, etc.). Operators with
+/// legacy infrastructure can override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+    /// Plain TCP that upgrades to TLS via STARTTLS. Port 587 by
+    /// default.
+    Starttls,
+    /// TLS from byte zero. Port 465 by default.
+    Implicit,
+    /// No TLS. Always rejected at load time when paired with
+    /// PLAIN/LOGIN auth — sending credentials in cleartext over
+    /// the wire is a misconfiguration the loader refuses, not a
+    /// runtime surprise.
+    None,
+}
+
+/// Phase 68 — shared SMTP configuration. One per-deployment;
+/// every `[[notify_target]] kind = "email"` reuses it. The
+/// password is stored as `SourcedSecret` so it never lands in a
+/// plain `String` field (matches the `[telegram] token` and
+/// `[anthropic] api_key` patterns).
+#[derive(Debug, Clone)]
+pub struct EmailConfig {
+    /// SMTP server hostname (e.g. `"smtp.gmail.com"`,
+    /// `"smtp.fastmail.com"`).
+    pub host: String,
+    /// SMTP server port. Defaults to 587 for STARTTLS or 465 for
+    /// implicit TLS; an explicit override wins.
+    pub port: u16,
+    /// TLS mode for the connection.
+    pub tls_mode: TlsMode,
+    /// SMTP username. Often the same as `from` but explicit so
+    /// providers using account-id-as-username (some self-hosted
+    /// setups) are supported.
+    pub username: SourcedSecret,
+    /// SMTP password. For Gmail and most cloud providers this is
+    /// an "app password," not the operator's account password.
+    pub password: SourcedSecret,
+    /// Sender address. Appears in the `From:` header.
+    pub from: String,
 }
 
 // --------------------------------------------------------------------
@@ -1087,6 +1144,8 @@ struct RawToml {
     memory: RawMemory,
     #[serde(default)]
     telegram: RawTelegram,
+    #[serde(default)]
+    email: RawEmail,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -1353,8 +1412,8 @@ struct RawFileWatch {
 struct RawNotifyTarget {
     name: String,
     /// Lowercase string discriminator. Accepted values:
-    /// `"telegram"`, `"webhook"`. Anything else is rejected at
-    /// load time.
+    /// `"telegram"`, `"webhook"`, `"email"` (Phase 68).
+    /// Anything else is rejected at load time.
     kind: String,
     /// Required when `kind = "telegram"`. The operator-owned
     /// Telegram chat the bot is authorized to message.
@@ -1363,6 +1422,10 @@ struct RawNotifyTarget {
     /// Required when `kind = "webhook"`. The endpoint to POST to.
     #[serde(default)]
     url: Option<String>,
+    /// Phase 68 — required when `kind = "email"`. The recipient
+    /// address; the shared SMTP credentials live in `[email]`.
+    #[serde(default)]
+    to: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
 }
@@ -1426,6 +1489,28 @@ struct RawTelegram {
     token: Option<String>,
     #[serde(default)]
     chat_id: Option<i64>,
+}
+
+/// Phase 68 — `[email]` section deserialize target.
+///
+/// All fields are optional at the TOML layer; the loader
+/// validates required-when-present semantics and applies the
+/// tls_mode → port default. `tls_mode` accepts the lowercase
+/// string variants `"starttls"`, `"implicit"`, `"none"`.
+#[derive(Debug, Default, Deserialize)]
+struct RawEmail {
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    tls_mode: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    from: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1696,6 +1781,15 @@ impl AivyxConfig {
         } else {
             None
         };
+
+        // --- Phase 68: email SMTP config ------------------------
+        // The `[email]` section is opt-in. Present-but-incomplete
+        // (e.g. host without password) is rejected; absent is fine.
+        // Validation: TLS mode must be one of the three labels;
+        // tls_mode=none combined with PLAIN/LOGIN auth is rejected
+        // (Q4 sign-off — we always use auth, so cleartext over the
+        // wire is a load-time error).
+        let email = build_email_config(&toml.email)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -2170,12 +2264,45 @@ impl AivyxConfig {
                     }
                     NotifyTargetKind::Webhook { url }
                 }
+                "email" => {
+                    // Phase 68 — email target. Requires `to` and
+                    // the `[email]` section to be configured.
+                    let to = raw.to.ok_or_else(|| ConfigError::Invalid {
+                        field: "notify_target.to",
+                        reason: format!(
+                            "kind = \"email\" requires `to` \
+                             (target `{}`)",
+                            raw.name
+                        ),
+                    })?;
+                    if !to.contains('@') {
+                        return Err(ConfigError::Invalid {
+                            field: "notify_target.to",
+                            reason: format!(
+                                "`to` must contain `@` (target `{}`, got `{}`)",
+                                raw.name, to
+                            ),
+                        });
+                    }
+                    if email.is_none() {
+                        return Err(ConfigError::Invalid {
+                            field: "notify_target.to",
+                            reason: format!(
+                                "kind = \"email\" requires a top-level \
+                                 [email] section with SMTP credentials \
+                                 (target `{}`)",
+                                raw.name
+                            ),
+                        });
+                    }
+                    NotifyTargetKind::Email { to }
+                }
                 other => {
                     return Err(ConfigError::Invalid {
                         field: "notify_target.kind",
                         reason: format!(
                             "unknown notify_target kind `{}` \
-                             (target `{}`); supported: telegram, webhook",
+                             (target `{}`); supported: telegram, webhook, email",
                             other, raw.name
                         ),
                     });
@@ -2265,6 +2392,7 @@ impl AivyxConfig {
             memory_ttl_secs,
             passphrase,
             telegram,
+            email,
             roles,
             active_role,
             profile,
@@ -2804,6 +2932,122 @@ fn validate_trigger_notify_targets(
 }
 
 /// Load and parse the TOML file at `path`, if any.
+/// Phase 68 — build an [`EmailConfig`] from the parsed `[email]`
+/// section. Returns `Ok(None)` if the section is absent (every
+/// field unset); `Ok(Some(cfg))` on a complete + validated
+/// declaration; `Err(ConfigError::Invalid)` on partial config or
+/// tls_mode-vs-auth security mismatches.
+///
+/// Validations:
+/// - If ANY email field is set, ALL required fields (`host`,
+///   `username`, `password`, `from`) must be set.
+/// - `tls_mode` must be one of `"starttls"`, `"implicit"`, `"none"`.
+/// - `tls_mode = "none"` is rejected per Q4(a) — we always
+///   send PLAIN/LOGIN credentials, which requires TLS.
+/// - `from` must contain `@`.
+/// - `port` defaults from tls_mode: 587 STARTTLS, 465 implicit.
+fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError> {
+    let any_set = raw.host.is_some()
+        || raw.port.is_some()
+        || raw.tls_mode.is_some()
+        || raw.username.is_some()
+        || raw.password.is_some()
+        || raw.from.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let host = raw.host.clone().ok_or(ConfigError::Invalid {
+        field: "email.host",
+        reason: "[email] section is present but `host` is missing".into(),
+    })?;
+    if host.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "email.host",
+            reason: "`host` must be non-empty".into(),
+        });
+    }
+
+    let tls_mode = match raw.tls_mode.as_deref() {
+        None | Some("starttls") => TlsMode::Starttls,
+        Some("implicit") => TlsMode::Implicit,
+        Some("none") => {
+            return Err(ConfigError::Invalid {
+                field: "email.tls_mode",
+                reason: "tls_mode = \"none\" is rejected — Aivyx uses \
+                         PLAIN/LOGIN auth which requires TLS to avoid \
+                         sending credentials in cleartext"
+                    .into(),
+            });
+        }
+        Some(other) => {
+            return Err(ConfigError::Invalid {
+                field: "email.tls_mode",
+                reason: format!(
+                    "unknown tls_mode `{other}` — supported: \
+                     \"starttls\" (default), \"implicit\""
+                ),
+            });
+        }
+    };
+
+    let port = raw.port.unwrap_or(match tls_mode {
+        TlsMode::Starttls => 587,
+        TlsMode::Implicit => 465,
+        TlsMode::None => 25,
+    });
+
+    let username_str = raw.username.clone().ok_or(ConfigError::Invalid {
+        field: "email.username",
+        reason: "[email] section requires `username`".into(),
+    })?;
+    if username_str.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "email.username",
+            reason: "`username` must be non-empty".into(),
+        });
+    }
+    let username = SourcedSecret::new(
+        secrecy::SecretString::from(username_str),
+        FieldSource::Toml,
+    );
+
+    let password_str = raw.password.clone().ok_or(ConfigError::Invalid {
+        field: "email.password",
+        reason: "[email] section requires `password` (SMTP password / app password)".into(),
+    })?;
+    if password_str.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "email.password",
+            reason: "`password` must be non-empty".into(),
+        });
+    }
+    let password = SourcedSecret::new(
+        secrecy::SecretString::from(password_str),
+        FieldSource::Toml,
+    );
+
+    let from = raw.from.clone().ok_or(ConfigError::Invalid {
+        field: "email.from",
+        reason: "[email] section requires `from`".into(),
+    })?;
+    if !from.contains('@') {
+        return Err(ConfigError::Invalid {
+            field: "email.from",
+            reason: format!("`from` must contain `@` (got `{from}`)"),
+        });
+    }
+
+    Ok(Some(EmailConfig {
+        host,
+        port,
+        tls_mode,
+        username,
+        password,
+        from,
+    }))
+}
+
 ///
 /// Contract:
 /// - `None` path → return default (empty) [`RawToml`].

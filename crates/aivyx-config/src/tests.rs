@@ -33,8 +33,8 @@ use secrecy::ExposeSecret;
 
 use crate::{
     AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, NotifyTargetKind,
-    ProviderKind, Role, ToolAllowlist, DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC,
-    DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
+    ProviderKind, Role, TlsMode, ToolAllowlist, DEFAULT_ASSISTANT_NAME,
+    DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -3586,5 +3586,326 @@ notify_target = "phone"
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert_eq!(cfg.schedules[0].role, "child");
     assert_eq!(cfg.schedules[0].notify_target.as_deref(), Some("phone"));
+    drop(env);
+}
+
+// ==============================================================
+// Phase 68 — [email] section + kind = "email" notify_target
+// ==============================================================
+
+#[test]
+fn email_section_with_kind_email_target_loads_cleanly() {
+    use secrecy::ExposeSecret;
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-happy");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.fastmail.com"
+username = "alice@example.com"
+password = "app-password-xyz"
+from = "aivyx@example.com"
+
+[[notify_target]]
+name = "self"
+kind = "email"
+to = "alice@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let email = cfg.email.expect("[email] populated");
+    assert_eq!(email.host, "smtp.fastmail.com");
+    assert_eq!(email.port, 587);
+    assert_eq!(email.tls_mode, TlsMode::Starttls);
+    assert_eq!(email.from, "aivyx@example.com");
+    assert_eq!(email.password.value.expose_secret(), "app-password-xyz");
+    assert_eq!(cfg.notify_targets.len(), 1);
+    match &cfg.notify_targets[0].kind {
+        NotifyTargetKind::Email { to } => assert_eq!(to, "alice@example.com"),
+        other => panic!("expected Email, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn email_kind_target_without_email_section_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-no-section");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "self"
+kind = "email"
+to = "alice@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.to");
+            assert!(
+                reason.contains("[email] section"),
+                "reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn email_tls_mode_none_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-tls-none");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+tls_mode = "none"
+username = "u"
+password = "p"
+from = "a@b.c"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "email.tls_mode");
+            assert!(reason.contains("cleartext"), "reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn email_implicit_tls_picks_port_465_default() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-implicit");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+tls_mode = "implicit"
+username = "u"
+password = "p"
+from = "a@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let email = cfg.email.expect("[email] populated");
+    assert_eq!(email.port, 465);
+    assert_eq!(email.tls_mode, TlsMode::Implicit);
+    drop(env);
+}
+
+#[test]
+fn email_explicit_port_override_wins() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-explicit-port");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+port = 2525
+username = "u"
+password = "p"
+from = "a@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.email.unwrap().port, 2525);
+    drop(env);
+}
+
+#[test]
+fn email_section_partial_config_is_error() {
+    // [email] declared with host but no password.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-partial");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+username = "u"
+from = "a@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "email.password"));
+    drop(env);
+}
+
+#[test]
+fn email_from_without_at_sign_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-bad-from");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+username = "u"
+password = "p"
+from = "notanemail"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "email.from"));
+    drop(env);
+}
+
+#[test]
+fn email_to_without_at_sign_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-bad-to");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+username = "u"
+password = "p"
+from = "a@example.com"
+
+[[notify_target]]
+name = "broken"
+kind = "email"
+to = "no-at-sign"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "notify_target.to"));
+    drop(env);
+}
+
+#[test]
+fn email_unknown_tls_mode_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("email-unknown-tls");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[email]
+host = "smtp.example.com"
+tls_mode = "bogus"
+username = "u"
+password = "p"
+from = "a@example.com"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "email.tls_mode");
+            assert!(reason.contains("bogus"), "reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
     drop(env);
 }

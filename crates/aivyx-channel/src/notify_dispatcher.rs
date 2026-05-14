@@ -238,6 +238,10 @@ impl Default for NotifyDispatcher {
 ///   token`), returns an error naming the offending target.
 /// - `NotifyTargetKind::Webhook { url }` → [`NotifyWebhookBackend`]
 ///   with a default reqwest sender (5s timeout).
+/// - `NotifyTargetKind::Email { to }` → [`NotifyEmailBackend`]
+///   (Phase 68) wrapping the supplied `email_sender`. Built
+///   from `[email]` config once and shared across every email
+///   target.
 ///
 /// Returns an empty dispatcher if `targets` is empty — the
 /// `notify.send` tool then surfaces `UnknownTarget` for every
@@ -247,6 +251,7 @@ impl Default for NotifyDispatcher {
 pub fn build_notify_dispatcher(
     targets: &[NotifyTargetConfig],
     telegram_transport: Option<Arc<dyn TelegramTransport>>,
+    email_context: Option<EmailDispatchContext>,
 ) -> Result<Arc<NotifyDispatcher>, String> {
     let mut d = NotifyDispatcher::new();
     for target in targets {
@@ -268,10 +273,37 @@ pub fn build_notify_dispatcher(
                 target.name.clone(),
                 url.clone(),
             )),
+            NotifyTargetKind::Email { to } => {
+                let ctx = email_context.as_ref().ok_or_else(|| {
+                    format!(
+                        "notify_target `{}` (kind = email) requires a configured \
+                         [email] section; the config loader should have caught \
+                         this — defense-in-depth check at dispatcher build time",
+                        target.name,
+                    )
+                })?;
+                Arc::new(crate::notify_email::NotifyEmailBackend::new(
+                    Arc::clone(&ctx.sender),
+                    ctx.from.clone(),
+                    to.clone(),
+                ))
+            }
         };
         d.register(&target.name, backend);
     }
     Ok(Arc::new(d))
+}
+
+/// Phase 68 — context for building email backends in
+/// `build_notify_dispatcher`. Bundles the shared
+/// `Arc<dyn EmailSender>` (one `LettreEmailSender` per
+/// deployment) with the `from` address pulled from
+/// `[email] from`. The binary's startup path constructs this
+/// once if any email targets exist; the dispatcher Arc-clones
+/// the sender into each per-target backend.
+pub struct EmailDispatchContext {
+    pub sender: Arc<dyn crate::notify_email::EmailSender>,
+    pub from: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +473,7 @@ mod tests {
 
     #[test]
     fn build_empty_targets_returns_empty_dispatcher() {
-        let d = build_notify_dispatcher(&[], None).expect("ok");
+        let d = build_notify_dispatcher(&[], None, None).expect("ok");
         assert_eq!(d.len(), 0);
     }
 
@@ -454,7 +486,7 @@ mod tests {
             },
             enabled: true,
         }];
-        let d = build_notify_dispatcher(&targets, None).expect("ok");
+        let d = build_notify_dispatcher(&targets, None, None).expect("ok");
         assert_eq!(d.len(), 1);
         let pairs = d.list_targets();
         assert_eq!(pairs[0], ("alerts", "webhook"));
@@ -469,7 +501,7 @@ mod tests {
             },
             enabled: true,
         }];
-        let err = build_notify_dispatcher(&targets, None).expect_err("must error");
+        let err = build_notify_dispatcher(&targets, None, None).expect_err("must error");
         assert!(err.contains("`phone`"), "error: {err}");
         assert!(err.contains("[telegram] token"), "error: {err}");
     }
@@ -484,7 +516,7 @@ mod tests {
             enabled: true,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
-        let d = build_notify_dispatcher(&targets, Some(transport)).expect("ok");
+        let d = build_notify_dispatcher(&targets, Some(transport), None).expect("ok");
         assert_eq!(d.len(), 1);
         let pairs = d.list_targets();
         assert_eq!(pairs[0], ("phone", "telegram"));
@@ -501,7 +533,7 @@ mod tests {
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let err =
-            build_notify_dispatcher(&targets, Some(transport)).expect_err("must error");
+            build_notify_dispatcher(&targets, Some(transport), None).expect_err("must error");
         assert!(err.contains("phone"), "error: {err}");
         assert!(err.contains("invalid telegram chat_id"), "error: {err}");
     }
@@ -525,7 +557,7 @@ mod tests {
             },
         ];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
-        let d = build_notify_dispatcher(&targets, Some(transport)).expect("ok");
+        let d = build_notify_dispatcher(&targets, Some(transport), None).expect("ok");
         assert_eq!(d.len(), 2);
         let mut pairs = d.list_targets();
         pairs.sort();

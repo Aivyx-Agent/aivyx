@@ -56,6 +56,7 @@ pub mod ollama_tools;
 /// `notify_webhook` (Phase 62 Task 6); the `notify.send` tool
 /// lives in `notify_tool` (Phase 62 Task 7).
 pub mod notify_dispatcher;
+pub mod notify_email;
 pub mod notify_telegram;
 pub mod notify_webhook;
 pub mod notify_tool;

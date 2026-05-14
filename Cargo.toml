@@ -77,6 +77,20 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 # Unix process-group signaling for shell.exec (Phase 42)
 libc = "0.2"
 
+# Phase 68 — SMTP client for the email notify backend.
+# `default-features = false` + explicit rustls features is
+# load-bearing: we keep TLS aligned with our existing reqwest
+# rustls-tls policy and never pull in system openssl by
+# accident.
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1",
+    "tokio1-rustls-tls",
+    "rustls-native-certs",
+    "smtp-transport",
+    "builder",
+    "hostname",
+] }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

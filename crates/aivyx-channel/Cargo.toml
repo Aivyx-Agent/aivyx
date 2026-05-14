@@ -55,6 +55,12 @@ zeroize = "1.8"
 # Pinned to `^7` (today 7.4.0) to match the current stable line.
 rpassword = "7"
 
+# Phase 68 — SMTP transport for the email notify backend.
+# Workspace dep with `default-features = false` + explicit
+# rustls features (see root Cargo.toml). `secrecy` is already
+# present above for the existing api-key / passphrase paths.
+lettre = { workspace = true }
+
 # Binary-only deps below. The library target (lib.rs) only needs the
 # entries above; the `aivyx` bin pulls in the rest so a single
 # `cargo run --bin aivyx` launches the full agent stack.
