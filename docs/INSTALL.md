@@ -290,6 +290,45 @@ Gmail/Office 365 users with strict workspace policies that
 prohibit app passwords need to wait for the OAuth2 phase or
 use a different provider in the meantime.
 
+## Web UI desktop notifications (Phase 69)
+
+The Web UI's localhost-only page at `127.0.0.1:7843` (Phase 39)
+can deliver OS-level desktop notifications + an in-page toast
+banner whenever the agent or trigger auto-notify fires.
+Operators who already keep the Web UI tab open get the
+lowest-friction notification path — no API keys, no SMTP
+setup, no bot tokens.
+
+**Enable it in two steps:**
+
+1. Add a `[[notify_target]] kind = "web-ui"` block to
+   `aivyx.toml` (and make sure the Web UI server is enabled —
+   it ships on by default):
+
+   ```toml
+   [[notify_target]]
+   name = "desktop"
+   kind = "web-ui"
+   ```
+
+2. Open `http://127.0.0.1:7843/` in a browser. On first load a
+   banner asks "Enable desktop notifications" — click *Enable*
+   and grant the browser's permission prompt. The agent's
+   `notify.send` tool and any trigger with
+   `notify_target = "desktop"` will now reach you.
+
+**The browser tab must be open.** Desktop notifications are
+delivered over the existing WebSocket bridge; close the tab
+and notifications stop firing for that target. Pair Web UI
+notify with `kind = "email"` (or `kind = "telegram"`) when you
+want notifications to land while you're away from the laptop —
+the audit chain records every dispatch either way.
+
+**One Web UI per daemon.** Multiple `kind = "web-ui"` targets
+all funnel into the same browser fan-out, so naming them
+differently only affects the per-target audit name; the
+operator-visible behavior is identical.
+
 ## Uninstall
 
 ```sh

@@ -376,7 +376,7 @@ parent_role = "researcher"
 #
 # Each `[[notify_target]]` entry declares an outbound notification
 # destination the agent can push to via the `notify.send` tool.
-# Two kinds in v1:
+# Four kinds:
 #
 #   kind = "telegram"  — uses the operator's existing bot (the
 #                        same [telegram] token below) to send a
@@ -391,10 +391,22 @@ parent_role = "researcher"
 #                        Slack incoming webhooks (with caveat),
 #                        and custom endpoints. 5-second timeout.
 #
+#   kind = "email"     — Phase 68 SMTP email backend; shares
+#                        the [email] block below across all
+#                        email targets.
+#
+#   kind = "web-ui"    — Phase 69 Web UI desktop notification.
+#                        Requires the Web UI server enabled
+#                        below; fans out via OS-level browser
+#                        Notification API + in-page toast.
+#
 # Required keys per kind:
 #   - telegram: `name`, `kind = "telegram"`, `chat_id` (string)
 #   - webhook:  `name`, `kind = "webhook"`, `url`
 #                (must start with http:// or https://)
+#   - email:    `name`, `kind = "email"`, `to` (recipient
+#                address) — also requires the [email] block.
+#   - web-ui:   `name`, `kind = "web-ui"` (no other fields)
 #
 # Optional: `enabled` (default true — set false to keep the
 # entry but skip dispatcher registration).
@@ -447,6 +459,23 @@ parent_role = "researcher"
 # username = "you@example.com"
 # password = "<app-password>"           # SMTP / app password
 # from = "aivyx@example.com"
+#
+# Phase 69 — Web UI desktop notification.
+#
+# Sends an OS-level browser notification + an in-page toast
+# banner to every connected Web UI browser tab. Requires the
+# `[daemon] web_ui = true` (or a `web_ui_port`) below so the
+# Web UI server is running. No credentials, no addresses —
+# operators just grant the browser notification permission
+# once when the page first loads.
+#
+# Pair this with `kind = "email"` or `kind = "telegram"` for
+# persistence: Web UI notifications fire only while a browser
+# tab is open and require the operator to be at the laptop.
+#
+# [[notify_target]]
+# name = "desktop"
+# kind = "web-ui"
 #
 # Example: granting the `coder` role permission to notify the
 # `phone` target only (no access to `ops-alerts`):
