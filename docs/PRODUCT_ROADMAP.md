@@ -887,11 +887,29 @@ respond to it. Closing the gap is the inflection point between
   DESIGN.md → 15, PRODUCT.md → 8, lib.rs → 16 (new
   record). First net-new workspace dep since Phase 58.
 
-- **Web UI desktop notifications (future).** Adds a
-  `kind = "web-ui"` backend that pushes a WebSocket
-  notification to the running Web UI session, surfaced via
-  the browser's `Notification` API. Needs WebPush
-  registration or aggressive polling.
+- **Phase 69 (Web UI desktop notifications, shipped 2026-05-15).**
+  Adds the `kind = "web-ui"` notify_target backend. A single
+  `WebUiBroadcaster` (wrapping `tokio::sync::broadcast`)
+  fans out `DesktopNotificationFrame`s to every connected
+  Web UI WebSocket; each browser tab subscribes a fresh
+  receiver. New `DaemonMessage::DesktopNotification {
+  title, body }` IPC envelope (Q4(a)). Browser-side wiring:
+  `Notification` API + in-page toast banner per Q2 (both
+  UX modes), one-time permission prompt on first page load.
+  Zero subscribers yields `Ok(())` per Q1(a) — broadcast-
+  style fire-and-forget; audit chain still records every
+  dispatch. After Phase 69 the supported notify kinds are
+  `telegram`, `webhook`, `email`, and `web-ui`. Tests +12
+  (1222 → 1234). All three streak predictions correct:
+  DESIGN.md → 16, PRODUCT.md → 9, lib.rs → 17 (new record,
+  beats Phase 68's 16). Zero new workspace deps.
+
+- **WebPush / service-worker notifications (future).**
+  Phase 69 requires the Web UI tab to be open. WebPush
+  would let notifications fire even with the tab closed;
+  needs VAPID key generation + service-worker registration
+  + push subscription persistence. Real engineering;
+  speculative pending operator pressure.
 
 - **Slack-flavored webhook payload (future, gated on use).**
   Slack incoming webhooks expect `{text: ...}` not

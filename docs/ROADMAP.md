@@ -1343,6 +1343,70 @@ notify, default-target sugar, retry semantics, multi-target
 dispatch, conditional notify) are operator-feedback-shaped
 follow-ups; the substrate is extensible.
 
+## Phase 69 — Web UI Desktop Notifications (Reach Phase 4)
+
+**Frozen — see [PHASE_69.md](PHASE_69.md).** Fourth notify
+backend after Phase 62's Telegram + webhook and Phase 68's
+email. Closes the focused-at-the-laptop case: operators who
+already keep the Web UI tab open at `127.0.0.1:7843` get
+OS-level desktop notifications + an in-page toast banner with
+no API keys, no SMTP setup, no bot tokens.
+
+Delivered across nine engineering commits (Open, Tasks 2–10
+each as their own commit, Exit):
+
+- **Config in `aivyx-config`.** `NotifyTargetKind::WebUi`
+  unit variant (no per-target fields per Q3(a)). Loader
+  accepts `kind = "web-ui"`; unknown-kind error message
+  lists `web-ui` in the supported-kinds suggestion.
+- **IPC envelope.** `DaemonMessage::DesktopNotification {
+  title, body }` + matching `DaemonEnvelope` variant per
+  Q4(a). Distinct from `StreamEvent` (per-session) because
+  broadcast events deserve their own variant.
+- **`notify_webui.rs` in `aivyx-channel`.** `WebUiBroadcaster`
+  wraps a `tokio::sync::broadcast::Sender<DesktopNotificationFrame>`;
+  `NotifyWebUiBackend` implements `NotifyBackend::send` by
+  pushing onto the broadcaster. Per Q1(a), zero subscribers
+  yields `Ok(())` — fire-and-forget broadcast model. Audit
+  chain (Phase 67) still records every dispatch.
+- **WS handler subscription.** Each browser WS connection
+  subscribes a fresh broadcast receiver; a third concurrent
+  loop relays each frame onto the WS as
+  `DaemonEnvelope::DesktopNotification` JSON.
+- **Dispatcher + binary wiring.** `build_notify_dispatcher`
+  gains the broadcaster as a fourth parameter; binary
+  constructs one `Arc<WebUiBroadcaster>` at startup whenever
+  the Web UI is enabled and Arc-shares it between the
+  dispatcher (push side) and `DaemonConfig` (subscribe side).
+- **Web UI JS.** Handler for `{type: "DesktopNotification"}`
+  triggers `new Notification(title, {body})` (browser API)
+  AND renders a stackable in-page toast banner per Q2 (both
+  UX modes). One-time "Enable notifications" prompt on page
+  load when `Notification.permission === "default"`.
+- **Docs + worked example.** `examples/aivyx.toml` gains a
+  commented `kind = "web-ui"` block; `docs/INSTALL.md`
+  "Web UI desktop notifications" subsection covers the
+  two-step enable, the browser-tab-must-be-open caveat, and
+  the pair-with-email-for-persistence guidance.
+
+Streak predictions all correct: DESIGN.md → 16, PRODUCT.md →
+9, `aivyx-core/src/lib.rs` → 17 (new record, longest
+production-core run in project history — beats Phase 68's
+16). Tests +12 (1222 → 1234). Zero clippy warnings.
+Zero new workspace deps (`tokio::sync::broadcast` was
+already available via the existing tokio dep).
+
+After Phase 69 the Reach Milestone covers all four
+operator-shape categories: chat-style (Telegram), tooling-
+style (webhook), inbox-style (email), focused-at-the-laptop
+(Web UI desktop). Remaining Reach-axis deferrals are smaller
+operator-feedback shapes: WebPush / service-worker
+notifications for closed-tab delivery (real engineering —
+needs VAPID + service-worker registration), default-target
+sugar, per-target rate limits, retry semantics, multi-target
+dispatch, conditional notify, notification urgency / sound /
+icons.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

@@ -226,37 +226,76 @@ is defense-in-depth.)
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**All three streak predictions correct.**
+
+- **DESIGN.md** — Held. Hash at exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  (byte-identical to entry). Streak extends to **sixteen**
+  consecutive phases as predicted. Phase 69 added one IPC
+  envelope variant + one `NotifyTargetKind` variant + a new
+  backend module + Web UI JS — none of which surfaced in
+  the locked technical contract.
+- **PRODUCT.md** — Held. Hash at exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  (byte-identical to entry). Streak extends to **nine**
+  consecutive phases as predicted. No commitment-text edits;
+  the Reach Milestone progress lives in `PRODUCT_ROADMAP.md`.
+- **Production-core `aivyx-core/src/lib.rs`** — Held. Hash
+  at exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  (byte-identical to entry). Streak extends to **seventeen**
+  consecutive phases as predicted — new project record,
+  beating Phase 68's 16. Web UI desktop notify lived
+  entirely in `aivyx-channel` (backend + WS broadcaster) and
+  the embedded HTML/JS.
+- **Workspace deps** — Zero net-new as predicted.
+  `tokio::sync::broadcast` was already available via the
+  existing tokio dep (the channel crate's `sync` feature
+  flag was already set).
+- **Tests** — +12 (1222 → 1234), comfortably inside the
+  +10–15 prediction. Breakdown: 6 backend (`notify_webui`),
+  2 config (`aivyx-config`), 3 dispatcher (`notify_dispatcher`),
+  1 HTML smoke (`web_ui`); also 2 IPC round-trip cases +
+  1 demux assertion in `daemon_ipc` (existing tests
+  extended, not net-new tests).
+- **Clippy** — Zero warnings across the workspace.
+- **Q-block** — All four resolutions held in implementation:
+  Q1(a) zero-subscriber `Ok(())` ships in
+  `WebUiBroadcaster::broadcast`; Q2 both browser
+  `Notification` + in-page toast in `web_ui_static.html`;
+  Q3(a) `NotifyTargetKind::WebUi` is a unit variant; Q4(a)
+  `DaemonMessage::DesktopNotification { title, body }` is
+  the wire envelope.
 
 ## Exit criteria
 
-- [ ] `NotifyTargetKind::WebUi` variant + config parsing —
+- [x] `NotifyTargetKind::WebUi` variant + config parsing —
   Task 2.
-- [ ] `DaemonMessage::DesktopNotification` + envelope decode
+- [x] `DaemonMessage::DesktopNotification` + envelope decode
   variant — Task 3.
-- [ ] `WebUiBroadcaster` + `NotifyWebUiBackend` in
+- [x] `WebUiBroadcaster` + `NotifyWebUiBackend` in
   `notify_webui.rs` — Task 4.
-- [ ] Web UI WS handler subscribes per-connection, relays
+- [x] Web UI WS handler subscribes per-connection, relays
   broadcast frames — Task 5.
-- [ ] `build_notify_dispatcher` accepts the broadcaster +
+- [x] `build_notify_dispatcher` accepts the broadcaster +
   routes `web-ui` targets — Task 6.
-- [ ] Binary wires the broadcaster + permission flow into the
+- [x] Binary wires the broadcaster + permission flow into the
   Web UI — Task 7.
-- [ ] Web UI JS: notification permission prompt, browser
+- [x] Web UI JS: notification permission prompt, browser
   notification trigger, in-page toast banner — Task 8.
-- [ ] Tests across backend, config, dispatcher integration —
+- [x] Tests across backend, config, dispatcher integration —
   Task 9.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 10.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 11.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to sixteen.
-- [ ] PRODUCT.md streak extends to nine.
-- [ ] Production-core streak extends to seventeen (new
+- [x] DESIGN.md streak extends to sixteen.
+- [x] PRODUCT.md streak extends to nine.
+- [x] Production-core streak extends to seventeen (new
   record).
-- [ ] Test count delta: positive (~+10–15).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (~+10–15).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.
