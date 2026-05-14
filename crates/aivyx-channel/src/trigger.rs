@@ -484,4 +484,99 @@ mod tests {
         assert_ne!(TriggerSource::Cron, TriggerSource::Webhook);
         assert_ne!(TriggerSource::Webhook, TriggerSource::FileWatch);
     }
+
+    // ---- Phase 67 — TriggerSource → TriggerKindSummary conversion ----
+
+    #[test]
+    fn trigger_source_converts_to_audit_kind() {
+        assert_eq!(
+            TriggerKindSummary::from(TriggerSource::Cron),
+            TriggerKindSummary::Cron,
+        );
+        assert_eq!(
+            TriggerKindSummary::from(TriggerSource::Webhook),
+            TriggerKindSummary::Webhook,
+        );
+        assert_eq!(
+            TriggerKindSummary::from(TriggerSource::FileWatch),
+            TriggerKindSummary::FileWatch,
+        );
+    }
+
+    // ---- Phase 67 — NotifyError → AutoNotifyOutcomeSummary mapping ----
+
+    #[test]
+    fn notify_error_transport_maps_to_failed_transport() {
+        let err = NotifyError::Transport("dns failure".into());
+        match outcome_from_notify_error(&err) {
+            AutoNotifyOutcomeSummary::Failed {
+                error_kind,
+                error_message,
+            } => {
+                assert_eq!(error_kind, "transport");
+                assert_eq!(error_message, "dns failure");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notify_error_auth_maps_to_failed_auth() {
+        let err = NotifyError::Auth("HTTP 401".into());
+        match outcome_from_notify_error(&err) {
+            AutoNotifyOutcomeSummary::Failed {
+                error_kind,
+                error_message,
+            } => {
+                assert_eq!(error_kind, "auth");
+                assert_eq!(error_message, "HTTP 401");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notify_error_rejected_maps_to_failed_with_status_in_message() {
+        let err = NotifyError::Rejected(429);
+        match outcome_from_notify_error(&err) {
+            AutoNotifyOutcomeSummary::Failed {
+                error_kind,
+                error_message,
+            } => {
+                assert_eq!(error_kind, "rejected");
+                assert!(error_message.contains("429"), "msg: {error_message}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notify_error_timeout_maps_to_failed_timeout() {
+        let err = NotifyError::Timeout;
+        match outcome_from_notify_error(&err) {
+            AutoNotifyOutcomeSummary::Failed {
+                error_kind,
+                error_message,
+            } => {
+                assert_eq!(error_kind, "timeout");
+                assert!(error_message.contains("timed out"), "msg: {error_message}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notify_error_unknown_target_maps_to_failed_unknown_target() {
+        let err = NotifyError::UnknownTarget("phone".into());
+        match outcome_from_notify_error(&err) {
+            AutoNotifyOutcomeSummary::Failed {
+                error_kind,
+                error_message,
+            } => {
+                assert_eq!(error_kind, "unknown_target");
+                assert!(error_message.contains("phone"), "msg: {error_message}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
 }

@@ -224,6 +224,37 @@ To apply the imported Profile, hand-edit the target host's
 destructive-write scope tight to one on-disk artifact (the
 encrypted Persona chain).
 
+## Debugging missing notifications
+
+When a scheduled briefing or trigger-fired notification doesn't
+arrive, the audit chain has the answer. Phase 67 records every
+auto-notify fire (delivered, skipped, or failed) as an
+`AutoNotifyDispatched` entry alongside `TurnStarted` /
+`TurnEnded`. To inspect:
+
+```sh
+# Walk the chain offline (no daemon needed):
+aivyx --verify-only
+
+# Or open the Web UI's Audit tab at http://127.0.0.1:7843
+```
+
+Filter on `AutoNotifyDispatched` and look at the `outcome`
+field:
+
+- `Delivered` — the notification reached the backend; if you
+  didn't see it, check the backend (Telegram bot still
+  authorized? webhook endpoint reachable from operator side?).
+- `SkippedEmptyResponse` — the agent's turn produced no text;
+  often a sign the trigger prompt was misconfigured or the
+  model returned nothing useful.
+- `Failed { error_kind, error_message }` — backend rejected
+  the dispatch. `error_kind` is one of `transport`, `auth`,
+  `rejected`, `timeout`, `unknown_target`.
+
+Correlate by `session_id` to find the corresponding
+`TurnStarted` / `TurnEnded` events for the same trigger fire.
+
 ## Uninstall
 
 ```sh
