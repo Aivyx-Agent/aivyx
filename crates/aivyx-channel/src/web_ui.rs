@@ -30,6 +30,7 @@ use crate::daemon_server::DaemonError;
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
 };
+use crate::notify_webui::{DesktopNotificationFrame, WebUiBroadcaster};
 
 /// Default web UI port. Adjacent to webhook (7842).
 pub const DEFAULT_WEB_UI_PORT: u16 = 7843;
@@ -121,6 +122,7 @@ pub async fn run_web_ui_server(
     socket_path: PathBuf,
     port: u16,
     shutdown: CancellationToken,
+    web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr)
@@ -149,9 +151,12 @@ pub async fn run_web_ui_server(
         };
 
         let conn_socket_path = Arc::clone(&socket_path);
+        let conn_broadcaster = web_ui_broadcaster.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, &conn_socket_path).await {
+            if let Err(e) =
+                handle_connection(stream, &conn_socket_path, conn_broadcaster).await
+            {
                 eprintln!("aivyx web ui: connection error: {e}");
             }
         });
@@ -164,6 +169,7 @@ pub async fn run_web_ui_server(
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     socket_path: &Path,
+    web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Peek at the HTTP request line to determine the path.
     // We read up to 1024 bytes to get the full request line.
@@ -180,7 +186,7 @@ async fn handle_connection(
             .await
             .map_err(|e| DaemonError::WebSocket(format!("ws handshake: {e}")))?;
 
-        handle_websocket(ws_stream, socket_path).await
+        handle_websocket(ws_stream, socket_path, web_ui_broadcaster).await
     } else if request_line.starts_with("GET / ")
         || request_line.starts_with("GET / HTTP")
     {
@@ -236,6 +242,7 @@ async fn serve_404(mut stream: tokio::net::TcpStream) -> Result<(), DaemonError>
 async fn handle_websocket(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     socket_path: &Path,
+    web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Connect to the daemon's Unix socket.
     let unix_stream = UnixStream::connect(socket_path).await?;
@@ -300,61 +307,75 @@ async fn handle_websocket(
         }
     };
 
-    // Split the WebSocket stream.
-    let (mut ws_sink, mut ws_source) = ws_stream.split();
+    // Split the WebSocket stream. The sink is shared with the
+    // optional broadcast relay loop (Phase 69 Task 5), so wrap it
+    // behind a Mutex like the unix writer.
+    let (ws_sink, mut ws_source) = ws_stream.split();
+    let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_sink));
 
     // Send SessionStarted to the browser.
     let session_started_json = serde_json::json!({
         "type": "SessionStarted",
         "session_id": session_id,
     });
-    let _ = ws_sink
-        .send(tokio_tungstenite::tungstenite::Message::Text(
-            session_started_json.to_string().into(),
-        ))
-        .await;
+    {
+        let mut sink = ws_sink.lock().await;
+        let _ = sink
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                session_started_json.to_string().into(),
+            ))
+            .await;
+    }
 
-    // Two concurrent loops: WS→IPC and IPC→WS.
+    // Three concurrent loops: WS→IPC, IPC→WS, and (when a
+    // broadcaster is configured) Broadcast→WS for Phase 69
+    // desktop notifications.
     let unix_writer = Arc::new(tokio::sync::Mutex::new(unix_writer));
 
     // IPC→WS: read daemon frames, forward as JSON over WebSocket.
-    let ipc_to_ws = async {
-        let mut buf = ipc_buf; // reuse the buffer from handshake
-        loop {
-            // Try to decode any buffered frames first.
+    let ipc_to_ws = {
+        let ws_sink = Arc::clone(&ws_sink);
+        async move {
+            let mut buf = ipc_buf; // reuse the buffer from handshake
             loop {
-                match decode_frame::<DaemonEnvelope>(&buf) {
-                    Ok((envelope, consumed)) => {
-                        buf.drain(..consumed);
-                        let json = match serde_json::to_string(&envelope) {
-                            Ok(j) => j,
-                            Err(e) => {
-                                eprintln!("aivyx web ui: serialize error: {e}");
-                                continue;
+                // Try to decode any buffered frames first.
+                loop {
+                    match decode_frame::<DaemonEnvelope>(&buf) {
+                        Ok((envelope, consumed)) => {
+                            buf.drain(..consumed);
+                            let json = match serde_json::to_string(&envelope) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    eprintln!("aivyx web ui: serialize error: {e}");
+                                    continue;
+                                }
+                            };
+                            let mut sink = ws_sink.lock().await;
+                            if sink
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    json.into(),
+                                ))
+                                .await
+                                .is_err()
+                            {
+                                return; // WebSocket closed
                             }
-                        };
-                        if ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
-                            .await
-                            .is_err()
-                        {
-                            return; // WebSocket closed
+                        }
+                        Err(FrameError::IncompleteBuf) => break,
+                        Err(e) => {
+                            eprintln!("aivyx web ui: ipc decode error: {e}");
+                            return;
                         }
                     }
-                    Err(FrameError::IncompleteBuf) => break,
-                    Err(e) => {
-                        eprintln!("aivyx web ui: ipc decode error: {e}");
-                        return;
-                    }
                 }
-            }
 
-            // Read more bytes from the daemon.
-            let mut tmp = [0u8; 4096];
-            match unix_reader.read(&mut tmp).await {
-                Ok(0) => return, // daemon disconnected
-                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                Err(_) => return,
+                // Read more bytes from the daemon.
+                let mut tmp = [0u8; 4096];
+                match unix_reader.read(&mut tmp).await {
+                    Ok(0) => return, // daemon disconnected
+                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                    Err(_) => return,
+                }
             }
         }
     };
@@ -401,11 +422,62 @@ async fn handle_websocket(
         }
     };
 
-    // Run both loops concurrently. When either exits, the
+    // Broadcast→WS (Phase 69 Task 5): if a WebUiBroadcaster is
+    // configured, subscribe a fresh receiver and relay every
+    // DesktopNotificationFrame onto the WS as
+    // DaemonEnvelope::DesktopNotification. On `Lagged` we drop
+    // the missed frames silently — desktop notifications for a
+    // tab the operator isn't watching are by definition
+    // discardable.
+    let broadcast_to_ws = {
+        let ws_sink = Arc::clone(&ws_sink);
+        let mut rx_opt = web_ui_broadcaster.as_ref().map(|bc| bc.subscribe());
+        async move {
+            let Some(rx) = rx_opt.as_mut() else {
+                // No broadcaster wired — this future never
+                // completes, so the `select!` only fires on the
+                // other two arms.
+                std::future::pending::<()>().await;
+                return;
+            };
+            loop {
+                match rx.recv().await {
+                    Ok(DesktopNotificationFrame { title, body }) => {
+                        let envelope = DaemonEnvelope::DesktopNotification { title, body };
+                        let json = match serde_json::to_string(&envelope) {
+                            Ok(j) => j,
+                            Err(e) => {
+                                eprintln!("aivyx web ui: broadcast serialize error: {e}");
+                                continue;
+                            }
+                        };
+                        let mut sink = ws_sink.lock().await;
+                        if sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                json.into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            return; // WebSocket closed
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Skipped some frames; keep listening.
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        }
+    };
+
+    // Run all three loops concurrently. When any exits, the
     // connection is done.
     tokio::select! {
         _ = ipc_to_ws => {}
         _ = ws_to_ipc => {}
+        _ = broadcast_to_ws => {}
     }
 
     // Send Disconnect to the daemon (best effort).

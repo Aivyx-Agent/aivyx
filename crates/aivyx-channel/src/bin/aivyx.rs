@@ -3030,6 +3030,11 @@ async fn run_async(
             // clone here lives alongside `profile_for_factory` the
             // role-switch path captured.
             profile: Arc::new(profile.clone()),
+            // Phase 69 — Task 7 will replace this None with the
+            // single Arc<WebUiBroadcaster> shared between the
+            // dispatcher and the WS handler when Web UI desktop
+            // notify is enabled.
+            web_ui_broadcaster: None,
         })
             .await;
 

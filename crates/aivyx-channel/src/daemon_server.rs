@@ -162,6 +162,14 @@ pub struct DaemonConfig {
     /// the current snapshot. Always present — defaults to an empty
     /// state for test fixtures.
     pub shared_persona: crate::persona::SharedEffectivePersona,
+    /// Phase 69 — Web UI desktop-notification broadcaster. When
+    /// the Web UI is enabled, the binary constructs one
+    /// `WebUiBroadcaster` and Arc-shares it between this field
+    /// (so the WS handler can subscribe per browser connection)
+    /// and the notify dispatcher (so `kind = "web-ui"` targets
+    /// can push frames into it). `None` when the Web UI is
+    /// disabled and no `kind = "web-ui"` targets exist.
+    pub web_ui_broadcaster: Option<Arc<crate::notify_webui::WebUiBroadcaster>>,
 }
 
 /// Run the daemon server.
@@ -195,6 +203,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         profile,
         persona_log,
         shared_persona,
+        web_ui_broadcaster,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -297,11 +306,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let _web_ui_handle = web_ui_port.map(|port| {
         let web_shutdown = shutdown.clone();
         let web_socket_path = socket_path.to_path_buf();
+        let web_broadcaster = web_ui_broadcaster.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::web_ui::run_web_ui_server(
                 web_socket_path,
                 port,
                 web_shutdown,
+                web_broadcaster,
             )
             .await
             {
@@ -961,6 +972,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         shared_persona: crate::persona::shared_effective_persona(
             crate::persona::EffectivePersona::default(),
         ),
+        web_ui_broadcaster: None,
     }).await
 }
 
