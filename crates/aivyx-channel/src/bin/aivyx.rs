@@ -592,6 +592,21 @@ fn run() -> Result<(), String> {
         out.copy_from_slice(subkey.as_bytes());
         out
     };
+    // Phase 70 — distinct HMAC key for the Persona proposal chain.
+    // Domain-separated from the persona chain via the HKDF info
+    // bytes (`persona-proposals`) so a chain-confusion attack
+    // (swapping a Pending row into the persona chain or vice
+    // versa) is structurally rejected at MAC verification.
+    let persona_proposal_chain_key: [u8; 32] = {
+        let subkey = master_key
+            .derive_subkey(b"persona-proposals")
+            .map_err(|e| {
+                format!("failed to derive persona proposal chain key: {e}")
+            })?;
+        let mut out = [0u8; 32];
+        out.copy_from_slice(subkey.as_bytes());
+        out
+    };
 
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
@@ -643,6 +658,7 @@ fn run() -> Result<(), String> {
             storage,
             audit_chain_key,
             persona_chain_key,
+            persona_proposal_chain_key,
             channel_kind,
             mode,
             no_daemon,
@@ -1688,6 +1704,7 @@ async fn run_async(
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
     persona_chain_key: [u8; 32],
+    persona_proposal_chain_key: [u8; 32],
     channel_kind: ChannelKind,
     mode: CliMode,
     no_daemon: bool,
@@ -1838,6 +1855,28 @@ async fn run_async(
             ));
         }
     };
+    // Phase 70 — open the persistent Persona proposal chain
+    // (KeyDomain::PersonaProposals). Parallel to the persona log
+    // above; this is the operator-pending side of P14's self-
+    // learning loop. Scheduled reflection turns append Pending
+    // rows here; operators resolve them via the Web UI Proposals
+    // pane / `aivyx persona proposals` CLI.
+    let persona_proposal_log = match aivyx_channel::persona_proposal::PersistentPersonaProposalLog::open(
+        storage.domain(KeyDomain::PersonaProposals),
+        persona_proposal_chain_key.to_vec(),
+    )
+    .await
+    {
+        Ok(log) => Arc::new(log),
+        Err(e) => {
+            return Err(format!(
+                "failed to open persona proposal chain \
+                 (KeyDomain::PersonaProposals): {e}"
+            ));
+        }
+    };
+    // Bound for the Task 5 scheduler + Task 6 IPC wiring to come.
+    let _ = &persona_proposal_log;
     let shared_persona = aivyx_channel::persona::shared_effective_persona(
         aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
