@@ -1751,10 +1751,20 @@ async fn run_async(
         // Phase 62 Task 8 — consumed below at the notify
         // dispatcher / NotifySendTool wiring site.
         notify_targets: config_notify_targets,
+        // Phase 70 — P14 self-learning closure. Consumed by the
+        // reflection-scheduler subsystem at the daemon startup
+        // path below; reflection turns fire on the configured
+        // cron and write proposals into the persona_proposals
+        // domain.
+        reflection_schedules: config_reflection_schedules,
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,
     } = config;
+    // Phase 70 — surfaced for future wiring (Task 5). Bound here
+    // so the destructure remains exhaustive; consumed when the
+    // reflection scheduler hooks in.
+    let _ = &config_reflection_schedules;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
             name: cli.name,

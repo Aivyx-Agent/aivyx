@@ -619,6 +619,13 @@ pub struct AivyxConfig {
     /// then dispatches with "unknown target" failures for any
     /// target name the agent provides.
     pub notify_targets: Vec<NotifyTargetConfig>,
+    /// Reflection-schedule entries from `[[reflection_schedule]]`
+    /// entries. Phase 70 — P14 self-learning closure. Each entry
+    /// fires a periodic reflection turn that synthesizes pending
+    /// Persona proposals from observed turn outcomes. Empty when
+    /// no entries are configured (the agent only reflects when
+    /// an operator explicitly prompts it).
+    pub reflection_schedules: Vec<ReflectionScheduleConfig>,
     /// Webhook listener port override. `None` means use the default
     /// (7842). Loaded from `[daemon] webhook_port` in the TOML file.
     pub webhook_port: Option<u16>,
@@ -1001,6 +1008,40 @@ pub struct ScheduleConfig {
     pub notify_target: Option<String>,
 }
 
+/// One reflection-schedule entry loaded from
+/// `[[reflection_schedule]]` in the TOML file. Phase 70 — P14
+/// self-learning closure. Each entry fires a periodic reflection
+/// turn that synthesizes pending Persona proposals from observed
+/// turn outcomes for the configured lookback window.
+///
+/// The scheduler reuses the existing `[[schedule]]` cron
+/// infrastructure under the hood; this is a distinct config
+/// section because the reflection-turn semantics — canonical
+/// reflection prompt, outcome-summary input context, persistent
+/// proposal store — differ enough from a generic scheduled turn
+/// that operator clarity wins over composability (Q1(a) at
+/// Phase 70 sign-off).
+#[derive(Debug, Clone)]
+pub struct ReflectionScheduleConfig {
+    /// Operator-chosen name, unique across reflection schedules
+    /// and across regular `[[schedule]]` entries.
+    pub name: String,
+    /// Standard 5- or 6-field cron pattern, parsed by the same
+    /// cron implementation `[[schedule]]` uses.
+    pub cron: String,
+    /// How far back to look when summarizing turn outcomes for
+    /// the reflection prompt. Minimum 60 seconds, maximum 30
+    /// days. Default 86400 (24 hours).
+    pub lookback_window_secs: u64,
+    /// Optional role override. When `Some(name)`, the reflection
+    /// turn runs as that role instead of the default reflection
+    /// envelope. The role must exist in the config.
+    pub role_override: Option<String>,
+    /// `true` when the entry is active; `false` keeps the entry
+    /// in the config but skips scheduler registration.
+    pub enabled: bool,
+}
+
 /// One webhook trigger entry loaded from `[[webhook]]` in the TOML file.
 /// Phase 27 Task 3.
 #[derive(Debug, Clone)]
@@ -1183,6 +1224,10 @@ struct RawToml {
     /// can reach via `notify.send`.
     #[serde(default, rename = "notify_target")]
     notify_targets: Option<Vec<RawNotifyTarget>>,
+    /// `[[reflection_schedule]]` table-array. Phase 70 — P14
+    /// self-learning closure.
+    #[serde(default, rename = "reflection_schedule")]
+    reflection_schedules: Option<Vec<RawReflectionSchedule>>,
     /// `[daemon]` section. Phase 28 Task 3.
     #[serde(default)]
     daemon: RawDaemon,
@@ -1366,6 +1411,30 @@ struct RawSchedule {
     /// completes.
     #[serde(default)]
     notify_target: Option<String>,
+}
+
+fn default_reflection_lookback_secs() -> u64 {
+    86400 // 24 hours
+}
+
+/// Minimum and maximum lookback bounds enforced at config-load
+/// time. Below 60s the reflection cadence becomes self-noisy;
+/// above 30 days the outcome-summary list becomes unwieldy.
+const MIN_REFLECTION_LOOKBACK_SECS: u64 = 60;
+const MAX_REFLECTION_LOOKBACK_SECS: u64 = 30 * 86400;
+
+/// One `[[reflection_schedule]]` entry in the TOML file.
+/// Phase 70 Task 2 — P14 self-learning closure.
+#[derive(Debug, Default, Deserialize)]
+struct RawReflectionSchedule {
+    name: String,
+    cron: String,
+    #[serde(default = "default_reflection_lookback_secs")]
+    lookback_window_secs: u64,
+    #[serde(default)]
+    role_override: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
 }
 
 /// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
@@ -2347,6 +2416,88 @@ impl AivyxConfig {
             });
         }
 
+        // --- reflection_schedules (Phase 70 — P14 closure) --------
+        // Each entry validates cron non-empty, lookback bounds,
+        // name uniqueness (across reflection schedules AND
+        // regular schedules to keep the operator mental model
+        // single-namespace), and role_override existence when
+        // declared.
+        let mut reflection_schedules: Vec<ReflectionScheduleConfig> = Vec::new();
+        for raw in toml.reflection_schedules.unwrap_or_default() {
+            if !raw.enabled {
+                continue;
+            }
+            if raw.name.trim().is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.name",
+                    reason: "reflection_schedule.name must be non-empty".into(),
+                });
+            }
+            if raw.cron.trim().is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.cron",
+                    reason: format!(
+                        "reflection_schedule `{}` has empty cron pattern",
+                        raw.name
+                    ),
+                });
+            }
+            if raw.lookback_window_secs < MIN_REFLECTION_LOOKBACK_SECS
+                || raw.lookback_window_secs > MAX_REFLECTION_LOOKBACK_SECS
+            {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.lookback_window_secs",
+                    reason: format!(
+                        "reflection_schedule `{}` lookback_window_secs = {} \
+                         is outside the allowed range \
+                         [{MIN_REFLECTION_LOOKBACK_SECS}, \
+                         {MAX_REFLECTION_LOOKBACK_SECS}] (60s to 30 days)",
+                        raw.name, raw.lookback_window_secs,
+                    ),
+                });
+            }
+            if reflection_schedules.iter().any(|s| s.name == raw.name) {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.name",
+                    reason: format!(
+                        "duplicate reflection_schedule name `{}` — names must \
+                         be unique across all [[reflection_schedule]] entries",
+                        raw.name
+                    ),
+                });
+            }
+            if schedules.iter().any(|s| s.name == raw.name) {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.name",
+                    reason: format!(
+                        "reflection_schedule `{}` collides with a [[schedule]] \
+                         entry of the same name — names share a namespace",
+                        raw.name
+                    ),
+                });
+            }
+            if let Some(ref role) = raw.role_override {
+                if !roles.contains_key(role) {
+                    return Err(ConfigError::Invalid {
+                        field: "reflection_schedule.role_override",
+                        reason: format!(
+                            "reflection_schedule `{}` role_override = `{role}` \
+                             references unknown role — declare a [[role]] \
+                             with that name or remove role_override",
+                            raw.name
+                        ),
+                    });
+                }
+            }
+            reflection_schedules.push(ReflectionScheduleConfig {
+                name: raw.name,
+                cron: raw.cron,
+                lookback_window_secs: raw.lookback_window_secs,
+                role_override: raw.role_override,
+                enabled: true,
+            });
+        }
+
         // --- Phase 63 Task 2: cross-validate trigger.notify_target
         //     against notify_targets + role envelopes. --------------
         //
@@ -2422,6 +2573,7 @@ impl AivyxConfig {
             webhooks,
             file_watches,
             notify_targets,
+            reflection_schedules,
             webhook_port: toml.daemon.webhook_port,
             web_ui_port: match (toml.daemon.web_ui, toml.daemon.web_ui_port) {
                 // Explicit port always wins (and implicitly enables).

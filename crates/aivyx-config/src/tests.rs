@@ -3981,3 +3981,287 @@ kind = "carrier-pigeon"
     }
     drop(env);
 }
+
+// ==============================================================
+// Phase 70 — [[reflection_schedule]] config block
+// ==============================================================
+
+#[test]
+fn reflection_schedule_with_defaults_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-default");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 23 * * *"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.reflection_schedules.len(), 1);
+    let s = &cfg.reflection_schedules[0];
+    assert_eq!(s.name, "nightly");
+    assert_eq!(s.cron, "0 0 23 * * *");
+    assert_eq!(s.lookback_window_secs, 86400); // 24h default
+    assert!(s.role_override.is_none());
+    assert!(s.enabled);
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_disabled_entries_are_skipped() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-disabled");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 23 * * *"
+enabled = false
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(cfg.reflection_schedules.is_empty());
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_empty_cron_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-empty-cron");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = ""
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "reflection_schedule.cron");
+            assert!(reason.contains("nightly"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_lookback_below_min_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-lookback-low");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "fast"
+cron = "* * * * * *"
+lookback_window_secs = 30
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "reflection_schedule.lookback_window_secs");
+            assert!(reason.contains("fast"), "{reason}");
+            assert!(reason.contains("60"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_lookback_above_max_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-lookback-high");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "slow"
+cron = "0 0 * * * *"
+lookback_window_secs = 999999999
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "reflection_schedule.lookback_window_secs");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_duplicate_name_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-dup");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 23 * * *"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 1 * * *"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "reflection_schedule.name");
+            assert!(reason.contains("duplicate"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_collision_with_schedule_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-vs-schedule");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[schedule]]
+name = "nightly"
+cron = "0 0 23 * * *"
+prompt = "do stuff"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 1 * * *"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "reflection_schedule.name");
+            assert!(reason.contains("collides"), "{reason}");
+            assert!(reason.contains("[[schedule]]"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn reflection_schedule_unknown_role_override_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("reflection-bad-role");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[reflection_schedule]]
+name = "nightly"
+cron = "0 0 23 * * *"
+role_override = "ghost-role"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "reflection_schedule.role_override");
+            assert!(reason.contains("ghost-role"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
