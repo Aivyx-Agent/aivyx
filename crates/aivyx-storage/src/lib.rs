@@ -110,6 +110,18 @@ pub enum KeyDomain {
     /// is replayed at daemon startup into an in-memory
     /// `EffectivePersona`.
     Persona,
+    /// Persona proposal log — HMAC-chained pending Persona deltas
+    /// proposed by the reflection auto-loop per PRODUCT.md P14
+    /// (Phase 70). Parallel to [`KeyDomain::Persona`] per Q4(a)
+    /// at Phase 70 sign-off: proposals are operator-pending
+    /// objects, deltas are operator-approved objects, so the
+    /// persona chain's invariant (every delta is operator-
+    /// approved) stays intact. One row per proposal keyed by
+    /// big-endian u64 sequence number; status transitions
+    /// (Pending → Approved | Rejected | Superseded) append new
+    /// rows rather than mutating in place, so the proposal
+    /// history is preserved for audit.
+    PersonaProposals,
 }
 
 impl KeyDomain {
@@ -131,6 +143,7 @@ impl KeyDomain {
             KeyDomain::Webhooks => b"webhooks",
             KeyDomain::FileWatches => b"file-watches",
             KeyDomain::Persona => b"persona",
+            KeyDomain::PersonaProposals => b"persona-proposals",
         }
     }
 
@@ -151,12 +164,13 @@ impl KeyDomain {
             KeyDomain::Webhooks => "aivyx_webhooks_v1",
             KeyDomain::FileWatches => "aivyx_file_watches_v1",
             KeyDomain::Persona => "aivyx_persona_v1",
+            KeyDomain::PersonaProposals => "aivyx_persona_proposals_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 10] = [
+    pub const ALL: [KeyDomain; 11] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -167,6 +181,7 @@ impl KeyDomain {
         KeyDomain::Webhooks,
         KeyDomain::FileWatches,
         KeyDomain::Persona,
+        KeyDomain::PersonaProposals,
     ];
 }
 
@@ -352,7 +367,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 10],
+    subkeys: [SubKey; 11],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -429,7 +444,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 10], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 11], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -444,6 +459,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Webhooks.as_bytes())?,
             master.derive_subkey(KeyDomain::FileWatches.as_bytes())?,
             master.derive_subkey(KeyDomain::Persona.as_bytes())?,
+            master.derive_subkey(KeyDomain::PersonaProposals.as_bytes())?,
         ])
     }
 
@@ -462,6 +478,7 @@ impl RedbStorage {
             KeyDomain::Webhooks => &self.subkeys[7],
             KeyDomain::FileWatches => &self.subkeys[8],
             KeyDomain::Persona => &self.subkeys[9],
+            KeyDomain::PersonaProposals => &self.subkeys[10],
         }
     }
 }
@@ -862,7 +879,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds an eleventh `KeyDomain` variant,
+        // If a future phase adds a twelfth `KeyDomain` variant,
         // this test fails because `ALL` is a fixed-size array and
         // the match below forces an update. Tripwire for "adding a
         // variant without updating ALL."
@@ -877,9 +894,52 @@ mod tests {
                 | KeyDomain::Schedules
                 | KeyDomain::Webhooks
                 | KeyDomain::FileWatches
-                | KeyDomain::Persona => {}
+                | KeyDomain::Persona
+                | KeyDomain::PersonaProposals => {}
             }
         }
+    }
+
+    // ---- Phase 70 — PersonaProposals domain ------------------------
+
+    #[test]
+    fn persona_proposals_domain_has_stable_metadata() {
+        assert_eq!(
+            KeyDomain::PersonaProposals.as_bytes(),
+            b"persona-proposals"
+        );
+        assert_eq!(
+            KeyDomain::PersonaProposals.table_name(),
+            "aivyx_persona_proposals_v1"
+        );
+        assert!(KeyDomain::ALL.contains(&KeyDomain::PersonaProposals));
+    }
+
+    #[tokio::test]
+    async fn persona_proposals_domain_isolates_from_persona_domain() {
+        // Same key in two different domains must not collide —
+        // proposals are operator-pending objects, deltas are
+        // operator-approved objects. Phase 70 Q4(a).
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(70)).await;
+
+        let persona = store.domain(KeyDomain::Persona);
+        let proposals = store.domain(KeyDomain::PersonaProposals);
+
+        let key = b"seq-0";
+        persona.put(key, b"approved-delta").await.unwrap();
+        proposals.put(key, b"pending-proposal").await.unwrap();
+
+        assert_eq!(
+            persona.get(key).await.unwrap(),
+            Some(b"approved-delta".to_vec()),
+            "Persona domain returned the proposal's value"
+        );
+        assert_eq!(
+            proposals.get(key).await.unwrap(),
+            Some(b"pending-proposal".to_vec()),
+            "PersonaProposals domain returned the persona's value"
+        );
     }
 
     // ---- Happy path -------------------------------------------------
