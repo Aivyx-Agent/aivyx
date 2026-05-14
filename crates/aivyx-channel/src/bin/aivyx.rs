@@ -94,6 +94,8 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
+#[path = "aivyx_modules/identity.rs"]
+mod identity;
 #[path = "aivyx_modules/init.rs"]
 mod init;
 #[path = "aivyx_modules/mcp_server.rs"]
@@ -391,6 +393,24 @@ fn run() -> Result<(), String> {
                 PersonaSubcommand::List => persona::run_persona_list().await,
                 PersonaSubcommand::Revert { target_delta_id } => {
                     persona::run_persona_revert(&target_delta_id).await
+                }
+            }
+        });
+    }
+
+    // ---- Phase 64: identity export/import (Persona Phase 3) -----
+    // Daemon-IPC-backed for the Persona half; reads aivyx.toml
+    // directly for the Profile half. Same minimal-runtime pattern
+    // as the persona subcommands above.
+    if let CliMode::Identity(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            match sub {
+                IdentitySubcommand::Export { path } => {
+                    identity::run_identity_export(&path).await
                 }
             }
         });
@@ -898,6 +918,23 @@ enum CliMode {
     /// shipped via package managers and required by cargo-dist's
     /// installer smoke test.
     Version,
+    /// `aivyx identity <subcommand>`: Profile + Persona
+    /// export/import (Phase 64). Closes the Phase 60
+    /// deferral; lets operators move identity between hosts.
+    /// Phase 64 ships export only; import lands in Phase 65
+    /// per the implementation-time scope adjustment.
+    Identity(IdentitySubcommand),
+}
+
+/// Subcommand discriminator under [`CliMode::Identity`]. Phase 64.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum IdentitySubcommand {
+    /// `aivyx identity export <path>` — write the full identity
+    /// bundle (Profile + Persona chain + effective snapshot) to
+    /// the operator-supplied path as pretty-printed JSON with
+    /// `0600` permissions. Daemon must be running (the Persona
+    /// half is fetched over IPC).
+    Export { path: PathBuf },
 }
 
 /// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
@@ -1050,6 +1087,60 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             mcp_sse_servers: Vec::new(),
             provider: None,
             web_ui_port: daemon_web_ui_port,
+        });
+    }
+
+    // Check for `identity <subcommand>` — Phase 64 (Profile +
+    // Persona export). `import` lands in Phase 65 — the parser
+    // here recognizes only `export` today; an unknown subcommand
+    // returns a descriptive error that names what's supported.
+    if !args.is_empty() && args[0] == "identity" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx identity` requires a subcommand. Supported: export <path>"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "export" => {
+                let path = args.get(2).ok_or_else(|| {
+                    "`aivyx identity export` requires a path. Usage: \
+                     `aivyx identity export <path>`"
+                        .to_string()
+                })?;
+                if args.len() > 3 {
+                    return Err(format!(
+                        "`aivyx identity export` accepts exactly one path argument. \
+                         Got extra args: `{}`",
+                        args[3..].join(" ")
+                    ));
+                }
+                IdentitySubcommand::Export {
+                    path: PathBuf::from(path),
+                }
+            }
+            "import" => {
+                return Err(
+                    "`aivyx identity import` is not yet available — Phase 64 ships \
+                     export only (the destructive-write side lands in Phase 65 \
+                     with focused conflict-resolution + --force semantics)."
+                        .to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized identity subcommand: `{other}`. \
+                     Supported: identity export <path>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Identity(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
         });
     }
 
@@ -4354,6 +4445,65 @@ mod tests {
             .expect_err("extra args must error");
         assert!(
             err.contains("does not accept additional arguments"),
+            "error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 64 — `aivyx identity <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn identity_export_parses_with_path() {
+        let parsed =
+            parse_cli_args_from(&argv(&["identity", "export", "/tmp/snap.json"]))
+                .expect("`identity export /tmp/snap.json` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Identity(IdentitySubcommand::Export {
+                path: PathBuf::from("/tmp/snap.json"),
+            })
+        );
+    }
+
+    #[test]
+    fn identity_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["identity"]))
+            .expect_err("`identity` without subcommand must error");
+        assert!(err.contains("requires a subcommand"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_export_without_path_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["identity", "export"]))
+            .expect_err("`identity export` without path must error");
+        assert!(err.contains("requires a path"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_export_rejects_extra_args() {
+        let err =
+            parse_cli_args_from(&argv(&["identity", "export", "/tmp/x", "--verbose"]))
+                .expect_err("extra args must error");
+        assert!(err.contains("extra args"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_import_announces_phase_65_deferral() {
+        // Phase 64 ships export only; import is recognized by
+        // the parser but returns a descriptive deferral message.
+        let err = parse_cli_args_from(&argv(&["identity", "import", "/tmp/x"]))
+            .expect_err("`identity import` must error in Phase 64");
+        assert!(err.contains("Phase 64 ships export only"), "error: {err}");
+        assert!(err.contains("Phase 65"), "error: {err}");
+    }
+
+    #[test]
+    fn identity_unrecognized_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["identity", "wat", "/tmp/x"]))
+            .expect_err("`identity wat` must error");
+        assert!(
+            err.contains("unrecognized identity subcommand"),
             "error: {err}"
         );
     }

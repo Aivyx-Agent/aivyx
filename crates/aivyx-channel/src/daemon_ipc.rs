@@ -138,6 +138,15 @@ pub enum QueryPayload {
         from_seq: u64,
         limit: u32,
     },
+    /// Phase 64 — fetch the full Persona chain in a single response
+    /// for export. Unlike `ListPersonaDeltas` (paginated summaries
+    /// for the Web UI), this returns full-fidelity `DeltaExport`
+    /// values that preserve every PersonaDelta field. Operator-
+    /// driven; intended to feed `aivyx identity export <path>`.
+    /// The daemon returns up to `MAX_EXPORT_CHAIN_ENTRIES` entries
+    /// in one shot (current cap: 100,000 — enough for years of
+    /// reflection-approved deltas at realistic rates).
+    ExportPersonaChain,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -195,6 +204,16 @@ pub enum QueryResponsePayload {
     /// fields empty / `None`.
     GetEffectivePersona {
         persona: EffectivePersonaSummary,
+    },
+    /// Response to [`QueryPayload::ExportPersonaChain`]. Phase 64.
+    /// Full-fidelity chain in a single response for the
+    /// `aivyx identity export` flow. `deltas` is the chain in
+    /// order; `effective` is the folded state at export time
+    /// (the export bundle embeds this as `effective_at_export`
+    /// per Q5(a)).
+    ExportPersonaChain {
+        deltas: Vec<crate::identity_export::DeltaExport>,
+        effective: crate::persona::EffectivePersona,
     },
     /// Response to [`QueryPayload::ListPersonaDeltas`]. Phase 60
     /// — paginated page of approved deltas. `total_len` is the full

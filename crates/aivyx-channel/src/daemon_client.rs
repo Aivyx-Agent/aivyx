@@ -440,6 +440,34 @@ pub async fn list_persona_deltas(
     }
 }
 
+/// Phase 64 Task 3 — full-fidelity Persona chain dump over IPC.
+/// Single-shot response (no pagination). Used by
+/// `aivyx identity export` to read the chain into memory before
+/// writing the export bundle to disk. Returns the chain in order
+/// and the effective state at fetch time.
+pub async fn export_persona_chain(
+    socket_path: &Path,
+) -> Result<
+    (
+        Vec<crate::identity_export::DeltaExport>,
+        crate::persona::EffectivePersona,
+    ),
+    DaemonError,
+> {
+    let payload = send_query(socket_path, "p-export", QueryPayload::ExportPersonaChain).await?;
+    match payload {
+        QueryResponsePayload::ExportPersonaChain { deltas, effective } => {
+            Ok((deltas, effective))
+        }
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ExportPersonaChain, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 60 — operator-initiated Persona delta revert over IPC.
 /// Returns the chain sequence number of the appended Revert delta
 /// on success.

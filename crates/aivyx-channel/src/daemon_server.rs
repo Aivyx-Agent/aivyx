@@ -1217,6 +1217,50 @@ async fn handle_query(
                 total_len,
             }
         }
+        QueryPayload::ExportPersonaChain => {
+            // Phase 64 Task 3 — full-fidelity chain dump for the
+            // `aivyx identity export` flow. Single-shot response
+            // (no pagination) — capped at MAX_EXPORT_CHAIN_ENTRIES.
+            // Realistic chain depth is dozens to low-hundreds of
+            // approved deltas; the cap exists to prevent a runaway
+            // chain from blowing IPC frame size.
+            const MAX_EXPORT_CHAIN_ENTRIES: usize = 100_000;
+            let Some(log) = persona_log else {
+                // No persona log configured — return an empty
+                // chain rather than erroring. The CLI treats this
+                // as "nothing to export," which is correct.
+                return QueryResponsePayload::ExportPersonaChain {
+                    deltas: Vec::new(),
+                    effective: crate::persona::EffectivePersona::default(),
+                };
+            };
+            let entries = log.entries();
+            if entries.len() > MAX_EXPORT_CHAIN_ENTRIES {
+                return QueryResponsePayload::QueryError {
+                    code: "persona_chain_too_large".into(),
+                    message: format!(
+                        "persona chain has {} entries; export caps at {} per response. \
+                         Contact aivyx maintainers if you legitimately hit this limit.",
+                        entries.len(),
+                        MAX_EXPORT_CHAIN_ENTRIES,
+                    ),
+                };
+            }
+            let deltas: Vec<crate::identity_export::DeltaExport> = entries
+                .iter()
+                .map(crate::identity_export::DeltaExport::from)
+                .collect();
+            let effective = match shared_persona.read() {
+                Ok(state) => state.clone(),
+                Err(_) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "persona_state_poisoned".into(),
+                        message: "shared persona state lock poisoned".into(),
+                    };
+                }
+            };
+            QueryResponsePayload::ExportPersonaChain { deltas, effective }
+        }
     }
 }
 
