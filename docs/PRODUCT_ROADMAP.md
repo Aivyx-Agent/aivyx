@@ -683,7 +683,10 @@ layer.
   operator is the proposer). Per Q4(a), revert appends a
   delta to the append-only chain rather than mutating in
   place. Identity export/import deferred to a future
-  micro-phase if pressure surfaces. Tests +19 (1052 → 1071).
+  micro-phase if pressure surfaces — **the export half landed
+  in Phase 64 (2026-05-14); the import half lands in Phase 65
+  per the implementation-time scope adjustment.** Tests +19
+  (1052 → 1071).
   All three streak predictions correct: DESIGN.md → 7,
   PRODUCT.md → broke at 2 (Task 7 Delivery Status refresh,
   intentional), lib.rs → 8. After Phase 60, **P1–P14 are

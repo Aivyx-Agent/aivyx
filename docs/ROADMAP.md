@@ -1037,6 +1037,66 @@ state changes aren't audit-logged either). Per-kind
 dispatcher-recording integration tests similarly folded into
 the `render_notify_body` unit coverage.
 
+## Phase 64 — Identity Export (Persona Phase 3)
+
+**Frozen — see [PHASE_64.md](PHASE_64.md).** Closes the oldest
+open deferral: Phase 60's "identity export/import" item. The
+phase ships **export only** per the implementation-time scope
+adjustment; import lands in Phase 65 with focused destructive-
+write design attention.
+
+Delivered across five engineering tasks (Tasks 1, 2+4, 3+6, 7,
+8):
+
+- **Task 2+4 — Format substrate.** New module
+  `crates/aivyx-channel/src/identity_export.rs` with:
+    * `IdentityExport` top-level bundle (schema_version,
+      exported_at, source_host, profile, persona).
+    * `ProfileExport` — plain-values projection of
+      `aivyx_config::Profile` dropping `Sourced<...>` metadata.
+    * `PersonaExport` — `Vec<DeltaExport>` (MAC-stripped) +
+      `effective_at_export` snapshot.
+    * `DeltaExport { seq, delta }` — preserves seq for
+      parse-time gap detection.
+    * `build()` pure assembler + `parse_and_validate()` with
+      five failure modes (Json, SchemaVersion, NonMonotonicSeq,
+      InvalidDelta, EffectiveMismatch).
+  Drive-by: `EffectivePersona` gains `Serialize` + `Deserialize`
+  derives. 9 new tests.
+
+- **Task 3+6 — CLI + IPC wiring.** New IPC envelope
+  `QueryPayload::ExportPersonaChain` with single-shot response
+  capped at 100,000 entries. Daemon handler reads
+  `persona_log.entries()` + the shared persona state. Client
+  wrapper `export_persona_chain` mirrors the
+  `list_persona_deltas` pattern. New CLI module
+  `aivyx_modules/identity.rs` with `run_identity_export(path)`
+  — fetches Persona via IPC, loads Profile via aivyx-config
+  directly, writes 0600 JSON. New `CliMode::Identity(...)` +
+  `IdentitySubcommand::Export` variant. `aivyx identity import`
+  recognized but routes to a descriptive Phase-65 deferral
+  error. 6 parser tests + 2 module tests.
+
+- **Task 7 — Operator docs.** New "Moving Aivyx to a new
+  machine" section in `docs/INSTALL.md` documents the export
+  flow, the JSON shape, the HMAC re-bind design (Q1(a)), and
+  the Phase 65 deferral.
+
+Streak predictions all correct: DESIGN.md → 11, PRODUCT.md → 4,
+`aivyx-core/src/lib.rs` → 12 (new record, longest production-
+core run in project history; beats Phase 63's 11). Tests +17
+(1154 → 1171). Zero clippy warnings. Zero new workspace deps.
+
+**Scope adjustment at exit:** Task 5 (`aivyx identity import
+<path>`) deferred to Phase 65 per the implementation-time
+sign-off on Option B (future-proofing argument). The import
+side carries substantial substrate of its own — new IPC
+envelopes for destructive writes, conflict resolution, atomic
+replay, `--force` flag, integration tests for each failure
+mode. Splitting the work yields cleaner phases and focused
+design attention for the locked-in IPC semantics. Phase 65
+opens next with the dedicated scope.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

@@ -306,49 +306,113 @@ flow with verbatim commands.
   Slack-flavored webhook, shared Telegram transport, auto-
   notify retry, multi-target dispatch, conditional notify).
 
-**Likely Phase 64 deferrals (filled in at exit):**
+**Phase 64 deferrals (recorded at exit):**
 
-- Merge-strategy imports (interleave two chains by approved_at
-  / category-deduplication / Revert-cross-chain semantics).
-- Encrypted export format (operator can wrap with `age` / `gpg`
-  today).
-- Selective import (e.g. "only character_traits and
+- **`aivyx identity import <path>` (Task 5) → Phase 65.** The
+  load-bearing scope adjustment at implementation time. After
+  Tasks 2+4 (format + parse_and_validate) shipped, evaluating
+  the remaining work revealed that the import side carries
+  substantial substrate of its own: new IPC envelopes
+  (`FrontendMessage::ImportPersonaChain` + response), daemon
+  handlers with destructive-write semantics (existing-chain
+  wipe + atomic replay + shared-state recompute), `--force`
+  conflict resolution, and integration tests for each failure
+  mode. Two arguments at decision time:
+  1. **Future-proofing**: the import IPC envelope locks in
+     refuse-or-overwrite semantics that, once shipped, are
+     harder to evolve. Focused phase = focused design
+     attention.
+  2. **Standalone value**: export alone delivers the most
+     common use case (snapshot before risky changes). Cross-
+     host restore is rarer and the more invasive operation.
+  Phase 65 ships import with dedicated scope, conflict-
+  resolution Q-block, and full IPC plumbing.
+- **Merge-strategy imports** (interleave two chains by
+  approved_at / category-deduplication / Revert-cross-chain
+  semantics).
+- **Encrypted export format** (operator can wrap with `age` /
+  `gpg` today).
+- **Selective import** (e.g. "only character_traits and
   relationship_milestones").
-- Profile diff display + interactive resolve when local
+- **Profile diff display + interactive resolve** when local
   `aivyx.toml` differs from the imported one.
-- Web UI export/import surface (CLI-only in v1).
-- Multi-source merge (importing from N hosts).
-- Schema migration tooling (today: schema_version == 1; future
-  versions need explicit migrators).
+- **Web UI export/import surface** (CLI-only in v1).
+- **Multi-source merge** (importing from N hosts).
+- **Schema migration tooling** (today: schema_version == 1;
+  future versions need explicit migrators).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+- **DESIGN.md** — Predicted: streak **extends to eleven**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
+  Phase 64 shipped under existing D-deliverables — format
+  module, IPC variant, CLI subcommand, docs.
+
+- **PRODUCT.md** — Predicted: streak **extends to four**.
+  **Reality: correct.** Hash unchanged at entry and exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
+  P14's Phase 60 contract already permitted export/import as
+  an optional future addition; Phase 64 honors that contract
+  without amendment.
+
+- **Production-core `aivyx-core/src/lib.rs`** — Predicted:
+  streak **extends to twelve** (new record). **Reality:
+  correct.** Hash unchanged at entry and exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
+  Every Phase 64 surface routed through `aivyx-channel`
+  (identity_export module, IPC envelope, daemon handler,
+  client wrapper, CLI module). Twelve consecutive phases is
+  the longest production-core run in project history.
+
+- **Test count** — Predicted: positive (~+15). **Reality:
+  +17** (1154 → 1171). Task 2+4 shipped 9 format tests, Task
+  3+6 shipped 6 parser tests + 2 module tests.
+
+- **New workspace deps** — Predicted: zero. **Reality:
+  correct.** All new code reuses `serde`, `serde_json`,
+  `chrono`, `thiserror`, and the existing IPC + persona
+  substrate.
+
+- **Scope split** — Not predicted at open. Implementation-
+  time decision to ship export only and defer import to
+  Phase 65 (Option B at decision time). The most material
+  deviation from the open doc's framing; recorded in the
+  Deferrals block.
 
 ## Exit criteria
 
-- [ ] `IdentityExport` + supporting types in
+- [x] `IdentityExport` + supporting types in
   `crates/aivyx-channel/src/identity_export.rs` with
-  serde-derived (de)serialization — Task 2.
-- [ ] `aivyx identity export <path>` writes a valid JSON
-  bundle with `0600` permissions — Task 3.
-- [ ] `parse_and_validate` rejects schema-version mismatch,
+  serde-derived (de)serialization — Task 2, commit `32b1884`.
+- [x] `aivyx identity export <path>` writes a valid JSON
+  bundle with `0600` permissions — Task 3, commit `6cdd0f5`.
+- [x] `parse_and_validate` rejects schema-version mismatch,
   non-monotonic seq, invalid (category, op) pairs, and
-  effective-state mismatches — Task 4.
-- [ ] `aivyx identity import <path>` refuses on non-empty
-  chain without `--force`; with `--force` replays cleanly —
-  Task 5.
-- [ ] Integration tests cover round-trip + each failure mode
-  — Task 6.
-- [ ] `docs/INSTALL.md` "Moving Aivyx to a new machine"
-  section — Task 7.
-- [ ] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
-  refreshed — Task 8.
-- [ ] All five Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to eleven.
-- [ ] PRODUCT.md streak extends to four.
-- [ ] Production-core streak extends to twelve (new record).
-- [ ] Test count delta: positive (~+15).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+  effective-state mismatches — Task 4 (folded into Task 2's
+  commit), `32b1884`.
+- [ ] `aivyx identity import <path>` — **Task 5 deferred to
+  Phase 65** per the implementation-time scope adjustment
+  (see Deferrals).
+- [x] Integration tests cover round-trip + each failure mode
+  — Task 6 (folded into Tasks 2+4 + 3+6 commits): 9 format
+  tests + 6 parser tests + 2 module tests = 17 new tests.
+  Import-side integration tests defer with the import work.
+- [x] `docs/INSTALL.md` "Moving Aivyx to a new machine"
+  section — Task 7, commit `07a0d08`. Documents export only;
+  notes the Phase 65 import deferral and an interim hand-edit
+  restore path.
+- [x] ROADMAP.md + PRODUCT_ROADMAP.md + docs/README.md
+  refreshed — Task 8 (this commit).
+- [x] All five Q-block questions resolved with operator
+  sign-off pre-Task 2 (Q1(a) re-sign on import — design
+  shipped in the format though the actual import lands in
+  Phase 65; Q2(a) single `identity` subcommand surface — the
+  `import` subcommand is recognized but routes to a Phase-65-
+  deferral error; Q3(a)/Q4(a)/Q5(a) all shipped as designed).
+- [x] DESIGN.md streak extends to eleven.
+- [x] PRODUCT.md streak extends to four.
+- [x] Production-core streak extends to twelve (new record).
+- [x] Test count delta: +17 (1154 → 1171).
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.
