@@ -813,6 +813,29 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::ResolvePersonaProposal { id, .. } => {
+                            // Phase 70 — daemon-side resolution handler
+                            // wiring lands in the follow-up commit
+                            // (Task 5b plumbs the proposal log into
+                            // the daemon's runtime state). For now we
+                            // surface a clear "not yet wired" error so
+                            // a Web UI / CLI that calls this end gets
+                            // a deterministic message rather than a
+                            // protocol error.
+                            let resp = DaemonMessage::PersonaProposalResolved {
+                                id,
+                                ok: false,
+                                success: None,
+                                error: Some(
+                                    "ResolvePersonaProposal handler is pending \
+                                     Phase 70 Task 5b — proposal log not yet \
+                                     plumbed into the daemon's runtime state"
+                                        .into(),
+                                ),
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ImportPersonaChain {
                             id,
                             deltas,
@@ -1315,6 +1338,25 @@ async fn handle_query(
             };
             QueryResponsePayload::ExportPersonaChain { deltas, effective }
         }
+        // Phase 70 — Persona proposal queries. Daemon-side
+        // handler wiring (proposal log → response) lands in
+        // Task 5b/Task 6 follow-up; the IPC envelope is in
+        // place so the Web UI / CLI can call this end and get
+        // a clear "not yet wired" message until then.
+        QueryPayload::ListPersonaProposals { .. } => QueryResponsePayload::QueryError {
+            code: "not_yet_wired".into(),
+            message: "ListPersonaProposals handler is pending Phase 70 \
+                      Task 5b — proposal log not yet plumbed into the \
+                      daemon's query path"
+                .into(),
+        },
+        QueryPayload::GetPersonaProposal { .. } => QueryResponsePayload::QueryError {
+            code: "not_yet_wired".into(),
+            message: "GetPersonaProposal handler is pending Phase 70 \
+                      Task 5b — proposal log not yet plumbed into the \
+                      daemon's query path"
+                .into(),
+        },
     }
 }
 

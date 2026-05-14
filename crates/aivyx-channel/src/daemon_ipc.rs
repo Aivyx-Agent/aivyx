@@ -147,6 +147,20 @@ pub enum QueryPayload {
     /// in one shot (current cap: 100,000 — enough for years of
     /// reflection-approved deltas at realistic rates).
     ExportPersonaChain,
+    /// Phase 70 — list pending and resolved Persona proposals.
+    /// `status_filter` is one of `"all" | "pending" | "approved"
+    /// | "rejected" | "superseded"`; unknown values default to
+    /// `"pending"` server-side. The daemon caps the page at
+    /// `limit` entries.
+    ListPersonaProposals {
+        status_filter: String,
+        limit: u32,
+    },
+    /// Phase 70 — fetch a single Persona proposal by id. Returns
+    /// the proposal's current status-derived view.
+    GetPersonaProposal {
+        proposal_id: String,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -221,6 +235,19 @@ pub enum QueryResponsePayload {
     ListPersonaDeltas {
         entries: Vec<PersonaDeltaSummary>,
         total_len: u64,
+    },
+    /// Phase 70 — response to [`QueryPayload::ListPersonaProposals`].
+    /// `proposals` is the filtered page; `total_len` is the total
+    /// number of proposals matching the filter (not capped by
+    /// `limit`).
+    ListPersonaProposals {
+        proposals: Vec<PersonaProposalSummary>,
+        total_len: u64,
+    },
+    /// Phase 70 — response to [`QueryPayload::GetPersonaProposal`].
+    /// `proposal` is `None` when the id does not exist.
+    GetPersonaProposal {
+        proposal: Option<PersonaProposalSummary>,
     },
 }
 
@@ -352,6 +379,49 @@ pub struct PersonaDeltaSummary {
     pub mac_hex: String,
 }
 
+/// Wire-format view of a Persona proposal. Phase 70 — used by
+/// `ListPersonaProposals` + `GetPersonaProposal`.
+///
+/// `proposed_op` is the agent's original proposal (always present);
+/// `applied_op` and `applied_seq` are populated only when the
+/// proposal's current status is `Approved` (and may differ from
+/// `proposed_op` if the operator edited before approving — Q3(a)).
+/// `reason` is populated only when the current status is `Rejected`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaProposalSummary {
+    pub id: String,
+    pub proposed_at_unix_ms: u64,
+    pub source_reflection_session_id: String,
+    /// Stable string label, one of `"Pending" | "Approved" |
+    /// "Rejected" | "Superseded"`.
+    pub status: String,
+    /// Stable string label of the proposal's category.
+    pub category: String,
+    /// Agent's original op as JSON; same shape as
+    /// [`PersonaDeltaSummary::op`].
+    pub proposed_op: serde_json::Value,
+    /// Optional operator-supplied reason the agent gave for
+    /// proposing this delta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_reason: Option<String>,
+    /// On `Approved` proposals only: the op that was actually
+    /// applied (may differ from `proposed_op` per Q3(a) edit-on-
+    /// approve flow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_op: Option<serde_json::Value>,
+    /// On `Approved` proposals only: seq of the resulting
+    /// PersonaDelta in the persona chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_seq: Option<u64>,
+    /// On `Rejected` proposals only: operator-supplied reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_reason: Option<String>,
+    /// Resolved-at timestamp for `Approved | Rejected |
+    /// Superseded` proposals; `None` for `Pending`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_unix_ms: Option<u64>,
+}
+
 /// Folded effective Persona snapshot. Phase 60 — returned by
 /// `GetEffectivePersona`. Mirrors `aivyx_channel::persona::EffectivePersona`
 /// shape directly; serializable so the Web UI can render it.
@@ -456,6 +526,51 @@ pub enum FrontendMessage {
         /// If `true`, wipe and replace.
         force: bool,
     },
+    /// Phase 70 — operator-initiated resolution of a pending
+    /// Persona proposal (P14 self-learning closure). Per Q3(a)
+    /// at Phase 70 sign-off the operator can approve as-is,
+    /// approve-with-edit (the daemon applies the edited op
+    /// instead of the original), or reject with an optional
+    /// reason.
+    ///
+    /// Daemon-side flow on `Approve` / `ApproveWithEdit`:
+    /// validate the applied op → append a `PersonaDelta` to
+    /// the persona chain → append an `Approved` entry to the
+    /// proposal chain referencing the delta's seq → recompute
+    /// shared runtime state. On `Reject`: append a `Rejected`
+    /// entry only.
+    ///
+    /// Reply: [`DaemonMessage::PersonaProposalResolved`] with
+    /// the same `id`.
+    ResolvePersonaProposal {
+        id: String,
+        proposal_id: String,
+        resolution: PersonaProposalResolution,
+    },
+}
+
+/// Phase 70 — operator resolution variants for
+/// [`FrontendMessage::ResolvePersonaProposal`]. Tagged so
+/// future variants (e.g. `Defer`, `RejectWithSuggestion`) can be
+/// added without breaking older daemons / frontends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum PersonaProposalResolution {
+    /// Approve verbatim — apply the agent's `proposed_op`
+    /// unchanged.
+    Approve,
+    /// Approve with operator edits. The daemon validates and
+    /// applies `edited_op` instead of the original
+    /// `proposed_op`. Both are preserved in the proposal chain
+    /// for audit.
+    ApproveWithEdit {
+        edited_op: crate::persona::ProposedPersonaDelta,
+    },
+    /// Reject the proposal. `reason` is optional and carried in
+    /// the audit trail.
+    Reject {
+        reason: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +650,21 @@ pub enum DaemonMessage {
         success: Option<PersonaImportSuccess>,
         error: Option<String>,
     },
+    /// Phase 70 — response to
+    /// [`FrontendMessage::ResolvePersonaProposal`]. `ok = true`
+    /// on success; `success` carries `{ proposal_status,
+    /// applied_seq }` on Approve / ApproveWithEdit (where
+    /// `applied_seq` is the persona-chain seq of the appended
+    /// delta) or `{ proposal_status: "Rejected", applied_seq:
+    /// None }` on Reject. `error` is populated on failure
+    /// (unknown proposal id, validation failure of edited op,
+    /// invalid status transition, storage error).
+    PersonaProposalResolved {
+        id: String,
+        ok: bool,
+        success: Option<PersonaProposalResolveSuccess>,
+        error: Option<String>,
+    },
     /// Phase 69 — broadcast-style Web UI desktop notification.
     /// Fired by [`crate::notify_webui::NotifyWebUiBackend`] and
     /// relayed onto every connected Web UI WebSocket. Distinct
@@ -544,6 +674,18 @@ pub enum DaemonMessage {
         title: String,
         body: String,
     },
+}
+
+/// Phase 70 — success payload for
+/// [`DaemonMessage::PersonaProposalResolved`]. `proposal_status`
+/// is the new stable label after resolution (`"Approved" |
+/// "Rejected"`); `applied_seq` is the persona-chain seq of the
+/// appended PersonaDelta on Approve / ApproveWithEdit, or `None`
+/// on Reject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaProposalResolveSuccess {
+    pub proposal_status: String,
+    pub applied_seq: Option<u64>,
 }
 
 /// Phase 65 — success payload for [`DaemonMessage::PersonaImportResolved`].
@@ -798,6 +940,13 @@ pub enum DaemonEnvelope {
         title: String,
         body: String,
     },
+    // Phase 70 — Persona proposal resolution result.
+    PersonaProposalResolved {
+        id: String,
+        ok: bool,
+        success: Option<PersonaProposalResolveSuccess>,
+        error: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -897,6 +1046,51 @@ mod tests {
             FrontendMessage::RevertPersonaDelta {
                 id: "rv-1".into(),
                 target_delta_id: "pd-abc123".into(),
+            },
+            // Phase 70 — Persona proposal queries.
+            FrontendMessage::Query {
+                id: "q-100".into(),
+                payload: QueryPayload::ListPersonaProposals {
+                    status_filter: "pending".into(),
+                    limit: 50,
+                },
+            },
+            FrontendMessage::Query {
+                id: "q-101".into(),
+                payload: QueryPayload::GetPersonaProposal {
+                    proposal_id: "pp-001".into(),
+                },
+            },
+            // Phase 70 — Persona proposal resolutions.
+            FrontendMessage::ResolvePersonaProposal {
+                id: "rs-1".into(),
+                proposal_id: "pp-001".into(),
+                resolution: PersonaProposalResolution::Approve,
+            },
+            FrontendMessage::ResolvePersonaProposal {
+                id: "rs-2".into(),
+                proposal_id: "pp-002".into(),
+                resolution: PersonaProposalResolution::ApproveWithEdit {
+                    edited_op: crate::persona::ProposedPersonaDelta {
+                        category: crate::persona::PersonaDeltaCategory::BehavioralPreferences,
+                        op: crate::persona::PersonaDeltaOp::AppendList {
+                            value: "operator-edited preference".into(),
+                        },
+                        reason: None,
+                    },
+                },
+            },
+            FrontendMessage::ResolvePersonaProposal {
+                id: "rs-3".into(),
+                proposal_id: "pp-003".into(),
+                resolution: PersonaProposalResolution::Reject {
+                    reason: Some("not safe".into()),
+                },
+            },
+            FrontendMessage::ResolvePersonaProposal {
+                id: "rs-4".into(),
+                proposal_id: "pp-004".into(),
+                resolution: PersonaProposalResolution::Reject { reason: None },
             },
         ];
         for msg in cases {
@@ -1114,6 +1308,62 @@ mod tests {
                 ok: false,
                 seq: None,
                 error: Some("no persona delta found with id `pd-missing`".into()),
+            },
+            // Phase 70 — proposal resolution responses.
+            DaemonMessage::PersonaProposalResolved {
+                id: "rs-1".into(),
+                ok: true,
+                success: Some(PersonaProposalResolveSuccess {
+                    proposal_status: "Approved".into(),
+                    applied_seq: Some(42),
+                }),
+                error: None,
+            },
+            DaemonMessage::PersonaProposalResolved {
+                id: "rs-2".into(),
+                ok: true,
+                success: Some(PersonaProposalResolveSuccess {
+                    proposal_status: "Rejected".into(),
+                    applied_seq: None,
+                }),
+                error: None,
+            },
+            DaemonMessage::PersonaProposalResolved {
+                id: "rs-3".into(),
+                ok: false,
+                success: None,
+                error: Some("unknown proposal id `pp-missing`".into()),
+            },
+            // Phase 70 — proposal query responses.
+            DaemonMessage::QueryResponse {
+                id: "q-100".into(),
+                payload: QueryResponsePayload::ListPersonaProposals {
+                    proposals: vec![PersonaProposalSummary {
+                        id: "pp-001".into(),
+                        proposed_at_unix_ms: 1_715_000_000_000,
+                        source_reflection_session_id: "ses-abc".into(),
+                        status: "Pending".into(),
+                        category: "BehavioralPreferences".into(),
+                        proposed_op: serde_json::json!({
+                            "kind": "AppendList",
+                            "value": "prefer terse",
+                        }),
+                        proposed_reason: Some(
+                            "operator confirmed 3 turns".into(),
+                        ),
+                        applied_op: None,
+                        applied_seq: None,
+                        rejected_reason: None,
+                        resolved_at_unix_ms: None,
+                    }],
+                    total_len: 1,
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-101".into(),
+                payload: QueryResponsePayload::GetPersonaProposal {
+                    proposal: None,
+                },
             },
             DaemonMessage::QueryResponse {
                 id: "q-006".into(),
