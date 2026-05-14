@@ -1,0 +1,104 @@
+# description: Software engineering assistant — Rust/Python/etc. dev work with sandboxed shell, fs, and web access.
+#
+# This is a starter template (Phase 66). `aivyx init --template coder`
+# pre-fills the interactive wizard with these defaults. After
+# generation, edit `aivyx.toml` to set your storage passphrase and
+# add your provider API key (or stick with Ollama for the
+# zero-API-key path).
+#
+# ----------------------------------------------------------------
+# Provider — default to local Ollama
+# ----------------------------------------------------------------
+
+[agent]
+provider = "ollama"
+model = "llama3.1"
+# To use Anthropic Claude instead:
+# provider = "anthropic"
+# model = "claude-sonnet-4-5"
+# (and uncomment the [anthropic] block below)
+
+[ollama]
+# Local Ollama on default port. Run `ollama pull llama3.1` once.
+base_url = "http://localhost:11434"
+
+# [anthropic]
+# api_key = "sk-ant-..."   # or set ANTHROPIC_API_KEY env var
+
+# ----------------------------------------------------------------
+# Storage + filesystem sandbox
+# ----------------------------------------------------------------
+
+[storage]
+path = "~/.local/share/aivyx/store.redb"
+
+[fs]
+# Sandbox root — every fs.read/fs.write below resolves under this
+# directory. Adjust to match your projects layout.
+root = "~/projects"
+
+[aivyx]
+# Master-key passphrase. Either set here, in the AIVYX_PASSPHRASE
+# env var, or the daemon will prompt on first launch.
+# passphrase = "set-a-real-passphrase"
+
+[daemon]
+web_ui = true
+
+# ----------------------------------------------------------------
+# Profile — operator-declared identity layer (P13)
+# ----------------------------------------------------------------
+
+[profile]
+assistant_name = "Codex"
+operator_profile = "Software engineer. Polyglot, leans toward systems languages and strong type systems."
+communication_style = "Terse, conclusion-first. Cite source files when referencing code."
+primary_use_cases = ["software engineering"]
+behavioral_preferences = [
+    "prefer integration tests over mocks",
+    "always cite source files when referencing code",
+    "explain WHY before WHAT when proposing a fix",
+]
+behavioral_constraints = [
+    "never autonomously commit code",
+    "always confirm destructive shell commands (rm, git reset --hard, etc.)",
+    "never share repository contents externally without explicit permission",
+]
+
+# ----------------------------------------------------------------
+# Roles — the coder role is the default active role
+# ----------------------------------------------------------------
+
+[[role]]
+name = "coder"
+system_prompt = "You are a pair-programmer. Reach for tests first; keep changes minimal and focused."
+tool_allowlist = [
+    "fs.read",
+    "fs.write",
+    "shell.exec",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "web.fetch",
+]
+capability_scopes = [
+    "fs.read",
+    "fs.write",
+    "shell.exec",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "net.fetch",
+]
+trust_ceiling = "Trusted"
+memory_topic_prefix = "coder/"
+
+# ----------------------------------------------------------------
+# MCP — bundled web search for documentation lookups
+# ----------------------------------------------------------------
+
+[[mcp_server]]
+name = "web-search"
+bundled = true
+command = "aivyx"
+args = ["mcp-server", "web-search"]

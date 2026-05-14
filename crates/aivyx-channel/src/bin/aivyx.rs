@@ -98,6 +98,8 @@
 mod identity;
 #[path = "aivyx_modules/init.rs"]
 mod init;
+#[path = "aivyx_modules/init_templates.rs"]
+mod init_templates;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/persona.rs"]
@@ -344,12 +346,31 @@ fn run() -> Result<(), String> {
     // ---- Phase 44: interactive init wizard ----------------------------
     // Like daemon management, init needs only a small runtime (for async
     // Ollama detection) and no config/store/API key.
-    if mode == CliMode::Init {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt.block_on(init::run_init_wizard());
+    if let CliMode::Init(init_mode) = &mode {
+        match init_mode {
+            InitMode::ListTemplates => {
+                // No tokio runtime needed — pure filesystem +
+                // string operations.
+                let templates = init_templates::list_templates();
+                print!("{}", init_templates::render_template_list(&templates));
+                return Ok(());
+            }
+            InitMode::Interactive => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+                return rt.block_on(init::run_init_wizard(None));
+            }
+            InitMode::InteractiveFromTemplate { template_name } => {
+                let template = init_templates::load_template(template_name)?;
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+                return rt.block_on(init::run_init_wizard(Some(&template)));
+            }
+        }
     }
 
     // ---- Phase 46: bundled MCP server -----------------------------------
@@ -902,7 +923,11 @@ enum CliMode {
     /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
     /// `aivyx init`: interactive first-run setup wizard (Phase 44).
-    Init,
+    /// Phase 66 added the optional template pre-fill via
+    /// `aivyx init --template <name>`. The wizard still walks the
+    /// operator through each prompt; the template sets the suggested
+    /// defaults.
+    Init(InitMode),
     /// `aivyx mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
     /// `aivyx profile <subcommand>`: Profile inspection / edit
@@ -927,6 +952,21 @@ enum CliMode {
     /// Phase 64 ships export only; import lands in Phase 65
     /// per the implementation-time scope adjustment.
     Identity(IdentitySubcommand),
+}
+
+/// Phase 66 — `aivyx init` variant discriminator.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum InitMode {
+    /// Plain `aivyx init` — interactive wizard, no template
+    /// pre-fill. Existing Phase 44 behavior.
+    Interactive,
+    /// `aivyx init --template <name>` — wizard pre-filled from
+    /// the named template (Q3(b) at Phase 66 sign-off).
+    InteractiveFromTemplate { template_name: String },
+    /// `aivyx init --list-templates` or `aivyx init --template`
+    /// (no name). Prints available templates and exits per
+    /// Q4(c) at sign-off.
+    ListTemplates,
 }
 
 /// Subcommand discriminator under [`CliMode::Identity`]. Phase 64.
@@ -1176,17 +1216,54 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Check for `init` subcommand — interactive first-run wizard.
+    // Check for `init` subcommand — interactive first-run wizard
+    // (Phase 44, extended at Phase 66 with starter templates).
+    //
+    // Accepted forms:
+    //   `aivyx init`                          → interactive, no template
+    //   `aivyx init --template <name>`        → interactive, pre-filled
+    //   `aivyx init --template` (no name)     → list templates + exit
+    //   `aivyx init --list-templates`         → list templates + exit
     if !args.is_empty() && args[0] == "init" {
-        if args.len() > 1 {
-            return Err(format!(
-                "`aivyx init` does not accept additional arguments. \
-                 Got: `{}`",
-                args[1..].join(" ")
-            ));
+        let mut init_mode = InitMode::Interactive;
+        let mut i = 1;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--list-templates" => {
+                    // Setting list-mode twice is idempotent;
+                    // `--template <name>` followed by
+                    // `--list-templates` collapses to list-mode
+                    // (the operator clearly wants to discover).
+                    init_mode = InitMode::ListTemplates;
+                    i += 1;
+                }
+                "--template" => {
+                    // `--template <name>` or `--template` (no name).
+                    let next = args.get(i + 1);
+                    match next {
+                        Some(name) if !name.starts_with("--") => {
+                            init_mode = InitMode::InteractiveFromTemplate {
+                                template_name: name.clone(),
+                            };
+                            i += 2;
+                        }
+                        _ => {
+                            // No name (or another flag follows) — list mode.
+                            init_mode = InitMode::ListTemplates;
+                            i += 1;
+                        }
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "`aivyx init`: unrecognized argument `{other}`. \
+                         Supported: `--template <name>`, `--list-templates`",
+                    ));
+                }
+            }
         }
         return Ok(CliArgs {
-            mode: CliMode::Init,
+            mode: CliMode::Init(init_mode),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -4289,7 +4366,7 @@ mod tests {
     fn parse_init_subcommand() {
         let parsed = parse_cli_args_from(&argv(&["init"]))
             .expect("init must parse");
-        assert_eq!(parsed.mode, CliMode::Init);
+        assert_eq!(parsed.mode, CliMode::Init(InitMode::Interactive));
     }
 
     #[test]
@@ -4297,9 +4374,50 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["init", "--channel", "local"]))
             .expect_err("init with flags must error");
         assert!(
-            err.contains("does not accept additional arguments"),
+            err.contains("unrecognized argument"),
             "error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_init_with_template_pre_fills() {
+        let parsed = parse_cli_args_from(&argv(&["init", "--template", "coder"]))
+            .expect("`init --template coder` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Init(InitMode::InteractiveFromTemplate {
+                template_name: "coder".into(),
+            }),
+        );
+    }
+
+    #[test]
+    fn parse_init_template_without_name_is_list_mode() {
+        let parsed = parse_cli_args_from(&argv(&["init", "--template"]))
+            .expect("`init --template` (no name) must parse to list mode");
+        assert_eq!(parsed.mode, CliMode::Init(InitMode::ListTemplates));
+    }
+
+    #[test]
+    fn parse_init_list_templates_flag() {
+        let parsed = parse_cli_args_from(&argv(&["init", "--list-templates"]))
+            .expect("`init --list-templates` must parse");
+        assert_eq!(parsed.mode, CliMode::Init(InitMode::ListTemplates));
+    }
+
+    #[test]
+    fn parse_init_template_followed_by_flag_is_list_mode() {
+        // `aivyx init --template --list-templates` — the second
+        // flag follows immediately, so --template has no name and
+        // routes to list mode. Cleaner than erroring; intent is
+        // recoverable.
+        let parsed = parse_cli_args_from(&argv(&[
+            "init",
+            "--template",
+            "--list-templates",
+        ]))
+        .expect("must parse");
+        assert_eq!(parsed.mode, CliMode::Init(InitMode::ListTemplates));
     }
 
     #[test]

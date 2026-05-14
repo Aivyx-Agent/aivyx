@@ -337,9 +337,204 @@ fn write_config(path: &Path, contents: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Phase 66 — values extracted from a starter template that the
+/// wizard uses as prompt defaults AND as the splice-back base for
+/// the final `aivyx.toml`. Each `Option` field is `None` when
+/// the corresponding TOML key wasn't present in the template —
+/// the wizard falls back to its existing hardcoded default in
+/// that case.
+struct TemplateDefaults {
+    provider: Option<String>,
+    model: Option<String>,
+    fs_root: Option<String>,
+    storage_path: Option<String>,
+    assistant_name: Option<String>,
+    primary_use_case: Option<String>,
+    communication_style: Option<String>,
+    /// Parsed template document. `Some` when a template was
+    /// supplied; the wizard splices its answers into this
+    /// document and writes it back. `None` when no template was
+    /// supplied; the wizard uses the existing `render_toml`
+    /// synthesis path.
+    template_doc: Option<toml_edit::DocumentMut>,
+    /// Source-of-truth name for diagnostics + the success banner.
+    template_name: Option<String>,
+}
+
+impl TemplateDefaults {
+    fn empty() -> Self {
+        Self {
+            provider: None,
+            model: None,
+            fs_root: None,
+            storage_path: None,
+            assistant_name: None,
+            primary_use_case: None,
+            communication_style: None,
+            template_doc: None,
+            template_name: None,
+        }
+    }
+
+    fn from_template(
+        template: &super::init_templates::Template,
+    ) -> Result<Self, String> {
+        let doc: toml_edit::DocumentMut = template.toml_content.parse().map_err(
+            |e: toml_edit::TomlError| {
+                format!(
+                    "template `{}` is not valid TOML: {e}",
+                    template.name,
+                )
+            },
+        )?;
+
+        let provider = doc
+            .get("agent")
+            .and_then(|a| a.get("provider"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let model = doc
+            .get("agent")
+            .and_then(|a| a.get("model"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let fs_root = doc
+            .get("fs")
+            .and_then(|a| a.get("root"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let storage_path = doc
+            .get("storage")
+            .and_then(|a| a.get("path"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let assistant_name = doc
+            .get("profile")
+            .and_then(|a| a.get("assistant_name"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let primary_use_case = doc
+            .get("profile")
+            .and_then(|a| a.get("primary_use_cases"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.iter().next())
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let communication_style = doc
+            .get("profile")
+            .and_then(|a| a.get("communication_style"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        Ok(Self {
+            provider,
+            model,
+            fs_root,
+            storage_path,
+            assistant_name,
+            primary_use_case,
+            communication_style,
+            template_doc: Some(doc),
+            template_name: Some(template.name.clone()),
+        })
+    }
+
+}
+
+/// Phase 66 — splice the wizard's answers back into the template
+/// `DocumentMut` and serialize. Preserves every comment, every
+/// role declaration, every MCP server block, every commented-out
+/// section in the template — only the wizard-controlled keys
+/// (provider, model, paths, profile fields, api key) are
+/// overwritten.
+fn render_with_template(
+    cfg: &InitConfig,
+    template_name: &str,
+    mut doc: toml_edit::DocumentMut,
+) -> String {
+    use toml_edit::value;
+
+    // [agent] provider + model
+    let provider_str = match cfg.provider {
+        Provider::Ollama => "ollama",
+        Provider::Anthropic => "anthropic",
+        Provider::OpenAi => "openai",
+    };
+    doc["agent"]["provider"] = value(provider_str);
+    doc["agent"]["model"] = value(cfg.model.as_str());
+
+    // Provider-specific API key. Wipe the inactive provider's
+    // api_key block to avoid the template's "alternative
+    // provider commented out" comments leaving stale keys.
+    match cfg.provider {
+        Provider::Anthropic => {
+            if let Some(key) = &cfg.api_key {
+                doc["anthropic"]["api_key"] = value(key.as_str());
+            }
+        }
+        Provider::OpenAi => {
+            if let Some(key) = &cfg.api_key {
+                doc["openai"]["api_key"] = value(key.as_str());
+            }
+        }
+        Provider::Ollama => {} // no key needed
+    }
+
+    // [fs] + [storage]
+    doc["fs"]["root"] = value(cfg.fs_root.as_str());
+    doc["storage"]["path"] = value(cfg.storage_path.as_str());
+
+    // [profile] fields. Only update keys the operator actually
+    // customized; leave the template's defaults otherwise. The
+    // template's assistant_name etc. is already a string the
+    // operator may have wanted to keep.
+    if let Some(name) = &cfg.profile_assistant_name {
+        doc["profile"]["assistant_name"] = value(name.as_str());
+    }
+    if let Some(uc) = &cfg.profile_primary_use_case {
+        // Replace primary_use_cases with a single-element array
+        // matching the operator's input. Templates may have
+        // multi-element arrays; the wizard's single prompt is
+        // intentionally a single use case.
+        let mut arr = toml_edit::Array::new();
+        arr.push(uc.as_str());
+        doc["profile"]["primary_use_cases"] = value(arr);
+    }
+    if let Some(style) = &cfg.profile_communication_style {
+        doc["profile"]["communication_style"] = value(style.as_str());
+    }
+
+    let mut out = format!(
+        "# Generated by `aivyx init --template {template_name}`\n\
+         # Customize freely; the template's structure is preserved.\n\n",
+    );
+    out.push_str(&doc.to_string());
+    out
+}
+
 /// Entry point for the init wizard. Called from `run()` in the
 /// binary when `CliMode::Init` is dispatched.
-pub async fn run_init_wizard() -> Result<(), String> {
+///
+/// Phase 66 added the optional `template` argument. When
+/// `Some(template)`, the wizard pre-fills prompt defaults from
+/// the template's content (assistant_name, primary_use_case,
+/// communication_style, provider, model, fs root, storage path),
+/// then writes the operator-modified template content as the
+/// final `aivyx.toml` so the template's role declarations + MCP
+/// servers + commented sections all survive. When `None`, the
+/// wizard runs the existing Phase 44 path with hardcoded defaults
+/// and the minimal `render_toml` output.
+pub async fn run_init_wizard(
+    template: Option<&super::init_templates::Template>,
+) -> Result<(), String> {
+    let template_defaults = match template {
+        Some(t) => TemplateDefaults::from_template(t)?,
+        None => TemplateDefaults::empty(),
+    };
+    run_init_wizard_inner(template_defaults).await
+}
+
+async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<(), String> {
     // 1. TTY check — bail if not interactive.
     if !io::stdin().is_terminal() {
         return Err("`aivyx init` requires an interactive terminal".into());
@@ -364,16 +559,41 @@ pub async fn run_init_wizard() -> Result<(), String> {
         }
     }
 
+    // Phase 66 — announce the template up front so the operator
+    // sees what's pre-filling each prompt.
+    if let Some(template_name) = &template_defaults.template_name {
+        eprintln!(
+            "Using template `{}`. Prompt defaults are pre-filled from the template; \
+             press Enter to accept or type a value to override.",
+            template_name,
+        );
+        eprintln!();
+    }
+
     // 3. Detect Ollama + build provider menu.
     let base_url = DEFAULT_OLLAMA_BASE_URL;
     let has_ollama = detect_ollama(base_url).await;
 
-    let (provider_options, default_idx) = if has_ollama {
-        eprintln!("Ollama detected at {base_url}");
-        (vec!["Ollama (local)", "Anthropic", "OpenAI"], 0usize)
-    } else {
-        eprintln!("Ollama not detected — defaulting to Anthropic");
-        (vec!["Anthropic", "OpenAI", "Ollama (local)"], 0usize)
+    // Phase 66 — when a template declares a provider, that
+    // becomes the default; otherwise fall back to the Phase 44
+    // ollama-or-anthropic heuristic.
+    let template_provider = template_defaults
+        .provider
+        .as_deref()
+        .map(str::to_ascii_lowercase);
+    let (provider_options, default_idx) = match template_provider.as_deref() {
+        Some("ollama") => (vec!["Ollama (local)", "Anthropic", "OpenAI"], 0usize),
+        Some("anthropic") => (vec!["Anthropic", "OpenAI", "Ollama (local)"], 0usize),
+        Some("openai") => (vec!["OpenAI", "Anthropic", "Ollama (local)"], 0usize),
+        _ => {
+            if has_ollama {
+                eprintln!("Ollama detected at {base_url}");
+                (vec!["Ollama (local)", "Anthropic", "OpenAI"], 0usize)
+            } else {
+                eprintln!("Ollama not detected — defaulting to Anthropic");
+                (vec!["Anthropic", "OpenAI", "Ollama (local)"], 0usize)
+            }
+        }
     };
 
     writeln!(writer, "\nSelect a provider:")
@@ -414,13 +634,19 @@ pub async fn run_init_wizard() -> Result<(), String> {
             (model, None)
         }
         Provider::Anthropic => {
+            // Phase 66 — template-supplied model becomes the default
+            // when the operator picked the matching provider.
+            let default_model = template_defaults
+                .model
+                .as_deref()
+                .unwrap_or("claude-sonnet-4-20250514");
             let model = prompt_line(
-                "Model [claude-sonnet-4-20250514]: ",
+                &format!("Model [{default_model}]: "),
                 &mut reader,
                 &mut writer,
             )?;
             let model = if model.is_empty() {
-                "claude-sonnet-4-20250514".into()
+                default_model.into()
             } else {
                 model
             };
@@ -431,9 +657,15 @@ pub async fn run_init_wizard() -> Result<(), String> {
             (model, Some(key))
         }
         Provider::OpenAi => {
-            let model = prompt_line("Model [gpt-4o]: ", &mut reader, &mut writer)?;
+            let default_model =
+                template_defaults.model.as_deref().unwrap_or("gpt-4o");
+            let model = prompt_line(
+                &format!("Model [{default_model}]: "),
+                &mut reader,
+                &mut writer,
+            )?;
             let model = if model.is_empty() {
-                "gpt-4o".into()
+                default_model.into()
             } else {
                 model
             };
@@ -445,8 +677,18 @@ pub async fn run_init_wizard() -> Result<(), String> {
         }
     };
 
-    // 5. Paths — show defaults, allow overrides.
-    let (default_fs, default_storage) = default_paths();
+    // 5. Paths — show defaults, allow overrides. Phase 66:
+    // template-supplied paths take precedence over the
+    // hardcoded HOME-derived defaults.
+    let (default_fs_fallback, default_storage_fallback) = default_paths();
+    let default_fs = template_defaults
+        .fs_root
+        .clone()
+        .unwrap_or(default_fs_fallback);
+    let default_storage = template_defaults
+        .storage_path
+        .clone()
+        .unwrap_or(default_storage_fallback);
 
     let fs_root = prompt_line(
         &format!("Sandbox root [{default_fs}]: "),
@@ -478,41 +720,53 @@ pub async fn run_init_wizard() -> Result<(), String> {
     // resolution at sign-off: three short prompts seeding the
     // operator's identity layer with a usable starting point.
     // Each prompt is **opt-in** — blank input means "skip, leave
-    // this field unset." Phase 58's `aivyx profile edit` surface
-    // fills in the other three categories (operator_profile,
-    // behavioral_preferences, behavioral_constraints) later.
+    // this field unset" when no template is supplied, or "keep
+    // the template's default" when one is.
     writeln!(writer, "\nAssistant identity (optional — press Enter to skip):")
         .map_err(|e| format!("write error: {e}"))?;
 
+    let assistant_name_prompt = match &template_defaults.assistant_name {
+        Some(name) => format!("Assistant name [{name}]: "),
+        None => "Assistant name (default Aivyx): ".to_string(),
+    };
     let assistant_name_raw = prompt_line(
-        "Assistant name (default Aivyx): ",
+        &assistant_name_prompt,
         &mut reader,
         &mut writer,
     )?;
     let profile_assistant_name = if assistant_name_raw.is_empty() {
-        None
+        template_defaults.assistant_name.clone()
     } else {
         Some(assistant_name_raw)
     };
 
+    let primary_use_case_prompt = match &template_defaults.primary_use_case {
+        Some(uc) => format!("Primary use case [{uc}]: "),
+        None => "Primary use case (e.g. 'Rust systems programming'): ".to_string(),
+    };
     let primary_use_case_raw = prompt_line(
-        "Primary use case (e.g. 'Rust systems programming'): ",
+        &primary_use_case_prompt,
         &mut reader,
         &mut writer,
     )?;
     let profile_primary_use_case = if primary_use_case_raw.is_empty() {
-        None
+        template_defaults.primary_use_case.clone()
     } else {
         Some(primary_use_case_raw)
     };
 
+    let style_prompt = match &template_defaults.communication_style {
+        Some(s) => format!("Communication style [{s}]: "),
+        None => "Communication style (e.g. 'terse, conclusion-first'): "
+            .to_string(),
+    };
     let style_raw = prompt_line(
-        "Communication style (e.g. 'terse, conclusion-first'): ",
+        &style_prompt,
         &mut reader,
         &mut writer,
     )?;
     let profile_communication_style = if style_raw.is_empty() {
-        None
+        template_defaults.communication_style.clone()
     } else {
         Some(style_raw)
     };
@@ -529,7 +783,14 @@ pub async fn run_init_wizard() -> Result<(), String> {
         profile_primary_use_case,
         profile_communication_style,
     };
-    let toml = render_toml(&cfg);
+    // Phase 66 — when a template was supplied, splice wizard
+    // answers into the template document so the role declarations,
+    // MCP servers, commented sections, and structure all survive.
+    // Otherwise use the existing minimal `render_toml` synthesis.
+    let toml = match (template_defaults.template_doc, &template_defaults.template_name) {
+        (Some(doc), Some(name)) => render_with_template(&cfg, name, doc),
+        _ => render_toml(&cfg),
+    };
     write_config(config_path, &toml)?;
 
     // 7. Success message.

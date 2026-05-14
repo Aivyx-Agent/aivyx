@@ -1,0 +1,102 @@
+# description: Research and synthesis assistant — heavy web fetch + memory for notes, no shell access.
+#
+# This is a starter template (Phase 66). `aivyx init --template
+# researcher` pre-fills the interactive wizard with these defaults.
+# After generation, edit `aivyx.toml` to set your storage passphrase
+# and provider details.
+#
+# The researcher role deliberately omits `shell.exec` and `fs.write`
+# outside a notes sandbox — research-style assistants pull
+# information in and write summaries; they don't run code or
+# modify projects.
+#
+# ----------------------------------------------------------------
+# Provider — default to local Ollama
+# ----------------------------------------------------------------
+
+[agent]
+provider = "ollama"
+model = "llama3.1"
+# To use Anthropic Claude instead:
+# provider = "anthropic"
+# model = "claude-sonnet-4-5"
+
+[ollama]
+base_url = "http://localhost:11434"
+
+# [anthropic]
+# api_key = "sk-ant-..."
+
+# ----------------------------------------------------------------
+# Storage + filesystem sandbox
+# ----------------------------------------------------------------
+
+[storage]
+path = "~/.local/share/aivyx/store.redb"
+
+[fs]
+# Sandbox root — point at a `notes/` or `research/` directory. The
+# researcher role reads from this and writes summaries here.
+root = "~/research"
+
+[aivyx]
+# passphrase = "set-a-real-passphrase"
+
+[daemon]
+web_ui = true
+
+# ----------------------------------------------------------------
+# Profile — operator-declared identity layer (P13)
+# ----------------------------------------------------------------
+
+[profile]
+assistant_name = "Inquiry"
+operator_profile = "Researcher. Synthesizes information across multiple sources; cares about citation rigor."
+communication_style = "Cite-first. Summarize before quoting. Bullet lists when comparing options."
+primary_use_cases = ["research and synthesis", "literature review"]
+behavioral_preferences = [
+    "always cite sources when summarizing",
+    "summarize before quoting",
+    "flag contradictions between sources explicitly",
+    "prefer primary sources over secondary",
+]
+behavioral_constraints = [
+    "never edit files outside the notes sandbox without operator confirmation",
+    "never claim certainty when sources disagree",
+]
+
+# ----------------------------------------------------------------
+# Roles — researcher is the default active role
+# ----------------------------------------------------------------
+
+[[role]]
+name = "researcher"
+system_prompt = "You are a careful note-taker. Cite sources. Summarize before quoting."
+tool_allowlist = [
+    "fs.read",
+    "fs.write",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "web.fetch",
+]
+capability_scopes = [
+    "fs.read",
+    "fs.write",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "net.fetch",
+]
+trust_ceiling = "Trusted"
+memory_topic_prefix = "researcher/"
+
+# ----------------------------------------------------------------
+# MCP — bundled web search is the workhorse for this archetype
+# ----------------------------------------------------------------
+
+[[mcp_server]]
+name = "web-search"
+bundled = true
+command = "aivyx"
+args = ["mcp-server", "web-search"]

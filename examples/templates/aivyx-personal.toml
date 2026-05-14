@@ -1,0 +1,116 @@
+# description: Personal assistant — daily briefings, task management, scheduled notifications to your phone.
+#
+# This is a starter template (Phase 66). `aivyx init --template
+# personal` pre-fills the interactive wizard with these defaults.
+# After generation, edit `aivyx.toml` to set your storage passphrase,
+# provider details, and (if you want notifications) your Telegram
+# bot token + chat_id.
+#
+# The personal archetype leans on Aivyx's scheduling (Phase 26),
+# auto-notify (Phase 63), and memory layer to build a "morning
+# briefing" pattern: a cron schedule fires at 9am, the agent
+# summarizes the operator's recent notes/calendar/etc., and the
+# `notify_target` setting auto-pushes the summary to Telegram.
+#
+# ----------------------------------------------------------------
+# Provider — default to local Ollama
+# ----------------------------------------------------------------
+
+[agent]
+provider = "ollama"
+model = "llama3.1"
+
+[ollama]
+base_url = "http://localhost:11434"
+
+# [anthropic]
+# api_key = "sk-ant-..."
+
+# ----------------------------------------------------------------
+# Storage + filesystem sandbox
+# ----------------------------------------------------------------
+
+[storage]
+path = "~/.local/share/aivyx/store.redb"
+
+[fs]
+# Sandbox root — point at a notes/journal directory.
+root = "~/journal"
+
+[aivyx]
+# passphrase = "set-a-real-passphrase"
+
+[daemon]
+web_ui = true
+
+# ----------------------------------------------------------------
+# Profile — operator-declared identity layer (P13)
+# ----------------------------------------------------------------
+
+[profile]
+assistant_name = "Mira"
+operator_profile = "Individual operator. Cares about personal task management, calendar follow-through, journal continuity."
+communication_style = "Conclusion-first paragraphs. Three-bullet lists when summarizing."
+primary_use_cases = ["personal task management", "daily briefings", "journal-keeping"]
+behavioral_preferences = [
+    "conclusion-first paragraphs",
+    "three-bullet lists when summarizing",
+    "reference prior journal entries by date when relevant",
+]
+behavioral_constraints = [
+    "never share sensitive personal context externally without asking",
+    "never auto-execute scheduled actions outside the notify path",
+]
+
+# ----------------------------------------------------------------
+# Roles — assistant is the default active role
+# ----------------------------------------------------------------
+
+[[role]]
+name = "assistant"
+system_prompt = "You are a personal assistant. Surface what matters; respect continuity with prior notes."
+tool_allowlist = [
+    "fs.read",
+    "fs.write",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "web.fetch",
+    "notify.send",
+]
+capability_scopes = [
+    "fs.read",
+    "fs.write",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "net.fetch",
+    "notify.send",
+]
+trust_ceiling = "Trusted"
+memory_topic_prefix = "personal/"
+
+# ----------------------------------------------------------------
+# Notify targets — uncomment + fill in to enable phone notifications
+# ----------------------------------------------------------------
+#
+# [[notify_target]]
+# name = "phone"
+# kind = "telegram"
+# chat_id = "123456789"   # your Telegram chat_id
+#
+# [telegram]
+# bot_token = "..."
+
+# ----------------------------------------------------------------
+# Schedules — "morning briefing" at 9am daily
+# ----------------------------------------------------------------
+#
+# Uncomment + add a notify_target to enable. Requires a configured
+# [[notify_target]] entry above.
+#
+# [[schedule]]
+# name = "morning-briefing"
+# cron = "0 0 9 * * * *"
+# prompt = "Summarize what's on my plate today: recent journal entries, any open tasks, anything I asked you to remind me about."
+# notify_target = "phone"
