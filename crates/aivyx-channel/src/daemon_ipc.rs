@@ -535,6 +535,15 @@ pub enum DaemonMessage {
         success: Option<PersonaImportSuccess>,
         error: Option<String>,
     },
+    /// Phase 69 — broadcast-style Web UI desktop notification.
+    /// Fired by [`crate::notify_webui::NotifyWebUiBackend`] and
+    /// relayed onto every connected Web UI WebSocket. Distinct
+    /// from `StreamEvent` (which is per-session); these are
+    /// per-daemon notifications without a session correlation.
+    DesktopNotification {
+        title: String,
+        body: String,
+    },
 }
 
 /// Phase 65 — success payload for [`DaemonMessage::PersonaImportResolved`].
@@ -783,6 +792,11 @@ pub enum DaemonEnvelope {
         ok: bool,
         success: Option<PersonaImportSuccess>,
         error: Option<String>,
+    },
+    // Phase 69 — Web UI desktop notification (broadcast).
+    DesktopNotification {
+        title: String,
+        body: String,
     },
 }
 
@@ -1122,6 +1136,15 @@ mod tests {
                     }),
                 },
             },
+            // Phase 69 — Web UI desktop notification broadcast.
+            DaemonMessage::DesktopNotification {
+                title: "Build complete".into(),
+                body: "aivyx-core: 1232 tests passed.".into(),
+            },
+            DaemonMessage::DesktopNotification {
+                title: "Trigger fired".into(),
+                body: String::new(),
+            },
         ];
         for msg in cases {
             let frame = encode_frame(&msg).expect("encode");
@@ -1268,6 +1291,21 @@ mod tests {
         let frame = encode_frame(&recovery).expect("encode recovery");
         let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
         assert!(matches!(envelope, DaemonEnvelope::RecoveryNotice { .. }));
+
+        // Phase 69 — DesktopNotification demux from a DaemonMessage frame.
+        let desktop = DaemonMessage::DesktopNotification {
+            title: "hello".into(),
+            body: "world".into(),
+        };
+        let frame = encode_frame(&desktop).expect("encode desktop");
+        let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        match envelope {
+            DaemonEnvelope::DesktopNotification { title, body } => {
+                assert_eq!(title, "hello");
+                assert_eq!(body, "world");
+            }
+            other => panic!("expected DesktopNotification, got {other:?}"),
+        }
     }
 
     // ---- StreamEventPayload covers all variants ----

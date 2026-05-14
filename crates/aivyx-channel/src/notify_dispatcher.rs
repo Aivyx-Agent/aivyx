@@ -288,6 +288,18 @@ pub fn build_notify_dispatcher(
                     to.clone(),
                 ))
             }
+            // Phase 69 — Task 6 will replace this stub with the
+            // WebUiBroadcaster-backed `NotifyWebUiBackend`. Task 3
+            // adds only the variant + IPC envelope; the broadcaster
+            // ships in Task 4, dispatcher routing in Task 6.
+            NotifyTargetKind::WebUi => {
+                return Err(format!(
+                    "notify_target `{}` (kind = web-ui) not yet routable; \
+                     Phase 69 Task 6 wires the WebUiBroadcaster into the \
+                     dispatcher",
+                    target.name,
+                ));
+            }
         };
         d.register(&target.name, backend);
     }
