@@ -170,6 +170,16 @@ pub struct DaemonConfig {
     /// can push frames into it). `None` when the Web UI is
     /// disabled and no `kind = "web-ui"` targets exist.
     pub web_ui_broadcaster: Option<Arc<crate::notify_webui::WebUiBroadcaster>>,
+    /// Phase 70 — persistent Persona proposal chain
+    /// (KeyDomain::PersonaProposals). Pending proposals from
+    /// the reflection auto-loop append rows here; operators
+    /// resolve them via `ResolvePersonaProposal`, which
+    /// transitions the status to Approved / Rejected and
+    /// (on approve) appends a PersonaDelta to `persona_log`.
+    /// `None` is the test-fixture path — proposal queries
+    /// return empty / not-wired responses.
+    pub persona_proposal_log:
+        Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
 }
 
 /// Run the daemon server.
@@ -204,6 +214,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_log,
         shared_persona,
         web_ui_broadcaster,
+        persona_proposal_log,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -388,6 +399,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             profile: Arc::clone(&profile),
             persona_log: persona_log.clone(),
             shared_persona: shared_persona.clone(),
+            persona_proposal_log: persona_proposal_log.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -430,6 +442,12 @@ struct ConnectionContext {
     /// Phase 60 — shared effective Persona for inspection +
     /// recompute after revert append.
     shared_persona: crate::persona::SharedEffectivePersona,
+    /// Phase 70 — persistent Persona proposal log for
+    /// `ListPersonaProposals` / `GetPersonaProposal` queries +
+    /// `ResolvePersonaProposal` status transitions. `None` in
+    /// test fixtures.
+    persona_proposal_log:
+        Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -445,6 +463,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         profile,
         persona_log,
         shared_persona,
+        persona_proposal_log,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -772,6 +791,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &profile,
                                 persona_log.as_deref(),
                                 &shared_persona,
+                                persona_proposal_log.as_deref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -813,25 +833,42 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::ResolvePersonaProposal { id, .. } => {
-                            // Phase 70 — daemon-side resolution handler
-                            // wiring lands in the follow-up commit
-                            // (Task 5b plumbs the proposal log into
-                            // the daemon's runtime state). For now we
-                            // surface a clear "not yet wired" error so
-                            // a Web UI / CLI that calls this end gets
-                            // a deterministic message rather than a
-                            // protocol error.
-                            let resp = DaemonMessage::PersonaProposalResolved {
-                                id,
-                                ok: false,
-                                success: None,
-                                error: Some(
-                                    "ResolvePersonaProposal handler is pending \
-                                     Phase 70 Task 5b — proposal log not yet \
-                                     plumbed into the daemon's runtime state"
-                                        .into(),
-                                ),
+                        FrontendMessage::ResolvePersonaProposal {
+                            id,
+                            proposal_id,
+                            resolution,
+                        } => {
+                            // Phase 70 — operator-initiated proposal
+                            // resolution. Approve / ApproveWithEdit
+                            // apply a PersonaDelta to the persona log
+                            // first, then record the Approved entry on
+                            // the proposal chain bound to the delta's
+                            // seq. Reject just records the Rejected
+                            // entry. The shared persona snapshot is
+                            // recomputed on approve so the next turn
+                            // sees the new state.
+                            let resp = match resolve_persona_proposal(
+                                persona_proposal_log.as_deref(),
+                                persona_log.as_deref(),
+                                &shared_persona,
+                                &id,
+                                proposal_id,
+                                resolution,
+                            )
+                            .await
+                            {
+                                Ok(success) => DaemonMessage::PersonaProposalResolved {
+                                    id,
+                                    ok: true,
+                                    success: Some(success),
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::PersonaProposalResolved {
+                                    id,
+                                    ok: false,
+                                    success: None,
+                                    error: Some(reason),
+                                },
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
@@ -962,6 +999,7 @@ async fn run_single_connection_daemon(
         shared_persona: crate::persona::shared_effective_persona(
             crate::persona::EffectivePersona::default(),
         ),
+        persona_proposal_log: None,
     })
     .await
 }
@@ -996,6 +1034,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
             crate::persona::EffectivePersona::default(),
         ),
         web_ui_broadcaster: None,
+        persona_proposal_log: None,
     }).await
 }
 
@@ -1141,6 +1180,11 @@ fn detect_crash_recovery(state_path: &Path) -> Option<DaemonState> {
 /// storage error are all reported as [`QueryResponsePayload::QueryError`]
 /// rather than propagated as a panic. The daemon must stay alive even
 /// if one connection's state interaction tripped earlier.
+// Eight parameters because the query dispatcher fans out across
+// every daemon-side substrate the read-only queries can touch.
+// Bundling them into a context struct is a future refactor that
+// touches every existing query test fixture; deferred.
+#[allow(clippy::too_many_arguments)]
 async fn handle_query(
     payload: QueryPayload,
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
@@ -1149,6 +1193,7 @@ async fn handle_query(
     profile: &aivyx_config::Profile,
     persona_log: Option<&crate::persona::PersistentPersonaLog>,
     shared_persona: &crate::persona::SharedEffectivePersona,
+    persona_proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1338,25 +1383,122 @@ async fn handle_query(
             };
             QueryResponsePayload::ExportPersonaChain { deltas, effective }
         }
-        // Phase 70 — Persona proposal queries. Daemon-side
-        // handler wiring (proposal log → response) lands in
-        // Task 5b/Task 6 follow-up; the IPC envelope is in
-        // place so the Web UI / CLI can call this end and get
-        // a clear "not yet wired" message until then.
-        QueryPayload::ListPersonaProposals { .. } => QueryResponsePayload::QueryError {
-            code: "not_yet_wired".into(),
-            message: "ListPersonaProposals handler is pending Phase 70 \
-                      Task 5b — proposal log not yet plumbed into the \
-                      daemon's query path"
-                .into(),
-        },
-        QueryPayload::GetPersonaProposal { .. } => QueryResponsePayload::QueryError {
-            code: "not_yet_wired".into(),
-            message: "GetPersonaProposal handler is pending Phase 70 \
-                      Task 5b — proposal log not yet plumbed into the \
-                      daemon's query path"
-                .into(),
-        },
+        // Phase 70 — Persona proposal queries.
+        QueryPayload::ListPersonaProposals {
+            status_filter,
+            limit,
+        } => {
+            let Some(log) = persona_proposal_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_persona_proposal_log".into(),
+                    message: "daemon has no persona proposal log configured".into(),
+                };
+            };
+            let filter = parse_proposal_status_filter(&status_filter);
+            let all = log.list(filter);
+            let total_len = all.len() as u64;
+            let capped = (limit as usize).min(all.len());
+            let proposals: Vec<crate::daemon_ipc::PersonaProposalSummary> = all
+                .into_iter()
+                .take(capped)
+                .map(proposal_summary_from_view)
+                .collect();
+            QueryResponsePayload::ListPersonaProposals {
+                proposals,
+                total_len,
+            }
+        }
+        QueryPayload::GetPersonaProposal { proposal_id } => {
+            let Some(log) = persona_proposal_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_persona_proposal_log".into(),
+                    message: "daemon has no persona proposal log configured".into(),
+                };
+            };
+            let proposal = log.get(&proposal_id).map(proposal_summary_from_view);
+            QueryResponsePayload::GetPersonaProposal { proposal }
+        }
+    }
+}
+
+/// Phase 70 — parse the wire-format status filter string into
+/// the typed enum. Unknown values fall through to `Pending` per
+/// the IPC contract documented at `QueryPayload::ListPersonaProposals`.
+fn parse_proposal_status_filter(
+    s: &str,
+) -> crate::persona_proposal::ProposalStatusFilter {
+    use crate::persona_proposal::ProposalStatusFilter;
+    match s.to_ascii_lowercase().as_str() {
+        "all" => ProposalStatusFilter::All,
+        "approved" => ProposalStatusFilter::Approved,
+        "rejected" => ProposalStatusFilter::Rejected,
+        "superseded" => ProposalStatusFilter::Superseded,
+        _ => ProposalStatusFilter::Pending,
+    }
+}
+
+/// Phase 70 — convert an in-memory `PersonaProposal` view into
+/// the wire `PersonaProposalSummary` shape.
+fn proposal_summary_from_view(
+    view: crate::persona_proposal::PersonaProposal,
+) -> crate::daemon_ipc::PersonaProposalSummary {
+    use crate::persona_proposal::ProposalStatus;
+    let category = format!("{:?}", view.proposed_op.category);
+    let proposed_reason = view.proposed_op.reason.clone();
+    let proposed_op = serde_json::to_value(&view.proposed_op.op)
+        .unwrap_or(serde_json::Value::Null);
+    let (status, applied_op, applied_seq, rejected_reason, resolved_at_unix_ms) =
+        match view.status {
+            ProposalStatus::Pending => {
+                ("Pending".to_string(), None, None, None, None)
+            }
+            ProposalStatus::Approved {
+                applied_op,
+                applied_seq,
+                resolved_at_unix_ms,
+            } => (
+                "Approved".to_string(),
+                Some(
+                    serde_json::to_value(&applied_op.op)
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+                Some(applied_seq),
+                None,
+                Some(resolved_at_unix_ms),
+            ),
+            ProposalStatus::Rejected {
+                reason,
+                resolved_at_unix_ms,
+            } => (
+                "Rejected".to_string(),
+                None,
+                None,
+                reason,
+                Some(resolved_at_unix_ms),
+            ),
+            ProposalStatus::Superseded {
+                by_proposal_id: _,
+                resolved_at_unix_ms,
+            } => (
+                "Superseded".to_string(),
+                None,
+                None,
+                None,
+                Some(resolved_at_unix_ms),
+            ),
+        };
+    crate::daemon_ipc::PersonaProposalSummary {
+        id: view.id,
+        proposed_at_unix_ms: view.proposed_at_unix_ms,
+        source_reflection_session_id: view.source_reflection_session_id,
+        status,
+        category,
+        proposed_op,
+        proposed_reason,
+        applied_op,
+        applied_seq,
+        rejected_reason,
+        resolved_at_unix_ms,
     }
 }
 
@@ -1593,6 +1735,96 @@ fn gate_state_label(state: mission::GateState) -> &'static str {
         mission::GateState::Pending => "Pending",
         mission::GateState::Approved => "Approved",
         mission::GateState::Rejected => "Rejected",
+    }
+}
+
+/// Phase 70 — daemon-side proposal resolution handler. On
+/// `Approve` / `ApproveWithEdit` it validates the applied op,
+/// appends a `PersonaDelta` to the persona chain, then appends
+/// an `Approved` entry to the proposal chain bound to the
+/// delta's seq, and recomputes the shared persona snapshot. On
+/// `Reject` it just appends a `Rejected` entry.
+async fn resolve_persona_proposal(
+    persona_proposal_log: Option<
+        &crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    _request_id: &str,
+    proposal_id: String,
+    resolution: crate::daemon_ipc::PersonaProposalResolution,
+) -> Result<crate::daemon_ipc::PersonaProposalResolveSuccess, String> {
+    let proposal_log = persona_proposal_log
+        .ok_or_else(|| "daemon has no persona proposal log configured".to_string())?;
+    let view = proposal_log
+        .get(&proposal_id)
+        .ok_or_else(|| format!("unknown proposal id `{proposal_id}`"))?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    match resolution {
+        crate::daemon_ipc::PersonaProposalResolution::Reject { reason } => {
+            proposal_log
+                .append_rejected(proposal_id, now_ms, reason)
+                .await
+                .map_err(|e| format!("proposal chain append failed: {e}"))?;
+            Ok(crate::daemon_ipc::PersonaProposalResolveSuccess {
+                proposal_status: "Rejected".into(),
+                applied_seq: None,
+            })
+        }
+        crate::daemon_ipc::PersonaProposalResolution::Approve
+        | crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit { .. } => {
+            // Resolve the op the operator actually wants applied.
+            let applied_op = match &resolution {
+                crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit {
+                    edited_op,
+                } => edited_op.clone(),
+                _ => view.proposed_op.clone(),
+            };
+            applied_op
+                .validate()
+                .map_err(|reason| format!("edited op invalid: {reason}"))?;
+            // Append to the persona log first; if that fails the
+            // proposal stays Pending so the operator can retry.
+            let persona_log = persona_log
+                .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+            let delta_id = format!("pd-approved-{proposal_id}");
+            let delta = crate::persona::PersonaDelta {
+                delta_id,
+                proposed_at_unix_ms: view.proposed_at_unix_ms,
+                approved_at_unix_ms: now_ms,
+                proposal_id: proposal_id.clone(),
+                category: applied_op.category,
+                op: applied_op.op.clone(),
+            };
+            let applied_seq = persona_log
+                .append(delta)
+                .await
+                .map_err(|e| format!("persona chain append failed: {e}"))?;
+            // Record the Approved transition on the proposal chain.
+            proposal_log
+                .append_approved(proposal_id, now_ms, applied_op, applied_seq)
+                .await
+                .map_err(|e| format!("proposal chain append failed: {e}"))?;
+            // Recompute shared persona state so the next turn sees
+            // the new effective persona.
+            let entries_after = persona_log.entries();
+            if !crate::persona::recompute_shared_from_entries(
+                shared_persona,
+                &entries_after,
+            ) {
+                return Err(
+                    "shared persona state lock poisoned during recompute".into(),
+                );
+            }
+            Ok(crate::daemon_ipc::PersonaProposalResolveSuccess {
+                proposal_status: "Approved".into(),
+                applied_seq: Some(applied_seq),
+            })
+        }
     }
 }
 
@@ -1884,5 +2116,225 @@ mod tests {
             vec!["never auto-commit".to_string()],
         );
         assert!(summary.injection_enabled);
+    }
+
+    // ---- Phase 70 — resolve_persona_proposal end-to-end -----
+
+    /// Helper: open a fresh persona + proposal log pair backed by
+    /// real redb storage so the resolve handler's chain
+    /// interactions are exercised against the actual substrate.
+    async fn open_phase_70_test_logs() -> (
+        Arc<crate::persona::PersistentPersonaLog>,
+        Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+        crate::persona::SharedEffectivePersona,
+    ) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = test_dir(&format!(
+            "phase-70-resolve-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([70u8; 32]),
+        )
+        .await
+        .expect("storage");
+        let persona_log = Arc::new(
+            crate::persona::PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                b"persona-key".to_vec(),
+            )
+            .await
+            .expect("persona log"),
+        );
+        let proposal_log = Arc::new(
+            crate::persona_proposal::PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"proposal-key".to_vec(),
+            )
+            .await
+            .expect("proposal log"),
+        );
+        let shared = crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        );
+        (persona_log, proposal_log, shared)
+    }
+
+    fn pending_op_fixture() -> crate::persona::ProposedPersonaDelta {
+        crate::persona::ProposedPersonaDelta {
+            category: crate::persona::PersonaDeltaCategory::BehavioralPreferences,
+            op: crate::persona::PersonaDeltaOp::AppendList {
+                value: "prefer terse".into(),
+            },
+            reason: Some("operator confirmed".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_proposal_approve_appends_to_persona_log_and_records_approved() {
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        proposal_log
+            .append_pending(
+                "pp-1".into(),
+                1_000,
+                "ses-1".into(),
+                pending_op_fixture(),
+            )
+            .await
+            .unwrap();
+        let success = resolve_persona_proposal(
+            Some(proposal_log.as_ref()),
+            Some(persona_log.as_ref()),
+            &shared,
+            "req-1",
+            "pp-1".into(),
+            crate::daemon_ipc::PersonaProposalResolution::Approve,
+        )
+        .await
+        .expect("approve ok");
+        assert_eq!(success.proposal_status, "Approved");
+        assert_eq!(success.applied_seq, Some(0));
+        // Persona chain has the applied delta.
+        assert_eq!(persona_log.len(), 1);
+        // Proposal chain now reports Approved status.
+        let view = proposal_log.get("pp-1").expect("present");
+        assert!(matches!(
+            view.status,
+            crate::persona_proposal::ProposalStatus::Approved { applied_seq: 0, .. }
+        ));
+        // Shared persona state reflects the approved op.
+        let snap = shared.read().unwrap();
+        assert!(snap
+            .behavioral_preferences
+            .contains(&"prefer terse".to_string()));
+    }
+
+    #[tokio::test]
+    async fn resolve_proposal_approve_with_edit_records_edited_op() {
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        proposal_log
+            .append_pending(
+                "pp-1".into(),
+                1_000,
+                "ses-1".into(),
+                pending_op_fixture(),
+            )
+            .await
+            .unwrap();
+        let edited = crate::persona::ProposedPersonaDelta {
+            category: crate::persona::PersonaDeltaCategory::BehavioralPreferences,
+            op: crate::persona::PersonaDeltaOp::AppendList {
+                value: "operator-edited preference".into(),
+            },
+            reason: None,
+        };
+        resolve_persona_proposal(
+            Some(proposal_log.as_ref()),
+            Some(persona_log.as_ref()),
+            &shared,
+            "req-2",
+            "pp-1".into(),
+            crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit {
+                edited_op: edited.clone(),
+            },
+        )
+        .await
+        .expect("approve-with-edit ok");
+        // Shared persona reflects the EDITED op, not the original.
+        let snap = shared.read().unwrap();
+        assert!(snap
+            .behavioral_preferences
+            .contains(&"operator-edited preference".to_string()));
+        assert!(!snap
+            .behavioral_preferences
+            .contains(&"prefer terse".to_string()));
+    }
+
+    #[tokio::test]
+    async fn resolve_proposal_reject_records_rejected_no_persona_append() {
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        proposal_log
+            .append_pending(
+                "pp-1".into(),
+                1_000,
+                "ses-1".into(),
+                pending_op_fixture(),
+            )
+            .await
+            .unwrap();
+        let success = resolve_persona_proposal(
+            Some(proposal_log.as_ref()),
+            Some(persona_log.as_ref()),
+            &shared,
+            "req-3",
+            "pp-1".into(),
+            crate::daemon_ipc::PersonaProposalResolution::Reject {
+                reason: Some("not now".into()),
+            },
+        )
+        .await
+        .expect("reject ok");
+        assert_eq!(success.proposal_status, "Rejected");
+        assert_eq!(success.applied_seq, None);
+        // Persona chain UNCHANGED.
+        assert!(persona_log.is_empty());
+        let view = proposal_log.get("pp-1").unwrap();
+        match view.status {
+            crate::persona_proposal::ProposalStatus::Rejected { reason, .. } => {
+                assert_eq!(reason.as_deref(), Some("not now"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_proposal_unknown_id_returns_error() {
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        let err = resolve_persona_proposal(
+            Some(proposal_log.as_ref()),
+            Some(persona_log.as_ref()),
+            &shared,
+            "req-4",
+            "pp-MISSING".into(),
+            crate::daemon_ipc::PersonaProposalResolution::Approve,
+        )
+        .await
+        .expect_err("must error");
+        assert!(err.contains("pp-MISSING"), "{err}");
+    }
+
+    #[test]
+    fn parse_proposal_status_filter_handles_known_and_unknown() {
+        use crate::persona_proposal::ProposalStatusFilter;
+        assert!(matches!(
+            parse_proposal_status_filter("all"),
+            ProposalStatusFilter::All
+        ));
+        assert!(matches!(
+            parse_proposal_status_filter("Approved"),
+            ProposalStatusFilter::Approved
+        ));
+        assert!(matches!(
+            parse_proposal_status_filter("REJECTED"),
+            ProposalStatusFilter::Rejected
+        ));
+        assert!(matches!(
+            parse_proposal_status_filter("superseded"),
+            ProposalStatusFilter::Superseded
+        ));
+        // Unknown / empty → Pending per IPC contract.
+        assert!(matches!(
+            parse_proposal_status_filter("xyz"),
+            ProposalStatusFilter::Pending
+        ));
+        assert!(matches!(
+            parse_proposal_status_filter(""),
+            ProposalStatusFilter::Pending
+        ));
     }
 }

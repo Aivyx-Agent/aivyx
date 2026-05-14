@@ -811,6 +811,7 @@ async fn two_concurrent_connections() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1093,6 +1094,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1173,6 +1175,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1577,6 +1580,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1834,6 +1838,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
         })
         .await
         .expect("daemon must complete");
@@ -2203,6 +2208,7 @@ async fn mission_queries_round_trip_over_ipc() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2476,6 +2482,7 @@ async fn audit_queries_round_trip_over_ipc() {
             persona_log: None,
             shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
             web_ui_broadcaster: None,
+            persona_proposal_log: None,
         })
         .await
         .expect("daemon must complete successfully");

@@ -1875,8 +1875,6 @@ async fn run_async(
             ));
         }
     };
-    // Bound for the Task 5 scheduler + Task 6 IPC wiring to come.
-    let _ = &persona_proposal_log;
     let shared_persona = aivyx_channel::persona::shared_effective_persona(
         aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
@@ -3099,6 +3097,12 @@ async fn run_async(
             // and the WS handler subscribes one receiver per
             // browser connection.
             web_ui_broadcaster: web_ui_broadcaster.clone(),
+            // Phase 70 — proposal chain opened at startup (see
+            // `persona_proposal_log` binding above). Threaded
+            // into `DaemonConfig` so the IPC query / resolve
+            // handlers in `handle_query` and the resolve arm
+            // can read the chain and append status transitions.
+            persona_proposal_log: Some(Arc::clone(&persona_proposal_log)),
         })
             .await;
 
