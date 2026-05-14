@@ -12,6 +12,9 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
+use aivyx_audit::{
+    AuditEvent, AuditWriter, AutoNotifyOutcomeSummary, PersistentAuditLog, TriggerKindSummary,
+};
 use aivyx_core::{Agent, Message, SessionId, TurnOutcome};
 
 use aivyx_storage::DomainHandle;
@@ -19,7 +22,7 @@ use aivyx_storage::DomainHandle;
 use crate::daemon_ipc::FrontendType;
 use crate::daemon_server::ChannelFactory;
 use crate::mission;
-use crate::notify_dispatcher::NotifyDispatcher;
+use crate::notify_dispatcher::{NotifyDispatcher, NotifyError};
 
 // ---------------------------------------------------------------------------
 // Trigger source tag — carried through dispatch for logging / audit.
@@ -45,6 +48,40 @@ impl std::fmt::Display for TriggerSource {
     }
 }
 
+impl From<TriggerSource> for TriggerKindSummary {
+    /// Phase 67 — runtime trigger kind → audit summary kind.
+    /// One-way conversion used by the audit-emission path in
+    /// [`TriggerDispatch::fire`].
+    fn from(src: TriggerSource) -> Self {
+        match src {
+            TriggerSource::Cron => TriggerKindSummary::Cron,
+            TriggerSource::Webhook => TriggerKindSummary::Webhook,
+            TriggerSource::FileWatch => TriggerKindSummary::FileWatch,
+        }
+    }
+}
+
+/// Phase 67 — runtime [`NotifyError`] → audit [`AutoNotifyOutcomeSummary::Failed`].
+/// Same `error_kind` labels the `notify.send` tool uses (Phase
+/// 62 Q4(a)), so forensic searches can grep across both
+/// agent-initiated and daemon-initiated notify failures
+/// uniformly.
+pub fn outcome_from_notify_error(e: &NotifyError) -> AutoNotifyOutcomeSummary {
+    let (error_kind, error_message) = match e {
+        NotifyError::Transport(s) => ("transport", s.clone()),
+        NotifyError::Auth(s) => ("auth", s.clone()),
+        NotifyError::Rejected(status) => ("rejected", format!("HTTP {status}")),
+        NotifyError::Timeout => ("timeout", "operation timed out".to_string()),
+        NotifyError::UnknownTarget(name) => {
+            ("unknown_target", format!("no notify_target named `{name}`"))
+        }
+    };
+    AutoNotifyOutcomeSummary::Failed {
+        error_kind: error_kind.to_string(),
+        error_message,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared turn-dispatch context.
 // ---------------------------------------------------------------------------
@@ -64,6 +101,13 @@ pub struct TriggerDispatch {
     /// When set, a trigger with `notify_target = Some(name)` fires
     /// the named target's backend after the turn completes.
     notify_dispatcher: Option<Arc<NotifyDispatcher>>,
+    /// Phase 67 — optional audit log handle. When set, every
+    /// auto-notify fire (delivered, skipped-empty, or failed)
+    /// emits an `AuditEvent::AutoNotifyDispatched` entry. When
+    /// `None`, the auto-notify path runs as before (eprintln
+    /// only) — same shape as the existing audit hook
+    /// integration in tool calls.
+    audit_log: Option<Arc<PersistentAuditLog>>,
 }
 
 impl TriggerDispatch {
@@ -74,6 +118,7 @@ impl TriggerDispatch {
             turn_lock: Arc::new(Mutex::new(())),
             mission_store: None,
             notify_dispatcher: None,
+            audit_log: None,
         }
     }
 
@@ -89,6 +134,16 @@ impl TriggerDispatch {
     /// turn's final response after completion.
     pub fn with_notify_dispatcher(mut self, dispatcher: Arc<NotifyDispatcher>) -> Self {
         self.notify_dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Phase 67 — attach a persistent audit log so trigger-fired
+    /// auto-notify events land in the chain alongside
+    /// `TurnStarted` / `TurnEnded`. Optional: when the daemon's
+    /// startup didn't open an audit log (e.g. PoC harness path),
+    /// auto-notify falls back to eprintln-only behavior.
+    pub fn with_audit_log(mut self, audit_log: Arc<PersistentAuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
         self
     }
 
@@ -121,7 +176,11 @@ impl TriggerDispatch {
         );
 
         let channel = (self.channel_factory)(FrontendType::Local);
-        let msg = Message::text(SessionId::new(), prompt.to_owned());
+        // Phase 67 — keep the session_id around so the audit
+        // event can carry it; the same id is recorded on the
+        // `TurnStarted` audit entry emitted from agent.turn().
+        let session_id = SessionId::new();
+        let msg = Message::text(session_id, prompt.to_owned());
 
         // Create mission if requested.
         let mission_id = if wrap_mission {
@@ -222,17 +281,23 @@ impl TriggerDispatch {
         // If the trigger declared a notify_target AND a dispatcher
         // is configured, push the turn's outcome to the named
         // target. Failure surfaces as eprintln; one attempt, no
-        // retry (Phase 63 sign-off). Audit-chain integration is
-        // deferred — see Phase 63 deferrals.
+        // retry (Phase 63 sign-off).
+        //
+        // Phase 67 closes the deferral: every fire (delivered,
+        // skipped-empty, or failed) emits an
+        // `AuditEvent::AutoNotifyDispatched` entry when an
+        // audit log is configured. eprintln remains for live
+        // debug visibility.
         if let (Some(target), Some(dispatcher)) = (notify_target, &self.notify_dispatcher) {
             let body = render_notify_body(&outcome);
             let subject = format!("{source}: {trigger_id}");
-            if body.is_empty() {
+            let audit_outcome = if body.is_empty() {
                 // Q2(a) — skip empty responses.
                 eprintln!(
                     "aivyx trigger: auto-notify skipped (empty response) for \
                      {source} {trigger_id:?} → target `{target}`",
                 );
+                AutoNotifyOutcomeSummary::SkippedEmptyResponse
             } else {
                 match dispatcher.dispatch(target, &body, Some(&subject)).await {
                     Ok(()) => {
@@ -240,18 +305,71 @@ impl TriggerDispatch {
                             "aivyx trigger: auto-notify dispatched for \
                              {source} {trigger_id:?} → target `{target}`",
                         );
+                        AutoNotifyOutcomeSummary::Delivered
                     }
                     Err(e) => {
                         eprintln!(
                             "aivyx trigger: auto-notify FAILED for \
                              {source} {trigger_id:?} → target `{target}`: {e}",
                         );
+                        outcome_from_notify_error(&e)
                     }
                 }
-            }
+            };
+            // Phase 67 — emit audit entry. Log + continue on
+            // failure per Q3(a) at sign-off.
+            self.emit_auto_notify_audit(
+                session_id,
+                source,
+                trigger_id,
+                target,
+                audit_outcome,
+            )
+            .await;
         }
 
         elapsed
+    }
+
+    /// Phase 67 — emit an `AuditEvent::AutoNotifyDispatched`
+    /// entry for the fire. When `audit_log` is `None` this is a
+    /// no-op (matching the PoC harness path). Append failures
+    /// are eprintln-logged and silently swallowed per Q3(a) —
+    /// the notification's already happened or didn't; failing
+    /// the trigger because the audit chain couldn't record it
+    /// would conflate two concerns.
+    async fn emit_auto_notify_audit(
+        &self,
+        session_id: SessionId,
+        trigger_source: TriggerSource,
+        trigger_id: &str,
+        target_name: &str,
+        outcome: AutoNotifyOutcomeSummary,
+    ) {
+        let Some(log) = &self.audit_log else {
+            return;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let event = AuditEvent::AutoNotifyDispatched {
+            session_id,
+            trigger_kind: TriggerKindSummary::from(trigger_source),
+            trigger_id: trigger_id.to_string(),
+            target_name: target_name.to_string(),
+            outcome,
+            dispatched_at_unix_ms: now_ms,
+        };
+        // PersistentAuditLog's AuditWriter::append is sync —
+        // the on-disk write is fire-and-forget via the
+        // persistent log's internal drain task.
+        if let Err(e) = log.append(event) {
+            eprintln!(
+                "aivyx trigger: audit log append failed for AutoNotifyDispatched \
+                 ({trigger_source} {trigger_id:?} → {target_name}): {e}"
+            );
+        }
     }
 }
 

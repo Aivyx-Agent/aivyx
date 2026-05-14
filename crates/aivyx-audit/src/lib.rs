@@ -121,6 +121,84 @@ pub enum AuditEvent {
         /// by convention).
         query_or_key: String,
     },
+
+    /// Phase 67 — daemon-initiated auto-notify on a trigger fire.
+    /// Distinct from `ToolCall` (which records agent-initiated
+    /// `notify.send` calls) so forensic searches can tell apart
+    /// "the agent decided to notify" from "the daemon's
+    /// trigger-config sugar decided to notify."
+    ///
+    /// Correlation: `session_id` is recorded on the corresponding
+    /// `TurnStarted` audit event from the same trigger fire — walk
+    /// backward through the chain to find the matching turn.
+    /// `turn_id` correlation is a Phase 67 deferral
+    /// (`TurnOutcome` doesn't carry `turn_id` today; lifting it
+    /// touches 120 match sites).
+    AutoNotifyDispatched {
+        /// Session id minted by `TriggerDispatch::fire` for this
+        /// trigger fire. Matches the `TurnStarted` /
+        /// `TurnEnded` events from the same fire.
+        session_id: SessionId,
+        /// Which trigger kind fired (cron / webhook / file-watch).
+        trigger_kind: TriggerKindSummary,
+        /// Operator-declared id of the trigger that fired (e.g.
+        /// `"morning-summary"`).
+        trigger_id: String,
+        /// Target name from `[[notify_target]]` that the auto-
+        /// notify dispatched (or attempted to dispatch) to.
+        target_name: String,
+        /// What happened. Three forms: delivered, skipped because
+        /// the agent's turn produced an empty response, failed
+        /// during dispatch.
+        outcome: AutoNotifyOutcomeSummary,
+        /// Wall-clock timestamp of the dispatch attempt, ms since
+        /// the Unix epoch. The chain's per-entry `appended_at` is
+        /// the canonical audit timestamp; this is the moment the
+        /// dispatcher was called, included for operator readability.
+        dispatched_at_unix_ms: u64,
+    },
+}
+
+/// Phase 67 — auto-notify outcome discriminator.
+///
+/// Mirrors `aivyx_channel::trigger`'s three post-turn dispatch
+/// paths: dispatch succeeded, dispatch deliberately skipped
+/// because the turn produced an empty body, dispatch failed.
+/// Carried as the `outcome` field of [`AuditEvent::AutoNotifyDispatched`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum AutoNotifyOutcomeSummary {
+    /// The dispatcher backend returned `Ok(())`. The notification
+    /// has been delivered to the target (or at least handed off
+    /// to it — for webhooks, "delivered" means the endpoint
+    /// returned 2xx).
+    Delivered,
+    /// The turn outcome's body was empty so the dispatcher was
+    /// deliberately not called (Phase 63 Q2(a) at sign-off).
+    /// Recording this in the chain means operators can answer
+    /// "why didn't my notification arrive?" definitively.
+    SkippedEmptyResponse,
+    /// The dispatcher backend returned an error. `error_kind`
+    /// mirrors the `notify.send` tool's classification:
+    /// `"transport"`, `"auth"`, `"rejected"`, `"timeout"`,
+    /// `"unknown_target"`.
+    Failed {
+        error_kind: String,
+        error_message: String,
+    },
+}
+
+/// Phase 67 — trigger kind label for the audit chain. Mirrors
+/// `aivyx_channel::trigger::TriggerSource`; duplicated in this
+/// crate to avoid a dep edge from `aivyx-audit` to
+/// `aivyx-channel` (the audit chain shape is independent of the
+/// channel adapter substrate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TriggerKindSummary {
+    Cron,
+    Webhook,
+    FileWatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -937,6 +1015,79 @@ mod tests {
             let back: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
             assert_eq!(ev, back);
         }
+    }
+
+    // ---- Phase 67 — AutoNotifyDispatched variant ----
+
+    #[test]
+    fn auto_notify_dispatched_round_trips_through_canonical_json() {
+        let cases = vec![
+            AuditEvent::AutoNotifyDispatched {
+                session_id: SessionId::new(),
+                trigger_kind: TriggerKindSummary::Cron,
+                trigger_id: "morning-briefing".into(),
+                target_name: "phone".into(),
+                outcome: AutoNotifyOutcomeSummary::Delivered,
+                dispatched_at_unix_ms: 1_715_000_000_000,
+            },
+            AuditEvent::AutoNotifyDispatched {
+                session_id: SessionId::new(),
+                trigger_kind: TriggerKindSummary::Webhook,
+                trigger_id: "ci-events".into(),
+                target_name: "ops-alerts".into(),
+                outcome: AutoNotifyOutcomeSummary::SkippedEmptyResponse,
+                dispatched_at_unix_ms: 1_715_000_000_001,
+            },
+            AuditEvent::AutoNotifyDispatched {
+                session_id: SessionId::new(),
+                trigger_kind: TriggerKindSummary::FileWatch,
+                trigger_id: "notes-dir".into(),
+                target_name: "phone".into(),
+                outcome: AutoNotifyOutcomeSummary::Failed {
+                    error_kind: "rejected".into(),
+                    error_message: "HTTP 429".into(),
+                },
+                dispatched_at_unix_ms: 1_715_000_000_002,
+            },
+        ];
+
+        for ev in cases {
+            let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
+            let back: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+            assert_eq!(ev, back);
+        }
+    }
+
+    #[test]
+    fn auto_notify_outcome_summary_serializes_with_kind_tag() {
+        // Sanity check: the #[serde(tag = "kind")] makes the
+        // wire shape `{"kind": "Delivered"}` etc., which the
+        // existing Web UI chain reader handles cleanly.
+        let delivered = AutoNotifyOutcomeSummary::Delivered;
+        let json = serde_json::to_value(&delivered).unwrap();
+        assert_eq!(json["kind"], "Delivered");
+
+        let failed = AutoNotifyOutcomeSummary::Failed {
+            error_kind: "auth".into(),
+            error_message: "HTTP 401".into(),
+        };
+        let json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json["kind"], "Failed");
+        assert_eq!(json["error_kind"], "auth");
+        assert_eq!(json["error_message"], "HTTP 401");
+    }
+
+    #[test]
+    fn trigger_kind_summary_serializes_with_kind_tag() {
+        let cron = TriggerKindSummary::Cron;
+        let json = serde_json::to_value(cron).unwrap();
+        assert_eq!(json["kind"], "Cron");
+
+        let webhook: TriggerKindSummary = serde_json::from_value(
+            serde_json::json!({"kind": "Webhook"}),
+        )
+        .expect("Webhook variant parses");
+        assert_eq!(webhook, TriggerKindSummary::Webhook);
     }
 
     // ---- NullAuditLog ----

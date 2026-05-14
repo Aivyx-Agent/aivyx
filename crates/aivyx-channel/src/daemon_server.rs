@@ -243,6 +243,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     if let Some(ref nd) = notify_dispatcher {
         trigger_dispatch = trigger_dispatch.with_notify_dispatcher(Arc::clone(nd));
     }
+    // Phase 67 — audit auto-notify dispatches into the same
+    // persistent chain that records TurnStarted/TurnEnded, so
+    // forensic walks see the complete trigger-fire-to-notify
+    // story for each schedule fire.
+    if let Some(ref al) = audit_log {
+        trigger_dispatch = trigger_dispatch.with_audit_log(Arc::clone(al));
+    }
 
     // Spawn the scheduler loop if a schedule store is provided.
     let _scheduler_handle = schedule_store.map(|store| {
@@ -1495,6 +1502,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::TurnStarted { .. } => "TurnStarted",
         aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
         aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
+        aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
     }
     .to_string();
 
