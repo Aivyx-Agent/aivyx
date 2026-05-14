@@ -360,9 +360,83 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 .audit-controls button:hover { background: var(--accent-dim); }
 .audit-controls button:disabled { opacity: 0.4; cursor: default; }
+
+/* Phase 69 — desktop notification permission banner + in-page toast stack. */
+#notif-permission-banner {
+  display: none;
+  padding: 8px 14px;
+  margin: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  align-items: center;
+  gap: 12px;
+}
+#notif-permission-banner.show { display: flex; }
+#notif-permission-banner button {
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+}
+#notif-permission-banner button.secondary {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+#toast-stack {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  min-width: 260px;
+  max-width: 380px;
+  padding: 10px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  animation: toast-in 0.18s ease-out;
+}
+.toast .toast-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--accent);
+}
+.toast .toast-body { white-space: pre-wrap; word-break: break-word; }
+.toast.dismissing { opacity: 0; transition: opacity 0.25s ease-out; }
+@keyframes toast-in {
+  from { transform: translateY(10px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
 </style>
 </head>
 <body>
+
+<!-- Phase 69 — desktop notification permission prompt (Q2). -->
+<div id="notif-permission-banner">
+  <span>Enable desktop notifications so the agent can ping you when it finishes work or a trigger fires.</span>
+  <button id="notif-enable-btn">Enable</button>
+  <button id="notif-dismiss-btn" class="secondary">Not now</button>
+</div>
+
+<!-- Phase 69 — in-page toast stack (Q2: both browser notification AND visible banner). -->
+<div id="toast-stack"></div>
 
 <div id="app">
   <div id="header">
@@ -561,6 +635,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         }
         break;
       }
+
+      case 'DesktopNotification':
+        // Phase 69 — Web UI desktop notification (Reach Phase 4).
+        // Per Q2 sign-off: show BOTH the browser OS-level notification
+        // (handles the unfocused-tab case) and the in-page toast banner
+        // (acknowledges receipt when the tab is focused).
+        showDesktopNotification(msg.title, msg.body);
+        showToast(msg.title, msg.body);
+        break;
     }
 
     messages.scrollTop = messages.scrollHeight;
@@ -1313,6 +1396,57 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
   sendBtn.addEventListener('click', sendMessage);
   cancelBtn.addEventListener('click', cancelTurn);
+
+  // Phase 69 — desktop notification helpers + permission prompt.
+
+  function showDesktopNotification(title, body) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      new Notification(title || 'Aivyx', { body: body || '' });
+    } catch (e) {
+      // Some browsers throw inside iframes / private modes; ignore.
+    }
+  }
+
+  function showToast(title, body) {
+    const stack = document.getElementById('toast-stack');
+    if (!stack) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    const t = document.createElement('div');
+    t.className = 'toast-title';
+    t.textContent = title || 'Aivyx';
+    const b = document.createElement('div');
+    b.className = 'toast-body';
+    b.textContent = body || '';
+    el.appendChild(t);
+    el.appendChild(b);
+    stack.appendChild(el);
+    setTimeout(function() {
+      el.classList.add('dismissing');
+      setTimeout(function() { el.remove(); }, 260);
+    }, 6000);
+  }
+
+  function initNotificationPermissionPrompt() {
+    const banner = document.getElementById('notif-permission-banner');
+    const enableBtn = document.getElementById('notif-enable-btn');
+    const dismissBtn = document.getElementById('notif-dismiss-btn');
+    if (!banner || !enableBtn || !dismissBtn) return;
+    if (!('Notification' in window)) return; // unsupported
+    if (Notification.permission !== 'default') return; // already granted or denied
+    banner.classList.add('show');
+    enableBtn.addEventListener('click', function() {
+      Notification.requestPermission().then(function() {
+        banner.classList.remove('show');
+      });
+    });
+    dismissBtn.addEventListener('click', function() {
+      banner.classList.remove('show');
+    });
+  }
+  initNotificationPermissionPrompt();
 
   connect();
 })();

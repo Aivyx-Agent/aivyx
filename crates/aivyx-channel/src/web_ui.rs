@@ -552,4 +552,39 @@ mod tests {
         assert!(HTML.contains("'ListSessions'"));
         assert!(HTML.contains("'VerifyAuditChain'"));
     }
+
+    /// Phase 69 — the embedded HTML must wire the desktop
+    /// notification handler, the permission prompt banner, and
+    /// the in-page toast stack. Substring smoke tests guard
+    /// against accidental gutting of the Reach-Phase-4 surface.
+    #[test]
+    fn html_contains_phase_69_desktop_notification_wiring() {
+        // WS receive-side handler.
+        assert!(
+            HTML.contains("'DesktopNotification'"),
+            "must dispatch on DesktopNotification type"
+        );
+        assert!(
+            HTML.contains("showDesktopNotification"),
+            "must define the browser-Notification helper"
+        );
+        assert!(
+            HTML.contains("showToast"),
+            "must define the in-page toast helper"
+        );
+        // Permission prompt + banner controls.
+        assert!(
+            HTML.contains("notif-permission-banner"),
+            "must include the permission prompt banner element"
+        );
+        assert!(
+            HTML.contains("Notification.requestPermission"),
+            "must request browser notification permission"
+        );
+        // Toast stack container.
+        assert!(
+            HTML.contains("toast-stack"),
+            "must include the toast stack container"
+        );
+    }
 }
