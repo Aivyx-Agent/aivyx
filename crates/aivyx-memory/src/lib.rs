@@ -87,7 +87,8 @@ pub use crate::redb::RedbMemory;
 
 mod tools;
 pub use crate::tools::{
-    MemoryForgetTool, MemoryReadTool, MemoryWriteTool, DEFAULT_MAX_PER_TOPIC,
+    MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool,
+    DEFAULT_MAX_PER_TOPIC,
 };
 
 /// A single memory record.

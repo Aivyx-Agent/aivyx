@@ -984,6 +984,190 @@ impl Tool for MemoryForgetTool {
 }
 
 // ---------------------------------------------------------------------------
+// MemorySearchTool — Phase 74
+// ---------------------------------------------------------------------------
+
+/// Default cap on a `memory.search` call. Lower than
+/// `MemoryReadTool::DEFAULT_READ_LIMIT` because search results
+/// cross topic boundaries and the agent rarely needs more than a
+/// dozen hits to find what it was looking for.
+const DEFAULT_SEARCH_LIMIT: usize = 16;
+
+/// Hard ceiling on a `memory.search` call regardless of operator
+/// override. Matches `MAX_READ_LIMIT`.
+const MAX_SEARCH_LIMIT: usize = 64;
+
+/// `memory.search` — case-insensitive substring search across
+/// every topic + body in the substrate. Returns up to `limit`
+/// matching entries, newest first.
+///
+/// The scope required is the cross-topic wildcard
+/// `memory.read:topic:*:session:<session>` so the same opt-in
+/// gate that controls cross-topic `memory.read` also controls
+/// search — operators who don't grant the wildcard get no
+/// search capability.
+pub struct MemorySearchTool {
+    id: ToolId,
+    memory: Arc<dyn Memory>,
+    schema: Value,
+}
+
+impl std::fmt::Debug for MemorySearchTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemorySearchTool")
+            .field("id", &self.id)
+            .field("memory", &"Arc<dyn Memory>")
+            .finish()
+    }
+}
+
+impl MemorySearchTool {
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        MemorySearchTool {
+            id: ToolId::new(),
+            memory,
+            schema: search_input_schema_value(),
+        }
+    }
+}
+
+fn search_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Substring to look for. Matches \
+                                case-insensitively in either the topic \
+                                name or the entry body. An empty string \
+                                returns the newest `limit` entries \
+                                across every topic."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_SEARCH_LIMIT,
+                "description": "Maximum number of matching entries to \
+                                return (default 16, max 64). Server-side \
+                                clamped to [1, 64]."
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": false,
+    })
+}
+
+#[async_trait]
+impl Tool for MemorySearchTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "memory.search"
+    }
+
+    fn description(&self) -> &str {
+        "Substring-search memory entries by topic + body. Returns \
+         matching entries newest-first. Cross-topic — requires the \
+         agent to hold `memory.read:topic:*:session:<session>` \
+         (same wildcard as cross-topic `memory.read`)."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        // Cross-topic discovery → wildcard scope. Operators who
+        // don't grant the wildcard get no search capability.
+        memory_scope("memory.read", "*", session_from_input(input))
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let query = match input.get("query").and_then(|v| v.as_str()) {
+            Some(q) => q.to_string(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(
+                    "memory.search: missing `query` field after scope \
+                     gate admitted the call"
+                        .into(),
+                ));
+            }
+        };
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_SEARCH_LIMIT)
+            .clamp(1, MAX_SEARCH_LIMIT);
+
+        let session = session_from_input(&input).map(str::to_string);
+        let role_prefix = role_prefix_from_input(&input).map(str::to_string);
+
+        // Audit records the wildcard scope + the query as the
+        // searchable key (analogous to the existing wildcard
+        // `memory.read` audit shape).
+        ctx.audit.on_event(AuditTag::MemoryAccess {
+            turn_id: ctx.turn_id,
+            operation: MemoryOperation::Read,
+            scope: memory_scope("memory.read", "*", session.as_deref()),
+            query_or_key: format!("search:{query}"),
+        });
+
+        // Build the session + role prefix to filter matches by.
+        // Pre-Phase-10 callers (no session, no role) see every
+        // entry; post-Phase-11 callers see only their own
+        // namespace.
+        let session_scan_prefix = match session.as_deref() {
+            Some(s) => format!("{SESSION_PREFIX}{s}\x01"),
+            None => String::new(),
+        };
+        let role_segment = role_prefix.as_deref().unwrap_or("");
+        let full_prefix = format!("{session_scan_prefix}{role_segment}");
+
+        // The substrate's `search` returns every match across the
+        // store. Filter to those whose physical topic starts with
+        // our session+role prefix, then strip the prefix to
+        // restore the logical topic the agent sees.
+        let hits = match self.memory.search(&query, MAX_SEARCH_LIMIT * 4).await {
+            Ok(v) => v,
+            Err(e) => return memory_err_to_failed(self.id, e),
+        };
+        let mut filtered: Vec<Value> = Vec::with_capacity(limit);
+        for entry in hits {
+            if !full_prefix.is_empty() && !entry.topic.starts_with(&full_prefix) {
+                continue;
+            }
+            let logical_topic = if !full_prefix.is_empty() {
+                entry.topic[full_prefix.len()..].to_string()
+            } else {
+                entry.topic.clone()
+            };
+            filtered.push(json!({
+                "topic": logical_topic,
+                "body": entry.body,
+                "seq": entry.seq,
+                "created_at_secs": entry.created_at_secs,
+            }));
+            if filtered.len() >= limit {
+                break;
+            }
+        }
+
+        let match_count = filtered.len();
+        ToolOutcome::Completed {
+            output: json!({
+                "query": query,
+                "matches": filtered,
+                "count": match_count,
+            }),
+            verified: Verification::Verified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 //
@@ -2506,5 +2690,114 @@ mod tests {
             "audit event should record the logical topic `notes`, \
              not the role-qualified `coder/notes`",
         );
+    }
+
+    // ---- Phase 74 — MemorySearchTool ---------------------------------
+
+    /// Tiny shared audit fixture for Phase 74 tool tests.
+    /// Existing tests in the file use inline `CaptureAudit`
+    /// structs; consolidating into one keeps the new section
+    /// terse.
+    #[derive(Default)]
+    struct RecordingAudit {
+        events: std::sync::Mutex<Vec<aivyx_core::AuditTag>>,
+    }
+
+    impl aivyx_core::AuditHook for RecordingAudit {
+        fn on_event(&self, tag: aivyx_core::AuditTag) {
+            self.events.lock().unwrap().push(tag);
+        }
+    }
+
+    #[test]
+    fn search_scope_is_wildcard_topic() {
+        let tool = MemorySearchTool::new(fresh_memory());
+        let scope = tool.required_scope(&json!({"query": "foo"}));
+        assert_eq!(scope.base(), "memory.read");
+        assert_eq!(scope.qualifier(), Some("topic:*"));
+    }
+
+    #[tokio::test]
+    async fn search_returns_substring_matches_newest_first() {
+        let memory = fresh_memory();
+        memory.put("notes", "Build the FOO subsystem").await.unwrap();
+        memory.put("docs", "Read about quux").await.unwrap();
+        memory.put("notes", "fixed foo bug today").await.unwrap();
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(json!({"query": "foo"}), &ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let matches = output.get("matches").unwrap().as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        // Newest first: seq=2 then seq=0.
+        assert_eq!(matches[0]["seq"].as_u64(), Some(2));
+        assert_eq!(matches[1]["seq"].as_u64(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn search_empty_query_returns_all_entries() {
+        let memory = fresh_memory();
+        memory.put("a", "x").await.unwrap();
+        memory.put("b", "y").await.unwrap();
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(json!({"query": ""}), &ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed");
+        };
+        let matches = output.get("matches").unwrap().as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit_cap() {
+        let memory = fresh_memory();
+        for i in 0..5 {
+            memory.put(&format!("topic-{i}"), "shared").await.unwrap();
+        }
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(json!({"query": "shared", "limit": 2}), &ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed");
+        };
+        let matches = output.get("matches").unwrap().as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(output.get("count").unwrap().as_u64(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn search_audits_with_wildcard_scope_and_query_key() {
+        let memory = fresh_memory();
+        memory.put("notes", "hello").await.unwrap();
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let _ = tool.execute(json!({"query": "hello"}), &ctx).await;
+        let events = audit.events.lock().unwrap();
+        let found = events.iter().any(|tag| {
+            matches!(
+                tag,
+                AuditTag::MemoryAccess { query_or_key, scope, .. }
+                if query_or_key == "search:hello"
+                    && scope.qualifier() == Some("topic:*")
+            )
+        });
+        assert!(found, "audit event must record wildcard scope + search key");
     }
 }

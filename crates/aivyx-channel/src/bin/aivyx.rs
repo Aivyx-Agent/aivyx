@@ -139,7 +139,7 @@ use aivyx_core::{
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
-    Memory, MemoryForgetTool, MemoryReadTool, MemoryWriteTool, RedbMemory,
+    Memory, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool, RedbMemory,
 };
 use aivyx_config::ProviderKind;
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
@@ -2301,6 +2301,7 @@ async fn run_async(
     let memory_write =
         MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
+    let memory_search = MemorySearchTool::new(Arc::clone(&memory));
     let memory_gc = aivyx_channel::memory_gc_tool::MemoryGcTool::new(Arc::clone(&memory));
 
     // ---- Tool list (with the Phase 11 Task 3 trust-tier gate) --------
@@ -2324,6 +2325,7 @@ async fn run_async(
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,
+        Arc::new(memory_search) as Arc<dyn Tool>,
         Arc::new(memory_gc) as Arc<dyn Tool>,
     ];
     let shell_exec_scope: Option<Scope> =
