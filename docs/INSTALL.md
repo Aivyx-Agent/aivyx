@@ -287,6 +287,68 @@ A condition-gated skip records
 in the audit chain so forensic searches can answer "why didn't
 this fire?" definitively.
 
+## Per-target retry, rate limit, history (Phase 73)
+
+Each `[[notify_target]]` block accepts four optional fields
+that tune backend behavior. Defaults preserve Phase 62
+behavior — operators who don't set them get one attempt per
+fire and no rate limiting.
+
+**Retry** — flat per-target fields:
+
+```toml
+[[notify_target]]
+name = "alerts"
+kind = "webhook"
+url = "https://ntfy.sh/aivyx-personal-2026"
+retry_count = 5             # default 0, cap 10
+retry_backoff_ms_start = 200  # default 500ms, min 100ms
+```
+
+Retries fire on `Transport`, `Timeout`, and `Rejected` with
+HTTP status ≥ 500 — the transient-failure class. `Auth`,
+`UnknownTarget`, and `Rejected` with status < 500 never
+retry; those need operator intervention or are programmer
+errors. Backoff is exponential: `backoff_ms_start * 2^attempt`.
+For `retry_count = 5` starting at 200ms the schedule is
+0ms (initial) + 200ms + 400ms + 800ms + 1.6s + 3.2s between
+attempts — total worst-case latency about 6.2 seconds per fire.
+
+**Rate limit** — in-memory sliding-window token bucket per
+target:
+
+```toml
+[[notify_target]]
+name = "phone"
+kind = "telegram"
+chat_id = "123456789"
+rate_limit_max = 20
+rate_limit_window_secs = 3600
+```
+
+Both fields must be set together or neither. Excess attempts
+skip the backend call and record
+`AutoNotifyOutcomeSummary::SkippedByRateLimit { limit,
+window_secs }` in the audit chain. State lives in memory for
+the daemon's lifetime — restart resets the bucket. v1 trades
+durability for simplicity; the audit chain remains the
+canonical record of what actually dispatched.
+
+**History review** — operators have two surfaces:
+
+```sh
+# Terminal — flat-text table with seq, timestamp, target,
+# outcome, trigger source/id, optional detail column.
+aivyx notify history                          # latest 100, all targets
+aivyx notify history --target phone           # filter by target
+aivyx notify history --target phone --limit 500  # max per page
+```
+
+Web UI: open `http://127.0.0.1:7843/` and click the
+**Notifications** tab. Per-target chips auto-populate from
+the loaded page; outcome badges colour-code delivered (teal)
+vs failed (orange) vs skipped (amber).
+
 ## Email notifications (Phase 68)
 
 Most operators don't run a Telegram bot but everyone has email.

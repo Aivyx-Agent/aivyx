@@ -579,6 +579,55 @@ parent_role = "researcher"
 # notify_when = "on_completed_non_empty"
 
 # ----------------------------------------------------------------
+# Phase 73 — per-target retry + rate-limit knobs
+# ----------------------------------------------------------------
+#
+# Each `[[notify_target]]` block accepts four optional fields that
+# tune backend behavior:
+#
+#   retry_count             u32, default 0, capped at 10
+#   retry_backoff_ms_start  u64, default 500ms, minimum 100ms
+#   rate_limit_max          u32 (must pair with window_secs)
+#   rate_limit_window_secs  u64 (must pair with max)
+#
+# Retry behavior: on Transport / Timeout / Rejected with HTTP
+# status ≥ 500, the daemon sleeps for `backoff * 2^attempt` and
+# retries up to `retry_count` additional times. Auth, UnknownTarget,
+# and Rejected with status < 500 are NOT retried — those need
+# operator intervention or are programmer errors. retry_count = 0
+# (the default) preserves Phase 62 behavior of one attempt per
+# fire.
+#
+# Rate limit: an in-memory sliding-window token bucket per target.
+# When set, the daemon admits at most `rate_limit_max` dispatch
+# attempts per `rate_limit_window_secs` for the target. Excess
+# attempts skip the backend call and record
+# `AutoNotifyOutcomeSummary::SkippedByRateLimit` in the audit
+# chain (visible in `aivyx notify history` and the Web UI
+# Notifications pane). Both fields must be set together or
+# neither — partial config rejects at load time. State lives in
+# memory for the daemon's lifetime; daemon restart resets the
+# bucket.
+#
+# Example — aggressive retry on a flaky webhook + a modest hourly
+# cap on Telegram so a runaway loop can't flood the operator's
+# phone:
+#
+# [[notify_target]]
+# name = "alerts"
+# kind = "webhook"
+# url = "https://ntfy.sh/aivyx-personal-2026"
+# retry_count = 5
+# retry_backoff_ms_start = 200
+#
+# [[notify_target]]
+# name = "phone"
+# kind = "telegram"
+# chat_id = "123456789"
+# rate_limit_max = 20
+# rate_limit_window_secs = 3600
+
+# ----------------------------------------------------------------
 # Reflection auto-loop (Phase 70 — P14 self-learning closure)
 # ----------------------------------------------------------------
 #
