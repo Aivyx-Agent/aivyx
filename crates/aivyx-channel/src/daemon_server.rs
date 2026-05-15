@@ -23,8 +23,9 @@ use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError,
-    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary, ProfileSummary,
-    QueryPayload, QueryResponsePayload, SessionSummary, StreamEventPayload, PROTOCOL_VERSION,
+    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary,
+    NotificationHistoryEntry, ProfileSummary, QueryPayload, QueryResponsePayload, SessionSummary,
+    StreamEventPayload, PROTOCOL_VERSION,
 };
 use crate::mission;
 
@@ -1482,18 +1483,111 @@ async fn handle_query(
             let proposal = log.get(&proposal_id).map(proposal_summary_from_view);
             QueryResponsePayload::GetPersonaProposal { proposal }
         }
-        // Phase 73 — notification history. Real handler lands in
-        // Task 5; the IPC envelope is in place so this returns a
-        // clear "not yet wired" message until then.
-        QueryPayload::ListNotificationHistory { .. } => {
-            QueryResponsePayload::QueryError {
-                code: "not_yet_wired".into(),
-                message: "ListNotificationHistory handler is pending Phase \
-                          73 Task 5 — audit-chain walker not yet plumbed \
-                          into the daemon's query path"
-                    .into(),
+        // Phase 73 — notification history. Walks the audit
+        // chain for `AutoNotifyDispatched` events, applies the
+        // optional `target_filter`, and renders each match into
+        // a `NotificationHistoryEntry`. Pagination matches the
+        // existing audit-entry handler's pattern (server-side
+        // cap of 500 per page).
+        QueryPayload::ListNotificationHistory {
+            from_seq,
+            limit,
+            target_filter,
+        } => {
+            let Some(log) = audit_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_audit_log".into(),
+                    message: "daemon has no audit log configured".into(),
+                };
+            };
+            let chain_len = log.len();
+            let entries = match log.entries_range(0, chain_len) {
+                Ok(e) => e,
+                Err(e) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "audit_read_failed".into(),
+                        message: format!("audit chain read failed: {e}"),
+                    };
+                }
+            };
+            let target_str = target_filter.as_deref();
+            let matches: Vec<NotificationHistoryEntry> = entries
+                .iter()
+                .filter_map(|entry| {
+                    if let aivyx_audit::AuditEvent::AutoNotifyDispatched {
+                        session_id,
+                        trigger_kind,
+                        trigger_id,
+                        target_name,
+                        outcome,
+                        dispatched_at_unix_ms,
+                    } = &entry.event
+                    {
+                        if let Some(filter) = target_str {
+                            if target_name != filter {
+                                return None;
+                            }
+                        }
+                        let (outcome_kind, outcome_detail) =
+                            render_notify_outcome_for_history(outcome);
+                        Some(NotificationHistoryEntry {
+                            seq: entry.seq,
+                            dispatched_at_unix_ms: *dispatched_at_unix_ms,
+                            session_id: session_id.to_string(),
+                            trigger_kind: format!("{trigger_kind:?}"),
+                            trigger_id: trigger_id.clone(),
+                            target_name: target_name.clone(),
+                            outcome_kind: outcome_kind.into(),
+                            outcome_detail,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let total_len = matches.len() as u64;
+            const HISTORY_QUERY_MAX_LIMIT: u32 = 500;
+            let capped = (limit.min(HISTORY_QUERY_MAX_LIMIT)) as usize;
+            let page: Vec<NotificationHistoryEntry> = matches
+                .into_iter()
+                .filter(|e| e.seq >= from_seq)
+                .take(capped)
+                .collect();
+            QueryResponsePayload::ListNotificationHistory {
+                entries: page,
+                total_len,
             }
         }
+    }
+}
+
+/// Phase 73 — render an `AutoNotifyOutcomeSummary` into
+/// (kind, detail) pair for the wire-format history entry. `kind`
+/// is the stable lowercase label; `detail` carries variant-
+/// specific data.
+fn render_notify_outcome_for_history(
+    summary: &aivyx_audit::AutoNotifyOutcomeSummary,
+) -> (&'static str, String) {
+    use aivyx_audit::AutoNotifyOutcomeSummary;
+    match summary {
+        AutoNotifyOutcomeSummary::Delivered => ("delivered", String::new()),
+        AutoNotifyOutcomeSummary::SkippedEmptyResponse => {
+            ("skipped_empty_response", String::new())
+        }
+        AutoNotifyOutcomeSummary::Failed {
+            error_kind,
+            error_message,
+        } => ("failed", format!("[{error_kind}] {error_message}")),
+        AutoNotifyOutcomeSummary::SkippedByCondition { condition } => {
+            ("skipped_by_condition", condition.clone())
+        }
+        AutoNotifyOutcomeSummary::SkippedByRateLimit {
+            limit,
+            window_secs,
+        } => (
+            "skipped_by_rate_limit",
+            format!("{limit}/{window_secs}s"),
+        ),
     }
 }
 
@@ -2420,5 +2514,61 @@ mod tests {
             parse_proposal_status_filter(""),
             ProposalStatusFilter::Pending
         ));
+    }
+
+    // ---- Phase 73 — notify-outcome history renderer ----------
+
+    #[test]
+    fn history_renderer_delivered_has_empty_detail() {
+        let (kind, detail) = render_notify_outcome_for_history(
+            &aivyx_audit::AutoNotifyOutcomeSummary::Delivered,
+        );
+        assert_eq!(kind, "delivered");
+        assert!(detail.is_empty());
+    }
+
+    #[test]
+    fn history_renderer_failed_carries_error_kind_and_message() {
+        let (kind, detail) = render_notify_outcome_for_history(
+            &aivyx_audit::AutoNotifyOutcomeSummary::Failed {
+                error_kind: "transport".into(),
+                error_message: "dns lookup failed".into(),
+            },
+        );
+        assert_eq!(kind, "failed");
+        assert!(detail.contains("transport"), "{detail}");
+        assert!(detail.contains("dns lookup failed"), "{detail}");
+    }
+
+    #[test]
+    fn history_renderer_skipped_empty_response_has_empty_detail() {
+        let (kind, detail) = render_notify_outcome_for_history(
+            &aivyx_audit::AutoNotifyOutcomeSummary::SkippedEmptyResponse,
+        );
+        assert_eq!(kind, "skipped_empty_response");
+        assert!(detail.is_empty());
+    }
+
+    #[test]
+    fn history_renderer_skipped_by_condition_carries_label() {
+        let (kind, detail) = render_notify_outcome_for_history(
+            &aivyx_audit::AutoNotifyOutcomeSummary::SkippedByCondition {
+                condition: "on_failed".into(),
+            },
+        );
+        assert_eq!(kind, "skipped_by_condition");
+        assert_eq!(detail, "on_failed");
+    }
+
+    #[test]
+    fn history_renderer_skipped_by_rate_limit_renders_limit_and_window() {
+        let (kind, detail) = render_notify_outcome_for_history(
+            &aivyx_audit::AutoNotifyOutcomeSummary::SkippedByRateLimit {
+                limit: 10,
+                window_secs: 3600,
+            },
+        );
+        assert_eq!(kind, "skipped_by_rate_limit");
+        assert_eq!(detail, "10/3600s");
     }
 }
