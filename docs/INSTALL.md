@@ -329,6 +329,58 @@ all funnel into the same browser fan-out, so naming them
 differently only affects the per-target audit name; the
 operator-visible behavior is identical.
 
+## Reflection auto-loop (Phase 70)
+
+Phase 70 closes the self-learning half of **P14 Persona**: the
+agent observes its own behavior, proposes Persona deltas, and
+the operator reviews them asynchronously in a dedicated Web
+UI Proposals pane or `aivyx persona proposals` CLI subcommand.
+
+**What's running by default after install:** nothing
+auto-reflects. Reflection happens when the agent calls
+`reflection.propose` (existing tool, Phase 29). Anything that
+fires a reflection turn — operator prompt, mission, or
+scheduled `[[schedule]]` block with a reflection-flavored
+prompt — produces proposals that land in the new persistent
+proposal store and surface in the operator review pane.
+
+**Reviewing proposals:**
+
+```sh
+# Terminal:
+aivyx persona proposals list                       # status: pending (default)
+aivyx persona proposals list --status approved
+aivyx persona proposals show <proposal_id>
+aivyx persona proposals approve <proposal_id>
+aivyx persona proposals reject <proposal_id> --reason "too aggressive"
+```
+
+Or open the Web UI at `http://127.0.0.1:7843/` (when enabled)
+and click the **Proposals** tab. The pane lets you approve,
+reject, or **edit-then-approve** — tweak the proposed op JSON
+inline before the daemon applies it. Both the original proposed
+op and the operator-applied op are preserved in the proposal
+chain for audit (Q3(a) at sign-off).
+
+**Storage isolation.** Pending and resolved proposals live in
+a separate encrypted domain (`KeyDomain::PersonaProposals`,
+table `aivyx_persona_proposals_v1`) from the approved-delta
+persona chain. The HMAC chain uses a distinct genesis seed so
+a chain-confusion attack (a Pending row inserted into the
+persona chain or vice versa) is structurally rejected at MAC
+verification (Q4(a)).
+
+**Pair with Web UI desktop notifications** (Phase 69) for the
+tightest review feedback loop: every proposed delta can fire
+a `kind = "web-ui"` notification so the browser tab pings the
+operator the moment a proposal lands.
+
+**Cron-fired auto-reflection** is the next polish along this
+axis. The `[[reflection_schedule]]` config section is parsed
+and validated today, but its scheduler-loop wiring is a
+deferred follow-up. For now, fire reflection turns via the
+existing `[[schedule]]` substrate.
+
 ## Uninstall
 
 ```sh
