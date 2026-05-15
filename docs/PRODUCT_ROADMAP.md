@@ -980,10 +980,22 @@ respond to it. Closing the gap is the inflection point between
   two-decade milestone, beats Phase 71's 19). Zero new
   workspace deps.
 
-- **Phase 73+ (Reach Tier-2 polish, future).** Per-target
-  retry semantics, per-target rate limits, dedicated Web UI
-  notification history pane. Different cluster of concerns
-  from Phase 72's Tier-1 trio; cleanly deferred.
+- **Phase 73 (Reach Tier-2 polish, shipped 2026-05-15).**
+  Closes the Tier-2 polish backlog Phase 72 deferred. Per-
+  target retry on transient failures (Transport / Timeout /
+  Rejected ≥ 500 per Q2(b)) via flat
+  `retry_count` + `retry_backoff_ms_start` fields (Q1(b))
+  with exponential backoff. Per-target in-memory token
+  bucket rate limits (Q3(a)) with the new
+  `AutoNotifyOutcomeSummary::SkippedByRateLimit` audit
+  variant. Notification history surface — both Web UI
+  Notifications pane and `aivyx notify history` CLI walk
+  the audit chain via the new `ListNotificationHistory`
+  IPC (Q4(a)). After Phase 73 the Reach Milestone polish
+  backlog is closed end-to-end. Tests +31 (1302 → 1333).
+  All three streak predictions correct: DESIGN.md → 20,
+  PRODUCT.md → 13, lib.rs → **21** (new record, beating
+  Phase 72's 20). Zero new workspace deps.
 
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush

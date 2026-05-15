@@ -1610,6 +1610,54 @@ Tier-2 polish (per-target retry semantics, per-target rate
 limits, Web UI notification history pane) defers to a focused
 follow-up — different cluster of concerns.
 
+## Phase 73 — Reach Tier-2 Polish: Retry, Rate Limit, History
+
+**Frozen — see [PHASE_73.md](PHASE_73.md).** Closes the
+Tier-2 polish backlog Phase 72 explicitly deferred. Three
+items shipped in one phase:
+
+- **Per-target retry.** Flat fields `retry_count` +
+  `retry_backoff_ms_start` on `NotifyTargetConfig` per
+  Q1(b). On transient failures (`Transport`, `Timeout`, or
+  `Rejected` with HTTP status ≥ 500 per Q2(b)), the
+  dispatcher retries up to `retry_count` times with
+  exponential backoff. `Auth`, `UnknownTarget`, and
+  `Rejected` < 500 never retry. Capped at 10 retries by the
+  loader (footgun guard).
+- **Per-target rate limit.** In-memory sliding-window token
+  bucket per target via the new `RateLimitRegistry` per
+  Q3(a). Both `rate_limit_max` + `rate_limit_window_secs`
+  must be set together. Exhausted bucket records the new
+  `AutoNotifyOutcomeSummary::SkippedByRateLimit { limit,
+  window_secs }` audit variant. Daemon-lifetime state;
+  restart resets the bucket.
+- **Notification history pane.** New
+  `QueryPayload::ListNotificationHistory { from_seq, limit,
+  target_filter }` walks the audit chain for
+  `AutoNotifyDispatched` events with server-side
+  pagination (cap 500, matches the audit pane). Web UI
+  Notifications tab renders a 4-column grid with
+  colour-coded outcome badges; auto-populated per-target
+  chips filter the view. CLI parity: `aivyx notify history
+  [--target NAME] [--limit N]`.
+
+`NotificationHistoryEntry` is the flat wire shape; the
+daemon's `render_notify_outcome_for_history` helper renders
+each `AutoNotifyOutcomeSummary` variant into stable lowercase
+`outcome_kind` + variant-specific `outcome_detail` strings.
+
+Streak predictions all correct: DESIGN.md → 20, PRODUCT.md →
+13, `aivyx-core/src/lib.rs` → **21** (new project record,
+beating Phase 72's 20). Tests +31 (1302 → 1333), comfortably
+inside the +25-35 prediction. Zero clippy warnings. Zero new
+workspace deps.
+
+After Phase 73 the Reach Milestone polish backlog is closed
+end-to-end. Remaining notify-shaped deferrals (WebPush,
+Slack-flavored webhooks, XOAUTH2, persisted rate-limit
+buckets) are operator-feedback-gated and ship if/when real
+pressure surfaces.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

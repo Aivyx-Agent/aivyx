@@ -291,36 +291,102 @@ module:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**All three streak predictions correct.**
+
+- **DESIGN.md** — Held. Hash at exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  (byte-identical to entry). Streak extends to **twenty**
+  consecutive phases as predicted. Phase 73 added config
+  fields, an audit variant, IPC envelopes, dispatch logic,
+  Web UI pane, and CLI subcommand — none touched the locked
+  technical contract.
+- **PRODUCT.md** — Held. Hash at exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  (byte-identical to entry). Streak extends to **thirteen**
+  consecutive phases. Phase 73 polishes an existing
+  commitment (Reach Milestone) without redefining it.
+- **Production-core `aivyx-core/src/lib.rs`** — Held. Hash
+  at exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  (byte-identical to entry). Streak extends to **twenty-one**
+  consecutive phases — **new project record**, beating
+  Phase 72's 20. All Phase 73 work lived in `aivyx-config`
+  (new fields), `aivyx-audit` (`SkippedByRateLimit` variant),
+  and `aivyx-channel` (retry loop, rate-bucket registry,
+  IPC handler, Web UI pane, CLI subcommand).
+- **Workspace deps** — Zero new as predicted. `tokio::time::sleep`
+  was already in tree for the backoff; the token bucket uses
+  `tokio::sync::Mutex` + `HashMap` + `VecDeque` from std.
+- **Tests** — +31 (1302 → 1333), comfortably inside the
+  +25-35 prediction. Breakdown:
+  - 8 new config tests (defaults, retry-count cap, backoff
+    floor, explicit values, partial-rate-limit rejection
+    × 2, zero-value rejection, both-set happy path).
+  - 6 new `trigger::tests` (transient-failure includes /
+    excludes, rate-bucket admit / evict / per-target
+    isolation, TargetPolicy round-trip).
+  - 5 new `daemon_server::tests` (renderer for the five
+    outcome variants).
+  - 1 new HTML smoke (Notifications pane wiring).
+  - 6 new CLI parser tests (default shape, both flags, zero-
+    limit error, non-numeric-limit error, bare-subcommand
+    error, unknown-subcommand error).
+  - 5 new render-helper tests in the notify module
+    (empty/no-filter, empty/with-target, delivered, failed,
+    pagination).
+- **Clippy** — Zero warnings across the workspace.
+- **Q-block** — All four resolutions held in implementation:
+  - **Q1(b)** — Flat per-target fields `retry_count` +
+    `retry_backoff_ms_start` on `NotifyTargetConfig`. Default
+    `retry_count = 0` preserves Phase 62 behavior.
+  - **Q2(b)** — `is_transient_failure` classifier: Transport
+    + Timeout + Rejected with HTTP status ≥ 500. Auth,
+    UnknownTarget, and Rejected 4xx never retry.
+    `dispatch_with_retry` is a pure async helper.
+  - **Q3(a)** — `RateLimitRegistry` is a per-target
+    `VecDeque<u64>` of recent timestamps under a
+    `tokio::sync::Mutex`. Daemon-lifetime state; restart
+    resets the bucket. Exhausted bucket records the new
+    `AutoNotifyOutcomeSummary::SkippedByRateLimit { limit,
+    window_secs }` audit variant.
+  - **Q4(a)** — `ListNotificationHistory` IPC walks the
+    audit chain for `AutoNotifyDispatched` events, filters
+    by target name, paginates with the same server-side cap
+    (500) as the audit pane. No new storage.
+
+After Phase 73 the Reach Milestone polish backlog is closed
+end-to-end. The remaining notify-shaped deferrals (WebPush,
+Slack-flavored webhooks, XOAUTH2) are operator-feedback-
+gated.
 
 ## Exit criteria
 
-- [ ] `NotifyTargetConfig` gains four retry/rate-limit
+- [x] `NotifyTargetConfig` gains four retry/rate-limit
   fields + raw parsing + validation — Task 2.
-- [ ] `AutoNotifyOutcomeSummary::SkippedByRateLimit` audit
+- [x] `AutoNotifyOutcomeSummary::SkippedByRateLimit` audit
   variant + `ListNotificationHistory` IPC envelopes — Task 3.
-- [ ] `RateLimitRegistry` + per-target token bucket — Task 4.
-- [ ] Retry loop wraps `dispatcher.dispatch` with the
+- [x] `RateLimitRegistry` + per-target token bucket — Task 4.
+- [x] Retry loop wraps `dispatcher.dispatch` with the
   Q2(b) failure-class filter + exponential backoff — Task 4.
-- [ ] Daemon-side `ListNotificationHistory` handler walks
+- [x] Daemon-side `ListNotificationHistory` handler walks
   the audit chain with target filter + pagination — Task 5.
-- [ ] Web UI Notifications pane with target chip + outcome
+- [x] Web UI Notifications pane with target chip + outcome
   badges + pagination — Task 6.
-- [ ] `aivyx notify history [--target ...] [--limit ...]`
+- [x] `aivyx notify history [--target ...] [--limit ...]`
   CLI — Task 7.
-- [ ] Tests across config, rate bucket, retry loop, audit,
+- [x] Tests across config, rate bucket, retry loop, audit,
   IPC, HTML smoke, CLI parser — Task 8.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 9.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 10.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty.
-- [ ] PRODUCT.md streak extends to thirteen.
-- [ ] Production-core streak extends to twenty-one (new
+- [x] DESIGN.md streak extends to twenty.
+- [x] PRODUCT.md streak extends to thirteen.
+- [x] Production-core streak extends to twenty-one (new
   record).
-- [ ] Test count delta: positive (~+25-35).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (~+25-35).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.
