@@ -695,6 +695,35 @@ layer.
   all fully shipped**. The PRODUCT.md forward-commitment
   ledger closes here.
 
+- **Phase 70 (Reflection auto-loop, shipped 2026-05-15).**
+  Closes the **self-learning half** of P14. PRODUCT.md:1133
+  always promised "Reflection is the engine that proposes
+  Persona deltas"; Phase 60 delivered the operator-edited
+  half (revert, visualization) and Phase 29 shipped the
+  reflection tooling substrate, but until Phase 70 the agent's
+  persona-delta proposals flowed only through a synchronous
+  mission-gate that needed the operator present at proposal
+  time. Phase 70 makes the review loop asynchronous: agent
+  calls `reflection.propose` → Pending rows in a new
+  encrypted proposal chain (KeyDomain::PersonaProposals,
+  distinct genesis seed from the persona chain per Q4(a)) →
+  operator reviews at leisure via the new Web UI Proposals
+  pane or `aivyx persona proposals` CLI → approve verbatim,
+  approve-with-edit (Q3(a) — operator tweaks the op before
+  applying), or reject with optional reason → daemon
+  validates, appends a PersonaDelta to the persona chain on
+  approve, and recomputes shared state. Both `proposed_op`
+  and `applied_op` survive in the proposal chain for audit.
+  Tests +41 (1234 → 1275). All three streak predictions
+  correct: DESIGN.md → 17, PRODUCT.md → 10, lib.rs → 18 (new
+  project record, beats Phase 69's 17). Zero new workspace
+  deps. **Scope note:** cron-fired auto-reflection (a
+  `[[reflection_schedule]]` scheduler loop) parses + validates
+  end-to-end but the loop-firing wire-up is deferred to a
+  follow-up phase; operators today fire reflection turns via
+  the existing `[[schedule]]` substrate and proposals land
+  in the same chain.
+
 ## Milestone — Distribution (in progress, Pipeline Ready)
 
 **Forward commitment:** none — operator-feedback-shaped

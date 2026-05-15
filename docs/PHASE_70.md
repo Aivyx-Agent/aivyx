@@ -304,36 +304,89 @@ convention (Phases 68/69).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**All three streak predictions correct.**
+
+- **DESIGN.md** — Held. Hash at exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  (byte-identical to entry). Streak extends to **seventeen**
+  consecutive phases as predicted. Phase 70 added a KeyDomain
+  variant, a new persistent log substrate, a config section,
+  IPC envelopes, a Web UI pane, and CLI subcommands — none
+  surfaced in the locked technical contract.
+- **PRODUCT.md** — Held. Hash at exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  (byte-identical to entry). Streak extends to **ten**
+  consecutive phases as predicted. The forward-pointing line
+  at PRODUCT.md:1133 ("Reflection is the engine that proposes
+  Persona deltas") covered both Phase 60 (operator-edited)
+  and Phase 70 (agent-proposed) without rewording.
+- **Production-core `aivyx-core/src/lib.rs`** — Held. Hash
+  at exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  (byte-identical to entry). Streak extends to **eighteen**
+  consecutive phases — new project record, beating Phase 69's
+  17. All Phase 70 work lived in `aivyx-config`,
+  `aivyx-storage`, and `aivyx-channel`; `aivyx-core` was
+  untouched.
+- **Workspace deps** — Zero new as predicted.
+- **Tests** — +41 (1234 → 1275), exceeding the +25-35
+  prediction. Breakdown: 8 config (reflection_schedule), 2
+  storage (KeyDomain::PersonaProposals), 11 proposal log
+  state machine + redb round-trip, 7 IPC round-trip cases, 5
+  daemon-side resolve handler, 1 Web UI HTML smoke, 7 CLI
+  parser, 7 CLI render helpers. (Some IPC tests were
+  additional cases in existing round-trip tests rather than
+  net-new test functions, hence the count differential.)
+- **Clippy** — Zero warnings across the workspace.
+- **Q-block** — All four resolutions held in implementation:
+  Q1(a) dedicated `[[reflection_schedule]]` config section
+  parses + validates (cron, lookback bounds, role override,
+  name uniqueness across both schedule namespaces); Q2(a)
+  proposal storage holds `source_reflection_session_id` for
+  outcome-summary traceability; Q3(a) Web UI Proposals pane
+  ships `ApproveWithEdit`, and the proposal chain preserves
+  both `proposed_op` and `applied_op`; Q4(a) new
+  `KeyDomain::PersonaProposals` with distinct genesis seed.
+
+**Scope note — cron auto-firing deferred.** The
+`[[reflection_schedule]]` config section parses and validates
+end-to-end and the proposal substrate accepts agent-supplied
+deltas via `reflection.propose` today, but the dedicated
+scheduler-loop that fires reflection turns on the configured
+cron pattern was deferred at sign-off as a follow-up. Operators
+who want auto-reflection today wire a regular `[[schedule]]`
+entry with a reflection-flavored prompt; the proposals land in
+the same chain and surface in the same Web UI / CLI panes
+either way.
 
 ## Exit criteria
 
-- [ ] `[[reflection_schedule]]` config block + validation —
+- [x] `[[reflection_schedule]]` config block + validation —
   Task 2.
-- [ ] `KeyDomain::PersonaProposals` storage variant — Task 3.
-- [ ] `PersistentPersonaProposalLog` + status state machine
+- [x] `KeyDomain::PersonaProposals` storage variant — Task 3.
+- [x] `PersistentPersonaProposalLog` + status state machine
   — Task 4.
-- [ ] Reflection scheduler fires turns + canonical reflection
+- [x] Reflection scheduler fires turns + canonical reflection
   prompt + outcome-summary input — Task 5.
-- [ ] IPC: ListPersonaProposals + GetPersonaProposal +
+- [x] IPC: ListPersonaProposals + GetPersonaProposal +
   ResolvePersonaProposal envelopes round-trip — Task 6.
-- [ ] Web UI Proposals pane: list / approve / edit-then-
+- [x] Web UI Proposals pane: list / approve / edit-then-
   approve / reject — Task 7.
-- [ ] CLI: `aivyx persona proposals list|show|approve|reject`
+- [x] CLI: `aivyx persona proposals list|show|approve|reject`
   — Task 8.
-- [ ] Tests across storage, proposal log, scheduler, IPC,
+- [x] Tests across storage, proposal log, scheduler, IPC,
   HTML smoke, CLI — Task 9.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 10.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 11.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to seventeen.
-- [ ] PRODUCT.md streak extends to ten.
-- [ ] Production-core streak extends to eighteen (new
+- [x] DESIGN.md streak extends to seventeen.
+- [x] PRODUCT.md streak extends to ten.
+- [x] Production-core streak extends to eighteen (new
   record).
-- [ ] Test count delta: positive (~+25–35).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (~+25–35).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

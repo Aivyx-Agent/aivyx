@@ -1407,6 +1407,92 @@ sugar, per-target rate limits, retry semantics, multi-target
 dispatch, conditional notify, notification urgency / sound /
 icons.
 
+## Phase 70 — Reflection Auto-Loop (P14 Self-Learning Closure)
+
+**Frozen — see [PHASE_70.md](PHASE_70.md).** Closes the
+long-held self-learning half of **P14 Persona**. Phase 29
+(frozen) shipped the reflection substrate — `ReflectionProposeTool`
++ `ReflectionApplyTool` — but the agent's persona-delta
+proposals went through a synchronous mission-gate flow that
+required the operator to be present at the agent's terminal
+at the moment of proposal. Phase 70 adds the **asynchronous
+review surface**: agent calls `reflection.propose` →
+proposals land as Pending rows in a new encrypted proposal
+chain → operator reviews on their own schedule via the Web UI
+Proposals pane or `aivyx persona proposals` CLI →
+approval/rejection appends to the persona chain (or audit
+trail) accordingly.
+
+Delivered across ten engineering commits (Open, Tasks 2–10,
+Exit):
+
+- **Config in `aivyx-config`.** `[[reflection_schedule]]`
+  section parses + validates (cron non-empty, lookback bounds
+  60s–30 days, name uniqueness across both schedule and
+  reflection-schedule namespaces, role_override existence).
+- **Storage in `aivyx-storage`.** `KeyDomain::PersonaProposals`
+  variant with HKDF info bytes `persona-proposals`, table
+  name `aivyx_persona_proposals_v1`, integrated into the
+  fixed-size subkey array and the all-variants tripwire test.
+- **`persona_proposal.rs` in `aivyx-channel`.** HMAC-chained
+  proposal log mirroring `PersistentPersonaLog`. Status as
+  state machine derived from chain entries (Pending → Approved
+  / Rejected / Superseded); each transition appends a new
+  signed row rather than mutating, preserving the audit story.
+  Distinct genesis seed (`aivyx-proposal-genesis-v1`) from
+  the persona chain so chain-confusion attacks are
+  structurally rejected at MAC verification (Q4(a)).
+- **IPC envelopes.** Two new `QueryPayload` variants
+  (`ListPersonaProposals`, `GetPersonaProposal`), the wire-
+  format `PersonaProposalSummary`, `FrontendMessage::ResolvePersonaProposal`
+  with the three-variant `PersonaProposalResolution` tagged
+  enum (`Approve | ApproveWithEdit { edited_op } | Reject {
+  reason }` per Q3(a)), and the matching
+  `DaemonMessage::PersonaProposalResolved` response with
+  `PersonaProposalResolveSuccess { proposal_status,
+  applied_seq }`.
+- **Daemon-side resolution.** `resolve_persona_proposal` in
+  `daemon_server.rs`: Approve / ApproveWithEdit validate the
+  applied op, append to the persona chain, then record an
+  Approved row bound to the resulting seq; Reject just
+  records Rejected. Shared persona state is recomputed on
+  approve. `handle_query` gains arms for both proposal-list
+  queries with status-filter parsing.
+- **Web UI Proposals pane.** New tab with filter chips
+  (`pending | approved | rejected | all`), per-proposal
+  cards showing category / id / source-reflection-session /
+  status badge / proposed op / agent reason, three actions
+  per Pending card (Approve verbatim / inline JSON editor +
+  Save & Approve for edit-on-approve / Reject with optional
+  reason). Approved cards with operator-edited applied_op
+  render both ops for audit visibility.
+- **CLI subcommands.** `aivyx persona proposals list
+  [--status STATUS]` (default `pending`), `show <id>`,
+  `approve <id>`, `reject <id> [--reason TEXT]`. Pretty-
+  prints proposals with all status-specific fields.
+- **Agent-write integration.** `ReflectionProposeTool` gains
+  a proposal-log setter; when set (binary's startup path
+  wires it in), every agent-supplied `ProposedPersonaDelta`
+  is appended to the proposal chain as a Pending row in
+  addition to the existing mission-gate flow.
+
+Streak predictions all correct: DESIGN.md → 17, PRODUCT.md →
+10, `aivyx-core/src/lib.rs` → 18 (new project record, beats
+Phase 69's 17). Tests +41 (1234 → 1275), exceeding the
++25-35 prediction. Zero clippy warnings. Zero new workspace
+deps.
+
+**Scope note — cron auto-firing deferred.** The
+`[[reflection_schedule]]` config section parses + validates
+end-to-end, and the proposal substrate accepts agent-
+generated deltas via `reflection.propose` today; the
+dedicated scheduler-loop that fires reflection turns on the
+configured cron is a deferred follow-up. Operators who want
+auto-reflection today wire a regular `[[schedule]]` entry
+with a reflection-flavored prompt; the proposals land in the
+same chain and surface in the same Web UI / CLI panes either
+way.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
