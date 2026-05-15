@@ -3288,6 +3288,13 @@ async fn run_async(
             // run_reflection_scheduler when this is non-empty AND
             // an audit log is configured.
             reflection_schedules: config_reflection_schedules.clone(),
+            // Phase 73 — per-target retry + rate-limit policies
+            // built from the loaded `[[notify_target]]` blocks.
+            // Empty map when no targets exist; the dispatcher's
+            // retry loop defaults to zero retries either way.
+            target_policies: aivyx_channel::trigger::TargetPolicy::map_from_targets(
+                &config_notify_targets,
+            ),
         })
             .await;
 

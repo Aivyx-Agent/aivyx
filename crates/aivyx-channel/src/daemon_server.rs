@@ -187,6 +187,12 @@ pub struct DaemonConfig {
     /// each entry's cron pattern. When empty, the reflection
     /// scheduler task is not spawned.
     pub reflection_schedules: Vec<aivyx_config::ReflectionScheduleConfig>,
+    /// Phase 73 — per-target retry + rate-limit policy map.
+    /// Built by the binary's startup path from the loaded
+    /// `[[notify_target]]` blocks (one entry per target name).
+    /// Empty map → every dispatch uses the zero-retry / no-
+    /// rate-limit defaults — today's behavior.
+    pub target_policies: std::collections::HashMap<String, crate::trigger::TargetPolicy>,
 }
 
 /// Run the daemon server.
@@ -223,6 +229,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         web_ui_broadcaster,
         persona_proposal_log,
         reflection_schedules,
+        target_policies,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -278,6 +285,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     if let Some(ref al) = audit_log {
         trigger_dispatch = trigger_dispatch.with_audit_log(Arc::clone(al));
     }
+    // Phase 73 — per-target retry + rate-limit policy map. Empty
+    // map → every dispatch uses the zero-retry / no-rate-limit
+    // defaults (today's behavior). Always called even with an
+    // empty map so the dispatcher's internal `target_policies`
+    // is set authoritatively from config at startup.
+    trigger_dispatch = trigger_dispatch.with_target_policies(target_policies);
 
     // Spawn the scheduler loop if a schedule store is provided.
     let _scheduler_handle = schedule_store.map(|store| {
@@ -1085,6 +1098,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         web_ui_broadcaster: None,
         persona_proposal_log: None,
         reflection_schedules: Vec::new(),
+        target_policies: std::collections::HashMap::new(),
     }).await
 }
 

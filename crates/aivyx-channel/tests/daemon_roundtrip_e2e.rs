@@ -813,6 +813,7 @@ async fn two_concurrent_connections() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1097,6 +1098,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1179,6 +1181,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
             })
             .await
             .expect("daemon must complete successfully");
@@ -1585,6 +1588,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
         })
         .await
         .expect("daemon must complete successfully");
@@ -1844,6 +1848,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
         })
         .await
         .expect("daemon must complete");
@@ -2215,6 +2220,7 @@ async fn mission_queries_round_trip_over_ipc() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
         })
         .await
         .expect("daemon must complete successfully");
@@ -2490,6 +2496,7 @@ async fn audit_queries_round_trip_over_ipc() {
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
+            target_policies: std::collections::HashMap::new(),
         })
         .await
         .expect("daemon must complete successfully");

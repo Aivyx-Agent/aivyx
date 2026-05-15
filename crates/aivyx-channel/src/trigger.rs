@@ -114,6 +114,112 @@ pub struct TriggerDispatch {
     /// only) — same shape as the existing audit hook
     /// integration in tool calls.
     audit_log: Option<Arc<PersistentAuditLog>>,
+    /// Phase 73 — per-target policy map (retry + rate-limit).
+    /// Populated at daemon startup from the loaded
+    /// `[[notify_target]]` blocks. Empty map → every dispatch
+    /// uses the zero-retry / no-rate-limit defaults (today's
+    /// behavior).
+    target_policies: Arc<std::collections::HashMap<String, TargetPolicy>>,
+    /// Phase 73 — in-memory rate-limit registry per Q3(a).
+    /// `Arc<...>` because the dispatcher is `Clone` and the
+    /// registry state needs to be shared across clones (the
+    /// scheduler / webhook listener / file watcher all hold
+    /// their own clone of the dispatcher).
+    rate_limit_registry: Arc<RateLimitRegistry>,
+}
+
+/// Phase 73 — per-target retry + rate-limit policy snapshot.
+/// One entry per `[[notify_target]]` block.
+#[derive(Debug, Clone, Default)]
+pub struct TargetPolicy {
+    pub retry_count: u32,
+    pub retry_backoff_ms_start: u64,
+    pub rate_limit_max: Option<u32>,
+    pub rate_limit_window_secs: Option<u64>,
+}
+
+impl TargetPolicy {
+    /// Build the dispatcher's `target_policies` map from the
+    /// loaded `[[notify_target]]` config.
+    pub fn map_from_targets(
+        targets: &[aivyx_config::NotifyTargetConfig],
+    ) -> std::collections::HashMap<String, TargetPolicy> {
+        targets
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    TargetPolicy {
+                        retry_count: t.retry_count,
+                        retry_backoff_ms_start: t.retry_backoff_ms_start,
+                        rate_limit_max: t.rate_limit_max,
+                        rate_limit_window_secs: t.rate_limit_window_secs,
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+/// Phase 73 — per-target sliding-window rate-limit registry.
+/// Each target gets its own `VecDeque<u64>` of recent dispatch
+/// timestamps (epoch ms); `check_and_record` evicts timestamps
+/// outside the window before deciding admit / reject.
+///
+/// State lives in memory for the daemon's lifetime per Q3(a).
+/// Daemon restart resets the bucket — acceptable for v1 since
+/// the audit chain remains the canonical record of what
+/// actually dispatched.
+#[derive(Debug, Default)]
+pub struct RateLimitRegistry {
+    state: tokio::sync::Mutex<
+        std::collections::HashMap<String, std::collections::VecDeque<u64>>,
+    >,
+}
+
+impl RateLimitRegistry {
+    pub fn new() -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Test whether a dispatch at `now_ms` fits within the budget
+    /// for `target`. On Ok the timestamp is recorded; on Err the
+    /// bucket is unchanged. Caller passes the policy values
+    /// directly so the registry stays config-agnostic.
+    pub async fn check_and_record(
+        &self,
+        target: &str,
+        max: u32,
+        window_secs: u64,
+        now_ms: u64,
+    ) -> Result<(), ()> {
+        let window_ms = window_secs.saturating_mul(1000);
+        let cutoff = now_ms.saturating_sub(window_ms);
+        let mut state = self.state.lock().await;
+        let bucket = state.entry(target.to_string()).or_default();
+        // Evict entries older than the window.
+        while bucket.front().is_some_and(|&t| t < cutoff) {
+            bucket.pop_front();
+        }
+        if (bucket.len() as u32) >= max {
+            return Err(());
+        }
+        bucket.push_back(now_ms);
+        Ok(())
+    }
+
+    /// Test-only: read the bucket length for inspection.
+    #[cfg(test)]
+    pub async fn len_for(&self, target: &str) -> usize {
+        self.state
+            .lock()
+            .await
+            .get(target)
+            .map(|b| b.len())
+            .unwrap_or(0)
+    }
 }
 
 impl TriggerDispatch {
@@ -125,7 +231,22 @@ impl TriggerDispatch {
             mission_store: None,
             notify_dispatcher: None,
             audit_log: None,
+            target_policies: Arc::new(std::collections::HashMap::new()),
+            rate_limit_registry: Arc::new(RateLimitRegistry::new()),
         }
+    }
+
+    /// Phase 73 — attach the per-target retry + rate-limit
+    /// policy map built from the loaded `[[notify_target]]`
+    /// config. Replaces any previously-set map. Without this
+    /// call, every target dispatches with the default
+    /// (zero retries, no rate limit) — today's behavior.
+    pub fn with_target_policies(
+        mut self,
+        policies: std::collections::HashMap<String, TargetPolicy>,
+    ) -> Self {
+        self.target_policies = Arc::new(policies);
+        self
     }
 
     /// Attach a mission store so that triggers with `wrap_mission = true`
@@ -348,29 +469,94 @@ impl TriggerDispatch {
                     // independently; one target's transport
                     // failure doesn't block the others. Latency-
                     // bounded by the slowest backend.
+                    //
+                    // Phase 73 — each per-target task additionally:
+                    //   1. Checks the rate-limit bucket (Q3(a))
+                    //      before any dispatch attempt; exhausted
+                    //      bucket → audit SkippedByRateLimit + skip.
+                    //   2. Wraps the dispatch in a retry loop
+                    //      (Q1(b) + Q2(b)) that retries on
+                    //      Transport, Timeout, or Rejected with
+                    //      HTTP status ≥ 500. Auth, UnknownTarget,
+                    //      and Rejected 4xx never retry.
+                    let policies = Arc::clone(&self.target_policies);
+                    let rate_limit_registry =
+                        Arc::clone(&self.rate_limit_registry);
                     let futures = notify_targets.iter().map(|target| {
                         let dispatcher = Arc::clone(&dispatcher);
                         let body = body.clone();
                         let subject = subject.clone();
                         let target = target.clone();
+                        let policy = policies
+                            .get(&target)
+                            .cloned()
+                            .unwrap_or_default();
+                        let rl_registry = Arc::clone(&rate_limit_registry);
                         async move {
-                            let result = dispatcher
-                                .dispatch(&target, &body, Some(&subject))
-                                .await;
-                            (target, result)
+                            // Rate-limit gate. Exhausted bucket
+                            // records SkippedByRateLimit and
+                            // returns the per-target outcome
+                            // distinct from any backend Err.
+                            if let (Some(max), Some(window_secs)) =
+                                (policy.rate_limit_max, policy.rate_limit_window_secs)
+                            {
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                if rl_registry
+                                    .check_and_record(&target, max, window_secs, now_ms)
+                                    .await
+                                    .is_err()
+                                {
+                                    return (
+                                        target,
+                                        DispatchOutcome::SkippedByRateLimit {
+                                            max,
+                                            window_secs,
+                                        },
+                                    );
+                                }
+                            }
+                            // Retry-aware dispatch.
+                            let result = dispatch_with_retry(
+                                &dispatcher,
+                                &target,
+                                &body,
+                                &subject,
+                                policy.retry_count,
+                                policy.retry_backoff_ms_start,
+                            )
+                            .await;
+                            (target, DispatchOutcome::Backend(result))
                         }
                     });
                     let results = futures_util::future::join_all(futures).await;
-                    for (target, result) in results {
-                        let audit_outcome = match result {
-                            Ok(()) => {
+                    for (target, outcome) in results {
+                        let audit_outcome = match outcome {
+                            DispatchOutcome::SkippedByRateLimit {
+                                max,
+                                window_secs,
+                            } => {
+                                eprintln!(
+                                    "aivyx trigger: auto-notify skipped \
+                                     (rate-limit exhausted: {max}/{window_secs}s) \
+                                     for {source} {trigger_id:?} → target \
+                                     `{target}`",
+                                );
+                                AutoNotifyOutcomeSummary::SkippedByRateLimit {
+                                    limit: max,
+                                    window_secs,
+                                }
+                            }
+                            DispatchOutcome::Backend(Ok(())) => {
                                 eprintln!(
                                     "aivyx trigger: auto-notify dispatched for \
                                      {source} {trigger_id:?} → target `{target}`",
                                 );
                                 AutoNotifyOutcomeSummary::Delivered
                             }
-                            Err(e) => {
+                            DispatchOutcome::Backend(Err(e)) => {
                                 eprintln!(
                                     "aivyx trigger: auto-notify FAILED for \
                                      {source} {trigger_id:?} → target \
@@ -434,6 +620,70 @@ impl TriggerDispatch {
                  ({trigger_source} {trigger_id:?} → {target_name}): {e}"
             );
         }
+    }
+}
+
+/// Phase 73 — internal per-target outcome shape distinguishing
+/// "the backend ran (and succeeded or failed)" from "the
+/// rate-limit gate refused the call." Folded into
+/// `AutoNotifyOutcomeSummary` at audit-emission time.
+enum DispatchOutcome {
+    Backend(Result<(), NotifyError>),
+    SkippedByRateLimit { max: u32, window_secs: u64 },
+}
+
+/// Phase 73 — retry-aware dispatch wrapper. Calls the backend
+/// once, then retries on transient failures up to
+/// `retry_count` additional times with exponential backoff
+/// (`backoff_ms_start * 2^attempt`). Auth, UnknownTarget, and
+/// Rejected with HTTP status < 500 are NOT retried per Q2(b).
+///
+/// Returns the final `Result` after the last attempt — every
+/// retry that bounces is silently swallowed; only the final
+/// outcome is exposed to the caller / audit chain. eprintln
+/// logs each retry for live debug visibility.
+async fn dispatch_with_retry(
+    dispatcher: &NotifyDispatcher,
+    target: &str,
+    body: &str,
+    subject: &str,
+    retry_count: u32,
+    backoff_ms_start: u64,
+) -> Result<(), NotifyError> {
+    let total_attempts = retry_count.saturating_add(1);
+    for attempt in 0..total_attempts {
+        let result = dispatcher.dispatch(target, body, Some(subject)).await;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt + 1 < total_attempts && is_transient_failure(&e) => {
+                let backoff_ms = backoff_ms_start.saturating_mul(1u64 << attempt);
+                eprintln!(
+                    "aivyx trigger: auto-notify attempt {} of {} for target \
+                     `{target}` failed ({e}); retrying in {backoff_ms}ms",
+                    attempt + 1,
+                    total_attempts,
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                    .await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    // Unreachable: the loop body always returns Ok or Err on the
+    // last attempt. Defensive fallback for the type checker.
+    Err(NotifyError::Transport(
+        "dispatch_with_retry exhausted attempts without producing a result".into(),
+    ))
+}
+
+/// Phase 73 — Q2(b): does this `NotifyError` warrant a retry?
+/// Retries on Transport, Timeout, and Rejected with HTTP status
+/// ≥ 500. Auth, UnknownTarget, and Rejected 4xx return false.
+pub fn is_transient_failure(e: &NotifyError) -> bool {
+    match e {
+        NotifyError::Transport(_) | NotifyError::Timeout => true,
+        NotifyError::Rejected(status) => *status >= 500,
+        NotifyError::Auth(_) | NotifyError::UnknownTarget(_) => false,
     }
 }
 
@@ -761,5 +1011,101 @@ mod tests {
             NotifyWhen::OnCompletedNonEmpty.condition_label(),
             "on_completed_non_empty"
         );
+    }
+
+    // ---- Phase 73 — retry classifier ------------------------
+
+    #[test]
+    fn transient_failure_includes_transport_timeout_5xx() {
+        assert!(is_transient_failure(&NotifyError::Transport(
+            "dns".into()
+        )));
+        assert!(is_transient_failure(&NotifyError::Timeout));
+        assert!(is_transient_failure(&NotifyError::Rejected(500)));
+        assert!(is_transient_failure(&NotifyError::Rejected(502)));
+        assert!(is_transient_failure(&NotifyError::Rejected(599)));
+    }
+
+    #[test]
+    fn transient_failure_excludes_auth_4xx_unknown() {
+        assert!(!is_transient_failure(&NotifyError::Auth("401".into())));
+        assert!(!is_transient_failure(&NotifyError::Rejected(400)));
+        assert!(!is_transient_failure(&NotifyError::Rejected(401)));
+        assert!(!is_transient_failure(&NotifyError::Rejected(403)));
+        assert!(!is_transient_failure(&NotifyError::Rejected(404)));
+        assert!(!is_transient_failure(&NotifyError::Rejected(499)));
+        assert!(!is_transient_failure(&NotifyError::UnknownTarget(
+            "phone".into()
+        )));
+    }
+
+    // ---- Phase 73 — rate-limit registry ---------------------
+
+    #[tokio::test]
+    async fn rate_bucket_admits_up_to_limit_then_rejects() {
+        let reg = RateLimitRegistry::new();
+        let now = 1_000_000u64;
+        // 3 within 60s window — all admit.
+        for _ in 0..3 {
+            reg.check_and_record("phone", 3, 60, now).await.unwrap();
+        }
+        assert_eq!(reg.len_for("phone").await, 3);
+        // 4th within same window — rejected, bucket unchanged.
+        let err = reg.check_and_record("phone", 3, 60, now).await;
+        assert!(err.is_err());
+        assert_eq!(reg.len_for("phone").await, 3);
+    }
+
+    #[tokio::test]
+    async fn rate_bucket_evicts_expired_timestamps() {
+        let reg = RateLimitRegistry::new();
+        let t0 = 1_000_000u64;
+        // Saturate the bucket at t0.
+        for _ in 0..3 {
+            reg.check_and_record("phone", 3, 60, t0).await.unwrap();
+        }
+        // Try again 61 seconds later — window has slid past all
+        // three entries; bucket evicts them and admits the new
+        // dispatch.
+        let later = t0 + 61_000;
+        reg.check_and_record("phone", 3, 60, later).await.unwrap();
+        assert_eq!(reg.len_for("phone").await, 1);
+    }
+
+    #[tokio::test]
+    async fn rate_bucket_isolates_per_target() {
+        let reg = RateLimitRegistry::new();
+        let now = 1_000_000u64;
+        // Saturate `phone` but not `desktop`.
+        for _ in 0..2 {
+            reg.check_and_record("phone", 2, 60, now).await.unwrap();
+        }
+        // phone is full; desktop is fresh.
+        assert!(reg.check_and_record("phone", 2, 60, now).await.is_err());
+        reg.check_and_record("desktop", 2, 60, now).await.unwrap();
+        assert_eq!(reg.len_for("phone").await, 2);
+        assert_eq!(reg.len_for("desktop").await, 1);
+    }
+
+    #[tokio::test]
+    async fn target_policy_map_from_targets_round_trips() {
+        let targets = vec![aivyx_config::NotifyTargetConfig {
+            name: "phone".into(),
+            kind: aivyx_config::NotifyTargetKind::Webhook {
+                url: "https://example.com/x".into(),
+            },
+            enabled: true,
+            is_default: false,
+            retry_count: 3,
+            retry_backoff_ms_start: 200,
+            rate_limit_max: Some(5),
+            rate_limit_window_secs: Some(60),
+        }];
+        let map = TargetPolicy::map_from_targets(&targets);
+        let p = map.get("phone").expect("present");
+        assert_eq!(p.retry_count, 3);
+        assert_eq!(p.retry_backoff_ms_start, 200);
+        assert_eq!(p.rate_limit_max, Some(5));
+        assert_eq!(p.rate_limit_window_secs, Some(60));
     }
 }
