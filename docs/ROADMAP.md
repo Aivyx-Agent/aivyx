@@ -1493,6 +1493,76 @@ with a reflection-flavored prompt; the proposals land in the
 same chain and surface in the same Web UI / CLI panes either
 way.
 
+## Phase 71 — Reflection Scheduler Loop (closes Phase 70 deferral)
+
+**Frozen — see [PHASE_71.md](PHASE_71.md).** Closes the
+cron-auto-firing deferral carried at Phase 70 exit. After
+Phase 71 the self-learning loop is genuinely autonomous: at
+each configured cron boundary the daemon synthesizes recent
+turn outcomes from the audit chain, fires a reflection turn
+carrying the canonical reflection prompt + outcome summary
+block, and any persona deltas the agent proposes land in the
+Phase 70 proposal chain for asynchronous operator review.
+
+Delivered across four engineering commits (Open, Tasks 2-4,
+Task 5, Tasks 7+Exit):
+
+- **New `reflection_scheduler.rs` module in `aivyx-channel`.**
+  `run_reflection_scheduler` async loop with adaptive
+  sleep-until-earliest-fire (cap 60s); per-schedule in-memory
+  last-fired-at; cron parsing reuses the existing `cron` crate
+  from Phase 26. `fire_reflection` summarizes recent outcomes,
+  formats the prompt block, calls `TriggerDispatch::fire(...)`.
+- **Canonical reflection prompt.** Hardcoded
+  `REFLECTION_SYSTEM_PROMPT` constant (Q2(a)) with
+  conservative behavioral framing: propose only on ≥3-turn
+  pattern recurrence, prefer narrower categories, every
+  proposal lands Pending until operator approves. A smoke
+  test guards the constraint set from accidental gutting.
+- **Audit walker + LRU cache.** `OutcomeSummary` struct
+  + `summarize_recent_outcomes_from_entries` pairs
+  TurnStarted/TurnEnded by turn_id, filters by lookback
+  window, sorts most-recent-first; in-flight + un-paired
+  entries skipped. `OutcomeSummaryCache` is a bounded
+  VecDeque-backed LRU keyed by
+  `(lookback_secs, audit_chain_len)` per Q1(c).
+- **TriggerSource + TriggerKindSummary variants.** New
+  `Reflection` variant in both runtime + audit enums so
+  forensic searches distinguish self-learning reflection
+  turns from operator-declared crons.
+- **Binary wire-up.** `DaemonConfig` gains
+  `reflection_schedules: Vec<ReflectionScheduleConfig>`. When
+  non-empty AND an audit log is available, the daemon spawns
+  the scheduler task alongside the existing scheduler /
+  webhook listener / file watcher. Startup banner prints one
+  line per registered schedule. Graceful degradation: when
+  schedules exist but no audit log is available, a clear
+  diagnostic prints and the scheduler is not spawned.
+- **Docs.** `examples/aivyx.toml` and `docs/INSTALL.md` flip
+  from the Phase 70 "deferred-polish" caveat to a concrete
+  setup walkthrough.
+
+Streak predictions all correct: DESIGN.md → 18, PRODUCT.md →
+11, `aivyx-core/src/lib.rs` → 19 (new project record, beats
+Phase 70's 18). Tests +14 (1275 → 1289), one below the
++15-25 prediction floor — the binary wire-up didn't add
+net-new tests because the spawn pattern was already
+exercised by the existing scheduler e2e. Zero clippy
+warnings. Zero new workspace deps.
+
+**Scope note — Q3(a) role_override is recorded but not
+runtime-honored.** The schedule config validates that
+`role_override` references an existing role and the scheduler
+logs the override for forensic attribution, but the per-fire
+runtime role swap is a deferred polish: v1 runs the
+reflection turn under the daemon's active role. Operators
+who want a dedicated reflection envelope today declare a
+`[[role]]` and run the daemon under it via the existing
+role-switching path.
+
+After Phase 71 the self-learning half of P14 is genuinely
+autonomous end-to-end.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

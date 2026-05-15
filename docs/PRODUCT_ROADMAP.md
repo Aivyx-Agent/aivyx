@@ -695,6 +695,31 @@ layer.
   all fully shipped**. The PRODUCT.md forward-commitment
   ledger closes here.
 
+- **Phase 71 (Reflection scheduler loop, shipped 2026-05-15).**
+  Closes the cron-auto-firing deferral carried at Phase 70
+  exit. New `reflection_scheduler.rs` module in
+  `aivyx-channel` owns a `run_reflection_scheduler` async
+  loop spawned alongside the existing scheduler / webhook /
+  file-watch tasks. On each cron boundary it walks the audit
+  chain for `TurnStarted`/`TurnEnded` pairs in the lookback
+  window (bounded LRU cache per Q1(c)), formats a canonical
+  reflection prompt + outcome summary block, and calls
+  `TriggerDispatch::fire(TriggerSource::Reflection, ...)`.
+  Hardcoded `REFLECTION_SYSTEM_PROMPT` const per Q2(a) with
+  conservative behavioral framing (propose only on ≥3-turn
+  pattern recurrence; prefer narrow categories; empty
+  reflection is valid). Errors log + audit + skip per Q4(a);
+  no in-window retry. After Phase 71 the self-learning half
+  of P14 is genuinely autonomous: at the configured cadence
+  the agent reflects on its own behavior without operator
+  prompting, and proposed deltas land in the Phase 70 review
+  pane. Tests +14 (1275 → 1289). All three streak predictions
+  correct: DESIGN.md → 18, PRODUCT.md → 11, lib.rs → 19 (new
+  project record). Zero new workspace deps. **Scope note:**
+  Q3(a) role_override is recorded for forensic attribution
+  but not runtime-honored in v1 — per-fire role swap is a
+  deferred polish.
+
 - **Phase 70 (Reflection auto-loop, shipped 2026-05-15).**
   Closes the **self-learning half** of P14. PRODUCT.md:1133
   always promised "Reflection is the engine that proposes

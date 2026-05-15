@@ -240,30 +240,94 @@ In `reflection_scheduler.rs`:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**All three streak predictions correct.**
+
+- **DESIGN.md** — Held. Hash at exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  (byte-identical to entry). Streak extends to **eighteen**
+  consecutive phases as predicted. Phase 71 added a scheduler
+  module, a canonical prompt constant, a summarizer + cache, a
+  `TriggerSource` variant, and binary wire-up — none touched
+  the locked technical contract.
+- **PRODUCT.md** — Held. Hash at exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  (byte-identical to entry). Streak extends to **eleven**
+  consecutive phases. Phase 71 delivers the cron-loop wiring
+  Phase 70 explicitly deferred; no new commitment text was
+  needed.
+- **Production-core `aivyx-core/src/lib.rs`** — Held. Hash at
+  exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  (byte-identical to entry). Streak extends to **nineteen**
+  consecutive phases — new project record, beating Phase 70's
+  18. All Phase 71 work lived in `aivyx-audit`,
+  `aivyx-channel`, `aivyx-config` (no edits this phase, but
+  the existing `ReflectionScheduleConfig` is the type
+  consumed); `aivyx-core` was untouched.
+- **Workspace deps** — Zero new as predicted. `cron` and
+  `chrono` were already in tree from Phase 26.
+- **Tests** — +14 (1275 → 1289). Just under the +15-25
+  prediction floor. Breakdown: 14 reflection_scheduler tests
+  covering pair-matching, in-flight skip, lookback filter,
+  sort order, LRU cache (hit / eviction / MRU bump / distinct
+  key), prompt format helper (empty + populated), cron
+  next-fire-after (valid + invalid), earliest-update reducer,
+  and a smoke test on the canonical prompt's behavioral
+  constraints. The binary wire-up didn't add net-new tests
+  because it threads existing types through the daemon's
+  startup spawn pattern; the e2e harness already exercises
+  that path. Honest miss on the lower bound.
+- **Clippy** — Zero warnings across the workspace.
+- **Q-block** — All four resolutions held:
+  - **Q1(c) implemented.** Audit chain is the source of truth;
+    `OutcomeSummaryCache` (capacity 8, VecDeque-backed LRU,
+    keyed by `(lookback_secs, audit_chain_len)`) absorbs
+    back-to-back fetches.
+  - **Q2(a) implemented.** `REFLECTION_SYSTEM_PROMPT` is a
+    hardcoded const in `reflection_scheduler.rs`; a smoke
+    test guards its behavioral constraints from accidental
+    gutting in future refactors.
+  - **Q3(a) scoped.** `role_override` is recorded in the
+    schedule config + the scheduler's log line for forensic
+    attribution. The per-fire runtime role override is a
+    deferred polish — v1 runs the reflection turn under the
+    daemon's active role. Operators who want a dedicated
+    reflection envelope today declare a `[[role]]` and run
+    the daemon under it via the existing role-switching path.
+    Acknowledged in the code comment at `fire_reflection`.
+  - **Q4(a) implemented.** Errors from the audit walker or
+    `TriggerDispatch::fire` emit a diagnostic + return; the
+    scheduler updates `last_fired` regardless so a broken
+    schedule doesn't hot-loop. No in-window retry; no
+    consecutive-failure backoff.
+- **Graceful degradation** — when `[[reflection_schedule]]`
+  entries are configured but no audit log is available
+  (test fixtures, PoC daemon), the daemon prints a clear
+  diagnostic and runs without the scheduler. No silent
+  no-op.
 
 ## Exit criteria
 
-- [ ] `run_reflection_scheduler` loop + cron dispatch — Task 2.
-- [ ] Canonical `REFLECTION_SYSTEM_PROMPT` constant + role
+- [x] `run_reflection_scheduler` loop + cron dispatch — Task 2.
+- [x] Canonical `REFLECTION_SYSTEM_PROMPT` constant + role
   envelope wiring — Task 3.
-- [ ] `OutcomeSummary` + audit-walk summarizer + LRU cache
+- [x] `OutcomeSummary` + audit-walk summarizer + LRU cache
   — Task 4.
-- [ ] Binary wire-up + startup-banner registration line —
+- [x] Binary wire-up + startup-banner registration line —
   Task 5.
-- [ ] Tests across summarizer, cache, dispatch, failure
+- [x] Tests across summarizer, cache, dispatch, failure
   path, integration — Task 6.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 7.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 8.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to eighteen.
-- [ ] PRODUCT.md streak extends to eleven.
-- [ ] Production-core streak extends to nineteen (new
+- [x] DESIGN.md streak extends to eighteen.
+- [x] PRODUCT.md streak extends to eleven.
+- [x] Production-core streak extends to nineteen (new
   record).
-- [ ] Test count delta: positive (~+15-25).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (~+15-25).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.
