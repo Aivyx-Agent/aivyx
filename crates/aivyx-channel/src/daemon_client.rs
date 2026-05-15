@@ -20,9 +20,9 @@ use std::sync::Arc;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, EffectivePersonaSummary, FrameError,
-    FrontendMessage, FrontendType, IpcAttachment, PersonaDeltaSummary,
-    PersonaProposalResolution, PersonaProposalResolveSuccess, PersonaProposalSummary,
-    QueryPayload, QueryResponsePayload, StreamEventPayload,
+    FrontendMessage, FrontendType, IpcAttachment, NotificationHistoryEntry,
+    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalResolveSuccess,
+    PersonaProposalSummary, QueryPayload, QueryResponsePayload, StreamEventPayload,
 };
 use crate::daemon_server::DaemonError;
 
@@ -437,6 +437,38 @@ pub async fn list_persona_deltas(
         }
         other => Err(DaemonError::Protocol(format!(
             "expected ListPersonaDeltas, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 73 — paginated notification history walk over IPC.
+/// Returns the `(entries, total_len)` pair from
+/// `QueryPayload::ListNotificationHistory`.
+pub async fn list_notification_history(
+    socket_path: &Path,
+    from_seq: u64,
+    limit: u32,
+    target_filter: Option<&str>,
+) -> Result<(Vec<NotificationHistoryEntry>, u64), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "n-hist",
+        QueryPayload::ListNotificationHistory {
+            from_seq,
+            limit,
+            target_filter: target_filter.map(str::to_string),
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ListNotificationHistory { entries, total_len } => {
+            Ok((entries, total_len))
+        }
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListNotificationHistory, got {other:?}"
         ))),
     }
 }

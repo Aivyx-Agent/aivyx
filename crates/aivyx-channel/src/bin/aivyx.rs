@@ -102,6 +102,8 @@ mod init;
 mod init_templates;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
+#[path = "aivyx_modules/notify.rs"]
+mod notify;
 #[path = "aivyx_modules/persona.rs"]
 mod persona;
 #[path = "aivyx_modules/profile.rs"]
@@ -436,6 +438,23 @@ fn run() -> Result<(), String> {
                         .await
                     }
                 },
+            }
+        });
+    }
+
+    // ---- Phase 73: notify history subcommand --------------------
+    // IPC-backed; the audit chain lives in encrypted storage and
+    // is fetched via the daemon's ListNotificationHistory query.
+    if let CliMode::Notify(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            match sub {
+                NotifySubcommand::History { target, limit } => {
+                    notify::run_notify_history(target.as_deref(), limit).await
+                }
             }
         });
     }
@@ -989,6 +1008,23 @@ enum CliMode {
     /// Phase 64 ships export only; import lands in Phase 65
     /// per the implementation-time scope adjustment.
     Identity(IdentitySubcommand),
+    /// `aivyx notify <subcommand>`: Reach Milestone history /
+    /// inspection (Phase 73 — Tier-2 polish). Talks to the
+    /// running daemon over IPC; renders the notification
+    /// history audit chain as a flat-text table for terminal
+    /// operators. Web UI parity in the Notifications pane.
+    Notify(NotifySubcommand),
+}
+
+/// Phase 73 — `aivyx notify` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum NotifySubcommand {
+    /// `aivyx notify history [--target NAME] [--limit N]`.
+    /// Defaults: no target filter, limit 100.
+    History {
+        target: Option<String>,
+        limit: u32,
+    },
 }
 
 /// Phase 66 — `aivyx init` variant discriminator.
@@ -1273,6 +1309,80 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             provider: None,
             web_ui_port: None,
         });
+    }
+
+    // Phase 73 — `aivyx notify <subcommand>` CLI surface.
+    // Today only `history` is implemented; future Tier-2+
+    // subcommands (e.g. `notify test <target>`) plug into the
+    // same dispatcher.
+    if !args.is_empty() && args[0] == "notify" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx notify` requires a subcommand. Supported: history".to_string()
+        })?;
+        match sub.as_str() {
+            "history" => {
+                let mut target: Option<String> = None;
+                let mut limit: u32 = 100;
+                let mut idx = 2;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--target" => {
+                            let value = args.get(idx + 1).ok_or_else(|| {
+                                "`aivyx notify history --target` requires a name"
+                                    .to_string()
+                            })?;
+                            target = Some(value.clone());
+                            idx += 2;
+                        }
+                        "--limit" => {
+                            let value = args.get(idx + 1).ok_or_else(|| {
+                                "`aivyx notify history --limit` requires a value"
+                                    .to_string()
+                            })?;
+                            let parsed: u32 = value.parse().map_err(|_| {
+                                format!(
+                                    "`aivyx notify history --limit` expects \
+                                     a positive integer, got `{value}`"
+                                )
+                            })?;
+                            if parsed == 0 {
+                                return Err(
+                                    "`aivyx notify history --limit` must be ≥ 1"
+                                        .to_string(),
+                                );
+                            }
+                            limit = parsed;
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx notify \
+                                 history`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                return Ok(CliArgs {
+                    mode: CliMode::Notify(NotifySubcommand::History {
+                        target,
+                        limit,
+                    }),
+                    channel: ChannelKind::Local,
+                    role: None,
+                    no_daemon: false,
+                    mcp_servers: vec![],
+                    mcp_sse_servers: vec![],
+                    provider: None,
+                    web_ui_port: None,
+                });
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx notify` subcommand: `{other}`. \
+                     Supported: history"
+                ));
+            }
+        }
     }
 
     // Check for `init` subcommand — interactive first-run wizard
@@ -5126,5 +5236,70 @@ mod tests {
             err.contains("unrecognized identity subcommand"),
             "error: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 73 — `aivyx notify <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn notify_history_default_limit_no_target() {
+        let parsed =
+            parse_cli_args_from(&argv(&["notify", "history"])).expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Notify(NotifySubcommand::History {
+                target: None,
+                limit: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn notify_history_with_target_and_limit_flags() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "notify", "history", "--target", "phone", "--limit", "50",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Notify(NotifySubcommand::History {
+                target: Some("phone".into()),
+                limit: 50,
+            })
+        );
+    }
+
+    #[test]
+    fn notify_history_zero_limit_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "notify", "history", "--limit", "0",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("must be ≥ 1"), "{err}");
+    }
+
+    #[test]
+    fn notify_history_non_numeric_limit_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "notify", "history", "--limit", "many",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("positive integer"), "{err}");
+    }
+
+    #[test]
+    fn notify_without_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["notify"]))
+            .expect_err("must error");
+        assert!(err.contains("requires a subcommand"), "{err}");
+        assert!(err.contains("history"), "{err}");
+    }
+
+    #[test]
+    fn notify_unknown_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["notify", "wat"]))
+            .expect_err("must error");
+        assert!(err.contains("unrecognized"), "{err}");
     }
 }
