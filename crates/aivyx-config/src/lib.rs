@@ -1152,6 +1152,28 @@ pub struct NotifyTargetConfig {
     /// At most one `[[notify_target]]` may set this; the loader
     /// rejects multiple defaults at config-load time.
     pub is_default: bool,
+    /// Phase 73 — number of retry attempts after the initial
+    /// dispatch fails with a transient error class
+    /// (`Transport`, `Timeout`, or `Rejected` with HTTP status
+    /// ≥ 500 per Q2(b)). Default `0` preserves Phase 62 behavior.
+    /// Capped at 10 by the loader.
+    pub retry_count: u32,
+    /// Phase 73 — starting backoff for the first retry, in
+    /// milliseconds. Each subsequent retry waits double the
+    /// previous (`backoff * 2^attempt`). Default 500 ms; loader
+    /// rejects values below 100 ms.
+    pub retry_backoff_ms_start: u64,
+    /// Phase 73 — when both this and
+    /// [`Self::rate_limit_window_secs`] are `Some`, the daemon
+    /// allows at most `rate_limit_max` dispatch attempts per
+    /// `rate_limit_window_secs` per target. Excess attempts
+    /// record `AutoNotifyOutcomeSummary::SkippedByRateLimit`
+    /// in the audit chain and skip the backend call.
+    pub rate_limit_max: Option<u32>,
+    /// Phase 73 — sliding-window length for [`Self::rate_limit_max`].
+    /// Both fields must be set together or neither — the loader
+    /// rejects partial config naming the missing field.
+    pub rate_limit_window_secs: Option<u64>,
 }
 
 /// Per-kind notification target configuration. Phase 62 ships two
@@ -1595,7 +1617,43 @@ struct RawNotifyTarget {
     /// this; loader rejects multiple defaults.
     #[serde(default)]
     default: bool,
+    /// Phase 73 — see [`NotifyTargetConfig::retry_count`].
+    /// `#[serde(default)]` returns 0 (no retry).
+    #[serde(default)]
+    retry_count: u32,
+    /// Phase 73 — see
+    /// [`NotifyTargetConfig::retry_backoff_ms_start`]. The
+    /// `Option` distinguishes "not set" (use the default
+    /// 500 ms) from "explicit value" so the loader's lower-
+    /// bound check (≥ 100) only applies when the operator
+    /// declared the field.
+    #[serde(default)]
+    retry_backoff_ms_start: Option<u64>,
+    /// Phase 73 — see [`NotifyTargetConfig::rate_limit_max`].
+    #[serde(default)]
+    rate_limit_max: Option<u32>,
+    /// Phase 73 — see
+    /// [`NotifyTargetConfig::rate_limit_window_secs`].
+    #[serde(default)]
+    rate_limit_window_secs: Option<u64>,
 }
+
+/// Hard ceiling for `retry_count`. Beyond this we treat the
+/// config as a footgun ("retry 100 times" means a single
+/// transient outage produces a multi-minute hang per fire).
+/// Phase 73 Task 2.
+pub const MAX_RETRY_COUNT: u32 = 10;
+
+/// Lower bound for `retry_backoff_ms_start`. Below this the
+/// retry loop starts hammering the backend before it can
+/// recover from the original failure. 100ms is enough that
+/// tests with mocked backoffs run quickly while real
+/// deployments don't pound the backend.
+pub const MIN_RETRY_BACKOFF_MS_START: u64 = 100;
+
+/// Default starting backoff when the operator declares
+/// `retry_count > 0` without setting an explicit start.
+pub const DEFAULT_RETRY_BACKOFF_MS_START: u64 = 500;
 
 fn default_role_name() -> String {
     DEFAULT_ROLE_NAME.to_string()
@@ -2588,11 +2646,100 @@ impl AivyxConfig {
                     ),
                 });
             }
+            // Phase 73 — validate retry + rate-limit fields.
+            // retry_count is capped at MAX_RETRY_COUNT (10 by
+            // default) so a misconfigured 100-retry policy
+            // doesn't wedge a single fire for minutes.
+            if raw.retry_count > MAX_RETRY_COUNT {
+                return Err(ConfigError::Invalid {
+                    field: "notify_target.retry_count",
+                    reason: format!(
+                        "notify_target `{}` retry_count = {} exceeds the \
+                         hard cap of {MAX_RETRY_COUNT}. Lower retry_count \
+                         or accept the failure quickly and surface it via \
+                         the audit chain.",
+                        raw.name, raw.retry_count,
+                    ),
+                });
+            }
+            // Backoff start has an explicit lower bound only
+            // when the operator declared the field — defaults
+            // (None → DEFAULT_RETRY_BACKOFF_MS_START) skip the
+            // check.
+            let retry_backoff_ms_start = match raw.retry_backoff_ms_start {
+                Some(v) if v < MIN_RETRY_BACKOFF_MS_START => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.retry_backoff_ms_start",
+                        reason: format!(
+                            "notify_target `{}` retry_backoff_ms_start = \
+                             {} ms is below the {MIN_RETRY_BACKOFF_MS_START} \
+                             ms minimum. A short initial backoff hammers \
+                             the failing backend before it can recover.",
+                            raw.name, v,
+                        ),
+                    });
+                }
+                Some(v) => v,
+                None => DEFAULT_RETRY_BACKOFF_MS_START,
+            };
+            // Rate limit: both fields must be set or both unset.
+            match (raw.rate_limit_max, raw.rate_limit_window_secs) {
+                (Some(_), None) => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.rate_limit_window_secs",
+                        reason: format!(
+                            "notify_target `{}` declares `rate_limit_max` \
+                             without `rate_limit_window_secs`; both fields \
+                             must be set together (or neither).",
+                            raw.name,
+                        ),
+                    });
+                }
+                (None, Some(_)) => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.rate_limit_max",
+                        reason: format!(
+                            "notify_target `{}` declares `rate_limit_window_secs` \
+                             without `rate_limit_max`; both fields must be \
+                             set together (or neither).",
+                            raw.name,
+                        ),
+                    });
+                }
+                (Some(0), _) => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.rate_limit_max",
+                        reason: format!(
+                            "notify_target `{}` rate_limit_max = 0 is \
+                             meaningless (no dispatches would ever be \
+                             allowed). Either remove the rate-limit fields \
+                             or set max ≥ 1.",
+                            raw.name,
+                        ),
+                    });
+                }
+                (_, Some(0)) => {
+                    return Err(ConfigError::Invalid {
+                        field: "notify_target.rate_limit_window_secs",
+                        reason: format!(
+                            "notify_target `{}` rate_limit_window_secs = 0 \
+                             is meaningless. Set window_secs ≥ 1 or remove \
+                             the rate-limit fields.",
+                            raw.name,
+                        ),
+                    });
+                }
+                _ => {}
+            }
             notify_targets.push(NotifyTargetConfig {
                 name: raw.name,
                 kind,
                 enabled: true,
                 is_default: raw.default,
+                retry_count: raw.retry_count,
+                retry_backoff_ms_start,
+                rate_limit_max: raw.rate_limit_max,
+                rate_limit_window_secs: raw.rate_limit_window_secs,
             });
         }
 

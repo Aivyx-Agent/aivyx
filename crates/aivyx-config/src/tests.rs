@@ -4696,3 +4696,289 @@ notify_targets = ["phone", "ghost"]
     }
     drop(env);
 }
+
+// ==============================================================
+// Phase 73 — retry + rate-limit fields on notify_target
+// ==============================================================
+
+#[test]
+fn retry_fields_default_to_zero_count_and_default_backoff() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retry-defaults");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let t = &cfg.notify_targets[0];
+    assert_eq!(t.retry_count, 0);
+    assert_eq!(t.retry_backoff_ms_start, 500); // DEFAULT_RETRY_BACKOFF_MS_START
+    assert!(t.rate_limit_max.is_none());
+    assert!(t.rate_limit_window_secs.is_none());
+    drop(env);
+}
+
+#[test]
+fn retry_count_above_cap_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retry-too-high");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+retry_count = 100
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.retry_count");
+            assert!(reason.contains("100"), "{reason}");
+            assert!(reason.contains("hard cap"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn retry_backoff_below_floor_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("backoff-too-low");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+retry_count = 3
+retry_backoff_ms_start = 50
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.retry_backoff_ms_start");
+            assert!(reason.contains("50"), "{reason}");
+            assert!(reason.contains("100"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn retry_explicit_values_parse() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retry-explicit");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+retry_count = 5
+retry_backoff_ms_start = 200
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let t = &cfg.notify_targets[0];
+    assert_eq!(t.retry_count, 5);
+    assert_eq!(t.retry_backoff_ms_start, 200);
+    drop(env);
+}
+
+#[test]
+fn rate_limit_partial_max_without_window_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rate-no-window");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+rate_limit_max = 10
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.rate_limit_window_secs");
+            assert!(reason.contains("both"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn rate_limit_partial_window_without_max_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rate-no-max");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+rate_limit_window_secs = 3600
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.rate_limit_max");
+            assert!(reason.contains("both"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn rate_limit_zero_max_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rate-zero-max");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+rate_limit_max = 0
+rate_limit_window_secs = 60
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "notify_target.rate_limit_max");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn rate_limit_both_set_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rate-both");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+rate_limit_max = 10
+rate_limit_window_secs = 3600
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let t = &cfg.notify_targets[0];
+    assert_eq!(t.rate_limit_max, Some(10));
+    assert_eq!(t.rate_limit_window_secs, Some(3600));
+    drop(env);
+}

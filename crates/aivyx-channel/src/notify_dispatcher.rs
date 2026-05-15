@@ -506,6 +506,10 @@ mod tests {
             },
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let d = build_notify_dispatcher(&targets, None, None, None).expect("ok");
         assert_eq!(d.len(), 1);
@@ -522,6 +526,10 @@ mod tests {
             },
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let err = build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
         assert!(err.contains("`phone`"), "error: {err}");
@@ -537,6 +545,10 @@ mod tests {
             },
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let d = build_notify_dispatcher(&targets, Some(transport), None, None).expect("ok");
@@ -554,6 +566,10 @@ mod tests {
             },
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let err =
@@ -572,6 +588,10 @@ mod tests {
                 },
                 enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
             },
             NotifyTargetConfig {
                 name: "alerts".into(),
@@ -580,6 +600,10 @@ mod tests {
                 },
                 enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
             },
         ];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
@@ -599,6 +623,10 @@ mod tests {
             kind: NotifyTargetKind::WebUi,
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let err =
             build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
@@ -613,6 +641,10 @@ mod tests {
             kind: NotifyTargetKind::WebUi,
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
         let d = build_notify_dispatcher(&targets, None, None, Some(bc)).expect("ok");
@@ -628,6 +660,10 @@ mod tests {
             kind: NotifyTargetKind::WebUi,
             enabled: true,
             is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
         }];
         let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
         let mut rx = bc.subscribe();
