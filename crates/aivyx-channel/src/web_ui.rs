@@ -553,6 +553,39 @@ mod tests {
         assert!(HTML.contains("'VerifyAuditChain'"));
     }
 
+    /// Phase 74 — the embedded HTML must wire the Memory pane:
+    /// tab presence, the three query kinds, EvictMemoryTopic
+    /// envelope construction, and the search bar. Substring
+    /// smoke tests guard against accidental gutting of the
+    /// memory-polish surface.
+    #[test]
+    fn html_contains_phase_74_memory_pane_wiring() {
+        assert!(
+            HTML.contains("data-pane=\"memory\""),
+            "must declare the memory tab/pane"
+        );
+        assert!(
+            HTML.contains("'ListMemoryTopics'"),
+            "must dispatch ListMemoryTopics queries"
+        );
+        assert!(
+            HTML.contains("'GetMemoryTopicEntries'"),
+            "must dispatch GetMemoryTopicEntries queries"
+        );
+        assert!(
+            HTML.contains("'SearchMemory'"),
+            "must dispatch SearchMemory queries"
+        );
+        assert!(
+            HTML.contains("'EvictMemoryTopic'"),
+            "must construct EvictMemoryTopic envelopes"
+        );
+        assert!(
+            HTML.contains("mem-search-input"),
+            "must include the memory search bar"
+        );
+    }
+
     /// Phase 73 — the embedded HTML must wire the Notifications
     /// pane: tab presence, target-filter chip, query dispatch,
     /// and the five outcome badge classes (delivered, failed,

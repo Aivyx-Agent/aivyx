@@ -411,6 +411,101 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .proposal-card .proposal-status.superseded { background: var(--border); color: var(--text); }
 .proposal-card .proposal-category { font-weight: 600; color: var(--accent); }
 
+/* Phase 74 — Memory pane: search bar + topic list + detail view. */
+.mem-searchbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.mem-searchbar input {
+  flex: 1;
+  padding: 5px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font);
+  font-size: 13px;
+}
+.mem-searchbar button {
+  padding: 5px 14px;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+}
+.mem-searchbar button.secondary {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.mem-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+}
+.mem-topics {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  max-height: 480px;
+  overflow-y: auto;
+}
+.mem-topic-row {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.mem-topic-row:last-child { border-bottom: 0; }
+.mem-topic-row:hover { background: var(--accent-dim); }
+.mem-topic-row.active { background: var(--accent); color: var(--bg); }
+.mem-detail {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  padding: 10px 12px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.mem-detail .mem-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.mem-detail .mem-evict-btn {
+  padding: 3px 10px;
+  background: #cb4b16;
+  color: var(--bg);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+}
+.mem-entry {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.mem-entry .mem-entry-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.mem-entry .mem-entry-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Phase 73 — Notifications pane: filter chips + outcome badges. */
 .notif-filter {
   display: flex;
@@ -620,6 +715,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="persona">Persona <span class="refresh" data-refresh="persona">↻</span></div>
     <div class="tab" data-pane="proposals">Proposals <span class="refresh" data-refresh="proposals">↻</span></div>
     <div class="tab" data-pane="notifications">Notifications <span class="refresh" data-refresh="notifications">↻</span></div>
+    <div class="tab" data-pane="memory">Memory <span class="refresh" data-refresh="memory">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -715,6 +811,23 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div id="notifications-body" class="empty">Click Refresh to load.</div>
   </div>
+
+  <!-- Memory pane (Phase 74 — memory polish) -->
+  <div class="pane list-pane" data-pane="memory">
+    <div class="pane-header">
+      <span class="pane-title">Memory</span>
+      <span class="pane-action" data-refresh="memory">Refresh</span>
+    </div>
+    <div class="mem-searchbar">
+      <input type="text" id="mem-search-input" placeholder="Search topics + bodies… (empty = browse all)">
+      <button id="mem-search-btn">Search</button>
+      <button id="mem-clear-search-btn" class="secondary">Clear</button>
+    </div>
+    <div class="mem-layout">
+      <div id="mem-topics" class="mem-topics empty">Click Refresh to load.</div>
+      <div id="mem-detail" class="mem-detail empty">Select a topic.</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -741,6 +854,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   let proposalFilter = 'pending';
   // Phase 73 — notifications pane state.
   let notifTargetFilter = ''; // '' = all targets
+  // Phase 74 — memory pane state.
+  let memActiveTopic = null;
+  let memSearchMode = false;
+  let nextMemEvictSeq = 0;
+  const pendingMemEvicts = new Map();
   let queryCounter = 0;
   function nextQueryId(prefix) {
     queryCounter += 1;
@@ -844,6 +962,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         const cb = pendingProposalResolves.get(msg.id);
         if (cb) {
           pendingProposalResolves.delete(msg.id);
+          cb(msg);
+        }
+        break;
+      }
+
+      case 'MemoryEvictResolved': {
+        // Phase 74 — memory eviction response.
+        const cb = pendingMemEvicts.get(msg.id);
+        if (cb) {
+          pendingMemEvicts.delete(msg.id);
           cb(msg);
         }
         break;
@@ -1843,6 +1971,179 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     loadNotifications();
   });
 
+  // ---- Memory pane (Phase 74 — memory polish) ----
+
+  function loadMemoryTopics() {
+    memSearchMode = false;
+    const topicsEl = document.getElementById('mem-topics');
+    const detailEl = document.getElementById('mem-detail');
+    topicsEl.className = 'mem-topics';
+    topicsEl.innerHTML = '<div class="empty">Loading…</div>';
+    detailEl.className = 'mem-detail empty';
+    detailEl.textContent = 'Select a topic.';
+    sendQuery('mtopics', { kind: 'ListMemoryTopics' }, function(resp) {
+      if (resp.kind === 'QueryError') {
+        renderError(topicsEl, resp.code, resp.message);
+        return;
+      }
+      if (resp.kind !== 'ListMemoryTopics') return;
+      renderMemoryTopics(resp.topics || []);
+    });
+  }
+
+  function renderMemoryTopics(topics) {
+    const topicsEl = document.getElementById('mem-topics');
+    topicsEl.className = 'mem-topics';
+    topicsEl.innerHTML = '';
+    if (topics.length === 0) {
+      topicsEl.className = 'mem-topics empty';
+      topicsEl.textContent = 'No memory topics yet.';
+      return;
+    }
+    topics.forEach(function(t) {
+      const row = document.createElement('div');
+      row.className = 'mem-topic-row' + (t === memActiveTopic ? ' active' : '');
+      row.textContent = t;
+      row.addEventListener('click', function() {
+        memActiveTopic = t;
+        document.querySelectorAll('.mem-topic-row').forEach(function(r) {
+          r.classList.toggle('active', r === row);
+        });
+        loadMemoryTopicEntries(t);
+      });
+      topicsEl.appendChild(row);
+    });
+  }
+
+  function loadMemoryTopicEntries(topic) {
+    const detailEl = document.getElementById('mem-detail');
+    detailEl.className = 'mem-detail';
+    detailEl.innerHTML = '<div class="empty">Loading…</div>';
+    sendQuery('mentries', {
+      kind: 'GetMemoryTopicEntries',
+      topic: topic,
+      limit: 64,
+    }, function(resp) {
+      if (resp.kind === 'QueryError') {
+        renderError(detailEl, resp.code, resp.message);
+        return;
+      }
+      if (resp.kind !== 'GetMemoryTopicEntries') return;
+      renderMemoryDetail(topic, resp.entries || [], true);
+    });
+  }
+
+  function runMemorySearch() {
+    const q = document.getElementById('mem-search-input').value;
+    memSearchMode = true;
+    const detailEl = document.getElementById('mem-detail');
+    detailEl.className = 'mem-detail';
+    detailEl.innerHTML = '<div class="empty">Searching…</div>';
+    sendQuery('msearch', {
+      kind: 'SearchMemory',
+      query: q,
+      limit: 64,
+    }, function(resp) {
+      if (resp.kind === 'QueryError') {
+        renderError(detailEl, resp.code, resp.message);
+        return;
+      }
+      if (resp.kind !== 'SearchMemory') return;
+      renderMemoryDetail(
+        'search: "' + q + '"',
+        resp.matches || [],
+        false
+      );
+    });
+  }
+
+  function renderMemoryDetail(title, entries, showEvict) {
+    const detailEl = document.getElementById('mem-detail');
+    detailEl.className = 'mem-detail';
+    detailEl.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'mem-detail-head';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'pane-title';
+    titleSpan.textContent = title + ' (' + entries.length + ')';
+    head.appendChild(titleSpan);
+    if (showEvict && memActiveTopic) {
+      const evictBtn = document.createElement('button');
+      evictBtn.className = 'mem-evict-btn';
+      evictBtn.textContent = 'Evict topic';
+      evictBtn.addEventListener('click', function() {
+        if (!confirm('Delete every entry under topic `' +
+            memActiveTopic + '`? This cannot be undone.')) {
+          return;
+        }
+        evictMemoryTopic(memActiveTopic);
+      });
+      head.appendChild(evictBtn);
+    }
+    detailEl.appendChild(head);
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No entries.';
+      detailEl.appendChild(empty);
+      return;
+    }
+    entries.forEach(function(e) {
+      const card = document.createElement('div');
+      card.className = 'mem-entry';
+      const meta = document.createElement('div');
+      meta.className = 'mem-entry-meta';
+      const created = formatUnixMs(e.created_at_secs * 1000);
+      const read = e.last_read_at_secs
+        ? formatUnixMs(e.last_read_at_secs * 1000)
+        : 'never';
+      meta.textContent =
+        '[#' + e.seq + '] ' + e.topic +
+        ' · written ' + created + ' · last read ' + read;
+      const body = document.createElement('div');
+      body.className = 'mem-entry-body';
+      body.textContent = e.body;
+      card.appendChild(meta);
+      card.appendChild(body);
+      detailEl.appendChild(card);
+    });
+  }
+
+  function evictMemoryTopic(topic) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      alert('Not connected to daemon.');
+      return;
+    }
+    const id = 'mev-' + (nextMemEvictSeq++);
+    pendingMemEvicts.set(id, function(resp) {
+      if (resp.ok) {
+        alert('Evicted ' + (resp.deleted || 0) +
+              ' entries from `' + topic + '`.');
+        memActiveTopic = null;
+        loadMemoryTopics();
+      } else {
+        alert('Evict failed: ' + (resp.error || 'unknown error'));
+      }
+    });
+    ws.send(JSON.stringify({
+      type: 'EvictMemoryTopic',
+      id: id,
+      topic: topic,
+    }));
+  }
+
+  document.getElementById('mem-search-btn')
+    .addEventListener('click', runMemorySearch);
+  document.getElementById('mem-search-input')
+    .addEventListener('keydown', function(ev) {
+      if (ev.key === 'Enter') runMemorySearch();
+    });
+  document.getElementById('mem-clear-search-btn')
+    .addEventListener('click', function() {
+      document.getElementById('mem-search-input').value = '';
+      loadMemoryTopics();
+    });
+
   // ------------------------------------------------------------------
   // Tab switching
   // ------------------------------------------------------------------
@@ -1881,6 +2182,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       else if (which === 'persona') loadPersona();
       else if (which === 'proposals') loadProposals();
       else if (which === 'notifications') loadNotifications();
+      else if (which === 'memory') loadMemoryTopics();
     });
   });
 
