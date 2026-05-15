@@ -199,6 +199,12 @@ pub enum TriggerKindSummary {
     Cron,
     Webhook,
     FileWatch,
+    /// Phase 71 — reflection-scheduler fire. Distinct from
+    /// `Cron` so forensic searches can tell "the agent
+    /// reflected on its own behavior" apart from "an operator-
+    /// declared cron job ran." Reflection turns carry the
+    /// canonical reflection prompt + outcome-summary input.
+    Reflection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

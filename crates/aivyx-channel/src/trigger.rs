@@ -36,6 +36,10 @@ pub enum TriggerSource {
     Cron,
     Webhook,
     FileWatch,
+    /// Phase 71 — reflection-scheduler fire. Distinct from `Cron`
+    /// so audit forensics + log lines can tell self-learning
+    /// reflection turns apart from operator-declared cron jobs.
+    Reflection,
 }
 
 impl std::fmt::Display for TriggerSource {
@@ -44,6 +48,7 @@ impl std::fmt::Display for TriggerSource {
             TriggerSource::Cron => write!(f, "cron"),
             TriggerSource::Webhook => write!(f, "webhook"),
             TriggerSource::FileWatch => write!(f, "file-watch"),
+            TriggerSource::Reflection => write!(f, "reflection"),
         }
     }
 }
@@ -57,6 +62,7 @@ impl From<TriggerSource> for TriggerKindSummary {
             TriggerSource::Cron => TriggerKindSummary::Cron,
             TriggerSource::Webhook => TriggerKindSummary::Webhook,
             TriggerSource::FileWatch => TriggerKindSummary::FileWatch,
+            TriggerSource::Reflection => TriggerKindSummary::Reflection,
         }
     }
 }
