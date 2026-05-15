@@ -553,6 +553,41 @@ mod tests {
         assert!(HTML.contains("'VerifyAuditChain'"));
     }
 
+    /// Phase 73 — the embedded HTML must wire the Notifications
+    /// pane: tab presence, target-filter chip, query dispatch,
+    /// and the five outcome badge classes (delivered, failed,
+    /// skipped_empty_response, skipped_by_condition,
+    /// skipped_by_rate_limit). Substring smoke tests guard
+    /// against accidental gutting of the Tier-2 polish surface.
+    #[test]
+    fn html_contains_phase_73_notifications_pane_wiring() {
+        assert!(
+            HTML.contains("data-pane=\"notifications\""),
+            "must declare the notifications tab/pane"
+        );
+        assert!(
+            HTML.contains("'ListNotificationHistory'"),
+            "must dispatch ListNotificationHistory queries"
+        );
+        assert!(
+            HTML.contains("data-notif-target-filter=\"\""),
+            "must include the all-targets filter chip"
+        );
+        // Five outcome badge classes — colour-coded per CSS.
+        for badge in [
+            "notif-outcome.delivered",
+            "notif-outcome.failed",
+            "notif-outcome.skipped_empty_response",
+            "notif-outcome.skipped_by_condition",
+            "notif-outcome.skipped_by_rate_limit",
+        ] {
+            assert!(
+                HTML.contains(badge),
+                "must style the {badge} outcome badge"
+            );
+        }
+    }
+
     /// Phase 70 — the embedded HTML must wire the Proposals
     /// pane: tab presence, filter chips, ListPersonaProposals
     /// query dispatch, and ResolvePersonaProposal envelope

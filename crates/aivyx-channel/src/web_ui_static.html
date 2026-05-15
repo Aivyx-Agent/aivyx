@@ -410,6 +410,58 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .proposal-card .proposal-status.rejected { background: #cb4b16; color: var(--bg); }
 .proposal-card .proposal-status.superseded { background: var(--border); color: var(--text); }
 .proposal-card .proposal-category { font-weight: 600; color: var(--accent); }
+
+/* Phase 73 — Notifications pane: filter chips + outcome badges. */
+.notif-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  align-items: center;
+}
+.notif-filter-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.notif-filter-chip.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.notif-filter-chip:hover:not(.active) { background: var(--accent-dim); color: var(--text); }
+.notif-row {
+  display: grid;
+  grid-template-columns: 160px 120px 140px 1fr;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  align-items: center;
+}
+.notif-row .notif-ts { color: var(--text-dim); }
+.notif-row .notif-target { font-weight: 600; color: var(--accent); }
+.notif-row .notif-outcome {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-align: center;
+  text-transform: lowercase;
+}
+.notif-row .notif-outcome.delivered { background: #2aa198; color: var(--bg); }
+.notif-row .notif-outcome.failed { background: #cb4b16; color: var(--bg); }
+.notif-row .notif-outcome.skipped_empty_response,
+.notif-row .notif-outcome.skipped_by_condition,
+.notif-row .notif-outcome.skipped_by_rate_limit { background: #b58900; color: var(--bg); }
+.notif-row .notif-detail { color: var(--text-dim); word-break: break-word; }
 .proposal-card .proposal-op {
   margin: 6px 0;
   padding: 6px 8px;
@@ -567,6 +619,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="profile">Profile <span class="refresh" data-refresh="profile">↻</span></div>
     <div class="tab" data-pane="persona">Persona <span class="refresh" data-refresh="persona">↻</span></div>
     <div class="tab" data-pane="proposals">Proposals <span class="refresh" data-refresh="proposals">↻</span></div>
+    <div class="tab" data-pane="notifications">Notifications <span class="refresh" data-refresh="notifications">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -649,6 +702,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div id="proposals-body" class="empty">Click Refresh to load.</div>
   </div>
+
+  <!-- Notifications pane (Phase 73 — Reach Tier-2 polish) -->
+  <div class="pane list-pane" data-pane="notifications">
+    <div class="pane-header">
+      <span class="pane-title">Notification history</span>
+      <span class="pane-action" data-refresh="notifications">Refresh</span>
+    </div>
+    <div class="notif-filter">
+      <span class="notif-filter-chip active" data-notif-target-filter="">All targets</span>
+      <span id="notif-target-chips"></span>
+    </div>
+    <div id="notifications-body" class="empty">Click Refresh to load.</div>
+  </div>
 </div>
 
 <script>
@@ -673,6 +739,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   const pendingProposalResolves = new Map();
   let nextProposalResolveSeq = 0;
   let proposalFilter = 'pending';
+  // Phase 73 — notifications pane state.
+  let notifTargetFilter = ''; // '' = all targets
   let queryCounter = 0;
   function nextQueryId(prefix) {
     queryCounter += 1;
@@ -1687,6 +1755,94 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     }));
   }
 
+  // ---- Notifications pane (Phase 73 — Reach Tier-2 polish) ----
+
+  function loadNotifications() {
+    const body = document.getElementById('notifications-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    const payload = {
+      kind: 'ListNotificationHistory',
+      from_seq: 0,
+      limit: 200,
+      target_filter: notifTargetFilter ? notifTargetFilter : null,
+    };
+    sendQuery('plistnotif', payload, function(resp) {
+      if (resp.kind === 'QueryError') {
+        renderError(body, resp.code, resp.message);
+        return;
+      }
+      if (resp.kind !== 'ListNotificationHistory') return;
+      renderNotificationHistory(body, resp.entries || [], resp.total_len || 0);
+      refreshNotifTargetChips(resp.entries || []);
+    });
+  }
+
+  function renderNotificationHistory(body, entries, total_len) {
+    body.innerHTML = '';
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent =
+        notifTargetFilter
+          ? 'No notification history for target `' +
+              escapeHtml(notifTargetFilter) + '`.'
+          : 'No notification history yet.';
+      body.appendChild(empty);
+      return;
+    }
+    entries.forEach(function(e) {
+      const row = document.createElement('div');
+      row.className = 'notif-row';
+      row.innerHTML =
+        '<span class="notif-ts">' + escapeHtml(formatUnixMs(e.dispatched_at_unix_ms)) + '</span>' +
+        '<span class="notif-target">' + escapeHtml(e.target_name) + '</span>' +
+        '<span class="notif-outcome ' + escapeHtml(e.outcome_kind) + '">' +
+          escapeHtml(e.outcome_kind) + '</span>' +
+        '<span class="notif-detail">' +
+          escapeHtml(e.trigger_kind) + ' / ' + escapeHtml(e.trigger_id) +
+          (e.outcome_detail ? ' · ' + escapeHtml(e.outcome_detail) : '') +
+        '</span>';
+      body.appendChild(row);
+    });
+    if (total_len > entries.length) {
+      const note = document.createElement('div');
+      note.className = 'row-meta';
+      note.textContent =
+        '(showing first ' + entries.length + ' of ' + total_len +
+        ' notifications)';
+      body.appendChild(note);
+    }
+  }
+
+  function refreshNotifTargetChips(entries) {
+    const chips = document.getElementById('notif-target-chips');
+    if (!chips) return;
+    const targets = Array.from(new Set(entries.map(function(e) {
+      return e.target_name;
+    }))).sort();
+    chips.innerHTML = '';
+    targets.forEach(function(t) {
+      const chip = document.createElement('span');
+      chip.className = 'notif-filter-chip' + (notifTargetFilter === t ? ' active' : '');
+      chip.setAttribute('data-notif-target-filter', t);
+      chip.textContent = t;
+      chips.appendChild(chip);
+    });
+  }
+
+  // Filter-chip click handler. Delegated so dynamically-rendered
+  // target chips also pick it up.
+  document.addEventListener('click', function(ev) {
+    const chip = ev.target.closest('[data-notif-target-filter]');
+    if (!chip) return;
+    notifTargetFilter = chip.getAttribute('data-notif-target-filter') || '';
+    document.querySelectorAll('[data-notif-target-filter]').forEach(function(c) {
+      c.classList.toggle('active', c === chip);
+    });
+    loadNotifications();
+  });
+
   // ------------------------------------------------------------------
   // Tab switching
   // ------------------------------------------------------------------
@@ -1724,6 +1880,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       else if (which === 'profile') loadProfile();
       else if (which === 'persona') loadPersona();
       else if (which === 'proposals') loadProposals();
+      else if (which === 'notifications') loadNotifications();
     });
   });
 
