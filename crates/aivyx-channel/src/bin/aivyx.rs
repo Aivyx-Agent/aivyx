@@ -1949,10 +1949,6 @@ async fn run_async(
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,
     } = config;
-    // Phase 70 — surfaced for future wiring (Task 5). Bound here
-    // so the destructure remains exhaustive; consumed when the
-    // reflection scheduler hooks in.
-    let _ = &config_reflection_schedules;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
             name: cli.name,
@@ -3285,6 +3281,11 @@ async fn run_async(
             // handlers in `handle_query` and the resolve arm
             // can read the chain and append status transitions.
             persona_proposal_log: Some(Arc::clone(&persona_proposal_log)),
+            // Phase 71 — validated reflection schedules from the
+            // config loader. The daemon spawns
+            // run_reflection_scheduler when this is non-empty AND
+            // an audit log is configured.
+            reflection_schedules: config_reflection_schedules.clone(),
         })
             .await;
 

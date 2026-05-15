@@ -180,6 +180,13 @@ pub struct DaemonConfig {
     /// return empty / not-wired responses.
     pub persona_proposal_log:
         Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
+    /// Phase 71 — validated `[[reflection_schedule]]` entries
+    /// from the config loader. When non-empty AND an audit log
+    /// is configured, the daemon spawns
+    /// `run_reflection_scheduler` to fire reflection turns on
+    /// each entry's cron pattern. When empty, the reflection
+    /// scheduler task is not spawned.
+    pub reflection_schedules: Vec<aivyx_config::ReflectionScheduleConfig>,
 }
 
 /// Run the daemon server.
@@ -215,6 +222,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         shared_persona,
         web_ui_broadcaster,
         persona_proposal_log,
+        reflection_schedules,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -312,6 +320,47 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             crate::file_watcher::run_file_watcher(fw_dispatch, store, fw_shutdown).await;
         })
     });
+
+    // Phase 71 — spawn the reflection scheduler if any
+    // `[[reflection_schedule]]` entries are configured AND an
+    // audit log is available (the loop reads the chain to
+    // build outcome summaries). If either prerequisite is
+    // missing the task is simply not spawned; the config block
+    // sits idle.
+    let _reflection_scheduler_handle = match (audit_log.as_ref(), reflection_schedules.is_empty()) {
+        (Some(al), false) => {
+            let rs_dispatch = trigger_dispatch.clone();
+            let rs_shutdown = shutdown.clone();
+            let rs_audit = Arc::clone(al);
+            let rs_schedules = reflection_schedules.clone();
+            for sched in &rs_schedules {
+                eprintln!(
+                    "aivyx reflection schedule {:?} registered (cron={:?}, \
+                     lookback={}s)",
+                    sched.name, sched.cron, sched.lookback_window_secs,
+                );
+            }
+            Some(tokio::spawn(async move {
+                crate::reflection_scheduler::run_reflection_scheduler(
+                    rs_schedules,
+                    rs_dispatch,
+                    rs_audit,
+                    rs_shutdown,
+                )
+                .await;
+            }))
+        }
+        (None, false) => {
+            eprintln!(
+                "aivyx daemon: {} [[reflection_schedule]] entries configured \
+                 but no audit log is available — reflection scheduler not \
+                 spawned (outcome summaries require the audit chain)",
+                reflection_schedules.len(),
+            );
+            None
+        }
+        _ => None,
+    };
 
     // Spawn the web UI server if a port is configured.
     let _web_ui_handle = web_ui_port.map(|port| {
@@ -1035,6 +1084,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         ),
         web_ui_broadcaster: None,
         persona_proposal_log: None,
+        reflection_schedules: Vec::new(),
     }).await
 }
 
