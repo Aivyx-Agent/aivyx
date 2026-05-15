@@ -193,6 +193,14 @@ pub enum AutoNotifyOutcomeSummary {
     /// `"on_completed_non_empty"`) so forensic searches can
     /// answer "why didn't this fire?" definitively.
     SkippedByCondition { condition: String },
+    /// Phase 73 — the target's in-memory rate-limit token bucket
+    /// was exhausted when this dispatch was attempted, so the
+    /// backend call was deliberately skipped. `limit` and
+    /// `window_secs` carry the effective policy at the time of
+    /// the skip so audit forensics can answer "what was the
+    /// rate limit when this was skipped?" without needing the
+    /// live config.
+    SkippedByRateLimit { limit: u32, window_secs: u64 },
 }
 
 /// Phase 67 — trigger kind label for the audit chain. Mirrors

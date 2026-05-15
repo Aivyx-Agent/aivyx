@@ -1468,6 +1468,18 @@ async fn handle_query(
             let proposal = log.get(&proposal_id).map(proposal_summary_from_view);
             QueryResponsePayload::GetPersonaProposal { proposal }
         }
+        // Phase 73 — notification history. Real handler lands in
+        // Task 5; the IPC envelope is in place so this returns a
+        // clear "not yet wired" message until then.
+        QueryPayload::ListNotificationHistory { .. } => {
+            QueryResponsePayload::QueryError {
+                code: "not_yet_wired".into(),
+                message: "ListNotificationHistory handler is pending Phase \
+                          73 Task 5 — audit-chain walker not yet plumbed \
+                          into the daemon's query path"
+                    .into(),
+            }
+        }
     }
 }
 

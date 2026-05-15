@@ -161,6 +161,16 @@ pub enum QueryPayload {
     GetPersonaProposal {
         proposal_id: String,
     },
+    /// Phase 73 — paginated walk of the audit chain for
+    /// `AutoNotifyDispatched` events. The daemon filters by
+    /// `target_filter` when set and renders each match into a
+    /// `NotificationHistoryEntry`. `limit` is server-side
+    /// capped (same as audit-entry queries: 500 max per page).
+    ListNotificationHistory {
+        from_seq: u64,
+        limit: u32,
+        target_filter: Option<String>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -249,6 +259,39 @@ pub enum QueryResponsePayload {
     GetPersonaProposal {
         proposal: Option<PersonaProposalSummary>,
     },
+    /// Phase 73 — response to [`QueryPayload::ListNotificationHistory`].
+    /// `entries` is the filtered page; `total_len` is the total
+    /// number of `AutoNotifyDispatched` audit events matching
+    /// the filter (uncapped by `limit`).
+    ListNotificationHistory {
+        entries: Vec<NotificationHistoryEntry>,
+        total_len: u64,
+    },
+}
+
+/// Phase 73 — flat wire view of one `AuditEvent::AutoNotifyDispatched`
+/// entry. Mirrors the shape of `AuditEntrySummary` (Phase 47) but
+/// projects the dispatch-specific fields into top-level keys so the
+/// Web UI / CLI don't have to dig into a nested JSON.
+///
+/// `outcome_kind` is the stable string label of
+/// `AutoNotifyOutcomeSummary` (`"delivered"`, `"failed"`,
+/// `"skipped_empty_response"`, `"skipped_by_condition"`,
+/// `"skipped_by_rate_limit"`). `outcome_detail` carries
+/// variant-specific data — error message for `failed`, condition
+/// label for `skipped_by_condition`, `"<limit>/<window_secs>s"`
+/// for `skipped_by_rate_limit`, empty for `delivered` and
+/// `skipped_empty_response`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationHistoryEntry {
+    pub seq: u64,
+    pub dispatched_at_unix_ms: u64,
+    pub session_id: String,
+    pub trigger_kind: String,
+    pub trigger_id: String,
+    pub target_name: String,
+    pub outcome_kind: String,
+    pub outcome_detail: String,
 }
 
 /// Minimal per-session metadata returned by
@@ -1061,6 +1104,23 @@ mod tests {
                     proposal_id: "pp-001".into(),
                 },
             },
+            // Phase 73 — notification history queries.
+            FrontendMessage::Query {
+                id: "q-200".into(),
+                payload: QueryPayload::ListNotificationHistory {
+                    from_seq: 0,
+                    limit: 100,
+                    target_filter: None,
+                },
+            },
+            FrontendMessage::Query {
+                id: "q-201".into(),
+                payload: QueryPayload::ListNotificationHistory {
+                    from_seq: 50,
+                    limit: 25,
+                    target_filter: Some("phone".into()),
+                },
+            },
             // Phase 70 — Persona proposal resolutions.
             FrontendMessage::ResolvePersonaProposal {
                 id: "rs-1".into(),
@@ -1363,6 +1423,23 @@ mod tests {
                 id: "q-101".into(),
                 payload: QueryResponsePayload::GetPersonaProposal {
                     proposal: None,
+                },
+            },
+            // Phase 73 — notification history response.
+            DaemonMessage::QueryResponse {
+                id: "q-200".into(),
+                payload: QueryResponsePayload::ListNotificationHistory {
+                    entries: vec![NotificationHistoryEntry {
+                        seq: 42,
+                        dispatched_at_unix_ms: 1_715_000_000_000,
+                        session_id: "ses-abc".into(),
+                        trigger_kind: "Cron".into(),
+                        trigger_id: "morning-summary".into(),
+                        target_name: "phone".into(),
+                        outcome_kind: "delivered".into(),
+                        outcome_detail: String::new(),
+                    }],
+                    total_len: 1,
                 },
             },
             DaemonMessage::QueryResponse {
