@@ -375,11 +375,32 @@ tightest review feedback loop: every proposed delta can fire
 a `kind = "web-ui"` notification so the browser tab pings the
 operator the moment a proposal lands.
 
-**Cron-fired auto-reflection** is the next polish along this
-axis. The `[[reflection_schedule]]` config section is parsed
-and validated today, but its scheduler-loop wiring is a
-deferred follow-up. For now, fire reflection turns via the
-existing `[[schedule]]` substrate.
+**Cron-fired auto-reflection (Phase 71)** runs on the
+configured cron. Declare one or more `[[reflection_schedule]]`
+blocks in `aivyx.toml`:
+
+```toml
+[[reflection_schedule]]
+name = "nightly-reflection"
+cron = "0 0 23 * * *"          # 11pm daily
+lookback_window_secs = 86400   # last 24 hours
+```
+
+The daemon spawns a scheduler task at startup (one line per
+registered schedule in the boot banner) that fires a reflection
+turn at each cron boundary. The reflection turn carries the
+canonical reflection prompt plus the lookback-window's
+TurnStarted/TurnEnded outcome summaries from the audit chain;
+the agent uses `reflection.propose` to record Persona deltas as
+Pending rows for asynchronous operator review.
+
+The canonical prompt is intentionally conservative: it tells
+the agent to propose only when a pattern recurs in ≥3 distinct
+turns within the window, prefer narrower categories
+(`BehavioralPreferences`, `LearnedContext`,
+`CommunicationAdaptations`) over identity-level changes, and
+return empty when no clear pattern emerges. An empty reflection
+turn is valid and preferred over speculation.
 
 ## Uninstall
 

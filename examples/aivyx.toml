@@ -564,13 +564,18 @@ parent_role = "researcher"
 #   - `enabled` — `true` by default; `false` keeps the entry
 #       in the config but skips scheduler registration.
 #
-# Phase 70 ships the storage / proposal-chain / IPC / Web UI
-# / CLI substrate end-to-end; the cron-fired auto-reflection
-# wiring itself is a deferred polish. For now, operators can
-# fire reflection turns via the existing `[[schedule]]`
-# infrastructure with a reflection-flavored prompt, or by
-# manual `aivyx` invocation — proposals land in the chain
-# either way and the operator-review surface works end-to-end.
+# Phase 71 closes the loop: when this section is configured
+# AND the daemon has an audit log open (the default for any
+# normal `aivyx daemon run`), the daemon spawns a scheduler
+# task that fires reflection turns on each entry's cron
+# pattern. The reflection turn carries a canonical reflection
+# system prompt (conservative phrasing: propose only when a
+# pattern recurs ≥3 times) plus the last `lookback_window_secs`
+# of TurnStarted/TurnEnded outcome summaries from the audit
+# chain. Any persona deltas the agent proposes via
+# `reflection.propose` land as Pending rows in the persona
+# proposal chain for asynchronous operator review via the
+# Web UI Proposals pane or `aivyx persona proposals` CLI.
 #
 # [[reflection_schedule]]
 # name = "nightly-reflection"
