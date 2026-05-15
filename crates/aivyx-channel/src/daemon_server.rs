@@ -2123,15 +2123,23 @@ mod tests {
     /// Helper: open a fresh persona + proposal log pair backed by
     /// real redb storage so the resolve handler's chain
     /// interactions are exercised against the actual substrate.
-    async fn open_phase_70_test_logs() -> (
+    async fn open_phase_70_test_logs(
+        slug: &str,
+    ) -> (
         Arc<crate::persona::PersistentPersonaLog>,
         Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
         crate::persona::SharedEffectivePersona,
     ) {
         use aivyx_crypto::MasterKey;
         use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        // Per-test slug + a high-res timestamp keeps every test's
+        // tempdir distinct under parallel execution. redb refuses
+        // two opens of the same file (`Database already open`),
+        // so collisions surface as the test panicking on storage
+        // open.
         let dir = test_dir(&format!(
-            "phase-70-resolve-{}",
+            "phase-70-resolve-{slug}-{}-{}",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -2177,7 +2185,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_proposal_approve_appends_to_persona_log_and_records_approved() {
-        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs("approve").await;
         proposal_log
             .append_pending(
                 "pp-1".into(),
@@ -2216,7 +2224,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_proposal_approve_with_edit_records_edited_op() {
-        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs("approve-with-edit").await;
         proposal_log
             .append_pending(
                 "pp-1".into(),
@@ -2257,7 +2265,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_proposal_reject_records_rejected_no_persona_append() {
-        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs("reject").await;
         proposal_log
             .append_pending(
                 "pp-1".into(),
@@ -2294,7 +2302,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_proposal_unknown_id_returns_error() {
-        let (persona_log, proposal_log, shared) = open_phase_70_test_logs().await;
+        let (persona_log, proposal_log, shared) = open_phase_70_test_logs("unknown-id").await;
         let err = resolve_persona_proposal(
             Some(proposal_log.as_ref()),
             Some(persona_log.as_ref()),

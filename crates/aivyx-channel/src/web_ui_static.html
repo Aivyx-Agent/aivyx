@@ -361,6 +361,121 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .audit-controls button:hover { background: var(--accent-dim); }
 .audit-controls button:disabled { opacity: 0.4; cursor: default; }
 
+/* Phase 70 — Proposals pane: filter chips + proposal cards. */
+.proposal-filter {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.proposal-filter-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.proposal-filter-chip.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.proposal-filter-chip:hover:not(.active) { background: var(--accent-dim); color: var(--text); }
+.proposal-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.proposal-card .proposal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.proposal-card .proposal-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: lowercase;
+}
+.proposal-card .proposal-status.pending { background: #b58900; color: var(--bg); }
+.proposal-card .proposal-status.approved { background: #2aa198; color: var(--bg); }
+.proposal-card .proposal-status.rejected { background: #cb4b16; color: var(--bg); }
+.proposal-card .proposal-status.superseded { background: var(--border); color: var(--text); }
+.proposal-card .proposal-category { font-weight: 600; color: var(--accent); }
+.proposal-card .proposal-op {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.proposal-card .proposal-reason {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+  margin: 4px 0;
+}
+.proposal-card .proposal-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.proposal-card .proposal-actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+}
+.proposal-card .proposal-actions button.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.proposal-card .proposal-actions button:hover { background: var(--accent-dim); }
+.proposal-card .proposal-actions button.primary:hover { background: var(--accent); opacity: 0.9; }
+.proposal-edit-area {
+  display: none;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+.proposal-edit-area.show { display: block; }
+.proposal-edit-area textarea {
+  width: 100%;
+  min-height: 80px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  resize: vertical;
+}
+.proposal-edit-area .proposal-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 /* Phase 69 — desktop notification permission banner + in-page toast stack. */
 #notif-permission-banner {
   display: none;
@@ -451,6 +566,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="sessions">Sessions <span class="refresh" data-refresh="sessions">↻</span></div>
     <div class="tab" data-pane="profile">Profile <span class="refresh" data-refresh="profile">↻</span></div>
     <div class="tab" data-pane="persona">Persona <span class="refresh" data-refresh="persona">↻</span></div>
+    <div class="tab" data-pane="proposals">Proposals <span class="refresh" data-refresh="proposals">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -518,6 +634,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div id="persona-timeline"></div>
   </div>
+
+  <!-- Proposals pane (Phase 70 — P14 self-learning closure) -->
+  <div class="pane list-pane" data-pane="proposals">
+    <div class="pane-header">
+      <span class="pane-title">Persona proposals</span>
+      <span class="pane-action" data-refresh="proposals">Refresh</span>
+    </div>
+    <div class="proposal-filter">
+      <span class="proposal-filter-chip active" data-proposal-filter="pending">Pending</span>
+      <span class="proposal-filter-chip" data-proposal-filter="approved">Approved</span>
+      <span class="proposal-filter-chip" data-proposal-filter="rejected">Rejected</span>
+      <span class="proposal-filter-chip" data-proposal-filter="all">All</span>
+    </div>
+    <div id="proposals-body" class="empty">Click Refresh to load.</div>
+  </div>
 </div>
 
 <script>
@@ -538,6 +669,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   // Phase 60 — outstanding RevertPersonaDelta requests by id.
   const pendingReverts = new Map();
   let nextRevertSeq = 0;
+  // Phase 70 — outstanding ResolvePersonaProposal requests by id.
+  const pendingProposalResolves = new Map();
+  let nextProposalResolveSeq = 0;
+  let proposalFilter = 'pending';
   let queryCounter = 0;
   function nextQueryId(prefix) {
     queryCounter += 1;
@@ -631,6 +766,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         const cb = pendingReverts.get(msg.id);
         if (cb) {
           pendingReverts.delete(msg.id);
+          cb(msg);
+        }
+        break;
+      }
+
+      case 'PersonaProposalResolved': {
+        // Phase 70 — proposal resolution response.
+        const cb = pendingProposalResolves.get(msg.id);
+        if (cb) {
+          pendingProposalResolves.delete(msg.id);
           cb(msg);
         }
         break;
@@ -1330,6 +1475,218 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     }));
   }
 
+  // ---- Persona proposals (Phase 70 — P14 self-learning closure) ----
+
+  function loadProposals() {
+    const body = document.getElementById('proposals-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    sendQuery('plistprop', {
+      kind: 'ListPersonaProposals',
+      status_filter: proposalFilter,
+      limit: 200,
+    }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'ListPersonaProposals') return;
+      renderProposals(body, payload.proposals || [], payload.total_len || 0);
+    });
+  }
+
+  function renderProposals(body, proposals, total_len) {
+    body.innerHTML = '';
+    if (proposals.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent =
+        'No ' + proposalFilter + ' proposals.';
+      body.appendChild(empty);
+      return;
+    }
+    proposals.forEach(function(p) {
+      body.appendChild(renderProposalCard(p));
+    });
+    if (total_len > proposals.length) {
+      const note = document.createElement('div');
+      note.className = 'row-meta';
+      note.textContent =
+        '(showing first ' + proposals.length + ' of ' + total_len + ')';
+      body.appendChild(note);
+    }
+  }
+
+  function renderProposalCard(p) {
+    const card = document.createElement('div');
+    card.className = 'proposal-card';
+
+    const head = document.createElement('div');
+    head.className = 'proposal-head';
+    const left = document.createElement('span');
+    left.innerHTML =
+      '<span class="proposal-category">' + escapeHtml(p.category) + '</span>' +
+      ' · ' + escapeHtml(p.id) +
+      ' · ses ' + escapeHtml(p.source_reflection_session_id);
+    const right = document.createElement('span');
+    right.className = 'proposal-status ' + p.status.toLowerCase();
+    right.textContent = p.status;
+    head.appendChild(left);
+    head.appendChild(right);
+    card.appendChild(head);
+
+    const ts = document.createElement('div');
+    ts.className = 'row-meta';
+    ts.textContent = 'proposed ' + formatUnixMs(p.proposed_at_unix_ms);
+    if (p.resolved_at_unix_ms) {
+      ts.textContent +=
+        ' · resolved ' + formatUnixMs(p.resolved_at_unix_ms);
+    }
+    card.appendChild(ts);
+
+    const proposedOp = document.createElement('div');
+    proposedOp.className = 'proposal-op';
+    proposedOp.textContent = JSON.stringify(p.proposed_op, null, 2);
+    card.appendChild(proposedOp);
+
+    if (p.proposed_reason) {
+      const reason = document.createElement('div');
+      reason.className = 'proposal-reason';
+      reason.textContent = 'agent reason: ' + p.proposed_reason;
+      card.appendChild(reason);
+    }
+
+    if (p.status === 'Approved' && p.applied_op &&
+        JSON.stringify(p.applied_op) !== JSON.stringify(p.proposed_op)) {
+      const editedLabel = document.createElement('div');
+      editedLabel.className = 'row-meta';
+      editedLabel.style.marginTop = '4px';
+      editedLabel.textContent = 'applied op (operator-edited):';
+      card.appendChild(editedLabel);
+      const editedOp = document.createElement('div');
+      editedOp.className = 'proposal-op';
+      editedOp.textContent = JSON.stringify(p.applied_op, null, 2);
+      card.appendChild(editedOp);
+    }
+
+    if (p.status === 'Rejected' && p.rejected_reason) {
+      const reason = document.createElement('div');
+      reason.className = 'proposal-reason';
+      reason.textContent = 'operator reason: ' + p.rejected_reason;
+      card.appendChild(reason);
+    }
+
+    if (p.status === 'Pending') {
+      card.appendChild(buildProposalActions(p));
+    }
+    return card;
+  }
+
+  function buildProposalActions(p) {
+    const wrap = document.createElement('div');
+
+    const actions = document.createElement('div');
+    actions.className = 'proposal-actions';
+
+    const approveBtn = document.createElement('button');
+    approveBtn.textContent = 'Approve';
+    approveBtn.className = 'primary';
+    approveBtn.addEventListener('click', function() {
+      resolveProposal(p.id, { kind: 'Approve' });
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', function() {
+      const editArea = wrap.querySelector('.proposal-edit-area');
+      editArea.classList.toggle('show');
+    });
+
+    const rejectBtn = document.createElement('button');
+    rejectBtn.textContent = 'Reject';
+    rejectBtn.addEventListener('click', function() {
+      const reason = prompt('Reject reason (optional):', '');
+      if (reason === null) return; // cancelled
+      const trimmed = reason.trim();
+      resolveProposal(p.id, {
+        kind: 'Reject',
+        reason: trimmed === '' ? null : trimmed,
+      });
+    });
+
+    actions.appendChild(approveBtn);
+    actions.appendChild(editBtn);
+    actions.appendChild(rejectBtn);
+    wrap.appendChild(actions);
+
+    // Edit area — inline JSON editor for the op. Per Q3(a), the
+    // operator can tweak the op before approving.
+    const editArea = document.createElement('div');
+    editArea.className = 'proposal-edit-area';
+    const editLabel = document.createElement('div');
+    editLabel.className = 'row-meta';
+    editLabel.textContent =
+      'Edit op JSON (must match PersonaDeltaOp shape):';
+    const editTextarea = document.createElement('textarea');
+    editTextarea.value = JSON.stringify(p.proposed_op, null, 2);
+    const editActions = document.createElement('div');
+    editActions.className = 'proposal-edit-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save & approve';
+    saveBtn.className = 'primary';
+    saveBtn.addEventListener('click', function() {
+      let editedOp;
+      try {
+        editedOp = JSON.parse(editTextarea.value);
+      } catch (e) {
+        alert('Invalid JSON: ' + e.message);
+        return;
+      }
+      resolveProposal(p.id, {
+        kind: 'ApproveWithEdit',
+        edited_op: {
+          category: p.category,
+          op: editedOp,
+        },
+      });
+    });
+    const cancelEditBtn = document.createElement('button');
+    cancelEditBtn.textContent = 'Cancel';
+    cancelEditBtn.addEventListener('click', function() {
+      editArea.classList.remove('show');
+    });
+    editActions.appendChild(saveBtn);
+    editActions.appendChild(cancelEditBtn);
+    editArea.appendChild(editLabel);
+    editArea.appendChild(editTextarea);
+    editArea.appendChild(editActions);
+    wrap.appendChild(editArea);
+
+    return wrap;
+  }
+
+  function resolveProposal(proposalId, resolution) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      alert('Not connected to daemon.');
+      return;
+    }
+    const id = 'rsp-' + (nextProposalResolveSeq++);
+    pendingProposalResolves.set(id, function(resp) {
+      if (resp.ok) {
+        loadProposals();
+      } else {
+        alert('Proposal resolution failed: ' +
+              (resp.error || 'unknown error'));
+      }
+    });
+    ws.send(JSON.stringify({
+      type: 'ResolvePersonaProposal',
+      id: id,
+      proposal_id: proposalId,
+      resolution: resolution,
+    }));
+  }
+
   // ------------------------------------------------------------------
   // Tab switching
   // ------------------------------------------------------------------
@@ -1366,6 +1723,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       else if (which === 'sessions') loadSessions();
       else if (which === 'profile') loadProfile();
       else if (which === 'persona') loadPersona();
+      else if (which === 'proposals') loadProposals();
+    });
+  });
+
+  // Phase 70 — Proposals pane filter chips.
+  document.querySelectorAll('[data-proposal-filter]').forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      proposalFilter = chip.getAttribute('data-proposal-filter');
+      document.querySelectorAll('[data-proposal-filter]').forEach(function(c) {
+        c.classList.toggle('active', c === chip);
+      });
+      loadProposals();
     });
   });
 

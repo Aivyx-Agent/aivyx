@@ -553,6 +553,55 @@ mod tests {
         assert!(HTML.contains("'VerifyAuditChain'"));
     }
 
+    /// Phase 70 — the embedded HTML must wire the Proposals
+    /// pane: tab presence, filter chips, ListPersonaProposals
+    /// query dispatch, and ResolvePersonaProposal envelope
+    /// construction with all three resolution variants.
+    #[test]
+    fn html_contains_phase_70_proposals_pane_wiring() {
+        // Tab structure.
+        assert!(
+            HTML.contains("data-pane=\"proposals\""),
+            "must declare the proposals tab/pane"
+        );
+        // Filter chips.
+        assert!(
+            HTML.contains("data-proposal-filter=\"pending\""),
+            "must include a pending filter chip"
+        );
+        assert!(
+            HTML.contains("data-proposal-filter=\"all\""),
+            "must include an all-status filter chip"
+        );
+        // IPC dispatch.
+        assert!(
+            HTML.contains("'ListPersonaProposals'"),
+            "must dispatch ListPersonaProposals queries"
+        );
+        assert!(
+            HTML.contains("'ResolvePersonaProposal'"),
+            "must construct ResolvePersonaProposal envelopes"
+        );
+        // Three resolution kinds wired in the UI.
+        assert!(
+            HTML.contains("'Approve'"),
+            "must offer the Approve resolution"
+        );
+        assert!(
+            HTML.contains("'ApproveWithEdit'"),
+            "must offer the ApproveWithEdit (Q3a edit-then-approve) resolution"
+        );
+        assert!(
+            HTML.contains("'Reject'"),
+            "must offer the Reject resolution"
+        );
+        // Response handler.
+        assert!(
+            HTML.contains("'PersonaProposalResolved'"),
+            "must dispatch on PersonaProposalResolved type"
+        );
+    }
+
     /// Phase 69 — the embedded HTML must wire the desktop
     /// notification handler, the permission prompt banner, and
     /// the in-page toast stack. Substring smoke tests guard
