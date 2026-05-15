@@ -423,6 +423,57 @@ all funnel into the same browser fan-out, so naming them
 differently only affects the per-target audit name; the
 operator-visible behavior is identical.
 
+## Memory subsystem (Phase 74)
+
+Phase 74 completes the self-learning triad — Persona (P14),
+reflection (Phases 70-71), and now a first-class memory
+surface — with three operator knobs.
+
+**Keyword search.** The agent gets a `memory.search` tool
+(case-insensitive substring across topics + bodies, requires
+the cross-topic `memory.read:topic:*` wildcard scope).
+Operators have terminal + Web UI parity:
+
+```sh
+aivyx memory list                    # every topic
+aivyx memory show <topic> [--limit N]
+aivyx memory search <query> [--limit N]
+aivyx memory evict <topic> [--yes]   # delete a whole topic
+```
+
+The Web UI Memory tab gives the same: a topic list, per-topic
+entry view, an inline search bar, and a per-topic Evict
+button (confirm-gated).
+
+**Per-topic retention.** `[[memory.retention]]` blocks declare
+a topic-glob pattern + a policy. The hourly GC walks every
+entry, applies the **first** matching rule (put narrower globs
+first), and falls through to the global `[memory] ttl_secs`
+for unmatched topics:
+
+```toml
+[[memory.retention]]
+topic_glob = "project/**"
+retention = "forever"          # never TTL-expire
+
+[[memory.retention]]
+topic_glob = "notes/daily/*"
+retention_days = 30            # evict entries older than 30d
+```
+
+Exactly one of `retention = "forever"` or `retention_days = N`
+per block; partial / both-form / unknown-value config rejects
+at load time.
+
+**LRU eviction.** When a topic exceeds `[memory]
+max_per_topic`, the least-recently-**read** entry is evicted
+first. Every `memory.read` stamps `last_read_at`; the Web UI
+Memory pane surfaces it ("last read: never" for entries the
+agent has written but not recalled). No config knob — it's
+automatic once `max_per_topic` is set. Distinct from the
+prior FIFO-on-write eviction: an old note the agent keeps
+recalling now survives a younger note it never reads.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

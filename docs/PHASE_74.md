@@ -280,44 +280,100 @@ hash backfill.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**All three streak predictions correct.**
+
+- **DESIGN.md** — Held. Hash at exit:
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  (byte-identical to entry). Streak extends to **twenty-one**
+  consecutive phases as predicted. Phase 74 added Memory
+  trait methods, a config section, IPC envelopes, a Web UI
+  pane, and a CLI subcommand — none touched the locked
+  technical contract.
+- **PRODUCT.md** — Held. Hash at exit:
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  (byte-identical to entry). Streak extends to **fourteen**
+  consecutive phases. Memory is G3 substrate (already
+  delivered); Phase 74 polishes it without commitment-text
+  edits.
+- **Production-core `aivyx-core/src/lib.rs`** — Held. Hash
+  at exit:
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  (byte-identical to entry). Streak extends to **twenty-two**
+  consecutive phases — **new project record**, beating Phase
+  73's 21. All work lived in `aivyx-memory`, `aivyx-config`,
+  and `aivyx-channel`.
+- **Workspace deps** — Zero new as predicted. `globset` was
+  already a transitive workspace dep through
+  `aivyx-capability`; substring matching used straight
+  `str::contains`.
+- **Tests** — +45 (1333 → 1378), above the +30-40
+  prediction. Breakdown: 10 memory-trait tests (search,
+  list_topics, evict_oldest_unread, get_recent LRU stamp) +
+  3 retention-aware-GC tests, 9 config tests (retention
+  parse + validation), 5 memory.search tool tests, 8 IPC
+  round-trip cases, 1 Web UI HTML smoke, 16 CLI parser +
+  render-helper tests.
+- **Clippy** — Zero warnings across the workspace.
+- **Q-block** — All four resolutions held in implementation:
+  - **Q1(a)** — Keyword search only. `Memory::search` is a
+    case-insensitive substring match; `memory.search` tool +
+    `SearchMemory` IPC + `aivyx memory search` CLI + Web UI
+    search bar all delegate to it. No embedding dep.
+  - **Q2(a)** — Config-based `[[memory.retention]]` with
+    topic-glob patterns. First-match wins in the GC pass;
+    unmatched topics fall through to the global `ttl_secs`.
+    `globset::GlobMatcher` compiled + validated at
+    config-load.
+  - **Q3(a)** — LRU on `last_read_at_secs`. The field is on
+    every `MemoryEntry` (serde-defaulted for backwards
+    compat); `get_recent` stamps it on both substrate impls;
+    `evict_oldest_unread` ranks `(last_read ASC, seq ASC)`.
+  - **Q4(a)** — Read-only browse + search + evict Web UI. No
+    edit-content path. The pane is a two-column topic-list +
+    detail layout with a confirm-gated per-topic Evict
+    button.
+
+After Phase 74 the self-learning triad is complete: Persona
+(P14, autonomous via Phase 70), reflection (autonomous via
+Phase 71), and memory (search + retention + LRU + operator
+surfaces via Phase 74).
 
 ## Exit criteria
 
-- [ ] `MemoryEntry::last_read_at_secs` + serde-default
+- [x] `MemoryEntry::last_read_at_secs` + serde-default
   backwards compat — Task 2.
-- [ ] `Memory` trait gains `search` / `list_topics` /
+- [x] `Memory` trait gains `search` / `list_topics` /
   `topic_entries` / `evict_oldest_unread` — Task 2.
-- [ ] `get_recent` updates `last_read_at_secs` on every
+- [x] `get_recent` updates `last_read_at_secs` on every
   read — Task 2.
-- [ ] `[[memory.retention]]` config section parses +
+- [x] `[[memory.retention]]` config section parses +
   validates topic_glob + retention discriminant — Task 3.
-- [ ] GC pass respects retention rules first-match + falls
+- [x] GC pass respects retention rules first-match + falls
   through to `memory_ttl_secs` default — Task 4.
-- [ ] LRU eviction kicks in when `memory_max_per_topic` is
+- [x] LRU eviction kicks in when `memory_max_per_topic` is
   exceeded — Task 4.
-- [ ] `memory.search` tool registered + delegates to the
+- [x] `memory.search` tool registered + delegates to the
   substrate — Task 5.
-- [ ] `ListMemoryTopics` / `GetMemoryTopicEntries` /
+- [x] `ListMemoryTopics` / `GetMemoryTopicEntries` /
   `SearchMemory` / `EvictMemoryTopic` IPC envelopes +
   daemon-side handlers — Task 6.
-- [ ] Web UI Memory pane: topic list, detail view, inline
+- [x] Web UI Memory pane: topic list, detail view, inline
   search, per-topic Evict — Task 7.
-- [ ] CLI: `aivyx memory list / show / search / evict` —
+- [x] CLI: `aivyx memory list / show / search / evict` —
   Task 8.
-- [ ] Tests across trait semantics, config validation, GC
+- [x] Tests across trait semantics, config validation, GC
   integration, IPC, HTML smoke, CLI — Task 8.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 8.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 8.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-one.
-- [ ] PRODUCT.md streak extends to fourteen.
-- [ ] Production-core streak extends to twenty-two (new
+- [x] DESIGN.md streak extends to twenty-one.
+- [x] PRODUCT.md streak extends to fourteen.
+- [x] Production-core streak extends to twenty-two (new
   record).
-- [ ] Test count delta: positive (~+30-40).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (~+30-40).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

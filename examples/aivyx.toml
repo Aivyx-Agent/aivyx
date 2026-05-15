@@ -678,3 +678,48 @@ parent_role = "researcher"
 # cron = "0 0 23 * * *"            # 11pm daily
 # lookback_window_secs = 86400     # last 24 hours
 # # role_override = "reflective"   # optional
+
+# ----------------------------------------------------------------
+# Memory polish (Phase 74) — search, retention, LRU
+# ----------------------------------------------------------------
+#
+# The memory substrate (topic/body store the agent writes via
+# memory.write) gained three operator knobs in Phase 74:
+#
+# 1. Keyword search. The agent gets a `memory.search` tool
+#    (case-insensitive substring across topics + bodies);
+#    operators get `aivyx memory search <query>` + the Web UI
+#    Memory pane's search bar. No config — it's always
+#    available to any role holding the cross-topic
+#    `memory.read:topic:*` wildcard scope.
+#
+# 2. Per-topic retention. `[[memory.retention]]` blocks declare
+#    a topic-glob pattern + a policy. The hourly GC pass walks
+#    every entry, applies the FIRST matching rule, and falls
+#    through to the global TTL (`[memory] ttl_secs`) for
+#    unmatched topics. Put narrower globs first.
+#
+#    Each block sets exactly ONE of:
+#      retention = "forever"   — never TTL-expire
+#      retention_days = N      — evict entries older than N days
+#
+# 3. LRU eviction. When a topic exceeds `[memory] max_per_topic`
+#    the least-recently-READ entry is evicted first (every
+#    memory.read stamps last_read_at). No config knob — it's
+#    automatic once max_per_topic is set.
+#
+# Example — keep project notes forever, expire scratch daily
+# notes after 30 days, expire everything else after the global
+# TTL:
+#
+# [memory]
+# max_per_topic = 200
+# ttl_secs = 7776000          # 90 days global fallback
+#
+# [[memory.retention]]
+# topic_glob = "project/**"
+# retention = "forever"
+#
+# [[memory.retention]]
+# topic_glob = "notes/daily/*"
+# retention_days = 30

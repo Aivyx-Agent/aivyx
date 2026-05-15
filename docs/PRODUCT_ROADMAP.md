@@ -997,6 +997,24 @@ respond to it. Closing the gap is the inflection point between
   PRODUCT.md → 13, lib.rs → **21** (new record, beating
   Phase 72's 20). Zero new workspace deps.
 
+- **Phase 74 (Memory polish, shipped 2026-05-16).** Completes
+  the self-learning triad alongside Persona (P14) and
+  reflection. `Memory` trait gains `search` (substring,
+  case-insensitive), `list_topics`, `evict_oldest_unread`
+  (LRU on `last_read_at_secs` per Q3(a)), and
+  `gc_expired_with_rules`. `[[memory.retention]]` config
+  blocks with topic-glob patterns drive per-topic-class
+  retention (`forever` | `retention_days = N`, first-match
+  wins per Q2(a)); unmatched topics fall through to the
+  global `ttl_secs`. Operator surfaces: `memory.search`
+  agent tool + Web UI Memory pane (read-only browse +
+  search + per-topic evict per Q4(a)) + `aivyx memory
+  list/show/search/evict` CLI. Keyword-only search per
+  Q1(a) — no embedding dep; semantic RAG defers. Tests +45
+  (1333 → 1378). All three streak predictions correct:
+  DESIGN.md → 21, PRODUCT.md → 14, lib.rs → **22** (new
+  record, beating Phase 73's 21). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

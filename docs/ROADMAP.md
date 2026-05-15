@@ -1658,6 +1658,47 @@ Slack-flavored webhooks, XOAUTH2, persisted rate-limit
 buckets) are operator-feedback-gated and ship if/when real
 pressure surfaces.
 
+## Phase 74 — Memory Polish: Search, Retention, LRU, Web UI Pane
+
+**Frozen — see [PHASE_74.md](PHASE_74.md).** Completes the
+self-learning triad — Persona (P14), reflection (Phases
+70-71), and now a first-class memory surface. Four items:
+
+- **Keyword search.** `Memory::search` (case-insensitive
+  substring across topics + bodies) + the `memory.search`
+  agent tool (cross-topic wildcard scope) + `SearchMemory`
+  IPC + `aivyx memory search` CLI + Web UI search bar. No
+  embedding dep per Q1(a) — semantic retrieval defers to a
+  future RAG arc.
+- **Per-topic retention.** `[[memory.retention]]` config
+  blocks with topic-glob patterns + `forever` |
+  `retention_days = N` policies (Q2(a)). The hourly GC pass
+  applies the first matching rule; unmatched topics fall
+  through to the global `ttl_secs`. New
+  `Memory::gc_expired_with_rules` + `RetentionMatcher`
+  boundary type keep the memory crate config-agnostic.
+- **LRU eviction.** `MemoryEntry::last_read_at_secs`
+  (serde-defaulted), stamped by `get_recent` on both substrate
+  impls; `evict_oldest_unread` ranks `(last_read ASC, seq
+  ASC)` per Q3(a). Replaces FIFO-on-write — a recalled old
+  note now survives a never-read younger one.
+- **Operator surfaces.** Web UI Memory pane (two-column
+  browse + search + per-topic confirm-gated Evict per Q4(a))
+  + `aivyx memory list/show/search/evict` CLI parity. New
+  IPC: ListMemoryTopics / GetMemoryTopicEntries /
+  SearchMemory queries + EvictMemoryTopic frontend message.
+
+Streak predictions all correct: DESIGN.md → 21, PRODUCT.md →
+14, `aivyx-core/src/lib.rs` → **22** (new project record,
+beating Phase 73's 21). Tests +45 (1333 → 1378), above the
++30-40 prediction. Zero clippy warnings. Zero new workspace
+deps.
+
+After Phase 74 the self-learning triad is complete. Likely
+follow-ups (semantic RAG, fuzzy match, edit-content Web UI,
+per-topic eviction-strategy override) are operator-feedback-
+gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
