@@ -20,8 +20,9 @@ use std::sync::Arc;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, EffectivePersonaSummary, FrameError,
-    FrontendMessage, FrontendType, IpcAttachment, PersonaDeltaSummary, QueryPayload,
-    QueryResponsePayload, StreamEventPayload,
+    FrontendMessage, FrontendType, IpcAttachment, PersonaDeltaSummary,
+    PersonaProposalResolution, PersonaProposalResolveSuccess, PersonaProposalSummary,
+    QueryPayload, QueryResponsePayload, StreamEventPayload,
 };
 use crate::daemon_server::DaemonError;
 
@@ -437,6 +438,127 @@ pub async fn list_persona_deltas(
         other => Err(DaemonError::Protocol(format!(
             "expected ListPersonaDeltas, got {other:?}"
         ))),
+    }
+}
+
+/// Phase 70 — list pending and resolved Persona proposals over
+/// IPC. `status_filter` is the same string the wire envelope
+/// expects: `"all" | "pending" | "approved" | "rejected" |
+/// "superseded"`; unknown values fall through to `"pending"`
+/// server-side.
+pub async fn list_persona_proposals(
+    socket_path: &Path,
+    status_filter: &str,
+    limit: u32,
+) -> Result<(Vec<PersonaProposalSummary>, u64), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "pp-list",
+        QueryPayload::ListPersonaProposals {
+            status_filter: status_filter.to_string(),
+            limit,
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ListPersonaProposals {
+            proposals,
+            total_len,
+        } => Ok((proposals, total_len)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListPersonaProposals, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 70 — fetch a single Persona proposal by id.
+pub async fn get_persona_proposal(
+    socket_path: &Path,
+    proposal_id: &str,
+) -> Result<Option<PersonaProposalSummary>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "pp-get",
+        QueryPayload::GetPersonaProposal {
+            proposal_id: proposal_id.to_string(),
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::GetPersonaProposal { proposal } => Ok(proposal),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected GetPersonaProposal, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 70 — operator-initiated proposal resolution over IPC.
+/// Sends a `ResolvePersonaProposal` frame and blocks for the
+/// matching `PersonaProposalResolved` reply.
+pub async fn resolve_persona_proposal(
+    socket_path: &Path,
+    proposal_id: &str,
+    resolution: PersonaProposalResolution,
+) -> Result<PersonaProposalResolveSuccess, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::ResolvePersonaProposal {
+        id: "rsp-cli".into(),
+        proposal_id: proposal_id.to_string(),
+        resolution,
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::PersonaProposalResolved {
+                    ok, success, error, ..
+                },
+                _,
+            )) => {
+                if ok {
+                    return success.ok_or_else(|| {
+                        DaemonError::Protocol(
+                            "PersonaProposalResolved ok=true but success is None"
+                                .into(),
+                        )
+                    });
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "proposal resolution failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected PersonaProposalResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 

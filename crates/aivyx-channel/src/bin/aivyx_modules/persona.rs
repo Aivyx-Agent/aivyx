@@ -16,10 +16,12 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, get_effective_persona, list_persona_deltas, revert_persona_delta,
+    daemon_is_running, get_effective_persona, get_persona_proposal, list_persona_deltas,
+    list_persona_proposals, resolve_persona_proposal, revert_persona_delta,
 };
 use aivyx_channel::daemon_ipc::{
     default_socket_path, EffectivePersonaSummary, PersonaDeltaSummary,
+    PersonaProposalResolution, PersonaProposalSummary,
 };
 
 /// Entry point for `aivyx persona show`. Fetches the daemon's current
@@ -180,6 +182,182 @@ fn render_delta_list(deltas: &[PersonaDeltaSummary]) -> String {
     out
 }
 
+// ---------------------------------------------------------------
+// Phase 70 — `aivyx persona proposals` subcommand handlers.
+// ---------------------------------------------------------------
+
+/// Entry point for `aivyx persona proposals list [--status ...]`.
+pub async fn run_persona_proposals_list(status: &str) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let (proposals, total_len) =
+        list_persona_proposals(&socket_path, status, 200)
+            .await
+            .map_err(|e| format!("failed to list persona proposals: {e}"))?;
+    print!(
+        "{}",
+        render_proposal_list(status, &proposals, total_len)
+    );
+    Ok(())
+}
+
+/// Entry point for `aivyx persona proposals show <id>`.
+pub async fn run_persona_proposals_show(proposal_id: &str) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let proposal = get_persona_proposal(&socket_path, proposal_id)
+        .await
+        .map_err(|e| format!("failed to fetch persona proposal: {e}"))?;
+    match proposal {
+        Some(p) => {
+            print!("{}", render_proposal_detail(&p));
+            Ok(())
+        }
+        None => Err(format!("no proposal found with id `{proposal_id}`")),
+    }
+}
+
+/// Entry point for `aivyx persona proposals approve <id>`. CLI v1
+/// applies the agent's proposed op verbatim; operators who want
+/// to edit the op before approving use the Web UI Proposals pane.
+pub async fn run_persona_proposals_approve(
+    proposal_id: &str,
+) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let success = resolve_persona_proposal(
+        &socket_path,
+        proposal_id,
+        PersonaProposalResolution::Approve,
+    )
+    .await
+    .map_err(|e| format!("approve failed: {e}"))?;
+    eprintln!(
+        "aivyx persona proposals approve: ok — proposal `{proposal_id}` \
+         applied as persona delta at chain seq {seq}",
+        seq = success
+            .applied_seq
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "<unknown>".to_string()),
+    );
+    Ok(())
+}
+
+/// Entry point for `aivyx persona proposals reject <id> [--reason ...]`.
+pub async fn run_persona_proposals_reject(
+    proposal_id: &str,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    resolve_persona_proposal(
+        &socket_path,
+        proposal_id,
+        PersonaProposalResolution::Reject {
+            reason: reason.map(str::to_string),
+        },
+    )
+    .await
+    .map_err(|e| format!("reject failed: {e}"))?;
+    eprintln!(
+        "aivyx persona proposals reject: ok — proposal `{proposal_id}` rejected"
+    );
+    Ok(())
+}
+
+/// Render a proposal list for `proposals list`. Pure function so
+/// unit tests can drive against fixtures without IPC.
+fn render_proposal_list(
+    status: &str,
+    proposals: &[PersonaProposalSummary],
+    total_len: u64,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Persona proposals (status filter: {status})\n",
+    ));
+    out.push_str("==========================================\n\n");
+    if proposals.is_empty() {
+        out.push_str(&format!(
+            "No proposals matching status filter `{status}`.\n"
+        ));
+        return out;
+    }
+    for p in proposals {
+        let op_str =
+            serde_json::to_string(&p.proposed_op).unwrap_or_else(|_| "{}".into());
+        out.push_str(&format!(
+            "[{status}] {id}  category={category}  proposed_at={ts}ms\n  op = {op}\n",
+            status = p.status,
+            id = p.id,
+            category = p.category,
+            ts = p.proposed_at_unix_ms,
+            op = op_str,
+        ));
+    }
+    if total_len as usize > proposals.len() {
+        out.push_str(&format!(
+            "\n(showing first {} of {} proposals matching the filter)\n",
+            proposals.len(),
+            total_len,
+        ));
+    }
+    out
+}
+
+/// Render full proposal detail for `proposals show <id>`.
+fn render_proposal_detail(p: &PersonaProposalSummary) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Proposal {id}\n", id = p.id));
+    out.push_str("=========================\n");
+    out.push_str(&format!("  status      = {}\n", p.status));
+    out.push_str(&format!("  category    = {}\n", p.category));
+    out.push_str(&format!(
+        "  proposed_at = {}ms\n",
+        p.proposed_at_unix_ms,
+    ));
+    out.push_str(&format!(
+        "  source ses  = {}\n",
+        p.source_reflection_session_id,
+    ));
+    let op_str = serde_json::to_string_pretty(&p.proposed_op)
+        .unwrap_or_else(|_| "{}".into());
+    out.push_str(&format!(
+        "\n  proposed op:\n{}\n",
+        indent_block(&op_str, "    "),
+    ));
+    if let Some(reason) = &p.proposed_reason {
+        out.push_str(&format!("\n  agent reason: {reason}\n"));
+    }
+    if let Some(applied_op) = &p.applied_op {
+        let applied_str = serde_json::to_string_pretty(applied_op)
+            .unwrap_or_else(|_| "{}".into());
+        if applied_str != op_str {
+            out.push_str(&format!(
+                "\n  applied op (operator-edited):\n{}\n",
+                indent_block(&applied_str, "    "),
+            ));
+        }
+    }
+    if let Some(seq) = p.applied_seq {
+        out.push_str(&format!("\n  applied at persona chain seq: {seq}\n"));
+    }
+    if let Some(reason) = &p.rejected_reason {
+        out.push_str(&format!("\n  operator reject reason: {reason}\n"));
+    }
+    if let Some(ts) = p.resolved_at_unix_ms {
+        out.push_str(&format!("\n  resolved_at = {ts}ms\n"));
+    }
+    out
+}
+
+fn indent_block(s: &str, indent: &str) -> String {
+    s.lines()
+        .map(|line| format!("{indent}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +424,96 @@ mod tests {
         assert!(out.contains("approved_at=1715000060000ms"));
         assert!(out.contains("\"kind\":\"AppendList\""));
         assert!(out.contains("prefer terse"));
+    }
+
+    // ---- Phase 70 — proposal render helpers ----
+
+    fn pending_fixture() -> PersonaProposalSummary {
+        PersonaProposalSummary {
+            id: "pp-abc".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-1".into(),
+            status: "Pending".into(),
+            category: "BehavioralPreferences".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": "prefer terse",
+            }),
+            proposed_reason: Some("operator confirmed terse 3x".into()),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+        }
+    }
+
+    #[test]
+    fn proposals_list_empty_renders_filter_aware_message() {
+        let out = render_proposal_list("pending", &[], 0);
+        assert!(out.contains("status filter: pending"));
+        assert!(
+            out.contains("No proposals matching status filter `pending`")
+        );
+    }
+
+    #[test]
+    fn proposals_list_shows_each_proposal_with_status_category_op() {
+        let out = render_proposal_list("pending", &[pending_fixture()], 1);
+        assert!(out.contains("[Pending] pp-abc"));
+        assert!(out.contains("category=BehavioralPreferences"));
+        assert!(out.contains("proposed_at=1715000000000ms"));
+        assert!(out.contains("\"kind\":\"AppendList\""));
+        assert!(out.contains("prefer terse"));
+    }
+
+    #[test]
+    fn proposals_list_paginated_note_appears_when_total_exceeds_returned() {
+        let out = render_proposal_list("pending", &[pending_fixture()], 5);
+        assert!(out.contains("showing first 1 of 5 proposals"));
+    }
+
+    #[test]
+    fn proposals_show_includes_proposed_op_reason_and_status() {
+        let out = render_proposal_detail(&pending_fixture());
+        assert!(out.contains("Proposal pp-abc"));
+        assert!(out.contains("status      = Pending"));
+        assert!(out.contains("category    = BehavioralPreferences"));
+        assert!(out.contains("source ses  = ses-1"));
+        assert!(out.contains("proposed op:"));
+        assert!(out.contains("\"AppendList\""));
+        assert!(out.contains("agent reason: operator confirmed terse 3x"));
+        // Not yet resolved / not edited → these lines absent.
+        assert!(!out.contains("applied op"));
+        assert!(!out.contains("resolved_at"));
+        assert!(!out.contains("operator reject reason"));
+    }
+
+    #[test]
+    fn proposals_show_with_operator_edit_renders_both_ops() {
+        let mut p = pending_fixture();
+        p.status = "Approved".into();
+        p.applied_op = Some(serde_json::json!({
+            "kind": "AppendList",
+            "value": "operator-edited preference",
+        }));
+        p.applied_seq = Some(7);
+        p.resolved_at_unix_ms = Some(1_715_000_060_000);
+        let out = render_proposal_detail(&p);
+        assert!(out.contains("proposed op:"));
+        assert!(out.contains("applied op (operator-edited):"));
+        assert!(out.contains("operator-edited preference"));
+        assert!(out.contains("applied at persona chain seq: 7"));
+        assert!(out.contains("resolved_at = 1715000060000ms"));
+    }
+
+    #[test]
+    fn proposals_show_with_rejection_renders_operator_reason() {
+        let mut p = pending_fixture();
+        p.status = "Rejected".into();
+        p.rejected_reason = Some("too aggressive".into());
+        p.resolved_at_unix_ms = Some(1_715_000_060_000);
+        let out = render_proposal_detail(&p);
+        assert!(out.contains("operator reject reason: too aggressive"));
+        assert!(out.contains("resolved_at = 1715000060000ms"));
     }
 }

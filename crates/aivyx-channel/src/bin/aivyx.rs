@@ -415,6 +415,27 @@ fn run() -> Result<(), String> {
                 PersonaSubcommand::Revert { target_delta_id } => {
                     persona::run_persona_revert(&target_delta_id).await
                 }
+                PersonaSubcommand::Proposals(sub) => match sub {
+                    ProposalsSubcommand::List { status } => {
+                        persona::run_persona_proposals_list(&status).await
+                    }
+                    ProposalsSubcommand::Show { proposal_id } => {
+                        persona::run_persona_proposals_show(&proposal_id).await
+                    }
+                    ProposalsSubcommand::Approve { proposal_id } => {
+                        persona::run_persona_proposals_approve(&proposal_id).await
+                    }
+                    ProposalsSubcommand::Reject {
+                        proposal_id,
+                        reason,
+                    } => {
+                        persona::run_persona_proposals_reject(
+                            &proposal_id,
+                            reason.as_deref(),
+                        )
+                        .await
+                    }
+                },
             }
         });
     }
@@ -1014,6 +1035,28 @@ enum PersonaSubcommand {
     /// revert. Daemon appends a `Revert` op delta and recomputes
     /// the shared runtime state so the next turn reflects the undo.
     Revert { target_delta_id: String },
+    /// `aivyx persona proposals <sub>` — Phase 70 review surface
+    /// for the reflection auto-loop's pending Persona proposals.
+    Proposals(ProposalsSubcommand),
+}
+
+/// Phase 70 — operator-facing CLI for the proposal review flow.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum ProposalsSubcommand {
+    /// `aivyx persona proposals list [--status pending|approved|
+    /// rejected|all]`. Defaults to `pending`.
+    List { status: String },
+    /// `aivyx persona proposals show <id>`.
+    Show { proposal_id: String },
+    /// `aivyx persona proposals approve <id>`. No edit-on-approve
+    /// in the CLI v1 (operator can `aivyx persona proposals show`
+    /// to inspect then use the Web UI Proposals pane for editing).
+    Approve { proposal_id: String },
+    /// `aivyx persona proposals reject <id> [--reason TEXT]`.
+    Reject {
+        proposal_id: String,
+        reason: Option<String>,
+    },
 }
 
 /// Subcommand discriminator under [`CliMode::Profile`]. Phase 58
@@ -1292,9 +1335,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
     // Check for `persona <subcommand>` — Phase 60 (PRODUCT.md P14).
     // Q1(c) at sign-off: nested enum with show/list/revert variants.
+    // Phase 70 adds `proposals` for the self-learning loop's
+    // operator review surface.
     if !args.is_empty() && args[0] == "persona" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx persona` requires a subcommand. Supported: show, list, revert"
+            "`aivyx persona` requires a subcommand. Supported: \
+             show, list, revert, proposals"
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -1335,10 +1381,135 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     target_delta_id: target.clone(),
                 }
             }
+            "proposals" => {
+                // Sub-subcommand: list / show / approve / reject.
+                let sub2 = args.get(2).ok_or_else(|| {
+                    "`aivyx persona proposals` requires a subcommand. \
+                     Supported: list, show, approve, reject"
+                        .to_string()
+                })?;
+                let proposals_sub = match sub2.as_str() {
+                    "list" => {
+                        let mut status = "pending".to_string();
+                        let mut idx = 3;
+                        while idx < args.len() {
+                            match args[idx].as_str() {
+                                "--status" => {
+                                    idx += 1;
+                                    let value = args.get(idx).ok_or_else(|| {
+                                        "`aivyx persona proposals list \
+                                         --status` requires a value"
+                                            .to_string()
+                                    })?;
+                                    let normalized = value.to_ascii_lowercase();
+                                    match normalized.as_str() {
+                                        "pending" | "approved" | "rejected"
+                                        | "superseded" | "all" => {
+                                            status = normalized;
+                                        }
+                                        other => {
+                                            return Err(format!(
+                                                "unknown --status value `{other}`. \
+                                                 Supported: pending, approved, \
+                                                 rejected, superseded, all"
+                                            ));
+                                        }
+                                    }
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "unrecognized argument to \
+                                         `aivyx persona proposals list`: `{other}`"
+                                    ));
+                                }
+                            }
+                            idx += 1;
+                        }
+                        ProposalsSubcommand::List { status }
+                    }
+                    "show" => {
+                        let pid = args.get(3).ok_or_else(|| {
+                            "`aivyx persona proposals show` requires a \
+                             proposal id"
+                                .to_string()
+                        })?;
+                        if args.len() > 4 {
+                            return Err(format!(
+                                "`aivyx persona proposals show` accepts exactly \
+                                 one proposal id. Got: `{}`",
+                                args[4..].join(" ")
+                            ));
+                        }
+                        ProposalsSubcommand::Show {
+                            proposal_id: pid.clone(),
+                        }
+                    }
+                    "approve" => {
+                        let pid = args.get(3).ok_or_else(|| {
+                            "`aivyx persona proposals approve` requires a \
+                             proposal id"
+                                .to_string()
+                        })?;
+                        if args.len() > 4 {
+                            return Err(format!(
+                                "`aivyx persona proposals approve` accepts \
+                                 exactly one proposal id. Got: `{}`",
+                                args[4..].join(" ")
+                            ));
+                        }
+                        ProposalsSubcommand::Approve {
+                            proposal_id: pid.clone(),
+                        }
+                    }
+                    "reject" => {
+                        let pid = args.get(3).ok_or_else(|| {
+                            "`aivyx persona proposals reject` requires a \
+                             proposal id"
+                                .to_string()
+                        })?;
+                        let mut reason: Option<String> = None;
+                        let mut idx = 4;
+                        while idx < args.len() {
+                            match args[idx].as_str() {
+                                "--reason" => {
+                                    idx += 1;
+                                    let value =
+                                        args.get(idx).ok_or_else(|| {
+                                            "`aivyx persona proposals reject \
+                                             --reason` requires a value"
+                                                .to_string()
+                                        })?;
+                                    reason = Some(value.clone());
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "unrecognized argument to \
+                                         `aivyx persona proposals reject`: `{other}`"
+                                    ));
+                                }
+                            }
+                            idx += 1;
+                        }
+                        ProposalsSubcommand::Reject {
+                            proposal_id: pid.clone(),
+                            reason,
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "unrecognized `aivyx persona proposals` \
+                             subcommand: `{other}`. \
+                             Supported: list, show, approve, reject"
+                        ));
+                    }
+                };
+                PersonaSubcommand::Proposals(proposals_sub)
+            }
             other => {
                 return Err(format!(
                     "unrecognized persona subcommand: `{other}`. \
-                     Supported: persona show, persona list, persona revert <id>"
+                     Supported: persona show, persona list, \
+                     persona revert <id>, persona proposals <sub>"
                 ));
             }
         };
@@ -4689,6 +4860,129 @@ mod tests {
             err.contains("show") && err.contains("list") && err.contains("revert"),
             "error must list all subcommands: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 70 — `aivyx persona proposals <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn proposals_list_default_status_is_pending() {
+        let parsed = parse_cli_args_from(&argv(&["persona", "proposals", "list"]))
+            .expect("`persona proposals list` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::List {
+                    status: "pending".into(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn proposals_list_status_flag_normalizes_case() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "list", "--status", "APPROVED",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::List {
+                    status: "approved".into(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn proposals_list_unknown_status_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "list", "--status", "bogus",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("unknown --status"), "{err}");
+        assert!(err.contains("pending"), "{err}");
+    }
+
+    #[test]
+    fn proposals_show_parses_with_id() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "show", "pp-xyz",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::Show {
+                    proposal_id: "pp-xyz".into(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn proposals_approve_parses_with_id() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "approve", "pp-xyz",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::Approve {
+                    proposal_id: "pp-xyz".into(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn proposals_reject_parses_with_optional_reason() {
+        let no_reason = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "reject", "pp-1",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            no_reason.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::Reject {
+                    proposal_id: "pp-1".into(),
+                    reason: None,
+                }
+            ))
+        );
+
+        let with_reason = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "reject", "pp-2", "--reason", "too aggressive",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            with_reason.mode,
+            CliMode::Persona(PersonaSubcommand::Proposals(
+                ProposalsSubcommand::Reject {
+                    proposal_id: "pp-2".into(),
+                    reason: Some("too aggressive".into()),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn proposals_without_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["persona", "proposals"]))
+            .expect_err("must error");
+        assert!(err.contains("requires a subcommand"), "{err}");
+    }
+
+    #[test]
+    fn proposals_unknown_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "persona", "proposals", "delete",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("unrecognized"), "{err}");
     }
 
     #[test]
