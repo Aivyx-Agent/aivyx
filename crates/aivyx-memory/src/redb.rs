@@ -65,7 +65,7 @@ use async_trait::async_trait;
 
 use aivyx_storage::{DomainHandle, KeyDomain, Storage};
 
-use crate::{InMemoryMemory, Memory, MemoryEntry, MemoryError};
+use crate::{InMemoryMemory, Memory, MemoryEntry, MemoryError, RetentionMatcher};
 
 /// Discriminator prefix for entry keys. Every entry in the memory
 /// domain starts with these two bytes; nothing else does.
@@ -497,6 +497,38 @@ impl Memory for RedbMemory {
             }
         }
         Ok(topics.into_iter().collect())
+    }
+
+    async fn gc_expired_with_rules(
+        &self,
+        rules: &[RetentionMatcher<'_>],
+        default_cutoff_secs: Option<u64>,
+    ) -> Result<usize, MemoryError> {
+        let rows = self
+            .handle
+            .scan_prefix(ENTRY_PREFIX)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let mut deleted = 0usize;
+        for (key, value) in &rows {
+            let entry = InMemoryMemory::decode_entry(value)?;
+            let cutoff = rules
+                .iter()
+                .find(|r| (r.matches)(entry.topic.as_str()))
+                .map(|r| r.cutoff_secs)
+                .unwrap_or(default_cutoff_secs);
+            let Some(cutoff) = cutoff else {
+                continue;
+            };
+            if entry.created_at_secs < cutoff {
+                self.handle
+                    .delete(key)
+                    .await
+                    .map_err(|e| MemoryError::Backend(e.to_string()))?;
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
     }
 
     async fn evict_oldest_unread(

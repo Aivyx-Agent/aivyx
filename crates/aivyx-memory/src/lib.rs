@@ -315,6 +315,45 @@ pub trait Memory: Send + Sync {
         topic: &str,
         keep: usize,
     ) -> Result<usize, MemoryError>;
+
+    /// Phase 74 — retention-aware GC pass.
+    ///
+    /// For each entry, the substrate finds the first
+    /// `RetentionMatcher` whose `matches(topic)` returns `true`
+    /// and applies that rule's `cutoff_secs` (a precomputed
+    /// `now - retention_days * 86400`, or `None` for
+    /// `RetentionPolicy::Forever`). Entries with no matching
+    /// rule fall through to `default_cutoff_secs` (the global
+    /// `memory_ttl_secs` cutoff, or `None` to skip them).
+    ///
+    /// Entries whose `created_at_secs` is older than the
+    /// resolved cutoff are deleted. Returns the total count
+    /// evicted across all topics.
+    ///
+    /// Phase 74 — distinct from `gc_expired(cutoff)` which
+    /// applies a single global cutoff to every entry. The
+    /// daemon's memory-GC timer calls this when
+    /// `[[memory.retention]]` rules are configured; falls back
+    /// to `gc_expired` when the rule list is empty.
+    async fn gc_expired_with_rules(
+        &self,
+        rules: &[RetentionMatcher<'_>],
+        default_cutoff_secs: Option<u64>,
+    ) -> Result<usize, MemoryError>;
+}
+
+/// Phase 74 — per-topic-glob retention rule for the
+/// retention-aware GC pass. `matches` is a closure-style trait
+/// object so callers can use whatever pattern matcher fits;
+/// in practice it's `globset::GlobMatcher::is_match`.
+///
+/// `cutoff_secs = None` is the "keep forever" sentinel; entries
+/// matched by this rule are never evicted by the GC pass.
+/// `cutoff_secs = Some(N)` evicts entries whose
+/// `created_at_secs < N`.
+pub struct RetentionMatcher<'a> {
+    pub matches: &'a (dyn Fn(&str) -> bool + Send + Sync),
+    pub cutoff_secs: Option<u64>,
 }
 
 /// Deterministic in-process `Memory` implementation.
@@ -569,6 +608,36 @@ impl Memory for InMemoryMemory {
             entries.remove(idx);
         }
         Ok(to_remove)
+    }
+
+    async fn gc_expired_with_rules(
+        &self,
+        rules: &[RetentionMatcher<'_>],
+        default_cutoff_secs: Option<u64>,
+    ) -> Result<usize, MemoryError> {
+        let mut state = self.state.lock().unwrap();
+        let mut total_removed = 0usize;
+        state.topics.retain(|topic, entries| {
+            // Find the effective cutoff for this topic: first
+            // matching rule wins; fall through to default.
+            let cutoff = rules
+                .iter()
+                .find(|r| (r.matches)(topic.as_str()))
+                .map(|r| r.cutoff_secs)
+                .unwrap_or(default_cutoff_secs);
+            match cutoff {
+                None => {
+                    // Forever (or no default + no match) — keep all.
+                }
+                Some(cutoff) => {
+                    let before = entries.len();
+                    entries.retain(|e| e.created_at_secs >= cutoff);
+                    total_removed += before - entries.len();
+                }
+            }
+            !entries.is_empty()
+        });
+        Ok(total_removed)
     }
 }
 
@@ -1061,6 +1130,66 @@ mod tests {
         let mem = InMemoryMemory::new();
         let err = mem.evict_oldest_unread("", 3).await.expect_err("must error");
         assert!(matches!(err, MemoryError::EmptyTopic));
+    }
+
+    #[tokio::test]
+    async fn gc_with_rules_first_match_wins_keeps_forever() {
+        let mem = InMemoryMemory::new();
+        // Two topics under different globs.
+        mem.put("project/x", "long-term").await.unwrap();
+        mem.put("notes/today", "short-term").await.unwrap();
+        // Backdate `notes/today` to "ancient" by deleting + re-
+        // writing with a manual timestamp would require a
+        // primitive we don't have. Instead, use the default
+        // cutoff to force eviction of unmatched topics and let
+        // the rule keep `project/*` even though everything is
+        // recent. Then verify the rule kept it.
+        let project_keep = |t: &str| t.starts_with("project/");
+        let rules = vec![RetentionMatcher {
+            matches: &project_keep,
+            cutoff_secs: None, // forever
+        }];
+        // default_cutoff > now means every unmatched entry is
+        // evicted (the "stale beyond any time" case).
+        let evicted = mem
+            .gc_expired_with_rules(&rules, Some(u64::MAX))
+            .await
+            .unwrap();
+        // `notes/today` falls through to default cutoff and
+        // evicts; `project/x` is kept by the Forever rule.
+        assert_eq!(evicted, 1);
+        let topics = mem.list_topics().await.unwrap();
+        assert_eq!(topics, vec!["project/x".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn gc_with_rules_no_match_no_default_keeps_all() {
+        let mem = InMemoryMemory::new();
+        mem.put("a", "x").await.unwrap();
+        mem.put("b", "y").await.unwrap();
+        let never = |_: &str| false;
+        let rules = vec![RetentionMatcher {
+            matches: &never,
+            cutoff_secs: Some(u64::MAX),
+        }];
+        // No match + no default → keep every entry.
+        let evicted = mem.gc_expired_with_rules(&rules, None).await.unwrap();
+        assert_eq!(evicted, 0);
+        assert_eq!(mem.list_topics().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn gc_with_rules_empty_rule_set_falls_through_to_default() {
+        let mem = InMemoryMemory::new();
+        mem.put("a", "x").await.unwrap();
+        let evicted = mem
+            .gc_expired_with_rules(&[], Some(u64::MAX))
+            .await
+            .unwrap();
+        // Default cutoff = u64::MAX so every entry is older than
+        // it → evicted.
+        assert_eq!(evicted, 1);
+        assert!(mem.list_topics().await.unwrap().is_empty());
     }
 
     #[tokio::test]

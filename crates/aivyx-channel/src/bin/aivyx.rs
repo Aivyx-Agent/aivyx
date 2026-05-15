@@ -2058,12 +2058,11 @@ async fn run_async(
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,
-        // Phase 74 — per-topic-glob retention rules. Bound here
-        // so the destructure stays exhaustive; Task 4 wires this
-        // into the memory-GC timer (the hourly pass will respect
-        // first-match retention before falling back to the
-        // global memory_ttl_secs).
-        memory_retention: _config_memory_retention,
+        // Phase 74 — per-topic-glob retention rules. Threaded
+        // into the daemon's memory-GC timer below so the hourly
+        // pass respects first-match retention before falling
+        // back to the global memory_ttl_secs.
+        memory_retention: config_memory_retention,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -3411,6 +3410,11 @@ async fn run_async(
             target_policies: aivyx_channel::trigger::TargetPolicy::map_from_targets(
                 &config_notify_targets,
             ),
+            // Phase 74 — per-topic-glob retention rules. Threaded
+            // into the daemon's memory-GC timer (the hourly pass
+            // respects first-match retention before falling back
+            // to the global memory_ttl_secs).
+            memory_retention: config_memory_retention,
         })
             .await;
 

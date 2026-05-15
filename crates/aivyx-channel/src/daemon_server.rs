@@ -188,6 +188,11 @@ pub struct DaemonConfig {
     /// each entry's cron pattern. When empty, the reflection
     /// scheduler task is not spawned.
     pub reflection_schedules: Vec<aivyx_config::ReflectionScheduleConfig>,
+    /// Phase 74 — per-topic-glob retention rules from
+    /// `[[memory.retention]]`. Threaded into the memory-GC
+    /// timer; first-match wins, unmatched topics fall through
+    /// to `memory_ttl_secs`.
+    pub memory_retention: Vec<aivyx_config::MemoryRetentionRule>,
     /// Phase 73 — per-target retry + rate-limit policy map.
     /// Built by the binary's startup path from the loaded
     /// `[[notify_target]]` blocks (one entry per target name).
@@ -230,6 +235,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         web_ui_broadcaster,
         persona_proposal_log,
         reflection_schedules,
+        memory_retention,
         target_policies,
     } = config;
     let socket_path = &socket_path;
@@ -395,39 +401,116 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         })
     });
 
-    // Spawn the memory-GC timer if a TTL is configured (Phase 42 Task 5).
-    // Runs every hour, deleting entries older than `memory_ttl_secs`.
-    let _memory_gc_handle = memory_ttl_secs.and_then(|ttl| {
-        let mem = memory?;
-        let gc_shutdown = shutdown.clone();
-        Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-            // The first tick fires immediately — skip it so the first GC
-            // runs after one hour of uptime, not at startup.
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        let cutoff = now.saturating_sub(ttl);
-                        match mem.gc_expired(cutoff).await {
-                            Ok(n) if n > 0 => {
-                                eprintln!("aivyx memory gc: expired {n} entries (cutoff={cutoff})");
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                eprintln!("aivyx memory gc error: {e}");
+    // Spawn the memory-GC timer if a TTL is configured OR if any
+    // `[[memory.retention]]` rules are declared (Phase 74). Runs
+    // every hour. Path A (retention rules present): walks every
+    // entry, finds the first matching rule, applies its policy.
+    // Unmatched entries fall through to the global
+    // `memory_ttl_secs` cutoff (or are kept if neither matches
+    // nor a default TTL exists). Path B (no rules, just TTL):
+    // original Phase 42 behavior, every entry checked against
+    // the single global cutoff.
+    let _memory_gc_handle = {
+        let needs_gc =
+            memory_ttl_secs.is_some() || !memory_retention.is_empty();
+        let mem_arc = if needs_gc { memory.clone() } else { None };
+        if !needs_gc {
+            None
+        } else if let Some(mem) = mem_arc {
+            let gc_shutdown = shutdown.clone();
+            let rules = memory_retention.clone();
+            let ttl = memory_ttl_secs;
+            Some(tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(3600));
+                // The first tick fires immediately — skip it so the
+                // first GC runs after one hour of uptime, not at
+                // startup.
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            // Resolve the default cutoff from the
+                            // optional global TTL.
+                            let default_cutoff =
+                                ttl.map(|t| now.saturating_sub(t));
+                            // Build precomputed RetentionMatcher
+                            // slice from the rules; cutoff_secs is
+                            // None for Forever, Some(now - days*86400)
+                            // for ForDays. The closure wraps each
+                            // rule's GlobMatcher into the
+                            // `&dyn Fn(&str) -> bool` shape the
+                            // memory crate's RetentionMatcher
+                            // expects.
+                            type GlobClosure =
+                                Box<dyn Fn(&str) -> bool + Send + Sync>;
+                            let closures: Vec<GlobClosure> = rules
+                                .iter()
+                                .map(|r| {
+                                    let m = r.matcher.clone();
+                                    Box::new(move |topic: &str| m.is_match(topic))
+                                        as Box<
+                                            dyn Fn(&str) -> bool + Send + Sync,
+                                        >
+                                })
+                                .collect();
+                            let matchers: Vec<aivyx_memory::RetentionMatcher<'_>> =
+                                rules.iter().enumerate().map(|(i, r)| {
+                                    let cutoff = match r.retention {
+                                        aivyx_config::RetentionPolicy::Forever => None,
+                                        aivyx_config::RetentionPolicy::ForDays(days) => {
+                                            Some(now.saturating_sub(days.saturating_mul(86400)))
+                                        }
+                                    };
+                                    aivyx_memory::RetentionMatcher {
+                                        matches: closures[i].as_ref(),
+                                        cutoff_secs: cutoff,
+                                    }
+                                }).collect();
+                            let result = if matchers.is_empty() {
+                                // No rules → keep the existing
+                                // global-TTL path. default_cutoff is
+                                // unwrap-able here because !needs_gc
+                                // checked above would have skipped
+                                // the spawn entirely otherwise.
+                                if let Some(cutoff) = default_cutoff {
+                                    mem.gc_expired(cutoff).await
+                                } else {
+                                    Ok(0)
+                                }
+                            } else {
+                                mem.gc_expired_with_rules(
+                                    &matchers,
+                                    default_cutoff,
+                                )
+                                .await
+                            };
+                            match result {
+                                Ok(n) if n > 0 => {
+                                    eprintln!(
+                                        "aivyx memory gc: expired {n} entries \
+                                         ({} rule(s) applied)",
+                                        rules.len(),
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    eprintln!("aivyx memory gc error: {e}");
+                                }
                             }
                         }
+                        _ = gc_shutdown.cancelled() => break,
                     }
-                    _ = gc_shutdown.cancelled() => break,
                 }
-            }
-        }))
-    });
+            }))
+        } else {
+            None
+        }
+    };
 
     let mission_store = mission_store.map(Arc::new);
     let pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>> =
@@ -1100,6 +1183,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_proposal_log: None,
         reflection_schedules: Vec::new(),
         target_policies: std::collections::HashMap::new(),
+        memory_retention: Vec::new(),
     }).await
 }
 
