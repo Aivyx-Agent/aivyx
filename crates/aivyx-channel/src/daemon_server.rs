@@ -546,6 +546,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             persona_log: persona_log.clone(),
             shared_persona: shared_persona.clone(),
             persona_proposal_log: persona_proposal_log.clone(),
+            memory: memory.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -594,6 +595,11 @@ struct ConnectionContext {
     /// test fixtures.
     persona_proposal_log:
         Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
+    /// Phase 74 — memory substrate handle for the
+    /// `ListMemoryTopics` / `GetMemoryTopicEntries` /
+    /// `SearchMemory` queries + the `EvictMemoryTopic`
+    /// frontend message. `None` in test fixtures.
+    memory: Option<Arc<dyn aivyx_memory::Memory>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -610,6 +616,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         persona_log,
         shared_persona,
         persona_proposal_log,
+        memory,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -938,6 +945,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 persona_log.as_deref(),
                                 &shared_persona,
                                 persona_proposal_log.as_deref(),
+                                memory.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1014,6 +1022,42 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     ok: false,
                                     success: None,
                                     error: Some(reason),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::EvictMemoryTopic { id, topic } => {
+                            // Phase 74 — operator-initiated memory
+                            // eviction. `Memory::forget` deletes every
+                            // entry under the topic and returns the
+                            // count.
+                            let resp = match memory.as_ref() {
+                                None => DaemonMessage::MemoryEvictResolved {
+                                    id,
+                                    ok: false,
+                                    deleted: None,
+                                    error: Some(
+                                        "daemon has no memory substrate \
+                                         configured"
+                                            .into(),
+                                    ),
+                                },
+                                Some(mem) => match mem.forget(&topic).await {
+                                    Ok(n) => DaemonMessage::MemoryEvictResolved {
+                                        id,
+                                        ok: true,
+                                        deleted: Some(n as u64),
+                                        error: None,
+                                    },
+                                    Err(e) => {
+                                        DaemonMessage::MemoryEvictResolved {
+                                            id,
+                                            ok: false,
+                                            deleted: None,
+                                            error: Some(e.to_string()),
+                                        }
+                                    }
                                 },
                             };
                             let frame = encode_frame(&resp)?;
@@ -1146,6 +1190,7 @@ async fn run_single_connection_daemon(
             crate::persona::EffectivePersona::default(),
         ),
         persona_proposal_log: None,
+        memory: None,
     })
     .await
 }
@@ -1343,6 +1388,7 @@ async fn handle_query(
     persona_log: Option<&crate::persona::PersistentPersonaLog>,
     shared_persona: &crate::persona::SharedEffectivePersona,
     persona_proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1642,6 +1688,81 @@ async fn handle_query(
                 total_len,
             }
         }
+        // Phase 74 — memory inspection queries.
+        QueryPayload::ListMemoryTopics => {
+            let Some(mem) = memory else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_memory".into(),
+                    message: "daemon has no memory substrate configured".into(),
+                };
+            };
+            match mem.list_topics().await {
+                Ok(topics) => QueryResponsePayload::ListMemoryTopics { topics },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "memory_list_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::GetMemoryTopicEntries { topic, limit } => {
+            let Some(mem) = memory else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_memory".into(),
+                    message: "daemon has no memory substrate configured".into(),
+                };
+            };
+            // Server-side cap mirrors the audit-entry handler.
+            const MEMORY_QUERY_MAX_LIMIT: u32 = 500;
+            let capped = limit.clamp(1, MEMORY_QUERY_MAX_LIMIT) as usize;
+            match mem.get_recent(&topic, capped).await {
+                Ok(entries) => QueryResponsePayload::GetMemoryTopicEntries {
+                    entries: entries
+                        .into_iter()
+                        .map(memory_entry_summary)
+                        .collect(),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "memory_get_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::SearchMemory { query, limit } => {
+            let Some(mem) = memory else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_memory".into(),
+                    message: "daemon has no memory substrate configured".into(),
+                };
+            };
+            const MEMORY_QUERY_MAX_LIMIT: u32 = 500;
+            let capped = limit.clamp(1, MEMORY_QUERY_MAX_LIMIT) as usize;
+            match mem.search(&query, capped).await {
+                Ok(matches) => QueryResponsePayload::SearchMemory {
+                    matches: matches
+                        .into_iter()
+                        .map(memory_entry_summary)
+                        .collect(),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "memory_search_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+    }
+}
+
+/// Phase 74 — convert an `aivyx_memory::MemoryEntry` into the
+/// flat wire `MemoryEntrySummary`.
+fn memory_entry_summary(
+    e: aivyx_memory::MemoryEntry,
+) -> crate::daemon_ipc::MemoryEntrySummary {
+    crate::daemon_ipc::MemoryEntrySummary {
+        topic: e.topic,
+        body: e.body,
+        seq: e.seq,
+        created_at_secs: e.created_at_secs,
+        last_read_at_secs: e.last_read_at_secs,
     }
 }
 

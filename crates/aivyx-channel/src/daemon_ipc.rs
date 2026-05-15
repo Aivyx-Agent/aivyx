@@ -171,6 +171,24 @@ pub enum QueryPayload {
         limit: u32,
         target_filter: Option<String>,
     },
+    /// Phase 74 — list every distinct memory topic. Drives the
+    /// Web UI Memory pane's left-column topic list + the
+    /// `aivyx memory list` CLI render.
+    ListMemoryTopics,
+    /// Phase 74 — fetch up to `limit` entries for a single
+    /// memory topic, newest first. Mirrors `Memory::get_recent`'s
+    /// shape over the wire.
+    GetMemoryTopicEntries {
+        topic: String,
+        limit: u32,
+    },
+    /// Phase 74 — substring search across topics + bodies.
+    /// Empty `query` returns the newest entries across every
+    /// topic.
+    SearchMemory {
+        query: String,
+        limit: u32,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -267,6 +285,37 @@ pub enum QueryResponsePayload {
         entries: Vec<NotificationHistoryEntry>,
         total_len: u64,
     },
+    /// Phase 74 — response to [`QueryPayload::ListMemoryTopics`].
+    /// Distinct topic names sorted ascending.
+    ListMemoryTopics {
+        topics: Vec<String>,
+    },
+    /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
+    /// Newest-first paginated entries for one topic.
+    GetMemoryTopicEntries {
+        entries: Vec<MemoryEntrySummary>,
+    },
+    /// Phase 74 — response to [`QueryPayload::SearchMemory`].
+    /// Matching entries newest-first.
+    SearchMemory {
+        matches: Vec<MemoryEntrySummary>,
+    },
+}
+
+/// Phase 74 — wire-format view of one memory entry. Flat shape
+/// mirroring the Phase 47 audit / Phase 70 proposal summary
+/// patterns; the Web UI Memory pane + `aivyx memory show` CLI
+/// render against this type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryEntrySummary {
+    pub topic: String,
+    pub body: String,
+    pub seq: u64,
+    pub created_at_secs: u64,
+    /// Phase 74 — `last_read_at_secs` so operators can sort the
+    /// Memory pane by LRU heat. `0` means "never read since
+    /// Phase 74 landed."
+    pub last_read_at_secs: u64,
 }
 
 /// Phase 73 — flat wire view of one `AuditEvent::AutoNotifyDispatched`
@@ -590,6 +639,14 @@ pub enum FrontendMessage {
         proposal_id: String,
         resolution: PersonaProposalResolution,
     },
+    /// Phase 74 — operator-initiated memory topic eviction.
+    /// Deletes every entry under `topic`; replies with
+    /// [`DaemonMessage::MemoryEvictResolved`] carrying the
+    /// number of entries deleted on success.
+    EvictMemoryTopic {
+        id: String,
+        topic: String,
+    },
 }
 
 /// Phase 70 — operator resolution variants for
@@ -706,6 +763,16 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         success: Option<PersonaProposalResolveSuccess>,
+        error: Option<String>,
+    },
+    /// Phase 74 — response to
+    /// [`FrontendMessage::EvictMemoryTopic`]. `ok = true` with
+    /// `deleted` set on success; `ok = false` with `error`
+    /// populated when the substrate rejects (empty topic, etc.).
+    MemoryEvictResolved {
+        id: String,
+        ok: bool,
+        deleted: Option<u64>,
         error: Option<String>,
     },
     /// Phase 69 — broadcast-style Web UI desktop notification.
@@ -990,6 +1057,13 @@ pub enum DaemonEnvelope {
         success: Option<PersonaProposalResolveSuccess>,
         error: Option<String>,
     },
+    // Phase 74 — memory eviction resolution result.
+    MemoryEvictResolved {
+        id: String,
+        ok: bool,
+        deleted: Option<u64>,
+        error: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1194,30 @@ mod tests {
                     limit: 25,
                     target_filter: Some("phone".into()),
                 },
+            },
+            // Phase 74 — memory inspection queries.
+            FrontendMessage::Query {
+                id: "q-300".into(),
+                payload: QueryPayload::ListMemoryTopics,
+            },
+            FrontendMessage::Query {
+                id: "q-301".into(),
+                payload: QueryPayload::GetMemoryTopicEntries {
+                    topic: "notes".into(),
+                    limit: 16,
+                },
+            },
+            FrontendMessage::Query {
+                id: "q-302".into(),
+                payload: QueryPayload::SearchMemory {
+                    query: "foo".into(),
+                    limit: 20,
+                },
+            },
+            // Phase 74 — operator-initiated memory eviction.
+            FrontendMessage::EvictMemoryTopic {
+                id: "ev-1".into(),
+                topic: "stale-notes".into(),
             },
             // Phase 70 — Persona proposal resolutions.
             FrontendMessage::ResolvePersonaProposal {
@@ -1393,6 +1491,50 @@ mod tests {
                 ok: false,
                 success: None,
                 error: Some("unknown proposal id `pp-missing`".into()),
+            },
+            // Phase 74 — memory eviction resolution.
+            DaemonMessage::MemoryEvictResolved {
+                id: "ev-1".into(),
+                ok: true,
+                deleted: Some(7),
+                error: None,
+            },
+            DaemonMessage::MemoryEvictResolved {
+                id: "ev-2".into(),
+                ok: false,
+                deleted: None,
+                error: Some("memory topic must be non-empty".into()),
+            },
+            // Phase 74 — memory query responses.
+            DaemonMessage::QueryResponse {
+                id: "q-300".into(),
+                payload: QueryResponsePayload::ListMemoryTopics {
+                    topics: vec!["notes".into(), "project/x".into()],
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-301".into(),
+                payload: QueryResponsePayload::GetMemoryTopicEntries {
+                    entries: vec![MemoryEntrySummary {
+                        topic: "notes".into(),
+                        body: "remember the milk".into(),
+                        seq: 3,
+                        created_at_secs: 1_715_000_000,
+                        last_read_at_secs: 1_715_000_500,
+                    }],
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-302".into(),
+                payload: QueryResponsePayload::SearchMemory {
+                    matches: vec![MemoryEntrySummary {
+                        topic: "project/x".into(),
+                        body: "the foo subsystem".into(),
+                        seq: 9,
+                        created_at_secs: 1_715_001_000,
+                        last_read_at_secs: 0,
+                    }],
+                },
             },
             // Phase 70 — proposal query responses.
             DaemonMessage::QueryResponse {
