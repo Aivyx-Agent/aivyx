@@ -90,7 +90,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_storage::{KeyDomain, Storage};
@@ -997,7 +997,7 @@ pub struct SandboxConfig {
 /// `false` records `AutoNotifyOutcomeSummary::SkippedByCondition`
 /// in the audit chain so forensic searches can answer "why
 /// didn't this trigger notify?" definitively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NotifyWhen {
     /// Today's behavior — dispatch unconditionally on every
     /// trigger fire. Empty responses still get

@@ -175,7 +175,8 @@ impl TriggerDispatch {
         trigger_id: &str,
         prompt: &str,
         wrap_mission: bool,
-        notify_target: Option<&str>,
+        notify_targets: &[String],
+        notify_when: aivyx_config::NotifyWhen,
     ) -> Duration {
         eprintln!(
             "aivyx trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
@@ -294,44 +295,101 @@ impl TriggerDispatch {
         // `AuditEvent::AutoNotifyDispatched` entry when an
         // audit log is configured. eprintln remains for live
         // debug visibility.
-        if let (Some(target), Some(dispatcher)) = (notify_target, &self.notify_dispatcher) {
-            let body = render_notify_body(&outcome);
-            let subject = format!("{source}: {trigger_id}");
-            let audit_outcome = if body.is_empty() {
-                // Q2(a) — skip empty responses.
-                eprintln!(
-                    "aivyx trigger: auto-notify skipped (empty response) for \
-                     {source} {trigger_id:?} → target `{target}`",
-                );
-                AutoNotifyOutcomeSummary::SkippedEmptyResponse
-            } else {
-                match dispatcher.dispatch(target, &body, Some(&subject)).await {
-                    Ok(()) => {
-                        eprintln!(
-                            "aivyx trigger: auto-notify dispatched for \
-                             {source} {trigger_id:?} → target `{target}`",
-                        );
-                        AutoNotifyOutcomeSummary::Delivered
+        if !notify_targets.is_empty() {
+            if let Some(dispatcher) = self.notify_dispatcher.clone() {
+                let body = render_notify_body(&outcome);
+                let subject = format!("{source}: {trigger_id}");
+                // Phase 72 — evaluate the conditional gate (Q3(a)).
+                // A gate that returns false skips the dispatch
+                // for every target and records SkippedByCondition
+                // per-target so forensic searches can grep across
+                // targets uniformly.
+                let gate_passes =
+                    condition_gate_passes(notify_when, &outcome, &body);
+                if !gate_passes {
+                    let condition = notify_when.condition_label().to_string();
+                    eprintln!(
+                        "aivyx trigger: auto-notify skipped (notify_when = \
+                         {condition}) for {source} {trigger_id:?} → targets \
+                         {notify_targets:?}",
+                    );
+                    for target in notify_targets {
+                        self.emit_auto_notify_audit(
+                            session_id,
+                            source,
+                            trigger_id,
+                            target,
+                            AutoNotifyOutcomeSummary::SkippedByCondition {
+                                condition: condition.clone(),
+                            },
+                        )
+                        .await;
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "aivyx trigger: auto-notify FAILED for \
-                             {source} {trigger_id:?} → target `{target}`: {e}",
-                        );
-                        outcome_from_notify_error(&e)
+                } else if body.is_empty() {
+                    // Q2(a) at Phase 63 — empty response skips
+                    // every target. Audit per target.
+                    eprintln!(
+                        "aivyx trigger: auto-notify skipped (empty response) \
+                         for {source} {trigger_id:?} → targets {notify_targets:?}",
+                    );
+                    for target in notify_targets {
+                        self.emit_auto_notify_audit(
+                            session_id,
+                            source,
+                            trigger_id,
+                            target,
+                            AutoNotifyOutcomeSummary::SkippedEmptyResponse,
+                        )
+                        .await;
+                    }
+                } else {
+                    // Phase 72 Q4(a) — concurrent fan-out via
+                    // join_all. Each per-target outcome is audited
+                    // independently; one target's transport
+                    // failure doesn't block the others. Latency-
+                    // bounded by the slowest backend.
+                    let futures = notify_targets.iter().map(|target| {
+                        let dispatcher = Arc::clone(&dispatcher);
+                        let body = body.clone();
+                        let subject = subject.clone();
+                        let target = target.clone();
+                        async move {
+                            let result = dispatcher
+                                .dispatch(&target, &body, Some(&subject))
+                                .await;
+                            (target, result)
+                        }
+                    });
+                    let results = futures_util::future::join_all(futures).await;
+                    for (target, result) in results {
+                        let audit_outcome = match result {
+                            Ok(()) => {
+                                eprintln!(
+                                    "aivyx trigger: auto-notify dispatched for \
+                                     {source} {trigger_id:?} → target `{target}`",
+                                );
+                                AutoNotifyOutcomeSummary::Delivered
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "aivyx trigger: auto-notify FAILED for \
+                                     {source} {trigger_id:?} → target \
+                                     `{target}`: {e}",
+                                );
+                                outcome_from_notify_error(&e)
+                            }
+                        };
+                        self.emit_auto_notify_audit(
+                            session_id,
+                            source,
+                            trigger_id,
+                            &target,
+                            audit_outcome,
+                        )
+                        .await;
                     }
                 }
-            };
-            // Phase 67 — emit audit entry. Log + continue on
-            // failure per Q3(a) at sign-off.
-            self.emit_auto_notify_audit(
-                session_id,
-                source,
-                trigger_id,
-                target,
-                audit_outcome,
-            )
-            .await;
+            }
         }
 
         elapsed
@@ -375,6 +433,32 @@ impl TriggerDispatch {
                 "aivyx trigger: audit log append failed for AutoNotifyDispatched \
                  ({trigger_source} {trigger_id:?} → {target_name}): {e}"
             );
+        }
+    }
+}
+
+/// Phase 72 — evaluate the conditional dispatch gate against a
+/// turn outcome. Public for testing.
+///
+/// - `Always` → always passes.
+/// - `OnFailed` → passes only for `Failed | TimedOut`.
+/// - `OnCompletedNonEmpty` → passes only when the turn
+///   completed AND the rendered body is non-whitespace.
+pub fn condition_gate_passes(
+    notify_when: aivyx_config::NotifyWhen,
+    outcome: &TurnOutcome,
+    rendered_body: &str,
+) -> bool {
+    use aivyx_config::NotifyWhen;
+    match notify_when {
+        NotifyWhen::Always => true,
+        NotifyWhen::OnFailed => matches!(
+            outcome,
+            TurnOutcome::Failed(_) | TurnOutcome::TimedOut { .. }
+        ),
+        NotifyWhen::OnCompletedNonEmpty => {
+            matches!(outcome, TurnOutcome::Completed { .. })
+                && !rendered_body.trim().is_empty()
         }
     }
 }
@@ -584,5 +668,98 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    // ---- Phase 72 — conditional dispatch gate ----------------
+
+    use aivyx_config::NotifyWhen;
+
+    fn completed_with_body(body: &str) -> TurnOutcome {
+        TurnOutcome::Completed {
+            final_message: body.to_string(),
+            tool_calls_made: 0,
+            duration: Duration::from_secs(1),
+        }
+    }
+
+    fn failed_outcome() -> TurnOutcome {
+        TurnOutcome::Failed(AivyxError::Tool {
+            tool: ToolId::new(),
+            detail: "boom".into(),
+        })
+    }
+
+    #[test]
+    fn condition_always_always_passes() {
+        let body = "anything";
+        assert!(condition_gate_passes(
+            NotifyWhen::Always,
+            &completed_with_body(body),
+            body,
+        ));
+        assert!(condition_gate_passes(
+            NotifyWhen::Always,
+            &failed_outcome(),
+            "Turn failed: boom",
+        ));
+    }
+
+    #[test]
+    fn condition_on_failed_only_passes_for_failed_and_timed_out() {
+        assert!(condition_gate_passes(
+            NotifyWhen::OnFailed,
+            &failed_outcome(),
+            "Turn failed: boom",
+        ));
+        assert!(condition_gate_passes(
+            NotifyWhen::OnFailed,
+            &TurnOutcome::TimedOut {
+                elapsed: Duration::from_secs(30),
+                tool_calls_made: 0,
+            },
+            "Turn timed out after 30s",
+        ));
+        assert!(!condition_gate_passes(
+            NotifyWhen::OnFailed,
+            &completed_with_body("daily summary"),
+            "daily summary",
+        ));
+    }
+
+    #[test]
+    fn condition_on_completed_non_empty_passes_only_for_completed_with_body() {
+        assert!(condition_gate_passes(
+            NotifyWhen::OnCompletedNonEmpty,
+            &completed_with_body("daily summary"),
+            "daily summary",
+        ));
+        // Empty body → false.
+        assert!(!condition_gate_passes(
+            NotifyWhen::OnCompletedNonEmpty,
+            &completed_with_body(""),
+            "",
+        ));
+        // Whitespace-only body → false.
+        assert!(!condition_gate_passes(
+            NotifyWhen::OnCompletedNonEmpty,
+            &completed_with_body("   \n"),
+            "   \n",
+        ));
+        // Failed turn → false even if body is non-empty.
+        assert!(!condition_gate_passes(
+            NotifyWhen::OnCompletedNonEmpty,
+            &failed_outcome(),
+            "Turn failed: boom",
+        ));
+    }
+
+    #[test]
+    fn condition_label_returns_stable_strings() {
+        assert_eq!(NotifyWhen::Always.condition_label(), "always");
+        assert_eq!(NotifyWhen::OnFailed.condition_label(), "on_failed");
+        assert_eq!(
+            NotifyWhen::OnCompletedNonEmpty.condition_label(),
+            "on_completed_non_empty"
+        );
     }
 }

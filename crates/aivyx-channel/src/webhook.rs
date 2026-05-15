@@ -26,6 +26,12 @@ pub struct WebhookRecord {
     /// Phase 63 Task 3 — see [`crate::schedule::ScheduleRecord::notify_target`].
     #[serde(default)]
     pub notify_target: Option<String>,
+    /// Phase 72 — see [`crate::schedule::ScheduleRecord::notify_targets`].
+    #[serde(default)]
+    pub notify_targets: Vec<String>,
+    /// Phase 72 — see [`crate::schedule::ScheduleRecord::notify_when`].
+    #[serde(default)]
+    pub notify_when: aivyx_config::NotifyWhen,
 }
 
 impl WebhookRecord {
@@ -43,6 +49,8 @@ impl WebhookRecord {
             created_at: now_millis(),
             last_fired_at: None,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }
     }
 }

@@ -3195,6 +3195,8 @@ async fn run_async(
                         );
                         record.wrap_mission = wh_cfg.wrap_mission;
                         record.notify_target = wh_cfg.notify_target.clone();
+                        record.notify_targets = wh_cfg.notify_targets.clone();
+                        record.notify_when = wh_cfg.notify_when;
                         if let Err(e) = aivyx_channel::webhook::create_webhook(
                             &webhook_domain,
                             &record,

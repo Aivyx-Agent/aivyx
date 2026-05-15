@@ -67,6 +67,8 @@ pub fn config_to_records(
                 r.debounce_ms = ms;
             }
             r.notify_target = c.notify_target.clone();
+            r.notify_targets = c.notify_targets.clone();
+            r.notify_when = c.notify_when;
             r
         })
         .collect()
@@ -118,7 +120,8 @@ pub async fn run_file_watcher(
                             let id = watch_id.clone();
                             let prompt = state.prompt.clone();
                             let wrap = state.wrap_mission;
-                            let notify_target = state.notify_target.clone();
+                            let notify_targets = state.notify_targets.clone();
+                            let notify_when = state.notify_when;
                             let store = store.clone();
                             tokio::spawn(async move {
                                 dispatch
@@ -127,7 +130,8 @@ pub async fn run_file_watcher(
                                         &id,
                                         &prompt,
                                         wrap,
-                                        notify_target.as_deref(),
+                                        &notify_targets,
+                                        notify_when,
                                     )
                                     .await;
                                 // Update last_fired_at in storage.
@@ -147,10 +151,13 @@ struct WatchState {
     debounce_ms: u64,
     wrap_mission: bool,
     last_fired_ms: Option<u64>,
-    /// Phase 63 Task 3 — copied from `FileWatchRecord::notify_target`
-    /// at reconcile time; passed to `TriggerDispatch::fire` when the
-    /// watcher fires.
-    notify_target: Option<String>,
+    /// Phase 72 — copied from `FileWatchRecord::notify_targets`
+    /// at reconcile time; passed to `TriggerDispatch::fire` when
+    /// the watcher fires. Empty = no notify.
+    notify_targets: Vec<String>,
+    /// Phase 72 — conditional dispatch gate copied from the
+    /// record at reconcile time.
+    notify_when: aivyx_config::NotifyWhen,
 }
 
 impl WatchState {
@@ -262,7 +269,8 @@ fn reconcile_watches(
                             debounce_ms: r.debounce_ms,
                             wrap_mission: r.wrap_mission,
                             last_fired_ms: r.last_fired_at,
-                            notify_target: r.notify_target.clone(),
+                            notify_targets: r.notify_targets.clone(),
+                            notify_when: r.notify_when,
                         });
                     }
                     Err(e) => {

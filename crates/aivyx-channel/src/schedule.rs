@@ -26,13 +26,22 @@ pub struct ScheduleRecord {
     pub wrap_mission: bool,
     pub created_at: u64,
     pub last_fired_at: Option<u64>,
-    /// Phase 63 Task 3 — when `Some(name)`, the daemon auto-
-    /// dispatches the turn's final response to the named
-    /// `[[notify_target]]` after firing. `#[serde(default)]` so
-    /// pre-Phase-63 stored records (which lack the field)
-    /// deserialize as `None`.
+    /// Phase 63 Task 3 — singular alias kept for backwards
+    /// compatibility. New code reads `notify_targets`.
     #[serde(default)]
     pub notify_target: Option<String>,
+    /// Phase 72 — list of notify target names for multi-target
+    /// fan-out. `#[serde(default)]` so pre-Phase-72 records
+    /// deserialize as empty. The daemon-scheduler's config sync
+    /// path bridges `notify_target` into a one-element vec
+    /// where needed.
+    #[serde(default)]
+    pub notify_targets: Vec<String>,
+    /// Phase 72 — conditional dispatch gate string. Defaults
+    /// to `NotifyWhen::Always`. `#[serde(default)]` for
+    /// backwards compatibility.
+    #[serde(default)]
+    pub notify_when: aivyx_config::NotifyWhen,
 }
 
 impl ScheduleRecord {
@@ -53,6 +62,8 @@ impl ScheduleRecord {
             created_at: now_millis(),
             last_fired_at: None,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         })
     }
 

@@ -61,6 +61,8 @@ pub fn config_to_records(
                 r.enabled = c.enabled;
                 r.wrap_mission = c.wrap_mission;
                 r.notify_target = c.notify_target.clone();
+                r.notify_targets = c.notify_targets.clone();
+                r.notify_when = c.notify_when;
                 r
             })
         })
@@ -192,7 +194,8 @@ async fn fire_schedule(
             &sched.schedule_id,
             &sched.prompt,
             sched.wrap_mission,
-            sched.notify_target.as_deref(),
+            &sched.notify_targets,
+            sched.notify_when,
         )
         .await;
 

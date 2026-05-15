@@ -159,7 +159,8 @@ async fn fire_webhook(
     let dispatch = dispatch.clone();
     let id = record.webhook_id.clone();
     let prompt = record.prompt.clone();
-    let notify_target = record.notify_target.clone();
+    let notify_targets = record.notify_targets.clone();
+    let notify_when = record.notify_when;
     let store_clone = store.clone();
     tokio::spawn(async move {
         dispatch
@@ -168,7 +169,8 @@ async fn fire_webhook(
                 &id,
                 &prompt,
                 record.wrap_mission,
-                notify_target.as_deref(),
+                &notify_targets,
+                notify_when,
             )
             .await;
 

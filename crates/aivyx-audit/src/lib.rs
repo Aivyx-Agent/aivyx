@@ -186,6 +186,13 @@ pub enum AutoNotifyOutcomeSummary {
         error_kind: String,
         error_message: String,
     },
+    /// Phase 72 — the trigger's `notify_when` condition gate
+    /// evaluated to false against the turn outcome, so the
+    /// dispatcher was deliberately skipped. `condition` carries
+    /// the stable string label (`"on_failed"`,
+    /// `"on_completed_non_empty"`) so forensic searches can
+    /// answer "why didn't this fire?" definitively.
+    SkippedByCondition { condition: String },
 }
 
 /// Phase 67 — trigger kind label for the audit chain. Mirrors

@@ -470,8 +470,9 @@ async fn fire_reflection(
             TriggerSource::Reflection,
             &sched.name,
             &user_message,
-            false, // wrap_mission — reflection turns don't need missions
-            None,  // notify_target — none for reflection
+            false,                             // wrap_mission — reflection turns don't need missions
+            &[],                               // notify_targets — none for reflection
+            aivyx_config::NotifyWhen::Always,  // unused (no targets) but the signature requires it
         )
         .await;
 }
