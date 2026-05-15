@@ -2058,6 +2058,12 @@ async fn run_async(
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
         memory_ttl_secs,
+        // Phase 74 — per-topic-glob retention rules. Bound here
+        // so the destructure stays exhaustive; Task 4 wires this
+        // into the memory-GC timer (the hourly pass will respect
+        // first-match retention before falling back to the
+        // global memory_ttl_secs).
+        memory_retention: _config_memory_retention,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {

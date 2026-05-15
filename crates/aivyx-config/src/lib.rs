@@ -522,6 +522,11 @@ pub struct AivyxConfig {
     /// daemon periodically calls `gc_expired(now - ttl)` to remove
     /// entries older than this duration.
     pub memory_ttl_secs: Option<Sourced<u64>>,
+    /// Phase 74 — per-topic-glob retention rules. First-match wins
+    /// at GC time; topics with no matching rule fall through to
+    /// the global `memory_ttl_secs` default (no behavior change
+    /// for pre-Phase-74 configs).
+    pub memory_retention: Vec<MemoryRetentionRule>,
     /// Aivyx store passphrase. `None` means "no source supplied one"
     /// and the binary should either prompt the user (tty branch) or
     /// error out (non-tty branch). Config layer does not do terminal
@@ -1096,6 +1101,44 @@ pub struct ReflectionScheduleConfig {
     pub enabled: bool,
 }
 
+/// Phase 74 — retention policy for a `[[memory.retention]]` block.
+/// Operators declare either `retention = "forever"` (entries never
+/// expire by TTL) or `retention_days = N` (entries older than N days
+/// are evicted by the GC pass). Exactly one form is set per block;
+/// the loader rejects partial config naming the missing field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetentionPolicy {
+    /// Topic entries are never evicted by the GC's TTL pass.
+    /// Per-topic-cap LRU eviction (`memory_max_per_topic`) still
+    /// applies.
+    Forever,
+    /// Topic entries older than N days are evicted by the GC pass.
+    /// `0` is meaningless (would evict everything immediately) and
+    /// rejects at load time.
+    ForDays(u64),
+}
+
+/// Phase 74 — one `[[memory.retention]]` rule. The loader compiles
+/// `topic_glob` into a `globset::GlobMatcher` at config-load time so
+/// the runtime GC walk is a fast match-or-skip per entry; the
+/// compiled matcher is held alongside the raw pattern string for
+/// diagnostics. `GlobMatcher` is `Send + Sync + Clone`, which keeps
+/// `MemoryRetentionRule` cheap to clone across the config-to-daemon
+/// boundary.
+#[derive(Debug, Clone)]
+pub struct MemoryRetentionRule {
+    /// Raw glob pattern as declared in TOML (e.g. `"project/*"`,
+    /// `"notes/**"`, `"daily-*"`). Kept for diagnostics and the
+    /// startup-banner render.
+    pub topic_glob: String,
+    /// Compiled matcher. Built once at config-load time. The
+    /// runtime GC pass calls `is_match` per entry to find the
+    /// first applicable rule.
+    pub matcher: globset::GlobMatcher,
+    /// What to do with matching entries.
+    pub retention: RetentionPolicy,
+}
+
 /// One webhook trigger entry loaded from `[[webhook]]` in the TOML file.
 /// Phase 27 Task 3.
 #[derive(Debug, Clone)]
@@ -1535,6 +1578,35 @@ struct RawReflectionSchedule {
     enabled: bool,
 }
 
+/// One `[[memory.retention]]` entry in the TOML file. Phase 74.
+/// Operators declare:
+///
+/// ```toml
+/// [[memory.retention]]
+/// topic_glob = "project/*"
+/// retention = "forever"
+///
+/// [[memory.retention]]
+/// topic_glob = "notes/*"
+/// retention_days = 30
+/// ```
+///
+/// Exactly one of `retention` (literal `"forever"`) or
+/// `retention_days` (numeric) must be set per block. The
+/// loader rejects partial / mutually-exclusive config.
+#[derive(Debug, Default, Deserialize)]
+struct RawMemoryRetention {
+    topic_glob: String,
+    /// String discriminator. Today only `"forever"` is
+    /// recognized; future variants land here.
+    #[serde(default)]
+    retention: Option<String>,
+    /// Numeric retention period in days. Mutually exclusive
+    /// with `retention`.
+    #[serde(default)]
+    retention_days: Option<u64>,
+}
+
 /// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
 #[derive(Debug, Default, Deserialize)]
 struct RawWebhook {
@@ -1763,6 +1835,13 @@ struct RawMemory {
     /// Phase 42 — optional TTL for memory entries, in seconds.
     #[serde(default)]
     ttl_secs: Option<u64>,
+    /// Phase 74 — `[[memory.retention]]` table-array. Each entry
+    /// is a per-topic-glob retention rule (forever or N days).
+    /// The loader compiles + validates each pattern and builds
+    /// the `memory_retention: Vec<MemoryRetentionRule>` on the
+    /// public type.
+    #[serde(default)]
+    retention: Vec<RawMemoryRetention>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2010,6 +2089,92 @@ impl AivyxConfig {
             }
             None => toml.memory.ttl_secs.map(|n| Sourced::new(n, FieldSource::Toml)),
         };
+
+        // --- memory.retention (Phase 74) ---------------------------
+        // Each `[[memory.retention]]` block declares a topic-glob
+        // pattern + a retention policy. The loader compiles each
+        // glob, validates the policy discriminant (exactly one of
+        // `retention = "forever"` or `retention_days = N`), and
+        // builds the runtime `MemoryRetentionRule` vec. First-
+        // match wins at GC time so operators put narrower globs
+        // first.
+        let mut memory_retention: Vec<MemoryRetentionRule> = Vec::new();
+        for raw in toml.memory.retention {
+            if raw.topic_glob.trim().is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "memory.retention.topic_glob",
+                    reason: "memory.retention.topic_glob must be a non-empty \
+                             glob pattern (e.g. \"project/*\" or \"notes/**\")"
+                        .into(),
+                });
+            }
+            let matcher = globset::Glob::new(&raw.topic_glob)
+                .map_err(|e| ConfigError::Invalid {
+                    field: "memory.retention.topic_glob",
+                    reason: format!(
+                        "memory.retention.topic_glob `{}` is not a valid \
+                         glob pattern: {e}",
+                        raw.topic_glob
+                    ),
+                })?
+                .compile_matcher();
+            let policy = match (
+                raw.retention.as_deref(),
+                raw.retention_days,
+            ) {
+                (Some("forever"), None) => RetentionPolicy::Forever,
+                (None, Some(0)) => {
+                    return Err(ConfigError::Invalid {
+                        field: "memory.retention.retention_days",
+                        reason: format!(
+                            "memory.retention.retention_days = 0 is \
+                             meaningless (entries would expire immediately). \
+                             topic_glob = `{}`",
+                            raw.topic_glob
+                        ),
+                    });
+                }
+                (None, Some(days)) => RetentionPolicy::ForDays(days),
+                (Some(other), None) => {
+                    return Err(ConfigError::Invalid {
+                        field: "memory.retention.retention",
+                        reason: format!(
+                            "memory.retention.retention = `{other}` is not \
+                             recognized. Supported: \"forever\". (For a \
+                             numeric period use `retention_days = N` \
+                             instead.) topic_glob = `{}`",
+                            raw.topic_glob
+                        ),
+                    });
+                }
+                (Some(_), Some(_)) => {
+                    return Err(ConfigError::Invalid {
+                        field: "memory.retention",
+                        reason: format!(
+                            "memory.retention declares both `retention` and \
+                             `retention_days` — pick one. topic_glob = `{}`",
+                            raw.topic_glob
+                        ),
+                    });
+                }
+                (None, None) => {
+                    return Err(ConfigError::Invalid {
+                        field: "memory.retention",
+                        reason: format!(
+                            "memory.retention must declare either \
+                             `retention = \"forever\"` or \
+                             `retention_days = N`. topic_glob = `{}`",
+                            raw.topic_glob
+                        ),
+                    });
+                }
+            };
+            memory_retention.push(MemoryRetentionRule {
+                topic_glob: raw.topic_glob,
+                matcher,
+                retention: policy,
+            });
+        }
 
         // --- passphrase --------------------------------------------
         // Secret; "set but empty" is treated as unset at this layer,
@@ -2934,6 +3099,7 @@ impl AivyxConfig {
             storage_path,
             memory_max_per_topic,
             memory_ttl_secs,
+            memory_retention,
             passphrase,
             telegram,
             email,

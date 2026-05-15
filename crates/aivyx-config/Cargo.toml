@@ -53,6 +53,12 @@ aivyx-capability = { path = "../aivyx-capability" }
 # with the rest of the workspace avoids an odd-crate-out flag later.
 async-trait = { workspace = true }
 
+# Phase 74 — `[[memory.retention]]` topic-glob validation. The
+# globset crate is already in workspace as a transitive of
+# aivyx-capability (Scope::matches uses it for capability-scope
+# wildcards), so adding it here is not a net-new workspace dep.
+globset = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 

@@ -4982,3 +4982,315 @@ rate_limit_window_secs = 3600
     assert_eq!(t.rate_limit_window_secs, Some(3600));
     drop(env);
 }
+
+// ==============================================================
+// Phase 74 — [[memory.retention]] config blocks
+// ==============================================================
+
+#[test]
+fn memory_retention_forever_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-forever");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "project/*"
+retention = "forever"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.memory_retention.len(), 1);
+    let rule = &cfg.memory_retention[0];
+    assert_eq!(rule.topic_glob, "project/*");
+    assert!(matches!(rule.retention, crate::RetentionPolicy::Forever));
+    // Glob matcher works as expected.
+    assert!(rule.matcher.is_match("project/x"));
+    assert!(!rule.matcher.is_match("notes/today"));
+    drop(env);
+}
+
+#[test]
+fn memory_retention_days_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-days");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "notes/*"
+retention_days = 30
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.memory_retention.len(), 1);
+    assert!(matches!(
+        cfg.memory_retention[0].retention,
+        crate::RetentionPolicy::ForDays(30)
+    ));
+    drop(env);
+}
+
+#[test]
+fn memory_retention_multiple_rules_preserve_first_match_order() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-multi");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "project/critical/*"
+retention = "forever"
+
+[[memory.retention]]
+topic_glob = "project/*"
+retention_days = 90
+
+[[memory.retention]]
+topic_glob = "notes/*"
+retention_days = 30
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.memory_retention.len(), 3);
+    // Order preserved — operator put narrower glob first.
+    assert_eq!(cfg.memory_retention[0].topic_glob, "project/critical/*");
+    assert_eq!(cfg.memory_retention[1].topic_glob, "project/*");
+    assert_eq!(cfg.memory_retention[2].topic_glob, "notes/*");
+    drop(env);
+}
+
+#[test]
+fn memory_retention_empty_glob_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-empty-glob");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = ""
+retention = "forever"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "memory.retention.topic_glob");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn memory_retention_unknown_retention_value_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-bad-value");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "project/*"
+retention = "until-summer"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "memory.retention.retention");
+            assert!(reason.contains("until-summer"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn memory_retention_zero_days_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-zero-days");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "notes/*"
+retention_days = 0
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "memory.retention.retention_days");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn memory_retention_neither_form_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-no-policy");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "notes/*"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "memory.retention");
+            assert!(reason.contains("must declare"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn memory_retention_both_forms_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-both-forms");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "notes/*"
+retention = "forever"
+retention_days = 30
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "memory.retention");
+            assert!(reason.contains("both"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn memory_retention_invalid_glob_rejects() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("retention-bad-glob");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[memory.retention]]
+topic_glob = "[unclosed"
+retention = "forever"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "memory.retention.topic_glob");
+            assert!(reason.contains("not a valid glob"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
