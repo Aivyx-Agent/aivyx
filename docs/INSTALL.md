@@ -255,6 +255,38 @@ field:
 Correlate by `session_id` to find the corresponding
 `TurnStarted` / `TurnEnded` events for the same trigger fire.
 
+## Multi-target + conditional dispatch (Phase 72)
+
+Every trigger (`[[schedule]]`, `[[webhook]]`, `[[file_watch]]`)
+now accepts three notify-flavoured knobs that compose with the
+notify-target backends in the next sections.
+
+**Multi-target fan-out** — `notify_targets = ["phone",
+"desktop"]` fires every named target concurrently when the
+trigger completes. One backend's transport failure doesn't
+block the others; each per-target outcome audits independently
+in the audit chain. The singular `notify_target = "phone"`
+stays valid as a one-element alias.
+
+**Default-target sugar** — Mark ONE `[[notify_target]]` block
+with `default = true`. Triggers that omit `notify_targets`
+fall through to it at config-load time. At most one default
+is allowed.
+
+**Conditional notify** — `notify_when` gates dispatch by turn
+outcome:
+
+| Value | Behavior |
+|---|---|
+| `"always"` (default) | Dispatch on every fire. Empty responses still get the Phase 63 `SkippedEmptyResponse` audit treatment. |
+| `"on_failed"` | Dispatch only when the turn outcome is `Failed` or `TimedOut`. Useful for "ping me when my morning job breaks." |
+| `"on_completed_non_empty"` | Dispatch only when the turn completed AND the rendered body is non-whitespace. The common shape for "stop pinging me on every cron fire — only when there's something to say." |
+
+A condition-gated skip records
+`AutoNotifyOutcomeSummary::SkippedByCondition { condition }`
+in the audit chain so forensic searches can answer "why didn't
+this fire?" definitively.
+
 ## Email notifications (Phase 68)
 
 Most operators don't run a Telegram bot but everyone has email.

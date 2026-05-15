@@ -532,6 +532,53 @@ parent_role = "researcher"
 # wrap_mission = false
 
 # ----------------------------------------------------------------
+# Phase 72 — multi-target fan-out, default-target, conditional gate
+# ----------------------------------------------------------------
+#
+# Three operator-feedback knobs land here:
+#
+# 1. `notify_targets = ["phone", "desktop"]` on a trigger fires
+#    every named target concurrently. One target's transport
+#    failure doesn't block the others; each per-target outcome
+#    audits independently. The singular `notify_target = "phone"`
+#    stays valid as a one-element alias for backwards
+#    compatibility. Declaring both forms on the same trigger
+#    rejects at config-load time.
+#
+# 2. `default = true` on ONE `[[notify_target]]` block marks it
+#    as the global default. Triggers that omit `notify_targets`
+#    fall through to the default at config-load time. At most
+#    one default is allowed; multiple defaults reject.
+#
+# 3. `notify_when` on a trigger gates dispatch by turn outcome:
+#      "always"               — today's behavior (default)
+#      "on_failed"            — only ping on Failed | TimedOut
+#      "on_completed_non_empty" — skip empty + non-completed
+#                                  outcomes
+#    A gate-skipped dispatch records
+#    `SkippedByCondition { condition }` in the audit chain.
+#
+# Example — fire a daily summary to multiple targets but only
+# ping the operator when the agent has something to say:
+#
+# [[notify_target]]
+# name = "phone"
+# kind = "telegram"
+# chat_id = "123456789"
+# default = true
+#
+# [[notify_target]]
+# name = "desktop"
+# kind = "web-ui"
+#
+# [[schedule]]
+# name = "morning-summary"
+# cron = "0 0 9 * * * *"
+# prompt = "Summarize my day. Reply only with what's actionable."
+# notify_targets = ["phone", "desktop"]
+# notify_when = "on_completed_non_empty"
+
+# ----------------------------------------------------------------
 # Reflection auto-loop (Phase 70 — P14 self-learning closure)
 # ----------------------------------------------------------------
 #
