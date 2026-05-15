@@ -207,6 +207,7 @@ impl Memory for RedbMemory {
             body: body.to_string(),
             seq,
             created_at_secs: now_secs(),
+            last_read_at_secs: 0,
         };
         let entry_bytes = InMemoryMemory::encode_entry(&entry)?;
 
@@ -255,9 +256,23 @@ impl Memory for RedbMemory {
         // (because seq is big-endian) is seq ascending. We want
         // newest-first, so reverse and take `limit`. Decode each
         // payload through the same path InMemoryMemory uses.
+        //
+        // Phase 74 — LRU stamp: every entry returned to a caller
+        // gets its `last_read_at_secs` rewritten to now on disk.
+        // We persist the bump because eviction queries the field
+        // at GC time; an in-memory-only stamp would be lost on
+        // restart and break LRU semantics across daemon lifetimes.
+        let now = now_secs();
         let mut out: Vec<MemoryEntry> = Vec::with_capacity(limit.min(rows.len()));
-        for (_key, value) in rows.iter().rev().take(limit) {
-            out.push(InMemoryMemory::decode_entry(value)?);
+        for (key, value) in rows.iter().rev().take(limit) {
+            let mut entry = InMemoryMemory::decode_entry(value)?;
+            entry.last_read_at_secs = now;
+            let entry_bytes = InMemoryMemory::encode_entry(&entry)?;
+            self.handle
+                .put(key, &entry_bytes)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?;
+            out.push(entry);
         }
         Ok(out)
     }
@@ -422,6 +437,108 @@ impl Memory for RedbMemory {
             out.push((topic, entries));
         }
         Ok(out)
+    }
+
+    // ---- Phase 74 — search / list / LRU evict ---------------
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        let rows = self
+            .handle
+            .scan_prefix(ENTRY_PREFIX)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let needle = query.to_lowercase();
+        let mut hits: Vec<MemoryEntry> = Vec::new();
+        for (_key, value) in &rows {
+            let entry = InMemoryMemory::decode_entry(value)?;
+            let matches = if needle.is_empty() {
+                true
+            } else {
+                entry.topic.to_lowercase().contains(&needle)
+                    || entry.body.to_lowercase().contains(&needle)
+            };
+            if matches {
+                hits.push(entry);
+            }
+        }
+        // Newest first.
+        hits.sort_by_key(|h| std::cmp::Reverse(h.seq));
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    async fn list_topics(&self) -> Result<Vec<String>, MemoryError> {
+        use std::collections::BTreeSet;
+        let rows = self
+            .handle
+            .scan_prefix(ENTRY_PREFIX)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let mut topics: BTreeSet<String> = BTreeSet::new();
+        for (key, _value) in &rows {
+            // Key layout: `e\x00 || topic_bytes || \x00 || seq_be(8)`.
+            if key.len() < ENTRY_PREFIX.len() + 1 + 8 {
+                continue;
+            }
+            let sep_idx = key.len() - 9;
+            if key[sep_idx] != 0x00 {
+                continue;
+            }
+            let topic_bytes = &key[ENTRY_PREFIX.len()..sep_idx];
+            if let Ok(topic_str) = std::str::from_utf8(topic_bytes) {
+                topics.insert(topic_str.to_string());
+            }
+        }
+        Ok(topics.into_iter().collect())
+    }
+
+    async fn evict_oldest_unread(
+        &self,
+        topic: &str,
+        keep: usize,
+    ) -> Result<usize, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let prefix = Self::topic_scan_prefix(topic);
+        let rows = self
+            .handle
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        if rows.len() <= keep {
+            return Ok(0);
+        }
+        // Decode each row to read `last_read_at_secs`, then rank.
+        // Ties on read time break by older seq loses first.
+        let mut ranked: Vec<(Vec<u8>, MemoryEntry)> =
+            Vec::with_capacity(rows.len());
+        for (key, value) in rows {
+            let entry = InMemoryMemory::decode_entry(&value)?;
+            ranked.push((key, entry));
+        }
+        ranked.sort_by(|a, b| {
+            a.1.last_read_at_secs
+                .cmp(&b.1.last_read_at_secs)
+                .then(a.1.seq.cmp(&b.1.seq))
+        });
+        let to_remove = ranked.len() - keep;
+        let mut deleted = 0;
+        for (key, _entry) in ranked.into_iter().take(to_remove) {
+            self.handle
+                .delete(&key)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?;
+            deleted += 1;
+        }
+        Ok(deleted)
     }
 }
 

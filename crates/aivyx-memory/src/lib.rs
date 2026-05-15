@@ -122,6 +122,19 @@ pub struct MemoryEntry {
     /// ordering (see module doc, Q2 resolution) — kept for display and
     /// future TTL/GC decisions.
     pub created_at_secs: u64,
+    /// Phase 74 — wall-clock seconds since UNIX epoch at the most
+    /// recent `get_recent` that returned this entry. Drives LRU
+    /// eviction (Q3(a) at Phase 74 sign-off) — when a topic exceeds
+    /// `memory_max_per_topic`, the entry with the smallest
+    /// `last_read_at_secs` is evicted first.
+    ///
+    /// `#[serde(default)]` so pre-Phase-74 stored entries (which
+    /// lack the field) deserialize with `0`. Zero is the "never
+    /// read, most-eligible-for-eviction" sentinel: entries with
+    /// `last_read_at_secs = 0` always lose to any entry with a real
+    /// read timestamp.
+    #[serde(default)]
+    pub last_read_at_secs: u64,
 }
 
 /// Errors the memory substrate can return.
@@ -258,6 +271,50 @@ pub trait Memory: Send + Sync {
         &self,
         cutoff_secs: u64,
     ) -> Result<usize, MemoryError>;
+
+    /// Phase 74 — case-insensitive substring search across every
+    /// topic + body in the substrate. Returns up to `limit` entries
+    /// sorted by `seq` descending (newest first). Empty `query`
+    /// returns the newest `limit` entries across every topic
+    /// (search-with-no-filter shape). Zero limit is an error.
+    ///
+    /// The substrate doesn't update `last_read_at_secs` on search
+    /// hits — search is a discovery surface, not a recall. Updating
+    /// the LRU stamp on every search would mean a periodic
+    /// `memory.search "..."` keeps stale entries pinned forever.
+    /// Per Q3(a) at sign-off, only `get_recent` is the LRU heat
+    /// signal.
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError>;
+
+    /// Phase 74 — return every distinct topic name in the
+    /// substrate, sorted ascending. Drives the Web UI Memory
+    /// pane's left-column topic list and the `aivyx memory list`
+    /// CLI render.
+    async fn list_topics(&self) -> Result<Vec<String>, MemoryError>;
+
+    /// Phase 74 — evict entries from `topic` whose
+    /// `last_read_at_secs` is smallest, until at most `keep`
+    /// entries remain. Returns the number of entries deleted.
+    /// Ties on `last_read_at_secs` break by `seq` ascending (older
+    /// writes lose to newer writes of the same heat).
+    ///
+    /// If the topic already has ≤ `keep` entries, returns 0
+    /// (no-op). If `keep` is 0, deletes every entry (equivalent
+    /// to `forget`). Empty topic is an error.
+    ///
+    /// Used by the GC loop after a `put` that pushes a topic
+    /// over `memory_max_per_topic` (Q3(a)). Distinct from
+    /// `gc_topic`, which is FIFO on `seq`; this is LRU on
+    /// `last_read_at_secs`.
+    async fn evict_oldest_unread(
+        &self,
+        topic: &str,
+        keep: usize,
+    ) -> Result<usize, MemoryError>;
 }
 
 /// Deterministic in-process `Memory` implementation.
@@ -325,6 +382,7 @@ impl Memory for InMemoryMemory {
             body: body.to_string(),
             seq,
             created_at_secs: now_secs(),
+            last_read_at_secs: 0,
         };
         // Round-trip through the real JSON encoder so the fake exercises
         // the same path the real impl will in task 2. Catches any future
@@ -350,10 +408,20 @@ impl Memory for InMemoryMemory {
         if limit == 0 {
             return Err(MemoryError::ZeroLimit);
         }
-        let state = self.state.lock().unwrap();
-        let Some(entries) = state.topics.get(topic) else {
+        let now = now_secs();
+        let mut state = self.state.lock().unwrap();
+        let Some(entries) = state.topics.get_mut(topic) else {
             return Ok(Vec::new());
         };
+        // Phase 74 — LRU stamp: every entry returned to a caller gets
+        // its `last_read_at_secs` bumped to now. Eviction reads this
+        // field to decide which entry loses next when the topic
+        // overflows.
+        let n = entries.len();
+        let take = limit.min(n);
+        for entry in entries.iter_mut().rev().take(take) {
+            entry.last_read_at_secs = now;
+        }
         // Newest first. `entries` is stored oldest-first, so iterate in
         // reverse and take `limit`. Cloning is fine — memory bodies are
         // small by construction and this is a fake.
@@ -424,6 +492,83 @@ impl Memory for InMemoryMemory {
             !entries.is_empty()
         });
         Ok(total_removed)
+    }
+
+    // ---- Phase 74 — search / list / LRU evict ---------------
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        let state = self.state.lock().unwrap();
+        let needle = query.to_lowercase();
+        let mut hits: Vec<MemoryEntry> = state
+            .topics
+            .values()
+            .flat_map(|entries| entries.iter())
+            .filter(|e| {
+                if needle.is_empty() {
+                    return true;
+                }
+                e.topic.to_lowercase().contains(&needle)
+                    || e.body.to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect();
+        // Newest first.
+        hits.sort_by_key(|h| std::cmp::Reverse(h.seq));
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    async fn list_topics(&self) -> Result<Vec<String>, MemoryError> {
+        let state = self.state.lock().unwrap();
+        // BTreeMap iterates in sorted-key order, which is the
+        // ascending alpha-sort the spec calls for.
+        Ok(state.topics.keys().cloned().collect())
+    }
+
+    async fn evict_oldest_unread(
+        &self,
+        topic: &str,
+        keep: usize,
+    ) -> Result<usize, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let mut state = self.state.lock().unwrap();
+        let Some(entries) = state.topics.get_mut(topic) else {
+            return Ok(0);
+        };
+        if entries.len() <= keep {
+            return Ok(0);
+        }
+        // Rank by (last_read_at_secs ASC, seq ASC). Smallest
+        // first = least-recently-read first. Ties on read time
+        // break by older write loses to newer write.
+        let to_remove = entries.len() - keep;
+        // Build a vector of indices sorted by the LRU key, take
+        // the first `to_remove`, then remove those indices in
+        // reverse order so earlier indices stay valid.
+        let mut indices: Vec<usize> = (0..entries.len()).collect();
+        indices.sort_by(|&a, &b| {
+            let ea = &entries[a];
+            let eb = &entries[b];
+            ea.last_read_at_secs
+                .cmp(&eb.last_read_at_secs)
+                .then(ea.seq.cmp(&eb.seq))
+        });
+        let mut victims: Vec<usize> =
+            indices.into_iter().take(to_remove).collect();
+        victims.sort_unstable();
+        for idx in victims.into_iter().rev() {
+            entries.remove(idx);
+        }
+        Ok(to_remove)
     }
 }
 
@@ -600,6 +745,7 @@ mod tests {
             body: "body with\nnewlines and unicode: résumé 🧠".to_string(),
             seq: 42,
             created_at_secs: 1_700_000_000,
+            last_read_at_secs: 0,
         };
         let bytes = InMemoryMemory::encode_entry(&entry).unwrap();
         let decoded = InMemoryMemory::decode_entry(&bytes).unwrap();
@@ -793,5 +939,142 @@ mod tests {
         let err = InMemoryMemory::decode_entry(b"not-valid-json-{")
             .expect_err("must reject garbage");
         assert!(matches!(err, MemoryError::Encoding(_)));
+    }
+
+    // ---- Phase 74 — search / list_topics / evict_oldest_unread ----
+
+    #[tokio::test]
+    async fn search_returns_substring_matches_case_insensitive() {
+        let mem = InMemoryMemory::new();
+        mem.put("project/x", "Build the FOO subsystem").await.unwrap();
+        mem.put("notes/today", "remember to fix Foo bug").await.unwrap();
+        mem.put("project/y", "Unrelated chunk").await.unwrap();
+        let hits = mem.search("foo", 10).await.unwrap();
+        // Two entries mention foo (case-insensitive).
+        assert_eq!(hits.len(), 2);
+        // Newest first: notes/today has seq 1; project/x has seq 0.
+        assert_eq!(hits[0].topic, "notes/today");
+        assert_eq!(hits[1].topic, "project/x");
+    }
+
+    #[tokio::test]
+    async fn search_empty_query_returns_all_newest_first() {
+        let mem = InMemoryMemory::new();
+        mem.put("a", "x").await.unwrap();
+        mem.put("b", "y").await.unwrap();
+        mem.put("c", "z").await.unwrap();
+        let hits = mem.search("", 10).await.unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].topic, "c");
+        assert_eq!(hits[2].topic, "a");
+    }
+
+    #[tokio::test]
+    async fn search_caps_at_limit() {
+        let mem = InMemoryMemory::new();
+        for i in 0..5 {
+            mem.put(&format!("topic-{i}"), "shared body").await.unwrap();
+        }
+        let hits = mem.search("shared", 2).await.unwrap();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_zero_limit_is_error() {
+        let mem = InMemoryMemory::new();
+        let err = mem.search("anything", 0).await.expect_err("must error");
+        assert!(matches!(err, MemoryError::ZeroLimit));
+    }
+
+    #[tokio::test]
+    async fn list_topics_returns_distinct_sorted() {
+        let mem = InMemoryMemory::new();
+        mem.put("zeta", "x").await.unwrap();
+        mem.put("alpha", "x").await.unwrap();
+        mem.put("alpha", "y").await.unwrap(); // duplicate topic
+        mem.put("beta", "x").await.unwrap();
+        let topics = mem.list_topics().await.unwrap();
+        assert_eq!(topics, vec!["alpha", "beta", "zeta"]);
+    }
+
+    #[tokio::test]
+    async fn list_topics_empty_substrate_returns_empty_vec() {
+        let mem = InMemoryMemory::new();
+        let topics = mem.list_topics().await.unwrap();
+        assert!(topics.is_empty());
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_keeps_recent_reads() {
+        let mem = InMemoryMemory::new();
+        // Write 5 entries.
+        for i in 0..5 {
+            mem.put("notes", &format!("body-{i}")).await.unwrap();
+        }
+        // Read the newest 2 — bumps their last_read_at_secs.
+        let _ = mem.get_recent("notes", 2).await.unwrap();
+        // Keep 3. Should evict 2 of the 3 oldest unread.
+        let evicted = mem.evict_oldest_unread("notes", 3).await.unwrap();
+        assert_eq!(evicted, 2);
+        // The two newest reads (body-4, body-3) must survive.
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        let bodies: Vec<&str> = remaining.iter().map(|e| e.body.as_str()).collect();
+        assert!(bodies.contains(&"body-4"));
+        assert!(bodies.contains(&"body-3"));
+        assert!(!bodies.contains(&"body-0"));
+        assert!(!bodies.contains(&"body-1"));
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_noop_when_under_cap() {
+        let mem = InMemoryMemory::new();
+        for i in 0..3 {
+            mem.put("notes", &format!("body-{i}")).await.unwrap();
+        }
+        let evicted = mem.evict_oldest_unread("notes", 5).await.unwrap();
+        assert_eq!(evicted, 0);
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_ties_break_by_seq_ascending() {
+        let mem = InMemoryMemory::new();
+        // Write 4 entries; none have ever been read so all have
+        // last_read_at_secs = 0. Ties on read time break by seq:
+        // smallest seq loses first.
+        for i in 0..4 {
+            mem.put("notes", &format!("body-{i}")).await.unwrap();
+        }
+        // Keep 2 → evict 2.
+        let evicted = mem.evict_oldest_unread("notes", 2).await.unwrap();
+        assert_eq!(evicted, 2);
+        // The two highest-seq entries (body-2, body-3) must survive.
+        let remaining = mem.get_recent("notes", 10).await.unwrap();
+        let bodies: Vec<&str> = remaining.iter().map(|e| e.body.as_str()).collect();
+        assert!(bodies.contains(&"body-2"));
+        assert!(bodies.contains(&"body-3"));
+        assert!(!bodies.contains(&"body-0"));
+        assert!(!bodies.contains(&"body-1"));
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_empty_topic_is_error() {
+        let mem = InMemoryMemory::new();
+        let err = mem.evict_oldest_unread("", 3).await.expect_err("must error");
+        assert!(matches!(err, MemoryError::EmptyTopic));
+    }
+
+    #[tokio::test]
+    async fn get_recent_updates_last_read_at_secs() {
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "body").await.unwrap();
+        // First read — last_read_at_secs gets stamped.
+        let before = mem.get_recent("notes", 1).await.unwrap();
+        let stamp_1 = before[0].last_read_at_secs;
+        assert!(stamp_1 > 0, "first read must stamp a non-zero time");
+        // Subsequent reads return the same stamp (within the same
+        // wall-clock second), but the stamp is at least the previous
+        // one.
+        let after = mem.get_recent("notes", 1).await.unwrap();
+        assert!(after[0].last_read_at_secs >= stamp_1);
     }
 }
