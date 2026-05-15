@@ -958,6 +958,33 @@ respond to it. Closing the gap is the inflection point between
   DESIGN.md → 16, PRODUCT.md → 9, lib.rs → 17 (new record,
   beats Phase 68's 16). Zero new workspace deps.
 
+- **Phase 72 (Reach Tier-1 polish, shipped 2026-05-15).**
+  Closes three operator-feedback shapes from the Reach
+  Milestone backlog in one phase: multi-target dispatch
+  (triggers fan out to N notify targets concurrently via
+  `futures::join_all`, per-target audit per Q4(a)), default-
+  target sugar (`default = true` on a `[[notify_target]]`
+  block resolves into empty trigger lists at config-load
+  time, one default allowed globally per Q2(a)), and
+  conditional notify (`notify_when` enum gates dispatch by
+  outcome: `Always | OnFailed | OnCompletedNonEmpty` per
+  Q3(a)). New `AutoNotifyOutcomeSummary::SkippedByCondition`
+  audit variant makes gate-skipped dispatches forensically
+  distinguishable. Backwards-compat: singular `notify_target`
+  stays valid as a one-element alias per Q1(a); declaring
+  both forms on one trigger rejects at load. Tests +13
+  (1289 → 1302), below the +20-30 prediction floor —
+  fan-out integration test scaffolding deferred to a
+  follow-up. All three streak predictions correct: DESIGN.md
+  → 19, PRODUCT.md → 12, lib.rs → **20** (new record +
+  two-decade milestone, beats Phase 71's 19). Zero new
+  workspace deps.
+
+- **Phase 73+ (Reach Tier-2 polish, future).** Per-target
+  retry semantics, per-target rate limits, dedicated Web UI
+  notification history pane. Different cluster of concerns
+  from Phase 72's Tier-1 trio; cleanly deferred.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

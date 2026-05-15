@@ -1563,6 +1563,53 @@ role-switching path.
 After Phase 71 the self-learning half of P14 is genuinely
 autonomous end-to-end.
 
+## Phase 72 — Reach Polish: Multi-Target, Default, Conditional
+
+**Frozen — see [PHASE_72.md](PHASE_72.md).** Closes three
+Tier-1 operator-feedback shapes carried from the Reach
+Milestone (Phases 62-69) in one phase:
+
+- **Multi-target dispatch.** A single trigger fans out to N
+  notify targets in one fire. `notify_targets: Vec<String>`
+  on trigger configs; the singular `notify_target` stays as
+  a backwards-compat alias. Dispatch uses
+  `futures_util::future::join_all` for concurrent fan-out
+  (Q4(a)); each per-target backend outcome is audited
+  independently as a separate `AutoNotifyDispatched` entry,
+  so one target's transport failure doesn't block the
+  others.
+- **Default-target sugar.** `default = true` on one
+  `[[notify_target]]` block marks it as the global default;
+  triggers that omit `notify_targets` fall through to it at
+  config-load time so runtime dispatch never has to resolve
+  defaults again. Loader rejects multiple defaults with a
+  clear "phone, desktop" multi-name error.
+- **Conditional notify.** New `NotifyWhen` enum
+  (`Always | OnFailed | OnCompletedNonEmpty`) gates dispatch
+  by turn outcome. A gate-skipped dispatch records the new
+  `AutoNotifyOutcomeSummary::SkippedByCondition { condition }`
+  audit variant so forensic searches can answer "why didn't
+  this fire?" definitively.
+
+Schedule / Webhook / FileWatch storage records gain
+`notify_targets` + `notify_when` fields (serde-defaulted for
+backwards compatibility); the config-to-record bridges copy
+both through. All four `dispatch.fire(...)` callers updated
+to the new signature.
+
+Streak predictions all correct: DESIGN.md → 19, PRODUCT.md →
+12, `aivyx-core/src/lib.rs` → **20** (new project record +
+**two-decade milestone**, beating Phase 71's 19). Tests +13
+(1289 → 1302), below the +20-30 prediction floor — honest
+miss called out in the phase doc: fan-out integration tests
+require heavier scaffolding (mocked dispatcher + audit log +
+spawned futures) than fit cleanly in the phase. Zero clippy
+warnings. Zero new workspace deps.
+
+Tier-2 polish (per-target retry semantics, per-target rate
+limits, Web UI notification history pane) defers to a focused
+follow-up — different cluster of concerns.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
