@@ -20,9 +20,10 @@ use std::sync::Arc;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, EffectivePersonaSummary, FrameError,
-    FrontendMessage, FrontendType, IpcAttachment, NotificationHistoryEntry,
-    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalResolveSuccess,
-    PersonaProposalSummary, QueryPayload, QueryResponsePayload, StreamEventPayload,
+    FrontendMessage, FrontendType, IpcAttachment, MemoryEntrySummary,
+    NotificationHistoryEntry, PersonaDeltaSummary, PersonaProposalResolution,
+    PersonaProposalResolveSuccess, PersonaProposalSummary, QueryPayload,
+    QueryResponsePayload, StreamEventPayload,
 };
 use crate::daemon_server::DaemonError;
 
@@ -438,6 +439,137 @@ pub async fn list_persona_deltas(
         other => Err(DaemonError::Protocol(format!(
             "expected ListPersonaDeltas, got {other:?}"
         ))),
+    }
+}
+
+/// Phase 74 — list every distinct memory topic over IPC.
+pub async fn list_memory_topics(
+    socket_path: &Path,
+) -> Result<Vec<String>, DaemonError> {
+    let payload =
+        send_query(socket_path, "m-topics", QueryPayload::ListMemoryTopics)
+            .await?;
+    match payload {
+        QueryResponsePayload::ListMemoryTopics { topics } => Ok(topics),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListMemoryTopics, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 74 — fetch up to `limit` entries for one topic.
+pub async fn get_memory_topic_entries(
+    socket_path: &Path,
+    topic: &str,
+    limit: u32,
+) -> Result<Vec<MemoryEntrySummary>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "m-entries",
+        QueryPayload::GetMemoryTopicEntries {
+            topic: topic.to_string(),
+            limit,
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::GetMemoryTopicEntries { entries } => Ok(entries),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected GetMemoryTopicEntries, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 74 — substring search across topics + bodies over IPC.
+pub async fn search_memory(
+    socket_path: &Path,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<MemoryEntrySummary>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "m-search",
+        QueryPayload::SearchMemory {
+            query: query.to_string(),
+            limit,
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::SearchMemory { matches } => Ok(matches),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected SearchMemory, got {other:?}"
+        ))),
+    }
+}
+
+/// Phase 74 — operator-initiated memory topic eviction over IPC.
+/// Returns the number of entries deleted on success.
+pub async fn evict_memory_topic(
+    socket_path: &Path,
+    topic: &str,
+) -> Result<u64, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::EvictMemoryTopic {
+        id: "ev-cli".into(),
+        topic: topic.to_string(),
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::MemoryEvictResolved {
+                    ok, deleted, error, ..
+                },
+                _,
+            )) => {
+                if ok {
+                    return deleted.ok_or_else(|| {
+                        DaemonError::Protocol(
+                            "MemoryEvictResolved ok=true but deleted is None"
+                                .into(),
+                        )
+                    });
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "memory evict failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected MemoryEvictResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 

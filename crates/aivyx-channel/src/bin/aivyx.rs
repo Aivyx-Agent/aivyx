@@ -102,6 +102,8 @@ mod init;
 mod init_templates;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
+#[path = "aivyx_modules/memory.rs"]
+mod memory;
 #[path = "aivyx_modules/notify.rs"]
 mod notify;
 #[path = "aivyx_modules/persona.rs"]
@@ -454,6 +456,30 @@ fn run() -> Result<(), String> {
             match sub {
                 NotifySubcommand::History { target, limit } => {
                     notify::run_notify_history(target.as_deref(), limit).await
+                }
+            }
+        });
+    }
+
+    // ---- Phase 74: memory subcommand ----------------------------
+    // IPC-backed; the substrate lives in encrypted storage and is
+    // reached via the daemon's memory queries.
+    if let CliMode::Memory(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            match sub {
+                MemorySubcommand::List => memory::run_memory_list().await,
+                MemorySubcommand::Show { topic, limit } => {
+                    memory::run_memory_show(&topic, limit).await
+                }
+                MemorySubcommand::Search { query, limit } => {
+                    memory::run_memory_search(&query, limit).await
+                }
+                MemorySubcommand::Evict { topic, yes } => {
+                    memory::run_memory_evict(&topic, yes).await
                 }
             }
         });
@@ -1014,6 +1040,10 @@ enum CliMode {
     /// history audit chain as a flat-text table for terminal
     /// operators. Web UI parity in the Notifications pane.
     Notify(NotifySubcommand),
+    /// `aivyx memory <subcommand>`: memory inspection /
+    /// management (Phase 74 — memory polish). IPC-backed;
+    /// terminal parity with the Web UI Memory pane.
+    Memory(MemorySubcommand),
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1025,6 +1055,22 @@ enum NotifySubcommand {
         target: Option<String>,
         limit: u32,
     },
+}
+
+/// Phase 74 — `aivyx memory` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum MemorySubcommand {
+    /// `aivyx memory list` — print every topic.
+    List,
+    /// `aivyx memory show <topic> [--limit N]` — entries for a
+    /// topic, newest first. Default limit 32.
+    Show { topic: String, limit: u32 },
+    /// `aivyx memory search <query> [--limit N]` — substring
+    /// search across topics + bodies. Default limit 32.
+    Search { query: String, limit: u32 },
+    /// `aivyx memory evict <topic> [--yes]` — delete every
+    /// entry under a topic. `--yes` skips the confirm prompt.
+    Evict { topic: String, yes: bool },
 }
 
 /// Phase 66 — `aivyx init` variant discriminator.
@@ -1383,6 +1429,119 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
         }
+    }
+
+    // Phase 74 — `aivyx memory <subcommand>` CLI surface.
+    if !args.is_empty() && args[0] == "memory" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx memory` requires a subcommand. Supported: \
+             list, show, search, evict"
+                .to_string()
+        })?;
+        // Helper: parse a trailing `--limit N` flag from the
+        // arg slice starting at `start`, returning (limit,
+        // positional-consumed). Default 32.
+        let parse_limit_from = |args: &[String],
+                                start: usize|
+         -> Result<u32, String> {
+            let mut idx = start;
+            let mut limit = 32u32;
+            while idx < args.len() {
+                match args[idx].as_str() {
+                    "--limit" => {
+                        let v = args.get(idx + 1).ok_or_else(|| {
+                            "`--limit` requires a value".to_string()
+                        })?;
+                        let parsed: u32 = v.parse().map_err(|_| {
+                            format!(
+                                "`--limit` expects a positive integer, \
+                                 got `{v}`"
+                            )
+                        })?;
+                        if parsed == 0 {
+                            return Err(
+                                "`--limit` must be ≥ 1".to_string()
+                            );
+                        }
+                        limit = parsed;
+                        idx += 2;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unrecognized argument: `{other}`"
+                        ));
+                    }
+                }
+            }
+            Ok(limit)
+        };
+        let mem_sub = match sub.as_str() {
+            "list" => {
+                if args.len() > 2 {
+                    return Err(
+                        "`aivyx memory list` takes no arguments".into()
+                    );
+                }
+                MemorySubcommand::List
+            }
+            "show" => {
+                let topic = args.get(2).ok_or_else(|| {
+                    "`aivyx memory show` requires a topic".to_string()
+                })?;
+                let limit = parse_limit_from(args, 3)?;
+                MemorySubcommand::Show {
+                    topic: topic.clone(),
+                    limit,
+                }
+            }
+            "search" => {
+                let query = args.get(2).ok_or_else(|| {
+                    "`aivyx memory search` requires a query".to_string()
+                })?;
+                let limit = parse_limit_from(args, 3)?;
+                MemorySubcommand::Search {
+                    query: query.clone(),
+                    limit,
+                }
+            }
+            "evict" => {
+                let topic = args.get(2).ok_or_else(|| {
+                    "`aivyx memory evict` requires a topic".to_string()
+                })?;
+                let mut yes = false;
+                for a in &args[3..] {
+                    match a.as_str() {
+                        "--yes" => yes = true,
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx memory \
+                                 evict`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                MemorySubcommand::Evict {
+                    topic: topic.clone(),
+                    yes,
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx memory` subcommand: `{other}`. \
+                     Supported: list, show, search, evict"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Memory(mem_sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
     }
 
     // Check for `init` subcommand — interactive first-run wizard
@@ -5311,6 +5470,127 @@ mod tests {
     #[test]
     fn notify_unknown_subcommand_errors() {
         let err = parse_cli_args_from(&argv(&["notify", "wat"]))
+            .expect_err("must error");
+        assert!(err.contains("unrecognized"), "{err}");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 74 — `aivyx memory <subcommand>` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn memory_list_parses() {
+        let parsed = parse_cli_args_from(&argv(&["memory", "list"]))
+            .expect("must parse");
+        assert_eq!(parsed.mode, CliMode::Memory(MemorySubcommand::List));
+    }
+
+    #[test]
+    fn memory_list_with_args_errors() {
+        let err = parse_cli_args_from(&argv(&["memory", "list", "extra"]))
+            .expect_err("must error");
+        assert!(err.contains("takes no arguments"), "{err}");
+    }
+
+    #[test]
+    fn memory_show_parses_with_default_limit() {
+        let parsed = parse_cli_args_from(&argv(&["memory", "show", "notes"]))
+            .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Show {
+                topic: "notes".into(),
+                limit: 32,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_show_parses_with_limit_flag() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "memory", "show", "notes", "--limit", "5",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Show {
+                topic: "notes".into(),
+                limit: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_show_without_topic_errors() {
+        let err = parse_cli_args_from(&argv(&["memory", "show"]))
+            .expect_err("must error");
+        assert!(err.contains("requires a topic"), "{err}");
+    }
+
+    #[test]
+    fn memory_search_parses() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "memory", "search", "foo", "--limit", "10",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Search {
+                query: "foo".into(),
+                limit: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_search_zero_limit_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "memory", "search", "foo", "--limit", "0",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("must be ≥ 1"), "{err}");
+    }
+
+    #[test]
+    fn memory_evict_parses_without_yes() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "memory", "evict", "stale",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Evict {
+                topic: "stale".into(),
+                yes: false,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_evict_parses_with_yes() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "memory", "evict", "stale", "--yes",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Evict {
+                topic: "stale".into(),
+                yes: true,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_without_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["memory"]))
+            .expect_err("must error");
+        assert!(err.contains("requires a subcommand"), "{err}");
+    }
+
+    #[test]
+    fn memory_unknown_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["memory", "wat"]))
             .expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
