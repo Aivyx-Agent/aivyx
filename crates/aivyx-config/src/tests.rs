@@ -33,7 +33,7 @@ use secrecy::ExposeSecret;
 
 use crate::{
     AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, NotifyTargetKind,
-    ProviderKind, Role, TlsMode, ToolAllowlist, DEFAULT_ASSISTANT_NAME,
+    NotifyWhen, ProviderKind, Role, TlsMode, ToolAllowlist, DEFAULT_ASSISTANT_NAME,
     DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
@@ -3286,7 +3286,7 @@ notify_target = "phone"
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
     match err {
         ConfigError::Invalid { field, reason } => {
-            assert_eq!(field, "schedule.notify_target");
+            assert_eq!(field, "schedule.notify_targets");
             assert!(reason.contains("unknown notify_target"), "reason: {reason}");
             assert!(reason.contains("phone"), "reason: {reason}");
             assert!(reason.contains("morning-summary"), "reason: {reason}");
@@ -3334,7 +3334,7 @@ notify_target = "phone"
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
     match err {
         ConfigError::Invalid { field, reason } => {
-            assert_eq!(field, "schedule.notify_target");
+            assert_eq!(field, "schedule.notify_targets");
             assert!(reason.contains("lacks `notify.send`"), "reason: {reason}");
             assert!(reason.contains("default"), "reason: {reason}");
             assert!(reason.contains("morning-summary"), "reason: {reason}");
@@ -3425,7 +3425,7 @@ notify_target = "phone"
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
-    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "schedule.notify_target"));
+    assert!(matches!(err, ConfigError::Invalid { field, .. } if field == "schedule.notify_targets"));
     drop(env);
 }
 
@@ -4260,6 +4260,437 @@ role_override = "ghost-role"
         ConfigError::Invalid { field, reason } => {
             assert_eq!(field, "reflection_schedule.role_override");
             assert!(reason.contains("ghost-role"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+// ==============================================================
+// Phase 72 — multi-target, default-target, conditional notify
+// ==============================================================
+
+#[test]
+fn singular_notify_target_bridges_into_plural() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("singular-alias");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning summary"
+notify_target = "phone"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let sched = cfg
+        .schedules
+        .iter()
+        .find(|s| s.name == "daily")
+        .expect("schedule loaded");
+    assert_eq!(sched.notify_targets, vec!["phone".to_string()]);
+    assert_eq!(sched.notify_target.as_deref(), Some("phone"));
+    assert_eq!(sched.notify_when, NotifyWhen::Always);
+    drop(env);
+}
+
+#[test]
+fn plural_notify_targets_loads_full_list() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("plural-list");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/p"
+
+[[notify_target]]
+name = "desktop"
+kind = "web-ui"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning summary"
+notify_targets = ["phone", "desktop"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let sched = &cfg.schedules[0];
+    assert_eq!(
+        sched.notify_targets,
+        vec!["phone".to_string(), "desktop".to_string()]
+    );
+    drop(env);
+}
+
+#[test]
+fn both_singular_and_plural_declared_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("both-forms");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning summary"
+notify_target = "phone"
+notify_targets = ["phone"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "trigger.notify_targets");
+            assert!(reason.contains("both"), "{reason}");
+            assert!(reason.contains("daily"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn default_target_resolves_into_empty_trigger_list() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("default-resolve");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+default = true
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning summary"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    // The default flag flows through to NotifyTargetConfig.
+    let phone = &cfg.notify_targets[0];
+    assert!(phone.is_default);
+    // The schedule's empty notify_targets gets filled with the
+    // default at load time.
+    let sched = &cfg.schedules[0];
+    assert_eq!(sched.notify_targets, vec!["phone".to_string()]);
+    drop(env);
+}
+
+#[test]
+fn default_target_does_not_overwrite_explicit_list() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("default-no-overwrite");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/p"
+default = true
+
+[[notify_target]]
+name = "desktop"
+kind = "web-ui"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning summary"
+notify_targets = ["desktop"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let sched = &cfg.schedules[0];
+    // The explicit list survives unchanged — default doesn't merge.
+    assert_eq!(sched.notify_targets, vec!["desktop".to_string()]);
+    drop(env);
+}
+
+#[test]
+fn multiple_default_targets_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("dup-default");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/p"
+default = true
+
+[[notify_target]]
+name = "desktop"
+kind = "web-ui"
+default = true
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "notify_target.default");
+            assert!(reason.contains("multiple"), "{reason}");
+            assert!(reason.contains("phone"), "{reason}");
+            assert!(reason.contains("desktop"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn notify_when_variants_parse() {
+    for (input, expected) in [
+        ("always", NotifyWhen::Always),
+        ("on_failed", NotifyWhen::OnFailed),
+        ("on_completed_non_empty", NotifyWhen::OnCompletedNonEmpty),
+    ] {
+        let env = EnvScope::new();
+        let tmp = TempDir::new(&format!("notify-when-{input}"));
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            format!(
+                r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning"
+notify_targets = ["phone"]
+notify_when = "{input}"
+"#,
+            ),
+        )
+        .unwrap();
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            role_override: None,
+        };
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+        assert_eq!(cfg.schedules[0].notify_when, expected);
+        drop(env);
+    }
+}
+
+#[test]
+fn notify_when_unknown_value_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("notify-when-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning"
+notify_targets = ["phone"]
+notify_when = "if_blue_moon"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "trigger.notify_when");
+            assert!(reason.contains("if_blue_moon"), "{reason}");
+            assert!(reason.contains("always"), "{reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn multi_target_with_one_unknown_name_is_rejected() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("multi-unknown");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "phone"
+kind = "webhook"
+url = "https://example.com/x"
+
+[[schedule]]
+name = "daily"
+cron = "0 0 9 * * *"
+prompt = "morning"
+notify_targets = ["phone", "ghost"]
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "schedule.notify_targets");
+            assert!(reason.contains("ghost"), "{reason}");
         }
         other => panic!("expected Invalid, got {other:?}"),
     }

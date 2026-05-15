@@ -505,6 +505,7 @@ mod tests {
                 url: "https://example.com/x".into(),
             },
             enabled: true,
+            is_default: false,
         }];
         let d = build_notify_dispatcher(&targets, None, None, None).expect("ok");
         assert_eq!(d.len(), 1);
@@ -520,6 +521,7 @@ mod tests {
                 chat_id: "123".into(),
             },
             enabled: true,
+            is_default: false,
         }];
         let err = build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
         assert!(err.contains("`phone`"), "error: {err}");
@@ -534,6 +536,7 @@ mod tests {
                 chat_id: "123".into(),
             },
             enabled: true,
+            is_default: false,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let d = build_notify_dispatcher(&targets, Some(transport), None, None).expect("ok");
@@ -550,6 +553,7 @@ mod tests {
                 chat_id: "not-a-number".into(),
             },
             enabled: true,
+            is_default: false,
         }];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
         let err =
@@ -567,6 +571,7 @@ mod tests {
                     chat_id: "1".into(),
                 },
                 enabled: true,
+            is_default: false,
             },
             NotifyTargetConfig {
                 name: "alerts".into(),
@@ -574,6 +579,7 @@ mod tests {
                     url: "https://example.com/".into(),
                 },
                 enabled: true,
+            is_default: false,
             },
         ];
         let transport: Arc<dyn TelegramTransport> = Arc::new(NoopTransport);
@@ -592,6 +598,7 @@ mod tests {
             name: "desktop".into(),
             kind: NotifyTargetKind::WebUi,
             enabled: true,
+            is_default: false,
         }];
         let err =
             build_notify_dispatcher(&targets, None, None, None).expect_err("must error");
@@ -605,6 +612,7 @@ mod tests {
             name: "desktop".into(),
             kind: NotifyTargetKind::WebUi,
             enabled: true,
+            is_default: false,
         }];
         let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
         let d = build_notify_dispatcher(&targets, None, None, Some(bc)).expect("ok");
@@ -619,6 +627,7 @@ mod tests {
             name: "desktop".into(),
             kind: NotifyTargetKind::WebUi,
             enabled: true,
+            is_default: false,
         }];
         let bc = Arc::new(crate::notify_webui::WebUiBroadcaster::new());
         let mut rx = bc.subscribe();

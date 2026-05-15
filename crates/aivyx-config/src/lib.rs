@@ -989,6 +989,48 @@ pub struct SandboxConfig {
     pub args: Vec<String>,
 }
 
+/// Phase 72 — conditional dispatch gate. When a trigger's
+/// `notify_when` is anything other than `Always`, the daemon
+/// evaluates the turn outcome (and, for
+/// `OnCompletedNonEmpty`, the rendered response body) before
+/// fanning out to the notify targets. A gate that returns
+/// `false` records `AutoNotifyOutcomeSummary::SkippedByCondition`
+/// in the audit chain so forensic searches can answer "why
+/// didn't this trigger notify?" definitively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotifyWhen {
+    /// Today's behavior — dispatch unconditionally on every
+    /// trigger fire. Empty responses still get
+    /// `SkippedEmptyResponse` audit treatment per the Phase 63
+    /// Q2(a) rule baked into the dispatch path.
+    #[default]
+    Always,
+    /// Dispatch only when the turn's outcome is `Failed` or
+    /// `TimedOut`. Completed / Cancelled / Escalated outcomes
+    /// skip dispatch.
+    OnFailed,
+    /// Dispatch only when the turn completed AND the final
+    /// response body is non-whitespace. The audit chain's
+    /// existing `SkippedEmptyResponse` still records the
+    /// empty-body case; this variant additionally skips
+    /// `Failed | TimedOut | Cancelled | Escalated` outcomes
+    /// (operators who want "only when something useful was
+    /// produced").
+    OnCompletedNonEmpty,
+}
+
+impl NotifyWhen {
+    /// Stable label rendered into audit `condition` strings
+    /// when a dispatch skips because of this gate.
+    pub fn condition_label(self) -> &'static str {
+        match self {
+            NotifyWhen::Always => "always",
+            NotifyWhen::OnFailed => "on_failed",
+            NotifyWhen::OnCompletedNonEmpty => "on_completed_non_empty",
+        }
+    }
+}
+
 /// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
 #[derive(Debug, Clone)]
 pub struct ScheduleConfig {
@@ -998,14 +1040,26 @@ pub struct ScheduleConfig {
     pub prompt: String,
     pub enabled: bool,
     pub wrap_mission: bool,
-    /// Phase 63 Task 2 — when `Some(name)`, the daemon
-    /// auto-dispatches the trigger-fired turn's final response
-    /// to the named `[[notify_target]]` after the turn
-    /// completes. Validated at config-load time: the named
-    /// target must exist and the trigger's `role` must have
-    /// `notify.send` (qualified to the target, or unqualified)
-    /// in its declared envelope.
+    /// Phase 63 Task 2 — kept as a singular alias for backwards
+    /// compatibility with pre-Phase-72 configs. When set, the
+    /// loader bridges it into `notify_targets` as a
+    /// one-element vec so downstream consumers always read the
+    /// vec. Declaring both `notify_target` and `notify_targets`
+    /// on the same trigger is rejected at config-load time
+    /// (Phase 72 Q1(a)).
     pub notify_target: Option<String>,
+    /// Phase 72 — list of notify target names this trigger
+    /// dispatches to on fire. The daemon fans out concurrently
+    /// (Q4(a)); per-target outcomes are audited independently.
+    /// When empty AND a `[[notify_target]]` is marked
+    /// `default = true`, the loader resolves the default into
+    /// this vec at config-load time so runtime dispatch never
+    /// has to ask "which target is default?" again.
+    pub notify_targets: Vec<String>,
+    /// Phase 72 — conditional dispatch gate. Defaults to
+    /// `Always` (today's behavior, no behavior change for
+    /// pre-Phase-72 configs).
+    pub notify_when: NotifyWhen,
 }
 
 /// One reflection-schedule entry loaded from
@@ -1051,8 +1105,12 @@ pub struct WebhookConfig {
     pub prompt: String,
     pub enabled: bool,
     pub wrap_mission: bool,
-    /// Phase 63 Task 2 — see [`ScheduleConfig::notify_target`].
+    /// See [`ScheduleConfig::notify_target`] — singular alias.
     pub notify_target: Option<String>,
+    /// Phase 72 — see [`ScheduleConfig::notify_targets`].
+    pub notify_targets: Vec<String>,
+    /// Phase 72 — see [`ScheduleConfig::notify_when`].
+    pub notify_when: NotifyWhen,
 }
 
 /// One file-watch trigger entry loaded from `[[file_watch]]` in the TOML file.
@@ -1066,8 +1124,12 @@ pub struct FileWatchConfig {
     pub enabled: bool,
     pub debounce_ms: Option<u64>,
     pub wrap_mission: bool,
-    /// Phase 63 Task 2 — see [`ScheduleConfig::notify_target`].
+    /// See [`ScheduleConfig::notify_target`] — singular alias.
     pub notify_target: Option<String>,
+    /// Phase 72 — see [`ScheduleConfig::notify_targets`].
+    pub notify_targets: Vec<String>,
+    /// Phase 72 — see [`ScheduleConfig::notify_when`].
+    pub notify_when: NotifyWhen,
 }
 
 /// One notification-target entry loaded from `[[notify_target]]` in
@@ -1085,6 +1147,11 @@ pub struct NotifyTargetConfig {
     pub name: String,
     pub kind: NotifyTargetKind,
     pub enabled: bool,
+    /// Phase 72 — when `true`, this target is the global default
+    /// triggers fall through to when they omit `notify_targets`.
+    /// At most one `[[notify_target]]` may set this; the loader
+    /// rejects multiple defaults at config-load time.
+    pub is_default: bool,
 }
 
 /// Per-kind notification target configuration. Phase 62 ships two
@@ -1394,6 +1461,7 @@ fn default_stdio_transport() -> String {
 
 /// One `[[schedule]]` entry in the TOML file. Phase 26 Task 2.
 /// Phase 63 Task 2 added the optional `notify_target` field.
+/// Phase 72 added `notify_targets` (plural) + `notify_when`.
 #[derive(Debug, Default, Deserialize)]
 struct RawSchedule {
     name: String,
@@ -1405,12 +1473,20 @@ struct RawSchedule {
     enabled: bool,
     #[serde(default)]
     wrap_mission: bool,
-    /// Phase 63 Task 2 — name of a configured `[[notify_target]]`.
-    /// When set, the daemon auto-dispatches the trigger-fired
-    /// turn's final response to the named target after the turn
-    /// completes.
+    /// Phase 63 Task 2 — singular alias. Kept for backwards
+    /// compatibility; loader bridges into `notify_targets`.
+    /// Declaring both `notify_target` and `notify_targets` on
+    /// one trigger is rejected at load time (Phase 72 Q1(a)).
     #[serde(default)]
     notify_target: Option<String>,
+    /// Phase 72 — explicit list of notify target names for
+    /// multi-target fan-out. Empty + a default-marked
+    /// `[[notify_target]]` exists → loader resolves the default.
+    #[serde(default)]
+    notify_targets: Vec<String>,
+    /// Phase 72 — conditional dispatch gate. Default `"always"`.
+    #[serde(default)]
+    notify_when: Option<String>,
 }
 
 fn default_reflection_lookback_secs() -> u64 {
@@ -1438,7 +1514,6 @@ struct RawReflectionSchedule {
 }
 
 /// One `[[webhook]]` entry in the TOML file. Phase 27 Task 3.
-/// Phase 63 Task 2 added the optional `notify_target` field.
 #[derive(Debug, Default, Deserialize)]
 struct RawWebhook {
     name: String,
@@ -1452,10 +1527,15 @@ struct RawWebhook {
     /// Phase 63 Task 2 — see `RawSchedule::notify_target`.
     #[serde(default)]
     notify_target: Option<String>,
+    /// Phase 72 — see `RawSchedule::notify_targets`.
+    #[serde(default)]
+    notify_targets: Vec<String>,
+    /// Phase 72 — see `RawSchedule::notify_when`.
+    #[serde(default)]
+    notify_when: Option<String>,
 }
 
 /// One `[[file_watch]]` entry in the TOML file. Phase 27 Task 4.
-/// Phase 63 Task 2 added the optional `notify_target` field.
 #[derive(Debug, Default, Deserialize)]
 struct RawFileWatch {
     name: String,
@@ -1471,6 +1551,12 @@ struct RawFileWatch {
     /// Phase 63 Task 2 — see `RawSchedule::notify_target`.
     #[serde(default)]
     notify_target: Option<String>,
+    /// Phase 72 — see `RawSchedule::notify_targets`.
+    #[serde(default)]
+    notify_targets: Vec<String>,
+    /// Phase 72 — see `RawSchedule::notify_when`.
+    #[serde(default)]
+    notify_when: Option<String>,
 }
 
 /// One `[[notify_target]]` entry in the TOML file. Phase 62 Task 3.
@@ -1503,10 +1589,73 @@ struct RawNotifyTarget {
     to: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    /// Phase 72 — when `true`, this target is the global
+    /// default triggers fall through to when they omit
+    /// `notify_targets`. At most one notify_target may set
+    /// this; loader rejects multiple defaults.
+    #[serde(default)]
+    default: bool,
 }
 
 fn default_role_name() -> String {
     DEFAULT_ROLE_NAME.to_string()
+}
+
+/// Phase 72 — reconcile a trigger's singular `notify_target` +
+/// plural `notify_targets` + string `notify_when` raw fields
+/// into the public `(Vec<String>, NotifyWhen)` shape.
+///
+/// Rules:
+/// - Singular + plural set on the same trigger → error.
+/// - Singular only → singular-as-one-element vec.
+/// - Plural only → vec passes through (empty allowed; the
+///   loader's later default-resolution pass may fill it in).
+/// - Neither set → empty vec.
+/// - `notify_when` parses lowercase `"always" | "on_failed" |
+///   "on_completed_non_empty"`; anything else → error.
+fn resolve_trigger_notify_fields(
+    trigger_kind: &str,
+    trigger_name: &str,
+    singular: Option<String>,
+    plural: Vec<String>,
+    raw_when: Option<&str>,
+) -> Result<(Vec<String>, NotifyWhen), ConfigError> {
+    let targets = match (singular, plural.is_empty()) {
+        (Some(_), false) => {
+            return Err(ConfigError::Invalid {
+                field: "trigger.notify_targets",
+                reason: format!(
+                    "{trigger_kind} `{trigger_name}` declares both \
+                     `notify_target` (singular) and `notify_targets` \
+                     (plural) — pick one. The singular form is kept \
+                     for backwards compatibility; new configs should \
+                     use `notify_targets`.",
+                ),
+            });
+        }
+        (Some(name), true) => vec![name],
+        (None, _) => plural,
+    };
+    let when = match raw_when {
+        None => NotifyWhen::Always,
+        Some(s) => match s {
+            "always" => NotifyWhen::Always,
+            "on_failed" => NotifyWhen::OnFailed,
+            "on_completed_non_empty" => NotifyWhen::OnCompletedNonEmpty,
+            other => {
+                return Err(ConfigError::Invalid {
+                    field: "trigger.notify_when",
+                    reason: format!(
+                        "{trigger_kind} `{trigger_name}` notify_when = \
+                         `{other}` is not recognized. Supported: \
+                         `always` (default), `on_failed`, \
+                         `on_completed_non_empty`."
+                    ),
+                });
+            }
+        },
+    };
+    Ok((targets, when))
 }
 
 fn default_true() -> bool {
@@ -2227,12 +2376,20 @@ impl AivyxConfig {
         }
 
         // --- schedules ---------------------------------------------
-        let schedules: Vec<ScheduleConfig> = toml
-            .schedules
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.enabled)
-            .map(|r| ScheduleConfig {
+        let mut schedules: Vec<ScheduleConfig> = Vec::new();
+        for r in toml.schedules.unwrap_or_default() {
+            if !r.enabled {
+                continue;
+            }
+            let (notify_targets, notify_when) =
+                resolve_trigger_notify_fields(
+                    "schedule",
+                    &r.name,
+                    r.notify_target.clone(),
+                    r.notify_targets.clone(),
+                    r.notify_when.as_deref(),
+                )?;
+            schedules.push(ScheduleConfig {
                 name: r.name,
                 cron: r.cron,
                 role: r.role,
@@ -2240,32 +2397,52 @@ impl AivyxConfig {
                 enabled: true,
                 wrap_mission: r.wrap_mission,
                 notify_target: r.notify_target,
-            })
-            .collect();
+                notify_targets,
+                notify_when,
+            });
+        }
 
         // --- webhooks ----------------------------------------------
-        let webhooks: Vec<WebhookConfig> = toml
-            .webhooks
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.enabled)
-            .map(|r| WebhookConfig {
+        let mut webhooks: Vec<WebhookConfig> = Vec::new();
+        for r in toml.webhooks.unwrap_or_default() {
+            if !r.enabled {
+                continue;
+            }
+            let (notify_targets, notify_when) =
+                resolve_trigger_notify_fields(
+                    "webhook",
+                    &r.name,
+                    r.notify_target.clone(),
+                    r.notify_targets.clone(),
+                    r.notify_when.as_deref(),
+                )?;
+            webhooks.push(WebhookConfig {
                 name: r.name,
                 role: r.role,
                 prompt: r.prompt,
                 enabled: true,
                 wrap_mission: r.wrap_mission,
                 notify_target: r.notify_target,
-            })
-            .collect();
+                notify_targets,
+                notify_when,
+            });
+        }
 
         // --- file watches ------------------------------------------
-        let file_watches: Vec<FileWatchConfig> = toml
-            .file_watches
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.enabled)
-            .map(|r| FileWatchConfig {
+        let mut file_watches: Vec<FileWatchConfig> = Vec::new();
+        for r in toml.file_watches.unwrap_or_default() {
+            if !r.enabled {
+                continue;
+            }
+            let (notify_targets, notify_when) =
+                resolve_trigger_notify_fields(
+                    "file_watch",
+                    &r.name,
+                    r.notify_target.clone(),
+                    r.notify_targets.clone(),
+                    r.notify_when.as_deref(),
+                )?;
+            file_watches.push(FileWatchConfig {
                 name: r.name,
                 path: r.path,
                 role: r.role,
@@ -2274,8 +2451,10 @@ impl AivyxConfig {
                 debounce_ms: r.debounce_ms,
                 wrap_mission: r.wrap_mission,
                 notify_target: r.notify_target,
-            })
-            .collect();
+                notify_targets,
+                notify_when,
+            });
+        }
 
         // --- notify targets (Phase 62 Task 3) ----------------------
         // Walk every [[notify_target]] entry. For each:
@@ -2413,7 +2592,55 @@ impl AivyxConfig {
                 name: raw.name,
                 kind,
                 enabled: true,
+                is_default: raw.default,
             });
+        }
+
+        // Phase 72 — at most one notify_target may set
+        // `default = true`. Reject multiple defaults eagerly so
+        // the loader error names the collision.
+        {
+            let defaults: Vec<&str> = notify_targets
+                .iter()
+                .filter(|t| t.is_default)
+                .map(|t| t.name.as_str())
+                .collect();
+            if defaults.len() > 1 {
+                return Err(ConfigError::Invalid {
+                    field: "notify_target.default",
+                    reason: format!(
+                        "multiple notify_targets declare `default = true` \
+                         ({}). At most one default is allowed.",
+                        defaults.join(", "),
+                    ),
+                });
+            }
+        }
+
+        // Phase 72 — resolve the default-target sugar into any
+        // trigger that omitted `notify_targets`. Done at
+        // config-load time so runtime dispatch never has to ask
+        // "which target is default?" again.
+        if let Some(default_name) = notify_targets
+            .iter()
+            .find(|t| t.is_default)
+            .map(|t| t.name.clone())
+        {
+            for s in &mut schedules {
+                if s.notify_targets.is_empty() {
+                    s.notify_targets.push(default_name.clone());
+                }
+            }
+            for w in &mut webhooks {
+                if w.notify_targets.is_empty() {
+                    w.notify_targets.push(default_name.clone());
+                }
+            }
+            for f in &mut file_watches {
+                if f.notify_targets.is_empty() {
+                    f.notify_targets.push(default_name.clone());
+                }
+            }
         }
 
         // --- reflection_schedules (Phase 70 — P14 closure) --------
@@ -3084,19 +3311,43 @@ fn validate_trigger_notify_targets(
             Ok(())
         };
 
+    // Phase 72 — walk the full `notify_targets` vec on each
+    // trigger. After load-time default-resolution this is the
+    // authoritative target list; the singular `notify_target`
+    // alias has already been bridged in. Per Q4(a) the dispatch
+    // path fans out concurrently, so every named target must
+    // pass both the existence + capability checks individually.
     for s in schedules {
-        if let Some(target) = &s.notify_target {
-            check(&s.role, target, "schedule", &s.name, "schedule.notify_target")?;
+        for target in &s.notify_targets {
+            check(
+                &s.role,
+                target,
+                "schedule",
+                &s.name,
+                "schedule.notify_targets",
+            )?;
         }
     }
     for w in webhooks {
-        if let Some(target) = &w.notify_target {
-            check(&w.role, target, "webhook", &w.name, "webhook.notify_target")?;
+        for target in &w.notify_targets {
+            check(
+                &w.role,
+                target,
+                "webhook",
+                &w.name,
+                "webhook.notify_targets",
+            )?;
         }
     }
     for f in file_watches {
-        if let Some(target) = &f.notify_target {
-            check(&f.role, target, "file_watch", &f.name, "file_watch.notify_target")?;
+        for target in &f.notify_targets {
+            check(
+                &f.role,
+                target,
+                "file_watch",
+                &f.name,
+                "file_watch.notify_targets",
+            )?;
         }
     }
     Ok(())

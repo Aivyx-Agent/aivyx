@@ -313,6 +313,8 @@ mod tests {
             enabled: true,
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs).unwrap();
         assert_eq!(records.len(), 1);
@@ -331,6 +333,8 @@ mod tests {
             enabled: true,
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         assert!(config_to_records(&configs).is_err());
     }
@@ -345,6 +349,8 @@ mod tests {
             enabled: false,
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(!records[0].enabled);
@@ -360,6 +366,8 @@ mod tests {
             enabled: true,
             wrap_mission: true,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(records[0].wrap_mission);

@@ -330,6 +330,8 @@ mod tests {
             debounce_ms: Some(5000),
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records.len(), 1);
@@ -349,6 +351,8 @@ mod tests {
             debounce_ms: None,
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs);
         assert_eq!(records[0].debounce_ms, file_watch::DEFAULT_DEBOUNCE_MS);
@@ -365,6 +369,8 @@ mod tests {
             debounce_ms: None,
             wrap_mission: false,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs);
         assert!(!records[0].enabled);
@@ -381,6 +387,8 @@ mod tests {
             debounce_ms: None,
             wrap_mission: true,
             notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
         }];
         let records = config_to_records(&configs);
         assert!(records[0].wrap_mission);
