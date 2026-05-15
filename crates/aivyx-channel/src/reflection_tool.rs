@@ -113,6 +113,16 @@ pub struct ReflectionProposeTool {
     audit_log: OnceLock<std::sync::Arc<dyn AuditLog + Send + Sync>>,
     mission_store: OnceLock<DomainHandle>,
     role_name: OnceLock<String>,
+    /// Phase 70 — when set, every agent-supplied `ProposedPersonaDelta`
+    /// is also appended to the persistent proposal chain as a
+    /// `Pending` row. The mission/gate flow stays in place for
+    /// memory writes (which still flow through reflection.apply);
+    /// persona deltas land in both surfaces so the operator can
+    /// review them via the new Web UI Proposals pane / `aivyx
+    /// persona proposals` CLI rather than waiting on a mission
+    /// gate.
+    persona_proposal_log:
+        OnceLock<std::sync::Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
 }
 
 impl std::fmt::Debug for ReflectionProposeTool {
@@ -120,6 +130,10 @@ impl std::fmt::Debug for ReflectionProposeTool {
         f.debug_struct("ReflectionProposeTool")
             .field("id", &self.id)
             .field("has_audit_log", &self.audit_log.get().is_some())
+            .field(
+                "has_proposal_log",
+                &self.persona_proposal_log.get().is_some(),
+            )
             .finish()
     }
 }
@@ -188,7 +202,24 @@ impl ReflectionProposeTool {
             audit_log: OnceLock::new(),
             mission_store: OnceLock::new(),
             role_name: OnceLock::new(),
+            persona_proposal_log: OnceLock::new(),
         }
+    }
+
+    /// Phase 70 — register the persistent proposal chain. When set,
+    /// agent-supplied persona deltas are written to the chain as
+    /// `Pending` rows in addition to the mission gate the existing
+    /// flow creates. Returns the original Arc back if a setter
+    /// collides (programming error — should only be set once at
+    /// startup).
+    pub fn set_persona_proposal_log(
+        &self,
+        log: std::sync::Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+    ) -> Result<
+        (),
+        std::sync::Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+    > {
+        self.persona_proposal_log.set(log)
     }
 
     pub fn set_audit_log(
@@ -472,6 +503,38 @@ impl Tool for ReflectionProposeTool {
         // Create a proposal and mission with gate.
         let proposal_id = format!("rp-{}", uuid::Uuid::new_v4().as_simple());
         let mission_id = format!("m-{}", uuid::Uuid::new_v4().as_simple());
+
+        // Phase 70 — also write each persona delta to the
+        // persistent proposal chain as a `Pending` row so the
+        // operator can review via the Web UI Proposals pane /
+        // `aivyx persona proposals` CLI without waiting on the
+        // mission gate. Best-effort: failures emit a tracing
+        // diagnostic but don't fail the whole tool call, since
+        // the mission/gate path still provides the legacy
+        // approval surface.
+        if let Some(proposal_log) = self.persona_proposal_log.get() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let session_id = _ctx.session_id.to_string();
+            for (idx, delta) in persona_deltas.iter().enumerate() {
+                let pid = format!("pp-{}-{idx}", &proposal_id[3..]);
+                if let Err(e) = proposal_log
+                    .append_pending(
+                        pid,
+                        now_ms,
+                        session_id.clone(),
+                        delta.clone(),
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "reflection.propose: proposal log append failed: {e}"
+                    );
+                }
+            }
+        }
 
         let proposal = ProposalRecord {
             proposal_id: proposal_id.clone(),

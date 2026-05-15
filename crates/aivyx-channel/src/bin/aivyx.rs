@@ -3005,6 +3005,17 @@ async fn run_async(
              bug, should be called exactly once"
                 .to_string()
         })?;
+    // Phase 70 — register the proposal chain so agent-supplied
+    // persona deltas also land in the Web UI Proposals pane /
+    // `aivyx persona proposals` CLI alongside the existing
+    // mission-gate flow.
+    reflection_propose_tool
+        .set_persona_proposal_log(Arc::clone(&persona_proposal_log))
+        .map_err(|_| {
+            "reflection.propose persona_proposal_log was already set — \
+             startup path bug, should be called exactly once"
+                .to_string()
+        })?;
 
     reflection_apply_tool
         .set_mission_store(storage.domain(KeyDomain::Missions))
