@@ -397,6 +397,26 @@ pub trait Memory: Send + Sync {
         query_vec: &[f32],
         limit: usize,
     ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError>;
+
+    /// Phase 77 — refresh one entry's LRU heat as if it had just
+    /// been read, because the recall-feedback loop found it
+    /// *helpful*. Sets `last_read_at_secs` to now for `(topic,
+    /// seq)` and returns whether the entry existed.
+    ///
+    /// This is the retention actuator's only lever and it is
+    /// deliberately not a new eviction *policy*: it reuses the
+    /// exact `last_read_at_secs` signal Phase 74 LRU eviction
+    /// already ranks on. `semantic_search` (auto-recall's path)
+    /// does **not** stamp `last_read_at_secs`, so without this a
+    /// frequently-but-only-auto-recalled memory looks cold and
+    /// loses to chattier topics. Promoting the *helpful* ones
+    /// makes good memory sticky; unhelpful ones are simply not
+    /// promoted and so naturally lose under the same LRU pass.
+    async fn promote_recall_helpful(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError>;
 }
 
 /// Phase 75 — cosine similarity of two equal-length vectors.
@@ -855,6 +875,28 @@ impl Memory for InMemoryMemory {
             }
         }
         Ok(out)
+    }
+
+    async fn promote_recall_helpful(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let now = now_secs();
+        let mut state = self.state.lock().unwrap();
+        if let Some(entry) = state
+            .topics
+            .get_mut(topic)
+            .and_then(|es| es.iter_mut().find(|e| e.seq == seq))
+        {
+            entry.last_read_at_secs = now;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 

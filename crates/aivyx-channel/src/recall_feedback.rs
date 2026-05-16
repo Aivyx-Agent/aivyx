@@ -29,9 +29,19 @@
 //! what the structural design avoids.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use aivyx_memory::Memory;
 
 use crate::recall_log::RecallEvent;
 use crate::reflection_scheduler::OutcomeSummary;
+
+/// Minimum net helpfulness for the retention actuator to
+/// promote an entry. `WEIGHT` = one net-clean turn: a single
+/// good turn is enough to keep a memory warm; consistently
+/// unhelpful ones (score < this, including all negatives) are
+/// simply not promoted and lose under the existing LRU pass.
+pub const PROMOTE_THRESHOLD: f32 = WEIGHT;
 
 /// A recall injected into a turn that ended within this many ms
 /// before another turn started (same session) is treated as
@@ -95,6 +105,52 @@ impl HelpfulnessTally {
         *self.scores.entry((topic.to_string(), seq)).or_insert(0.0) +=
             delta;
     }
+
+    /// Test/seed constructor — build a tally from explicit
+    /// `(topic, seq, score)` triples without running
+    /// `correlate`.
+    #[cfg(test)]
+    pub(crate) fn from_triples(
+        triples: &[(&str, u64, f32)],
+    ) -> Self {
+        let mut t = Self::default();
+        for (topic, seq, score) in triples {
+            t.add(topic, *seq, *score);
+        }
+        t
+    }
+}
+
+/// Actuator A — retention self-tuning. For every entry whose
+/// net helpfulness is at or above [`PROMOTE_THRESHOLD`], refresh
+/// its LRU heat via [`Memory::promote_recall_helpful`] so the
+/// existing Phase 74 eviction pass protects it. Net-negative
+/// and below-threshold entries are deliberately left untouched
+/// — under the same LRU pass they lose to the promoted ones,
+/// which *is* the "decay faster" half (no new eviction
+/// primitive). Returns how many entries were actually promoted
+/// (an entry whose body was GC'd in the meantime counts as
+/// not-promoted — the vector/signal is allowed to lag entry
+/// GC, same backstop discipline as semantic_search).
+pub async fn apply_retention_feedback(
+    memory: &Arc<dyn Memory>,
+    tally: &HelpfulnessTally,
+) -> usize {
+    let mut promoted = 0usize;
+    for (topic, seq, score) in tally.ranked() {
+        if score < PROMOTE_THRESHOLD {
+            // `ranked()` is score-descending — once we drop
+            // below the threshold nothing later qualifies.
+            break;
+        }
+        if matches!(
+            memory.promote_recall_helpful(&topic, seq).await,
+            Ok(true)
+        ) {
+            promoted += 1;
+        }
+    }
+    promoted
 }
 
 /// Did this outcome's session see another turn start within
@@ -308,6 +364,82 @@ mod tests {
         let outcomes2 =
             [outcome(&s.to_string(), "t1", 999_000, 100, "completed")];
         assert!(correlate(&recalls, &outcomes2).is_empty());
+    }
+
+    // ---- Actuator A — retention self-tuning --------------------
+
+    async fn last_read_of(
+        memory: &Arc<dyn Memory>,
+        topic: &str,
+        seq: u64,
+    ) -> u64 {
+        // scan_prefix does NOT stamp last_read (Phase 76), so it
+        // observes the field without perturbing it.
+        let groups =
+            memory.scan_prefix("", usize::MAX).await.unwrap();
+        for (t, entries) in groups {
+            if t == topic {
+                for e in entries {
+                    if e.seq == seq {
+                        return e.last_read_at_secs;
+                    }
+                }
+            }
+        }
+        panic!("entry {topic}/{seq} not found");
+    }
+
+    #[tokio::test]
+    async fn promotes_only_helpful_entries() {
+        let memory: Arc<dyn Memory> =
+            Arc::new(aivyx_memory::InMemoryMemory::new());
+        let good = memory.put("notes", "kept").await.unwrap();
+        let bad = memory.put("notes", "unhelpful").await.unwrap();
+        let meh = memory.put("notes", "weak").await.unwrap();
+        assert_eq!(last_read_of(&memory, "notes", good).await, 0);
+
+        let tally = HelpfulnessTally::from_triples(&[
+            ("notes", good, 2.0 * WEIGHT), // clearly helpful
+            ("notes", bad, -3.0 * WEIGHT), // net negative
+            ("notes", meh, 0.5 * WEIGHT),  // below threshold
+        ]);
+        let n = apply_retention_feedback(&memory, &tally).await;
+        assert_eq!(n, 1, "only the net-helpful entry is promoted");
+
+        assert!(
+            last_read_of(&memory, "notes", good).await > 0,
+            "helpful entry must be LRU-promoted"
+        );
+        assert_eq!(
+            last_read_of(&memory, "notes", bad).await,
+            0,
+            "net-negative entry must NOT be promoted"
+        );
+        assert_eq!(
+            last_read_of(&memory, "notes", meh).await,
+            0,
+            "below-threshold entry must NOT be promoted"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_tally_promotes_nothing() {
+        let memory: Arc<dyn Memory> =
+            Arc::new(aivyx_memory::InMemoryMemory::new());
+        memory.put("t", "x").await.unwrap();
+        let tally = HelpfulnessTally::default();
+        assert_eq!(apply_retention_feedback(&memory, &tally).await, 0);
+    }
+
+    #[tokio::test]
+    async fn promoting_a_vanished_entry_is_not_counted() {
+        // Signal references a (topic, seq) that no longer
+        // exists (entry GC'd). Must not panic, must not count.
+        let memory: Arc<dyn Memory> =
+            Arc::new(aivyx_memory::InMemoryMemory::new());
+        let tally =
+            HelpfulnessTally::from_triples(&[("gone", 999, 5.0)]);
+        assert_eq!(apply_retention_feedback(&memory, &tally).await, 0);
     }
 
     #[test]

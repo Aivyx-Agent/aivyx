@@ -762,6 +762,33 @@ impl Memory for RedbMemory {
         }
         Ok(out)
     }
+
+    async fn promote_recall_helpful(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let key = Self::entry_key(topic, seq);
+        let Some(bytes) = self
+            .handle
+            .get(&key)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?
+        else {
+            return Ok(false);
+        };
+        let mut entry = InMemoryMemory::decode_entry(&bytes)?;
+        entry.last_read_at_secs = now_secs();
+        let encoded = InMemoryMemory::encode_entry(&entry)?;
+        self.handle
+            .put(&key, &encoded)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        Ok(true)
+    }
 }
 
 /// Extract the trailing `seq_be` from an entry key, or `None` if the
