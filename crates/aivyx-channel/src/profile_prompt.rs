@@ -98,6 +98,85 @@ pub fn assemble_session_prompt(
     out
 }
 
+// ---------------------------------------------------------------------------
+// Phase 79 — adaptive Persona: reduced-Persona assembly
+// ---------------------------------------------------------------------------
+
+/// Number of *reducible* (soft) Persona list entries. The
+/// adaptive refiner uses this for its size-threshold fallback
+/// (Q3a): below the threshold there is nothing worth selecting
+/// over, so the full Persona is injected unchanged.
+///
+/// Excludes the protected fields — the scalar identity and
+/// `behavioral_constraints` are never reduced, so they never
+/// count toward "is the Soul big enough to bound."
+pub fn reducible_facet_count(p: &EffectivePersona) -> usize {
+    p.primary_use_cases.len()
+        + p.behavioral_preferences.len()
+        + p.learned_context.len()
+        + p.communication_adaptations.len()
+        + p.character_traits.len()
+        + p.relationship_milestones.len()
+}
+
+/// Build a reduced [`EffectivePersona`] keeping only the soft
+/// list entries for which `keep` returns `true`.
+///
+/// **Core invariant (Phase 79 Q2a), structurally enforced
+/// here so no caller can violate it:** the scalar identity
+/// (`assistant_name`, `operator_profile`, `communication_style`)
+/// and `behavioral_constraints` are copied through **in full,
+/// unconditionally** — `keep` is *only* ever applied to the six
+/// soft list categories. Identity and guardrails are
+/// non-negotiable and can never be selected away, regardless of
+/// what the selector decides.
+pub fn reduce_persona(
+    full: &EffectivePersona,
+    keep: &dyn Fn(&str) -> bool,
+) -> EffectivePersona {
+    let filter = |v: &[String]| -> Vec<String> {
+        v.iter().filter(|s| keep(s)).cloned().collect()
+    };
+    EffectivePersona {
+        // --- protected: always copied in full (the invariant) ---
+        assistant_name: full.assistant_name.clone(),
+        operator_profile: full.operator_profile.clone(),
+        communication_style: full.communication_style.clone(),
+        behavioral_constraints: full.behavioral_constraints.clone(),
+        // --- reducible soft list categories ---
+        primary_use_cases: filter(&full.primary_use_cases),
+        behavioral_preferences: filter(&full.behavioral_preferences),
+        learned_context: filter(&full.learned_context),
+        communication_adaptations: filter(
+            &full.communication_adaptations,
+        ),
+        character_traits: filter(&full.character_traits),
+        relationship_milestones: filter(&full.relationship_milestones),
+    }
+}
+
+/// Assemble the turn's system prompt with only the
+/// contextually-selected Persona facets. Thin wrapper:
+/// [`reduce_persona`] (invariant enforced) → the **unchanged**
+/// [`assemble_session_prompt`]. Used by the Phase 79 refiner;
+/// kept here so the reduction and the invariant are tested in
+/// one place.
+pub fn assemble_session_prompt_selected(
+    profile: &Profile,
+    full_persona: &EffectivePersona,
+    keep: &dyn Fn(&str) -> bool,
+    role_name: &str,
+    role_system_prompt: &str,
+) -> String {
+    let reduced = reduce_persona(full_persona, keep);
+    assemble_session_prompt(
+        profile,
+        Some(&reduced),
+        role_name,
+        role_system_prompt,
+    )
+}
+
 fn render_profile_section(profile: &Profile) -> String {
     let mut out = String::from("## About this assistant\n\n");
     out.push_str(&format!(
@@ -438,5 +517,107 @@ mod tests {
         );
         assert_eq!(with_none, with_empty);
         assert_eq!(with_none, "hi");
+    }
+
+    // ---- Phase 79 — reduced-Persona assembly + invariant -------
+
+    fn rich_persona() -> EffectivePersona {
+        EffectivePersona {
+            assistant_name: Some("Ada".to_string()),
+            operator_profile: Some("staff SRE".to_string()),
+            communication_style: Some("terse".to_string()),
+            primary_use_cases: vec!["oncall".to_string()],
+            behavioral_preferences: vec!["cite sources".to_string()],
+            behavioral_constraints: vec![
+                "never run destructive cmds unprompted".to_string(),
+            ],
+            learned_context: vec![
+                "operator uses Vim".to_string(),
+                "deploys on Fridays".to_string(),
+            ],
+            communication_adaptations: vec![
+                "conclusion-first".to_string(),
+            ],
+            character_traits: vec!["dry wit".to_string()],
+            relationship_milestones: vec!["shipped v1".to_string()],
+        }
+    }
+
+    #[test]
+    fn reduce_persona_keeps_protected_fields_even_when_keep_rejects_all()
+    {
+        let full = rich_persona();
+        // keep = reject everything.
+        let r = reduce_persona(&full, &|_| false);
+
+        // Invariant: scalars + constraints copied in full.
+        assert_eq!(r.assistant_name.as_deref(), Some("Ada"));
+        assert_eq!(r.operator_profile.as_deref(), Some("staff SRE"));
+        assert_eq!(r.communication_style.as_deref(), Some("terse"));
+        assert_eq!(
+            r.behavioral_constraints,
+            vec!["never run destructive cmds unprompted".to_string()]
+        );
+        // Every soft list emptied.
+        assert!(r.primary_use_cases.is_empty());
+        assert!(r.behavioral_preferences.is_empty());
+        assert!(r.learned_context.is_empty());
+        assert!(r.communication_adaptations.is_empty());
+        assert!(r.character_traits.is_empty());
+        assert!(r.relationship_milestones.is_empty());
+    }
+
+    #[test]
+    fn reduce_persona_keeps_only_selected_soft_entries() {
+        let full = rich_persona();
+        let r = reduce_persona(&full, &|s| s == "deploys on Fridays");
+        assert_eq!(
+            r.learned_context,
+            vec!["deploys on Fridays".to_string()]
+        );
+        // Other soft categories lose their (non-matching) entries.
+        assert!(r.character_traits.is_empty());
+        // Protected still intact.
+        assert_eq!(r.assistant_name.as_deref(), Some("Ada"));
+        assert_eq!(r.behavioral_constraints.len(), 1);
+    }
+
+    #[test]
+    fn reducible_facet_count_excludes_protected() {
+        // rich_persona soft entries: 1+1+2+1+1+1 = 7.
+        // behavioral_constraints (1) + scalars must NOT count.
+        assert_eq!(reducible_facet_count(&rich_persona()), 7);
+        assert_eq!(
+            reducible_facet_count(&EffectivePersona::default()),
+            0
+        );
+    }
+
+    #[test]
+    fn selected_assembly_matches_reduce_then_assemble_and_keeps_constraint(
+    ) {
+        let profile = operator_declared_profile();
+        let full = rich_persona();
+        let keep = |s: &str| s == "oncall";
+
+        let via_wrapper = assemble_session_prompt_selected(
+            &profile, &full, &keep, "default", "role prompt",
+        );
+        let manual = assemble_session_prompt(
+            &profile,
+            Some(&reduce_persona(&full, &keep)),
+            "default",
+            "role prompt",
+        );
+        assert_eq!(via_wrapper, manual);
+
+        // End-to-end invariant: a behavioral constraint the
+        // selector rejected is STILL in the rendered prompt.
+        assert!(via_wrapper
+            .contains("never run destructive cmds unprompted"));
+        // And the selected soft facet is present...
+        assert!(via_wrapper.contains("oncall"));
+        // ...while a rejected soft facet is gone.
+        assert!(!via_wrapper.contains("dry wit"));
     }
 }
