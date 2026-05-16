@@ -132,6 +132,17 @@ pub enum KeyDomain {
     /// table without touching the entry table. Loaded into an
     /// in-memory flat cosine index at daemon startup.
     MemoryVectors,
+    /// Recall-feedback events (Phase 77). One row per turn that
+    /// auto-recall injected memory into, keyed by a big-endian
+    /// timestamp + sequence so the reflection loop can read a
+    /// time window cheaply. Each row records which `(topic,
+    /// seq)` memories were injected and their cosine scores;
+    /// the structural correlator pairs these against the audit
+    /// chain's `TurnEnded` outcomes to learn which memories
+    /// actually help. Kept separate from every other domain so
+    /// the learning signal can be GC-clamped independently and
+    /// a corrupt row degrades learning, not recall or memory.
+    RecallEvents,
 }
 
 impl KeyDomain {
@@ -155,6 +166,7 @@ impl KeyDomain {
             KeyDomain::Persona => b"persona",
             KeyDomain::PersonaProposals => b"persona-proposals",
             KeyDomain::MemoryVectors => b"memory-vectors",
+            KeyDomain::RecallEvents => b"recall-events",
         }
     }
 
@@ -177,12 +189,13 @@ impl KeyDomain {
             KeyDomain::Persona => "aivyx_persona_v1",
             KeyDomain::PersonaProposals => "aivyx_persona_proposals_v1",
             KeyDomain::MemoryVectors => "aivyx_memory_vectors_v1",
+            KeyDomain::RecallEvents => "aivyx_recall_events_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 12] = [
+    pub const ALL: [KeyDomain; 13] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -195,6 +208,7 @@ impl KeyDomain {
         KeyDomain::Persona,
         KeyDomain::PersonaProposals,
         KeyDomain::MemoryVectors,
+        KeyDomain::RecallEvents,
     ];
 }
 
@@ -380,7 +394,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 12],
+    subkeys: [SubKey; 13],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -457,7 +471,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 12], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 13], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -474,6 +488,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::Persona.as_bytes())?,
             master.derive_subkey(KeyDomain::PersonaProposals.as_bytes())?,
             master.derive_subkey(KeyDomain::MemoryVectors.as_bytes())?,
+            master.derive_subkey(KeyDomain::RecallEvents.as_bytes())?,
         ])
     }
 
@@ -494,6 +509,7 @@ impl RedbStorage {
             KeyDomain::Persona => &self.subkeys[9],
             KeyDomain::PersonaProposals => &self.subkeys[10],
             KeyDomain::MemoryVectors => &self.subkeys[11],
+            KeyDomain::RecallEvents => &self.subkeys[12],
         }
     }
 }
@@ -894,7 +910,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a thirteenth `KeyDomain`
+        // If a future phase adds a fourteenth `KeyDomain`
         // variant, this test fails because `ALL` is a fixed-size
         // array and the match below forces an update. Tripwire
         // for "adding a variant without updating ALL."
@@ -911,7 +927,8 @@ mod tests {
                 | KeyDomain::FileWatches
                 | KeyDomain::Persona
                 | KeyDomain::PersonaProposals
-                | KeyDomain::MemoryVectors => {}
+                | KeyDomain::MemoryVectors
+                | KeyDomain::RecallEvents => {}
             }
         }
     }
@@ -993,6 +1010,46 @@ mod tests {
             vectors.get(key).await.unwrap(),
             Some(vec![1u8, 2, 3, 4]),
             "MemoryVectors domain returned the entry's value"
+        );
+    }
+
+    // ---- Phase 77 — RecallEvents domain ----------------------------
+
+    #[test]
+    fn recall_events_domain_has_stable_metadata() {
+        assert_eq!(KeyDomain::RecallEvents.as_bytes(), b"recall-events");
+        assert_eq!(
+            KeyDomain::RecallEvents.table_name(),
+            "aivyx_recall_events_v1"
+        );
+        assert!(KeyDomain::ALL.contains(&KeyDomain::RecallEvents));
+    }
+
+    #[tokio::test]
+    async fn recall_events_domain_isolates_from_memory_domain() {
+        // The recall-feedback signal is a distinct learning
+        // artifact: it must not collide with memory entries (a
+        // corrupt/GC'd signal degrades learning, never recall or
+        // the memory itself). Phase 77 Q2(a).
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(77)).await;
+
+        let entries = store.domain(KeyDomain::Memory);
+        let recall = store.domain(KeyDomain::RecallEvents);
+
+        let key = b"shared-key";
+        entries.put(key, b"a memory body").await.unwrap();
+        recall.put(key, b"a recall event").await.unwrap();
+
+        assert_eq!(
+            entries.get(key).await.unwrap(),
+            Some(b"a memory body".to_vec()),
+            "Memory domain returned the recall event's value"
+        );
+        assert_eq!(
+            recall.get(key).await.unwrap(),
+            Some(b"a recall event".to_vec()),
+            "RecallEvents domain returned the memory's value"
         );
     }
 
