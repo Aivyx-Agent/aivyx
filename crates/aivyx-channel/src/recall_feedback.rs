@@ -324,6 +324,65 @@ fn match_outcome<'a>(
         .map(|(_, o)| o)
 }
 
+/// Per-recall correlation detail. The single source of truth
+/// for "what happened to this recall" — both the aggregate
+/// [`correlate`] and the Phase 78 learning-insights surface
+/// derive from this so the operator never sees numbers that
+/// disagree with what the loop actually did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallContribution {
+    pub ts_secs: u64,
+    pub session_id: String,
+    /// The `(topic, seq)` memories this recall injected.
+    pub topic_seqs: Vec<(String, u64)>,
+    /// Outcome label of the turn this recall matched, or `None`
+    /// if it matched no turn (turn not yet ended / outside the
+    /// window).
+    pub outcome_kind: Option<String>,
+    /// Signed signal applied to every hit: `Some(+WEIGHT)`
+    /// helpful, `Some(-WEIGHT)` unhelpful, `None` matched a
+    /// no-signal outcome (escalated / cancelled) or no turn.
+    pub signal: Option<f32>,
+}
+
+/// Correlate the window's recalls against its outcomes,
+/// returning both the aggregate [`HelpfulnessTally`] and the
+/// per-recall [`RecallContribution`] detail. The detail is what
+/// the Phase 78 insights surface reconstructs provenance from;
+/// keeping one matching pass guarantees the surface and the
+/// actuators can never diverge.
+pub fn correlate_detailed(
+    recalls: &[RecallEvent],
+    outcomes: &[OutcomeSummary],
+) -> (HelpfulnessTally, Vec<RecallContribution>) {
+    let mut tally = HelpfulnessTally::default();
+    let mut detail = Vec::with_capacity(recalls.len());
+    for recall in recalls {
+        let topic_seqs: Vec<(String, u64)> = recall
+            .hits
+            .iter()
+            .map(|h| (h.topic.clone(), h.seq))
+            .collect();
+        let matched = match_outcome(recall, outcomes);
+        let outcome_kind =
+            matched.map(|o| o.outcome_kind.clone());
+        let signal = matched.and_then(|o| turn_signal(o, outcomes));
+        if let Some(sig) = signal {
+            for hit in &recall.hits {
+                tally.add(&hit.topic, hit.seq, sig);
+            }
+        }
+        detail.push(RecallContribution {
+            ts_secs: recall.ts_secs,
+            session_id: recall.session_id.to_string(),
+            topic_seqs,
+            outcome_kind,
+            signal,
+        });
+    }
+    (tally, detail)
+}
+
 /// Correlate the window's recalls against its outcomes into a
 /// helpfulness tally. Recalls with no matchable turn (the turn
 /// hasn't ended yet, or fell outside the audit window) simply
@@ -334,19 +393,7 @@ pub fn correlate(
     recalls: &[RecallEvent],
     outcomes: &[OutcomeSummary],
 ) -> HelpfulnessTally {
-    let mut tally = HelpfulnessTally::default();
-    for recall in recalls {
-        let Some(outcome) = match_outcome(recall, outcomes) else {
-            continue;
-        };
-        let Some(signal) = turn_signal(outcome, outcomes) else {
-            continue;
-        };
-        for hit in &recall.hits {
-            tally.add(&hit.topic, hit.seq, signal);
-        }
-    }
-    tally
+    correlate_detailed(recalls, outcomes).0
 }
 
 #[cfg(test)]
