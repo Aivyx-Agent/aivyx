@@ -196,6 +196,13 @@ pub enum QueryPayload {
         #[serde(default)]
         semantic: bool,
     },
+    /// Phase 78 — read-only learning-observability query.
+    /// `window_secs = None` → the handler's default lookback.
+    /// `#[serde(default)]` so older clients/frames decode.
+    GetLearningInsights {
+        #[serde(default)]
+        window_secs: Option<u64>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -313,6 +320,16 @@ pub enum QueryResponsePayload {
         /// older frames decode as `false`.
         #[serde(default)]
         fell_back_to_keyword: bool,
+    },
+    /// Phase 78 — response to
+    /// [`QueryPayload::GetLearningInsights`]. The digest is the
+    /// per-window operational picture; `proposals` is the
+    /// reconstructed provenance for each recall-driven Persona
+    /// proposal. An empty digest (zero recalls) is a valid
+    /// "nothing learned yet" answer, not an error.
+    LearningInsights {
+        digest: crate::recall_insights::LearningDigest,
+        proposals: Vec<crate::recall_insights::ProposalProvenance>,
     },
 }
 
@@ -1229,6 +1246,12 @@ mod tests {
                     semantic: true,
                 },
             },
+            FrontendMessage::Query {
+                id: "q-303".into(),
+                payload: QueryPayload::GetLearningInsights {
+                    window_secs: Some(86_400),
+                },
+            },
             // Phase 74 — operator-initiated memory eviction.
             FrontendMessage::EvictMemoryTopic {
                 id: "ev-1".into(),
@@ -1550,6 +1573,40 @@ mod tests {
                         last_read_at_secs: 0,
                     }],
                     fell_back_to_keyword: true,
+                },
+            },
+            DaemonMessage::QueryResponse {
+                id: "q-303".into(),
+                payload: QueryResponsePayload::LearningInsights {
+                    digest: crate::recall_insights::LearningDigest {
+                        window_secs: 86_400,
+                        recalls_total: 12,
+                        recalls_scored: 9,
+                        promoted: 4,
+                        not_promoted: 2,
+                        top_helpful: vec![("project/x".into(), 5.0)],
+                        top_unhelpful: vec![("scratch".into(), -3.0)],
+                        proposals_in_window: 1,
+                    },
+                    proposals: vec![
+                        crate::recall_insights::ProposalProvenance {
+                            proposal_id: "recall-fb:project/x".into(),
+                            topic: "project/x".into(),
+                            status: "pending".into(),
+                            net_score: 5.0,
+                            reason: Some("net +5".into()),
+                            contributing: vec![
+                                crate::recall_insights::ContributingTurn {
+                                    ts_secs: 1_715_000_000,
+                                    outcome_kind: Some(
+                                        "completed".into(),
+                                    ),
+                                    signal: Some(1.0),
+                                    seqs: vec![9],
+                                },
+                            ],
+                        },
+                    ],
                 },
             },
             // Phase 70 — proposal query responses.

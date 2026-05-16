@@ -621,6 +621,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             persona_proposal_log: persona_proposal_log.clone(),
             memory: memory.clone(),
             embedding_provider: embedding_provider.clone(),
+            recall_log: recall_log.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -680,6 +681,10 @@ struct ConnectionContext {
     /// to keyword.
     embedding_provider:
         Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
+    /// Phase 78 — recall-feedback log for the read-only
+    /// `GetLearningInsights` query. `None` = no auto-recall
+    /// configured (the query returns an empty digest).
+    recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -698,6 +703,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         persona_proposal_log,
         memory,
         embedding_provider,
+        recall_log,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1028,6 +1034,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 persona_proposal_log.as_deref(),
                                 memory.as_ref(),
                                 embedding_provider.as_ref(),
+                                recall_log.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1274,6 +1281,7 @@ async fn run_single_connection_daemon(
         persona_proposal_log: None,
         memory: None,
         embedding_provider: None,
+        recall_log: None,
     })
     .await
 }
@@ -1477,6 +1485,7 @@ async fn handle_query(
     embedding_provider: Option<
         &Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
     >,
+    recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1895,6 +1904,85 @@ async fn handle_query(
                     code: "memory_search_failed".into(),
                     message: e.to_string(),
                 },
+            }
+        }
+        QueryPayload::GetLearningInsights { window_secs } => {
+            let window = window_secs.unwrap_or(
+                crate::recall_feedback::RECALL_LOG_RETAIN_SECS,
+            );
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let now_secs = now_ms / 1000;
+
+            // No recall substrate → an empty digest is the
+            // valid "nothing learned yet" answer, not an error.
+            let Some(rlog) = recall_log else {
+                return QueryResponsePayload::LearningInsights {
+                    digest: crate::recall_insights::build_digest(
+                        window,
+                        &crate::recall_feedback::HelpfulnessTally::default(),
+                        &[],
+                        &[],
+                    ),
+                    proposals: Vec::new(),
+                };
+            };
+
+            let since = now_secs.saturating_sub(window);
+            let recalls = match rlog.events_since(since).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "recall_log_read_failed".into(),
+                        message: e.to_string(),
+                    };
+                }
+            };
+            // Outcomes from the audit chain (same builder the
+            // reflection loop uses). No audit log → no scored
+            // recalls (digest still reports the raw recall
+            // count).
+            let outcomes = match audit_log {
+                Some(al) => {
+                    let n = al.len();
+                    match al.entries_range(0, n) {
+                        Ok(es) => {
+                            crate::reflection_scheduler::summarize_recent_outcomes_from_entries(
+                                &es, window, now_ms,
+                            )
+                        }
+                        Err(e) => {
+                            return QueryResponsePayload::QueryError {
+                                code: "audit_read_failed".into(),
+                                message: format!(
+                                    "audit chain read failed: {e}"
+                                ),
+                            };
+                        }
+                    }
+                }
+                None => Vec::new(),
+            };
+            let (tally, detail) =
+                crate::recall_feedback::correlate_detailed(
+                    &recalls, &outcomes,
+                );
+            let proposals = persona_proposal_log
+                .map(|l| {
+                    l.list(
+                        crate::persona_proposal::ProposalStatusFilter::All,
+                    )
+                })
+                .unwrap_or_default();
+            QueryResponsePayload::LearningInsights {
+                digest: crate::recall_insights::build_digest(
+                    window, &tally, &detail, &proposals,
+                ),
+                proposals: crate::recall_insights::build_provenance(
+                    &detail, &proposals,
+                ),
             }
         }
     }
