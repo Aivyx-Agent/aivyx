@@ -143,6 +143,14 @@ pub struct SessionConfig {
     /// are dropped during context-window pruning. `None` means pruned
     /// messages are silently discarded.
     pub prune_sink: Option<Arc<dyn aivyx_core::llm_planner::PruneSink>>,
+    /// Phase 76 — optional automatic-recall hook. When `Some`,
+    /// the planner embeds each user message and prepends the
+    /// top relevant memories to that turn. `None` means no
+    /// auto-recall (pre-Phase-76 behavior). Mirrors
+    /// `prune_sink` — a planner hook carried by-Arc through the
+    /// per-turn config clone.
+    pub context_provider:
+        Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>>,
     /// Phase 60 — per-turn system-prompt refresh closure. When
     /// `Some`, the planner factory invokes this on each turn to
     /// rebuild the `system_prompt` from the current state of
@@ -221,6 +229,9 @@ where
     }
     if let Some(sink) = config.prune_sink {
         planner_config = planner_config.with_prune_sink(sink);
+    }
+    if let Some(provider) = config.context_provider {
+        planner_config = planner_config.with_context_provider(provider);
     }
     let role_overrides_for_factory = config.role_overrides.clone();
     // Phase 60 — per-turn Persona refresh. When `prompt_refresher`

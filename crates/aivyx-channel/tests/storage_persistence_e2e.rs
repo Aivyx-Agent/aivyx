@@ -261,6 +261,7 @@ async fn run_one_turn(storage: Arc<dyn Storage>, audit_key_byte: u8, user_line: 
         role_overrides: None,
         context_window_tokens: None,
         prune_sink: None,
+        context_provider: None,
         prompt_refresher: None,
     };
 

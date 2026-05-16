@@ -2518,6 +2518,25 @@ async fn run_async(
         None => None,
     };
 
+    // Phase 76 — automatic semantic recall. Built once when both
+    // a provider and the `[embedding]` config exist (the config
+    // carries the rag_top_k / rag_min_similarity knobs). Shared
+    // by-Arc into every planner-factory site below; `None` →
+    // no auto-recall attached → pre-Phase-76 behavior.
+    let recall_context: Option<
+        Arc<dyn aivyx_core::llm_planner::ContextProvider>,
+    > = match (&embedding_provider, config_embedding.as_ref()) {
+        (Some(provider), Some(cfg)) => Some(Arc::new(
+            aivyx_channel::memory_recall::SemanticMemoryContext::new(
+                Arc::clone(&memory),
+                Arc::clone(provider),
+                cfg.rag_top_k,
+                cfg.rag_min_similarity,
+            ),
+        )),
+        _ => None,
+    };
+
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
     // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
     // resolution into `aivyx-config`; the cap arrives pre-parsed
@@ -3100,6 +3119,10 @@ async fn run_async(
     // prompts identical to the parent. The clone is an `Arc<RwLock<_>>`
     // — cheap, lock-free at construction time.
     let persona_for_factory = shared_persona.clone();
+    // Phase 76 — sub-agents recall too. Captured by-Option-Arc so
+    // each child planner gets the same auto-recall hook the parent
+    // has (or none, identically, when `[embedding]` is off).
+    let recall_context_for_factory = recall_context.clone();
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -3168,7 +3191,7 @@ async fn run_async(
         // value (cloned per-turn). The child's planner is
         // independent of the parent's — a fresh `LlmPlanner` per
         // sub-session turn, exactly like the parent.
-        let planner_config = LlmPlannerConfig::new(model_for_factory.clone())
+        let mut planner_config = LlmPlannerConfig::new(model_for_factory.clone())
             .with_system_prompt(child_system_prompt)
             .with_max_tokens(max_tokens_for_factory)
             .with_tool_allowlist(child_tool_allowlist.clone())
@@ -3176,6 +3199,11 @@ async fn run_async(
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory_for_factory)),
             ));
+        // Phase 76 — same auto-recall hook as the parent.
+        if let Some(rc) = &recall_context_for_factory {
+            planner_config =
+                planner_config.with_context_provider(Arc::clone(rc));
+        }
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
         // Phase 60 Task 3 — per-turn Persona refresh inside the
@@ -3430,7 +3458,7 @@ async fn run_async(
         let socket_path = default_socket_path()?;
 
         let daemon_tool_allowlist = tool_allowlist.clone();
-        let planner_config = LlmPlannerConfig::new(model.clone())
+        let mut planner_config = LlmPlannerConfig::new(model.clone())
             .with_system_prompt(system_prompt)
             .with_max_tokens(DEFAULT_MAX_TOKENS)
             .with_tool_allowlist(tool_allowlist)
@@ -3438,6 +3466,13 @@ async fn run_async(
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
             ));
+        // Phase 76 — automatic recall (Q1a). Carried by-Arc
+        // through the per-turn `planner_config.clone()` in the
+        // factory below, exactly like the prune sink.
+        if let Some(rc) = &recall_context {
+            planner_config =
+                planner_config.with_context_provider(Arc::clone(rc));
+        }
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
         let daemon_overrides = shared_role_overrides.clone();
@@ -3849,6 +3884,9 @@ async fn run_async(
                 prune_sink: Some(Arc::new(
                     aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
                 )),
+                // Phase 76 — automatic recall (Q1a). `None` when
+                // `[embedding]` is unconfigured → no auto-recall.
+                context_provider: recall_context.clone(),
             };
 
             let stdin = io::stdin();

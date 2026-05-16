@@ -280,6 +280,7 @@ fn base_session_config(harness: &MemoryHarness, storage: Arc<dyn Storage>) -> Se
         role_overrides: None,
         context_window_tokens: None,
         prune_sink: None,
+        context_provider: None,
         prompt_refresher: None,
     }
 }
