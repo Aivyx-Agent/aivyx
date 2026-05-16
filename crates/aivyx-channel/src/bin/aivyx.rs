@@ -100,6 +100,8 @@ mod identity;
 mod init;
 #[path = "aivyx_modules/init_templates.rs"]
 mod init_templates;
+#[path = "aivyx_modules/learning.rs"]
+mod learning;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
@@ -487,6 +489,18 @@ fn run() -> Result<(), String> {
                 }
             }
         });
+    }
+
+    // Phase 78 — `aivyx learning`: read-only window into the
+    // self-learning loop. IPC-backed; terminal parity with the
+    // Web UI Learning pane.
+    if let CliMode::Learning { window_secs } = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt
+            .block_on(async move { learning::run_learning(window_secs).await });
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1048,6 +1062,12 @@ enum CliMode {
     /// management (Phase 74 — memory polish). IPC-backed;
     /// terminal parity with the Web UI Memory pane.
     Memory(MemorySubcommand),
+    /// `aivyx learning [--window <secs>]`: Phase 78 read-only
+    /// view of what the self-learning loop has learned and why.
+    /// IPC-backed; terminal parity with the Web UI Learning
+    /// pane. `window_secs = None` → the daemon's default
+    /// lookback.
+    Learning { window_secs: Option<u64> },
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1583,6 +1603,51 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Memory(mem_sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 78 — `aivyx learning [--window <secs>]`.
+    if !args.is_empty() && args[0] == "learning" {
+        let mut window_secs: Option<u64> = None;
+        let mut idx = 1;
+        while idx < args.len() {
+            match args[idx].as_str() {
+                "--window" => {
+                    let v = args.get(idx + 1).ok_or_else(|| {
+                        "`--window` requires a value (seconds)"
+                            .to_string()
+                    })?;
+                    let parsed: u64 = v.parse().map_err(|_| {
+                        format!(
+                            "`--window` expects a positive integer \
+                             (seconds), got `{v}`"
+                        )
+                    })?;
+                    if parsed == 0 {
+                        return Err(
+                            "`--window` must be >= 1".to_string()
+                        );
+                    }
+                    window_secs = Some(parsed);
+                    idx += 2;
+                }
+                other => {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx learning`: \
+                         `{other}`"
+                    ));
+                }
+            }
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Learning { window_secs },
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -5772,6 +5837,51 @@ mod tests {
     fn memory_unknown_subcommand_errors() {
         let err = parse_cli_args_from(&argv(&["memory", "wat"]))
             .expect_err("must error");
+        assert!(err.contains("unrecognized"), "{err}");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 78 — `aivyx learning [--window <secs>]` parser tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn learning_parses_without_window() {
+        let parsed = parse_cli_args_from(&argv(&["learning"]))
+            .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Learning { window_secs: None }
+        );
+    }
+
+    #[test]
+    fn learning_parses_with_window() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "learning", "--window", "604800",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Learning {
+                window_secs: Some(604_800),
+            }
+        );
+    }
+
+    #[test]
+    fn learning_window_zero_errors() {
+        let err = parse_cli_args_from(&argv(&[
+            "learning", "--window", "0",
+        ]))
+        .expect_err("must error");
+        assert!(err.contains("must be >= 1"), "{err}");
+    }
+
+    #[test]
+    fn learning_unknown_arg_errors() {
+        let err =
+            parse_cli_args_from(&argv(&["learning", "--bogus"]))
+                .expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
 }

@@ -520,6 +520,38 @@ pub async fn search_memory(
     }
 }
 
+/// Phase 78 — read-only learning-observability query. `None`
+/// window → the daemon's default lookback.
+pub async fn get_learning_insights(
+    socket_path: &Path,
+    window_secs: Option<u64>,
+) -> Result<
+    (
+        crate::recall_insights::LearningDigest,
+        Vec<crate::recall_insights::ProposalProvenance>,
+    ),
+    DaemonError,
+> {
+    let payload = send_query(
+        socket_path,
+        "l-insights",
+        QueryPayload::GetLearningInsights { window_secs },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::LearningInsights {
+            digest,
+            proposals,
+        } => Ok((digest, proposals)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LearningInsights, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(
