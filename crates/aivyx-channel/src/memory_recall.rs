@@ -35,6 +35,11 @@ pub struct SemanticMemoryContext {
     provider: Arc<dyn EmbeddingProvider>,
     rag_top_k: usize,
     rag_min_similarity: f32,
+    /// Phase 77 — optional recall-feedback log. When set, every
+    /// injected recall appends a `RecallEvent` correlated to the
+    /// turn's session. `None` → capture disabled (the loop just
+    /// gets no signal; recall itself is unaffected).
+    recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
 }
 
 impl SemanticMemoryContext {
@@ -49,7 +54,20 @@ impl SemanticMemoryContext {
             provider,
             rag_top_k,
             rag_min_similarity,
+            recall_log: None,
         }
+    }
+
+    /// Phase 77 — attach the recall-feedback log so injected
+    /// recalls are persisted for the reflection loop. Builder-
+    /// style; the binary calls this only when the RecallEvents
+    /// domain is available.
+    pub fn with_recall_log(
+        mut self,
+        log: Arc<crate::recall_log::PersistentRecallLog>,
+    ) -> Self {
+        self.recall_log = Some(log);
+        self
     }
 
     /// Format the surviving hits into the injection-safe block.
@@ -91,7 +109,11 @@ impl SemanticMemoryContext {
 
 #[async_trait]
 impl ContextProvider for SemanticMemoryContext {
-    async fn recall(&self, user_message: &str) -> Option<String> {
+    async fn recall(
+        &self,
+        user_message: &str,
+        session_id: aivyx_core::SessionId,
+    ) -> Option<String> {
         // Embed the query (Q2a — latest user message only).
         let qvec = match self
             .provider
@@ -127,6 +149,29 @@ impl ContextProvider for SemanticMemoryContext {
         // The *content* recalled is independently visible — it
         // is the labeled block injected into the turn.
         eprintln!("{}", recall_marker_line(&kept));
+
+        // Phase 77 — capture the recall-feedback signal,
+        // correlated to this turn's session. Strictly
+        // best-effort: an append failure costs this one turn's
+        // signal, never the recall itself (the block is still
+        // returned below).
+        if let Some(log) = &self.recall_log {
+            let ts = now_secs();
+            let event = crate::recall_log::RecallEvent {
+                ts_secs: ts,
+                session_id,
+                hits: kept
+                    .iter()
+                    .map(|(e, score)| crate::recall_log::RecallHit {
+                        topic: e.topic.clone(),
+                        seq: e.seq,
+                        score: *score,
+                    })
+                    .collect(),
+            };
+            let _ = log.append(&event).await;
+        }
+
         Some(Self::format_block(&kept, now_secs()))
     }
 }
@@ -239,11 +284,15 @@ mod tests {
         )
     }
 
+    fn sid() -> aivyx_core::SessionId {
+        aivyx_core::SessionId::new()
+    }
+
     #[tokio::test]
     async fn recall_returns_labeled_block_for_relevant_hit() {
         let memory = seed().await;
         let block = ctx(memory, false, 0.0)
-            .recall("what is my favorite color")
+            .recall("what is my favorite color", sid())
             .await
             .expect("a relevant hit must produce a block");
         assert!(block.starts_with("## Relevant context (auto-recalled)"));
@@ -257,7 +306,7 @@ mod tests {
         let memory = seed().await;
         // Impossibly high floor → every hit filtered → None.
         let out = ctx(memory, false, 0.999_999)
-            .recall("what is my favorite color")
+            .recall("what is my favorite color", sid())
             .await;
         assert!(out.is_none());
     }
@@ -265,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn recall_none_when_embed_fails() {
         let memory = seed().await;
-        let out = ctx(memory, true, 0.0).recall("anything").await;
+        let out = ctx(memory, true, 0.0).recall("anything", sid()).await;
         assert!(out.is_none());
     }
 
@@ -274,7 +323,7 @@ mod tests {
         // Memory with an entry but NO vectors → nothing to rank.
         let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
         memory.put("notes", "unembedded").await.unwrap();
-        let out = ctx(memory, false, 0.0).recall("query").await;
+        let out = ctx(memory, false, 0.0).recall("query", sid()).await;
         assert!(out.is_none());
     }
 
@@ -343,5 +392,62 @@ mod tests {
         assert_eq!(humanize_age(172_800, 0), "2d ago");
         // Clock skew (then > now) must not panic / underflow.
         assert_eq!(humanize_age(0, 500), "just now");
+    }
+
+    // ---- Phase 77 — recall-feedback capture --------------------
+
+    #[tokio::test]
+    async fn injected_recall_appends_a_correlated_event() {
+        use crate::recall_log::PersistentRecallLog;
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-recall-capture-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([77u8; 32]),
+        )
+        .await
+        .unwrap();
+        let log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+
+        let memory = seed().await;
+        let context = ctx(memory, false, 0.0).with_recall_log(log.clone());
+        let session = sid();
+        let block = context
+            .recall("what is my favorite color", session)
+            .await;
+        assert!(block.is_some(), "a relevant hit must inject");
+
+        // Exactly one event, correlated to this turn's session,
+        // carrying the injected hit.
+        let events = log.events_since(0).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_id, session);
+        assert_eq!(events[0].hits.len(), 1);
+        assert_eq!(events[0].hits[0].topic, "notes");
+
+        // No injection → no event (the floor filtered everything).
+        let memory2 = seed().await;
+        let ctx2 = ctx(memory2, false, 0.999_999)
+            .with_recall_log(log.clone());
+        assert!(ctx2.recall("x", sid()).await.is_none());
+        assert_eq!(
+            log.events_since(0).await.unwrap().len(),
+            1,
+            "a no-op recall must not append a signal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

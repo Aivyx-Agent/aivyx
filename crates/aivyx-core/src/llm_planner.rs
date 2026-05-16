@@ -89,7 +89,17 @@ pub trait ContextProvider: Send + Sync {
     /// this turn, or `None` to leave the turn unchanged. Must never
     /// panic and must swallow its own errors into `None` (the
     /// universal no-op path — recall is best-effort, never fatal).
-    async fn recall(&self, user_message: &str) -> Option<String>;
+    ///
+    /// Phase 77 — `session_id` is the turn's conversation id,
+    /// passed so an implementation can persist a recall-feedback
+    /// event correlated to the turn (the reflection loop pairs it
+    /// against the audit chain's per-session `TurnEnded`). It does
+    /// not influence what is recalled.
+    async fn recall(
+        &self,
+        user_message: &str,
+        session_id: crate::SessionId,
+    ) -> Option<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +439,10 @@ impl TurnPlanner for LlmPlanner {
                 }
             };
             if !query_text.trim().is_empty() {
-                if let Some(block) = provider.recall(&query_text).await {
+                if let Some(block) = provider
+                    .recall(&query_text, message.session_id)
+                    .await
+                {
                     content.insert(0, ContentBlock::text(block));
                 }
             }
@@ -1003,6 +1016,7 @@ mod tests {
     struct FakeContextProvider {
         block: Option<String>,
         seen: std::sync::Mutex<Vec<String>>,
+        seen_sessions: std::sync::Mutex<Vec<SessionId>>,
     }
 
     impl FakeContextProvider {
@@ -1010,14 +1024,20 @@ mod tests {
             Arc::new(Self {
                 block: block.map(str::to_string),
                 seen: std::sync::Mutex::new(Vec::new()),
+                seen_sessions: std::sync::Mutex::new(Vec::new()),
             })
         }
     }
 
     #[async_trait]
     impl ContextProvider for FakeContextProvider {
-        async fn recall(&self, user_message: &str) -> Option<String> {
+        async fn recall(
+            &self,
+            user_message: &str,
+            session_id: SessionId,
+        ) -> Option<String> {
             self.seen.lock().unwrap().push(user_message.to_string());
+            self.seen_sessions.lock().unwrap().push(session_id);
             self.block.clone()
         }
     }
@@ -1048,6 +1068,13 @@ mod tests {
         assert_eq!(
             provider.seen.lock().unwrap().clone(),
             vec!["what's my color?".to_string()]
+        );
+        // Phase 77 — begin_turn threads the message's session id
+        // through so the impl can correlate a recall-feedback
+        // event to this turn.
+        assert_eq!(
+            provider.seen_sessions.lock().unwrap().clone(),
+            vec![channel.session]
         );
         // History user message: recalled block FIRST, then the
         // user's own text — one message, two content blocks.

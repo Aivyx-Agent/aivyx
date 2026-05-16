@@ -2523,17 +2523,35 @@ async fn run_async(
     // carries the rag_top_k / rag_min_similarity knobs). Shared
     // by-Arc into every planner-factory site below; `None` →
     // no auto-recall attached → pre-Phase-76 behavior.
+    // Phase 77 — the recall-feedback log. Built once and shared:
+    // the recall hook appends to it, and (Task 8) the reflection
+    // loop reads it. `None` when auto-recall is off.
+    let recall_log: Option<
+        Arc<aivyx_channel::recall_log::PersistentRecallLog>,
+    > = match (&embedding_provider, config_embedding.as_ref()) {
+        (Some(_), Some(_)) => {
+            Some(Arc::new(aivyx_channel::recall_log::PersistentRecallLog::new(
+                storage.domain(KeyDomain::RecallEvents),
+            )))
+        }
+        _ => None,
+    };
     let recall_context: Option<
         Arc<dyn aivyx_core::llm_planner::ContextProvider>,
     > = match (&embedding_provider, config_embedding.as_ref()) {
-        (Some(provider), Some(cfg)) => Some(Arc::new(
-            aivyx_channel::memory_recall::SemanticMemoryContext::new(
-                Arc::clone(&memory),
-                Arc::clone(provider),
-                cfg.rag_top_k,
-                cfg.rag_min_similarity,
-            ),
-        )),
+        (Some(provider), Some(cfg)) => {
+            let mut sc =
+                aivyx_channel::memory_recall::SemanticMemoryContext::new(
+                    Arc::clone(&memory),
+                    Arc::clone(provider),
+                    cfg.rag_top_k,
+                    cfg.rag_min_similarity,
+                );
+            if let Some(log) = &recall_log {
+                sc = sc.with_recall_log(Arc::clone(log));
+            }
+            Some(Arc::new(sc))
+        }
         _ => None,
     };
 
