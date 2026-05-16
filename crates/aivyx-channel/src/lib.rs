@@ -46,6 +46,7 @@ pub mod file_watcher;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
 pub mod memory_recall;
+pub mod recall_feedback;
 pub mod recall_log;
 pub mod prune_sink;
 pub mod reflection_tool;
