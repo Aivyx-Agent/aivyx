@@ -55,6 +55,14 @@ pub const PROMOTE_THRESHOLD: f32 = WEIGHT;
 /// regardless; this threshold just keeps the queue meaningful.
 pub const PROPOSAL_TOPIC_THRESHOLD: f32 = 3.0 * WEIGHT;
 
+/// How long recall events are retained before the
+/// same-cadence GC clamp drops them. Generous relative to any
+/// realistic reflection lookback so the loop always has a full
+/// window of signal; bounded so the dedicated RecallEvents
+/// domain can't grow without limit. ~30 days. (A `[recall_feedback]`
+/// knob to tune this is a documented Phase 77 deferral.)
+pub const RECALL_LOG_RETAIN_SECS: u64 = 30 * 24 * 3600;
+
 /// A recall injected into a turn that ended within this many ms
 /// before another turn started (same session) is treated as
 /// "the operator immediately came back" — weak-negative.

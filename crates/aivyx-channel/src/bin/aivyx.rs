@@ -3719,6 +3719,10 @@ async fn run_async(
             // `[embedding]` is configured; drives the daemon's
             // hourly lazy-backfill pass.
             embedding_provider: embedding_provider.clone(),
+            // Phase 77 — the shared recall-feedback log. `Some`
+            // iff auto-recall is configured; the reflection
+            // scheduler reads/clamps it on cadence.
+            recall_log: recall_log.clone(),
         })
             .await;
 

@@ -206,6 +206,13 @@ pub struct DaemonConfig {
     /// `None` = semantic search disabled, no backfill spawned.
     pub embedding_provider:
         Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
+    /// Phase 77 — the recall-feedback log. `Some` iff
+    /// auto-recall is configured; the reflection scheduler
+    /// reads/clamps it on its cadence to close the
+    /// recall→learning loop. `None` → the feedback pass is
+    /// skipped (pre-Phase-77 behavior).
+    pub recall_log:
+        Option<Arc<crate::recall_log::PersistentRecallLog>>,
 }
 
 /// Run the daemon server.
@@ -245,6 +252,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         memory_retention,
         target_policies,
         embedding_provider,
+        recall_log,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -361,6 +369,27 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let rs_shutdown = shutdown.clone();
             let rs_audit = Arc::clone(al);
             let rs_schedules = reflection_schedules.clone();
+            // Phase 77 — bundle the recall→reflection feedback
+            // deps iff the whole substrate is present (recall
+            // log + memory + proposal chain). Any missing piece
+            // → `None` → the feedback pass is skipped while the
+            // reflection turn still fires normally.
+            let rs_recall_feedback = match (
+                recall_log.clone(),
+                memory.clone(),
+                persona_proposal_log.clone(),
+            ) {
+                (Some(rl), Some(mem), Some(pl)) => {
+                    Some(crate::reflection_scheduler::RecallFeedbackDeps {
+                        recall_log: rl,
+                        memory: mem,
+                        proposal_log: pl,
+                        gc_retain_secs:
+                            crate::recall_feedback::RECALL_LOG_RETAIN_SECS,
+                    })
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -373,6 +402,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_schedules,
                     rs_dispatch,
                     rs_audit,
+                    rs_recall_feedback,
                     rs_shutdown,
                 )
                 .await;
@@ -1282,6 +1312,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         reflection_schedules: Vec::new(),
         target_policies: std::collections::HashMap::new(),
         embedding_provider: None,
+        recall_log: None,
         memory_retention: Vec::new(),
     }).await
 }

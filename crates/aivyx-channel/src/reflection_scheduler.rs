@@ -63,6 +63,19 @@ use aivyx_core::{CancellationToken, TurnId, TurnOutcomeSummary};
 
 use crate::trigger::{TriggerDispatch, TriggerSource};
 
+/// Phase 77 — handles the recall→reflection feedback pass needs.
+/// Bundled so `run_reflection_scheduler`'s signature doesn't grow
+/// per-handle. `None` (no `[embedding]` / no recall substrate) →
+/// the feedback pass is skipped entirely (pre-Phase-77 behavior).
+pub struct RecallFeedbackDeps {
+    pub recall_log: std::sync::Arc<crate::recall_log::PersistentRecallLog>,
+    pub memory: std::sync::Arc<dyn aivyx_memory::Memory>,
+    pub proposal_log:
+        std::sync::Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+    /// Retention window for the recall-log GC clamp (seconds).
+    pub gc_retain_secs: u64,
+}
+
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
 /// short cron pattern) are picked up promptly even if the
 /// next computed fire happens to be hours away.
@@ -345,6 +358,7 @@ pub async fn run_reflection_scheduler(
     schedules: Vec<ReflectionScheduleConfig>,
     dispatch: TriggerDispatch,
     audit_log: Arc<PersistentAuditLog>,
+    recall_feedback: Option<RecallFeedbackDeps>,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -393,6 +407,7 @@ pub async fn run_reflection_scheduler(
                     sched,
                     &mut cache,
                     now,
+                    recall_feedback.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -424,6 +439,7 @@ async fn fire_reflection(
     sched: &ReflectionScheduleConfig,
     cache: &mut OutcomeSummaryCache,
     now: DateTime<Utc>,
+    recall_feedback: Option<&RecallFeedbackDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -451,6 +467,14 @@ async fn fire_reflection(
         sched.lookback_window_secs,
     );
 
+    // Phase 77 — recall→reflection feedback, on the very same
+    // cadence (Q4a). Independent of the LLM reflection turn
+    // below; runs over the same lookback window the summaries
+    // were built from. Entirely no-op when the deps are absent.
+    if let Some(deps) = recall_feedback {
+        run_recall_feedback_pass(deps, sched, &summaries, now_ms).await;
+    }
+
     let user_message = format!(
         "{REFLECTION_SYSTEM_PROMPT}\n\n{}",
         format_summaries_for_prompt(&summaries),
@@ -475,6 +499,80 @@ async fn fire_reflection(
             aivyx_config::NotifyWhen::Always,  // unused (no targets) but the signature requires it
         )
         .await;
+}
+
+/// The recall→reflection feedback pass (Tasks 5–7), driven on
+/// the reflection cadence. Reads the same lookback window as the
+/// outcome summaries, correlates, applies the retention bias,
+/// files any operator-gated proposals, then GC-clamps the
+/// recall log. Every step is best-effort: a read/append error
+/// is logged and the cycle continues — learning degrades, the
+/// reflection turn and recall itself are untouched.
+async fn run_recall_feedback_pass(
+    deps: &RecallFeedbackDeps,
+    sched: &ReflectionScheduleConfig,
+    summaries: &[OutcomeSummary],
+    now_ms: u64,
+) {
+    let now_secs = now_ms / 1000;
+    let since = now_secs.saturating_sub(sched.lookback_window_secs);
+
+    match deps.recall_log.events_since(since).await {
+        Ok(recalls) if !recalls.is_empty() => {
+            let tally = crate::recall_feedback::correlate(
+                &recalls, summaries,
+            );
+            if !tally.is_empty() {
+                let promoted =
+                    crate::recall_feedback::apply_retention_feedback(
+                        &deps.memory,
+                        &tally,
+                    )
+                    .await;
+                let filed =
+                    crate::recall_feedback::emit_persona_proposals(
+                        &deps.proposal_log,
+                        &tally,
+                        now_ms,
+                        &format!("reflection:{}", sched.name),
+                    )
+                    .await;
+                eprintln!(
+                    "aivyx recall-feedback: schedule {:?} — {} entr{} \
+                     scored, {promoted} promoted, {filed} proposal(s) \
+                     filed",
+                    sched.name,
+                    tally.len(),
+                    if tally.len() == 1 { "y" } else { "ies" },
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "aivyx recall-feedback: schedule {:?} recall-log read \
+                 error: {e}",
+                sched.name,
+            );
+        }
+    }
+
+    // Bounded-growth clamp on the same cadence.
+    let cutoff = now_secs.saturating_sub(deps.gc_retain_secs);
+    match deps.recall_log.gc_older_than(cutoff).await {
+        Ok(n) if n > 0 => {
+            eprintln!(
+                "aivyx recall-feedback: gc clamped {n} old recall \
+                 event(s)"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "aivyx recall-feedback: recall-log gc error: {e}"
+            );
+        }
+    }
 }
 
 fn next_fire_after(cron_expr: &str, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -724,4 +822,135 @@ mod tests {
         assert!(REFLECTION_SYSTEM_PROMPT.contains("operator"));
     }
 
+    // ---- Phase 77 — recall-feedback pass orchestration ---------
+
+    #[tokio::test]
+    async fn recall_feedback_pass_promotes_and_files_and_clamps() {
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-recall-pass-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([79u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"recall-pass-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        // Three entries under one topic, each recalled in its
+        // own clean, well-separated turn → topic nets +3 →
+        // promotion (all three) AND a proposal (>= 3*WEIGHT).
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let mut seqs = Vec::new();
+        for i in 0..3u64 {
+            let seq =
+                memory.put("proj", &format!("note {i}")).await.unwrap();
+            seqs.push(seq);
+            recall_log
+                .append(&RecallEvent {
+                    ts_secs: 1000 + i * 100,
+                    session_id: s,
+                    hits: vec![RecallHit {
+                        topic: "proj".into(),
+                        seq,
+                        score: 0.9,
+                    }],
+                })
+                .await
+                .unwrap();
+        }
+        let summaries: Vec<OutcomeSummary> = (0..3u64)
+            .map(|i| OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: format!("t{i}"),
+                started_at_unix_ms: (1000 + i * 100) * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 500,
+            })
+            .collect();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 1_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            // cutoff = now_secs - this = 0 → nothing GC'd.
+            gc_retain_secs: 2_000,
+        };
+
+        // now well after the last event; whole window covered.
+        run_recall_feedback_pass(&deps, &sched, &summaries, 2_000_000)
+            .await;
+
+        // Actuator A: every helpful entry LRU-promoted.
+        let groups =
+            memory.scan_prefix("", usize::MAX).await.unwrap();
+        let proj = groups
+            .iter()
+            .find(|(t, _)| t == "proj")
+            .map(|(_, e)| e.clone())
+            .unwrap();
+        for e in &proj {
+            assert!(
+                e.last_read_at_secs > 0,
+                "seq {} should have been promoted",
+                e.seq
+            );
+        }
+
+        // Actuator B: one operator-gated Pending proposal.
+        let pending = proposal_log.list(ProposalStatusFilter::Pending);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "recall-fb:proj");
+
+        // Re-running the same window must not double-file or
+        // re-promote-count (idempotent dedup).
+        run_recall_feedback_pass(&deps, &sched, &summaries, 2_000_001)
+            .await;
+        assert_eq!(
+            proposal_log.list(ProposalStatusFilter::Pending).len(),
+            1,
+            "second pass must not re-file the proposal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

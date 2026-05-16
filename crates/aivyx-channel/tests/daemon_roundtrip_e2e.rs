@@ -815,6 +815,7 @@ async fn two_concurrent_connections() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1102,6 +1103,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1187,6 +1189,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1596,6 +1599,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -1858,6 +1862,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2232,6 +2237,7 @@ async fn mission_queries_round_trip_over_ipc() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2510,6 +2516,7 @@ async fn audit_queries_round_trip_over_ipc() {
             reflection_schedules: Vec::new(),
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
+            recall_log: None,
             memory_retention: Vec::new(),
         })
         .await
