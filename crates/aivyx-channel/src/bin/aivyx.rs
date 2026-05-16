@@ -2619,6 +2619,24 @@ async fn run_async(
         }
         _ => None,
     };
+    // Phase 79 — adaptive Persona. Built once when an embedding
+    // provider exists; attached by-Arc at every planner-factory
+    // site below. `None` → no refiner → the full Persona is
+    // injected unchanged (pre-Phase-79 behavior).
+    let persona_refiner: Option<
+        Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
+    > = match &embedding_provider {
+        Some(provider) => Some(Arc::new(
+            aivyx_channel::persona_context::PersonaContextRefiner::with_defaults(
+                profile.clone(),
+                shared_persona.clone(),
+                active_role_name.clone(),
+                role_for_envelope.system_prompt.value.clone(),
+                Arc::clone(provider),
+            ),
+        )),
+        None => None,
+    };
 
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
     // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
@@ -3206,6 +3224,8 @@ async fn run_async(
     // each child planner gets the same auto-recall hook the parent
     // has (or none, identically, when `[embedding]` is off).
     let recall_context_for_factory = recall_context.clone();
+    // Phase 79 — sub-agents get the adaptive Soul too.
+    let persona_refiner_for_factory = persona_refiner.clone();
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -3286,6 +3306,11 @@ async fn run_async(
         if let Some(rc) = &recall_context_for_factory {
             planner_config =
                 planner_config.with_context_provider(Arc::clone(rc));
+        }
+        // Phase 79 — same adaptive-Persona refiner as the parent.
+        if let Some(pr) = &persona_refiner_for_factory {
+            planner_config = planner_config
+                .with_system_prompt_refiner(Arc::clone(pr));
         }
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
@@ -3555,6 +3580,11 @@ async fn run_async(
         if let Some(rc) = &recall_context {
             planner_config =
                 planner_config.with_context_provider(Arc::clone(rc));
+        }
+        // Phase 79 — adaptive Persona refiner (daemon path).
+        if let Some(pr) = &persona_refiner {
+            planner_config = planner_config
+                .with_system_prompt_refiner(Arc::clone(pr));
         }
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
@@ -3974,6 +4004,8 @@ async fn run_async(
                 // Phase 76 — automatic recall (Q1a). `None` when
                 // `[embedding]` is unconfigured → no auto-recall.
                 context_provider: recall_context.clone(),
+                // Phase 79 — adaptive Persona (local-CLI path).
+                system_prompt_refiner: persona_refiner.clone(),
             };
 
             let stdin = io::stdin();

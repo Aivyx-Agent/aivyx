@@ -151,6 +151,13 @@ pub struct SessionConfig {
     /// per-turn config clone.
     pub context_provider:
         Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>>,
+    /// Phase 79 — optional per-turn system-prompt refiner
+    /// (adaptive Persona). Carried by-Arc through the per-turn
+    /// config clone, applied in `begin_turn` *after* the
+    /// Phase 60 refresher sets the base prompt, so the selected
+    /// Persona wins. `None` = pre-Phase-79 behavior.
+    pub system_prompt_refiner:
+        Option<Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>>,
     /// Phase 60 — per-turn system-prompt refresh closure. When
     /// `Some`, the planner factory invokes this on each turn to
     /// rebuild the `system_prompt` from the current state of
@@ -232,6 +239,10 @@ where
     }
     if let Some(provider) = config.context_provider {
         planner_config = planner_config.with_context_provider(provider);
+    }
+    if let Some(refiner) = config.system_prompt_refiner {
+        planner_config =
+            planner_config.with_system_prompt_refiner(refiner);
     }
     let role_overrides_for_factory = config.role_overrides.clone();
     // Phase 60 — per-turn Persona refresh. When `prompt_refresher`
