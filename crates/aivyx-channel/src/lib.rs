@@ -45,6 +45,7 @@ pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
+pub mod memory_recall;
 pub mod prune_sink;
 pub mod reflection_tool;
 pub mod role_overrides;

@@ -384,6 +384,19 @@ pub trait Memory: Send + Sync {
         query_vec: &[f32],
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, MemoryError>;
+
+    /// Phase 76 — same ranking as [`Self::semantic_search`] but
+    /// each hit carries its cosine score (most-similar first).
+    /// The automatic-recall hook needs the score to apply a
+    /// relevance floor (`rag_min_similarity`); plain
+    /// `semantic_search` delegates here and drops the scores so
+    /// existing callers are unaffected. Score is in `[-1.0,
+    /// 1.0]`; a stale-dimension vector scores `0.0`.
+    async fn semantic_search_scored(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError>;
 }
 
 /// Phase 75 — cosine similarity of two equal-length vectors.
@@ -421,7 +434,7 @@ pub(crate) fn rank_by_cosine(
     index: &[(String, u64, Vec<f32>)],
     query_vec: &[f32],
     limit: usize,
-) -> Vec<(String, u64)> {
+) -> Vec<(String, u64, f32)> {
     let mut scored: Vec<(f32, &str, u64)> = index
         .iter()
         .map(|(topic, seq, vec)| {
@@ -436,7 +449,7 @@ pub(crate) fn rank_by_cosine(
     scored
         .into_iter()
         .take(limit)
-        .map(|(_score, topic, seq)| (topic.to_string(), seq))
+        .map(|(score, topic, seq)| (topic.to_string(), seq, score))
         .collect()
 }
 
@@ -811,13 +824,26 @@ impl Memory for InMemoryMemory {
         query_vec: &[f32],
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        Ok(self
+            .semantic_search_scored(query_vec, limit)
+            .await?
+            .into_iter()
+            .map(|(entry, _score)| entry)
+            .collect())
+    }
+
+    async fn semantic_search_scored(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError> {
         if limit == 0 {
             return Err(MemoryError::ZeroLimit);
         }
         let state = self.state.lock().unwrap();
         let ranked = rank_by_cosine(&state.vectors, query_vec, limit);
         let mut out = Vec::with_capacity(ranked.len());
-        for (topic, seq) in ranked {
+        for (topic, seq, score) in ranked {
             // Skip a winner whose entry body is gone — the vector
             // index is allowed to lag entry GC.
             if let Some(entry) = state
@@ -825,7 +851,7 @@ impl Memory for InMemoryMemory {
                 .get(&topic)
                 .and_then(|es| es.iter().find(|e| e.seq == seq))
             {
-                out.push(entry.clone());
+                out.push((entry.clone(), score));
             }
         }
         Ok(out)

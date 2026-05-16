@@ -722,6 +722,19 @@ impl Memory for RedbMemory {
         query_vec: &[f32],
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        Ok(self
+            .semantic_search_scored(query_vec, limit)
+            .await?
+            .into_iter()
+            .map(|(entry, _score)| entry)
+            .collect())
+    }
+
+    async fn semantic_search_scored(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError> {
         if limit == 0 {
             return Err(MemoryError::ZeroLimit);
         }
@@ -733,7 +746,7 @@ impl Memory for RedbMemory {
             rank_by_cosine(&index, query_vec, limit)
         };
         let mut out = Vec::with_capacity(ranked.len());
-        for (topic, seq) in ranked {
+        for (topic, seq, score) in ranked {
             let key = Self::entry_key(&topic, seq);
             // A winner whose entry body is gone (entry GC ran but
             // the vector wasn't cleaned) is skipped — semantic
@@ -744,7 +757,7 @@ impl Memory for RedbMemory {
                 .await
                 .map_err(|e| MemoryError::Backend(e.to_string()))?
             {
-                out.push(InMemoryMemory::decode_entry(&bytes)?);
+                out.push((InMemoryMemory::decode_entry(&bytes)?, score));
             }
         }
         Ok(out)
