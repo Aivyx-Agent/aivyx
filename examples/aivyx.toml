@@ -823,3 +823,8 @@ parent_role = "researcher"
 # entirely a function of auto-recall + a reflection schedule
 # being present. Daemon log lines `aivyx recall-feedback: …`
 # show each cycle's effect.
+#
+# To SEE what it has learned and why (Phase 78): run
+# `aivyx learning [--window <secs>]` or open the Web UI
+# "Learning" tab — a read-only digest + per-proposal
+# provenance. Also nothing to configure.

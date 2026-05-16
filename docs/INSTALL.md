@@ -624,6 +624,47 @@ behavior). Each cycle prints a daemon-log breadcrumb:
 aivyx recall-feedback: schedule "nightly" — 12 entries scored, 4 promoted, 1 proposal(s) filed
 ```
 
+## Learning insights (Phase 78)
+
+The Phase 77 loop changes behaviour on its own. Phase 78 makes
+that **legible** — an autonomous system you can't see is one
+you can't trust. There's a read-only view of *what the
+assistant has learned and why*, with full CLI + Web UI parity:
+
+```
+aivyx learning [--window <secs>]
+```
+
+and a **Learning** tab in the Web UI. Both show the same two
+things:
+
+- **A digest** — over the lookback window: how many recalls
+  happened and how many scored, how many memories the
+  retention actuator is keeping warm vs. letting age out, the
+  count of recall-driven Persona proposals, and the top
+  helpful / least-helpful topics. This answers "is the loop
+  healthy and what is it leaning toward."
+- **Proposal provenance** — for each Pending (or resolved)
+  recall-driven Persona proposal: the topic, its net score,
+  the agent's stated reason, and the actual recalls/turns that
+  produced the score (timestamp, turn outcome, whether each
+  helped or hurt). This answers "*why* did it propose to
+  change its Persona" — the highest-trust-stakes question,
+  since you approve/reject those proposals.
+
+It is **read-only**: approve/reject still happens through
+`aivyx persona proposals` / the Proposals pane. Nothing here
+is configurable and nothing is persisted for it — the view is
+computed on demand from the live recall log, so it always
+matches what the loop actually did. The horizon is bounded by
+the ~30-day recall-event retention; with no `[embedding]` /
+no recall yet, it simply reports an empty digest (a valid
+"nothing learned yet", not an error).
+
+```
+aivyx learning --window 604800   # last 7 days
+```
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

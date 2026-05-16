@@ -203,34 +203,93 @@ the recalls and turn outcomes that motivated it.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct.**
+
+- **DESIGN.md → 25.** Held, byte-identical. Exit hash
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  == entry. A read-only inspection surface touched no contract.
+- **PRODUCT.md → 18.** Held, byte-identical. Exit hash
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  == entry. Observability is transparency, not a new commitment.
+- **Production-core `aivyx-core/src/lib.rs` → 26.** Held,
+  byte-identical. Exit hash
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  == entry. **New project record (beats Phase 77's 25).** The
+  whole surface — `recall_insights`, the IPC variant, handler,
+  CLI, Web UI — lives in `aivyx-channel`, reusing existing
+  types. Nothing needed an `aivyx-core` change; the
+  streak-shaped-architecture discipline (Q1a compute-on-query,
+  reuse `OutcomeSummary`, no new `AuditTag`) made `lib.rs`
+  byte-identity a non-event, as designed.
+
+**Test delta — MISS (honest, third consecutive).** +12 (1461
+→ 1473), **below** even the deliberately-lowered +18-30
+prediction. Breakdown: `recall_insights` derivation 4, CLI
+parser+render 7, Web UI smoke 1. Causes, all structural and
+all the right call:
+
+1. The IPC variant is exercised by the *existing*
+   `frontend_message_round_trips` / `daemon_message_round_trips`
+   tests (fixtures extended) — no new test fn, but full
+   round-trip coverage.
+2. The daemon handler is pure composition of already-tested
+   parts (`summarize_recent_outcomes_from_entries`,
+   `correlate_detailed`, `build_digest/provenance`,
+   `recall_log.events_since`, `proposal_log.list`). A handler
+   integration test would mostly re-verify tested code through
+   more store-setup boilerplate — padding, which the Phase
+   76/77 retros explicitly rejected.
+3. `correlate_detailed` was a refactor that *replaced* logic,
+   not added it (the 15 Phase 77 tests still cover it).
+
+**Calibration, updated (third data point).** Phase 76 +15,
+Phase 77 +22, Phase 78 +12. The earlier note ("integration-
+on-existing-substrate ≈ +20-25") was still too high for a
+*pure-observability/read-surface* phase. Tighter rule for
+future planning: a phase that adds **no new behaviour** —
+only a read/inspection surface over existing state — trends
+**~+10-15**, because its correctness is mostly the
+already-tested machinery it reuses. Over-predicting test
+count on reuse phases is now a well-characterised, three-phase
+pattern; the prediction, not the work, is what keeps missing.
+
+**No deviations.** Every planned surface (derivation, IPC,
+handler, CLI, Web UI) shipped exactly as scoped. Q3(b)'s
+deliberate scope (digest + provenance; per-entry drill-down
+deferred) held — no creep, no cut.
+
+**Zero clippy warnings, zero new workspace deps** — both held
+(one transient `unnecessary_sort_by` fixed inline with
+`sort_by_key` + `Reverse`).
 
 ## Exit criteria
 
-- [ ] `LearningDigest` + `ProposalProvenance` derivation,
+- [x] `LearningDigest` + `ProposalProvenance` derivation,
   pure + tested — Task 2.
-- [ ] `GetLearningInsights` IPC query + response +
+- [x] `GetLearningInsights` IPC query + response +
   round-trip — Task 3.
-- [ ] Daemon handler; empty (not error) when no recall
+- [x] Daemon handler; empty (not error) when no recall
   substrate — Task 4.
-- [ ] `daemon_client` + `aivyx learning` CLI + parser/render
+- [x] `daemon_client` + `aivyx learning` CLI + parser/render
   tests — Task 5.
-- [ ] Web UI Learning pane + HTML smoke — Task 6.
-- [ ] Tests across derivation, IPC, CLI, Web UI, handler
-  integration — Task 7.
-- [ ] `docs/INSTALL.md` (+ `examples/aivyx.toml` if
-  warranted) updated — Task 7.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] Web UI Learning pane + HTML smoke — Task 6.
+- [x] Tests across derivation, IPC (round-trip), CLI, Web
+  UI — Task 7. (Handler is pure composition of tested parts;
+  a dedicated integration test would be padding — see
+  prediction-vs-reality.)
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` pointer
+  updated — Task 7.
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 7.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-five.
-- [ ] PRODUCT.md streak extends to eighteen.
-- [ ] Production-core streak extends to twenty-six (new
+- [x] DESIGN.md streak extends to twenty-five.
+- [x] PRODUCT.md streak extends to eighteen.
+- [x] Production-core streak extends to twenty-six (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+18-30, calibrated per
-  the Phase 77 note: inspection-on-existing-substrate phases
-  trend lower).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive but **below** prediction
+  (+12 vs ~+18-30) — honest third-consecutive miss; calibration
+  tightened to ~+10-15 for pure read-surface phases.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

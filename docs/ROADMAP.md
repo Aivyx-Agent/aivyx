@@ -1836,8 +1836,49 @@ honest miss, documented). Zero clippy warnings. Zero new
 workspace deps.
 
 Likely follow-ups (`[recall_feedback]` tuning knob,
-LLM-judged recall usefulness, recall-event Web UI surface,
-cross-session pattern learning) are operator-feedback-gated.
+LLM-judged recall usefulness, cross-session pattern learning)
+are operator-feedback-gated.
+
+## Phase 78 — Learning Observability & Trust Surface
+
+**Frozen — see [PHASE_78.md](PHASE_78.md).** Makes the closed
+Phase 75–77 self-learning loop *legible*: an autonomous system
+the operator can't see is one they can't trust. A read-only
+view of what the assistant has learned and why, with full
+parity, reusing existing machinery — zero new behaviour, zero
+new storage, zero new deps.
+
+- **`recall_insights` (Q1a):** `recall_feedback` refactored to
+  `correlate_detailed` (tally + per-recall detail; `correlate`
+  delegates — all 15 Phase 77 tests still green, one matching
+  pass so the surface can never disagree with the loop).
+  `build_digest` (recall counts, promoted/aging, top
+  helpful/unhelpful) + `build_provenance` (each `recall-fb:`
+  proposal traced to its contributing recalls/turns,
+  reconstructed on-query — no schema/chain migration).
+- **`GetLearningInsights` IPC + handler:** computed on-query
+  from the live recall log + audit `OutcomeSummary` + the
+  proposal chain (the same builders the reflection loop uses).
+  No recall substrate → an empty digest, a valid "nothing
+  learned yet" answer, not an error.
+- **Full parity (Q2a):** `aivyx learning [--window <secs>]`
+  CLI + a read-only Web UI **Learning** tab; approve/reject
+  stays in the existing Proposals surface.
+
+Streak all three correct: DESIGN.md → 25, PRODUCT.md → 18,
+`aivyx-core/src/lib.rs` → **26** (new record, beats Phase
+77's 25) — the surface lives entirely in `aivyx-channel`,
+reusing existing types; `lib.rs` byte-identical, the
+streak-shaped-architecture discipline continued. Tests +12
+(1461 → 1473) — **below** even the deliberately-lowered
++18-30 prediction (third consecutive miss; pure derivation +
+reused round-trip harness + thin compositional handler).
+Honest, documented; calibration tightened. Zero clippy
+warnings. Zero new workspace deps.
+
+Likely follow-ups (per-memory-entry drill-down, history
+beyond the recall-log window, Web UI live refresh, actionable
+insights) are operator-feedback-gated.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 

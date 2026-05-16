@@ -1077,6 +1077,27 @@ respond to it. Closing the gap is the inflection point between
   (new record, beating Phase 76's 24). Zero new workspace
   deps.
 
+- **Phase 78 (Learning observability & trust surface, shipped
+  2026-05-17).** Makes the closed self-learning loop legible —
+  a transparency improvement to already-delivered G3/P8/P14,
+  not a new commitment. A read-only view (computed on-query
+  from the live recall log + audit + proposal chain — zero new
+  storage) of what the assistant has learned and why: a
+  per-window digest + per-Pending-proposal provenance tracing
+  each recall-driven Persona proposal back to the recalls/turn
+  outcomes that motivated it. Full parity: `GetLearningInsights`
+  IPC + `aivyx learning` CLI + a read-only Web UI Learning
+  tab; approve/reject stays in the existing operator gate.
+  Reuses existing `aivyx-channel` machinery (correlate_detailed
+  shares the loop's single matching pass), so the operator
+  never sees numbers that disagree with what the loop did.
+  Tests +12 (1461 → 1473) — below the deliberately-lowered
+  +18-30 prediction (third consecutive honest miss; pure
+  derivation + reused round-trip harness + thin handler).
+  Streak all three correct: DESIGN.md → 25, PRODUCT.md → 18,
+  lib.rs → **26** (new record, beating Phase 77's 25). Zero
+  new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
