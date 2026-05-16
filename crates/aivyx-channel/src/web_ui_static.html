@@ -733,6 +733,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="tab" data-pane="proposals">Proposals <span class="refresh" data-refresh="proposals">↻</span></div>
     <div class="tab" data-pane="notifications">Notifications <span class="refresh" data-refresh="notifications">↻</span></div>
     <div class="tab" data-pane="memory">Memory <span class="refresh" data-refresh="memory">↻</span></div>
+    <div class="tab" data-pane="learning">Learning <span class="refresh" data-refresh="learning">↻</span></div>
   </div>
 
   <!-- Chat pane (Phase 39) -->
@@ -847,6 +848,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div id="mem-topics" class="mem-topics empty">Click Refresh to load.</div>
       <div id="mem-detail" class="mem-detail empty">Select a topic.</div>
     </div>
+  </div>
+
+  <!-- Learning pane (Phase 78 — learning observability + trust) -->
+  <div class="pane list-pane" data-pane="learning">
+    <div class="pane-header">
+      <span class="pane-title">Learning</span>
+      <span class="pane-action" data-refresh="learning">Refresh</span>
+    </div>
+    <div id="learning-body" class="empty">Click Refresh to load.</div>
   </div>
 </div>
 
@@ -1464,6 +1474,95 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   }
 
   // ---- Profile (Phase 58 — PRODUCT.md P13) ----
+
+  // Phase 78 — Learning pane: read-only view of what the
+  // self-learning loop has learned and why each Pending
+  // Persona proposal exists. Dispatches GetLearningInsights.
+  function loadLearning() {
+    const body = document.getElementById('learning-body');
+    body.className = '';
+    body.innerHTML = '<div class="empty">Loading…</div>';
+
+    sendQuery('li', { kind: 'GetLearningInsights' }, function(payload) {
+      if (payload.kind === 'QueryError') {
+        renderError(body, payload.code, payload.message);
+        return;
+      }
+      if (payload.kind !== 'LearningInsights') return;
+
+      const d = payload.digest;
+      const proposals = payload.proposals || [];
+      body.innerHTML = '';
+      body.className = '';
+
+      const days = Math.floor(d.window_secs / 86400);
+      const summary = document.createElement('div');
+      summary.className = 'row-card';
+      summary.innerHTML =
+        '<div class="row-line"><span class="row-id">Learning — last ' +
+        (days >= 1 ? days + 'd' : d.window_secs + 's') + '</span>' +
+        '<span class="row-meta">' + d.recalls_total + ' recalls, ' +
+        d.recalls_scored + ' scored · ' + d.promoted + ' promoted, ' +
+        d.not_promoted + ' aging out · ' + d.proposals_in_window +
+        ' recall-driven proposal(s)</span></div>';
+      body.appendChild(summary);
+
+      function topicList(title, pairs) {
+        const card = document.createElement('div');
+        card.className = 'row-card';
+        let html = '<div class="row-line"><span class="row-id">' +
+          escapeHtml(title) + '</span></div>';
+        if (!pairs.length) {
+          html += '<div class="row-meta">(none)</div>';
+        } else {
+          pairs.forEach(function(p) {
+            html += '<div class="row-line"><span class="row-meta">' +
+              (p[1] >= 0 ? '+' : '') + p[1] + '</span> ' +
+              '<span>' + escapeHtml(p[0]) + '</span></div>';
+          });
+        }
+        card.innerHTML = html;
+        body.appendChild(card);
+      }
+      topicList('Most helpful topics', d.top_helpful);
+      topicList('Least helpful topics', d.top_unhelpful);
+
+      if (!proposals.length) {
+        const none = document.createElement('div');
+        none.className = 'empty';
+        none.textContent =
+          'No recall-driven Persona proposals in this window.';
+        body.appendChild(none);
+        return;
+      }
+      proposals.forEach(function(p) {
+        const card = document.createElement('div');
+        card.className = 'row-card';
+        let html =
+          '<div class="row-line"><span class="row-id">' +
+          escapeHtml(p.proposal_id) + '</span>' +
+          '<span class="row-meta">[' + escapeHtml(p.status) +
+          '] topic ‘' + escapeHtml(p.topic) + '’ net ' +
+          (p.net_score >= 0 ? '+' : '') + p.net_score +
+          '</span></div>';
+        if (p.reason) {
+          html += '<div class="row-meta">' + escapeHtml(p.reason) +
+            '</div>';
+        }
+        (p.contributing || []).forEach(function(c) {
+          const sig = c.signal == null ? 'no-signal'
+            : (c.signal > 0 ? 'helped' : 'hurt');
+          html += '<div class="row-line"><span class="row-meta">t=' +
+            c.ts_secs + ' ' +
+            escapeHtml(c.outcome_kind || 'unmatched') +
+            ' (' + sig + ') seqs=' +
+            escapeHtml(JSON.stringify(c.seqs)) + '</span></div>';
+        });
+        card.innerHTML = html;
+        body.appendChild(card);
+      });
+    });
+  }
 
   function loadProfile() {
     const body = document.getElementById('profile-body');
@@ -2205,6 +2304,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       else if (which === 'proposals') loadProposals();
       else if (which === 'notifications') loadNotifications();
       else if (which === 'memory') loadMemoryTopics();
+      else if (which === 'learning') loadLearning();
     });
   });
 

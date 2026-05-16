@@ -590,6 +590,33 @@ mod tests {
         );
     }
 
+    /// Phase 78 — the embedded HTML must wire the Learning
+    /// pane: tab presence, query dispatch, and the body
+    /// container the loader renders into.
+    #[test]
+    fn html_contains_phase_78_learning_pane_wiring() {
+        assert!(
+            HTML.contains("data-pane=\"learning\""),
+            "must include the Learning tab/pane"
+        );
+        assert!(
+            HTML.contains("'GetLearningInsights'"),
+            "must dispatch GetLearningInsights queries"
+        );
+        assert!(
+            HTML.contains("LearningInsights"),
+            "must handle the LearningInsights response"
+        );
+        assert!(
+            HTML.contains("learning-body"),
+            "must include the Learning render container"
+        );
+        assert!(
+            HTML.contains("function loadLearning"),
+            "must define the Learning loader"
+        );
+    }
+
     /// Phase 73 — the embedded HTML must wire the Notifications
     /// pane: tab presence, target-filter chip, query dispatch,
     /// and the five outcome badge classes (delivered, failed,
