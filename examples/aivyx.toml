@@ -723,3 +723,55 @@ parent_role = "researcher"
 # [[memory.retention]]
 # topic_glob = "notes/daily/*"
 # retention_days = 30
+
+# ----------------------------------------------------------------
+# Semantic memory search (Phase 75) — optional `[embedding]`
+# ----------------------------------------------------------------
+#
+# Without this section `memory.search` is keyword-only (exactly
+# the pre-Phase-75 behavior) and `mode = "semantic"` requests
+# transparently fall back to keyword. Add `[embedding]` to turn
+# on embedding-ranked retrieval:
+#
+#   - `memory.write` embeds each new entry's body at write time
+#     (non-fatal — a provider hiccup just defers the vector to
+#     the hourly backfill; the entry is still written and
+#     keyword-findable).
+#   - An hourly backfill re-embeds anything missing a vector, so
+#     enabling this on an existing store gradually indexes the
+#     whole back-catalog (bounded per tick — no startup stall).
+#   - `aivyx memory search <q> --semantic`, the agent's
+#     `memory.search` `mode` arg, and the Web UI "semantic"
+#     toggle all use it.
+#
+# PRIVACY — read this. `base_url` is the only thing that decides
+# whether memory content leaves the machine. Embedding requires
+# sending the text to be embedded to the configured endpoint:
+#
+#   • Cloud (text leaves the box — your explicit choice):
+#       [embedding]
+#       base_url = "https://api.openai.com"
+#       model = "text-embedding-3-small"
+#       api_key = "sk-..."          # or AIVYX_EMBEDDING_API_KEY,
+#                                   # or the encrypted secrets store
+#       dimensions = 1536
+#
+#   • Local / on-device (nothing leaves the box) — point at any
+#     OpenAI-compatible server (ollama, llama.cpp,
+#     text-embeddings-inference). No api_key needed:
+#       [embedding]
+#       base_url = "http://localhost:11434"
+#       model = "nomic-embed-text"
+#       dimensions = 768
+#
+# `dimensions` must match the model's native output. If you swap
+# models later, stored vectors of the old dimension are treated
+# as unembedded and the backfill re-embeds them automatically.
+#
+# Defaults if a field is omitted (but the section is present):
+#   base_url   = "https://api.openai.com"
+#   model      = "text-embedding-3-small"
+#   dimensions = 1536
+# api_key resolves env (AIVYX_EMBEDDING_API_KEY) > this TOML key
+# > the encrypted secrets store — same precedence as the
+# anthropic / openai keys.

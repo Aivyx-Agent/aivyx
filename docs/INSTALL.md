@@ -474,6 +474,66 @@ automatic once `max_per_topic` is set. Distinct from the
 prior FIFO-on-write eviction: an old note the agent keeps
 recalling now survives a younger note it never reads.
 
+## Semantic memory search (Phase 75)
+
+Phase 75 adds **embedding-ranked** memory retrieval on top of
+the Phase 74 keyword search. It is **off by default** — without
+an `[embedding]` section nothing changes, and a `semantic`
+request transparently falls back to keyword.
+
+**The base_url privacy choice.** Embedding means sending the
+text to be embedded to the configured endpoint. `base_url` is
+the only thing that decides whether memory content leaves the
+machine:
+
+- **Cloud** (`base_url = "https://api.openai.com"`, the
+  default) — entry bodies and search queries are sent to
+  OpenAI. This is your explicit, opt-in choice by configuring
+  the section.
+- **Local / on-device** — point `base_url` at any
+  OpenAI-compatible server (ollama, llama.cpp,
+  text-embeddings-inference, e.g.
+  `http://localhost:11434`). Nothing leaves the box; no
+  `api_key` needed.
+
+```toml
+[embedding]
+base_url = "http://localhost:11434"   # local → on-device
+model = "nomic-embed-text"
+dimensions = 768
+# api_key resolves env (AIVYX_EMBEDDING_API_KEY) > this TOML
+# key > the encrypted secrets store, same as the LLM keys.
+```
+
+`dimensions` must match the model's native output. Omitted
+fields default to `https://api.openai.com` /
+`text-embedding-3-small` / `1536`.
+
+**Keyword fallback.** A `semantic` request silently serves
+keyword results — flagged so you can see it — when (a) no
+`[embedding]` section is configured, (b) the embedding
+provider call fails (down, rate-limited, bad key), or (c) the
+vector index is still empty. You never get a hard error for
+asking for semantic; you get the best available answer.
+
+```
+aivyx memory search "<query>" --semantic [--limit N]
+```
+
+The agent's `memory.search` tool gains a `mode` argument
+(`"keyword"` default, `"semantic"`); the Web UI Memory tab
+gains a **semantic** toggle next to the search box. All three
+share one provider and one fallback rule.
+
+**Backfill on upgrade.** Enabling `[embedding]` on an existing
+store does not require a re-index command. New writes are
+embedded inline; an hourly backfill pass (bounded per tick, so
+no startup stall) walks entries lacking a current-dimension
+vector and embeds them, so the back-catalog becomes searchable
+gradually. Swapping embedding models is safe — vectors of the
+old dimension are detected as stale and re-embedded by the
+same backfill.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

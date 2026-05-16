@@ -1699,6 +1699,56 @@ follow-ups (semantic RAG, fuzzy match, edit-content Web UI,
 per-topic eviction-strategy override) are operator-feedback-
 gated.
 
+## Phase 75 — Semantic RAG Memory Arc
+
+**Frozen — see [PHASE_75.md](PHASE_75.md).** Picks up the
+Phase 74 deferred "semantic RAG" follow-up: embedding-ranked
+memory retrieval layered on top of keyword search, off by
+default. Eight tasks:
+
+- **`KeyDomain::MemoryVectors`** — a new encrypted, HKDF-
+  isolated storage domain for vectors (precedent: Phases
+  21/26/27/56/70). Entry bodies and vectors are never
+  decryptable with the same subkey.
+- **`EmbeddingProvider` trait + OpenAI-compatible HTTP impl** —
+  reuses the existing `aivyx-llm` `reqwest` transport via a
+  new non-streaming `post_json` seam. **Zero new workspace
+  deps** (Q1(a)). `EmbeddingError` taxonomy mirrors the
+  notify-error classification.
+- **`[embedding]` config** — `base_url` / `model` / `api_key`
+  / `dimensions`. Absent section → semantic disabled, keyword
+  unchanged. API key resolves env > TOML > encrypted store
+  (same two-phase pattern as the anthropic/openai keys).
+- **Vector store + cosine** — `Memory` gains `put_vector` /
+  `load_all_vectors` / `semantic_search`; an in-memory flat
+  index rebuilt at open; hand-rolled cosine (no linalg dep).
+  `forget` + `evict_oldest_unread` drop vectors; orphan
+  vectors are skipped at query time (vector store may lag
+  entry GC).
+- **Write-time embed + lazy backfill (Q2(a))** — an
+  `EmbeddingHook` seam keeps `aivyx-memory` free of an
+  `aivyx-llm` dep; `MemoryWriteTool` embeds inline (non-fatal)
+  and a bounded hourly backfill (reusing the GC timer) indexes
+  the back-catalog and re-embeds stale-dimension vectors.
+- **`mode` flag + keyword fallback (Q4(a))** — `memory.search`
+  gains `mode = keyword|semantic` (default keyword, no
+  behavior change); semantic transparently falls back to
+  keyword — flagged — when no provider, embed failure, or an
+  empty index. Threaded through the agent tool, `SearchMemory`
+  IPC (serde-defaulted for round-trip back-compat), CLI
+  `--semantic`, and a Web UI toggle.
+
+Streak predictions all correct: DESIGN.md → **22**,
+PRODUCT.md → **15**, `aivyx-core/src/lib.rs` → **23** (new
+project record, beating Phase 74's 22). Tests +46 (1378 →
+1424), inside the +35-50 prediction. Zero clippy warnings.
+Zero new workspace deps. Privacy is the operator's `base_url`
+choice — cloud or fully on-device.
+
+Likely follow-ups (ANN index, explicit `aivyx memory reembed`,
+hybrid keyword+semantic fusion, query-embedding cache) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

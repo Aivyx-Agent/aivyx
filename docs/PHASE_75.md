@@ -267,36 +267,84 @@ status flip, prediction-vs-reality, hash backfill.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct.**
+
+- **DESIGN.md → 22.** Held, byte-identical. Exit hash
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  == entry hash. The `KeyDomain` variant + `[embedding]`
+  section + `EmbeddingProvider` trait + vector store + `mode`
+  flag all landed in non-contract crates, as predicted.
+- **PRODUCT.md → 15.** Held, byte-identical. Exit hash
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  == entry hash. Semantic retrieval was a G3 quality
+  improvement, no commitment-text edit — as predicted.
+- **Production-core `aivyx-core/src/lib.rs` → 23.** Held,
+  byte-identical. Exit hash
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  == entry hash. **New project record (beats Phase 74's 22).**
+  All work lived in `aivyx-storage`, `aivyx-llm`,
+  `aivyx-config`, `aivyx-memory`, `aivyx-channel`.
+
+**Test delta — inside prediction.** +46 (1378 → 1424),
+within the predicted +35-50. Spread: storage isolation (T2),
+mocked-HTTP embedding provider 9 (T3), config parse/validate/
+fall-through 8 (T4), vector store + cosine 17 (T5), backfill
+5 (T6), mode-flag fallback + IPC round-trip + CLI parser +
+HTML smoke (T7).
+
+**Zero clippy warnings, zero new workspace deps** — both held
+(one `cloned_ref_to_slice_refs` lint surfaced and was fixed
+with `std::slice::from_ref` during T7).
+
+**Surprises / deviations (none contract-affecting):**
+
+- The plan said "`MemoryWriteTool` (or the daemon write
+  path)". To keep `aivyx-memory` free of an `aivyx-llm`
+  dependency, an `EmbeddingHook` trait was introduced *in*
+  `aivyx-memory` and the concrete `aivyx-llm`-backed adapter
+  (`LlmEmbeddingHook`) lives in `aivyx-channel`. The write
+  tool and the search tool both consume the hook; the daemon
+  owns the backfill driver. Cleaner than threading a provider
+  through the tool crate, and it preserves the crate
+  dependency direction.
+- `MemorySearchTool` (not just the IPC handler) needed the
+  hook too, since the agent-facing `mode = "semantic"` path
+  must embed the query. Anticipated by the plan listing the
+  tool as a surface; called out here because it added a
+  builder + Debug field beyond the write tool.
+- The backfill reused the existing memory-GC timer by
+  broadening its spawn condition to also fire when only
+  `[embedding]` is configured — exactly the Q2(a) "GC
+  cadence" intent, no new task loop.
 
 ## Exit criteria
 
-- [ ] `KeyDomain::MemoryVectors` + isolation test — Task 2.
-- [ ] `EmbeddingProvider` trait + OpenAI-compatible HTTP
+- [x] `KeyDomain::MemoryVectors` + isolation test — Task 2.
+- [x] `EmbeddingProvider` trait + OpenAI-compatible HTTP
   impl + error taxonomy — Task 3.
-- [ ] `[embedding]` config section + validation + env/store
+- [x] `[embedding]` config section + validation + env/store
   key fall-through — Task 4.
-- [ ] `Memory` vector store + in-memory index + cosine
+- [x] `Memory` vector store + in-memory index + cosine
   `semantic_search` + forget/evict drop vectors — Task 5.
-- [ ] Write-time embed + lazy backfill on GC cadence —
+- [x] Write-time embed + lazy backfill on GC cadence —
   Task 6.
-- [ ] `mode` flag on memory.search + semantic path +
+- [x] `mode` flag on memory.search + semantic path +
   keyword auto-fallback with result flag — Task 7.
-- [ ] CLI `--semantic` flag + Web UI semantic toggle —
+- [x] CLI `--semantic` flag + Web UI semantic toggle —
   Task 7.
-- [ ] Tests across storage, provider, config, cosine,
+- [x] Tests across storage, provider, config, cosine,
   backfill, fallback, IPC, CLI, HTML smoke — Task 8.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 8.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 8.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-two.
-- [ ] PRODUCT.md streak extends to fifteen.
-- [ ] Production-core streak extends to twenty-three (new
+- [x] DESIGN.md streak extends to twenty-two.
+- [x] PRODUCT.md streak extends to fifteen.
+- [x] Production-core streak extends to twenty-three (new
   record).
-- [ ] Test count delta: positive (~+35-50).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (+46, 1378 → 1424).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

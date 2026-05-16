@@ -1015,6 +1015,26 @@ respond to it. Closing the gap is the inflection point between
   DESIGN.md → 21, PRODUCT.md → 14, lib.rs → **22** (new
   record, beating Phase 73's 21). Zero new workspace deps.
 
+- **Phase 75 (Semantic RAG memory arc, shipped 2026-05-16).**
+  Picks up Phase 74's deferred semantic-retrieval follow-up.
+  Quality improvement to G3 memory substrate — not a new
+  PRODUCT.md commitment. New encrypted `KeyDomain::MemoryVectors`;
+  an `EmbeddingProvider` trait + OpenAI-compatible HTTP impl
+  reusing the existing `aivyx-llm` transport (zero new deps,
+  Q1(a)); `[embedding]` config (absent → semantic off, keyword
+  unchanged); `Memory` vector store + hand-rolled cosine
+  `semantic_search` + in-memory index; write-time embed
+  (non-fatal) + bounded hourly backfill on the GC cadence
+  (Q2(a)); `memory.search` `mode = keyword|semantic` with
+  transparent flagged keyword fallback (Q4(a)) across the agent
+  tool, `SearchMemory` IPC, `aivyx memory search --semantic`
+  CLI, and a Web UI toggle. **Privacy is the operator's
+  `base_url`** — cloud API or a local OpenAI-compatible server
+  (fully on-device). Tests +46 (1378 → 1424). All three streak
+  predictions correct: DESIGN.md → 22, PRODUCT.md → 15,
+  lib.rs → **23** (new record, beating Phase 74's 22). Zero
+  new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
