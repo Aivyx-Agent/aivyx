@@ -800,3 +800,26 @@ parent_role = "researcher"
 # noise. Raise it (e.g. 0.35) for stricter, fewer injections;
 # lower it (e.g. 0.10) to recall more aggressively. Valid range
 # is [0.0, 1.0]; `rag_top_k` must be >= 1.
+#
+# ----------------------------------------------------------------
+# Recall feedback loop (Phase 77) — no config; learns on its own
+# ----------------------------------------------------------------
+#
+# Once auto-recall is on AND you have a [[reflection_schedule]],
+# the loop closes itself: each recall is logged, and on the
+# reflection cron the assistant correlates which recalled
+# memories preceded turns that went well (completed, no
+# immediate operator re-ask) vs badly (failed, or you came
+# right back). It uses ONLY that structural signal — it never
+# asks an LLM to grade its own recall. Consistently-helpful
+# memories are kept warm so they survive eviction; consistently-
+# unhelpful ones are left to age out. A strongly-helpful topic
+# also files a *Pending* Persona proposal you review and
+# approve/reject — the loop never edits the Persona itself.
+#
+# There is no `[recall_feedback]` block: thresholds and the
+# ~30-day recall-event retention are fixed for v1 (a tuning
+# knob is a deferred follow-up). Nothing to configure — it is
+# entirely a function of auto-recall + a reflection schedule
+# being present. Daemon log lines `aivyx recall-feedback: …`
+# show each cycle's effect.

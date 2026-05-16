@@ -1796,6 +1796,49 @@ recall gate, token-budget context sizing, query-embedding
 cache, recall-usage feedback into reflection) are
 operator-feedback-gated.
 
+## Phase 77 — Recall → Reflection Feedback Loop
+
+**Frozen — see [PHASE_77.md](PHASE_77.md).** Closes the loop
+Phase 76 opened: recall stops being a bigger cache and starts
+*teaching* the system. Pure integration on the 75/76/70-71
+substrate, zero new deps.
+
+- **`KeyDomain::RecallEvents`** — a dedicated encrypted domain
+  for the signal (the Phase 76 audit-streak lesson applied by
+  design: route *around* `AuditTag`, not through it).
+- **`PersistentRecallLog`** — `ts_be||uuid` keys (time-ordered
+  scan, collision-free appends), `events_since` lookback +
+  independent `gc_older_than` clamp.
+- **Capture (Q1a/Q2a):** `ContextProvider::recall()` gains a
+  `SessionId` (llm_planner.rs only — `lib.rs` byte-identical);
+  `SemanticMemoryContext` appends a session-correlated
+  `RecallEvent` per injected recall, strictly best-effort.
+- **Structural correlator (Q1a):** pure, no LLM — matches a
+  recall to its turn and signs it from the audit chain's
+  existing `OutcomeSummary` (completed-no-followup → +;
+  failed / quick-comeback → −; escalated/cancelled → 0).
+- **Both actuators (Q3c):** memory-retention self-tuning
+  (helpful entries kept LRU-warm via a targeted
+  `promote_recall_helpful` — *no new eviction primitive*) and
+  operator-gated **Pending** Persona proposals (deterministic,
+  deduped, never auto-applied — Phase 70 P14 authority rule).
+- **Piggybacked (Q4a):** the existing cron reflection pass
+  runs correlate → retention → proposals → recall-log GC over
+  the same lookback window. Zero new scheduler; whole pass is
+  a no-op when the substrate is absent.
+
+Streak all three correct: DESIGN.md → 24, PRODUCT.md → 17,
+`aivyx-core/src/lib.rs` → **25** (new record, beats Phase
+76's 24). Tests +22 (1439 → 1461) — **below** the +35-55
+prediction (the actuators deliberately reused existing
+machinery rather than adding primitives, so each is lean;
+honest miss, documented). Zero clippy warnings. Zero new
+workspace deps.
+
+Likely follow-ups (`[recall_feedback]` tuning knob,
+LLM-judged recall usefulness, recall-event Web UI surface,
+cross-session pattern learning) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

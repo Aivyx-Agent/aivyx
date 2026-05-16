@@ -233,33 +233,86 @@ other domain.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct.**
+
+- **DESIGN.md → 24.** Held, byte-identical. Exit hash
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  == entry. No locked technical-contract decision touched.
+- **PRODUCT.md → 17.** Held, byte-identical. Exit hash
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  == entry. Closing the recall→learning loop is a G3/P8/P14
+  quality improvement, no commitment text.
+- **Production-core `aivyx-core/src/lib.rs` → 25.** Held,
+  byte-identical. Exit hash
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  == entry. **New project record (beats Phase 76's 24).** The
+  `recall()` `SessionId` arg landed in `llm_planner.rs` only;
+  the signal deliberately uses a new `KeyDomain` +
+  the *existing* `OutcomeSummary` rather than a new `AuditTag`
+  variant — the Phase 76 streak lesson applied by design, not
+  relearned the hard way.
+
+**Test delta — MISS (honest, second consecutive).** +22 (1439
+→ 1461), **below** the predicted +35-55. Breakdown: storage
+isolation 2, recall-log 4, capture 1, scorer 7, retention
+actuator 3, proposal actuator 4, reflection-loop orchestration
+1. The shortfall is structural and was the right engineering
+call: both actuators were deliberately built as a *bias on
+existing machinery* (a targeted `last_read_at_secs` bump reusing
+Phase 74 LRU; the existing operator-gated proposal chain) rather
+than new primitives, so each carries far less new surface — and
+therefore fewer new tests — than a from-scratch retention/
+proposal subsystem would. Task 8 is composition of
+already-tested parts. As in Phase 76, an honest +22 with full
+behavioral coverage beats padding the count with redundant
+integration tests; the prediction was simply too high for an
+"reuse, don't reinvent" phase. Calibration note for future
+loop-closing phases: integration-on-existing-substrate phases
+trend ~+20-25, not +35-55.
+
+**Q3(c) "both actuators" — delivered in full.** The
+acknowledged largest-surface option shipped end to end:
+retention self-tuning (Task 6) and operator-gated Persona
+proposals (Task 7), both wired into the cron pass (Task 8),
+each with its own test matrix including real-store integration
+tests. No scope was quietly dropped.
+
+**No deviations.** Unlike Phase 76 (streak-forced marker
+descope), every planned surface landed as designed. The
+streak constraint shaped the *architecture up front* (Q2a's
+dedicated `KeyDomain`, capture via `llm_planner.rs` not
+`lib.rs`) so no late compromise was needed.
+
+**Zero clippy warnings, zero new workspace deps** — both held
+(one transient `dead_code` on a test-only constructor fixed
+inline with `#[cfg(test)]`).
 
 ## Exit criteria
 
-- [ ] `KeyDomain::RecallEvents` + isolation test — Task 2.
-- [ ] `RecallEvent` + `PersistentRecallLog` (append + windowed
+- [x] `KeyDomain::RecallEvents` + isolation test — Task 2.
+- [x] `RecallEvent` + `PersistentRecallLog` (append + windowed
   read + GC clamp) — Task 3.
-- [ ] Capture: `recall()` `SessionId` arg (**no `lib.rs`
+- [x] Capture: `recall()` `SessionId` arg (**no `lib.rs`
   edit**) + non-fatal event append — Task 4.
-- [ ] Structural correlation scorer (no LLM) — Task 5.
-- [ ] Retention self-tuning actuator — Task 6.
-- [ ] Operator-gated Persona-proposal actuator — Task 7.
-- [ ] Piggybacked into the cron reflection loop; no-op when
+- [x] Structural correlation scorer (no LLM) — Task 5.
+- [x] Retention self-tuning actuator — Task 6.
+- [x] Operator-gated Persona-proposal actuator — Task 7.
+- [x] Piggybacked into the cron reflection loop; no-op when
   no recall events — Task 8.
-- [ ] Tests across storage, log, capture, scorer, both
+- [x] Tests across storage, log, capture, scorer, both
   actuators, reflection integration, no-op — Task 9.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 9.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 9.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-four.
-- [ ] PRODUCT.md streak extends to seventeen.
-- [ ] Production-core streak extends to twenty-five (new
+- [x] DESIGN.md streak extends to twenty-four.
+- [x] PRODUCT.md streak extends to seventeen.
+- [x] Production-core streak extends to twenty-five (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+35-55).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive but **below** prediction
+  (+22 vs ~+35-55) — honest miss, reasons documented.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

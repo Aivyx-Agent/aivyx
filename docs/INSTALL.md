@@ -573,6 +573,57 @@ The block is explicitly framed to the model as background
 reference, not instructions — a recalled note cannot hijack
 the turn.
 
+## Recall feedback loop (Phase 77)
+
+Auto-recall (Phase 76) made the assistant *remember*. Phase 77
+makes it **learn which memories are worth remembering** —
+without you configuring anything and without an LLM grading
+itself.
+
+**How it learns (structurally, no LLM).** Every auto-recall is
+logged. On your existing reflection schedule's cron, the loop
+correlates each recall with how that turn actually went, using
+only signals already in the audit chain:
+
+- the turn `completed` and you did **not** immediately come
+  back → the recalled memories scored **helpful**;
+- the turn `failed`/`timed_out`, **or** you started another
+  turn in the same session within 60 s (the structural proxy
+  for "that didn't land") → scored **unhelpful**;
+- `escalated`/`cancelled` → no signal.
+
+It never asks the model whether its own recall was useful —
+that self-judgement is exactly what this avoids. Per-turn the
+signal is coarse; across many turns it is reliable.
+
+**What it does with the signal — two actuators:**
+
+1. **Memory retention self-tunes.** Consistently-helpful
+   memories are kept "warm" so the existing Phase 74 LRU
+   eviction protects them; consistently-unhelpful ones are
+   simply not protected and age out under the same pass. No
+   new eviction policy — good memory just gets stickier.
+2. **Operator-gated Persona proposals.** A topic whose
+   memories are *strongly* and repeatedly helpful files a
+   **Pending** Persona proposal (e.g. "operator consistently
+   benefits from recalled context about X — keep surfacing
+   it"). You review and approve or reject it via the existing
+   `aivyx persona proposals` flow. **The loop never edits the
+   Persona itself** — you remain the authority (the Phase 70
+   P14 rule). The same deterministic proposal is filed once;
+   it won't re-nag after a rejection.
+
+**Zero configuration.** There is no `[recall_feedback]`
+block — thresholds and the ~30-day recall-event retention are
+fixed for v1. The loop is active precisely when auto-recall
+(`[embedding]`) **and** a `[[reflection_schedule]]` are both
+present; otherwise it is a complete no-op (pre-Phase-77
+behavior). Each cycle prints a daemon-log breadcrumb:
+
+```
+aivyx recall-feedback: schedule "nightly" — 12 entries scored, 4 promoted, 1 proposal(s) filed
+```
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

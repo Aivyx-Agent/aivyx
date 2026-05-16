@@ -1057,6 +1057,26 @@ respond to it. Closing the gap is the inflection point between
   lib.rs → **24** (new record, beating Phase 75's 23). Zero
   new workspace deps.
 
+- **Phase 77 (Recall→reflection feedback loop, shipped
+  2026-05-16).** Closes the self-learning loop — a quality
+  improvement uniting already-delivered G3 (memory) / P8
+  (reflection) / P14 (Persona), not a new commitment. A
+  dedicated `KeyDomain::RecallEvents` log captures every
+  auto-recall; a **structural, no-LLM** correlator scores
+  recalled memories against the audit chain's existing turn
+  outcomes; on the existing reflection cron the loop self-
+  tunes memory retention (helpful memories kept LRU-warm, no
+  new eviction primitive) and files **operator-gated Pending**
+  Persona proposals (never auto-applied — the P14 authority
+  rule holds). Deliberately routes the signal *around* the
+  streak-locked `AuditTag` (the Phase 76 lesson applied by
+  design). Tests +22 (1439 → 1461), **below** the +35-55
+  prediction (honest miss — the actuators reused existing
+  machinery rather than adding primitives). Streak all three
+  correct: DESIGN.md → 24, PRODUCT.md → 17, lib.rs → **25**
+  (new record, beating Phase 76's 24). Zero new workspace
+  deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
