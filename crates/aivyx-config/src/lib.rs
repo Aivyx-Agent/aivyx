@@ -1336,6 +1336,17 @@ pub struct EmbeddingConfig {
     /// stored vectors with a different length are treated as
     /// unembedded and lazily re-embedded.
     pub dimensions: usize,
+    /// Phase 76 — automatic-recall fan-out: how many of the
+    /// top semantic hits the per-turn recall hook may inject.
+    /// Default [`DEFAULT_RAG_TOP_K`]. Must be ≥ 1.
+    pub rag_top_k: usize,
+    /// Phase 76 — automatic-recall relevance floor: a hit whose
+    /// cosine similarity is below this is dropped even when
+    /// `rag_top_k` is not filled. This is what stops naive RAG
+    /// from injecting weak/irrelevant memories on every
+    /// unrelated prompt. Default [`DEFAULT_RAG_MIN_SIMILARITY`].
+    /// Must be in `[0.0, 1.0]`.
+    pub rag_min_similarity: f32,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -1349,6 +1360,15 @@ pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 /// Default vector dimensionality — the native size of
 /// `text-embedding-3-small`.
 pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 1536;
+/// Phase 76 — default auto-recall top-K. Small on purpose: a
+/// handful of highly-relevant memories beats a wall of
+/// loosely-related ones for prompt quality and token cost.
+pub const DEFAULT_RAG_TOP_K: usize = 5;
+/// Phase 76 — default auto-recall similarity floor. Cosine
+/// similarity runs `[-1.0, 1.0]`; 0.20 keeps clearly-related
+/// hits while dropping the near-orthogonal noise that an
+/// unrelated prompt would otherwise pull in.
+pub const DEFAULT_RAG_MIN_SIMILARITY: f32 = 0.20;
 
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
@@ -1945,6 +1965,10 @@ struct RawEmbedding {
     api_key: Option<String>,
     #[serde(default)]
     dimensions: Option<usize>,
+    #[serde(default)]
+    rag_top_k: Option<usize>,
+    #[serde(default)]
+    rag_min_similarity: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3911,7 +3935,9 @@ fn build_embedding_config(
     let any_set = raw.base_url.is_some()
         || raw.model.is_some()
         || raw.api_key.is_some()
-        || raw.dimensions.is_some();
+        || raw.dimensions.is_some()
+        || raw.rag_top_k.is_some()
+        || raw.rag_min_similarity.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -3947,6 +3973,25 @@ fn build_embedding_config(
         });
     }
 
+    let rag_top_k = raw.rag_top_k.unwrap_or(DEFAULT_RAG_TOP_K);
+    if rag_top_k == 0 {
+        return Err(ConfigError::Invalid {
+            field: "embedding.rag_top_k",
+            reason: "`rag_top_k` must be >= 1".into(),
+        });
+    }
+
+    let rag_min_similarity = raw
+        .rag_min_similarity
+        .unwrap_or(DEFAULT_RAG_MIN_SIMILARITY);
+    if !(0.0..=1.0).contains(&rag_min_similarity) {
+        return Err(ConfigError::Invalid {
+            field: "embedding.rag_min_similarity",
+            reason: "`rag_min_similarity` must be in [0.0, 1.0]"
+                .into(),
+        });
+    }
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -3964,6 +4009,8 @@ fn build_embedding_config(
         model,
         api_key,
         dimensions,
+        rag_top_k,
+        rag_min_similarity,
     }))
 }
 

@@ -5339,6 +5339,12 @@ api_key = "sk-emb-toml"
     assert_eq!(emb.base_url, crate::DEFAULT_EMBEDDING_BASE_URL);
     assert_eq!(emb.model, crate::DEFAULT_EMBEDDING_MODEL);
     assert_eq!(emb.dimensions, crate::DEFAULT_EMBEDDING_DIMENSIONS);
+    // Phase 76 — RAG knobs default when unspecified.
+    assert_eq!(emb.rag_top_k, crate::DEFAULT_RAG_TOP_K);
+    assert_eq!(
+        emb.rag_min_similarity,
+        crate::DEFAULT_RAG_MIN_SIMILARITY
+    );
     let key = emb.api_key.expect("key from toml");
     assert_eq!(key.source, FieldSource::Toml);
     assert_eq!(key.value.expose_secret(), "sk-emb-toml");
@@ -5468,6 +5474,98 @@ dimensions = 0
     match err {
         ConfigError::Invalid { field, .. } => {
             assert_eq!(field, "embedding.dimensions");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Phase 76 — explicit RAG knobs override the defaults.
+#[test]
+fn embedding_rag_knobs_explicit_win() {
+    let env = EnvScope::new();
+    env.clear("AIVYX_EMBEDDING_API_KEY");
+    let tmp = TempDir::new("embedding-rag-explicit");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+base_url = "http://localhost:11434"
+rag_top_k = 12
+rag_min_similarity = 0.55
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.rag_top_k, 12);
+    assert!((emb.rag_min_similarity - 0.55).abs() < 1e-6);
+}
+
+/// Phase 76 — `rag_top_k = 0` is a load-time `Invalid`.
+#[test]
+fn embedding_rag_top_k_zero_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-rag-topk-zero");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+rag_top_k = 0
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "embedding.rag_top_k");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Phase 76 — `rag_min_similarity` outside `[0.0, 1.0]` is a
+/// load-time `Invalid`.
+#[test]
+fn embedding_rag_min_similarity_out_of_range_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-rag-sim-oor");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+rag_min_similarity = 1.5
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "embedding.rag_min_similarity");
         }
         other => panic!("expected Invalid, got {other:?}"),
     }
