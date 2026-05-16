@@ -534,6 +534,45 @@ gradually. Swapping embedding models is safe — vectors of the
 old dimension are detected as stale and re-embedded by the
 same backfill.
 
+## Automatic recall (Phase 76)
+
+Phase 75 gave the agent a semantic-search *tool*. Phase 76
+makes recall **automatic**: with `[embedding]` configured,
+every turn the assistant embeds your message, finds the most
+semantically-relevant past memories, and injects them into
+that turn's context **without being asked**. This is what
+gives it continuity — it remembers across turns the way a
+personal assistant should.
+
+**Off when embedding is off.** No `[embedding]` section → no
+auto-recall → behavior is byte-identical to pre-Phase-76. The
+hook is also fully best-effort: an embedding-provider hiccup,
+an empty vector index, or no sufficiently-relevant memory all
+leave the turn untouched. Auto-recall never errors a turn.
+
+**Two knobs** (under `[embedding]`, both optional):
+
+- `rag_top_k` (default 5) — the most memories injected per
+  turn.
+- `rag_min_similarity` (default 0.20) — the cosine-similarity
+  floor. This is the important one: it drops weakly-related
+  hits so an unrelated prompt doesn't drag in noise. Raise it
+  for stricter recall, lower it to recall more aggressively.
+  Range `[0.0, 1.0]`; `rag_top_k` must be ≥ 1.
+
+**What you'll see.** The recalled memories appear as a clearly
+labeled, reference-only block at the top of the turn (visible
+in the conversation / Web UI as part of that turn), and the
+daemon log prints a one-line marker when recall fires:
+
+```
+aivyx recall: injected 3 memories [project/notes, prefs]
+```
+
+The block is explicitly framed to the model as background
+reference, not instructions — a recalled note cannot hijack
+the turn.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

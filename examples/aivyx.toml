@@ -775,3 +775,28 @@ parent_role = "researcher"
 # api_key resolves env (AIVYX_EMBEDDING_API_KEY) > this TOML key
 # > the encrypted secrets store — same precedence as the
 # anthropic / openai keys.
+#
+# ----------------------------------------------------------------
+# Automatic recall (Phase 76) — `rag_top_k` / `rag_min_similarity`
+# ----------------------------------------------------------------
+#
+# With `[embedding]` configured, the assistant doesn't only
+# recall when it calls `memory.search` — every turn it embeds
+# your message and silently injects the most relevant past
+# memories into that turn's context (a clearly-labeled,
+# reference-only block; the daemon log prints
+# `aivyx recall: injected N memories [...]` when it fires). No
+# embedding configured → no auto-recall, exactly as before.
+#
+# Two knobs tune it (both optional, shown with their defaults):
+#
+#   [embedding]
+#   # ... base_url / model / api_key / dimensions as above ...
+#   rag_top_k = 5             # max memories injected per turn
+#   rag_min_similarity = 0.20 # drop hits below this cosine score
+#
+# `rag_min_similarity` is the important one: it is the floor that
+# stops an unrelated prompt from dragging in weakly-related
+# noise. Raise it (e.g. 0.35) for stricter, fewer injections;
+# lower it (e.g. 0.10) to recall more aggressively. Valid range
+# is [0.0, 1.0]; `rag_top_k` must be >= 1.

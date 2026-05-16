@@ -1035,6 +1035,28 @@ respond to it. Closing the gap is the inflection point between
   lib.rs → **23** (new record, beating Phase 74's 22). Zero
   new workspace deps.
 
+- **Phase 76 (Automatic semantic recall, shipped 2026-05-16).**
+  Closes the RAG arc Phase 75 set up — a G3 memory-substrate
+  quality improvement, not a new PRODUCT.md commitment. A
+  per-turn `ContextProvider` planner hook (read-side sibling
+  of `PruneSink`, kept out of `aivyx-core/src/lib.rs` to
+  protect the streak) embeds each user message and
+  auto-injects the top semantically-relevant memories
+  (`rag_top_k` / `rag_min_similarity` floor), as an
+  injection-safe reference-only block, across the local-CLI,
+  daemon, and child-agent planner paths. Silent no-op when
+  embedding is unavailable — recall never errors a turn. The
+  Q4b visible marker shipped as the established
+  stderr-breadcrumb convention rather than a new `AuditTag`
+  variant: the audit enum is in the streak file, and breaking
+  the core streak to buy an observability nicety was the wrong
+  trade — a deliberate, documented streak-forced deviation.
+  Tests +15 (1424 → 1439), **below** the +25-40 prediction
+  (honest miss — wiring-only Task 5, streak-collapsed Task 6).
+  Streak all three correct: DESIGN.md → 23, PRODUCT.md → 16,
+  lib.rs → **24** (new record, beating Phase 75's 23). Zero
+  new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

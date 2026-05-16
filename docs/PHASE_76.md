@@ -235,33 +235,101 @@ edit**):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct.**
+
+- **DESIGN.md → 23.** Held, byte-identical. Exit hash
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  == entry hash. No locked technical-contract decision touched.
+- **PRODUCT.md → 16.** Held, byte-identical. Exit hash
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  == entry hash. Auto-recall was a G3 quality improvement, no
+  commitment text.
+- **Production-core `aivyx-core/src/lib.rs` → 24.** Held,
+  byte-identical. Exit hash
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  == entry hash. **New project record (beats Phase 75's 23.)**
+  The `ContextProvider` trait + builder + `begin_turn`
+  invocation all landed in `llm_planner.rs`; the existing
+  `pub mod llm_planner;` (line 34, unchanged) makes it reachable
+  without a `lib.rs` re-export. The streak constraint had real
+  teeth this phase — see the Q4b deviation below.
+
+**Test delta — MISS (honest).** +15 (1424 → 1439), **below**
+the predicted +25-40. Breakdown: planner hook 4 (core), config
+3, recall ranking/floor/no-op + formatting + marker 8. The
+shortfall has two concrete causes, both downstream of design
+choices made *during* the phase:
+
+1. Task 5 was pure wiring (0 tests — threading an Arc through
+   three factory sites; the behavior it enables is covered by
+   the Task 2 + Task 4 unit tests on both sides of the seam).
+2. Task 6 collapsed from the implied "new `AuditTag` variant +
+   Web UI indicator + HTML smoke" (~8 tests) to a 2-test
+   stderr breadcrumb, for the streak reason below. The "Web UI
+   HTML smoke" exit-criteria line is therefore N/A.
+
+I deliberately did not pad the suite with a heavyweight
+`LlmPlanner` integration test that would mostly duplicate
+aivyx-core's private test fakes — the trait seam is already
+exercised on both sides. An honest +15 with solid coverage
+beats a padded +30.
+
+**Q4b deviation (intentional, streak-forced).** The plan
+implied a `ContextRecall` `AuditTag` variant for the visible
+marker. `AuditTag` is defined in `aivyx-core/src/lib.rs` — the
+exact streak file Q1(a) was chosen to protect. Adding a variant
+would have broken the core streak at 24 to buy an observability
+nicety. Instead the marker uses the codebase's established
+operator-visible stderr-breadcrumb convention (identical to
+`aivyx memory gc: …` and `aivyx memory embed: …`):
+`aivyx recall: injected N memories [topics]`. The *content*
+recalled needs no separate Web UI plumbing — it is the labeled
+block injected into (and rendered as part of) the turn itself.
+Net: the operator can still see *that* recall fired (log) and
+*what* was recalled (in-turn block) — Q4b's intent — without
+spending the streak. This is the streak discipline working as
+designed: a late-surfacing cost was paid in scope, not in the
+contract.
+
+**Task 4 minor deviation.** The audit sink the plan placed on
+the Task 4 struct was dropped entirely (not deferred to Task
+6): the breadcrumb approach needs no sink, so the struct stayed
+lean.
+
+**Zero clippy warnings, zero new workspace deps** — both held
+(one `cloned_ref_to_slice_refs` lint was fixed inline during
+Task 4 with `std::slice::from_ref`).
 
 ## Exit criteria
 
-- [ ] `ContextProvider` trait + `with_context_provider` +
+- [x] `ContextProvider` trait + `with_context_provider` +
   planner invocation, **no `lib.rs` edit** — Task 2.
-- [ ] `rag_top_k` + `rag_min_similarity` config + validation
+- [x] `rag_top_k` + `rag_min_similarity` config + validation
   + tests — Task 3.
-- [ ] `SemanticMemoryContext` with floor filtering +
+- [x] `SemanticMemoryContext` with floor filtering +
   injection-safe labeled block + silent no-op — Task 4.
-- [ ] Wired into local-CLI, daemon, and child-agent planner
+- [x] Wired into local-CLI, daemon, and child-agent planner
   factories — Task 5.
-- [ ] `ContextRecall` audit tag + Web UI recall indicator +
-  HTML smoke — Task 6.
-- [ ] Tests across planner hook, config, recall ranking/
-  floor/no-op, audit marker, Web UI — Task 7.
-- [ ] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
+- [~] Visible recall marker — Task 6. **Deviated
+  (streak-forced):** stderr breadcrumb, not a new `AuditTag`
+  variant (would break the core streak Q1a protects); no
+  separate Web UI indicator (recalled content is the in-turn
+  labeled block). See prediction-vs-reality.
+- [x] Tests across planner hook, config, recall ranking/
+  floor/no-op, marker — Task 7. (Web UI HTML smoke N/A —
+  no Web UI surface added.)
+- [x] `examples/aivyx.toml` + `docs/INSTALL.md` updated —
   Task 7.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 7.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-three.
-- [ ] PRODUCT.md streak extends to sixteen.
-- [ ] Production-core streak extends to twenty-four (new
+- [x] DESIGN.md streak extends to twenty-three.
+- [x] PRODUCT.md streak extends to sixteen.
+- [x] Production-core streak extends to twenty-four (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+25-40).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive but **below** prediction
+  (+15 vs ~+25-40) — honest miss, reasons documented.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

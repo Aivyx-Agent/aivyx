@@ -1749,6 +1749,53 @@ Likely follow-ups (ANN index, explicit `aivyx memory reembed`,
 hybrid keyword+semantic fusion, query-embedding cache) are
 operator-feedback-gated.
 
+## Phase 76 — Automatic Semantic Recall (RAG context injection)
+
+**Frozen — see [PHASE_76.md](PHASE_76.md).** Closes the RAG arc
+Phase 75 set up: the agent no longer only recalls when it calls
+`memory.search` — every turn it embeds the user's message and
+auto-injects the most relevant past memories. Pure integration
+on the Phase 75 substrate, zero new deps.
+
+- **`ContextProvider` planner hook (Q1a).** Read-side sibling
+  of `PruneSink`; `LlmPlannerConfig::with_context_provider` +
+  a `begin_turn` invocation that prepends the recalled block
+  as a distinct leading text block in the user message (not
+  the static system prompt; avoids provider role-alternation).
+  Deliberately **not** re-exported from `aivyx-core/src/lib.rs`
+  (reachable via `aivyx_core::llm_planner::ContextProvider`) —
+  this is what protected the core streak.
+- **`rag_top_k` (5) + `rag_min_similarity` (0.20)** on
+  `[embedding]`; the floor is what stops naive-RAG noise.
+- **`SemanticMemoryContext`** embeds the latest user message
+  (Q2a), `semantic_search_scored` top-K, drops sub-floor hits
+  (Q3a), formats an injection-safe reference-only block;
+  silent no-op on embed-fail / empty index / all-below-floor —
+  recall never errors a turn.
+- Wired into all three planner factories (local-CLI, daemon,
+  child-agent — sub-agents recall too).
+- **Visible marker (Q4b) — streak-forced deviation:** a
+  `ContextRecall` `AuditTag` variant would have broken the
+  core streak (the enum lives in the streak file), so the
+  marker is the established stderr-breadcrumb convention
+  (`aivyx recall: injected N memories […]`); the recalled
+  content is independently visible as the in-turn block. No
+  separate Web UI indicator. The streak discipline had teeth
+  this phase — a late cost was paid in scope, not in the
+  contract.
+
+Streak all three correct: DESIGN.md → 23, PRODUCT.md → 16,
+`aivyx-core/src/lib.rs` → **24** (new record, beats Phase 75's
+23). Tests +15 (1424 → 1439) — **below** the +25-40 prediction
+(Task 5 wiring-only; Task 6 collapsed by the streak deviation;
+no Web UI smoke). Honest miss, documented. Zero clippy
+warnings. Zero new workspace deps.
+
+Likely follow-ups (conversational-window query, heuristic
+recall gate, token-budget context sizing, query-embedding
+cache, recall-usage feedback into reflection) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
