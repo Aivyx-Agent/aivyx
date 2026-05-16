@@ -66,6 +66,33 @@ pub trait PruneSink: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// ContextProvider — per-turn automatic recall hook (Phase 76)
+// ---------------------------------------------------------------------------
+
+/// Read-side sibling of [`PruneSink`]: invoked once per turn with the
+/// user's message, returning an already-formatted context block to
+/// prepend, or `None` for "nothing relevant — leave the turn
+/// untouched."
+///
+/// The concrete implementation lives in the channel layer (which has
+/// access to `Memory` + the embedding provider); the core crate
+/// defines only the contract. Mirrors the `PruneSink` pattern.
+///
+/// Phase 76 deliberately does **not** re-export this trait from
+/// `aivyx-core`'s `lib.rs` (unlike the older `PruneSink`): consumers
+/// reach it via `aivyx_core::llm_planner::ContextProvider`. Keeping
+/// `lib.rs` byte-identical protects the production-core streak; the
+/// minor re-export asymmetry is the documented, intentional price.
+#[async_trait]
+pub trait ContextProvider: Send + Sync {
+    /// Return a formatted, injection-safe context block to prepend to
+    /// this turn, or `None` to leave the turn unchanged. Must never
+    /// panic and must swallow its own errors into `None` (the
+    /// universal no-op path — recall is best-effort, never fatal).
+    async fn recall(&self, user_message: &str) -> Option<String>;
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -108,6 +135,11 @@ pub struct LlmPlannerConfig {
     /// `Memory::put()` to persist pruned context for later reflection.
     /// `None` means pruned messages are silently discarded.
     pub prune_sink: Option<Arc<dyn PruneSink>>,
+    /// Phase 76 — optional automatic-recall hook. When `Some`,
+    /// `begin_turn` calls it with the user's message and prepends
+    /// any returned block to that turn's context. `None` means no
+    /// auto-recall (pre-Phase-76 behavior exactly).
+    pub context_provider: Option<Arc<dyn ContextProvider>>,
 }
 
 impl std::fmt::Debug for LlmPlannerConfig {
@@ -120,6 +152,10 @@ impl std::fmt::Debug for LlmPlannerConfig {
             .field("tool_allowlist", &self.tool_allowlist)
             .field("context_window_tokens", &self.context_window_tokens)
             .field("prune_sink", &self.prune_sink.as_ref().map(|_| ".."))
+            .field(
+                "context_provider",
+                &self.context_provider.as_ref().map(|_| ".."),
+            )
             .finish()
     }
 }
@@ -134,6 +170,7 @@ impl LlmPlannerConfig {
             tool_allowlist: None,
             context_window_tokens: None,
             prune_sink: None,
+            context_provider: None,
         }
     }
 
@@ -164,6 +201,17 @@ impl LlmPlannerConfig {
     /// for persistence (e.g. to memory). See [`PruneSink`].
     pub fn with_prune_sink(mut self, sink: Arc<dyn PruneSink>) -> Self {
         self.prune_sink = Some(sink);
+        self
+    }
+
+    /// Attach a [`ContextProvider`] for per-turn automatic recall.
+    /// `None` (the default) preserves pre-Phase-76 behavior. Mirrors
+    /// [`Self::with_prune_sink`].
+    pub fn with_context_provider(
+        mut self,
+        provider: Arc<dyn ContextProvider>,
+    ) -> Self {
+        self.context_provider = Some(provider);
         self
     }
 
@@ -338,7 +386,7 @@ impl LlmPlanner {
 #[async_trait]
 impl TurnPlanner for LlmPlanner {
     async fn begin_turn(&mut self, message: &Message) {
-        let content = match &message.content {
+        let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
             MessageContent::Image { media_type, data } => {
                 vec![ContentBlock::image_from_bytes(media_type, data)]
@@ -353,6 +401,40 @@ impl TurnPlanner for LlmPlanner {
                 })
                 .collect(),
         };
+
+        // Phase 76 — automatic recall. Embed-and-retrieve is driven
+        // by the user's *text* (Q2a: latest user message only). The
+        // returned block is prepended as a distinct leading text
+        // block *inside the same user message* rather than as its
+        // own message: a separate message would risk provider
+        // role-alternation rules, and folding it into the static
+        // system prompt would make per-turn recall look like a
+        // standing instruction. The provider's `recall` is
+        // best-effort — a `None` (no provider, embed failure, empty
+        // index, all-below-floor) leaves the turn byte-identical to
+        // pre-Phase-76 behavior.
+        if let Some(provider) = &self.config.context_provider {
+            let query_text = match &message.content {
+                MessageContent::Text(text) => text.clone(),
+                MessageContent::Image { .. } => String::new(),
+                MessageContent::Mixed(parts) => {
+                    let joined: Vec<&str> = parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            ContentPart::Text(t) => Some(t.as_str()),
+                            ContentPart::Image { .. } => None,
+                        })
+                        .collect();
+                    joined.join(" ")
+                }
+            };
+            if !query_text.trim().is_empty() {
+                if let Some(block) = provider.recall(&query_text).await {
+                    content.insert(0, ContentBlock::text(block));
+                }
+            }
+        }
+
         self.history.push(LlmMessage::User { content });
         self.pending_call_ids.clear();
     }
@@ -914,6 +996,135 @@ mod tests {
             }
             other => panic!("expected Assistant, got {other:?}"),
         }
+    }
+
+    // ---- Phase 76 — ContextProvider auto-recall hook -----------
+
+    struct FakeContextProvider {
+        block: Option<String>,
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeContextProvider {
+        fn new(block: Option<&str>) -> Arc<Self> {
+            Arc::new(Self {
+                block: block.map(str::to_string),
+                seen: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ContextProvider for FakeContextProvider {
+        async fn recall(&self, user_message: &str) -> Option<String> {
+            self.seen.lock().unwrap().push(user_message.to_string());
+            self.block.clone()
+        }
+    }
+
+    fn bare_planner(config: LlmPlannerConfig) -> LlmPlanner {
+        LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            Arc::new(ToolRegistry::new(vec![])),
+            config,
+        )
+    }
+
+    #[tokio::test]
+    async fn context_provider_prepends_recalled_block() {
+        let provider = FakeContextProvider::new(Some(
+            "## Relevant context (auto-recalled)\n- [notes] purple",
+        ));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_context_provider(provider.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "what's my color?"))
+            .await;
+
+        // The query handed to recall is the raw user text.
+        assert_eq!(
+            provider.seen.lock().unwrap().clone(),
+            vec!["what's my color?".to_string()]
+        );
+        // History user message: recalled block FIRST, then the
+        // user's own text — one message, two content blocks.
+        match &planner.history()[0] {
+            LlmMessage::User { content } => {
+                assert_eq!(content.len(), 2);
+                assert_eq!(
+                    content[0],
+                    ContentBlock::text(
+                        "## Relevant context (auto-recalled)\n\
+                         - [notes] purple"
+                    )
+                );
+                assert_eq!(
+                    content[1],
+                    ContentBlock::text("what's my color?")
+                );
+            }
+            other => panic!("expected User, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_provider_none_leaves_turn_unchanged() {
+        let provider = FakeContextProvider::new(None);
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_context_provider(provider.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi there"))
+            .await;
+        // recall consulted, returned None → turn byte-identical.
+        assert_eq!(provider.seen.lock().unwrap().len(), 1);
+        assert!(matches!(
+            planner.history()[0],
+            LlmMessage::User { ref content }
+                if content == &[ContentBlock::text("hi there")]
+        ));
+    }
+
+    #[tokio::test]
+    async fn no_context_provider_is_unchanged() {
+        // Regression guard: the default config path must not change.
+        let mut planner = bare_planner(LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hello"))
+            .await;
+        assert!(matches!(
+            planner.history()[0],
+            LlmMessage::User { ref content }
+                if content == &[ContentBlock::text("hello")]
+        ));
+    }
+
+    #[tokio::test]
+    async fn context_provider_skipped_for_blank_query() {
+        // Whitespace-only text must not consult the provider (no
+        // point embedding empty input) and must not inject a block
+        // even if the provider would return one.
+        let provider = FakeContextProvider::new(Some("SHOULD-NOT-APPEAR"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_context_provider(provider.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "   "))
+            .await;
+        assert!(provider.seen.lock().unwrap().is_empty());
+        assert!(matches!(
+            planner.history()[0],
+            LlmMessage::User { ref content }
+                if content == &[ContentBlock::text("   ")]
+        ));
     }
 
     #[tokio::test]
