@@ -51,6 +51,23 @@ pub trait HttpTransport: Send + Sync {
             "get_text not implemented on this transport".to_string(),
         ))
     }
+
+    /// Phase 75 — non-streaming POST returning the full
+    /// response body as bytes. Used by the embedding provider
+    /// (`POST /v1/embeddings` is request/response, not SSE).
+    /// Default impl errors so streaming-only test fakes can
+    /// skip it.
+    async fn post_json(
+        &self,
+        _url: &str,
+        _headers: &[(&str, &str)],
+        _body: Vec<u8>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, LlmError> {
+        Err(LlmError::Transport(
+            "post_json not implemented on this transport".to_string(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -148,5 +165,41 @@ impl HttpTransport for ReqwestTransport {
         );
 
         Ok(Box::pin(stream))
+    }
+
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, LlmError> {
+        if cancellation.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+        let mut request = self.client.post(url).body(body);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            let message: String = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
+            return Err(LlmError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        Ok(bytes.to_vec())
     }
 }

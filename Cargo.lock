@@ -102,6 +102,7 @@ dependencies = [
  "aivyx-crypto",
  "aivyx-storage",
  "async-trait",
+ "globset",
  "secrecy",
  "serde",
  "thiserror 2.0.18",
