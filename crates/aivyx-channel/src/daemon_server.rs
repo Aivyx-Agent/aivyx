@@ -199,6 +199,13 @@ pub struct DaemonConfig {
     /// Empty map → every dispatch uses the zero-retry / no-
     /// rate-limit defaults — today's behavior.
     pub target_policies: std::collections::HashMap<String, crate::trigger::TargetPolicy>,
+    /// Phase 75 — embedding provider for semantic memory.
+    /// `Some` iff `[embedding]` is configured. Drives the
+    /// hourly lazy-backfill pass in the memory-GC timer; it is
+    /// the same provider the write tool's embedding hook wraps.
+    /// `None` = semantic search disabled, no backfill spawned.
+    pub embedding_provider:
+        Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
 }
 
 /// Run the daemon server.
@@ -237,6 +244,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         reflection_schedules,
         memory_retention,
         target_policies,
+        embedding_provider,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -413,13 +421,20 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let _memory_gc_handle = {
         let needs_gc =
             memory_ttl_secs.is_some() || !memory_retention.is_empty();
-        let mem_arc = if needs_gc { memory.clone() } else { None };
-        if !needs_gc {
+        // Phase 75 — the same hourly timer also drives the
+        // embedding backfill, so it must spawn when a provider
+        // is configured even if no TTL/retention GC is.
+        let needs_backfill = embedding_provider.is_some();
+        let mem_arc = if needs_gc || needs_backfill {
+            memory.clone()
+        } else {
             None
-        } else if let Some(mem) = mem_arc {
+        };
+        if let (true, Some(mem)) = (needs_gc || needs_backfill, mem_arc) {
             let gc_shutdown = shutdown.clone();
             let rules = memory_retention.clone();
             let ttl = memory_ttl_secs;
+            let backfill_provider = embedding_provider.clone();
             Some(tokio::spawn(async move {
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -430,6 +445,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
+                          if needs_gc {
                             let now = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -502,6 +518,33 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                                     eprintln!("aivyx memory gc error: {e}");
                                 }
                             }
+                          }
+                          // Phase 75 — lazy embedding backfill on
+                          // the same hourly cadence. Bounded per
+                          // tick; provider failure is non-fatal
+                          // (the pass returns Ok(0) and retries
+                          // next hour).
+                          if let Some(provider) = &backfill_provider {
+                              match crate::memory_embedding::run_backfill_pass(
+                                  &mem, provider,
+                              )
+                              .await
+                              {
+                                  Ok(n) if n > 0 => {
+                                      eprintln!(
+                                          "aivyx memory embed: backfilled \
+                                           {n} vector(s)"
+                                      );
+                                  }
+                                  Ok(_) => {}
+                                  Err(e) => {
+                                      eprintln!(
+                                          "aivyx memory embed backfill \
+                                           error: {e}"
+                                      );
+                                  }
+                              }
+                          }
                         }
                         _ = gc_shutdown.cancelled() => break,
                     }
@@ -1228,6 +1271,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_proposal_log: None,
         reflection_schedules: Vec::new(),
         target_policies: std::collections::HashMap::new(),
+        embedding_provider: None,
         memory_retention: Vec::new(),
     }).await
 }

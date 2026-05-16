@@ -2178,11 +2178,11 @@ async fn run_async(
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
         email,
-        // Phase 75 — `[embedding]` config. Bound but not yet
-        // consumed at this site; Task 6/7 thread it into the
-        // daemon's memory write/search path. Underscore-prefixed
-        // so the unused binding doesn't trip `-D warnings`.
-        embedding: _config_embedding,
+        // Phase 75 — `[embedding]` config. `Some` iff the
+        // `[embedding]` section is present; threaded into the
+        // write tool's embedding hook and the daemon's
+        // lazy-backfill timer below.
+        embedding: config_embedding,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2456,14 +2456,36 @@ async fn run_async(
     let memory: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
         .await
         .map_err(|e| format!("failed to open memory substrate: {e}"))?;
+    // Phase 75 — construct the embedding provider once iff
+    // `[embedding]` is configured. Shared two ways: the write
+    // tool's synchronous write-time hook, and the daemon's
+    // hourly lazy-backfill timer (passed via DaemonConfig).
+    let embedding_provider: Option<
+        Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
+    > = match config_embedding.as_ref() {
+        Some(cfg) => Some(
+            aivyx_channel::memory_embedding::build_embedding_provider(cfg)?,
+        ),
+        None => None,
+    };
+
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
     // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
     // resolution into `aivyx-config`; the cap arrives pre-parsed
     // from env / TOML / default with typed `Invalid` errors if a
     // source supplied a non-usize value. Destructured above as
     // `memory_cap` from `config.memory_max_per_topic.value`.
-    let memory_write =
+    let mut memory_write =
         MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
+    // Phase 75 — write-time embed hook (non-fatal; backfill is
+    // the safety net). Only attached when a provider exists.
+    if let Some(provider) = &embedding_provider {
+        memory_write = memory_write.with_embedding_hook(Arc::new(
+            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(
+                Arc::clone(provider),
+            ),
+        ));
+    }
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
     let memory_search = MemorySearchTool::new(Arc::clone(&memory));
     let memory_gc = aivyx_channel::memory_gc_tool::MemoryGcTool::new(Arc::clone(&memory));
@@ -3581,6 +3603,10 @@ async fn run_async(
             // respects first-match retention before falling back
             // to the global memory_ttl_secs).
             memory_retention: config_memory_retention,
+            // Phase 75 — shared embedding provider. `Some` iff
+            // `[embedding]` is configured; drives the daemon's
+            // hourly lazy-backfill pass.
+            embedding_provider: embedding_provider.clone(),
         })
             .await;
 

@@ -440,6 +440,22 @@ pub(crate) fn rank_by_cosine(
         .collect()
 }
 
+/// Phase 75 — write-time embedding seam.
+///
+/// `aivyx-memory` deliberately does **not** depend on
+/// `aivyx-llm`; the concrete embedding client lives there and
+/// the daemon (`aivyx-channel`) adapts it into this trait. The
+/// memory write tool calls [`EmbeddingHook::embed_one`] right
+/// after a successful `put`. A `None` return is the explicit
+/// non-fatal contract: the entry is already written and
+/// keyword-searchable; the hourly backfill re-attempts the
+/// vector later. The hook must therefore never panic and must
+/// swallow its own provider errors into `None`.
+#[async_trait]
+pub trait EmbeddingHook: Send + Sync {
+    async fn embed_one(&self, text: &str) -> Option<Vec<f32>>;
+}
+
 /// Phase 74 — per-topic-glob retention rule for the
 /// retention-aware GC pass. `matches` is a closure-style trait
 /// object so callers can use whatever pattern matcher fits;

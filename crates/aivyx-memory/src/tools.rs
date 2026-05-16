@@ -89,7 +89,7 @@ use aivyx_core::{
     ToolOutcome, Verification,
 };
 
-use crate::{Memory, MemoryError};
+use crate::{EmbeddingHook, Memory, MemoryError};
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -654,6 +654,14 @@ pub struct MemoryWriteTool {
     /// [`DEFAULT_MAX_PER_TOPIC`]; binaries and tests can override via
     /// [`MemoryWriteTool::set_max_per_topic`].
     max_per_topic: usize,
+    /// Phase 75 — optional write-time embedding hook. When set
+    /// (the daemon supplies one iff `[embedding]` is configured),
+    /// a successful `put` is followed by an `embed_one` +
+    /// `put_vector`. A `None` from the hook is non-fatal: the
+    /// entry stands, only its vector is deferred to the hourly
+    /// backfill. `None` here = no embedding configured = today's
+    /// behavior.
+    embedding: Option<Arc<dyn EmbeddingHook>>,
 }
 
 impl std::fmt::Debug for MemoryWriteTool {
@@ -662,6 +670,10 @@ impl std::fmt::Debug for MemoryWriteTool {
             .field("id", &self.id)
             .field("memory", &"Arc<dyn Memory>")
             .field("max_per_topic", &self.max_per_topic)
+            .field(
+                "embedding",
+                &self.embedding.as_ref().map(|_| "Arc<dyn EmbeddingHook>"),
+            )
             .finish()
     }
 }
@@ -673,7 +685,20 @@ impl MemoryWriteTool {
             memory,
             schema: write_input_schema_value(),
             max_per_topic: DEFAULT_MAX_PER_TOPIC,
+            embedding: None,
         }
+    }
+
+    /// Phase 75 — attach a write-time embedding hook. Builder-
+    /// style to match `set_max_per_topic`. The binary calls this
+    /// only when `[embedding]` is configured; otherwise the tool
+    /// keeps its pre-Phase-75 behavior (no vectors written).
+    pub fn with_embedding_hook(
+        mut self,
+        hook: Arc<dyn EmbeddingHook>,
+    ) -> Self {
+        self.embedding = Some(hook);
+        self
     }
 
     /// Override the per-topic write cap. Returns `self` for the
@@ -818,6 +843,20 @@ impl Tool for MemoryWriteTool {
             Ok(s) => s,
             Err(e) => return memory_err_to_failed(self.id, e),
         };
+
+        // Phase 75 — write-time embed. Strictly non-fatal: a
+        // `None` from the hook (provider down, no key, transient
+        // error) leaves the entry without a vector and the
+        // hourly backfill retries it. A `put_vector` failure is
+        // likewise swallowed — the entry write is the only thing
+        // `memory.write` promises, so Verified must not hinge on
+        // the vector landing.
+        if let Some(hook) = &self.embedding {
+            if let Some(vector) = hook.embed_one(&body).await {
+                let _ =
+                    self.memory.put_vector(&physical, seq, vector).await;
+            }
+        }
 
         // Verification fence. Re-read the topic's newest entry and
         // confirm it is what we just wrote. This catches substrate
