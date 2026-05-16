@@ -122,6 +122,16 @@ pub enum KeyDomain {
     /// rows rather than mutating in place, so the proposal
     /// history is preserved for audit.
     PersonaProposals,
+    /// Memory embedding vectors (Phase 75). One row per
+    /// embedded memory entry, keyed by the same `topic\x00seq`
+    /// shape the `Memory` domain uses so a vector can be
+    /// dropped in lockstep with its entry on forget/evict.
+    /// Stored separately from [`KeyDomain::Memory`] so a plain
+    /// memory read doesn't drag a 384–1536-float payload, and
+    /// so an embedding-model change can invalidate the vector
+    /// table without touching the entry table. Loaded into an
+    /// in-memory flat cosine index at daemon startup.
+    MemoryVectors,
 }
 
 impl KeyDomain {
@@ -144,6 +154,7 @@ impl KeyDomain {
             KeyDomain::FileWatches => b"file-watches",
             KeyDomain::Persona => b"persona",
             KeyDomain::PersonaProposals => b"persona-proposals",
+            KeyDomain::MemoryVectors => b"memory-vectors",
         }
     }
 
@@ -165,12 +176,13 @@ impl KeyDomain {
             KeyDomain::FileWatches => "aivyx_file_watches_v1",
             KeyDomain::Persona => "aivyx_persona_v1",
             KeyDomain::PersonaProposals => "aivyx_persona_proposals_v1",
+            KeyDomain::MemoryVectors => "aivyx_memory_vectors_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 11] = [
+    pub const ALL: [KeyDomain; 12] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -182,6 +194,7 @@ impl KeyDomain {
         KeyDomain::FileWatches,
         KeyDomain::Persona,
         KeyDomain::PersonaProposals,
+        KeyDomain::MemoryVectors,
     ];
 }
 
@@ -367,7 +380,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 11],
+    subkeys: [SubKey; 12],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -444,7 +457,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 11], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 12], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -460,6 +473,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::FileWatches.as_bytes())?,
             master.derive_subkey(KeyDomain::Persona.as_bytes())?,
             master.derive_subkey(KeyDomain::PersonaProposals.as_bytes())?,
+            master.derive_subkey(KeyDomain::MemoryVectors.as_bytes())?,
         ])
     }
 
@@ -479,6 +493,7 @@ impl RedbStorage {
             KeyDomain::FileWatches => &self.subkeys[8],
             KeyDomain::Persona => &self.subkeys[9],
             KeyDomain::PersonaProposals => &self.subkeys[10],
+            KeyDomain::MemoryVectors => &self.subkeys[11],
         }
     }
 }
@@ -879,10 +894,10 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a twelfth `KeyDomain` variant,
-        // this test fails because `ALL` is a fixed-size array and
-        // the match below forces an update. Tripwire for "adding a
-        // variant without updating ALL."
+        // If a future phase adds a thirteenth `KeyDomain`
+        // variant, this test fails because `ALL` is a fixed-size
+        // array and the match below forces an update. Tripwire
+        // for "adding a variant without updating ALL."
         for d in KeyDomain::ALL {
             match d {
                 KeyDomain::Sessions
@@ -895,7 +910,8 @@ mod tests {
                 | KeyDomain::Webhooks
                 | KeyDomain::FileWatches
                 | KeyDomain::Persona
-                | KeyDomain::PersonaProposals => {}
+                | KeyDomain::PersonaProposals
+                | KeyDomain::MemoryVectors => {}
             }
         }
     }
@@ -939,6 +955,44 @@ mod tests {
             proposals.get(key).await.unwrap(),
             Some(b"pending-proposal".to_vec()),
             "PersonaProposals domain returned the persona's value"
+        );
+    }
+
+    #[test]
+    fn memory_vectors_domain_has_stable_metadata() {
+        assert_eq!(KeyDomain::MemoryVectors.as_bytes(), b"memory-vectors");
+        assert_eq!(
+            KeyDomain::MemoryVectors.table_name(),
+            "aivyx_memory_vectors_v1"
+        );
+        assert!(KeyDomain::ALL.contains(&KeyDomain::MemoryVectors));
+    }
+
+    #[tokio::test]
+    async fn memory_vectors_domain_isolates_from_memory_domain() {
+        // Same key in the Memory vs MemoryVectors domains must
+        // not collide — entries and their embedding vectors are
+        // stored separately so a plain memory read doesn't drag
+        // the float payload (Phase 75 Q3(a)).
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(75)).await;
+
+        let entries = store.domain(KeyDomain::Memory);
+        let vectors = store.domain(KeyDomain::MemoryVectors);
+
+        let key = b"notes\x00\x00\x00\x00\x00\x00\x00\x00";
+        entries.put(key, b"the body text").await.unwrap();
+        vectors.put(key, b"\x01\x02\x03\x04").await.unwrap();
+
+        assert_eq!(
+            entries.get(key).await.unwrap(),
+            Some(b"the body text".to_vec()),
+            "Memory domain returned the vector's value"
+        );
+        assert_eq!(
+            vectors.get(key).await.unwrap(),
+            Some(vec![1u8, 2, 3, 4]),
+            "MemoryVectors domain returned the entry's value"
         );
     }
 
