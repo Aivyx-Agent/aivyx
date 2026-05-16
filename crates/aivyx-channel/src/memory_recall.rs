@@ -118,8 +118,41 @@ impl ContextProvider for SemanticMemoryContext {
         if kept.is_empty() {
             return None;
         }
+        // Phase 76 (Q4b) — visible per-turn marker. A new
+        // `AuditTag` variant would break the production-core
+        // streak that Q1a was chosen to protect, so the marker
+        // uses the same operator-visible stderr-breadcrumb
+        // convention the memory GC + embedding backfill already
+        // use (`aivyx memory gc: …`, `aivyx memory embed: …`).
+        // The *content* recalled is independently visible — it
+        // is the labeled block injected into the turn.
+        eprintln!("{}", recall_marker_line(&kept));
         Some(Self::format_block(&kept, now_secs()))
     }
+}
+
+/// The operator-visible per-turn recall breadcrumb. Pure +
+/// public so it is unit-testable without capturing stderr.
+/// Topics are de-duplicated, stable-ordered (first-seen), and
+/// capped so a wide fan-out stays one tidy line.
+pub(crate) fn recall_marker_line(hits: &[(MemoryEntry, f32)]) -> String {
+    let mut topics: Vec<&str> = Vec::new();
+    for (e, _) in hits {
+        if !topics.contains(&e.topic.as_str()) {
+            topics.push(e.topic.as_str());
+        }
+    }
+    const MAX_SHOWN: usize = 6;
+    let shown = topics.len().min(MAX_SHOWN);
+    let mut list = topics[..shown].join(", ");
+    if topics.len() > MAX_SHOWN {
+        list.push_str(&format!(", +{} more", topics.len() - MAX_SHOWN));
+    }
+    let n = hits.len();
+    format!(
+        "aivyx recall: injected {n} memor{} [{list}]",
+        if n == 1 { "y" } else { "ies" }
+    )
 }
 
 fn now_secs() -> u64 {
@@ -264,6 +297,41 @@ mod tests {
             .find(|l| l.starts_with("- [t · "))
             .expect("body line present");
         assert!(!body_line.contains("long\n"));
+    }
+
+    fn entry(topic: &str) -> MemoryEntry {
+        MemoryEntry {
+            topic: topic.into(),
+            body: "b".into(),
+            seq: 0,
+            created_at_secs: 0,
+            last_read_at_secs: 0,
+        }
+    }
+
+    #[test]
+    fn recall_marker_singular_plural_and_dedup() {
+        let one = [(entry("notes"), 0.9)];
+        assert_eq!(
+            recall_marker_line(&one),
+            "aivyx recall: injected 1 memory [notes]"
+        );
+        // Duplicate topic collapses; count still reflects hits.
+        let two_same = [(entry("notes"), 0.9), (entry("notes"), 0.8)];
+        assert_eq!(
+            recall_marker_line(&two_same),
+            "aivyx recall: injected 2 memories [notes]"
+        );
+    }
+
+    #[test]
+    fn recall_marker_caps_topic_list() {
+        let hits: Vec<(MemoryEntry, f32)> = (0..9)
+            .map(|i| (entry(&format!("t{i}")), 0.5))
+            .collect();
+        let line = recall_marker_line(&hits);
+        assert!(line.contains("injected 9 memories"));
+        assert!(line.contains("+3 more"), "line was: {line}");
     }
 
     #[test]
