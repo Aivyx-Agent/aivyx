@@ -33,6 +33,10 @@ use std::sync::Arc;
 
 use aivyx_memory::Memory;
 
+use crate::persona::{
+    PersonaDeltaCategory, PersonaDeltaOp, ProposedPersonaDelta,
+};
+use crate::persona_proposal::PersistentPersonaProposalLog;
 use crate::recall_log::RecallEvent;
 use crate::reflection_scheduler::OutcomeSummary;
 
@@ -42,6 +46,14 @@ use crate::reflection_scheduler::OutcomeSummary;
 /// unhelpful ones (score < this, including all negatives) are
 /// simply not promoted and lose under the existing LRU pass.
 pub const PROMOTE_THRESHOLD: f32 = WEIGHT;
+
+/// Minimum *per-topic* net helpfulness before Actuator B will
+/// emit a Persona proposal. `3 * WEIGHT` mirrors the reflection
+/// loop's own "a pattern must recur in at least 3 distinct
+/// turns" discipline — one or two good turns is not an identity
+/// signal, it's noise. The operator gate is the final say
+/// regardless; this threshold just keeps the queue meaningful.
+pub const PROPOSAL_TOPIC_THRESHOLD: f32 = 3.0 * WEIGHT;
 
 /// A recall injected into a turn that ended within this many ms
 /// before another turn started (same session) is treated as
@@ -151,6 +163,96 @@ pub async fn apply_retention_feedback(
         }
     }
     promoted
+}
+
+/// One operator-reviewable proposal Actuator B wants to file.
+/// `proposal_id` is deterministic in the topic so re-running
+/// the loop never queues a duplicate (the emitter skips an id
+/// already present in the chain).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallProposal {
+    pub proposal_id: String,
+    pub proposed_op: ProposedPersonaDelta,
+}
+
+/// Aggregate the tally by topic and turn each
+/// strongly-net-helpful topic into a single conservative
+/// `LearnedContext` proposal. Pure + deterministic (sorted by
+/// topic) so it is unit-testable without a chain and so the
+/// `proposal_id` is stable across cycles. Phrased as an
+/// observation the operator approves or rejects — never an
+/// authoritative identity claim (the gate is the authority,
+/// Phase 70 P14 rule).
+pub fn proposals_from_tally(
+    tally: &HelpfulnessTally,
+) -> Vec<RecallProposal> {
+    // Sum per topic across all of its entries.
+    let mut by_topic: HashMap<String, f32> = HashMap::new();
+    for (topic, _seq, score) in tally.ranked() {
+        *by_topic.entry(topic).or_insert(0.0) += score;
+    }
+    let mut topics: Vec<(String, f32)> = by_topic
+        .into_iter()
+        .filter(|(_, s)| *s >= PROPOSAL_TOPIC_THRESHOLD)
+        .collect();
+    topics.sort_by(|a, b| a.0.cmp(&b.0));
+
+    topics
+        .into_iter()
+        .map(|(topic, score)| {
+            let value = format!(
+                "Operator consistently benefits from recalled \
+                 memory under topic '{topic}' — keep surfacing \
+                 it proactively."
+            );
+            RecallProposal {
+                proposal_id: format!("recall-fb:{topic}"),
+                proposed_op: ProposedPersonaDelta {
+                    category: PersonaDeltaCategory::LearnedContext,
+                    op: PersonaDeltaOp::AppendList { value },
+                    reason: Some(format!(
+                        "Structural recall-feedback signal: net \
+                         helpfulness {score:+.0} across recalls of \
+                         topic '{topic}' (no LLM judgement; the \
+                         operator decides)."
+                    )),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Actuator B — file each proposal as `Pending` in the
+/// operator-gated persona-proposal chain, **skipping any
+/// proposal_id already in the chain** so a periodic loop never
+/// re-queues (or re-nags after a rejection). Best-effort: an
+/// individual append failure is swallowed (the next cycle
+/// retries). Returns how many *new* proposals were filed.
+pub async fn emit_persona_proposals(
+    log: &PersistentPersonaProposalLog,
+    tally: &HelpfulnessTally,
+    now_unix_ms: u64,
+    source_session: &str,
+) -> usize {
+    let mut filed = 0usize;
+    for proposal in proposals_from_tally(tally) {
+        if log.get(&proposal.proposal_id).is_some() {
+            continue; // already pending/approved/rejected
+        }
+        if log
+            .append_pending(
+                proposal.proposal_id,
+                now_unix_ms,
+                source_session.to_string(),
+                proposal.proposed_op,
+            )
+            .await
+            .is_ok()
+        {
+            filed += 1;
+        }
+    }
+    filed
 }
 
 /// Did this outcome's session see another turn start within
@@ -459,5 +561,109 @@ mod tests {
             correlate(&recalls, &outcomes).score("fav", 3),
             2.0 * WEIGHT
         );
+    }
+
+    // ---- Actuator B — operator-gated Persona proposals ---------
+
+    #[test]
+    fn proposals_only_for_strongly_helpful_topics() {
+        // topic "strong": 2 entries summing to 4 (>= 3 thresh).
+        // topic "weak": sums to 2 (< 3). topic "neg": negative.
+        let tally = HelpfulnessTally::from_triples(&[
+            ("strong", 1, 2.0),
+            ("strong", 2, 2.0),
+            ("weak", 1, 2.0),
+            ("neg", 1, -5.0),
+        ]);
+        let props = proposals_from_tally(&tally);
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].proposal_id, "recall-fb:strong");
+        match &props[0].proposed_op.op {
+            PersonaDeltaOp::AppendList { value } => {
+                assert!(value.contains("topic 'strong'"));
+            }
+            other => panic!("expected AppendList, got {other:?}"),
+        }
+        assert_eq!(
+            props[0].proposed_op.category,
+            PersonaDeltaCategory::LearnedContext
+        );
+        assert!(props[0].proposed_op.reason.is_some());
+    }
+
+    #[test]
+    fn proposals_are_deterministic_and_topic_sorted() {
+        let tally = HelpfulnessTally::from_triples(&[
+            ("zeta", 1, 5.0),
+            ("alpha", 1, 5.0),
+        ]);
+        let a = proposals_from_tally(&tally);
+        let b = proposals_from_tally(&tally);
+        assert_eq!(a, b, "must be deterministic");
+        assert_eq!(a[0].proposal_id, "recall-fb:alpha");
+        assert_eq!(a[1].proposal_id, "recall-fb:zeta");
+    }
+
+    #[test]
+    fn no_proposals_from_empty_or_weak_tally() {
+        assert!(
+            proposals_from_tally(&HelpfulnessTally::default())
+                .is_empty()
+        );
+        assert!(proposals_from_tally(&HelpfulnessTally::from_triples(
+            &[("t", 1, 1.0)]
+        ))
+        .is_empty());
+    }
+
+    #[tokio::test]
+    async fn emit_files_pending_and_dedups_across_cycles() {
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-recall-prop-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([78u8; 32]),
+        )
+        .await
+        .unwrap();
+        let log = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"recall-prop-test-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let tally =
+            HelpfulnessTally::from_triples(&[("proj", 1, 5.0)]);
+
+        // First cycle files one Pending proposal.
+        let n1 =
+            emit_persona_proposals(&log, &tally, 1_000, "refl-1").await;
+        assert_eq!(n1, 1);
+        let pending = log.list(ProposalStatusFilter::Pending);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "recall-fb:proj");
+
+        // Second cycle, same signal → deterministic id already
+        // present → nothing re-filed (no operator nagging).
+        let n2 =
+            emit_persona_proposals(&log, &tally, 2_000, "refl-2").await;
+        assert_eq!(n2, 0);
+        assert_eq!(log.list(ProposalStatusFilter::Pending).len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
