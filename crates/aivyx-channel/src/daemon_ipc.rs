@@ -188,6 +188,13 @@ pub enum QueryPayload {
     SearchMemory {
         query: String,
         limit: u32,
+        /// Phase 75 — request the embedding-ranked path.
+        /// `#[serde(default)]` (= `false`, keyword) so
+        /// pre-Phase-75 clients and stored frames round-trip
+        /// unchanged. Falls back to keyword transparently when
+        /// embedding is unavailable.
+        #[serde(default)]
+        semantic: bool,
     },
 }
 
@@ -299,6 +306,13 @@ pub enum QueryResponsePayload {
     /// Matching entries newest-first.
     SearchMemory {
         matches: Vec<MemoryEntrySummary>,
+        /// Phase 75 — `true` when a `semantic` request was
+        /// transparently served by the keyword path (no
+        /// `[embedding]` config, provider call failed, or the
+        /// corpus has zero vectors). `#[serde(default)]` so
+        /// older frames decode as `false`.
+        #[serde(default)]
+        fell_back_to_keyword: bool,
     },
 }
 
@@ -1212,6 +1226,7 @@ mod tests {
                 payload: QueryPayload::SearchMemory {
                     query: "foo".into(),
                     limit: 20,
+                    semantic: true,
                 },
             },
             // Phase 74 — operator-initiated memory eviction.
@@ -1534,6 +1549,7 @@ mod tests {
                         created_at_secs: 1_715_001_000,
                         last_read_at_secs: 0,
                     }],
+                    fell_back_to_keyword: true,
                 },
             },
             // Phase 70 — proposal query responses.

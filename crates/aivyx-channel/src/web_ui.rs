@@ -584,6 +584,10 @@ mod tests {
             HTML.contains("mem-search-input"),
             "must include the memory search bar"
         );
+        assert!(
+            HTML.contains("mem-semantic-toggle"),
+            "must include the Phase 75 semantic search toggle"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

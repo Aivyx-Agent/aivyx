@@ -487,22 +487,30 @@ pub async fn get_memory_topic_entries(
 }
 
 /// Phase 74 — substring search across topics + bodies over IPC.
+/// Phase 75 — `semantic` requests the embedding-ranked path;
+/// the returned bool is `fell_back_to_keyword` (the daemon
+/// transparently downgraded to keyword).
 pub async fn search_memory(
     socket_path: &Path,
     query: &str,
     limit: u32,
-) -> Result<Vec<MemoryEntrySummary>, DaemonError> {
+    semantic: bool,
+) -> Result<(Vec<MemoryEntrySummary>, bool), DaemonError> {
     let payload = send_query(
         socket_path,
         "m-search",
         QueryPayload::SearchMemory {
             query: query.to_string(),
             limit,
+            semantic,
         },
     )
     .await?;
     match payload {
-        QueryResponsePayload::SearchMemory { matches } => Ok(matches),
+        QueryResponsePayload::SearchMemory {
+            matches,
+            fell_back_to_keyword,
+        } => Ok((matches, fell_back_to_keyword)),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))
         }

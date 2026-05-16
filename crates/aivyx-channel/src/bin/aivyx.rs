@@ -475,8 +475,12 @@ fn run() -> Result<(), String> {
                 MemorySubcommand::Show { topic, limit } => {
                     memory::run_memory_show(&topic, limit).await
                 }
-                MemorySubcommand::Search { query, limit } => {
-                    memory::run_memory_search(&query, limit).await
+                MemorySubcommand::Search {
+                    query,
+                    limit,
+                    semantic,
+                } => {
+                    memory::run_memory_search(&query, limit, semantic).await
                 }
                 MemorySubcommand::Evict { topic, yes } => {
                     memory::run_memory_evict(&topic, yes).await
@@ -1065,9 +1069,16 @@ enum MemorySubcommand {
     /// `aivyx memory show <topic> [--limit N]` — entries for a
     /// topic, newest first. Default limit 32.
     Show { topic: String, limit: u32 },
-    /// `aivyx memory search <query> [--limit N]` — substring
+    /// `aivyx memory search <query> [--semantic] [--limit N]` —
     /// search across topics + bodies. Default limit 32.
-    Search { query: String, limit: u32 },
+    /// `--semantic` requests embedding-ranked retrieval; the
+    /// daemon transparently falls back to keyword (with a
+    /// stderr note) when embedding is unavailable.
+    Search {
+        query: String,
+        limit: u32,
+        semantic: bool,
+    },
     /// `aivyx memory evict <topic> [--yes]` — delete every
     /// entry under a topic. `--yes` skips the confirm prompt.
     Evict { topic: String, yes: bool },
@@ -1498,10 +1509,48 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let query = args.get(2).ok_or_else(|| {
                     "`aivyx memory search` requires a query".to_string()
                 })?;
-                let limit = parse_limit_from(args, 3)?;
+                // Hand-parsed (not `parse_limit_from`) because
+                // search additionally accepts the `--semantic`
+                // flag, which the shared limit parser rejects.
+                let mut limit = 32u32;
+                let mut semantic = false;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--semantic" => {
+                            semantic = true;
+                            idx += 1;
+                        }
+                        "--limit" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--limit` requires a value".to_string()
+                            })?;
+                            let parsed: u32 = v.parse().map_err(|_| {
+                                format!(
+                                    "`--limit` expects a positive \
+                                     integer, got `{v}`"
+                                )
+                            })?;
+                            if parsed == 0 {
+                                return Err(
+                                    "`--limit` must be ≥ 1".to_string()
+                                );
+                            }
+                            limit = parsed;
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx \
+                                 memory search`: `{other}`"
+                            ));
+                        }
+                    }
+                }
                 MemorySubcommand::Search {
                     query: query.clone(),
                     limit,
+                    semantic,
                 }
             }
             "evict" => {
@@ -2487,7 +2536,17 @@ async fn run_async(
         ));
     }
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
-    let memory_search = MemorySearchTool::new(Arc::clone(&memory));
+    let mut memory_search = MemorySearchTool::new(Arc::clone(&memory));
+    // Phase 75 — semantic `mode` for the agent-facing tool.
+    // Same hook the write path uses; absent → semantic requests
+    // transparently fall back to keyword.
+    if let Some(provider) = &embedding_provider {
+        memory_search = memory_search.with_embedding_hook(Arc::new(
+            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(
+                Arc::clone(provider),
+            ),
+        ));
+    }
     let memory_gc = aivyx_channel::memory_gc_tool::MemoryGcTool::new(Arc::clone(&memory));
 
     // ---- Tool list (with the Phase 11 Task 3 trust-tier gate) --------
@@ -5569,6 +5628,36 @@ mod tests {
             CliMode::Memory(MemorySubcommand::Search {
                 query: "foo".into(),
                 limit: 10,
+                semantic: false,
+            })
+        );
+    }
+
+    #[test]
+    fn memory_search_semantic_flag_parses() {
+        // `--semantic` in either order relative to `--limit`.
+        let parsed = parse_cli_args_from(&argv(&[
+            "memory", "search", "foo", "--semantic", "--limit", "7",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Memory(MemorySubcommand::Search {
+                query: "foo".into(),
+                limit: 7,
+                semantic: true,
+            })
+        );
+        let parsed2 = parse_cli_args_from(&argv(&[
+            "memory", "search", "bar", "--semantic",
+        ]))
+        .expect("must parse");
+        assert_eq!(
+            parsed2.mode,
+            CliMode::Memory(MemorySubcommand::Search {
+                query: "bar".into(),
+                limit: 32,
+                semantic: true,
             })
         );
     }

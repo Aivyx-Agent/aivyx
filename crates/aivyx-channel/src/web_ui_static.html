@@ -442,6 +442,23 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   color: var(--text);
   border: 1px solid var(--border);
 }
+/* Phase 75 — semantic toggle. Scoped reset so the inner
+   checkbox doesn't inherit the search input's flex:1. */
+.mem-semantic-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mem-semantic-toggle input {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0;
+  margin: 0;
+}
 .mem-layout {
   display: grid;
   grid-template-columns: 220px 1fr;
@@ -820,6 +837,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div class="mem-searchbar">
       <input type="text" id="mem-search-input" placeholder="Search topics + bodies… (empty = browse all)">
+      <label class="mem-semantic-toggle" title="Rank by embedding similarity (meaning-based). Falls back to keyword if embedding is unavailable.">
+        <input type="checkbox" id="mem-semantic-toggle"> semantic
+      </label>
       <button id="mem-search-btn">Search</button>
       <button id="mem-clear-search-btn" class="secondary">Clear</button>
     </div>
@@ -2035,6 +2055,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
   function runMemorySearch() {
     const q = document.getElementById('mem-search-input').value;
+    const semantic = document.getElementById('mem-semantic-toggle').checked;
     memSearchMode = true;
     const detailEl = document.getElementById('mem-detail');
     detailEl.className = 'mem-detail';
@@ -2043,17 +2064,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       kind: 'SearchMemory',
       query: q,
       limit: 64,
+      semantic: semantic,
     }, function(resp) {
       if (resp.kind === 'QueryError') {
         renderError(detailEl, resp.code, resp.message);
         return;
       }
       if (resp.kind !== 'SearchMemory') return;
-      renderMemoryDetail(
-        'search: "' + q + '"',
-        resp.matches || [],
-        false
-      );
+      let title = (semantic ? 'semantic search' : 'search') + ': "' + q + '"';
+      if (semantic && resp.fell_back_to_keyword) {
+        title += ' (semantic unavailable — keyword results)';
+      }
+      renderMemoryDetail(title, resp.matches || [], false);
     });
   }
 

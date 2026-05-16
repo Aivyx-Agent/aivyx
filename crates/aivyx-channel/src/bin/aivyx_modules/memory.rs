@@ -37,17 +37,31 @@ pub async fn run_memory_show(topic: &str, limit: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory search <query> [--limit N]`
-pub async fn run_memory_search(query: &str, limit: u32) -> Result<(), String> {
+/// `aivyx memory search <query> [--semantic] [--limit N]`
+pub async fn run_memory_search(
+    query: &str,
+    limit: u32,
+    semantic: bool,
+) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let matches = search_memory(&socket_path, query, limit)
-        .await
-        .map_err(|e| format!("failed to search memory: {e}"))?;
-    print!(
-        "{}",
-        render_entries(&format!("search \"{query}\""), &matches)
-    );
+    let (matches, fell_back) =
+        search_memory(&socket_path, query, limit, semantic)
+            .await
+            .map_err(|e| format!("failed to search memory: {e}"))?;
+    let label = if semantic && !fell_back {
+        format!("semantic search \"{query}\"")
+    } else {
+        format!("search \"{query}\"")
+    };
+    if semantic && fell_back {
+        eprintln!(
+            "aivyx memory search: semantic unavailable \
+             (no [embedding] config, provider error, or empty \
+             vector index) — showing keyword results"
+        );
+    }
+    print!("{}", render_entries(&label, &matches));
     Ok(())
 }
 

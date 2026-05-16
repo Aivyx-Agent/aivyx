@@ -1049,6 +1049,10 @@ pub struct MemorySearchTool {
     id: ToolId,
     memory: Arc<dyn Memory>,
     schema: Value,
+    /// Phase 75 — query-embedding hook for `mode = "semantic"`.
+    /// `None` (no `[embedding]` config) means a semantic
+    /// request transparently degrades to keyword.
+    embedding: Option<Arc<dyn EmbeddingHook>>,
 }
 
 impl std::fmt::Debug for MemorySearchTool {
@@ -1056,6 +1060,10 @@ impl std::fmt::Debug for MemorySearchTool {
         f.debug_struct("MemorySearchTool")
             .field("id", &self.id)
             .field("memory", &"Arc<dyn Memory>")
+            .field(
+                "embedding",
+                &self.embedding.as_ref().map(|_| "Arc<dyn EmbeddingHook>"),
+            )
             .finish()
     }
 }
@@ -1066,7 +1074,19 @@ impl MemorySearchTool {
             id: ToolId::new(),
             memory,
             schema: search_input_schema_value(),
+            embedding: None,
         }
+    }
+
+    /// Phase 75 — attach the query-embedding hook. Builder-
+    /// style; the binary calls this only when `[embedding]` is
+    /// configured.
+    pub fn with_embedding_hook(
+        mut self,
+        hook: Arc<dyn EmbeddingHook>,
+    ) -> Self {
+        self.embedding = Some(hook);
+        self
     }
 }
 
@@ -1089,6 +1109,18 @@ fn search_input_schema_value() -> Value {
                 "description": "Maximum number of matching entries to \
                                 return (default 16, max 64). Server-side \
                                 clamped to [1, 64]."
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["keyword", "semantic"],
+                "description": "Retrieval mode. `keyword` (default) \
+                                is case-insensitive substring match. \
+                                `semantic` ranks by embedding cosine \
+                                similarity — meaning-based recall. If \
+                                semantic embedding is unavailable the \
+                                tool transparently falls back to \
+                                keyword and sets \
+                                `fell_back_to_keyword: true`."
             }
         },
         "required": ["query"],
@@ -1140,6 +1172,13 @@ impl Tool for MemorySearchTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_SEARCH_LIMIT)
             .clamp(1, MAX_SEARCH_LIMIT);
+        // Phase 75 — `mode` (default keyword). Anything other
+        // than the literal "semantic" is keyword.
+        let semantic_requested = input
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(|m| m.eq_ignore_ascii_case("semantic"))
+            .unwrap_or(false);
 
         let session = session_from_input(&input).map(str::to_string);
         let role_prefix = role_prefix_from_input(&input).map(str::to_string);
@@ -1165,14 +1204,55 @@ impl Tool for MemorySearchTool {
         let role_segment = role_prefix.as_deref().unwrap_or("");
         let full_prefix = format!("{session_scan_prefix}{role_segment}");
 
-        // The substrate's `search` returns every match across the
-        // store. Filter to those whose physical topic starts with
-        // our session+role prefix, then strip the prefix to
-        // restore the logical topic the agent sees.
-        let hits = match self.memory.search(&query, MAX_SEARCH_LIMIT * 4).await {
-            Ok(v) => v,
-            Err(e) => return memory_err_to_failed(self.id, e),
+        // Phase 75 — pick the retrieval path. Semantic falls
+        // back to keyword (flagged) when: no embedding hook is
+        // wired, the query embed returns `None`, or the corpus
+        // has zero vectors (semantic over an empty index is
+        // strictly worse than keyword there).
+        let mut fell_back_to_keyword = false;
+        let keyword = |tool: &Self| {
+            let mem = tool.memory.clone();
+            let q = query.clone();
+            async move { mem.search(&q, MAX_SEARCH_LIMIT * 4).await }
         };
+        let hits = if semantic_requested {
+            let qvec = match &self.embedding {
+                Some(h) => h.embed_one(&query).await,
+                None => None,
+            };
+            let has_vectors = match self.memory.load_all_vectors().await {
+                Ok(v) => !v.is_empty(),
+                Err(e) => return memory_err_to_failed(self.id, e),
+            };
+            match qvec {
+                Some(qvec) if has_vectors => {
+                    match self
+                        .memory
+                        .semantic_search(&qvec, MAX_SEARCH_LIMIT * 4)
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => return memory_err_to_failed(self.id, e),
+                    }
+                }
+                _ => {
+                    fell_back_to_keyword = true;
+                    match keyword(self).await {
+                        Ok(v) => v,
+                        Err(e) => return memory_err_to_failed(self.id, e),
+                    }
+                }
+            }
+        } else {
+            match keyword(self).await {
+                Ok(v) => v,
+                Err(e) => return memory_err_to_failed(self.id, e),
+            }
+        };
+        // The chosen path returns every match across the store.
+        // Filter to those whose physical topic starts with our
+        // session+role prefix, then strip the prefix to restore
+        // the logical topic the agent sees.
         let mut filtered: Vec<Value> = Vec::with_capacity(limit);
         for entry in hits {
             if !full_prefix.is_empty() && !entry.topic.starts_with(&full_prefix) {
@@ -1195,11 +1275,19 @@ impl Tool for MemorySearchTool {
         }
 
         let match_count = filtered.len();
+        let effective_mode =
+            if semantic_requested && !fell_back_to_keyword {
+                "semantic"
+            } else {
+                "keyword"
+            };
         ToolOutcome::Completed {
             output: json!({
                 "query": query,
                 "matches": filtered,
                 "count": match_count,
+                "mode": effective_mode,
+                "fell_back_to_keyword": fell_back_to_keyword,
             }),
             verified: Verification::Verified,
         }
@@ -2838,5 +2926,114 @@ mod tests {
             )
         });
         assert!(found, "audit event must record wildcard scope + search key");
+    }
+
+    // ---- Phase 75 — semantic mode + keyword fallback --------
+
+    struct FixedHook {
+        vec: Option<Vec<f32>>,
+    }
+
+    #[async_trait]
+    impl EmbeddingHook for FixedHook {
+        async fn embed_one(&self, _t: &str) -> Option<Vec<f32>> {
+            self.vec.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn search_semantic_ranks_by_vector_when_available() {
+        let memory = fresh_memory();
+        let s0 = memory.put("notes", "alpha").await.unwrap();
+        let s1 = memory.put("notes", "beta").await.unwrap();
+        memory.put_vector("notes", s0, vec![1.0, 0.0]).await.unwrap();
+        memory.put_vector("notes", s1, vec![0.0, 1.0]).await.unwrap();
+        let tool = MemorySearchTool::new(Arc::clone(&memory))
+            .with_embedding_hook(Arc::new(FixedHook {
+                vec: Some(vec![1.0, 0.0]),
+            }));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let ToolOutcome::Completed { output, .. } = tool
+            .execute(
+                json!({"query": "ignored", "mode": "semantic"}),
+                &ctx,
+            )
+            .await
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(output["mode"], "semantic");
+        assert_eq!(output["fell_back_to_keyword"], false);
+        let matches = output["matches"].as_array().unwrap();
+        // Query [1,0] is closest to s0's vector.
+        assert_eq!(matches[0]["seq"].as_u64(), Some(s0));
+    }
+
+    #[tokio::test]
+    async fn search_semantic_without_hook_falls_back_to_keyword() {
+        let memory = fresh_memory();
+        memory.put("notes", "findme please").await.unwrap();
+        // No hook attached → semantic impossible.
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let ToolOutcome::Completed { output, .. } = tool
+            .execute(
+                json!({"query": "findme", "mode": "semantic"}),
+                &ctx,
+            )
+            .await
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(output["mode"], "keyword");
+        assert_eq!(output["fell_back_to_keyword"], true);
+        assert_eq!(output["matches"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_semantic_empty_index_falls_back_to_keyword() {
+        let memory = fresh_memory();
+        memory.put("notes", "findme please").await.unwrap();
+        // Hook present, but no vectors stored yet → fallback.
+        let tool = MemorySearchTool::new(Arc::clone(&memory))
+            .with_embedding_hook(Arc::new(FixedHook {
+                vec: Some(vec![1.0, 0.0]),
+            }));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let ToolOutcome::Completed { output, .. } = tool
+            .execute(
+                json!({"query": "findme", "mode": "semantic"}),
+                &ctx,
+            )
+            .await
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(output["fell_back_to_keyword"], true);
+        assert_eq!(output["matches"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_default_mode_is_keyword_no_fallback_flag() {
+        let memory = fresh_memory();
+        memory.put("notes", "hello").await.unwrap();
+        let tool = MemorySearchTool::new(Arc::clone(&memory));
+        let channel = fresh_channel();
+        let audit = RecordingAudit::default();
+        let ctx = make_ctx(&channel, &audit);
+        let ToolOutcome::Completed { output, .. } = tool
+            .execute(json!({"query": "hello"}), &ctx)
+            .await
+        else {
+            panic!("expected Completed");
+        };
+        assert_eq!(output["mode"], "keyword");
+        assert_eq!(output["fell_back_to_keyword"], false);
     }
 }

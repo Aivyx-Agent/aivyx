@@ -590,6 +590,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             shared_persona: shared_persona.clone(),
             persona_proposal_log: persona_proposal_log.clone(),
             memory: memory.clone(),
+            embedding_provider: embedding_provider.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -643,6 +644,12 @@ struct ConnectionContext {
     /// `SearchMemory` queries + the `EvictMemoryTopic`
     /// frontend message. `None` in test fixtures.
     memory: Option<Arc<dyn aivyx_memory::Memory>>,
+    /// Phase 75 — embedding provider for the `SearchMemory`
+    /// semantic path. `None` = `[embedding]` not configured;
+    /// a `mode = "semantic"` request transparently falls back
+    /// to keyword.
+    embedding_provider:
+        Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -660,6 +667,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         shared_persona,
         persona_proposal_log,
         memory,
+        embedding_provider,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -989,6 +997,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &shared_persona,
                                 persona_proposal_log.as_deref(),
                                 memory.as_ref(),
+                                embedding_provider.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1234,6 +1243,7 @@ async fn run_single_connection_daemon(
         ),
         persona_proposal_log: None,
         memory: None,
+        embedding_provider: None,
     })
     .await
 }
@@ -1433,6 +1443,9 @@ async fn handle_query(
     shared_persona: &crate::persona::SharedEffectivePersona,
     persona_proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
     memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+    embedding_provider: Option<
+        &Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
+    >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1771,7 +1784,11 @@ async fn handle_query(
                 },
             }
         }
-        QueryPayload::SearchMemory { query, limit } => {
+        QueryPayload::SearchMemory {
+            query,
+            limit,
+            semantic,
+        } => {
             let Some(mem) = memory else {
                 return QueryResponsePayload::QueryError {
                     code: "no_memory".into(),
@@ -1780,12 +1797,68 @@ async fn handle_query(
             };
             const MEMORY_QUERY_MAX_LIMIT: u32 = 500;
             let capped = limit.clamp(1, MEMORY_QUERY_MAX_LIMIT) as usize;
+
+            // Phase 75 — semantic path with transparent keyword
+            // fallback (Q4a). Fall back when: no `[embedding]`
+            // provider, the query embed call fails, or the
+            // corpus has zero vectors (semantic over an empty
+            // index would just return nothing — keyword is
+            // strictly better there). The `fell_back_to_keyword`
+            // flag lets the operator/agent see it happened.
+            if semantic {
+                let qvec = match embedding_provider {
+                    Some(p) => {
+                        match p.embed(std::slice::from_ref(&query)).await {
+                            Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
+                            _ => None,
+                        }
+                    }
+                    None => None,
+                };
+                let has_vectors = mem
+                    .load_all_vectors()
+                    .await
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false);
+                if let (Some(qvec), true) = (qvec, has_vectors) {
+                    return match mem.semantic_search(&qvec, capped).await {
+                        Ok(matches) => QueryResponsePayload::SearchMemory {
+                            matches: matches
+                                .into_iter()
+                                .map(memory_entry_summary)
+                                .collect(),
+                            fell_back_to_keyword: false,
+                        },
+                        Err(e) => QueryResponsePayload::QueryError {
+                            code: "memory_search_failed".into(),
+                            message: e.to_string(),
+                        },
+                    };
+                }
+                // Fallback to keyword, flagged.
+                return match mem.search(&query, capped).await {
+                    Ok(matches) => QueryResponsePayload::SearchMemory {
+                        matches: matches
+                            .into_iter()
+                            .map(memory_entry_summary)
+                            .collect(),
+                        fell_back_to_keyword: true,
+                    },
+                    Err(e) => QueryResponsePayload::QueryError {
+                        code: "memory_search_failed".into(),
+                        message: e.to_string(),
+                    },
+                };
+            }
+
+            // Keyword path (default; no behavior change).
             match mem.search(&query, capped).await {
                 Ok(matches) => QueryResponsePayload::SearchMemory {
                     matches: matches
                         .into_iter()
                         .map(memory_entry_summary)
                         .collect(),
+                    fell_back_to_keyword: false,
                 },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "memory_search_failed".into(),
