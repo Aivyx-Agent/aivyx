@@ -544,6 +544,12 @@ pub struct AivyxConfig {
     /// the loader rejects email targets without `[email]` at load
     /// time.
     pub email: Option<EmailConfig>,
+    /// Phase 75 — `[embedding]` section. `None` when the
+    /// section is absent: semantic memory search is disabled
+    /// and `memory.search` stays keyword-only. When `Some`, the
+    /// daemon embeds memory writes and serves
+    /// `mode = "semantic"` searches.
+    pub embedding: Option<EmbeddingConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1298,6 +1304,52 @@ pub struct EmailConfig {
     pub from: String,
 }
 
+/// Phase 75 — `[embedding]` section. Configures the
+/// OpenAI-compatible embedding backend that powers semantic
+/// memory search. `None` on [`AivyxConfig`] means the section
+/// was absent: semantic search is disabled and `memory.search`
+/// keeps working in keyword mode (no behavior change for
+/// pre-Phase-75 configs).
+///
+/// `base_url` is the privacy lever: point it at
+/// `https://api.openai.com` and memory content is sent to
+/// OpenAI; point it at a local OpenAI-compatible server
+/// (ollama, llama.cpp, text-embeddings-inference) and nothing
+/// leaves the box. The default is the OpenAI public endpoint —
+/// the operator opts into locality explicitly.
+#[derive(Debug, Clone)]
+pub struct EmbeddingConfig {
+    /// Embeddings API base URL. Default
+    /// [`DEFAULT_EMBEDDING_BASE_URL`]. The provider POSTs to
+    /// `{base_url}/v1/embeddings`.
+    pub base_url: String,
+    /// Embedding model id. Default [`DEFAULT_EMBEDDING_MODEL`].
+    pub model: String,
+    /// API key. `Option` because a local server needs none.
+    /// `SourcedSecret` so a stray `{:?}` never leaks it and the
+    /// startup banner can show provenance — same pattern as the
+    /// anthropic / openai keys (env > TOML > encrypted store).
+    pub api_key: Option<SourcedSecret>,
+    /// Expected vector dimensionality. Default
+    /// [`DEFAULT_EMBEDDING_DIMENSIONS`] (text-embedding-3-small).
+    /// The vector store uses this to detect a model swap:
+    /// stored vectors with a different length are treated as
+    /// unembedded and lazily re-embedded.
+    pub dimensions: usize,
+}
+
+/// Default embeddings endpoint — the OpenAI public API. An
+/// operator who wants on-device embedding overrides this with
+/// a local OpenAI-compatible server URL.
+pub const DEFAULT_EMBEDDING_BASE_URL: &str = "https://api.openai.com";
+/// Default embedding model. `text-embedding-3-small` is the
+/// cheap, widely-supported OpenAI default; local servers
+/// generally accept an arbitrary model string.
+pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+/// Default vector dimensionality — the native size of
+/// `text-embedding-3-small`.
+pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 1536;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1325,6 +1377,9 @@ struct RawToml {
     telegram: RawTelegram,
     #[serde(default)]
     email: RawEmail,
+    /// `[embedding]` section. Phase 75 — semantic memory search.
+    #[serde(default)]
+    embedding: RawEmbedding,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -1874,6 +1929,24 @@ struct RawEmail {
     from: Option<String>,
 }
 
+/// Phase 75 — `[embedding]` section deserialize target. All
+/// fields optional; an absent section deserializes via
+/// `Default` into the all-`None` shape, which the loader maps
+/// to `embedding: None` (semantic search disabled). When any
+/// field is set the loader fills omitted fields from the
+/// `DEFAULT_EMBEDDING_*` constants and validates the result.
+#[derive(Debug, Default, Deserialize)]
+struct RawEmbedding {
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    dimensions: Option<usize>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -1892,6 +1965,9 @@ pub mod secret_keys {
     pub const ANTHROPIC_API_KEY: &[u8] = b"anthropic_api_key";
     /// Storage key for the OpenAI API key. Value: UTF-8 string.
     pub const OPENAI_API_KEY: &[u8] = b"openai_api_key";
+    /// Storage key for the embedding-backend API key (Phase 75).
+    /// Value: UTF-8 string.
+    pub const EMBEDDING_API_KEY: &[u8] = b"embedding_api_key";
     /// Storage key for the Telegram bot token. Value: UTF-8 string.
     pub const TELEGRAM_TOKEN: &[u8] = b"telegram_token";
     /// Storage key for the Aivyx master-key passphrase. Value: UTF-8 string.
@@ -1927,6 +2003,10 @@ const ENV_ROLE: &str = "AIVYX_ROLE";
 const ENV_OPENAI_API_KEY: &str = "AIVYX_OPENAI_API_KEY";
 const ENV_OPENAI_BASE_URL: &str = "AIVYX_OPENAI_BASE_URL";
 const ENV_PROVIDER: &str = "AIVYX_PROVIDER";
+/// Phase 75 — env override for the embedding-backend API key.
+/// Highest priority in the env > TOML > encrypted-store
+/// fall-through, matching the anthropic / openai key pattern.
+const ENV_EMBEDDING_API_KEY: &str = "AIVYX_EMBEDDING_API_KEY";
 
 // --------------------------------------------------------------------
 // Loader
@@ -2237,6 +2317,12 @@ impl AivyxConfig {
         // (Q4 sign-off — we always use auth, so cleartext over the
         // wire is a load-time error).
         let email = build_email_config(&toml.email)?;
+
+        // Phase 75 — `[embedding]` section. Absent → None
+        // (semantic search disabled). When present, the env
+        // var beats the TOML key; a still-`None` key is filled
+        // from the encrypted store in phase 2 of the load.
+        let embedding = build_embedding_config(&toml.embedding)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3103,6 +3189,7 @@ impl AivyxConfig {
             passphrase,
             telegram,
             email,
+            embedding,
             roles,
             active_role,
             profile,
@@ -3197,6 +3284,33 @@ impl AivyxConfig {
                         field: "telegram.token",
                     })?;
                     tg.token = Some(SourcedSecret::new(
+                        SecretString::from(s),
+                        FieldSource::EncryptedStore,
+                    ));
+                }
+            }
+        }
+
+        // Phase 75 — embedding API key store fall-through. Only
+        // touched if the `[embedding]` section materialized an
+        // `EmbeddingConfig`; we never fabricate one just because
+        // the store holds a key (mirrors the telegram rule).
+        if let Some(emb) = self.embedding.as_mut() {
+            if emb.api_key.is_none() {
+                if let Some(bytes) = secrets
+                    .get(secret_keys::EMBEDDING_API_KEY)
+                    .await
+                    .map_err(|e| ConfigError::StoreRead {
+                        field: "embedding.api_key",
+                        reason: e.to_string(),
+                    })?
+                {
+                    let s = String::from_utf8(bytes).map_err(|_| {
+                        ConfigError::NonUtf8Secret {
+                            field: "embedding.api_key",
+                        }
+                    })?;
+                    emb.api_key = Some(SourcedSecret::new(
                         SecretString::from(s),
                         FieldSource::EncryptedStore,
                     ));
@@ -3780,6 +3894,76 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
         username,
         password,
         from,
+    }))
+}
+
+/// Phase 75 — build the `[embedding]` config.
+///
+/// Absent section (every field `None`) → `Ok(None)`: semantic
+/// search disabled, `memory.search` stays keyword-only. Any set
+/// field opts in; omitted fields fall back to the
+/// `DEFAULT_EMBEDDING_*` constants. The API key resolves
+/// env > TOML here; a still-`None` key is filled from the
+/// encrypted store in phase 2 ([`AivyxConfig::hydrate_secrets_from_store`]).
+fn build_embedding_config(
+    raw: &RawEmbedding,
+) -> Result<Option<EmbeddingConfig>, ConfigError> {
+    let any_set = raw.base_url.is_some()
+        || raw.model.is_some()
+        || raw.api_key.is_some()
+        || raw.dimensions.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let base_url = raw
+        .base_url
+        .clone()
+        .unwrap_or_else(|| DEFAULT_EMBEDDING_BASE_URL.to_string());
+    if base_url.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "embedding.base_url",
+            reason: "`base_url` must be non-empty".into(),
+        });
+    }
+
+    let model = raw
+        .model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
+    if model.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "embedding.model",
+            reason: "`model` must be non-empty".into(),
+        });
+    }
+
+    let dimensions =
+        raw.dimensions.unwrap_or(DEFAULT_EMBEDDING_DIMENSIONS);
+    if dimensions == 0 {
+        return Err(ConfigError::Invalid {
+            field: "embedding.dimensions",
+            reason: "`dimensions` must be >= 1".into(),
+        });
+    }
+
+    // env > TOML; encrypted-store fall-through happens in phase 2.
+    let api_key = env_secret(ENV_EMBEDDING_API_KEY)
+        .map(|s| SourcedSecret::new(s, FieldSource::Env))
+        .or_else(|| {
+            raw.api_key.as_ref().map(|s| {
+                SourcedSecret::new(
+                    SecretString::from(s.clone()),
+                    FieldSource::Toml,
+                )
+            })
+        });
+
+    Ok(Some(EmbeddingConfig {
+        base_url,
+        model,
+        api_key,
+        dimensions,
     }))
 }
 

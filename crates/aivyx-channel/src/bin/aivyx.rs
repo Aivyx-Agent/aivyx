@@ -2178,6 +2178,11 @@ async fn run_async(
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
         email,
+        // Phase 75 — `[embedding]` config. Bound but not yet
+        // consumed at this site; Task 6/7 thread it into the
+        // daemon's memory write/search path. Underscore-prefixed
+        // so the unused binding doesn't trip `-D warnings`.
+        embedding: _config_embedding,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by

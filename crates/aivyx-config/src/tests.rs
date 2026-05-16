@@ -5294,3 +5294,268 @@ retention = "forever"
     }
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Phase 75 — [embedding] section
+// ------------------------------------------------------------------
+
+/// No `[embedding]` section → `embedding: None`. Semantic search
+/// is disabled; pre-Phase-75 configs are unaffected.
+#[test]
+fn embedding_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+        .expect("load");
+    assert!(cfg.embedding.is_none());
+    drop(env);
+}
+
+/// A `[embedding]` section with only the api_key set: the three
+/// non-secret fields fall back to the `DEFAULT_EMBEDDING_*`
+/// constants, the key is `FieldSource::Toml`.
+#[test]
+fn embedding_partial_section_applies_defaults() {
+    let env = EnvScope::new();
+    env.clear("AIVYX_EMBEDDING_API_KEY");
+    let tmp = TempDir::new("embedding-defaults");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+api_key = "sk-emb-toml"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.base_url, crate::DEFAULT_EMBEDDING_BASE_URL);
+    assert_eq!(emb.model, crate::DEFAULT_EMBEDDING_MODEL);
+    assert_eq!(emb.dimensions, crate::DEFAULT_EMBEDDING_DIMENSIONS);
+    let key = emb.api_key.expect("key from toml");
+    assert_eq!(key.source, FieldSource::Toml);
+    assert_eq!(key.value.expose_secret(), "sk-emb-toml");
+    drop(env);
+}
+
+/// Explicit values override every default; a local base_url
+/// keeps embedding on-device.
+#[test]
+fn embedding_explicit_fields_win() {
+    let env = EnvScope::new();
+    env.clear("AIVYX_EMBEDDING_API_KEY");
+    let tmp = TempDir::new("embedding-explicit");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+base_url = "http://localhost:11434"
+model = "nomic-embed-text"
+dimensions = 768
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.base_url, "http://localhost:11434");
+    assert_eq!(emb.model, "nomic-embed-text");
+    assert_eq!(emb.dimensions, 768);
+    // No key set anywhere — a local server needs none.
+    assert!(emb.api_key.is_none());
+    drop(env);
+}
+
+/// `AIVYX_EMBEDDING_API_KEY` beats the TOML `api_key` (env >
+/// TOML), matching the anthropic / openai key precedence.
+#[test]
+fn embedding_env_key_beats_toml_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_EMBEDDING_API_KEY", "sk-emb-env");
+    let tmp = TempDir::new("embedding-env-wins");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+api_key = "sk-emb-toml-loses"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let key = cfg.embedding.unwrap().api_key.expect("key present");
+    assert_eq!(key.source, FieldSource::Env);
+    assert_eq!(key.value.expose_secret(), "sk-emb-env");
+    drop(env);
+}
+
+/// A blank `base_url` is a load-time `Invalid`.
+#[test]
+fn embedding_blank_base_url_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-blank-url");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+base_url = "   "
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "embedding.base_url");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// `dimensions = 0` is a load-time `Invalid`.
+#[test]
+fn embedding_zero_dimensions_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-zero-dims");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+dimensions = 0
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "embedding.dimensions");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Env + TOML do not supply the embedding key, but the
+/// encrypted store has a `secret_keys::EMBEDDING_API_KEY` row.
+/// After hydration the key is populated with
+/// `FieldSource::EncryptedStore`.
+#[tokio::test]
+async fn embedding_key_hydrates_from_store() {
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{KeyDomain, RedbStorage, StorageConfig};
+
+    let env = EnvScope::new();
+    env.clear("AIVYX_EMBEDDING_API_KEY");
+
+    let tmp = TempDir::new("embedding-store-hydrate");
+    let store_path = tmp.path().join("store.redb");
+    let master = MasterKey::from_raw([11u8; 32]);
+    let storage = RedbStorage::open(StorageConfig::new(store_path), master)
+        .await
+        .expect("open store");
+    let secrets = storage.domain(KeyDomain::Secrets);
+    secrets
+        .put(crate::secret_keys::EMBEDDING_API_KEY, b"sk-emb-from-store")
+        .await
+        .expect("put embedding key");
+
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+model = "text-embedding-3-small"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let mut cfg =
+        AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(cfg.embedding.as_ref().unwrap().api_key.is_none());
+
+    cfg.hydrate_secrets_from_store(&storage)
+        .await
+        .expect("hydrate");
+    let key = cfg
+        .embedding
+        .unwrap()
+        .api_key
+        .expect("hydrated from store");
+    assert_eq!(key.source, FieldSource::EncryptedStore);
+    assert_eq!(key.value.expose_secret(), "sk-emb-from-store");
+    drop(env);
+}
+
+/// Hydration must not materialize an `EmbeddingConfig` when the
+/// `[embedding]` section was absent, even if the store holds a
+/// key row (mirrors the telegram-token rule).
+#[tokio::test]
+async fn embedding_store_key_without_section_stays_none() {
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{KeyDomain, RedbStorage, StorageConfig};
+
+    let env = EnvScope::new();
+    env.clear("AIVYX_EMBEDDING_API_KEY");
+    let tmp = TempDir::new("embedding-no-section");
+    let store_path = tmp.path().join("store.redb");
+    let master = MasterKey::from_raw([12u8; 32]);
+    let storage = RedbStorage::open(StorageConfig::new(store_path), master)
+        .await
+        .unwrap();
+    storage
+        .domain(KeyDomain::Secrets)
+        .put(crate::secret_keys::EMBEDDING_API_KEY, b"orphan-key")
+        .await
+        .unwrap();
+
+    let mut cfg =
+        AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+            .expect("load");
+    cfg.hydrate_secrets_from_store(&storage).await.unwrap();
+    assert!(cfg.embedding.is_none());
+    drop(env);
+}
