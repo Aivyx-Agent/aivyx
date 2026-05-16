@@ -102,6 +102,30 @@ pub trait ContextProvider: Send + Sync {
     ) -> Option<String>;
 }
 
+/// Phase 79 — per-turn system-prompt refiner. Sibling of
+/// [`ContextProvider`]: invoked in `begin_turn` with the user's
+/// message, it may return a replacement system prompt for *this
+/// turn only*, or `None` to leave the planner's base prompt
+/// untouched (the universal byte-identical fallback path).
+///
+/// Used by the adaptive-Persona refiner, which selects the
+/// Persona facets relevant to the turn instead of injecting the
+/// whole accreted Soul every time. Like every hook in this
+/// module it is **not** re-exported from `aivyx-core`'s
+/// `lib.rs` — consumers reach it via
+/// `aivyx_core::llm_planner::SystemPromptRefiner`. Keeping
+/// `lib.rs` byte-identical protects the production-core streak;
+/// the minor re-export asymmetry is the documented, intentional
+/// price (same rationale as `ContextProvider`).
+#[async_trait]
+pub trait SystemPromptRefiner: Send + Sync {
+    /// Return a replacement system prompt for this turn, or
+    /// `None` to keep the planner's base prompt unchanged. Must
+    /// never panic and must swallow its own errors into `None`
+    /// (best-effort — refinement is never fatal).
+    async fn refine(&self, user_message: &str) -> Option<String>;
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -150,6 +174,12 @@ pub struct LlmPlannerConfig {
     /// any returned block to that turn's context. `None` means no
     /// auto-recall (pre-Phase-76 behavior exactly).
     pub context_provider: Option<Arc<dyn ContextProvider>>,
+    /// Phase 79 — optional per-turn system-prompt refiner. When
+    /// `Some`, `begin_turn` calls it with the user's message and
+    /// (on `Some`) swaps the system prompt for that turn. `None`
+    /// means the base prompt is used unchanged (pre-Phase-79
+    /// behavior exactly).
+    pub system_prompt_refiner: Option<Arc<dyn SystemPromptRefiner>>,
 }
 
 impl std::fmt::Debug for LlmPlannerConfig {
@@ -166,6 +196,10 @@ impl std::fmt::Debug for LlmPlannerConfig {
                 "context_provider",
                 &self.context_provider.as_ref().map(|_| ".."),
             )
+            .field(
+                "system_prompt_refiner",
+                &self.system_prompt_refiner.as_ref().map(|_| ".."),
+            )
             .finish()
     }
 }
@@ -181,6 +215,7 @@ impl LlmPlannerConfig {
             context_window_tokens: None,
             prune_sink: None,
             context_provider: None,
+            system_prompt_refiner: None,
         }
     }
 
@@ -222,6 +257,17 @@ impl LlmPlannerConfig {
         provider: Arc<dyn ContextProvider>,
     ) -> Self {
         self.context_provider = Some(provider);
+        self
+    }
+
+    /// Phase 79 — attach a per-turn [`SystemPromptRefiner`].
+    /// Mirrors [`Self::with_context_provider`]; `None` (the
+    /// default) preserves pre-Phase-79 behavior.
+    pub fn with_system_prompt_refiner(
+        mut self,
+        refiner: Arc<dyn SystemPromptRefiner>,
+    ) -> Self {
+        self.system_prompt_refiner = Some(refiner);
         self
     }
 
@@ -423,27 +469,53 @@ impl TurnPlanner for LlmPlanner {
         // best-effort — a `None` (no provider, embed failure, empty
         // index, all-below-floor) leaves the turn byte-identical to
         // pre-Phase-76 behavior.
+        // Compute the user's text once — both the Phase 76
+        // recall hook and the Phase 79 system-prompt refiner key
+        // off it, and they are independently configured.
+        let query_text = match &message.content {
+            MessageContent::Text(text) => text.clone(),
+            MessageContent::Image { .. } => String::new(),
+            MessageContent::Mixed(parts) => {
+                let joined: Vec<&str> = parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text(t) => Some(t.as_str()),
+                        ContentPart::Image { .. } => None,
+                    })
+                    .collect();
+                joined.join(" ")
+            }
+        };
+        let has_query = !query_text.trim().is_empty();
+
         if let Some(provider) = &self.config.context_provider {
-            let query_text = match &message.content {
-                MessageContent::Text(text) => text.clone(),
-                MessageContent::Image { .. } => String::new(),
-                MessageContent::Mixed(parts) => {
-                    let joined: Vec<&str> = parts
-                        .iter()
-                        .filter_map(|p| match p {
-                            ContentPart::Text(t) => Some(t.as_str()),
-                            ContentPart::Image { .. } => None,
-                        })
-                        .collect();
-                    joined.join(" ")
-                }
-            };
-            if !query_text.trim().is_empty() {
+            if has_query {
                 if let Some(block) = provider
                     .recall(&query_text, message.session_id)
                     .await
                 {
                     content.insert(0, ContentBlock::text(block));
+                }
+            }
+        }
+
+        // Phase 79 — adaptive Persona. The refiner may replace
+        // this turn's system prompt with one carrying only the
+        // contextually-relevant Persona facets. The planner is
+        // built fresh per turn (the factory constructs a new
+        // instance each turn), so mutating `config.system_prompt`
+        // here is naturally turn-scoped. Clone the `Arc` out
+        // first to release the `&self.config` borrow before the
+        // `&mut self.config` assignment. `None` (no refiner,
+        // blank message, fallback) leaves the base prompt
+        // byte-identical to pre-Phase-79.
+        let refiner = self.config.system_prompt_refiner.clone();
+        if let Some(refiner) = refiner {
+            if has_query {
+                if let Some(refined) =
+                    refiner.refine(&query_text).await
+                {
+                    self.config.system_prompt = Some(refined);
                 }
             }
         }
@@ -1152,6 +1224,109 @@ mod tests {
             LlmMessage::User { ref content }
                 if content == &[ContentBlock::text("   ")]
         ));
+    }
+
+    // ---- Phase 79 — SystemPromptRefiner hook -------------------
+
+    struct FakeRefiner {
+        refined: Option<String>,
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeRefiner {
+        fn new(refined: Option<&str>) -> Arc<Self> {
+            Arc::new(Self {
+                refined: refined.map(str::to_string),
+                seen: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SystemPromptRefiner for FakeRefiner {
+        async fn refine(&self, user_message: &str) -> Option<String> {
+            self.seen.lock().unwrap().push(user_message.to_string());
+            self.refined.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn refiner_some_swaps_system_prompt_for_the_turn() {
+        let refiner = FakeRefiner::new(Some("REFINED PERSONA PROMPT"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_system_prompt("BASE PROMPT")
+                .with_system_prompt_refiner(refiner.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "help me ship"))
+            .await;
+        assert_eq!(
+            refiner.seen.lock().unwrap().clone(),
+            vec!["help me ship".to_string()]
+        );
+        assert_eq!(
+            planner.config.system_prompt.as_deref(),
+            Some("REFINED PERSONA PROMPT")
+        );
+    }
+
+    #[tokio::test]
+    async fn refiner_none_keeps_base_prompt() {
+        let refiner = FakeRefiner::new(None);
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_system_prompt("BASE PROMPT")
+                .with_system_prompt_refiner(refiner.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"))
+            .await;
+        // Consulted, returned None → base byte-identical.
+        assert_eq!(refiner.seen.lock().unwrap().len(), 1);
+        assert_eq!(
+            planner.config.system_prompt.as_deref(),
+            Some("BASE PROMPT")
+        );
+    }
+
+    #[tokio::test]
+    async fn no_refiner_is_unchanged() {
+        // Regression guard: the default path must not change.
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m").with_system_prompt("BASE"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hello"))
+            .await;
+        assert_eq!(
+            planner.config.system_prompt.as_deref(),
+            Some("BASE")
+        );
+    }
+
+    #[tokio::test]
+    async fn refiner_skipped_for_blank_query() {
+        // Whitespace-only message must not consult the refiner
+        // and must leave the base prompt untouched.
+        let refiner = FakeRefiner::new(Some("SHOULD-NOT-APPEAR"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_system_prompt("BASE")
+                .with_system_prompt_refiner(refiner.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "   "))
+            .await;
+        assert!(refiner.seen.lock().unwrap().is_empty());
+        assert_eq!(
+            planner.config.system_prompt.as_deref(),
+            Some("BASE")
+        );
     }
 
     #[tokio::test]
