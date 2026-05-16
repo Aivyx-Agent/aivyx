@@ -341,6 +341,103 @@ pub trait Memory: Send + Sync {
         rules: &[RetentionMatcher<'_>],
         default_cutoff_secs: Option<u64>,
     ) -> Result<usize, MemoryError>;
+
+    /// Phase 75 — store the embedding `vector` for the entry at
+    /// `(topic, seq)`. Idempotent on key: a second call for the
+    /// same `(topic, seq)` overwrites the prior vector (lets the
+    /// lazy backfill re-embed after a model swap). The vector
+    /// lives in a domain separate from entry bodies
+    /// (`KeyDomain::MemoryVectors`) and is also reflected into
+    /// the in-memory index that `semantic_search` ranks over.
+    ///
+    /// Fails fast on empty topic.
+    async fn put_vector(
+        &self,
+        topic: &str,
+        seq: u64,
+        vector: Vec<f32>,
+    ) -> Result<(), MemoryError>;
+
+    /// Phase 75 — return every `(topic, seq, vector)` row in the
+    /// vector store. The daemon calls this once at startup to
+    /// decide which entries still need embedding (lazy
+    /// backfill): any entry whose `(topic, seq)` is absent here
+    /// (or whose vector length no longer matches the configured
+    /// dimensionality) is a backfill candidate.
+    async fn load_all_vectors(
+        &self,
+    ) -> Result<Vec<(String, u64, Vec<f32>)>, MemoryError>;
+
+    /// Phase 75 — cosine-rank every indexed vector against
+    /// `query_vec` and return the bodies of the top `limit`
+    /// entries, most-similar first. Vectors whose length differs
+    /// from `query_vec` score 0 (a stale-dimension vector can't
+    /// meaningfully match). A `(topic, seq)` whose entry body
+    /// has since been deleted is skipped — the vector store is
+    /// allowed to lag entry GC, so `semantic_search` is the
+    /// consistency backstop.
+    ///
+    /// Zero limit is an error (same as `get_recent`). An empty
+    /// index returns an empty `Vec`, not an error.
+    async fn semantic_search(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError>;
+}
+
+/// Phase 75 — cosine similarity of two equal-length vectors.
+///
+/// Hand-rolled (no linalg dep, per the Phase 75 zero-new-deps
+/// constraint). Returns 0.0 for length mismatch, empty inputs,
+/// or a zero-norm vector — all "cannot meaningfully compare"
+/// cases the ranking treats as "no match" rather than erroring.
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a.sqrt() * norm_b.sqrt())
+}
+
+/// Phase 75 — rank `(topic, seq)` index rows against a query
+/// vector, returning the top `limit` `(topic, seq)` pairs
+/// most-similar first. Shared by both `Memory` impls so the
+/// in-process fake and the redb impl produce identical ordering
+/// (the same equivalence discipline the rest of this crate
+/// relies on). Ties on score break by `seq` descending (newer
+/// write wins) for a deterministic order.
+pub(crate) fn rank_by_cosine(
+    index: &[(String, u64, Vec<f32>)],
+    query_vec: &[f32],
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let mut scored: Vec<(f32, &str, u64)> = index
+        .iter()
+        .map(|(topic, seq, vec)| {
+            (cosine_similarity(query_vec, vec), topic.as_str(), *seq)
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.2.cmp(&a.2))
+    });
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_score, topic, seq)| (topic.to_string(), seq))
+        .collect()
 }
 
 /// Phase 74 — per-topic-glob retention rule for the
@@ -380,6 +477,13 @@ pub struct InMemoryMemory {
 struct State {
     /// Topic → entries, oldest first within each topic.
     topics: BTreeMap<String, Vec<MemoryEntry>>,
+    /// Phase 75 — parallel in-process embedding index. One
+    /// `(topic, seq, vector)` row per embedded entry. Kept in
+    /// lock-step with `topics`: `forget` and
+    /// `evict_oldest_unread` drop the matching rows so a
+    /// removed entry never leaves an orphan vector. Mirrors the
+    /// `VectorIndex` `RedbMemory` rebuilds at open.
+    vectors: Vec<(String, u64, Vec<f32>)>,
     /// Monotonic insertion counter, shared across topics. Every `put`
     /// increments this and assigns the post-increment value to the new
     /// entry's `seq`. Global (not per-topic) so that two entries
@@ -473,6 +577,9 @@ impl Memory for InMemoryMemory {
             return Err(MemoryError::EmptyTopic);
         }
         let mut state = self.state.lock().unwrap();
+        // Phase 75 — drop the topic's vectors too; a forgotten
+        // topic must leave no orphan in the embedding index.
+        state.vectors.retain(|(t, _, _)| t != topic);
         Ok(state.topics.remove(topic).map(|v| v.len()).unwrap_or(0))
     }
 
@@ -581,34 +688,45 @@ impl Memory for InMemoryMemory {
             return Err(MemoryError::EmptyTopic);
         }
         let mut state = self.state.lock().unwrap();
-        let Some(entries) = state.topics.get_mut(topic) else {
-            return Ok(0);
+        // Phase 75 — capture the evicted entries' seqs so we can
+        // drop their vectors after the entry borrow ends.
+        let removed_seqs: Vec<u64> = {
+            let Some(entries) = state.topics.get_mut(topic) else {
+                return Ok(0);
+            };
+            if entries.len() <= keep {
+                return Ok(0);
+            }
+            // Rank by (last_read_at_secs ASC, seq ASC). Smallest
+            // first = least-recently-read first. Ties on read time
+            // break by older write loses to newer write.
+            let to_remove = entries.len() - keep;
+            // Build a vector of indices sorted by the LRU key, take
+            // the first `to_remove`, then remove those indices in
+            // reverse order so earlier indices stay valid.
+            let mut indices: Vec<usize> = (0..entries.len()).collect();
+            indices.sort_by(|&a, &b| {
+                let ea = &entries[a];
+                let eb = &entries[b];
+                ea.last_read_at_secs
+                    .cmp(&eb.last_read_at_secs)
+                    .then(ea.seq.cmp(&eb.seq))
+            });
+            let mut victims: Vec<usize> =
+                indices.into_iter().take(to_remove).collect();
+            victims.sort_unstable();
+            let mut removed = Vec::with_capacity(victims.len());
+            for idx in victims.into_iter().rev() {
+                removed.push(entries.remove(idx).seq);
+            }
+            removed
         };
-        if entries.len() <= keep {
-            return Ok(0);
-        }
-        // Rank by (last_read_at_secs ASC, seq ASC). Smallest
-        // first = least-recently-read first. Ties on read time
-        // break by older write loses to newer write.
-        let to_remove = entries.len() - keep;
-        // Build a vector of indices sorted by the LRU key, take
-        // the first `to_remove`, then remove those indices in
-        // reverse order so earlier indices stay valid.
-        let mut indices: Vec<usize> = (0..entries.len()).collect();
-        indices.sort_by(|&a, &b| {
-            let ea = &entries[a];
-            let eb = &entries[b];
-            ea.last_read_at_secs
-                .cmp(&eb.last_read_at_secs)
-                .then(ea.seq.cmp(&eb.seq))
-        });
-        let mut victims: Vec<usize> =
-            indices.into_iter().take(to_remove).collect();
-        victims.sort_unstable();
-        for idx in victims.into_iter().rev() {
-            entries.remove(idx);
-        }
-        Ok(to_remove)
+        // Drop the evicted entries' vectors so the index stays
+        // in lock-step with the entry store.
+        state
+            .vectors
+            .retain(|(t, s, _)| !(t == topic && removed_seqs.contains(s)));
+        Ok(removed_seqs.len())
     }
 
     async fn gc_expired_with_rules(
@@ -639,6 +757,62 @@ impl Memory for InMemoryMemory {
             !entries.is_empty()
         });
         Ok(total_removed)
+    }
+
+    async fn put_vector(
+        &self,
+        topic: &str,
+        seq: u64,
+        vector: Vec<f32>,
+    ) -> Result<(), MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let mut state = self.state.lock().unwrap();
+        // Idempotent on (topic, seq): overwrite a prior vector so
+        // a re-embed after a model swap replaces, not duplicates.
+        if let Some(row) = state
+            .vectors
+            .iter_mut()
+            .find(|(t, s, _)| t == topic && *s == seq)
+        {
+            row.2 = vector;
+        } else {
+            state.vectors.push((topic.to_string(), seq, vector));
+        }
+        Ok(())
+    }
+
+    async fn load_all_vectors(
+        &self,
+    ) -> Result<Vec<(String, u64, Vec<f32>)>, MemoryError> {
+        let state = self.state.lock().unwrap();
+        Ok(state.vectors.clone())
+    }
+
+    async fn semantic_search(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        let state = self.state.lock().unwrap();
+        let ranked = rank_by_cosine(&state.vectors, query_vec, limit);
+        let mut out = Vec::with_capacity(ranked.len());
+        for (topic, seq) in ranked {
+            // Skip a winner whose entry body is gone — the vector
+            // index is allowed to lag entry GC.
+            if let Some(entry) = state
+                .topics
+                .get(&topic)
+                .and_then(|es| es.iter().find(|e| e.seq == seq))
+            {
+                out.push(entry.clone());
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -1206,5 +1380,134 @@ mod tests {
         // one.
         let after = mem.get_recent("notes", 1).await.unwrap();
         assert!(after[0].last_read_at_secs >= stamp_1);
+    }
+
+    // ---- Phase 75 — vector store + cosine search ------------
+
+    #[test]
+    fn cosine_identical_is_one_orthogonal_is_zero() {
+        let a = [1.0, 0.0, 0.0];
+        let b = [1.0, 0.0, 0.0];
+        let c = [0.0, 1.0, 0.0];
+        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
+        assert!(cosine_similarity(&a, &c).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_handles_degenerate_inputs() {
+        // Length mismatch, empty, and zero-norm all → 0.0
+        // (treated as "no match", never a panic / NaN).
+        assert_eq!(cosine_similarity(&[1.0, 2.0], &[1.0]), 0.0);
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
+    }
+
+    #[tokio::test]
+    async fn put_vector_then_semantic_search_ranks_by_cosine() {
+        let mem = InMemoryMemory::new();
+        let s0 = mem.put("t", "apple").await.unwrap();
+        let s1 = mem.put("t", "banana").await.unwrap();
+        let s2 = mem.put("t", "cherry").await.unwrap();
+        mem.put_vector("t", s0, vec![1.0, 0.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s1, vec![0.0, 1.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s2, vec![0.9, 0.1, 0.0]).await.unwrap();
+
+        // Query closest to s0, then s2, then s1.
+        let hits = mem
+            .semantic_search(&[1.0, 0.0, 0.0], 3)
+            .await
+            .unwrap();
+        let bodies: Vec<&str> =
+            hits.iter().map(|e| e.body.as_str()).collect();
+        assert_eq!(bodies, vec!["apple", "cherry", "banana"]);
+    }
+
+    #[tokio::test]
+    async fn put_vector_is_idempotent_on_topic_seq() {
+        let mem = InMemoryMemory::new();
+        let s = mem.put("t", "x").await.unwrap();
+        mem.put_vector("t", s, vec![1.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s, vec![0.0, 1.0]).await.unwrap();
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1, "re-embed replaces, not duplicates");
+        assert_eq!(all[0].2, vec![0.0, 1.0]);
+    }
+
+    #[tokio::test]
+    async fn semantic_search_zero_limit_is_error() {
+        let mem = InMemoryMemory::new();
+        assert!(matches!(
+            mem.semantic_search(&[1.0], 0).await,
+            Err(MemoryError::ZeroLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn semantic_search_empty_index_is_empty_not_error() {
+        let mem = InMemoryMemory::new();
+        let hits = mem.semantic_search(&[1.0, 2.0], 5).await.unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn put_vector_empty_topic_is_error() {
+        let mem = InMemoryMemory::new();
+        assert!(matches!(
+            mem.put_vector("", 0, vec![1.0]).await,
+            Err(MemoryError::EmptyTopic)
+        ));
+    }
+
+    #[tokio::test]
+    async fn forget_drops_the_topics_vectors() {
+        let mem = InMemoryMemory::new();
+        let a = mem.put("keep", "a").await.unwrap();
+        let b = mem.put("drop", "b").await.unwrap();
+        mem.put_vector("keep", a, vec![1.0, 0.0]).await.unwrap();
+        mem.put_vector("drop", b, vec![0.0, 1.0]).await.unwrap();
+
+        mem.forget("drop").await.unwrap();
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, "keep");
+        // The forgotten topic's vector can no longer surface.
+        let hits = mem
+            .semantic_search(&[0.0, 1.0], 5)
+            .await
+            .unwrap();
+        assert!(hits.iter().all(|e| e.topic == "keep"));
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_drops_evicted_vectors() {
+        let mem = InMemoryMemory::new();
+        let s0 = mem.put("t", "old").await.unwrap();
+        let s1 = mem.put("t", "new").await.unwrap();
+        mem.put_vector("t", s0, vec![1.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s1, vec![0.0, 1.0]).await.unwrap();
+        // Read s1 so s0 is the LRU loser.
+        let _ = mem.get_recent("t", 1).await.unwrap();
+
+        let evicted = mem.evict_oldest_unread("t", 1).await.unwrap();
+        assert_eq!(evicted, 1);
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].1, s1, "the surviving entry's vector remains");
+    }
+
+    #[tokio::test]
+    async fn semantic_search_skips_winner_with_missing_entry() {
+        // Vector present but the entry body was GC'd: the vector
+        // index is allowed to lag, so the stale winner is skipped
+        // rather than surfacing a bogus hit.
+        let mem = InMemoryMemory::new();
+        let s = mem.put("t", "real").await.unwrap();
+        mem.put_vector("t", s, vec![1.0, 0.0]).await.unwrap();
+        // Inject an orphan vector for a (topic, seq) with no entry.
+        mem.put_vector("t", 999, vec![1.0, 0.0]).await.unwrap();
+
+        let hits = mem.semantic_search(&[1.0, 0.0], 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].body, "real");
     }
 }

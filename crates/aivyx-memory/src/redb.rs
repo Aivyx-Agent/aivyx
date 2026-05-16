@@ -65,7 +65,10 @@ use async_trait::async_trait;
 
 use aivyx_storage::{DomainHandle, KeyDomain, Storage};
 
-use crate::{InMemoryMemory, Memory, MemoryEntry, MemoryError, RetentionMatcher};
+use crate::{
+    rank_by_cosine, InMemoryMemory, Memory, MemoryEntry, MemoryError,
+    RetentionMatcher,
+};
 
 /// Discriminator prefix for entry keys. Every entry in the memory
 /// domain starts with these two bytes; nothing else does.
@@ -78,6 +81,16 @@ const ENTRY_PREFIX: &[u8] = b"e\x00";
 /// (schema version, stats) would share the `m\x00` prefix.
 const META_NEXT_SEQ_KEY: &[u8] = b"m\x00next_seq";
 
+/// Phase 75 — discriminator prefix for vector keys in the
+/// separate `KeyDomain::MemoryVectors` table. The layout mirrors
+/// the entry key (`v\x00 || topic || \x00 || seq_be`) so the
+/// same big-endian-seq prefix-scan isolation story holds. It
+/// lives in its *own* domain (distinct HKDF subkey) so a vector
+/// blob and an entry body are never decryptable with the same
+/// key — the Phase 75 Task 2 `KeyDomain::MemoryVectors`
+/// isolation guarantee.
+const VECTOR_PREFIX: &[u8] = b"v\x00";
+
 /// `RedbMemory` — the persistent [`Memory`] implementation Phase 6
 /// ships to the binary. Construct via [`RedbMemory::open`], share as
 /// `Arc<dyn Memory>`.
@@ -87,6 +100,15 @@ pub struct RedbMemory {
     /// after every successful `put` and re-seeded from the on-disk
     /// entries at `open` time.
     next_seq: tokio::sync::Mutex<u64>,
+    /// Phase 75 — handle to the separate `KeyDomain::MemoryVectors`
+    /// table where embedding vectors are persisted.
+    vectors_handle: DomainHandle,
+    /// Phase 75 — in-memory `(topic, seq, vector)` index rebuilt
+    /// from `vectors_handle` at `open`. `semantic_search` ranks
+    /// over this rather than scanning + decrypting every vector
+    /// row per query; `put_vector` keeps it and the table in
+    /// lock-step.
+    vector_index: tokio::sync::Mutex<Vec<(String, u64, Vec<f32>)>>,
 }
 
 impl std::fmt::Debug for RedbMemory {
@@ -111,11 +133,67 @@ impl RedbMemory {
     /// correct.
     pub async fn open(storage: Arc<dyn Storage>) -> Result<Arc<Self>, MemoryError> {
         let handle = storage.domain(KeyDomain::Memory);
+        let vectors_handle = storage.domain(KeyDomain::MemoryVectors);
         let seed = Self::seed_counter_from_storage(&handle).await?;
+        let index = Self::load_vector_index(&vectors_handle).await?;
         Ok(Arc::new(RedbMemory {
             handle,
             next_seq: tokio::sync::Mutex::new(seed),
+            vectors_handle,
+            vector_index: tokio::sync::Mutex::new(index),
         }))
+    }
+
+    /// Phase 75 — rebuild the in-memory vector index from the
+    /// `MemoryVectors` domain. One decrypt + decode per row,
+    /// paid once at open. A row whose value isn't a clean f32
+    /// blob is skipped rather than failing the whole open — a
+    /// corrupt vector should degrade semantic search, not brick
+    /// the daemon.
+    async fn load_vector_index(
+        handle: &DomainHandle,
+    ) -> Result<Vec<(String, u64, Vec<f32>)>, MemoryError> {
+        let rows = handle
+            .scan_prefix(VECTOR_PREFIX)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let mut index = Vec::with_capacity(rows.len());
+        for (key, value) in &rows {
+            let Some((topic, seq)) = parse_vector_key(key) else {
+                continue;
+            };
+            let Some(vector) = decode_vector(value) else {
+                continue;
+            };
+            index.push((topic, seq, vector));
+        }
+        Ok(index)
+    }
+
+    /// Build the vector key for `(topic, seq)`. Same layout as
+    /// the entry key, distinct discriminator (`v\x00`).
+    fn vector_key(topic: &str, seq: u64) -> Vec<u8> {
+        let topic_bytes = topic.as_bytes();
+        let mut key = Vec::with_capacity(
+            VECTOR_PREFIX.len() + topic_bytes.len() + 1 + 8,
+        );
+        key.extend_from_slice(VECTOR_PREFIX);
+        key.extend_from_slice(topic_bytes);
+        key.push(0x00);
+        key.extend_from_slice(&seq.to_be_bytes());
+        key
+    }
+
+    /// Single-topic vector scan prefix: every vector under
+    /// `topic` and nothing else.
+    fn topic_vector_prefix(topic: &str) -> Vec<u8> {
+        let topic_bytes = topic.as_bytes();
+        let mut prefix =
+            Vec::with_capacity(VECTOR_PREFIX.len() + topic_bytes.len() + 1);
+        prefix.extend_from_slice(VECTOR_PREFIX);
+        prefix.extend_from_slice(topic_bytes);
+        prefix.push(0x00);
+        prefix
     }
 
     /// Scan the domain once to recover the correct `next_seq` value.
@@ -303,6 +381,27 @@ impl Memory for RedbMemory {
                 .map_err(|e| MemoryError::Backend(e.to_string()))?;
             deleted += 1;
         }
+
+        // Phase 75 — drop the topic's vectors from the table and
+        // the in-memory index so a forgotten topic leaves no
+        // orphan vector behind.
+        let vprefix = Self::topic_vector_prefix(topic);
+        let vrows = self
+            .vectors_handle
+            .scan_prefix(&vprefix)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        for (key, _value) in &vrows {
+            self.vectors_handle
+                .delete(key)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        }
+        self.vector_index
+            .lock()
+            .await
+            .retain(|(t, _, _)| t != topic);
+
         Ok(deleted)
     }
 
@@ -563,14 +662,92 @@ impl Memory for RedbMemory {
         });
         let to_remove = ranked.len() - keep;
         let mut deleted = 0;
-        for (key, _entry) in ranked.into_iter().take(to_remove) {
+        let mut removed_seqs: Vec<u64> = Vec::with_capacity(to_remove);
+        for (key, entry) in ranked.into_iter().take(to_remove) {
             self.handle
                 .delete(&key)
                 .await
                 .map_err(|e| MemoryError::Backend(e.to_string()))?;
+            // Phase 75 — evict the matching vector too.
+            self.vectors_handle
+                .delete(&Self::vector_key(topic, entry.seq))
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?;
+            removed_seqs.push(entry.seq);
             deleted += 1;
         }
+        self.vector_index
+            .lock()
+            .await
+            .retain(|(t, s, _)| !(t == topic && removed_seqs.contains(s)));
         Ok(deleted)
+    }
+
+    async fn put_vector(
+        &self,
+        topic: &str,
+        seq: u64,
+        vector: Vec<f32>,
+    ) -> Result<(), MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let key = Self::vector_key(topic, seq);
+        self.vectors_handle
+            .put(&key, &encode_vector(&vector))
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        // Keep the in-memory index in lock-step. Idempotent on
+        // (topic, seq): a re-embed replaces, never duplicates.
+        let mut index = self.vector_index.lock().await;
+        if let Some(row) = index
+            .iter_mut()
+            .find(|(t, s, _)| t == topic && *s == seq)
+        {
+            row.2 = vector;
+        } else {
+            index.push((topic.to_string(), seq, vector));
+        }
+        Ok(())
+    }
+
+    async fn load_all_vectors(
+        &self,
+    ) -> Result<Vec<(String, u64, Vec<f32>)>, MemoryError> {
+        Ok(self.vector_index.lock().await.clone())
+    }
+
+    async fn semantic_search(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        // Rank under the index lock, then release it before the
+        // per-winner entry fetches (decrypt I/O) so a concurrent
+        // put_vector isn't blocked on storage latency.
+        let ranked = {
+            let index = self.vector_index.lock().await;
+            rank_by_cosine(&index, query_vec, limit)
+        };
+        let mut out = Vec::with_capacity(ranked.len());
+        for (topic, seq) in ranked {
+            let key = Self::entry_key(&topic, seq);
+            // A winner whose entry body is gone (entry GC ran but
+            // the vector wasn't cleaned) is skipped — semantic
+            // search is the consistency backstop.
+            if let Some(bytes) = self
+                .handle
+                .get(&key)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?
+            {
+                out.push(InMemoryMemory::decode_entry(&bytes)?);
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -601,6 +778,52 @@ fn decode_u64_be(bytes: &[u8]) -> Option<u64> {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(bytes);
     Some(u64::from_be_bytes(buf))
+}
+
+/// Phase 75 — parse `(topic, seq)` out of a vector key
+/// (`v\x00 || topic || \x00 || seq_be(8)`). `None` if the bytes
+/// don't fit the layout or the topic isn't UTF-8.
+fn parse_vector_key(key: &[u8]) -> Option<(String, u64)> {
+    if !key.starts_with(VECTOR_PREFIX)
+        || key.len() < VECTOR_PREFIX.len() + 1 + 8
+    {
+        return None;
+    }
+    let sep_idx = key.len() - 9;
+    if key[sep_idx] != 0x00 {
+        return None;
+    }
+    let topic = std::str::from_utf8(&key[VECTOR_PREFIX.len()..sep_idx])
+        .ok()?
+        .to_string();
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&key[key.len() - 8..]);
+    Some((topic, u64::from_be_bytes(buf)))
+}
+
+/// Phase 75 — encode an f32 vector as little-endian bytes (4
+/// bytes per lane). Compact and zero-dep — JSON would ~3x the
+/// 1536-lane payload and bincode isn't a workspace dep.
+fn encode_vector(vector: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vector.len() * 4);
+    for v in vector {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes
+}
+
+/// Inverse of [`encode_vector`]. `None` if the blob isn't a
+/// whole number of f32 lanes.
+fn decode_vector(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+    )
 }
 
 fn now_secs() -> u64 {
@@ -1140,5 +1363,119 @@ mod tests {
         assert_eq!(removed, 0);
         let notes = mem.get_recent("notes", 10).await.unwrap();
         assert_eq!(notes.len(), 1);
+    }
+
+    // ---- Phase 75 — vector store + cosine search ------------
+
+    #[tokio::test]
+    async fn put_vector_persists_and_index_rebuilds_on_reopen() {
+        let scratch = Scratch::new();
+        {
+            let mem = open_mem(&scratch, 31).await;
+            let s = mem.put("notes", "purple").await.unwrap();
+            mem.put_vector("notes", s, vec![0.1, 0.2, 0.3])
+                .await
+                .unwrap();
+        }
+        // Reopen the same store + key: the in-memory index must
+        // be rebuilt from the MemoryVectors domain.
+        let mem = open_mem(&scratch, 31).await;
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, "notes");
+        assert_eq!(all[0].2, vec![0.1, 0.2, 0.3]);
+        let hits = mem
+            .semantic_search(&[0.1, 0.2, 0.3], 5)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].body, "purple");
+    }
+
+    #[tokio::test]
+    async fn semantic_search_ranks_most_similar_first() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 32).await;
+        let s0 = mem.put("t", "near").await.unwrap();
+        let s1 = mem.put("t", "far").await.unwrap();
+        mem.put_vector("t", s0, vec![1.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s1, vec![0.0, 1.0]).await.unwrap();
+
+        let hits = mem.semantic_search(&[1.0, 0.0], 2).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].body, "near");
+        assert_eq!(hits[1].body, "far");
+    }
+
+    #[tokio::test]
+    async fn forget_drops_vectors_persistently() {
+        let scratch = Scratch::new();
+        {
+            let mem = open_mem(&scratch, 33).await;
+            let a = mem.put("keep", "a").await.unwrap();
+            let b = mem.put("drop", "b").await.unwrap();
+            mem.put_vector("keep", a, vec![1.0, 0.0]).await.unwrap();
+            mem.put_vector("drop", b, vec![0.0, 1.0]).await.unwrap();
+            mem.forget("drop").await.unwrap();
+        }
+        // Reopen: the dropped topic's vector must not be in the
+        // rebuilt index either (it was deleted from the table).
+        let mem = open_mem(&scratch, 33).await;
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, "keep");
+    }
+
+    #[tokio::test]
+    async fn evict_oldest_unread_drops_vectors_persistently() {
+        let scratch = Scratch::new();
+        {
+            let mem = open_mem(&scratch, 34).await;
+            let s0 = mem.put("t", "old").await.unwrap();
+            let s1 = mem.put("t", "new").await.unwrap();
+            mem.put_vector("t", s0, vec![1.0, 0.0]).await.unwrap();
+            mem.put_vector("t", s1, vec![0.0, 1.0]).await.unwrap();
+            // Read s1 so s0 is the LRU loser.
+            let _ = mem.get_recent("t", 1).await.unwrap();
+            assert_eq!(mem.evict_oldest_unread("t", 1).await.unwrap(), 1);
+        }
+        let mem = open_mem(&scratch, 34).await;
+        let all = mem.load_all_vectors().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].1, 1, "only the surviving entry's vector");
+    }
+
+    #[tokio::test]
+    async fn semantic_search_skips_orphan_vector() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 35).await;
+        let s = mem.put("t", "real").await.unwrap();
+        mem.put_vector("t", s, vec![1.0, 0.0]).await.unwrap();
+        // Orphan: vector for a (topic, seq) with no entry body.
+        mem.put_vector("t", 999, vec![1.0, 0.0]).await.unwrap();
+
+        let hits = mem.semantic_search(&[1.0, 0.0], 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].body, "real");
+    }
+
+    #[test]
+    fn vector_codec_round_trips() {
+        let v = vec![1.5f32, -2.25, 0.0, 3.125];
+        let bytes = encode_vector(&v);
+        assert_eq!(decode_vector(&bytes), Some(v));
+        // A non-multiple-of-4 blob is rejected (not a panic).
+        assert_eq!(decode_vector(&[0, 1, 2]), None);
+    }
+
+    #[test]
+    fn vector_key_round_trips_topic_and_seq() {
+        let key = RedbMemory::vector_key("notes/sub", 42);
+        assert_eq!(
+            parse_vector_key(&key),
+            Some(("notes/sub".to_string(), 42))
+        );
+        // An entry key (different discriminator) is not a vector key.
+        assert_eq!(parse_vector_key(&RedbMemory::entry_key("t", 1)), None);
     }
 }
