@@ -2623,18 +2623,29 @@ async fn run_async(
     // provider exists; attached by-Arc at every planner-factory
     // site below. `None` → no refiner → the full Persona is
     // injected unchanged (pre-Phase-79 behavior).
+    // Phase 79 (Q4a) — shared last-selection stat: the refiner
+    // writes it, the daemon's GetLearningInsights handler reads
+    // the *same* handle. `None` when adaptive Persona is off.
+    let persona_selection_stat = embedding_provider.as_ref().map(|_| {
+        aivyx_channel::persona_context::shared_persona_selection_stat()
+    });
     let persona_refiner: Option<
         Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
     > = match &embedding_provider {
-        Some(provider) => Some(Arc::new(
-            aivyx_channel::persona_context::PersonaContextRefiner::with_defaults(
-                profile.clone(),
-                shared_persona.clone(),
-                active_role_name.clone(),
-                role_for_envelope.system_prompt.value.clone(),
-                Arc::clone(provider),
-            ),
-        )),
+        Some(provider) => {
+            let mut r =
+                aivyx_channel::persona_context::PersonaContextRefiner::with_defaults(
+                    profile.clone(),
+                    shared_persona.clone(),
+                    active_role_name.clone(),
+                    role_for_envelope.system_prompt.value.clone(),
+                    Arc::clone(provider),
+                );
+            if let Some(stat) = &persona_selection_stat {
+                r = r.with_stat(stat.clone());
+            }
+            Some(Arc::new(r))
+        }
         None => None,
     };
 
@@ -3818,6 +3829,9 @@ async fn run_async(
             // iff auto-recall is configured; the reflection
             // scheduler reads/clamps it on cadence.
             recall_log: recall_log.clone(),
+            // Phase 79 (Q4a) — same handle the adaptive refiner
+            // writes; the GetLearningInsights handler reads it.
+            persona_selection_stat: persona_selection_stat.clone(),
         })
             .await;
 

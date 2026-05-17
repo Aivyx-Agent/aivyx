@@ -816,6 +816,7 @@ async fn two_concurrent_connections() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1104,6 +1105,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1190,6 +1192,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1600,6 +1603,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -1863,6 +1867,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2238,6 +2243,7 @@ async fn mission_queries_round_trip_over_ipc() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2517,6 +2523,7 @@ async fn audit_queries_round_trip_over_ipc() {
             target_policies: std::collections::HashMap::new(),
             embedding_provider: None,
             recall_log: None,
+            persona_selection_stat: None,
             memory_retention: Vec::new(),
         })
         .await

@@ -615,6 +615,16 @@ mod tests {
             HTML.contains("function loadLearning"),
             "must define the Learning loader"
         );
+        // Phase 79 (Q4a) — the Learning pane must surface the
+        // adaptive-Persona last-selection.
+        assert!(
+            HTML.contains("payload.persona_selection"),
+            "must read the persona_selection field"
+        );
+        assert!(
+            HTML.contains("Adaptive Persona"),
+            "must render the adaptive-Persona selection line"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

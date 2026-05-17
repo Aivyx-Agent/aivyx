@@ -330,6 +330,14 @@ pub enum QueryResponsePayload {
     LearningInsights {
         digest: crate::recall_insights::LearningDigest,
         proposals: Vec<crate::recall_insights::ProposalProvenance>,
+        /// Phase 79 (Q4a) — the last turn's adaptive-Persona
+        /// selection (selected/total facets), or `None` if no
+        /// adaptive selection has run (no `[embedding]`, small
+        /// Soul, or pre-Phase-79). `#[serde(default)]` so older
+        /// frames decode.
+        #[serde(default)]
+        persona_selection:
+            Option<crate::persona_context::PersonaSelectionStat>,
     },
 }
 
@@ -1607,6 +1615,13 @@ mod tests {
                             ],
                         },
                     ],
+                    persona_selection: Some(
+                        crate::persona_context::PersonaSelectionStat {
+                            ts_secs: 1_715_002_000,
+                            selected: 6,
+                            total: 20,
+                        },
+                    ),
                 },
             },
             // Phase 70 — proposal query responses.

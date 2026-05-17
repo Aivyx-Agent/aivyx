@@ -213,6 +213,12 @@ pub struct DaemonConfig {
     /// skipped (pre-Phase-77 behavior).
     pub recall_log:
         Option<Arc<crate::recall_log::PersistentRecallLog>>,
+    /// Phase 79 (Q4a) — shared last-Persona-selection stat the
+    /// adaptive refiner writes and `GetLearningInsights` reads.
+    /// `None` → adaptive Persona not configured (the surface
+    /// reports no selection).
+    pub persona_selection_stat:
+        Option<crate::persona_context::SharedPersonaSelectionStat>,
 }
 
 /// Run the daemon server.
@@ -253,6 +259,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         target_policies,
         embedding_provider,
         recall_log,
+        persona_selection_stat,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -622,6 +629,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             memory: memory.clone(),
             embedding_provider: embedding_provider.clone(),
             recall_log: recall_log.clone(),
+            persona_selection_stat: persona_selection_stat.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -685,6 +693,10 @@ struct ConnectionContext {
     /// `GetLearningInsights` query. `None` = no auto-recall
     /// configured (the query returns an empty digest).
     recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
+    /// Phase 79 (Q4a) — last-Persona-selection stat for the
+    /// `GetLearningInsights` surface.
+    persona_selection_stat:
+        Option<crate::persona_context::SharedPersonaSelectionStat>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -704,6 +716,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         memory,
         embedding_provider,
         recall_log,
+        persona_selection_stat,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1035,6 +1048,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 memory.as_ref(),
                                 embedding_provider.as_ref(),
                                 recall_log.as_ref(),
+                                persona_selection_stat.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1282,6 +1296,7 @@ async fn run_single_connection_daemon(
         memory: None,
         embedding_provider: None,
         recall_log: None,
+        persona_selection_stat: None,
     })
     .await
 }
@@ -1321,6 +1336,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         target_policies: std::collections::HashMap::new(),
         embedding_provider: None,
         recall_log: None,
+        persona_selection_stat: None,
         memory_retention: Vec::new(),
     }).await
 }
@@ -1486,6 +1502,9 @@ async fn handle_query(
         &Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
     >,
     recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
+    persona_selection_stat: Option<
+        &crate::persona_context::SharedPersonaSelectionStat,
+    >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -1916,6 +1935,12 @@ async fn handle_query(
                 .unwrap_or(0);
             let now_secs = now_ms / 1000;
 
+            // Phase 79 (Q4a) — last adaptive-Persona selection.
+            // Independent of the recall substrate, so resolved
+            // once and included in every LearningInsights return.
+            let persona_selection = persona_selection_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
             let Some(rlog) = recall_log else {
@@ -1927,6 +1952,7 @@ async fn handle_query(
                         &[],
                     ),
                     proposals: Vec::new(),
+                    persona_selection,
                 };
             };
 
@@ -1983,6 +2009,7 @@ async fn handle_query(
                 proposals: crate::recall_insights::build_provenance(
                     &detail, &proposals,
                 ),
+                persona_selection,
             }
         }
     }

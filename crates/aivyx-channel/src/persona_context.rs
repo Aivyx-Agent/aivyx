@@ -16,9 +16,10 @@
 //! byte-identical full-Persona base prompt (Q3a).
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use aivyx_core::llm_planner::SystemPromptRefiner;
 use aivyx_llm::embedding::EmbeddingProvider;
@@ -38,6 +39,28 @@ pub const DEFAULT_TOP_K: usize = 12;
 /// turn" and is dropped even if `top_k` is unfilled (same
 /// rationale as the Phase 76 recall floor).
 pub const DEFAULT_MIN_SIMILARITY: f32 = 0.20;
+
+/// Phase 79 (Q4a) — the last turn's Persona selection, for the
+/// Phase 78 trust surface. Ephemeral (last-turn only, not
+/// persisted): an adaptive Soul that silently picks which
+/// identity to apply must still be legible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaSelectionStat {
+    pub ts_secs: u64,
+    pub selected: usize,
+    pub total: usize,
+}
+
+/// Shared handle the refiner writes and the
+/// `GetLearningInsights` handler reads. `None` inside = no
+/// adaptive selection has run yet this daemon lifetime.
+pub type SharedPersonaSelectionStat =
+    Arc<RwLock<Option<PersonaSelectionStat>>>;
+
+/// Construct an empty shared selection-stat handle.
+pub fn shared_persona_selection_stat() -> SharedPersonaSelectionStat {
+    Arc::new(RwLock::new(None))
+}
 
 /// Cosine of two equal-length vectors. Hand-rolled, zero-dep
 /// (the Phase 75 "no linalg crate" ethos). Returns 0.0 for the
@@ -70,6 +93,9 @@ pub struct PersonaContextRefiner {
     size_threshold: usize,
     top_k: usize,
     min_similarity: f32,
+    /// Phase 79 (Q4a) — optional last-selection sink for the
+    /// Phase 78 surface. `None` → breadcrumb-only.
+    stat: Option<SharedPersonaSelectionStat>,
 }
 
 impl PersonaContextRefiner {
@@ -93,7 +119,20 @@ impl PersonaContextRefiner {
             size_threshold,
             top_k,
             min_similarity,
+            stat: None,
         }
+    }
+
+    /// Phase 79 (Q4a) — attach the shared last-selection stat
+    /// so the Phase 78 learning surface can show what the
+    /// adaptive Soul did. Builder; the binary calls this with
+    /// the same handle it passes into `DaemonConfig`.
+    pub fn with_stat(
+        mut self,
+        stat: SharedPersonaSelectionStat,
+    ) -> Self {
+        self.stat = Some(stat);
+        self
     }
 
     /// Production constructor — module-default thresholds.
@@ -191,6 +230,18 @@ impl SystemPromptRefiner for PersonaContextRefiner {
             kept.len(),
             facets.len()
         );
+        if let Some(stat) = &self.stat {
+            if let Ok(mut w) = stat.write() {
+                *w = Some(PersonaSelectionStat {
+                    ts_secs: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    selected: kept.len(),
+                    total: facets.len(),
+                });
+            }
+        }
 
         let keep = |s: &str| kept.contains(s);
         Some(assemble_session_prompt_selected(

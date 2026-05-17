@@ -1507,6 +1507,20 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         ' recall-driven proposal(s)</span></div>';
       body.appendChild(summary);
 
+      // Phase 79 (Q4a) — adaptive Persona last-selection.
+      const ps = payload.persona_selection;
+      const personaCard = document.createElement('div');
+      personaCard.className = 'row-card';
+      personaCard.innerHTML =
+        '<div class="row-line"><span class="row-id">Adaptive Persona' +
+        '</span><span class="row-meta">' +
+        (ps
+          ? (ps.selected + '/' + ps.total +
+             ' facets injected last turn')
+          : 'not engaged (no [embedding] / small Soul / none yet)') +
+        '</span></div>';
+      body.appendChild(personaCard);
+
       function topicList(title, pairs) {
         const card = document.createElement('div');
         card.className = 'row-card';

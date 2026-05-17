@@ -12,6 +12,7 @@ use aivyx_channel::daemon_client::{
     daemon_is_running, get_learning_insights,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
+use aivyx_channel::persona_context::PersonaSelectionStat;
 use aivyx_channel::recall_insights::{
     LearningDigest, ProposalProvenance,
 };
@@ -22,13 +23,16 @@ pub async fn run_learning(
 ) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let (digest, proposals) =
+    let (digest, proposals, persona_selection) =
         get_learning_insights(&socket_path, window_secs)
             .await
             .map_err(|e| {
                 format!("failed to fetch learning insights: {e}")
             })?;
-    print!("{}", render_insights(&digest, &proposals));
+    print!(
+        "{}",
+        render_insights(&digest, &proposals, persona_selection.as_ref())
+    );
     Ok(())
 }
 
@@ -60,6 +64,7 @@ fn fmt_topics(pairs: &[(String, f32)]) -> String {
 fn render_insights(
     d: &LearningDigest,
     proposals: &[ProposalProvenance],
+    persona_selection: Option<&PersonaSelectionStat>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -85,6 +90,16 @@ fn render_insights(
         "  recall-driven Persona proposals: {}\n",
         d.proposals_in_window,
     ));
+    match persona_selection {
+        Some(p) => out.push_str(&format!(
+            "  adaptive Persona: {}/{} facets injected last turn\n",
+            p.selected, p.total,
+        )),
+        None => out.push_str(
+            "  adaptive Persona: not engaged (no [embedding] / \
+             small Soul / none yet)\n",
+        ),
+    }
     out.push_str("\nMost helpful topics:\n");
     out.push_str(&fmt_topics(&d.top_helpful));
     out.push_str("\nLeast helpful topics:\n");
@@ -142,7 +157,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[]);
+        let out = render_insights(&digest(), &[], None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -176,7 +191,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov);
+        let out = render_insights(&digest(), &prov, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -197,9 +212,28 @@ mod tests {
             top_unhelpful: vec![],
             proposals_in_window: 0,
         };
-        let out = render_insights(&d, &[]);
+        let out = render_insights(&d, &[], None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
+    }
+
+    #[test]
+    fn render_persona_selection_some_and_none() {
+        // None → "not engaged" line.
+        let none_out = render_insights(&digest(), &[], None);
+        assert!(none_out.contains("adaptive Persona: not engaged"));
+
+        // Some → selected/total.
+        let stat = PersonaSelectionStat {
+            ts_secs: 1_715_002_000,
+            selected: 6,
+            total: 20,
+        };
+        let some_out =
+            render_insights(&digest(), &[], Some(&stat));
+        assert!(some_out.contains(
+            "adaptive Persona: 6/20 facets injected last turn"
+        ));
     }
 }
