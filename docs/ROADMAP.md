@@ -1980,6 +1980,62 @@ LLM-composed proactive prose, conversational/interactive
 proactive, additional signal classes) are
 operator-feedback-gated.
 
+## Phase 81 — Persona Lifecycle (the Soul that refines itself)
+
+**Frozen — see [PHASE_81.md](PHASE_81.md).** For 80 phases
+the Persona only ever grew. Phase 81 closes the open half of
+the identity arc (the Phase 79 deferral, made consequential by
+Phase 80): on the existing reflection cadence the assistant
+*proposes* consolidation of near-duplicate facets and decay of
+long-unreinforced ones — the "self-improving" half of the
+identity layer. Zero new deps.
+
+- **Piggyback the reflection cron (Q1a):** `PersonaLifecycleDeps`
+  threaded into `run_reflection_scheduler` exactly like Phase
+  77/80; no new scheduler. No section / disabled / no schedule
+  → complete no-op.
+- **Propose-only, operator-gated (Q2a):** the pass files
+  normal Pending `PersonaProposal`s (`RemoveList` ops) and
+  **never resolves** them — the Phase 77/79 no-self-mutation
+  ethos applied to the highest-stakes layer; `Revert` makes
+  every approved action reversible. Consolidation removes the
+  shorter near-duplicates and keeps the longest *existing*
+  member, so no `AppendList` is needed and each removal is
+  independently safe (a deliberate simplification of the plan's
+  "RemoveList×N + AppendList" recipe — see prediction vs.
+  reality).
+- **Structural + embedding, no LLM (Q3a):** `soft_facets_of`
+  is the core-protection choke point (six soft lists only —
+  scalars + `behavioral_constraints` can never become an
+  action, the Phase 79 invariant extended, proven by test);
+  consolidation reuses the Phase 79 cosine seam, decay is
+  age-based; deterministic, no new persistence.
+- **Default-off, legible (Q4a):** opt-in `[persona_lifecycle]`
+  in `aivyx-config`; deterministic proposal ids dedup across
+  cycles against the chain in *any* status (never nag); a
+  per-cycle breadcrumb + a `persona_lifecycle` field on the
+  Phase 78 `GetLearningInsights` surface (CLI + Web UI).
+
+Streak all three correct: DESIGN.md → **28**, PRODUCT.md →
+**21**, `aivyx-core/src/lib.rs` → **29** (new record, beats
+Phase 80's 28) — lifecycle actions are existing-shape
+proposals through the existing proposal/persona chains, so no
+new `KeyDomain` and no new `AuditTag`; every line lives in
+`aivyx-channel` / `aivyx-config`; `lib.rs` byte-identical, the
+streak-shaped-architecture discipline continued. Tests **+17**
+(1507 → 1524) — **in band** (predicted ~+16-22), the second
+consecutive in-band landing; slightly lighter than Phase 80's
++20 exactly as predicted (no new KeyDomain), the
+embedding-clustering detector + core-protection invariant +
+config carrying the genuine new surface. One scoped
+simplification (consolidation needs no `AppendList`), recorded
+honestly. Zero clippy warnings. Zero new workspace deps.
+
+Likely follow-ups (helpfulness-driven decay,
+contradiction-based supersession, standalone
+`[[persona_lifecycle_schedule]]`, facet-scoped one-click
+revert) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

@@ -767,6 +767,82 @@ their `reason` provenance, dedup/cap counts — appears in the
 ("proactive: N surfaced last cycle"), the Phase 78 trust
 surface extended once more.
 
+## Persona lifecycle (Phase 81)
+
+For 80 phases the Persona ("Soul") only ever **grew** — the
+reflection loop adds facets, none ever consolidated a
+redundant one or retired a stale one. Over months a Soul that
+only accretes dilutes its own signal and can contradict
+itself; Phase 80 raised the stakes (a bloated Soul now also
+drives proactive sends). Phase 81 gives the Persona a
+**lifecycle**: on the existing reflection cadence the
+assistant notices near-duplicate and long-unreinforced
+soft-list facets and **proposes** consolidation or decay.
+
+Identity is the highest-stakes layer, so it ships **off by
+default, propose-only, core-protected, and fully reversible**:
+
+- **Opt-in.** With no `[persona_lifecycle]` section (or
+  `enabled = false`) the pass is a complete no-op — exactly
+  pre-Phase-81 behaviour. It also needs a
+  `[[reflection_schedule]]` (it piggybacks that cron) and an
+  `[embedding]` provider (consolidation embeds facets).
+- **Propose-only — the loop never edits identity.** Every
+  action is filed as a normal *Pending* `PersonaProposal` you
+  approve or reject in `aivyx persona` / the Web UI. Nothing
+  changes the Soul until you say so, and `aivyx persona
+  revert` undoes any approved action (it is a plain
+  `RemoveList` delta on the chain).
+- **The always-on core is structurally untouchable.** Only
+  the six *soft* lists (`primary_use_cases`,
+  `behavioral_preferences`, `learned_context`,
+  `communication_adaptations`, `character_traits`,
+  `relationship_milestones`) are ever considered. The scalar
+  identity and **every `behavioral_constraint`** are excluded
+  by construction — the Phase 79 always-on-core invariant
+  extended to this layer.
+- **Conservative, no extra LLM.** *Consolidate*: facets whose
+  embeddings are near-identical (cosine above
+  `consolidation_similarity`) — it proposes removing the
+  shorter near-duplicates and keeping the longest (canonical)
+  one. *Decay*: a facet whose originating delta is older than
+  `decay_max_age_secs` with no later delta in its category
+  (active curation suppresses decay). Never acts on a list
+  with fewer than `min_soft_facets` entries. No model judges
+  *whether* to act.
+- **Never nags.** A deterministic proposal id means an action
+  already filed (in any status, including a prior *Rejected*)
+  is never re-proposed.
+
+**Configure it** in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[persona_lifecycle]
+enabled = true
+consolidation_similarity = 0.92   # optional, default 0.92
+decay_max_age_secs = 7776000      # optional, default ~90d
+min_soft_facets = 6               # optional, default 6
+# Each class defaults ON when enabled; set false to mute one.
+# At least one must stay on.
+signal_consolidate = true
+signal_decay = true
+```
+
+Validation (only when `enabled = true`):
+`consolidation_similarity` in `(0.0, 1.0]`,
+`decay_max_age_secs >= 1`, `min_soft_facets >= 1`, at least
+one signal class on. **To turn it off:** set
+`enabled = false` or delete the `[persona_lifecycle]` block.
+
+**Where to see it.** The daemon log prints
+`aivyx persona-lifecycle: schedule … — proposed N
+(deduped D)`, and the last cycle's proposed actions + their
+`reason` provenance appear in the `aivyx learning` view and
+the Web UI **Learning** tab ("persona lifecycle: N proposed
+last cycle"). Filed proposals show up in `aivyx persona`
+exactly like reflection-driven ones — the Phase 78 trust
+surface extended once more.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

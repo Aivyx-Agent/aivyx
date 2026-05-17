@@ -1139,6 +1139,31 @@ respond to it. Closing the gap is the inflection point between
   PRODUCT.md → **20**, lib.rs → **28** (new record, beating
   Phase 79's 27). Zero new workspace deps.
 
+- **Phase 81 (Persona Lifecycle, shipped 2026-05-18).** Closes
+  the open half of the identity arc: for 80 phases the Persona
+  only ever grew. It introduces **no new product commitment**
+  and weakens none — it refines *how* the already-delivered
+  P14 Persona maintains itself, and the operator-facing
+  contract is *strengthened*: a structurally-enforced
+  guarantee that the scalar identity + every
+  `behavioral_constraint` can never be consolidated or
+  decayed, and full reversibility of every lifecycle action
+  via the existing proposal + `Revert` chain. Delivered as
+  conservatively as the trust stakes demand: **off by
+  default**, **propose-only** (the loop never edits identity —
+  it files normal Pending proposals the operator
+  approves/rejects), a structural no-LLM gate (near-duplicate
+  cosine clustering + age-based decay), and a deterministic
+  never-nag dedup. Reuse was near-total — lifecycle actions
+  are existing-shape `RemoveList` proposals through the
+  existing chains, so no schema migration, no new `KeyDomain`,
+  no new `AuditTag`. All code lives in `aivyx-channel` /
+  `aivyx-config`. Tests **+17** (1507 → 1524) — **in band**
+  (predicted ~+16-22), the second consecutive in-band
+  landing. Streak all three correct: DESIGN.md → 28,
+  PRODUCT.md → **21**, lib.rs → **29** (new record, beating
+  Phase 80's 28). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

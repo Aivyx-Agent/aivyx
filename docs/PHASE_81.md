@@ -265,36 +265,103 @@ wiring:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct (the headline).**
+DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs` are all
+byte-identical to their entry hashes:
+
+- DESIGN.md `89dc8903…` unchanged → streak **28** (predicted
+  "extends to twenty-eight" — exact).
+- PRODUCT.md `cd60c4f9…` unchanged → streak **21** (predicted
+  "extends to twenty-one" — exact).
+- `aivyx-core/src/lib.rs` `69fb9af1…` unchanged → streak
+  **29**, a new project record beating Phase 80's 28
+  (predicted "extends to twenty-nine (new record)" — exact).
+
+The Phase 76/77/80 lesson held again: lifecycle actions are
+existing-shape `RemoveList` `PersonaProposal`s flowing through
+the *existing* proposal/persona chains, so there was no new
+`KeyDomain` and no new `AuditTag` — nothing required an
+`aivyx-core` type change. Detector, pass, config, and the
+whole observability surface lived in `aivyx-channel` /
+`aivyx-config`, exactly as predicted at open.
+
+**Test delta — +17 (1507 → 1524), IN BAND, prediction
+correct.** Predicted "~+16-22 … slightly lighter than Phase
+80's +20 as there is no new KeyDomain." Actual +17 lands in
+the lower half of that band — the **second consecutive in-band
+landing** (Phase 80 was the first, after four small misses),
+and the "slightly lighter than +20" call was right: Phase 80's
+new `ProactiveLog` KeyDomain carried ~3-4 isolation/GC/dedup
+tests that Phase 81 (reusing the persona + proposal chains)
+did not need; the embedding-clustering detector +
+core-protection invariant + `to_proposals` + config + the
+integration pass carried the rest. The converged calibration
+is now validated across three regimes: reuse-heavy ≈ +10-15,
+new-surface-with-new-domain ≈ +20, new-surface-no-new-domain
+≈ +17.
+
+**Deviations — one scoped simplification, recorded honestly
+(net safer).** The plan (Task 4 / Q2a) described a
+`Consolidate` proposal as carrying "the `RemoveList`×N +
+`AppendList` recipe." In implementation the deterministic
+merge picks the **longest existing member** as the canonical
+facet — which is, by construction, already present in the
+soft list. The `AppendList(merged)` would therefore be an
+idempotent no-op (per `PersonaDeltaOp::AppendList`'s
+documented "duplicate appends are idempotent"). Emitting a
+no-op proposal the operator must review is pure noise, so the
+pass emits **only** the `RemoveList`s for the non-canonical
+near-duplicates and no `AppendList`. This is strictly safer
+and simpler than the planned recipe: each removal is an
+independent, individually-reviewable, individually-`Revert`-able
+proposal, and the kept facet is never touched at all (so a
+consolidation can never transiently drop the canonical text).
+No behaviour the plan promised is lost — consolidation still
+dedupes a soft list down to its canonical member, operator-
+gated and reversible — but the "+ AppendList" half of the
+recipe was correctly identified as unnecessary and dropped.
+Every other planned surface shipped exactly as scoped.
+
+**Core-protection invariant — delivered structurally, not by
+runtime check.** `soft_facets_of` is total over the six soft
+lists and has no arm for the scalar identity or
+`behavioral_constraints`; `SoftCategory` has no variant for
+them; `to_delta_category` is total over the same six. A
+scalar or guardrail therefore *cannot* be expressed as a
+lifecycle action — the Phase 79 always-on-core invariant
+extended to this layer by construction, proven by the
+`core_protection_soft_facets_of_excludes_core` test rather
+than asserted at runtime.
+
+No clippy warnings. No new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[persona_lifecycle]` config + validation +
+- [x] `[persona_lifecycle]` config + validation +
   off-when-absent — Task 2.
-- [ ] Structural detector, pure, per-class + empty +
+- [x] Structural detector, pure, per-class + empty +
   core-protection invariant tested — Task 3.
-- [ ] Lifecycle pass piggybacked on reflection; no-op when
+- [x] Lifecycle pass piggybacked on reflection; no-op when
   off/absent; files Pending proposals + cross-cycle dedup;
   never resolves — Task 4.
-- [ ] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
+- [x] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
   Task 5.
-- [ ] Tests across config, detector, pass integration,
+- [x] Tests across config, detector, pass integration,
   observability, IPC, CLI/Web UI — Task 6.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 6.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 6.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-eight.
-- [ ] PRODUCT.md streak extends to twenty-one.
-- [ ] Production-core streak extends to twenty-nine (new
+- [x] DESIGN.md streak extends to twenty-eight.
+- [x] PRODUCT.md streak extends to twenty-one.
+- [x] Production-core streak extends to twenty-nine (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+16-22; per the converged
-  calibration band — embedding-clustering detector +
-  core-protection invariant + config carry real new surface,
-  slightly lighter than Phase 80's +20 as there is no new
+- [x] Test count delta: positive — **+17 (1507 → 1524)**, in
+  band (predicted ~+16-22), second consecutive in-band
+  landing; lighter than Phase 80's +20 as predicted (no new
   KeyDomain).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

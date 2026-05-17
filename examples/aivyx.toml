@@ -873,3 +873,38 @@ parent_role = "researcher"
 # signal_ttl_expiry     = true
 # signal_recall_cluster = true
 # signal_due_reminder   = true
+
+# ----------------------------------------------------------------
+# Persona lifecycle (Phase 81) — OFF BY DEFAULT
+# ----------------------------------------------------------------
+#
+# For 80 phases the Persona ("Soul") only ever GREW. This lets
+# the assistant, on its existing reflection cadence, PROPOSE
+# consolidation of near-duplicate soft-list facets and decay of
+# long-unreinforced ones — so the learned character stays sharp
+# instead of diluting itself over months.
+#
+# It is off unless this [persona_lifecycle] block is present
+# AND `enabled = true`. With it absent/false the pass is a
+# complete no-op — exactly pre-Phase-81 behaviour. It also
+# needs a [[reflection_schedule]] (it piggybacks that cron) and
+# an [embedding] provider (consolidation embeds facets).
+#
+# Safety: it ONLY ever files Pending PersonaProposals — the
+# loop never edits identity itself; you approve/reject in
+# `aivyx persona` / the Web UI and `aivyx persona revert`
+# undoes any approved action. The scalar identity and EVERY
+# behavioral_constraint are structurally excluded — only the
+# six soft lists are ever touched. A deterministic proposal id
+# means it never re-proposes (never nags). The last cycle
+# shows in `aivyx learning` and the Web UI "Learning" tab.
+#
+# [persona_lifecycle]
+# enabled = true
+# consolidation_similarity = 0.92   # optional, default 0.92
+# decay_max_age_secs = 7776000      # optional, default ~90d
+# min_soft_facets = 6               # optional, default 6
+# # Each class defaults ON when enabled; set false to mute one.
+# # At least one must stay on.
+# signal_consolidate = true
+# signal_decay = true
