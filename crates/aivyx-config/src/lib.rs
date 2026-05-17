@@ -550,6 +550,11 @@ pub struct AivyxConfig {
     /// daemon embeds memory writes and serves
     /// `mode = "semantic"` searches.
     pub embedding: Option<EmbeddingConfig>,
+    /// Phase 80 — `[proactive]` section. `None` when absent:
+    /// proactive surfacing is off (the assistant never reaches
+    /// out unprompted — pre-Phase-80 behavior). `Some` only
+    /// arms the pass; it still no-ops unless `enabled = true`.
+    pub proactive: Option<ProactiveConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1370,6 +1375,64 @@ pub const DEFAULT_RAG_TOP_K: usize = 5;
 /// unrelated prompt would otherwise pull in.
 pub const DEFAULT_RAG_MIN_SIMILARITY: f32 = 0.20;
 
+/// Phase 80 — which structural signal classes the proactive
+/// pass is allowed to surface. All default `true`: an operator
+/// who turns proactive on generally wants every conservative
+/// signal, and can disable individual classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProactiveSignals {
+    /// A memory entry within the warn window of TTL eviction.
+    pub ttl_expiry: bool,
+    /// A topic whose Phase-77 net helpfulness is strongly
+    /// positive over the high threshold.
+    pub recall_cluster: bool,
+    /// Reminder-shaped memory whose due time has arrived.
+    pub due_reminder: bool,
+}
+
+impl Default for ProactiveSignals {
+    fn default() -> Self {
+        ProactiveSignals {
+            ttl_expiry: true,
+            recall_cluster: true,
+            due_reminder: true,
+        }
+    }
+}
+
+/// Phase 80 — operator-facing config for proactive surfacing
+/// (the assistant reaching out unprompted). **Off unless an
+/// `[proactive]` section is present *and* `enabled = true`** —
+/// an unprompted outbound message is the highest-trust-stakes
+/// action, so it is opt-in, hard-capped, and never a
+/// surprise-on-upgrade.
+#[derive(Debug, Clone)]
+pub struct ProactiveConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present the pass is a no-op until this is `true`.
+    pub enabled: bool,
+    /// Notify-target name the surfacing is dispatched to (must
+    /// match a configured `[[notify_target]]`). Required when
+    /// `enabled`.
+    pub target: String,
+    /// Hard cap on proactive sends per `window_secs`, on top of
+    /// the per-target Phase 73 rate-limit. The total volume
+    /// guard regardless of how much the signal fires.
+    pub max_per_window: u32,
+    /// The cap's window, in seconds. Default
+    /// [`DEFAULT_PROACTIVE_WINDOW_SECS`].
+    pub window_secs: u64,
+    /// Which structural signal classes may surface.
+    pub signals: ProactiveSignals,
+}
+
+/// Default proactive volume cap: at most this many unprompted
+/// surfacings per [`DEFAULT_PROACTIVE_WINDOW_SECS`]. Small on
+/// purpose — proactive is a scalpel, not a feed.
+pub const DEFAULT_PROACTIVE_MAX_PER_WINDOW: u32 = 3;
+/// Default proactive cap window — one day.
+pub const DEFAULT_PROACTIVE_WINDOW_SECS: u64 = 86_400;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1400,6 +1463,9 @@ struct RawToml {
     /// `[embedding]` section. Phase 75 — semantic memory search.
     #[serde(default)]
     embedding: RawEmbedding,
+    /// `[proactive]` section. Phase 80 — proactive surfacing.
+    #[serde(default)]
+    proactive: RawProactive,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -1971,6 +2037,28 @@ struct RawEmbedding {
     rag_min_similarity: Option<f32>,
 }
 
+/// Phase 80 — `[proactive]` deserialize target. Absent section
+/// → all-`None` via `Default` → the loader maps to
+/// `proactive: None` (off). Signal toggles are `Option<bool>`
+/// so an omitted key means "default on," set means explicit.
+#[derive(Debug, Default, Deserialize)]
+struct RawProactive {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    max_per_window: Option<u32>,
+    #[serde(default)]
+    window_secs: Option<u64>,
+    #[serde(default)]
+    signal_ttl_expiry: Option<bool>,
+    #[serde(default)]
+    signal_recall_cluster: Option<bool>,
+    #[serde(default)]
+    signal_due_reminder: Option<bool>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2347,6 +2435,7 @@ impl AivyxConfig {
         // var beats the TOML key; a still-`None` key is filled
         // from the encrypted store in phase 2 of the load.
         let embedding = build_embedding_config(&toml.embedding)?;
+        let proactive = build_proactive_config(&toml.proactive)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3214,6 +3303,7 @@ impl AivyxConfig {
             telegram,
             email,
             embedding,
+            proactive,
             roles,
             active_role,
             profile,
@@ -4011,6 +4101,83 @@ fn build_embedding_config(
         dimensions,
         rag_top_k,
         rag_min_similarity,
+    }))
+}
+
+/// Phase 80 — build the `[proactive]` config. Absent section
+/// (every field `None`) → `Ok(None)` (proactive off, the
+/// common case). Validation applies **only when `enabled`** —
+/// a present-but-disabled section is allowed to be incomplete
+/// so an operator can stage the config before arming it.
+fn build_proactive_config(
+    raw: &RawProactive,
+) -> Result<Option<ProactiveConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.target.is_some()
+        || raw.max_per_window.is_some()
+        || raw.window_secs.is_some()
+        || raw.signal_ttl_expiry.is_some()
+        || raw.signal_recall_cluster.is_some()
+        || raw.signal_due_reminder.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let target = raw.target.clone().unwrap_or_default();
+    let max_per_window = raw
+        .max_per_window
+        .unwrap_or(DEFAULT_PROACTIVE_MAX_PER_WINDOW);
+    let window_secs =
+        raw.window_secs.unwrap_or(DEFAULT_PROACTIVE_WINDOW_SECS);
+    let signals = ProactiveSignals {
+        ttl_expiry: raw.signal_ttl_expiry.unwrap_or(true),
+        recall_cluster: raw.signal_recall_cluster.unwrap_or(true),
+        due_reminder: raw.signal_due_reminder.unwrap_or(true),
+    };
+
+    // Only an *armed* config must be coherent — a staged
+    // (enabled = false) section can be partial.
+    if enabled {
+        if target.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                field: "proactive.target",
+                reason: "`target` is required when proactive is \
+                         enabled (must name a [[notify_target]])"
+                    .into(),
+            });
+        }
+        if max_per_window == 0 {
+            return Err(ConfigError::Invalid {
+                field: "proactive.max_per_window",
+                reason: "`max_per_window` must be >= 1".into(),
+            });
+        }
+        if window_secs == 0 {
+            return Err(ConfigError::Invalid {
+                field: "proactive.window_secs",
+                reason: "`window_secs` must be >= 1".into(),
+            });
+        }
+        if !signals.ttl_expiry
+            && !signals.recall_cluster
+            && !signals.due_reminder
+        {
+            return Err(ConfigError::Invalid {
+                field: "proactive.signals",
+                reason: "at least one signal class must be enabled \
+                         when proactive is enabled"
+                    .into(),
+            });
+        }
+    }
+
+    Ok(Some(ProactiveConfig {
+        enabled,
+        target,
+        max_per_window,
+        window_secs,
+        signals,
     }))
 }
 

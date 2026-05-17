@@ -5657,3 +5657,168 @@ async fn embedding_store_key_without_section_stays_none() {
     assert!(cfg.embedding.is_none());
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Phase 80 — [proactive] section
+// ------------------------------------------------------------------
+
+fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
+    let tmp = TempDir::new(tag);
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, body).unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    AivyxConfig::load_from_env_and_toml(&opts).expect("load")
+}
+
+/// No `[proactive]` section → `proactive: None` (off; the
+/// assistant never reaches out unprompted, pre-Phase-80).
+#[test]
+fn proactive_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.proactive.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config): it builds with `enabled = false`, defaults
+/// elsewhere, and is NOT validated.
+#[test]
+fn proactive_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[proactive]\nenabled = false\n",
+        "proactive-staged",
+    );
+    let p = cfg.proactive.expect("section present");
+    assert!(!p.enabled);
+    assert_eq!(p.target, "");
+    assert_eq!(
+        p.max_per_window,
+        crate::DEFAULT_PROACTIVE_MAX_PER_WINDOW
+    );
+    assert_eq!(
+        p.window_secs,
+        crate::DEFAULT_PROACTIVE_WINDOW_SECS
+    );
+    // Signals default on.
+    assert!(p.signals.ttl_expiry);
+    assert!(p.signals.recall_cluster);
+    assert!(p.signals.due_reminder);
+    drop(env);
+}
+
+/// Enabled + valid: explicit fields win; an explicitly-off
+/// signal is respected while the others default on.
+#[test]
+fn proactive_enabled_valid_with_signal_toggle() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[proactive]\nenabled = true\ntarget = \"ops\"\n\
+         max_per_window = 5\nwindow_secs = 3600\n\
+         signal_due_reminder = false\n",
+        "proactive-valid",
+    );
+    let p = cfg.proactive.expect("section present");
+    assert!(p.enabled);
+    assert_eq!(p.target, "ops");
+    assert_eq!(p.max_per_window, 5);
+    assert_eq!(p.window_secs, 3600);
+    assert!(p.signals.ttl_expiry);
+    assert!(p.signals.recall_cluster);
+    assert!(!p.signals.due_reminder);
+    drop(env);
+}
+
+/// Enabled without a target → load-time `Invalid`.
+#[test]
+fn proactive_enabled_requires_target() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("proactive-no-target");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[proactive]\nenabled = true\n")
+        .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "proactive.target");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with `max_per_window = 0` → `Invalid`.
+#[test]
+fn proactive_enabled_zero_cap_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("proactive-zero-cap");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[proactive]\nenabled = true\ntarget = \"ops\"\n\
+         max_per_window = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "proactive.max_per_window");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with every signal class off → `Invalid`.
+#[test]
+fn proactive_enabled_all_signals_off_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("proactive-no-signals");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[proactive]\nenabled = true\ntarget = \"ops\"\n\
+         signal_ttl_expiry = false\n\
+         signal_recall_cluster = false\n\
+         signal_due_reminder = false\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "proactive.signals");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}

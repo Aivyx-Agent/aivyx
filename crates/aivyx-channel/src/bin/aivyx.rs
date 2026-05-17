@@ -2297,6 +2297,9 @@ async fn run_async(
         // write tool's embedding hook and the daemon's
         // lazy-backfill timer below.
         embedding: config_embedding,
+        // Phase 80 — `[proactive]` config. Bound here; consumed
+        // by the proactive pass wiring in a later task.
+        proactive: _config_proactive,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
