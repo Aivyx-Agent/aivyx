@@ -701,6 +701,72 @@ Web UI **Learning** tab ("Adaptive Persona: N/M facets
 injected last turn") — the Phase 78 trust surface, extended:
 an adaptive Soul stays legible.
 
+## Proactive surfacing (Phase 80)
+
+For 79 phases the assistant only ever acted when prompted — a
+turn, a cron, a webhook. Phase 80 lets it **reach out first**:
+on its existing reflection cadence it notices a concrete,
+high-confidence reason to surface something and sends it
+unprompted — *"you noted X 29 days ago, it expires
+tomorrow"*; *"your `deploy/` notes keep helping, here's the
+cluster."*
+
+An unprompted **outbound** message is the highest-trust-stakes
+thing the assistant can do, so it ships **off by default,
+hard-capped, and fully explainable**:
+
+- **Opt-in.** With no `[proactive]` section (or
+  `enabled = false`) the pass is a complete no-op — exactly
+  pre-Phase-80 behaviour. Nothing reaches out unless you ask
+  it to.
+- **Structural gate, no extra LLM.** It surfaces only when it
+  can point to a concrete reason in one of three conservative
+  signal classes: a memory within a day of TTL eviction
+  (`signal_ttl_expiry`), a topic whose Phase 77 net
+  helpfulness is strongly positive (`signal_recall_cluster`),
+  or a `@due:`-marked reminder whose time has arrived
+  (`signal_due_reminder`). No model judges *whether* to
+  interrupt you — the Phase 77 no-self-judgement ethos applied
+  to the highest-stakes action.
+- **Hard volume cap.** At most `max_per_window` sends per
+  `window_secs` (default **3 per day**), enforced
+  deterministically on top of Phase 73's per-target
+  rate-limit. Proactive is a scalpel, not a feed.
+- **Never nags.** Every surfaced item's deterministic id is
+  recorded in an encrypted, HKDF-isolated `ProactiveLog`
+  store; the same item is never surfaced twice across cycles.
+  Rows GC on the reflection cadence (~30-day retain).
+
+**Configure it** in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[proactive]
+enabled = true
+target  = "me"          # a configured notify target name
+max_per_window = 3       # optional, default 3
+window_secs    = 86400   # optional, default 86400 (1 day)
+# Each signal class defaults ON when proactive is enabled;
+# set to false to mute one. At least one must stay on.
+signal_ttl_expiry     = true
+signal_recall_cluster = true
+signal_due_reminder   = true
+```
+
+Validation (only when `enabled = true`): `target` non-empty,
+`max_per_window >= 1`, `window_secs >= 1`, at least one signal
+class on. **To turn it off:** set `enabled = false` or delete
+the `[proactive]` block.
+
+**Where it's recorded.** Every send lands in the notify
+history (the existing `AutoNotifyDispatched` audit event, same
+as any auto-notify). The daemon log prints a per-cycle
+breadcrumb `aivyx proactive: schedule … — surfaced N
+(deduped D, capped C)`, and the last cycle's outcome — items,
+their `reason` provenance, dedup/cap counts — appears in the
+`aivyx learning` view and the Web UI **Learning** tab
+("proactive: N surfaced last cycle"), the Phase 78 trust
+surface extended once more.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

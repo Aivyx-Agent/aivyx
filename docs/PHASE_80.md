@@ -228,36 +228,92 @@ wiring:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct (the headline).**
+DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs` are all
+byte-identical to their entry hashes:
+
+- DESIGN.md `89dc8903…` unchanged → streak **27** (predicted
+  "extends to twenty-seven" — exact).
+- PRODUCT.md `cd60c4f9…` unchanged → streak **20** (predicted
+  "extends to twenty" — exact).
+- `aivyx-core/src/lib.rs` `69fb9af1…` unchanged → streak
+  **28**, a new project record beating Phase 79's 27
+  (predicted "extends to twenty-eight (new record)" — exact).
+
+The Phase 76/77 lesson held once more: because the proactive
+pass is a structural, no-LLM/no-turn composition dispatched
+through the *existing* `NotifyDispatcher`, it produced the
+**existing** `AutoNotifyDispatched` audit event — no new
+`AuditTag` variant, so no `lib.rs` touch. Detector, dispatch,
+config, the new `KeyDomain`, and the whole observability
+surface lived entirely in `aivyx-channel` / `aivyx-config` /
+`aivyx-storage`, exactly as predicted at open.
+
+**Test delta — +20 (1487 → 1507), IN BAND, prediction
+correct.** Predicted "~+14-22, top-of-band — detector + new
+KeyDomain + config carry real new surface like Phase 77's
++22." Actual +20 lands in the top half of that band. This is
+the **first in-band landing after four consecutive small
+misses (Phases 76–79)** — the converged calibration finally
+matched reality because Phase 80, unlike the four reuse-heavy
+phases before it, carried genuine *new* surface (a pure
+heavily-unit-tested detector, a brand-new isolated KeyDomain +
+its dedup/GC log, a full config section with validation, and a
+real integration pass over a store + fake notify backend), the
+exact "real new surface like Phase 77's +22" the prediction
+called out. The calibration band is now validated in both
+regimes: reuse-heavy ≈ +10-15, new-surface ≈ +18-22.
+
+**Deviations — none in scope; one honest nuance recorded.**
+Every planned surface shipped exactly as scoped (config,
+storage isolation + log, pure detector with per-class + empty
+tests, the piggybacked cap/dedup/dispatch pass, the breadcrumb
++ Phase 78 surface extension, docs). The honest nuance: the
+plan and Q3a describe the hard `max_per_window` cap as sitting
+"on top of Phase 73's per-target rate-limit." In practice the
+proactive pass dispatches through `NotifyDispatcher::dispatch`,
+and Phase 73's per-target rate-limit is applied at the
+*trigger* layer, not inside raw `dispatch` — so for proactive
+specifically the **deterministic `max_per_window` cap is the
+primary volume guard**, not a secondary one behind the
+rate-limit. This is by design and strictly *safer* to state
+plainly (a single deterministic cap the operator sets,
+enforced by `count_since` over the dedup log, rather than a
+cap whose backstop only sometimes engages), but the original
+"on top of" framing overstated the layering and is corrected
+here for the record. No behaviour changed; the cap works as
+specified.
+
+No clippy warnings. No new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[proactive]` config + validation + off-when-absent —
+- [x] `[proactive]` config + validation + off-when-absent —
   Task 2.
-- [ ] `KeyDomain::ProactiveLog` + isolation test +
+- [x] `KeyDomain::ProactiveLog` + isolation test +
   `PersistentProactiveLog` (dedup + GC) — Task 3.
-- [ ] Structural detector, pure, per-class + empty tested —
+- [x] Structural detector, pure, per-class + empty tested —
   Task 4.
-- [ ] Proactive pass piggybacked on reflection; no-op when
+- [x] Proactive pass piggybacked on reflection; no-op when
   off/absent; hard cap + cross-cycle dedup + dispatch —
   Task 5.
-- [ ] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
+- [x] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
   Task 6.
-- [ ] Tests across config, storage, detector, pass
+- [x] Tests across config, storage, detector, pass
   integration, observability, IPC, CLI/Web UI — Task 7.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 7.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 7.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-seven.
-- [ ] PRODUCT.md streak extends to twenty.
-- [ ] Production-core streak extends to twenty-eight (new
+- [x] DESIGN.md streak extends to twenty-seven.
+- [x] PRODUCT.md streak extends to twenty.
+- [x] Production-core streak extends to twenty-eight (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+14-22; per the converged
-  calibration band, top-of-band — detector + new KeyDomain +
-  config carry real new surface like Phase 77's +22).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive — **+20 (1487 → 1507)**, in
+  band (predicted ~+14-22, top-of-band); first in-band landing
+  after four consecutive small misses.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

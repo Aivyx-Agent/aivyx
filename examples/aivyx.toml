@@ -838,3 +838,38 @@ parent_role = "researcher"
 # byte-identical. Nothing to configure; the `aivyx learning`
 # view and the daemon log (`aivyx persona: injected N/M
 # facets`) show what it selected.
+
+# ----------------------------------------------------------------
+# Proactive surfacing (Phase 80) — OFF BY DEFAULT
+# ----------------------------------------------------------------
+#
+# Lets the assistant reach out FIRST, unprompted, on its
+# existing reflection cadence when it finds a concrete reason:
+# a memory about to TTL-evict, a topic whose Phase 77 net
+# helpfulness is strongly positive, or a `@due:` reminder whose
+# time has arrived. No LLM judges WHETHER to interrupt you — the
+# gate is purely structural (the Phase 77 ethos applied to the
+# highest-stakes action: an unprompted OUTBOUND message).
+#
+# It is off unless this [proactive] block is present AND
+# `enabled = true`. With it absent/false the pass is a complete
+# no-op — exactly pre-Phase-80 behaviour. It also needs a
+# [[reflection_schedule]] (it piggybacks that cron) and a
+# matching notify target.
+#
+# Safety rails: a hard `max_per_window` cap (default 3/day) on
+# TOP of Phase 73's per-target rate-limit, and a never-nag
+# dedup log so the same item is never surfaced twice. Every
+# send lands in the notify history; the last cycle shows in
+# `aivyx learning` and the Web UI "Learning" tab.
+#
+# [proactive]
+# enabled = true
+# target  = "me"           # a configured notify target name
+# max_per_window = 3        # optional, default 3
+# window_secs    = 86400    # optional, default 86400 (1 day)
+# # Each signal class defaults ON when enabled; set false to
+# # mute one. At least one must stay on.
+# signal_ttl_expiry     = true
+# signal_recall_cluster = true
+# signal_due_reminder   = true

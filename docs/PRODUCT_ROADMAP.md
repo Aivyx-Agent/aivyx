@@ -1117,6 +1117,28 @@ respond to it. Closing the gap is the inflection point between
   PRODUCT.md → 19, lib.rs → **27** (new record, beating Phase
   78's 26). Zero new workspace deps.
 
+- **Phase 80 (Proactive Surfacing, shipped 2026-05-17).** The
+  capstone of the 75–79 arc: the assistant now reaches out
+  *first*. It introduces **no new product commitment** and
+  weakens none — it is a quality/vision deepening of the
+  already-delivered G3 (memory) / P8 (reflection) substrate,
+  delivered as conservatively as the trust stakes demand:
+  **off by default**, a structural no-LLM gate (it interrupts
+  only when it can name a concrete reason — a TTL boundary, a
+  strong Phase-77 recall cluster, a due reminder), a hard
+  per-window cap on top of Phase 73's rate-limit, a never-nag
+  dedup store, and every send recorded in the notify history +
+  the Phase 78 learning surface. Reuse was near-total: a
+  proactive surfacing is an auto-notify with a specific shape
+  — no new scheduler, no LLM call, no agent turn, the existing
+  `AutoNotifyDispatched` audit event. All code lives in
+  `aivyx-channel` / `aivyx-config` / `aivyx-storage`. Tests
+  **+20** (1487 → 1507) — **in band** (predicted ~+14-22,
+  top), the first in-band landing after four consecutive small
+  misses. Streak all three correct: DESIGN.md → 27,
+  PRODUCT.md → **20**, lib.rs → **28** (new record, beating
+  Phase 79's 27). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

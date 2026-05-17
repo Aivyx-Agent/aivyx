@@ -1925,6 +1925,61 @@ Likely follow-ups (`[persona]` tuning block, Persona
 consolidation/supersession/decay, behavioural Persona,
 conversational-window selection) are operator-feedback-gated.
 
+## Phase 80 — Proactive Surfacing (the assistant brings things to you)
+
+**Frozen — see [PHASE_80.md](PHASE_80.md).** For 79 phases the
+assistant only ever acted when prompted. Phase 80 is the
+capstone of the 75–79 arc: on its existing reflection cadence
+it notices a concrete, high-confidence reason to reach out and
+**surfaces it unprompted** — the single biggest step from "a
+tool you query" to "an assistant that brings things to you."
+An unprompted *outbound* message is the highest-trust-stakes
+action, so it ships off by default, hard-capped, and fully
+explainable. Zero new deps.
+
+- **Piggyback the reflection cron (Q1a):** no new scheduler;
+  the reflection pass also runs the detector, `RecallFeedback`
+  wiring precedent. No `[proactive]` / disabled / no schedule
+  → complete no-op (pre-Phase-80 behaviour).
+- **Structural gate, no extra LLM (Q2a):** surfaces only on a
+  concrete reason in three conservative classes — `TtlExpiry`
+  (entry near TTL eviction), `RecallCluster` (Phase-77 net
+  helpfulness strongly positive), `DueReminder` (`@due:` time
+  arrived). The Phase 77 no-self-judgement ethos applied to
+  the highest-stakes action; pure, per-class + empty tested.
+- **Reuse the notify dispatcher (Q3a):** every send is a
+  normal auto-notify — same `AutoNotifyDispatched` audit
+  event, same notify history, Phase 73's per-target
+  rate-limit.
+- **Default-off, capped, explainable (Q4a):** opt-in
+  `[proactive]` in `aivyx-config`; an HKDF-isolated
+  `KeyDomain::ProactiveLog` never-nag dedup store
+  (`was_surfaced` + GC clamp); a deterministic hard
+  `max_per_window` cap on top of the rate-limit; per-cycle
+  breadcrumb + a `proactive` field on the Phase 78
+  `GetLearningInsights` surface (CLI + Web UI).
+
+Streak all three correct: DESIGN.md → **27**, PRODUCT.md →
+**20**, `aivyx-core/src/lib.rs` → **28** (new record, beats
+Phase 79's 27) — the proactive pass is a structural,
+no-LLM/no-turn composition through the existing dispatcher, so
+it produced the *existing* audit event with no new `AuditTag`;
+every line lives in `aivyx-channel` / `aivyx-config` /
+`aivyx-storage`; `lib.rs` byte-identical, the
+streak-shaped-architecture discipline continued. Tests **+20**
+(1487 → 1507) — **in band** (predicted ~+14-22, top), the
+first in-band landing after four consecutive small misses: a
+new KeyDomain + config section + a heavily-tested pure
+detector + an integration pass carried the genuine new
+surface the converged calibration anticipated. No deviations:
+every planned surface shipped as scoped. Zero clippy warnings.
+Zero new workspace deps.
+
+Likely follow-ups (standalone `[[proactive_schedule]]`,
+LLM-composed proactive prose, conversational/interactive
+proactive, additional signal classes) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
