@@ -143,6 +143,13 @@ pub enum KeyDomain {
     /// the learning signal can be GC-clamped independently and
     /// a corrupt row degrades learning, not recall or memory.
     RecallEvents,
+    /// Proactive-surfacing dedup log (Phase 80). One row per
+    /// item the assistant has surfaced unprompted, keyed by the
+    /// item's deterministic id, so the proactive pass never
+    /// re-surfaces the same thing across reflection cycles.
+    /// Tiny + GC-clamped; isolated so a corrupt row degrades
+    /// only proactive dedup, never memory or the recall signal.
+    ProactiveLog,
 }
 
 impl KeyDomain {
@@ -167,6 +174,7 @@ impl KeyDomain {
             KeyDomain::PersonaProposals => b"persona-proposals",
             KeyDomain::MemoryVectors => b"memory-vectors",
             KeyDomain::RecallEvents => b"recall-events",
+            KeyDomain::ProactiveLog => b"proactive-log",
         }
     }
 
@@ -190,12 +198,13 @@ impl KeyDomain {
             KeyDomain::PersonaProposals => "aivyx_persona_proposals_v1",
             KeyDomain::MemoryVectors => "aivyx_memory_vectors_v1",
             KeyDomain::RecallEvents => "aivyx_recall_events_v1",
+            KeyDomain::ProactiveLog => "aivyx_proactive_log_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 13] = [
+    pub const ALL: [KeyDomain; 14] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -209,6 +218,7 @@ impl KeyDomain {
         KeyDomain::PersonaProposals,
         KeyDomain::MemoryVectors,
         KeyDomain::RecallEvents,
+        KeyDomain::ProactiveLog,
     ];
 }
 
@@ -394,7 +404,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 13],
+    subkeys: [SubKey; 14],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -471,7 +481,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 13], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 14], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -489,6 +499,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::PersonaProposals.as_bytes())?,
             master.derive_subkey(KeyDomain::MemoryVectors.as_bytes())?,
             master.derive_subkey(KeyDomain::RecallEvents.as_bytes())?,
+            master.derive_subkey(KeyDomain::ProactiveLog.as_bytes())?,
         ])
     }
 
@@ -510,6 +521,7 @@ impl RedbStorage {
             KeyDomain::PersonaProposals => &self.subkeys[10],
             KeyDomain::MemoryVectors => &self.subkeys[11],
             KeyDomain::RecallEvents => &self.subkeys[12],
+            KeyDomain::ProactiveLog => &self.subkeys[13],
         }
     }
 }
@@ -910,7 +922,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a fourteenth `KeyDomain`
+        // If a future phase adds a fifteenth `KeyDomain`
         // variant, this test fails because `ALL` is a fixed-size
         // array and the match below forces an update. Tripwire
         // for "adding a variant without updating ALL."
@@ -928,7 +940,8 @@ mod tests {
                 | KeyDomain::Persona
                 | KeyDomain::PersonaProposals
                 | KeyDomain::MemoryVectors
-                | KeyDomain::RecallEvents => {}
+                | KeyDomain::RecallEvents
+                | KeyDomain::ProactiveLog => {}
             }
         }
     }
@@ -1050,6 +1063,49 @@ mod tests {
             recall.get(key).await.unwrap(),
             Some(b"a recall event".to_vec()),
             "RecallEvents domain returned the memory's value"
+        );
+    }
+
+    // ---- Phase 80 — ProactiveLog domain ----------------------------
+
+    #[test]
+    fn proactive_log_domain_has_stable_metadata() {
+        assert_eq!(
+            KeyDomain::ProactiveLog.as_bytes(),
+            b"proactive-log"
+        );
+        assert_eq!(
+            KeyDomain::ProactiveLog.table_name(),
+            "aivyx_proactive_log_v1"
+        );
+        assert!(KeyDomain::ALL.contains(&KeyDomain::ProactiveLog));
+    }
+
+    #[tokio::test]
+    async fn proactive_log_domain_isolates_from_recall_events() {
+        // The proactive dedup log is distinct from the
+        // recall-feedback signal: a corrupt/GC'd proactive row
+        // must degrade only proactive dedup, never the learning
+        // signal. Phase 80.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(80)).await;
+
+        let recall = store.domain(KeyDomain::RecallEvents);
+        let proactive = store.domain(KeyDomain::ProactiveLog);
+
+        let key = b"shared-key";
+        recall.put(key, b"a recall event").await.unwrap();
+        proactive.put(key, b"a surfaced item").await.unwrap();
+
+        assert_eq!(
+            recall.get(key).await.unwrap(),
+            Some(b"a recall event".to_vec()),
+            "RecallEvents domain returned the proactive value"
+        );
+        assert_eq!(
+            proactive.get(key).await.unwrap(),
+            Some(b"a surfaced item".to_vec()),
+            "ProactiveLog domain returned the recall value"
         );
     }
 
