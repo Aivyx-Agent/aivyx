@@ -2301,10 +2301,9 @@ async fn run_async(
         // daemon's reflection-cron proactive pass below.
         proactive: config_proactive,
         // Phase 81 — `[persona_lifecycle]` config. Threaded
-        // into the daemon's reflection-cron lifecycle pass in
-        // Task 4 (bound here so the destructure stays
-        // exhaustive).
-        persona_lifecycle: _config_persona_lifecycle,
+        // into the daemon's reflection-cron lifecycle pass via
+        // DaemonConfig below.
+        persona_lifecycle: config_persona_lifecycle,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2656,6 +2655,15 @@ async fn run_async(
     let proactive_stat = match &config_proactive {
         Some(p) if p.enabled => Some(
             aivyx_channel::proactive_detect::shared_proactive_stat(),
+        ),
+        _ => None,
+    };
+    // Phase 81 (Q4a) — shared last-lifecycle-cycle stat: the
+    // pass writes it, GetLearningInsights reads the same
+    // handle. Created iff the lifecycle pass is armed.
+    let persona_lifecycle_stat = match &config_persona_lifecycle {
+        Some(p) if p.enabled => Some(
+            aivyx_channel::persona_lifecycle::shared_persona_lifecycle_stat(),
         ),
         _ => None,
     };
@@ -3866,6 +3874,14 @@ async fn run_async(
             proactive_config: config_proactive.clone(),
             proactive_log: proactive_log.clone(),
             proactive_stat: proactive_stat.clone(),
+            // Phase 81 — persona-lifecycle config + last-cycle
+            // stat. The persona/proposal chains + embedding
+            // are already on DaemonConfig; the pass picks them
+            // up there.
+            persona_lifecycle_config: config_persona_lifecycle
+                .clone(),
+            persona_lifecycle_stat: persona_lifecycle_stat
+                .clone(),
         })
             .await;
 

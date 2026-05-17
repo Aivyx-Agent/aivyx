@@ -233,6 +233,18 @@ pub struct DaemonConfig {
     /// proactive not armed (the surface reports none).
     pub proactive_stat:
         Option<crate::proactive_detect::SharedProactiveStat>,
+    /// Phase 81 — `[persona_lifecycle]` config. `None` (no
+    /// section) → the Persona never self-consolidates or
+    /// decays; even `Some` no-ops unless `enabled`.
+    pub persona_lifecycle_config:
+        Option<aivyx_config::PersonaLifecycleConfig>,
+    /// Phase 81 (Q4a) — shared last-lifecycle-cycle stat the
+    /// pass writes and `GetLearningInsights` reads. `None` →
+    /// the lifecycle pass is not armed (the surface reports
+    /// none).
+    pub persona_lifecycle_stat: Option<
+        crate::persona_lifecycle::SharedPersonaLifecycleStat,
+    >,
 }
 
 /// Run the daemon server.
@@ -277,6 +289,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         proactive_config,
         proactive_log,
         proactive_stat,
+        persona_lifecycle_config,
+        persona_lifecycle_stat,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -439,6 +453,32 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Phase 81 — persona-lifecycle deps: armed only
+            // when the section is enabled AND the persona
+            // substrate (chain + proposal chain + embedding)
+            // is present. Any missing piece → None → the pass
+            // is skipped while reflection still fires.
+            let rs_persona_lifecycle = match (
+                persona_lifecycle_config.clone(),
+                persona_log.clone(),
+                persona_proposal_log.clone(),
+                embedding_provider.clone(),
+            ) {
+                (Some(cfg), Some(plog), Some(pplog), Some(emb))
+                    if cfg.enabled =>
+                {
+                    Some(
+                        crate::reflection_scheduler::PersonaLifecycleDeps {
+                            config: cfg,
+                            persona_log: plog,
+                            proposal_log: pplog,
+                            embedding: emb,
+                            stat: persona_lifecycle_stat.clone(),
+                        },
+                    )
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -453,6 +493,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_audit,
                     rs_recall_feedback,
                     rs_proactive,
+                    rs_persona_lifecycle,
                     rs_shutdown,
                 )
                 .await;
@@ -1391,6 +1432,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         proactive_config: None,
         proactive_log: None,
         proactive_stat: None,
+        persona_lifecycle_config: None,
+        persona_lifecycle_stat: None,
         memory_retention: Vec::new(),
     }).await
 }

@@ -19,14 +19,17 @@
 //! Pending `PersonaProposal`; the operator approves/rejects and
 //! every action is reversible (`Revert`).
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
 use aivyx_config::PersonaLifecycleConfig;
 use aivyx_llm::embedding::EmbeddingProvider;
 
-use crate::persona::EffectivePersona;
+use crate::persona::{
+    EffectivePersona, PersonaDeltaCategory, PersonaDeltaOp,
+    ProposedPersonaDelta,
+};
 
 /// The six reducible soft-list categories — and *only* these.
 /// There is deliberately no variant for the scalar identity
@@ -76,6 +79,32 @@ impl SoftCategory {
         SoftCategory::CharacterTraits,
         SoftCategory::RelationshipMilestones,
     ];
+
+    /// Map to the persona-chain delta category. Total over the
+    /// six soft lists — there is no arm for the always-on core,
+    /// so a lifecycle proposal can only ever target a soft list.
+    pub fn to_delta_category(self) -> PersonaDeltaCategory {
+        match self {
+            SoftCategory::PrimaryUseCases => {
+                PersonaDeltaCategory::PrimaryUseCases
+            }
+            SoftCategory::BehavioralPreferences => {
+                PersonaDeltaCategory::BehavioralPreferences
+            }
+            SoftCategory::LearnedContext => {
+                PersonaDeltaCategory::LearnedContext
+            }
+            SoftCategory::CommunicationAdaptations => {
+                PersonaDeltaCategory::CommunicationAdaptations
+            }
+            SoftCategory::CharacterTraits => {
+                PersonaDeltaCategory::CharacterTraits
+            }
+            SoftCategory::RelationshipMilestones => {
+                PersonaDeltaCategory::RelationshipMilestones
+            }
+        }
+    }
 }
 
 /// Extract every soft-list facet from an effective Persona,
@@ -178,6 +207,115 @@ impl PersonaLifecycleAction {
             ),
         }
     }
+
+    /// Compact class label for breadcrumbs / the Phase 78
+    /// surface.
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            LifecycleActionKind::Consolidate { .. } => {
+                "consolidate"
+            }
+            LifecycleActionKind::Decay { .. } => "decay",
+        }
+    }
+
+    /// Decompose into the operator-gated proposals that
+    /// implement it. Each is **one** `(category, op)` — the
+    /// existing one-op-per-proposal model — keyed by a
+    /// deterministic, cross-cycle-stable proposal id so the
+    /// pass never re-files the same identity change.
+    ///
+    /// `Decay` → a single `RemoveList`. `Consolidate` → a
+    /// `RemoveList` for every near-duplicate **except**
+    /// `merged` (which is the longest *existing* member, so it
+    /// is already in the list — no `AppendList` is needed and
+    /// none is emitted; removing a redundant near-duplicate
+    /// while the canonical one stays is independently safe and
+    /// `Revert`-able per proposal).
+    pub fn to_proposals(
+        &self,
+    ) -> Vec<(String, ProposedPersonaDelta)> {
+        let cat = self.category.to_delta_category();
+        match &self.kind {
+            LifecycleActionKind::Decay { value } => vec![(
+                format!(
+                    "pl:decay:{}:{}",
+                    self.category.label(),
+                    value,
+                ),
+                ProposedPersonaDelta {
+                    category: cat,
+                    op: PersonaDeltaOp::RemoveList {
+                        value: value.clone(),
+                    },
+                    reason: Some(self.reason.clone()),
+                },
+            )],
+            LifecycleActionKind::Consolidate {
+                originals,
+                merged,
+            } => originals
+                .iter()
+                .filter(|o| o.as_str() != merged.as_str())
+                .map(|o| {
+                    (
+                        format!(
+                            "pl:consolidate:{}:keep={}:rm={}",
+                            self.category.label(),
+                            merged,
+                            o,
+                        ),
+                        ProposedPersonaDelta {
+                            category: cat,
+                            op: PersonaDeltaOp::RemoveList {
+                                value: o.clone(),
+                            },
+                            reason: Some(format!(
+                                "{} (redundant with kept \
+                                 facet {merged:?})",
+                                self.reason,
+                            )),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+/// One filed lifecycle proposal, for the Phase 78 trust
+/// surface (Task 5). Ephemeral last-cycle only — an
+/// assistant-initiated identity proposal must stay legible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaLifecycleProposed {
+    /// "consolidate" or "decay".
+    pub kind: String,
+    pub category: SoftCategory,
+    /// The soft-list facet value the filed proposal removes.
+    pub value: String,
+    pub reason: String,
+}
+
+/// The last lifecycle cycle's outcome. Ephemeral (last-cycle
+/// only, not persisted) — the Phase 78 posture extended to the
+/// identity-maintenance layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaLifecycleStat {
+    pub ts_secs: u64,
+    pub proposed: Vec<PersonaLifecycleProposed>,
+    pub deduped: u32,
+}
+
+/// Shared handle the pass writes and the
+/// `GetLearningInsights` handler reads. `None` inside = the
+/// lifecycle pass has not run this daemon lifetime.
+pub type SharedPersonaLifecycleStat =
+    Arc<RwLock<Option<PersonaLifecycleStat>>>;
+
+/// Construct an empty shared lifecycle-stat handle.
+pub fn shared_persona_lifecycle_stat() -> SharedPersonaLifecycleStat
+{
+    Arc::new(RwLock::new(None))
 }
 
 /// Cosine of two equal-length vectors. Hand-rolled, zero-dep
@@ -602,6 +740,68 @@ mod tests {
             LifecycleActionKind::Decay { .. }
         )));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn consolidate_to_proposals_removes_only_non_canonical() {
+        let a = PersonaLifecycleAction {
+            kind: LifecycleActionKind::Consolidate {
+                originals: vec![
+                    "short".into(),
+                    "the long canonical".into(),
+                    "mid one".into(),
+                ],
+                merged: "the long canonical".into(),
+            },
+            category: SoftCategory::LearnedContext,
+            reason: "3 near-duplicate learned_context facets"
+                .into(),
+        };
+        let props = a.to_proposals();
+        // One RemoveList per non-canonical original; the kept
+        // (merged) facet is never appended or removed.
+        assert_eq!(props.len(), 2);
+        for (id, op) in &props {
+            assert!(id.starts_with(
+                "pl:consolidate:learned_context:keep="
+            ));
+            match &op.op {
+                PersonaDeltaOp::RemoveList { value } => {
+                    assert_ne!(value, "the long canonical");
+                }
+                other => {
+                    panic!("expected RemoveList, got {other:?}")
+                }
+            }
+            assert_eq!(
+                op.category,
+                PersonaDeltaCategory::LearnedContext
+            );
+        }
+    }
+
+    #[test]
+    fn decay_to_proposals_is_one_removelist() {
+        let a = PersonaLifecycleAction {
+            kind: LifecycleActionKind::Decay {
+                value: "stale fact".into(),
+            },
+            category: SoftCategory::CharacterTraits,
+            reason: "unreinforced".into(),
+        };
+        let props = a.to_proposals();
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].0, "pl:decay:character_traits:stale fact");
+        match &props[0].1.op {
+            PersonaDeltaOp::RemoveList { value } => {
+                assert_eq!(value, "stale fact");
+            }
+            other => panic!("expected RemoveList, got {other:?}"),
+        }
+        assert_eq!(
+            props[0].1.category,
+            PersonaDeltaCategory::CharacterTraits
+        );
     }
 
     #[tokio::test]

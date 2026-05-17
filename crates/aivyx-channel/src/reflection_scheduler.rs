@@ -103,6 +103,29 @@ pub struct ProactiveDeps {
     pub stat: Option<crate::proactive_detect::SharedProactiveStat>,
 }
 
+/// Phase 81 — handles the Persona-lifecycle pass needs.
+/// Bundled like [`ProactiveDeps`]. `None` (no
+/// `[persona_lifecycle]` / no persona substrate) → the pass is
+/// skipped entirely (pre-Phase-81 behavior — the Soul only
+/// ever grows). Even when `Some`, the pass no-ops unless
+/// `config.enabled`.
+pub struct PersonaLifecycleDeps {
+    pub config: aivyx_config::PersonaLifecycleConfig,
+    pub persona_log:
+        std::sync::Arc<crate::persona::PersistentPersonaLog>,
+    pub proposal_log: std::sync::Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    pub embedding: std::sync::Arc<
+        dyn aivyx_llm::embedding::EmbeddingProvider,
+    >,
+    /// Phase 81 (Q4a) — optional last-cycle stat sink for the
+    /// Phase 78 surface. `None` → breadcrumb-only.
+    pub stat: Option<
+        crate::persona_lifecycle::SharedPersonaLifecycleStat,
+    >,
+}
+
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
 /// short cron pattern) are picked up promptly even if the
 /// next computed fire happens to be hours away.
@@ -387,6 +410,7 @@ pub async fn run_reflection_scheduler(
     audit_log: Arc<PersistentAuditLog>,
     recall_feedback: Option<RecallFeedbackDeps>,
     proactive: Option<ProactiveDeps>,
+    persona_lifecycle: Option<PersonaLifecycleDeps>,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -437,6 +461,7 @@ pub async fn run_reflection_scheduler(
                     now,
                     recall_feedback.as_ref(),
                     proactive.as_ref(),
+                    persona_lifecycle.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -462,6 +487,7 @@ pub async fn run_reflection_scheduler(
 /// diagnostic + an audit event-style eprintln and return; the
 /// caller updates `last_fired` regardless so a broken schedule
 /// doesn't hot-loop.
+#[allow(clippy::too_many_arguments)]
 async fn fire_reflection(
     dispatch: &TriggerDispatch,
     audit_log: &PersistentAuditLog,
@@ -470,6 +496,7 @@ async fn fire_reflection(
     now: DateTime<Utc>,
     recall_feedback: Option<&RecallFeedbackDeps>,
     proactive: Option<&ProactiveDeps>,
+    persona_lifecycle: Option<&PersonaLifecycleDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -510,6 +537,13 @@ async fn fire_reflection(
     // disabled.
     if let Some(deps) = proactive {
         run_proactive_pass(deps, sched, &summaries, now_ms).await;
+    }
+
+    // Phase 81 — Persona lifecycle on the same cadence (Q1a).
+    // Independent of the above; no-op when absent or disabled.
+    // It only files Pending proposals — never resolves them.
+    if let Some(deps) = persona_lifecycle {
+        run_persona_lifecycle_pass(deps, sched, now_ms).await;
     }
 
     let user_message = format!(
@@ -765,6 +799,157 @@ async fn run_proactive_pass(
             eprintln!(
                 "aivyx proactive: gc clamped {n} old dedup row(s)"
             );
+        }
+    }
+}
+
+/// The Phase 81 Persona-lifecycle pass, driven on the
+/// reflection cadence (Q1a). Folds the persona chain, builds
+/// per-soft-facet provenance (origin ts + whether a later
+/// delta in the same category reinforced it), runs the
+/// structural detector, and **files each surviving action as a
+/// Pending `PersonaProposal`** — it never resolves anything
+/// (Q2a: the operator approves/rejects, every action is
+/// `Revert`-able). Cross-cycle dedup is by the deterministic
+/// proposal id: an id already present in the proposal chain
+/// (any status, including Rejected) is never re-filed — the
+/// assistant must not nag about its own identity. Every step
+/// is best-effort: an error is logged and the cycle continues;
+/// the reflection turn and the persona chain are untouched.
+async fn run_persona_lifecycle_pass(
+    deps: &PersonaLifecycleDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let now_secs = now_ms / 1000;
+
+    // Snapshot the persona chain (sync, in-memory) and fold it.
+    let entries = deps.persona_log.entries();
+    if entries.is_empty() {
+        return;
+    }
+    let persona =
+        crate::persona::compute_effective_persona(&entries);
+
+    // Build per-facet provenance. `soft_facets_of` is the
+    // core-protection choke point — only the six soft lists,
+    // never the scalars or behavioral_constraints.
+    let mut facets: Vec<crate::persona_lifecycle::LifecycleFacet> =
+        Vec::new();
+    for (cat, value) in
+        crate::persona_lifecycle::soft_facets_of(&persona)
+    {
+        let dcat = cat.to_delta_category();
+        // The latest AppendList that put this exact value into
+        // effect for this category is the facet's origin.
+        let Some(origin) = entries.iter().rev().find(|e| {
+            e.delta.category == dcat
+                && matches!(
+                    &e.delta.op,
+                    crate::persona::PersonaDeltaOp::AppendList {
+                        value: v,
+                    } if *v == value
+                )
+        }) else {
+            continue;
+        };
+        // Reinforced = any *later* delta touched the same
+        // category (active curation → do not decay it).
+        let reinforced = entries
+            .iter()
+            .any(|e| e.seq > origin.seq && e.delta.category == dcat);
+        facets.push(crate::persona_lifecycle::LifecycleFacet {
+            category: cat,
+            value,
+            origin_ts_secs: origin.delta.approved_at_unix_ms
+                / 1000,
+            reinforced,
+        });
+    }
+
+    let detector =
+        crate::persona_lifecycle::PersonaLifecycleDetector::new(
+            deps.config.clone(),
+            deps.embedding.clone(),
+        );
+    let actions = detector.detect(&facets, now_secs).await;
+
+    let (mut proposed, mut deduped) = (0u32, 0u32);
+    let mut proposed_items: Vec<
+        crate::persona_lifecycle::PersonaLifecycleProposed,
+    > = Vec::new();
+    for action in &actions {
+        for (pid, op) in action.to_proposals() {
+            // Cross-cycle dedup: an id already in the chain in
+            // ANY status (Pending/Approved/Rejected/Superseded)
+            // is never re-filed — never nag about identity.
+            if deps.proposal_log.get(&pid).is_some() {
+                deduped += 1;
+                continue;
+            }
+            let removed = match &op.op {
+                crate::persona::PersonaDeltaOp::RemoveList {
+                    value,
+                } => value.clone(),
+                _ => String::new(),
+            };
+            match deps
+                .proposal_log
+                .append_pending(
+                    pid,
+                    now_ms,
+                    format!(
+                        "persona-lifecycle:{}",
+                        sched.name
+                    ),
+                    op,
+                )
+                .await
+            {
+                Ok(_) => {
+                    proposed += 1;
+                    proposed_items.push(
+                        crate::persona_lifecycle::PersonaLifecycleProposed {
+                            kind: action
+                                .kind_label()
+                                .to_string(),
+                            category: action.category,
+                            value: removed,
+                            reason: action.reason.clone(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "aivyx persona-lifecycle: schedule \
+                         {:?} append_pending failed: {e}",
+                        sched.name,
+                    );
+                }
+            }
+        }
+    }
+
+    if proposed > 0 || deduped > 0 {
+        eprintln!(
+            "aivyx persona-lifecycle: schedule {:?} — \
+             proposed {proposed} (deduped {deduped})",
+            sched.name,
+        );
+        // Q4a — record this cycle for the Phase 78 surface.
+        if let Some(stat) = &deps.stat {
+            if let Ok(mut w) = stat.write() {
+                *w = Some(
+                    crate::persona_lifecycle::PersonaLifecycleStat {
+                        ts_secs: now_secs,
+                        proposed: proposed_items,
+                        deduped,
+                    },
+                );
+            }
         }
     }
 }
@@ -1280,6 +1465,246 @@ mod tests {
         };
         run_proactive_pass(&off, &sched, &[], 6_000_000).await;
         assert_eq!(backend.calls.lock().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 81 — persona-lifecycle pass orchestration -------
+
+    #[tokio::test]
+    async fn persona_lifecycle_pass_files_then_dedups() {
+        use crate::persona::{
+            PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
+            PersistentPersonaLog,
+        };
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_llm::embedding::{
+            EmbeddingError, EmbeddingProvider,
+        };
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        struct FakeEmb;
+        #[async_trait::async_trait]
+        impl EmbeddingProvider for FakeEmb {
+            async fn embed(
+                &self,
+                texts: &[String],
+            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+                Ok(texts
+                    .iter()
+                    .map(|t| {
+                        let l = t.to_lowercase();
+                        if l.contains("dup") {
+                            vec![1.0, 0.0, 0.0]
+                        } else if l.contains("other") {
+                            vec![0.0, 1.0, 0.0]
+                        } else {
+                            vec![0.0, 0.0, 1.0]
+                        }
+                    })
+                    .collect())
+            }
+            fn model(&self) -> &str {
+                "fake"
+            }
+            fn dimensions(&self) -> usize {
+                3
+            }
+        }
+
+        fn seed(
+            seq_label: &str,
+            cat: PersonaDeltaCategory,
+            value: &str,
+            approved_at_unix_ms: u64,
+        ) -> PersonaDelta {
+            PersonaDelta {
+                delta_id: format!("d-{seq_label}"),
+                proposed_at_unix_ms: approved_at_unix_ms,
+                approved_at_unix_ms,
+                proposal_id: "seed".into(),
+                category: cat,
+                op: PersonaDeltaOp::AppendList {
+                    value: value.into(),
+                },
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-pl-pass-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([81u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let persona_log = Arc::new(
+            PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                vec![1u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+        // LearnedContext: two near-duplicates (consolidate) +
+        // one distinct; all fresh so they never decay.
+        persona_log
+            .append(seed(
+                "0",
+                PersonaDeltaCategory::LearnedContext,
+                "dup a",
+                9_500_000,
+            ))
+            .await
+            .unwrap();
+        persona_log
+            .append(seed(
+                "1",
+                PersonaDeltaCategory::LearnedContext,
+                "dup a longer",
+                9_500_000,
+            ))
+            .await
+            .unwrap();
+        persona_log
+            .append(seed(
+                "2",
+                PersonaDeltaCategory::LearnedContext,
+                "lc distinct other",
+                9_500_000,
+            ))
+            .await
+            .unwrap();
+        // CharacterTraits: a kept (reinforced, fresh) facet +
+        // one old, last-in-category, unreinforced → decays.
+        persona_log
+            .append(seed(
+                "3",
+                PersonaDeltaCategory::CharacterTraits,
+                "ct keep other",
+                9_600_000,
+            ))
+            .await
+            .unwrap();
+        persona_log
+            .append(seed(
+                "4",
+                PersonaDeltaCategory::CharacterTraits,
+                "ct stale",
+                1_000,
+            ))
+            .await
+            .unwrap();
+
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                vec![2u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+
+        let stat =
+            crate::persona_lifecycle::shared_persona_lifecycle_stat();
+        let deps = PersonaLifecycleDeps {
+            config: aivyx_config::PersonaLifecycleConfig {
+                enabled: true,
+                consolidation_similarity: 0.92,
+                decay_max_age_secs: 1_000,
+                min_soft_facets: 2,
+                signals:
+                    aivyx_config::PersonaLifecycleSignals {
+                        consolidate: true,
+                        decay: true,
+                    },
+            },
+            persona_log: Arc::clone(&persona_log),
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(FakeEmb),
+            stat: Some(Arc::clone(&stat)),
+        };
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+
+        // now_ms = 10_000_000 → now_secs 10_000.
+        run_persona_lifecycle_pass(&deps, &sched, 10_000_000)
+            .await;
+        let pending =
+            proposal_log.list(ProposalStatusFilter::Pending);
+        assert_eq!(
+            pending.len(),
+            2,
+            "one consolidate-removal + one decay-removal"
+        );
+        let ids: Vec<&str> =
+            pending.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.iter().any(|i| i.starts_with(
+            "pl:consolidate:learned_context:keep=dup a longer:"
+        )));
+        assert!(ids
+            .contains(&"pl:decay:character_traits:ct stale"));
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat written");
+            assert_eq!(s.proposed.len(), 2);
+            assert_eq!(s.deduped, 0);
+        }
+
+        // Second cycle, same state → every id already in the
+        // chain → all deduped, no new proposals.
+        run_persona_lifecycle_pass(&deps, &sched, 10_000_001)
+            .await;
+        assert_eq!(
+            proposal_log
+                .list(ProposalStatusFilter::Pending)
+                .len(),
+            2,
+            "already-filed proposals must not be re-filed"
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().unwrap();
+            assert!(s.proposed.is_empty());
+            assert_eq!(s.deduped, 2);
+        }
+
+        // Disabled config → complete no-op.
+        let off = PersonaLifecycleDeps {
+            config: aivyx_config::PersonaLifecycleConfig {
+                enabled: false,
+                ..deps.config.clone()
+            },
+            persona_log,
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(FakeEmb),
+            stat: None,
+        };
+        run_persona_lifecycle_pass(&off, &sched, 10_000_002)
+            .await;
+        assert_eq!(
+            proposal_log
+                .list(ProposalStatusFilter::Pending)
+                .len(),
+            2,
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
