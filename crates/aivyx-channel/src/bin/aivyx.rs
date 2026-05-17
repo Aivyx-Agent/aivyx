@@ -2297,9 +2297,9 @@ async fn run_async(
         // write tool's embedding hook and the daemon's
         // lazy-backfill timer below.
         embedding: config_embedding,
-        // Phase 80 — `[proactive]` config. Bound here; consumed
-        // by the proactive pass wiring in a later task.
-        proactive: _config_proactive,
+        // Phase 80 — `[proactive]` config. Threaded into the
+        // daemon's reflection-cron proactive pass below.
+        proactive: config_proactive,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2602,6 +2602,19 @@ async fn run_async(
                 storage.domain(KeyDomain::RecallEvents),
             )))
         }
+        _ => None,
+    };
+    // Phase 80 — proactive dedup log, created when the
+    // `[proactive]` section is armed (enabled). The reflection
+    // cron pass uses it for cross-cycle dedup + the cap.
+    let proactive_log: Option<
+        Arc<aivyx_channel::proactive_log::PersistentProactiveLog>,
+    > = match &config_proactive {
+        Some(p) if p.enabled => Some(Arc::new(
+            aivyx_channel::proactive_log::PersistentProactiveLog::new(
+                storage.domain(KeyDomain::ProactiveLog),
+            ),
+        )),
         _ => None,
     };
     let recall_context: Option<
@@ -3835,6 +3848,9 @@ async fn run_async(
             // Phase 79 (Q4a) — same handle the adaptive refiner
             // writes; the GetLearningInsights handler reads it.
             persona_selection_stat: persona_selection_stat.clone(),
+            // Phase 80 — proactive surfacing config + dedup log.
+            proactive_config: config_proactive.clone(),
+            proactive_log: proactive_log.clone(),
         })
             .await;
 

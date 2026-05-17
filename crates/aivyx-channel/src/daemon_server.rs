@@ -219,6 +219,15 @@ pub struct DaemonConfig {
     /// reports no selection).
     pub persona_selection_stat:
         Option<crate::persona_context::SharedPersonaSelectionStat>,
+    /// Phase 80 — `[proactive]` config. `None` (no section) →
+    /// proactive surfacing is off; even `Some` no-ops unless
+    /// `enabled`.
+    pub proactive_config: Option<aivyx_config::ProactiveConfig>,
+    /// Phase 80 — proactive dedup log. `Some` iff proactive is
+    /// armed; the reflection cron pass uses it for cross-cycle
+    /// dedup + the per-window cap.
+    pub proactive_log:
+        Option<Arc<crate::proactive_log::PersistentProactiveLog>>,
 }
 
 /// Run the daemon server.
@@ -260,6 +269,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         embedding_provider,
         recall_log,
         persona_selection_stat,
+        proactive_config,
+        proactive_log,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -397,6 +408,30 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Phase 80 — proactive deps: armed only when the
+            // section is enabled AND the substrate is present.
+            let rs_proactive = match (
+                proactive_config.clone(),
+                memory.clone(),
+                proactive_log.clone(),
+                notify_dispatcher.clone(),
+            ) {
+                (Some(cfg), Some(mem), Some(plog), Some(nd))
+                    if cfg.enabled =>
+                {
+                    Some(crate::reflection_scheduler::ProactiveDeps {
+                        config: cfg,
+                        memory: mem,
+                        proactive_log: plog,
+                        notify: nd,
+                        recall_log: recall_log.clone(),
+                        memory_ttl_secs,
+                        gc_retain_secs:
+                            crate::proactive_log::PROACTIVE_LOG_RETAIN_SECS,
+                    })
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -410,6 +445,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_dispatch,
                     rs_audit,
                     rs_recall_feedback,
+                    rs_proactive,
                     rs_shutdown,
                 )
                 .await;
@@ -1337,6 +1373,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         embedding_provider: None,
         recall_log: None,
         persona_selection_stat: None,
+        proactive_config: None,
+        proactive_log: None,
         memory_retention: Vec::new(),
     }).await
 }

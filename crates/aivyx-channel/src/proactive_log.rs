@@ -16,6 +16,12 @@
 
 use aivyx_storage::DomainHandle;
 
+/// How long surfaced-item dedup rows are retained before the
+/// same-cadence GC clamp drops them. Generous (~30 days): a
+/// row older than this can re-surface, which is fine — the
+/// signal that produced it has long since changed.
+pub const PROACTIVE_LOG_RETAIN_SECS: u64 = 30 * 24 * 3600;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProactiveLogError {
     #[error("proactive log storage error: {0}")]
@@ -57,6 +63,32 @@ impl PersistentProactiveLog {
             .put(id.as_bytes(), &ts_secs.to_be_bytes())
             .await
             .map_err(|e| ProactiveLogError::Storage(e.to_string()))
+    }
+
+    /// How many items were surfaced at or after `cutoff_secs`.
+    /// Drives the per-window hard cap (Q4a) — the deterministic
+    /// volume guard on top of any per-target rate-limit.
+    pub async fn count_since(
+        &self,
+        cutoff_secs: u64,
+    ) -> Result<u32, ProactiveLogError> {
+        let rows = self
+            .storage
+            .scan_prefix(&[])
+            .await
+            .map_err(|e| ProactiveLogError::Storage(e.to_string()))?;
+        let mut n = 0u32;
+        for (_k, v) in &rows {
+            if v.len() < 8 {
+                continue;
+            }
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&v[..8]);
+            if u64::from_be_bytes(buf) >= cutoff_secs {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     /// Delete every dedup row older than `cutoff_secs`. Bounded-
@@ -162,6 +194,19 @@ mod tests {
         assert!(!log.was_surfaced("old-a").await.unwrap());
         assert!(!log.was_surfaced("old-b").await.unwrap());
         assert!(log.was_surfaced("fresh").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn count_since_bounds_the_window() {
+        let scratch = Scratch::new();
+        let log = open_log(&scratch, 4).await;
+        log.mark_surfaced("a", 100).await.unwrap();
+        log.mark_surfaced("b", 500).await.unwrap();
+        log.mark_surfaced("c", 900).await.unwrap();
+        // ts >= 500 → b, c.
+        assert_eq!(log.count_since(500).await.unwrap(), 2);
+        assert_eq!(log.count_since(0).await.unwrap(), 3);
+        assert_eq!(log.count_since(1000).await.unwrap(), 0);
     }
 
     #[tokio::test]

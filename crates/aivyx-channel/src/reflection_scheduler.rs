@@ -76,6 +76,30 @@ pub struct RecallFeedbackDeps {
     pub gc_retain_secs: u64,
 }
 
+/// Phase 80 — handles the proactive-surfacing pass needs.
+/// Bundled like [`RecallFeedbackDeps`]. `None` (no
+/// `[proactive]`) → the pass is skipped entirely (pre-Phase-80
+/// behavior). Even when `Some`, the pass no-ops unless
+/// `config.enabled`.
+pub struct ProactiveDeps {
+    pub config: aivyx_config::ProactiveConfig,
+    pub memory: std::sync::Arc<dyn aivyx_memory::Memory>,
+    pub proactive_log:
+        std::sync::Arc<crate::proactive_log::PersistentProactiveLog>,
+    pub notify:
+        std::sync::Arc<crate::notify_dispatcher::NotifyDispatcher>,
+    /// Optional recall-feedback log: only the `RecallCluster`
+    /// signal needs the Phase 77 tally; absent → that signal
+    /// simply never fires, the other two still do.
+    pub recall_log: Option<
+        std::sync::Arc<crate::recall_log::PersistentRecallLog>,
+    >,
+    /// Global memory TTL (drives the `TtlExpiry` signal).
+    pub memory_ttl_secs: Option<u64>,
+    /// Retention window for the proactive-log GC clamp.
+    pub gc_retain_secs: u64,
+}
+
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
 /// short cron pattern) are picked up promptly even if the
 /// next computed fire happens to be hours away.
@@ -359,6 +383,7 @@ pub async fn run_reflection_scheduler(
     dispatch: TriggerDispatch,
     audit_log: Arc<PersistentAuditLog>,
     recall_feedback: Option<RecallFeedbackDeps>,
+    proactive: Option<ProactiveDeps>,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -408,6 +433,7 @@ pub async fn run_reflection_scheduler(
                     &mut cache,
                     now,
                     recall_feedback.as_ref(),
+                    proactive.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -440,6 +466,7 @@ async fn fire_reflection(
     cache: &mut OutcomeSummaryCache,
     now: DateTime<Utc>,
     recall_feedback: Option<&RecallFeedbackDeps>,
+    proactive: Option<&ProactiveDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -473,6 +500,13 @@ async fn fire_reflection(
     // were built from. Entirely no-op when the deps are absent.
     if let Some(deps) = recall_feedback {
         run_recall_feedback_pass(deps, sched, &summaries, now_ms).await;
+    }
+
+    // Phase 80 — proactive surfacing on the same cadence (Q1a).
+    // Independent of recall-feedback; no-op when absent or
+    // disabled.
+    if let Some(deps) = proactive {
+        run_proactive_pass(deps, sched, &summaries, now_ms).await;
     }
 
     let user_message = format!(
@@ -570,6 +604,142 @@ async fn run_recall_feedback_pass(
         Err(e) => {
             eprintln!(
                 "aivyx recall-feedback: recall-log gc error: {e}"
+            );
+        }
+    }
+}
+
+/// Phase 80 — the proactive-surfacing pass, on the reflection
+/// cadence (Q1a). Detect structurally, drop already-surfaced
+/// (cross-cycle dedup) and over-cap items, dispatch survivors
+/// through the existing notify dispatcher, record + GC-clamp.
+/// Every step best-effort: a failure is logged and the cycle
+/// continues — the reflection turn is untouched, and a failed
+/// dispatch is *not* marked surfaced so it retries next cycle.
+async fn run_proactive_pass(
+    deps: &ProactiveDeps,
+    sched: &ReflectionScheduleConfig,
+    summaries: &[OutcomeSummary],
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let now_secs = now_ms / 1000;
+
+    // Enumerate memory without perturbing LRU (scan_prefix does
+    // not stamp last_read, unlike get_recent).
+    let entries: Vec<aivyx_memory::MemoryEntry> = match deps
+        .memory
+        .scan_prefix("", usize::MAX)
+        .await
+    {
+        Ok(groups) => {
+            groups.into_iter().flat_map(|(_t, es)| es).collect()
+        }
+        Err(e) => {
+            eprintln!(
+                "aivyx proactive: schedule {:?} memory scan \
+                 error: {e}",
+                sched.name,
+            );
+            return;
+        }
+    };
+
+    // The RecallCluster signal needs the Phase 77 tally; the
+    // other two don't. No recall log → empty tally → that
+    // signal simply never fires.
+    let tally = match &deps.recall_log {
+        Some(rl) => {
+            let since = now_secs
+                .saturating_sub(sched.lookback_window_secs);
+            match rl.events_since(since).await {
+                Ok(recalls) => {
+                    crate::recall_feedback::correlate(
+                        &recalls, summaries,
+                    )
+                }
+                Err(_) => {
+                    crate::recall_feedback::HelpfulnessTally::default()
+                }
+            }
+        }
+        None => crate::recall_feedback::HelpfulnessTally::default(),
+    };
+
+    let items = crate::proactive_detect::detect(
+        &entries,
+        &tally,
+        &deps.config.signals,
+        deps.memory_ttl_secs,
+        now_secs,
+    );
+
+    // Hard per-window cap (Q4a) — the deterministic volume
+    // guard on top of any per-target rate-limit.
+    let window_start =
+        now_secs.saturating_sub(deps.config.window_secs);
+    let used = deps
+        .proactive_log
+        .count_since(window_start)
+        .await
+        .unwrap_or(0);
+    let mut remaining =
+        deps.config.max_per_window.saturating_sub(used);
+
+    let (mut surfaced, mut deduped, mut capped) = (0u32, 0u32, 0u32);
+    for item in items {
+        match deps.proactive_log.was_surfaced(&item.id).await {
+            Ok(true) => {
+                deduped += 1;
+                continue;
+            }
+            Ok(false) => {}
+            Err(_) => continue, // log read error → skip safely
+        }
+        if remaining == 0 {
+            capped += 1;
+            continue;
+        }
+        let subject = format!("Aivyx — proactive ({:?})", item.kind);
+        let body = format!("{}\n\n(why: {})", item.summary, item.reason);
+        match deps
+            .notify
+            .dispatch(&deps.config.target, &body, Some(&subject))
+            .await
+        {
+            Ok(()) => {
+                // Only mark on success → a failed send retries.
+                let _ = deps
+                    .proactive_log
+                    .mark_surfaced(&item.id, now_secs)
+                    .await;
+                surfaced += 1;
+                remaining -= 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "aivyx proactive: dispatch to {:?} failed: {e}",
+                    deps.config.target,
+                );
+            }
+        }
+    }
+
+    if surfaced > 0 || deduped > 0 || capped > 0 {
+        eprintln!(
+            "aivyx proactive: schedule {:?} — surfaced {surfaced} \
+             (deduped {deduped}, capped {capped})",
+            sched.name,
+        );
+    }
+
+    let cutoff = now_secs.saturating_sub(deps.gc_retain_secs);
+    if let Ok(n) = deps.proactive_log.gc_older_than(cutoff).await {
+        if n > 0 {
+            eprintln!(
+                "aivyx proactive: gc clamped {n} old dedup row(s)"
             );
         }
     }
@@ -950,6 +1120,140 @@ mod tests {
             1,
             "second pass must not re-file the proposal"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 80 — proactive pass orchestration ---------------
+
+    #[tokio::test]
+    async fn proactive_pass_surfaces_then_dedups_and_caps() {
+        use crate::notify_dispatcher::{
+            NotifyBackend, NotifyDispatcher, NotifyError,
+        };
+        use crate::proactive_log::PersistentProactiveLog;
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::{Arc, Mutex};
+
+        struct RecBackend {
+            calls: Mutex<Vec<(String, Option<String>)>>,
+        }
+        #[async_trait::async_trait]
+        impl NotifyBackend for RecBackend {
+            async fn send(
+                &self,
+                message: &str,
+                subject: Option<&str>,
+            ) -> Result<(), NotifyError> {
+                self.calls.lock().unwrap().push((
+                    message.to_string(),
+                    subject.map(|s| s.to_string()),
+                ));
+                Ok(())
+            }
+            fn kind(&self) -> &'static str {
+                "rec"
+            }
+        }
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-proactive-pass-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([80u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+        // A reminder that is past due → DueReminder fires.
+        memory
+            .put("rem", "@due:1000 water the plants")
+            .await
+            .unwrap();
+        // A plain note → nothing.
+        memory.put("notes", "just a note").await.unwrap();
+
+        let plog = Arc::new(PersistentProactiveLog::new(
+            store.domain(KeyDomain::ProactiveLog),
+        ));
+        let backend = Arc::new(RecBackend {
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut nd = NotifyDispatcher::new();
+        nd.register("ops", backend.clone());
+        let notify = Arc::new(nd);
+
+        let deps = ProactiveDeps {
+            config: aivyx_config::ProactiveConfig {
+                enabled: true,
+                target: "ops".into(),
+                max_per_window: 5,
+                window_secs: 3600,
+                signals: aivyx_config::ProactiveSignals::default(),
+            },
+            memory: Arc::clone(&memory),
+            proactive_log: Arc::clone(&plog),
+            notify: Arc::clone(&notify),
+            recall_log: None,
+            memory_ttl_secs: None,
+            gc_retain_secs: 1_000_000,
+        };
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+
+        // now well past the @due:1000.
+        run_proactive_pass(&deps, &sched, &[], 5_000_000).await;
+        {
+            let calls = backend.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "the due reminder surfaces");
+            assert!(calls[0].0.contains("water the plants"));
+            assert!(calls[0]
+                .1
+                .as_deref()
+                .unwrap()
+                .contains("DueReminder"));
+        }
+        assert!(plog.was_surfaced("due:rem:0").await.unwrap());
+
+        // Second cycle, same state → deduped, no new send.
+        run_proactive_pass(&deps, &sched, &[], 5_000_001).await;
+        assert_eq!(
+            backend.calls.lock().unwrap().len(),
+            1,
+            "already-surfaced item must not re-send"
+        );
+
+        // Disabled config → complete no-op even with fresh state.
+        let off = ProactiveDeps {
+            config: aivyx_config::ProactiveConfig {
+                enabled: false,
+                ..deps.config.clone()
+            },
+            memory,
+            proactive_log: plog,
+            notify,
+            recall_log: None,
+            memory_ttl_secs: None,
+            gc_retain_secs: 1_000_000,
+        };
+        run_proactive_pass(&off, &sched, &[], 6_000_000).await;
+        assert_eq!(backend.calls.lock().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
