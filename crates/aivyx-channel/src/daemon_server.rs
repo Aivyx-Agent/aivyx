@@ -715,6 +715,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             recall_log: recall_log.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             proactive_stat: proactive_stat.clone(),
+            persona_lifecycle_stat: persona_lifecycle_stat.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -786,6 +787,11 @@ struct ConnectionContext {
     /// `GetLearningInsights` surface.
     proactive_stat:
         Option<crate::proactive_detect::SharedProactiveStat>,
+    /// Phase 81 (Q4a) — last-persona-lifecycle-cycle stat for
+    /// the `GetLearningInsights` surface.
+    persona_lifecycle_stat: Option<
+        crate::persona_lifecycle::SharedPersonaLifecycleStat,
+    >,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -807,6 +813,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         recall_log,
         persona_selection_stat,
         proactive_stat,
+        persona_lifecycle_stat,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1140,6 +1147,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_log.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 proactive_stat.as_ref(),
+                                persona_lifecycle_stat.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1389,6 +1397,7 @@ async fn run_single_connection_daemon(
         recall_log: None,
         persona_selection_stat: None,
         proactive_stat: None,
+        persona_lifecycle_stat: None,
     })
     .await
 }
@@ -1604,6 +1613,9 @@ async fn handle_query(
     >,
     proactive_stat: Option<
         &crate::proactive_detect::SharedProactiveStat,
+    >,
+    persona_lifecycle_stat: Option<
+        &crate::persona_lifecycle::SharedPersonaLifecycleStat,
     >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
@@ -2042,6 +2054,8 @@ async fn handle_query(
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             let proactive = proactive_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let persona_lifecycle = persona_lifecycle_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
 
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
@@ -2056,6 +2070,7 @@ async fn handle_query(
                     proposals: Vec::new(),
                     persona_selection,
                     proactive,
+                    persona_lifecycle,
                 };
             };
 
@@ -2114,6 +2129,7 @@ async fn handle_query(
                 ),
                 persona_selection,
                 proactive,
+                persona_lifecycle,
             }
         }
     }

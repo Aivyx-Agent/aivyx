@@ -531,6 +531,7 @@ pub async fn get_learning_insights(
         Vec<crate::recall_insights::ProposalProvenance>,
         Option<crate::persona_context::PersonaSelectionStat>,
         Option<crate::proactive_detect::ProactiveStat>,
+        Option<crate::persona_lifecycle::PersonaLifecycleStat>,
     ),
     DaemonError,
 > {
@@ -546,7 +547,14 @@ pub async fn get_learning_insights(
             proposals,
             persona_selection,
             proactive,
-        } => Ok((digest, proposals, persona_selection, proactive)),
+            persona_lifecycle,
+        } => Ok((
+            digest,
+            proposals,
+            persona_selection,
+            proactive,
+            persona_lifecycle,
+        )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))
         }

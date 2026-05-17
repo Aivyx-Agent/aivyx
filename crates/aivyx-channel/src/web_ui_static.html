@@ -1544,6 +1544,29 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       proactiveCard.innerHTML = paHtml;
       body.appendChild(proactiveCard);
 
+      // Phase 81 (Q4a) — persona lifecycle last cycle.
+      const pl = payload.persona_lifecycle;
+      const lifecycleCard = document.createElement('div');
+      lifecycleCard.className = 'row-card';
+      let plHtml =
+        '<div class="row-line"><span class="row-id">' +
+        'Persona lifecycle</span><span class="row-meta">' +
+        (pl
+          ? (pl.proposed.length + ' proposed last cycle (' +
+             pl.deduped + ' deduped)')
+          : 'not engaged (off, or no cycle yet)') +
+        '</span></div>';
+      if (pl) {
+        (pl.proposed || []).forEach(function(p) {
+          plHtml += '<div class="row-line"><span class="row-meta">' +
+            escapeHtml(p.kind) + ' ‘' + escapeHtml(p.value) +
+            '’</span> <span>' + escapeHtml(p.reason) +
+            '</span></div>';
+        });
+      }
+      lifecycleCard.innerHTML = plHtml;
+      body.appendChild(lifecycleCard);
+
       function topicList(title, pairs) {
         const card = document.createElement('div');
         card.className = 'row-card';

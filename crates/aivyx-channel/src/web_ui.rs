@@ -635,6 +635,16 @@ mod tests {
             HTML.contains("surfaced last cycle"),
             "must render the proactive last-cycle line"
         );
+        // Phase 81 (Q4a) — the Learning pane must surface the
+        // persona-lifecycle last-cycle stat.
+        assert!(
+            HTML.contains("payload.persona_lifecycle"),
+            "must read the persona_lifecycle field"
+        );
+        assert!(
+            HTML.contains("proposed last cycle"),
+            "must render the persona-lifecycle last-cycle line"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

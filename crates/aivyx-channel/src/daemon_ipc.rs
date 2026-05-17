@@ -346,6 +346,15 @@ pub enum QueryResponsePayload {
         #[serde(default)]
         proactive:
             Option<crate::proactive_detect::ProactiveStat>,
+        /// Phase 81 (Q4a) — the last persona-lifecycle cycle's
+        /// outcome (what was proposed for consolidation/decay +
+        /// why, deduped count), or `None` if the lifecycle pass
+        /// has not run (off / no schedule / pre-Phase-81).
+        /// `#[serde(default)]` so older frames decode.
+        #[serde(default)]
+        persona_lifecycle: Option<
+            crate::persona_lifecycle::PersonaLifecycleStat,
+        >,
     },
 }
 
@@ -1642,6 +1651,20 @@ mod tests {
                             ],
                             deduped: 1,
                             capped: 0,
+                        },
+                    ),
+                    persona_lifecycle: Some(
+                        crate::persona_lifecycle::PersonaLifecycleStat {
+                            ts_secs: 1_715_004_000,
+                            proposed: vec![
+                                crate::persona_lifecycle::PersonaLifecycleProposed {
+                                    kind: "consolidate".into(),
+                                    category: crate::persona_lifecycle::SoftCategory::LearnedContext,
+                                    value: "dup a".into(),
+                                    reason: "2 near-duplicate learned_context facets (cosine > 0.92)".into(),
+                                },
+                            ],
+                            deduped: 1,
                         },
                     ),
                 },
