@@ -1521,6 +1521,29 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         '</span></div>';
       body.appendChild(personaCard);
 
+      // Phase 80 (Q4a) — proactive surfacing last cycle.
+      const pa = payload.proactive;
+      const proactiveCard = document.createElement('div');
+      proactiveCard.className = 'row-card';
+      let paHtml =
+        '<div class="row-line"><span class="row-id">Proactive' +
+        '</span><span class="row-meta">' +
+        (pa
+          ? (pa.surfaced.length + ' surfaced last cycle (' +
+             pa.deduped + ' deduped, ' + pa.capped + ' capped)')
+          : 'not engaged (off, or no cycle yet)') +
+        '</span></div>';
+      if (pa) {
+        (pa.surfaced || []).forEach(function(s) {
+          paHtml += '<div class="row-line"><span class="row-meta">' +
+            escapeHtml(s.kind) + ' ‘' + escapeHtml(s.topic) +
+            '’</span> <span>' + escapeHtml(s.reason) +
+            '</span></div>';
+        });
+      }
+      proactiveCard.innerHTML = paHtml;
+      body.appendChild(proactiveCard);
+
       function topicList(title, pairs) {
         const card = document.createElement('div');
         card.className = 'row-card';

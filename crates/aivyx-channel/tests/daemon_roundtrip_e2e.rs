@@ -819,6 +819,7 @@ async fn two_concurrent_connections() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1110,6 +1111,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1199,6 +1201,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
             })
             .await
@@ -1612,6 +1615,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -1878,6 +1882,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2256,6 +2261,7 @@ async fn mission_queries_round_trip_over_ipc() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
         })
         .await
@@ -2538,6 +2544,7 @@ async fn audit_queries_round_trip_over_ipc() {
             persona_selection_stat: None,
             proactive_config: None,
             proactive_log: None,
+            proactive_stat: None,
             memory_retention: Vec::new(),
         })
         .await

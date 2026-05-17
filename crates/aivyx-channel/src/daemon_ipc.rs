@@ -338,6 +338,14 @@ pub enum QueryResponsePayload {
         #[serde(default)]
         persona_selection:
             Option<crate::persona_context::PersonaSelectionStat>,
+        /// Phase 80 (Q4a) — the last proactive cycle's outcome
+        /// (what was surfaced + why, deduped/capped counts), or
+        /// `None` if proactive has not run (off / no schedule /
+        /// pre-Phase-80). `#[serde(default)]` so older frames
+        /// decode.
+        #[serde(default)]
+        proactive:
+            Option<crate::proactive_detect::ProactiveStat>,
     },
 }
 
@@ -1620,6 +1628,20 @@ mod tests {
                             ts_secs: 1_715_002_000,
                             selected: 6,
                             total: 20,
+                        },
+                    ),
+                    proactive: Some(
+                        crate::proactive_detect::ProactiveStat {
+                            ts_secs: 1_715_003_000,
+                            surfaced: vec![
+                                crate::proactive_detect::ProactiveSurfaced {
+                                    kind: crate::proactive_detect::ProactiveKind::DueReminder,
+                                    topic: "rem".into(),
+                                    reason: "reminder in 'rem' was due 2h ago".into(),
+                                },
+                            ],
+                            deduped: 1,
+                            capped: 0,
                         },
                     ),
                 },

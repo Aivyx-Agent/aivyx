@@ -2645,6 +2645,15 @@ async fn run_async(
     let persona_selection_stat = embedding_provider.as_ref().map(|_| {
         aivyx_channel::persona_context::shared_persona_selection_stat()
     });
+    // Phase 80 (Q4a) — shared last-proactive-cycle stat: the
+    // pass writes it, GetLearningInsights reads the same handle.
+    // Created iff proactive is armed (enabled).
+    let proactive_stat = match &config_proactive {
+        Some(p) if p.enabled => Some(
+            aivyx_channel::proactive_detect::shared_proactive_stat(),
+        ),
+        _ => None,
+    };
     let persona_refiner: Option<
         Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
     > = match &embedding_provider {
@@ -3851,6 +3860,7 @@ async fn run_async(
             // Phase 80 — proactive surfacing config + dedup log.
             proactive_config: config_proactive.clone(),
             proactive_log: proactive_log.clone(),
+            proactive_stat: proactive_stat.clone(),
         })
             .await;
 

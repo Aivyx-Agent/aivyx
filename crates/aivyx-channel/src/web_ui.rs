@@ -625,6 +625,16 @@ mod tests {
             HTML.contains("Adaptive Persona"),
             "must render the adaptive-Persona selection line"
         );
+        // Phase 80 (Q4a) — the Learning pane must surface the
+        // proactive-surfacing last-cycle stat.
+        assert!(
+            HTML.contains("payload.proactive"),
+            "must read the proactive field"
+        );
+        assert!(
+            HTML.contains("surfaced last cycle"),
+            "must render the proactive last-cycle line"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

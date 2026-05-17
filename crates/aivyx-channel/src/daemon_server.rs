@@ -228,6 +228,11 @@ pub struct DaemonConfig {
     /// dedup + the per-window cap.
     pub proactive_log:
         Option<Arc<crate::proactive_log::PersistentProactiveLog>>,
+    /// Phase 80 (Q4a) — shared last-proactive-cycle stat the
+    /// pass writes and `GetLearningInsights` reads. `None` →
+    /// proactive not armed (the surface reports none).
+    pub proactive_stat:
+        Option<crate::proactive_detect::SharedProactiveStat>,
 }
 
 /// Run the daemon server.
@@ -271,6 +276,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_selection_stat,
         proactive_config,
         proactive_log,
+        proactive_stat,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -428,6 +434,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         memory_ttl_secs,
                         gc_retain_secs:
                             crate::proactive_log::PROACTIVE_LOG_RETAIN_SECS,
+                        stat: proactive_stat.clone(),
                     })
                 }
                 _ => None,
@@ -666,6 +673,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             embedding_provider: embedding_provider.clone(),
             recall_log: recall_log.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
+            proactive_stat: proactive_stat.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -733,6 +741,10 @@ struct ConnectionContext {
     /// `GetLearningInsights` surface.
     persona_selection_stat:
         Option<crate::persona_context::SharedPersonaSelectionStat>,
+    /// Phase 80 (Q4a) — last-proactive-cycle stat for the
+    /// `GetLearningInsights` surface.
+    proactive_stat:
+        Option<crate::proactive_detect::SharedProactiveStat>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -753,6 +765,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         embedding_provider,
         recall_log,
         persona_selection_stat,
+        proactive_stat,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1085,6 +1098,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 embedding_provider.as_ref(),
                                 recall_log.as_ref(),
                                 persona_selection_stat.as_ref(),
+                                proactive_stat.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1333,6 +1347,7 @@ async fn run_single_connection_daemon(
         embedding_provider: None,
         recall_log: None,
         persona_selection_stat: None,
+        proactive_stat: None,
     })
     .await
 }
@@ -1375,6 +1390,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_selection_stat: None,
         proactive_config: None,
         proactive_log: None,
+        proactive_stat: None,
         memory_retention: Vec::new(),
     }).await
 }
@@ -1542,6 +1558,9 @@ async fn handle_query(
     recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
     persona_selection_stat: Option<
         &crate::persona_context::SharedPersonaSelectionStat,
+    >,
+    proactive_stat: Option<
+        &crate::proactive_detect::SharedProactiveStat,
     >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
@@ -1978,6 +1997,8 @@ async fn handle_query(
             // once and included in every LearningInsights return.
             let persona_selection = persona_selection_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let proactive = proactive_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
 
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
@@ -1991,6 +2012,7 @@ async fn handle_query(
                     ),
                     proposals: Vec::new(),
                     persona_selection,
+                    proactive,
                 };
             };
 
@@ -2048,6 +2070,7 @@ async fn handle_query(
                     &detail, &proposals,
                 ),
                 persona_selection,
+                proactive,
             }
         }
     }

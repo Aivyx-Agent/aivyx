@@ -13,6 +13,7 @@ use aivyx_channel::daemon_client::{
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::persona_context::PersonaSelectionStat;
+use aivyx_channel::proactive_detect::ProactiveStat;
 use aivyx_channel::recall_insights::{
     LearningDigest, ProposalProvenance,
 };
@@ -23,7 +24,7 @@ pub async fn run_learning(
 ) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let (digest, proposals, persona_selection) =
+    let (digest, proposals, persona_selection, proactive) =
         get_learning_insights(&socket_path, window_secs)
             .await
             .map_err(|e| {
@@ -31,7 +32,12 @@ pub async fn run_learning(
             })?;
     print!(
         "{}",
-        render_insights(&digest, &proposals, persona_selection.as_ref())
+        render_insights(
+            &digest,
+            &proposals,
+            persona_selection.as_ref(),
+            proactive.as_ref(),
+        )
     );
     Ok(())
 }
@@ -65,6 +71,7 @@ fn render_insights(
     d: &LearningDigest,
     proposals: &[ProposalProvenance],
     persona_selection: Option<&PersonaSelectionStat>,
+    proactive: Option<&ProactiveStat>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -98,6 +105,26 @@ fn render_insights(
         None => out.push_str(
             "  adaptive Persona: not engaged (no [embedding] / \
              small Soul / none yet)\n",
+        ),
+    }
+    match proactive {
+        Some(p) => {
+            out.push_str(&format!(
+                "  proactive: {} surfaced last cycle \
+                 ({} deduped, {} capped)\n",
+                p.surfaced.len(),
+                p.deduped,
+                p.capped,
+            ));
+            for s in &p.surfaced {
+                out.push_str(&format!(
+                    "    - {:?} '{}' — {}\n",
+                    s.kind, s.topic, s.reason,
+                ));
+            }
+        }
+        None => out.push_str(
+            "  proactive: not engaged (off, or no cycle yet)\n",
         ),
     }
     out.push_str("\nMost helpful topics:\n");
@@ -157,7 +184,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None);
+        let out = render_insights(&digest(), &[], None, None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -191,7 +218,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None);
+        let out = render_insights(&digest(), &prov, None, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -212,7 +239,7 @@ mod tests {
             top_unhelpful: vec![],
             proposals_in_window: 0,
         };
-        let out = render_insights(&d, &[], None);
+        let out = render_insights(&d, &[], None, None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
@@ -221,7 +248,7 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None);
+        let none_out = render_insights(&digest(), &[], None, None);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -231,9 +258,40 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat));
+            render_insights(&digest(), &[], Some(&stat), None);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
+        ));
+    }
+
+    #[test]
+    fn render_proactive_some_and_none() {
+        use aivyx_channel::proactive_detect::{
+            ProactiveKind, ProactiveStat, ProactiveSurfaced,
+        };
+
+        // None → "not engaged" line.
+        let none_out = render_insights(&digest(), &[], None, None);
+        assert!(none_out.contains("proactive: not engaged"));
+
+        // Some → count line + per-item lines.
+        let stat = ProactiveStat {
+            ts_secs: 1_715_003_000,
+            surfaced: vec![ProactiveSurfaced {
+                kind: ProactiveKind::DueReminder,
+                topic: "reminders".into(),
+                reason: "1 item due".into(),
+            }],
+            deduped: 2,
+            capped: 1,
+        };
+        let some_out =
+            render_insights(&digest(), &[], None, Some(&stat));
+        assert!(some_out.contains(
+            "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
+        ));
+        assert!(some_out.contains(
+            "DueReminder 'reminders' — 1 item due"
         ));
     }
 }

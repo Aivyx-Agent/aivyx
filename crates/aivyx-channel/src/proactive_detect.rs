@@ -65,6 +65,37 @@ pub struct ProactiveItem {
     pub reason: String,
 }
 
+/// Phase 80 (Q4a) — one item the last proactive cycle actually
+/// dispatched, for the Phase 78 trust surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProactiveSurfaced {
+    pub kind: ProactiveKind,
+    pub topic: String,
+    pub reason: String,
+}
+
+/// The last proactive cycle's outcome. Ephemeral (last-cycle
+/// only, not persisted) — an autonomous *outbound* action must
+/// still be legible, the Phase 78 posture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProactiveStat {
+    pub ts_secs: u64,
+    pub surfaced: Vec<ProactiveSurfaced>,
+    pub deduped: u32,
+    pub capped: u32,
+}
+
+/// Shared handle the proactive pass writes and the
+/// `GetLearningInsights` handler reads. `None` inside = the
+/// proactive pass has not run this daemon lifetime.
+pub type SharedProactiveStat =
+    std::sync::Arc<std::sync::RwLock<Option<ProactiveStat>>>;
+
+/// Construct an empty shared proactive-stat handle.
+pub fn shared_proactive_stat() -> SharedProactiveStat {
+    std::sync::Arc::new(std::sync::RwLock::new(None))
+}
+
 fn snippet(body: &str) -> String {
     let one_line = body.replace('\n', " ");
     if one_line.chars().count() > SUMMARY_CHARS {

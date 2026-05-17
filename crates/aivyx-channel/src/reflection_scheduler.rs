@@ -98,6 +98,9 @@ pub struct ProactiveDeps {
     pub memory_ttl_secs: Option<u64>,
     /// Retention window for the proactive-log GC clamp.
     pub gc_retain_secs: u64,
+    /// Phase 80 (Q4a) — optional last-cycle stat sink for the
+    /// Phase 78 surface. `None` → breadcrumb-only.
+    pub stat: Option<crate::proactive_detect::SharedProactiveStat>,
 }
 
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
@@ -689,6 +692,9 @@ async fn run_proactive_pass(
         deps.config.max_per_window.saturating_sub(used);
 
     let (mut surfaced, mut deduped, mut capped) = (0u32, 0u32, 0u32);
+    let mut surfaced_items: Vec<
+        crate::proactive_detect::ProactiveSurfaced,
+    > = Vec::new();
     for item in items {
         match deps.proactive_log.was_surfaced(&item.id).await {
             Ok(true) => {
@@ -717,6 +723,13 @@ async fn run_proactive_pass(
                     .await;
                 surfaced += 1;
                 remaining -= 1;
+                surfaced_items.push(
+                    crate::proactive_detect::ProactiveSurfaced {
+                        kind: item.kind,
+                        topic: item.topic.clone(),
+                        reason: item.reason.clone(),
+                    },
+                );
             }
             Err(e) => {
                 eprintln!(
@@ -733,6 +746,17 @@ async fn run_proactive_pass(
              (deduped {deduped}, capped {capped})",
             sched.name,
         );
+        // Q4a — record this cycle for the Phase 78 surface.
+        if let Some(stat) = &deps.stat {
+            if let Ok(mut w) = stat.write() {
+                *w = Some(crate::proactive_detect::ProactiveStat {
+                    ts_secs: now_secs,
+                    surfaced: surfaced_items,
+                    deduped,
+                    capped,
+                });
+            }
+        }
     }
 
     let cutoff = now_secs.saturating_sub(deps.gc_retain_secs);
@@ -1208,6 +1232,7 @@ mod tests {
             recall_log: None,
             memory_ttl_secs: None,
             gc_retain_secs: 1_000_000,
+            stat: None,
         };
         let sched = aivyx_config::ReflectionScheduleConfig {
             name: "nightly".into(),
@@ -1251,6 +1276,7 @@ mod tests {
             recall_log: None,
             memory_ttl_secs: None,
             gc_retain_secs: 1_000_000,
+            stat: None,
         };
         run_proactive_pass(&off, &sched, &[], 6_000_000).await;
         assert_eq!(backend.calls.lock().unwrap().len(), 1);
