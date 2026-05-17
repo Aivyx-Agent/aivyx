@@ -665,6 +665,42 @@ no recall yet, it simply reports an empty digest (a valid
 aivyx learning --window 604800   # last 7 days
 ```
 
+## Adaptive Persona (Phase 79)
+
+Before Phase 79 the **entire** accreted Persona — every learned
+context note, character trait, communication adaptation the
+reflection loop has ever written — was injected into *every*
+system prompt, unbounded and identical regardless of the turn.
+As the Soul matures over months that grows without limit and
+dilutes its own signal. Phase 79 makes it **adaptive**: each
+turn the assistant injects only the Persona facets
+semantically relevant to your message.
+
+**The always-on core (the safety invariant).** Selection only
+ever applies to the *soft* list facets. The scalar identity
+(`assistant_name`, `operator_profile`, `communication_style`)
+and **every `behavioral_constraint`** are injected in full on
+every turn, unconditionally — they can never be selected away.
+Your declared identity and your guardrails always apply; only
+which *learned* facets surface is contextual.
+
+**Only engages when it matters.** With no `[embedding]`
+configured, **or** while the Soul is still small (below an
+internal facet threshold), the full Persona is injected
+exactly as before — byte-identical to pre-Phase-79. The
+feature is invisible until the Persona is actually large
+enough to need bounding; an embed failure also falls back
+silently. It is never a regression and never an error. There
+is nothing to configure (a `[persona]` tuning block is a
+deferred follow-up).
+
+**Where to see it.** Each turn the daemon log prints
+`aivyx persona: injected N/M facets`, and the same
+selected/total appears in the `aivyx learning` view and the
+Web UI **Learning** tab ("Adaptive Persona: N/M facets
+injected last turn") — the Phase 78 trust surface, extended:
+an adaptive Soul stays legible.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

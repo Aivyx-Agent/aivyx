@@ -1880,6 +1880,51 @@ Likely follow-ups (per-memory-entry drill-down, history
 beyond the recall-log window, Web UI live refresh, actionable
 insights) are operator-feedback-gated.
 
+## Phase 79 — Adaptive Persona (contextual "Soul" selection)
+
+**Frozen — see [PHASE_79.md](PHASE_79.md).** The accreted
+Persona was dumped whole into every system prompt, unbounded
+and turn-blind. Phase 79 makes the Soul *adaptive*: per-turn
+semantic selection of the relevant facets, reusing the Phase
+76 begin_turn seam and the Phase 78 trust surface. Zero new
+deps.
+
+- **`SystemPromptRefiner` hook (Q1a):** sibling of Phase 76's
+  `ContextProvider` in `llm_planner.rs` (not `lib.rs` —
+  reachable via `aivyx_core::llm_planner::`); `begin_turn`
+  swaps the turn's system prompt on `Some`. The planner is
+  per-turn so the swap is naturally turn-scoped.
+- **Core invariant (Q2a), structurally enforced:**
+  `reduce_persona` copies scalar identity +
+  `behavioral_constraints` through *unconditionally*; `keep`
+  only ever touches the six soft list categories. No caller
+  can drop identity or guardrails — proven end-to-end.
+- **`PersonaContextRefiner` (Q3a):** embed the message,
+  cosine-rank facets, top-K above a floor, re-assemble via the
+  *unchanged* `assemble_session_prompt`. Below a size
+  threshold / no embedding / embed failure → `None` →
+  byte-identical full Persona. The feature is invisible until
+  the Soul is large enough to need bounding.
+- **Legible (Q4a):** per-turn `aivyx persona: injected N/M
+  facets` breadcrumb + a `persona_selection` field on the
+  Phase 78 `GetLearningInsights` surface (CLI + Web UI).
+
+Streak all three correct: DESIGN.md → 26, PRODUCT.md → 19,
+`aivyx-core/src/lib.rs` → **27** (new record, beats Phase
+78's 26) — every line lives in `aivyx-channel` /
+`llm_planner.rs`, reusing existing types; `lib.rs`
+byte-identical, the streak-shaped-architecture discipline
+continued. Tests +14 (1473 → 1487) — just under the
+calibrated +15-25 (4th consecutive small miss; the band has
+converged — reuse-heavy phases land ~+10-15, this had genuine
+new selection logic so topped that band at +14). No
+deviations: every planned surface shipped as scoped. Zero
+clippy warnings. Zero new workspace deps.
+
+Likely follow-ups (`[persona]` tuning block, Persona
+consolidation/supersession/decay, behavioural Persona,
+conversational-window selection) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

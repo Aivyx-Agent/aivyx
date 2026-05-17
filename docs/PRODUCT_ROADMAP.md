@@ -1098,6 +1098,25 @@ respond to it. Closing the gap is the inflection point between
   lib.rs → **26** (new record, beating Phase 77's 25). Zero
   new workspace deps.
 
+- **Phase 79 (Adaptive Persona, shipped 2026-05-17).** Refines
+  *how* the already-delivered P14 Persona is applied — no new
+  product commitment, and the operator-visible contract is
+  *strengthened*: a structurally-enforced invariant guarantees
+  declared identity + every behavioral_constraint are always
+  injected in full, while only the soft learned facets are
+  selected per turn (semantic, reusing the Phase 76 embedding
+  seam). Below a size threshold / no [embedding] / embed
+  failure → byte-identical full Persona, so it is never a
+  regression and engages only once the Soul is large. Made
+  legible via the Phase 78 surface (a `persona_selection`
+  field + per-turn breadcrumb). All hooks live in
+  `aivyx-channel`/`llm_planner.rs` reusing existing types.
+  Tests +14 (1473 → 1487) — just under the calibrated +15-25
+  (4th consecutive small miss; the reuse-phase band has
+  converged). Streak all three correct: DESIGN.md → 26,
+  PRODUCT.md → 19, lib.rs → **27** (new record, beating Phase
+  78's 26). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

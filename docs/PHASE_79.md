@@ -237,35 +237,82 @@ deferral).
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct.**
+
+- **DESIGN.md → 26.** Held, byte-identical. Exit hash
+  `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`
+  == entry. A planner extension-point hook touched no contract.
+- **PRODUCT.md → 19.** Held, byte-identical. Exit hash
+  `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`
+  == entry. The core-identity invariant *strengthens* the
+  operator-visible contract without editing commitment text.
+- **Production-core `aivyx-core/src/lib.rs` → 27.** Held,
+  byte-identical. Exit hash
+  `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`
+  == entry. **New project record (beats Phase 78's 26).** The
+  `SystemPromptRefiner` hook lives in `llm_planner.rs`; every
+  other line is `aivyx-channel`, reusing existing types. The
+  streak-shaped-architecture discipline (the Phase 76
+  precedent applied up front) made `lib.rs` byte-identity a
+  non-event by design — five phases running.
+
+**Test delta — small MISS (fourth consecutive, but the band
+has converged).** +14 (1473 → 1487), just under the
+deliberately-calibrated +15-25 floor. Breakdown: refiner hook
+4, reduced-Persona invariant 4, `PersonaContextRefiner`
+selection/fallbacks 5, observability render 1; the IPC
+`persona_selection` field + the threaded shared-stat are
+covered by the *existing* round-trip / `persona_context`
+tests (no new test fn, full coverage). This phase had genuine
+new logic (a selection algorithm with an enforced invariant
+and two fallback branches), which is why it landed at +14 —
+the **top of the converged reuse-phase band**, not the ~+10-12
+a pure read-surface would. The four-point series (76:+15,
+77:+22, 78:+12, 79:+14) now characterises it well: phases that
+extend proven seams trend **~+12-18**; the Phase 78 "~+10-15"
+note was slightly low for ones carrying real new algorithmic
+logic. Calibration is now converged — future estimates for
+seam-reuse phases should use +12-18 and stop treating the
+recurring miss as new information.
+
+**No deviations.** Every planned surface (hook, invariant,
+refiner, three factory sites, breadcrumb + Phase 78 surface)
+shipped exactly as scoped. The Q2a invariant is not just
+tested in isolation but proven end-to-end (a selector-rejected
+`behavioral_constraint` still renders in the assembled
+prompt).
+
+**Zero clippy warnings, zero new workspace deps** — both held
+(one transient `field_reassign_with_default` fixed inline with
+a struct-update literal).
 
 ## Exit criteria
 
-- [ ] `SystemPromptRefiner` hook + builder + `begin_turn`
+- [x] `SystemPromptRefiner` hook + builder + `begin_turn`
   swap, **no `lib.rs` edit** — Task 2.
-- [ ] Reduced-Persona assembly + always-inject core invariant,
+- [x] Reduced-Persona assembly + always-inject core invariant,
   pure + tested — Task 3.
-- [ ] `PersonaContextRefiner` with both fallbacks + ranking +
+- [x] `PersonaContextRefiner` with both fallbacks + ranking +
   invariant — Task 4.
-- [ ] Wired into local-CLI, daemon, and child-agent factories
+- [x] Wired into local-CLI, daemon, and child-agent factories
   — Task 5.
-- [ ] Per-turn breadcrumb + Phase 78 surface extended (CLI +
+- [x] Per-turn breadcrumb + Phase 78 surface extended (CLI +
   Web UI) — Task 6.
-- [ ] Tests across hook, invariant, selection, fallbacks,
+- [x] Tests across hook, invariant, selection, fallbacks,
   observability — Task 7.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 7.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 7.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-six.
-- [ ] PRODUCT.md streak extends to nineteen.
-- [ ] Production-core streak extends to twenty-seven (new
+- [x] DESIGN.md streak extends to twenty-six.
+- [x] PRODUCT.md streak extends to nineteen.
+- [x] Production-core streak extends to twenty-seven (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+15-25; calibrated per the
-  76/77/78 pattern — genuine new selection logic with many
-  edge cases, but heavily reusing proven seams).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive but **just below**
+  prediction (+14 vs ~+15-25) — small 4th-consecutive miss;
+  calibration converged to +12-18 for seam-reuse phases.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

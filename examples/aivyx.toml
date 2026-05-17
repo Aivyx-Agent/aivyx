@@ -828,3 +828,13 @@ parent_role = "researcher"
 # `aivyx learning [--window <secs>]` or open the Web UI
 # "Learning" tab — a read-only digest + per-proposal
 # provenance. Also nothing to configure.
+#
+# Adaptive Persona (Phase 79): with [embedding] configured,
+# once the Persona is large the assistant injects only the
+# facets relevant to each turn instead of the whole accreted
+# Soul. Core identity + every behavioral_constraint are ALWAYS
+# injected in full (never selected away). Below the size
+# threshold / no [embedding] → full Persona as before,
+# byte-identical. Nothing to configure; the `aivyx learning`
+# view and the daemon log (`aivyx persona: injected N/M
+# facets`) show what it selected.
