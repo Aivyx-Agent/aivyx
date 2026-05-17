@@ -5822,3 +5822,165 @@ fn proactive_enabled_all_signals_off_is_invalid() {
     }
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Phase 81 — [persona_lifecycle] section
+// ------------------------------------------------------------------
+
+/// No `[persona_lifecycle]` section → `persona_lifecycle: None`
+/// (off; the Persona only ever grows, pre-Phase-81).
+#[test]
+fn persona_lifecycle_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.persona_lifecycle.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config): it builds with `enabled = false`, defaults
+/// elsewhere, and is NOT validated.
+#[test]
+fn persona_lifecycle_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = false\n",
+        "pl-staged",
+    );
+    let p = cfg.persona_lifecycle.expect("section present");
+    assert!(!p.enabled);
+    assert!(
+        (p.consolidation_similarity
+            - crate::DEFAULT_PL_CONSOLIDATION_SIMILARITY)
+            .abs()
+            < 1e-6
+    );
+    assert_eq!(
+        p.decay_max_age_secs,
+        crate::DEFAULT_PL_DECAY_MAX_AGE_SECS
+    );
+    assert_eq!(
+        p.min_soft_facets,
+        crate::DEFAULT_PL_MIN_SOFT_FACETS
+    );
+    // Signals default on.
+    assert!(p.signals.consolidate);
+    assert!(p.signals.decay);
+    drop(env);
+}
+
+/// Enabled + valid: explicit fields win; an explicitly-off
+/// signal is respected while the other defaults on.
+#[test]
+fn persona_lifecycle_enabled_valid_with_signal_toggle() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = true\n\
+         consolidation_similarity = 0.85\n\
+         decay_max_age_secs = 1209600\nmin_soft_facets = 4\n\
+         signal_decay = false\n",
+        "pl-valid",
+    );
+    let p = cfg.persona_lifecycle.expect("section present");
+    assert!(p.enabled);
+    assert!((p.consolidation_similarity - 0.85).abs() < 1e-6);
+    assert_eq!(p.decay_max_age_secs, 1_209_600);
+    assert_eq!(p.min_soft_facets, 4);
+    assert!(p.signals.consolidate);
+    assert!(!p.signals.decay);
+    drop(env);
+}
+
+/// Enabled with an out-of-range similarity → load-time
+/// `Invalid` (the `(0.0, 1.0]` bound; `0.0` is excluded).
+#[test]
+fn persona_lifecycle_enabled_bad_similarity_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pl-bad-sim");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         consolidation_similarity = 1.5\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "persona_lifecycle.consolidation_similarity"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with `min_soft_facets = 0` → `Invalid`.
+#[test]
+fn persona_lifecycle_enabled_zero_min_facets_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pl-zero-floor");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         min_soft_facets = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "persona_lifecycle.min_soft_facets");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with every signal class off → `Invalid`.
+#[test]
+fn persona_lifecycle_enabled_all_signals_off_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pl-no-signals");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         signal_consolidate = false\nsignal_decay = false\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "persona_lifecycle.signals");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}

@@ -2300,6 +2300,11 @@ async fn run_async(
         // Phase 80 — `[proactive]` config. Threaded into the
         // daemon's reflection-cron proactive pass below.
         proactive: config_proactive,
+        // Phase 81 — `[persona_lifecycle]` config. Threaded
+        // into the daemon's reflection-cron lifecycle pass in
+        // Task 4 (bound here so the destructure stays
+        // exhaustive).
+        persona_lifecycle: _config_persona_lifecycle,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by

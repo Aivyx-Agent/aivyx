@@ -555,6 +555,12 @@ pub struct AivyxConfig {
     /// out unprompted — pre-Phase-80 behavior). `Some` only
     /// arms the pass; it still no-ops unless `enabled = true`.
     pub proactive: Option<ProactiveConfig>,
+    /// Phase 81 — `[persona_lifecycle]` section. `None` when
+    /// absent: the Persona never self-consolidates or decays
+    /// (pre-Phase-81 behavior — it only ever grows). `Some`
+    /// only arms the pass; it still no-ops unless
+    /// `enabled = true`.
+    pub persona_lifecycle: Option<PersonaLifecycleConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1433,6 +1439,66 @@ pub const DEFAULT_PROACTIVE_MAX_PER_WINDOW: u32 = 3;
 /// Default proactive cap window — one day.
 pub const DEFAULT_PROACTIVE_WINDOW_SECS: u64 = 86_400;
 
+/// Phase 81 — which lifecycle action classes the persona-
+/// lifecycle pass may propose. Both default `true`: an
+/// operator who turns the lifecycle on generally wants the
+/// Soul kept tidy, and can disable a class individually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersonaLifecycleSignals {
+    /// Propose merging near-duplicate facets in a soft list.
+    pub consolidate: bool,
+    /// Propose retiring a long-unreinforced facet.
+    pub decay: bool,
+}
+
+impl Default for PersonaLifecycleSignals {
+    fn default() -> Self {
+        PersonaLifecycleSignals {
+            consolidate: true,
+            decay: true,
+        }
+    }
+}
+
+/// Phase 81 — operator-facing config for Persona lifecycle
+/// (consolidation + decay of the learned soft-list facets).
+/// **Off unless a `[persona_lifecycle]` section is present
+/// *and* `enabled = true`.** The pass only ever *proposes*
+/// (the operator approves/rejects and every action is
+/// reversible) and never touches the always-on core, but
+/// mutating identity is high-stakes, so it is opt-in and never
+/// a surprise-on-upgrade.
+#[derive(Debug, Clone)]
+pub struct PersonaLifecycleConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present the pass is a no-op until this is `true`.
+    pub enabled: bool,
+    /// Cosine threshold above which two facets in the same
+    /// soft list are treated as near-duplicates and a merge is
+    /// proposed. In `(0.0, 1.0]`; high by design.
+    pub consolidation_similarity: f32,
+    /// A soft-list facet whose originating delta is older than
+    /// this many seconds, with no later reinforcing delta in
+    /// its category, is proposed for decay.
+    pub decay_max_age_secs: u64,
+    /// Never act on a soft list with fewer than this many
+    /// facets — a small Soul has nothing worth pruning.
+    pub min_soft_facets: u32,
+    /// Which lifecycle action classes may be proposed.
+    pub signals: PersonaLifecycleSignals,
+}
+
+/// Default near-duplicate cosine threshold. High on purpose —
+/// only facets that are essentially the same should merge.
+pub const DEFAULT_PL_CONSOLIDATION_SIMILARITY: f32 = 0.92;
+/// Default decay horizon — ~90 days. A soft-list facet
+/// untouched and unreinforced for a quarter is a stale-Soul
+/// candidate.
+pub const DEFAULT_PL_DECAY_MAX_AGE_SECS: u64 = 90 * 24 * 3600;
+/// Default soft-list floor: never prune a list smaller than
+/// this — a young Soul has nothing to tidy.
+pub const DEFAULT_PL_MIN_SOFT_FACETS: u32 = 6;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1466,6 +1532,10 @@ struct RawToml {
     /// `[proactive]` section. Phase 80 — proactive surfacing.
     #[serde(default)]
     proactive: RawProactive,
+    /// `[persona_lifecycle]` section. Phase 81 — Persona
+    /// consolidation + decay.
+    #[serde(default)]
+    persona_lifecycle: RawPersonaLifecycle,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2059,6 +2129,27 @@ struct RawProactive {
     signal_due_reminder: Option<bool>,
 }
 
+/// Phase 81 — `[persona_lifecycle]` deserialize target. Absent
+/// section → all-`None` via `Default` → the loader maps to
+/// `persona_lifecycle: None` (off). Signal toggles are
+/// `Option<bool>` so an omitted key means "default on,"
+/// a set key means explicit.
+#[derive(Debug, Default, Deserialize)]
+struct RawPersonaLifecycle {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    consolidation_similarity: Option<f32>,
+    #[serde(default)]
+    decay_max_age_secs: Option<u64>,
+    #[serde(default)]
+    min_soft_facets: Option<u32>,
+    #[serde(default)]
+    signal_consolidate: Option<bool>,
+    #[serde(default)]
+    signal_decay: Option<bool>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2436,6 +2527,9 @@ impl AivyxConfig {
         // from the encrypted store in phase 2 of the load.
         let embedding = build_embedding_config(&toml.embedding)?;
         let proactive = build_proactive_config(&toml.proactive)?;
+        let persona_lifecycle = build_persona_lifecycle_config(
+            &toml.persona_lifecycle,
+        )?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3304,6 +3398,7 @@ impl AivyxConfig {
             email,
             embedding,
             proactive,
+            persona_lifecycle,
             roles,
             active_role,
             profile,
@@ -4177,6 +4272,84 @@ fn build_proactive_config(
         target,
         max_per_window,
         window_secs,
+        signals,
+    }))
+}
+
+/// Phase 81 — build the `[persona_lifecycle]` config. Absent
+/// section (every field `None`) → `Ok(None)` (lifecycle off,
+/// the common case — the Persona only ever grows, pre-Phase-81
+/// behavior). Validation applies **only when `enabled`** — a
+/// present-but-disabled section may be incomplete so an
+/// operator can stage it before arming.
+fn build_persona_lifecycle_config(
+    raw: &RawPersonaLifecycle,
+) -> Result<Option<PersonaLifecycleConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.consolidation_similarity.is_some()
+        || raw.decay_max_age_secs.is_some()
+        || raw.min_soft_facets.is_some()
+        || raw.signal_consolidate.is_some()
+        || raw.signal_decay.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let consolidation_similarity = raw
+        .consolidation_similarity
+        .unwrap_or(DEFAULT_PL_CONSOLIDATION_SIMILARITY);
+    let decay_max_age_secs = raw
+        .decay_max_age_secs
+        .unwrap_or(DEFAULT_PL_DECAY_MAX_AGE_SECS);
+    let min_soft_facets =
+        raw.min_soft_facets.unwrap_or(DEFAULT_PL_MIN_SOFT_FACETS);
+    let signals = PersonaLifecycleSignals {
+        consolidate: raw.signal_consolidate.unwrap_or(true),
+        decay: raw.signal_decay.unwrap_or(true),
+    };
+
+    // Only an *armed* config must be coherent — a staged
+    // (enabled = false) section can be partial.
+    if enabled {
+        if !(consolidation_similarity > 0.0
+            && consolidation_similarity <= 1.0)
+        {
+            return Err(ConfigError::Invalid {
+                field: "persona_lifecycle.consolidation_similarity",
+                reason: "`consolidation_similarity` must be in \
+                         the range (0.0, 1.0]"
+                    .into(),
+            });
+        }
+        if decay_max_age_secs == 0 {
+            return Err(ConfigError::Invalid {
+                field: "persona_lifecycle.decay_max_age_secs",
+                reason: "`decay_max_age_secs` must be >= 1".into(),
+            });
+        }
+        if min_soft_facets == 0 {
+            return Err(ConfigError::Invalid {
+                field: "persona_lifecycle.min_soft_facets",
+                reason: "`min_soft_facets` must be >= 1".into(),
+            });
+        }
+        if !signals.consolidate && !signals.decay {
+            return Err(ConfigError::Invalid {
+                field: "persona_lifecycle.signals",
+                reason: "at least one signal class must be \
+                         enabled when persona_lifecycle is \
+                         enabled"
+                    .into(),
+            });
+        }
+    }
+
+    Ok(Some(PersonaLifecycleConfig {
+        enabled,
+        consolidation_similarity,
+        decay_max_age_secs,
+        min_soft_facets,
         signals,
     }))
 }
