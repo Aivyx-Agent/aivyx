@@ -139,6 +139,17 @@ pub struct PersonaLifecycleDeps {
     pub embedding: std::sync::Arc<
         dyn aivyx_llm::embedding::EmbeddingProvider,
     >,
+    /// Phase 85 — the durable helpfulness ledger. When present,
+    /// a facet whose `recall-fb:{topic}` provenance resolves is
+    /// gated by that topic's decayed helpfulness (symmetric:
+    /// sustained-negative triggers decay early, sustained-
+    /// positive protects an age-old facet). `None` → pure
+    /// age-only decay (byte-identical to Phase 81).
+    pub helpfulness_ledger: Option<
+        std::sync::Arc<
+            crate::helpfulness_ledger::PersistentHelpfulnessLedger,
+        >,
+    >,
     /// Phase 81 (Q4a) — optional last-cycle stat sink for the
     /// Phase 78 surface. `None` → breadcrumb-only.
     pub stat: Option<
@@ -1032,12 +1043,45 @@ async fn run_persona_lifecycle_pass(
         let reinforced = entries
             .iter()
             .any(|e| e.seq > origin.seq && e.delta.category == dcat);
+        // Phase 85 (Q1a) — recover the recall topic structurally
+        // from `recall-fb:{topic}` provenance. Only
+        // recall-feedback-derived facets carry it; reflection-
+        // authored facets → `None` → age-only (unchanged).
+        let recall_topic = origin
+            .delta
+            .proposal_id
+            .strip_prefix("recall-fb:")
+            .map(|t| t.to_string());
+        // Resolve the topic's durable decayed helpfulness once,
+        // here, so the detector stays pure. `None` when no
+        // ledger, no provenance, or the topic is unseen → the
+        // detector falls back to exact Phase 81 age-only.
+        let helpfulness = match (
+            &deps.helpfulness_ledger,
+            recall_topic.as_deref(),
+        ) {
+            (Some(ledger), Some(topic)) => match ledger
+                .topic_score(topic, now_secs)
+                .await
+            {
+                Ok(Some(e)) => Some(
+                    crate::persona_lifecycle::HelpfulnessHint {
+                        score: e.ewma_score,
+                        samples: e.samples,
+                    },
+                ),
+                _ => None,
+            },
+            _ => None,
+        };
         facets.push(crate::persona_lifecycle::LifecycleFacet {
             category: cat,
             value,
             origin_ts_secs: origin.delta.approved_at_unix_ms
                 / 1000,
             reinforced,
+            recall_topic,
+            helpfulness,
         });
     }
 
@@ -2321,6 +2365,7 @@ mod tests {
             persona_log: Arc::clone(&persona_log),
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(FakeEmb),
+            helpfulness_ledger: None,
             stat: Some(Arc::clone(&stat)),
         };
         let sched = aivyx_config::ReflectionScheduleConfig {
@@ -2382,6 +2427,7 @@ mod tests {
             persona_log,
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(FakeEmb),
+            helpfulness_ledger: None,
             stat: None,
         };
         run_persona_lifecycle_pass(&off, &sched, 10_000_002)
@@ -2391,6 +2437,213 @@ mod tests {
                 .list(ProposalStatusFilter::Pending)
                 .len(),
             2,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 85 — helpfulness-driven decay (provenance) ------
+
+    #[tokio::test]
+    async fn helpfulness_decay_uses_recall_fb_provenance() {
+        use crate::helpfulness_ledger::PersistentHelpfulnessLedger;
+        use crate::persona::{
+            PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
+            PersistentPersonaLog,
+        };
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_llm::embedding::{
+            EmbeddingError, EmbeddingProvider,
+        };
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        struct NoEmb;
+        #[async_trait::async_trait]
+        impl EmbeddingProvider for NoEmb {
+            async fn embed(
+                &self,
+                _t: &[String],
+            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+                Ok(vec![])
+            }
+            fn model(&self) -> &str {
+                "noemb"
+            }
+            fn dimensions(&self) -> usize {
+                1
+            }
+        }
+
+        fn delta(
+            id: &str,
+            value: &str,
+            proposal_id: &str,
+            approved_ms: u64,
+        ) -> PersonaDelta {
+            PersonaDelta {
+                delta_id: id.into(),
+                proposed_at_unix_ms: approved_ms,
+                approved_at_unix_ms: approved_ms,
+                proposal_id: proposal_id.into(),
+                category: PersonaDeltaCategory::LearnedContext,
+                op: PersonaDeltaOp::AppendList {
+                    value: value.into(),
+                },
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-pl-help-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([85u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let persona_log = Arc::new(
+            PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                vec![1u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+        // now_ms = 1e9 → now_secs 1_000_000. Both facets YOUNG
+        // (origin == now → age 0), so age-only never decays
+        // them — any decay here is helpfulness-driven.
+        let now_ms = 1_000_000_000u64;
+        // A: recall-feedback-derived (recall-fb:deploy).
+        persona_log
+            .append(delta(
+                "a",
+                "deploy runbook fact",
+                "recall-fb:deploy",
+                now_ms,
+            ))
+            .await
+            .unwrap();
+        // B: reflection-authored (no recall-fb provenance).
+        persona_log
+            .append(delta(
+                "b",
+                "a reflection note",
+                "seed",
+                now_ms,
+            ))
+            .await
+            .unwrap();
+
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                vec![2u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+        let ledger = Arc::new(PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        ));
+        // Topic "deploy" sustained-negative: 3 windows, net
+        // -3 each at the same instant → ewma -9, samples 3.
+        for _ in 0..3 {
+            ledger
+                .record_window(
+                    &[("deploy".into(), -3.0)],
+                    1_000_000,
+                )
+                .await
+                .unwrap();
+        }
+
+        let cfg = aivyx_config::PersonaLifecycleConfig {
+            enabled: true,
+            consolidation_similarity: 0.92,
+            decay_max_age_secs: 1_000_000, // age 0 → never
+            min_soft_facets: 2,
+            decay_unhelpful_threshold: -2.0,
+            decay_min_samples: 3,
+            signals: aivyx_config::PersonaLifecycleSignals {
+                consolidate: false,
+                decay: true,
+            },
+        };
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+
+        // 1) No ledger → graceful pure age-only. Both facets
+        //    are young → nothing proposed.
+        let no_ledger = PersonaLifecycleDeps {
+            config: cfg.clone(),
+            persona_log: Arc::clone(&persona_log),
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(NoEmb),
+            helpfulness_ledger: None,
+            stat: None,
+        };
+        run_persona_lifecycle_pass(&no_ledger, &sched, now_ms)
+            .await;
+        assert!(
+            proposal_log
+                .list(ProposalStatusFilter::Pending)
+                .is_empty(),
+            "no ledger + young facets → pure age-only → nothing"
+        );
+
+        // 2) Ledger present, "deploy" sustained-negative →
+        //    facet A decays early via recall-fb provenance;
+        //    the reflection-authored B (no provenance) does
+        //    not.
+        let with_ledger = PersonaLifecycleDeps {
+            config: cfg,
+            persona_log: Arc::clone(&persona_log),
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(NoEmb),
+            helpfulness_ledger: Some(Arc::clone(&ledger)),
+            stat: None,
+        };
+        run_persona_lifecycle_pass(&with_ledger, &sched, now_ms)
+            .await;
+        let pending =
+            proposal_log.list(ProposalStatusFilter::Pending);
+        assert_eq!(pending.len(), 1, "only A decays");
+        assert_eq!(
+            pending[0].id,
+            "pl:decay:learned_context:deploy runbook fact"
+        );
+        let reason = match &pending[0].proposed_op.op {
+            PersonaDeltaOp::RemoveList { value } => {
+                assert_eq!(value, "deploy runbook fact");
+                pending[0]
+                    .proposed_op
+                    .reason
+                    .clone()
+                    .unwrap_or_default()
+            }
+            o => panic!("expected RemoveList, got {o:?}"),
+        };
+        assert!(
+            reason.contains("\"deploy\"")
+                && reason
+                    .contains("sustained low helpfulness"),
+            "reason must cite the helpfulness evidence: {reason}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

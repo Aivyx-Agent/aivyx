@@ -149,12 +149,32 @@ pub fn soft_facets_of(
 /// `origin_ts_secs` is when the facet's originating delta was
 /// applied; `reinforced` is true iff a *later* delta touched
 /// the same category (active curation → do not decay it).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Phase 85 — a facet's associated topic helpfulness, resolved
+/// by the pass from the Phase 82 ledger *before* the (pure)
+/// detector runs. `score` is the decayed EWMA; `samples` the
+/// ledger confidence count. `None` on a `LifecycleFacet` means
+/// "no signal" (no provenance, no ledger, or unseen topic) →
+/// the detector falls back to exact Phase 81 age-only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HelpfulnessHint {
+    pub score: f32,
+    pub samples: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LifecycleFacet {
     pub category: SoftCategory,
     pub value: String,
     pub origin_ts_secs: u64,
     pub reinforced: bool,
+    /// Phase 85 — the recall topic recovered from
+    /// `recall-fb:{topic}` provenance, or `None` for
+    /// reflection-authored facets (no topic linkage).
+    pub recall_topic: Option<String>,
+    /// Phase 85 — the resolved durable helpfulness for
+    /// `recall_topic` (decayed score + sample count), or
+    /// `None` (no signal → age-only).
+    pub helpfulness: Option<HelpfulnessHint>,
 }
 
 /// What a lifecycle action proposes. Both are expressible
@@ -397,27 +417,81 @@ impl PersonaLifecycleDetector {
                 continue;
             }
 
-            // --- Decay (no model needed) ---
+            // --- Decay (no model needed) — Phase 85
+            // symmetric helpfulness gate over the Phase 81
+            // age rule. `decay_unhelpful_threshold` is
+            // negative; its magnitude is the symmetric
+            // positive bar. No hint (no provenance / no
+            // ledger / unseen topic) → both flags false →
+            // exact Phase 81 age-only behaviour.
             if self.config.signals.decay {
+                let neg = self.config.decay_unhelpful_threshold;
+                let pos = -neg;
+                let min_s = self.config.decay_min_samples;
                 for f in &group {
                     let age =
                         now_secs.saturating_sub(f.origin_ts_secs);
-                    if age > self.config.decay_max_age_secs
-                        && !f.reinforced
-                    {
-                        actions.push(PersonaLifecycleAction {
-                            kind: LifecycleActionKind::Decay {
-                                value: f.value.clone(),
-                            },
-                            category: cat,
-                            reason: format!(
-                                "unreinforced for {age}s \
-                                 (> {}s) with no later {} delta",
-                                self.config.decay_max_age_secs,
-                                cat.label(),
-                            ),
+                    let age_eligible = age
+                        > self.config.decay_max_age_secs
+                        && !f.reinforced;
+                    let sustained_negative =
+                        f.helpfulness.is_some_and(|h| {
+                            h.samples >= min_s && h.score <= neg
                         });
+                    let sustained_positive =
+                        f.helpfulness.is_some_and(|h| {
+                            h.samples >= min_s && h.score >= pos
+                        });
+                    // Trigger: actively-harmful → decay even
+                    // before the age horizon. Protect: an
+                    // age-old facet whose topic still clearly
+                    // helps is kept.
+                    let decay = sustained_negative
+                        || (age_eligible
+                            && !sustained_positive);
+                    if !decay {
+                        continue;
                     }
+                    let reason = if sustained_negative {
+                        let h = f.helpfulness.unwrap();
+                        let topic = f
+                            .recall_topic
+                            .as_deref()
+                            .unwrap_or("?");
+                        if age_eligible {
+                            format!(
+                                "unreinforced for {age}s \
+                                 (> {}s) AND topic {topic:?} \
+                                 net {:.1} over {} windows \
+                                 (sustained low helpfulness)",
+                                self.config.decay_max_age_secs,
+                                h.score,
+                                h.samples,
+                            )
+                        } else {
+                            format!(
+                                "topic {topic:?} net {:.1} \
+                                 over {} windows (sustained \
+                                 low helpfulness — decayed \
+                                 before the age horizon)",
+                                h.score, h.samples,
+                            )
+                        }
+                    } else {
+                        format!(
+                            "unreinforced for {age}s (> {}s) \
+                             with no later {} delta",
+                            self.config.decay_max_age_secs,
+                            cat.label(),
+                        )
+                    };
+                    actions.push(PersonaLifecycleAction {
+                        kind: LifecycleActionKind::Decay {
+                            value: f.value.clone(),
+                        },
+                        category: cat,
+                        reason,
+                    });
                 }
             }
 
@@ -574,6 +648,32 @@ mod tests {
             value: v.to_string(),
             origin_ts_secs,
             reinforced,
+            recall_topic: None,
+            helpfulness: None,
+        }
+    }
+
+    /// A facet with `recall-fb` provenance + a resolved
+    /// helpfulness hint (the Phase 85 path).
+    fn facet_h(
+        cat: SoftCategory,
+        v: &str,
+        origin_ts_secs: u64,
+        reinforced: bool,
+        topic: &str,
+        score: f32,
+        samples: u32,
+    ) -> LifecycleFacet {
+        LifecycleFacet {
+            category: cat,
+            value: v.to_string(),
+            origin_ts_secs,
+            reinforced,
+            recall_topic: Some(topic.to_string()),
+            helpfulness: Some(HelpfulnessHint {
+                score,
+                samples,
+            }),
         }
     }
 
@@ -817,5 +917,134 @@ mod tests {
             .detect(&f, 9_999)
             .await;
         assert!(out.is_empty());
+    }
+
+    // ---- Phase 85 — symmetric helpfulness gate -----------------
+
+    #[tokio::test]
+    async fn negative_helpfulness_triggers_decay_before_age() {
+        // A YOUNG facet (not age-eligible) whose topic is
+        // sustained-negative (-5 <= -2, 5 >= 3 samples) →
+        // decays early; a young no-hint facet does not.
+        let f = vec![
+            facet_h(
+                SoftCategory::LearnedContext,
+                "deploy-runbook note",
+                9_000,
+                false,
+                "deploy",
+                -5.0,
+                5,
+            ),
+            facet(
+                SoftCategory::LearnedContext,
+                "young plain",
+                9_000,
+                false,
+            ),
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "deploy-runbook note");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        assert!(out[0].reason.contains(
+            "decayed before the age horizon"
+        ));
+        assert!(out[0].reason.contains("\"deploy\""));
+    }
+
+    #[tokio::test]
+    async fn positive_helpfulness_protects_age_old_facet() {
+        // Both OLD + unreinforced (Phase 81 would decay both).
+        // The hinted one's topic is sustained-positive
+        // (+5 >= +2) → PROTECTED; the no-hint one still
+        // age-decays.
+        let f = vec![
+            facet_h(
+                SoftCategory::CharacterTraits,
+                "still-useful trait",
+                0,
+                false,
+                "rust",
+                5.0,
+                5,
+            ),
+            facet(
+                SoftCategory::CharacterTraits,
+                "stale plain trait",
+                0,
+                false,
+            ),
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 5_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "stale plain trait");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        // The still-helpful old facet must NOT be proposed.
+        assert!(out.iter().all(|a| match &a.kind {
+            LifecycleActionKind::Decay { value } =>
+                value != "still-useful trait",
+            _ => true,
+        }));
+        // The surviving decay is the plain age-only one.
+        assert!(out[0]
+            .reason
+            .contains("with no later"));
+    }
+
+    #[tokio::test]
+    async fn thin_evidence_falls_back_to_exact_age_only() {
+        // Negative score but samples (1) below the floor (3):
+        // the hint is ignored entirely → an OLD facet decays
+        // by AGE with the Phase 81 reason (not the helpfulness
+        // one); a YOUNG facet is NOT early-triggered.
+        let f = vec![
+            facet_h(
+                SoftCategory::LearnedContext,
+                "old thin",
+                0,
+                false,
+                "deploy",
+                -9.0,
+                1,
+            ),
+            facet_h(
+                SoftCategory::LearnedContext,
+                "young thin",
+                9_000,
+                false,
+                "deploy",
+                -9.0,
+                1,
+            ),
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "old thin");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        // Exact Phase 81 reason — thin evidence never cites
+        // helpfulness.
+        assert!(out[0].reason.contains("with no later"));
+        assert!(!out[0]
+            .reason
+            .contains("sustained low helpfulness"));
     }
 }

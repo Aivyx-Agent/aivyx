@@ -511,6 +511,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                             persona_log: plog,
                             proposal_log: pplog,
                             embedding: emb,
+                            // Phase 85 — gate decay by durable
+                            // topic helpfulness when available
+                            // (already wired for Phase 82).
+                            helpfulness_ledger:
+                                helpfulness_ledger.clone(),
                             stat: persona_lifecycle_stat.clone(),
                         },
                     )
