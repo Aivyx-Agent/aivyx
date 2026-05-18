@@ -221,6 +221,16 @@ pub struct DaemonConfig {
     pub helpfulness_ledger: Option<
         Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
     >,
+    /// Phase 83 — the durable cross-session co-occurrence
+    /// ledger. `Some` iff the recall substrate is configured
+    /// (zero-config, built alongside the recall log); the
+    /// reflection pass folds each window's pairs into it.
+    /// `None` → no fold (a passive add-on).
+    pub cooccurrence_ledger: Option<
+        Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    >,
     /// Phase 79 (Q4a) — shared last-Persona-selection stat the
     /// adaptive refiner writes and `GetLearningInsights` reads.
     /// `None` → adaptive Persona not configured (the surface
@@ -294,6 +304,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         embedding_provider,
         recall_log,
         helpfulness_ledger,
+        cooccurrence_ledger,
         persona_selection_stat,
         proactive_config,
         proactive_log,
@@ -439,6 +450,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         // log itself).
                         helpfulness_ledger:
                             helpfulness_ledger.clone(),
+                        // Phase 83 — fold each window's pairs
+                        // into the durable co-occurrence
+                        // ledger (zero-config, same substrate).
+                        cooccurrence_ledger:
+                            cooccurrence_ledger.clone(),
                     })
                 }
                 _ => None,
@@ -1463,6 +1479,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         embedding_provider: None,
         recall_log: None,
         helpfulness_ledger: None,
+        cooccurrence_ledger: None,
         persona_selection_stat: None,
         proactive_config: None,
         proactive_log: None,

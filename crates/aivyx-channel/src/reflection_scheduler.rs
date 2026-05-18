@@ -84,6 +84,16 @@ pub struct RecallFeedbackDeps {
             crate::helpfulness_ledger::PersistentHelpfulnessLedger,
         >,
     >,
+    /// Phase 83 — the durable cross-session co-occurrence
+    /// ledger. The pass folds each window's per-pair net into
+    /// it (after the Phase 82 fold, so recall-feedback + the
+    /// helpfulness ledger are byte-identical) and prunes on the
+    /// same cadence. `None` → no fold (a passive add-on).
+    pub cooccurrence_ledger: Option<
+        std::sync::Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    >,
 }
 
 /// Phase 80 — handles the proactive-surfacing pass needs.
@@ -663,6 +673,106 @@ async fn run_recall_feedback_pass(
                             "aivyx helpfulness-ledger: folded \
                              {folded} topic(s), pruned {pruned}",
                         );
+                    }
+                }
+
+                // Phase 83 — fold this window's co-occurring
+                // topic pairs into the durable cross-session
+                // ledger. After the Phase 82 fold, so
+                // recall-feedback AND the helpfulness ledger
+                // are byte-identical; a passive add-on,
+                // absent → skipped.
+                if let Some(cooc) = &deps.cooccurrence_ledger {
+                    let detail =
+                        crate::recall_feedback::correlate_detailed(
+                            &recalls, summaries,
+                        )
+                        .1;
+                    let mut pair_net: std::collections::HashMap<
+                        (String, String),
+                        f32,
+                    > = std::collections::HashMap::new();
+                    for (event, contrib) in
+                        recalls.iter().zip(detail.iter())
+                    {
+                        let Some(sig) = contrib.signal else {
+                            continue;
+                        };
+                        // Top-K highest-scoring DISTINCT
+                        // topics for this event (the Q4a
+                        // deterministic O(n²) bound).
+                        let mut hits: Vec<
+                            &crate::recall_log::RecallHit,
+                        > = event.hits.iter().collect();
+                        hits.sort_by(|a, b| {
+                            b.score
+                                .partial_cmp(&a.score)
+                                .unwrap_or(
+                                    std::cmp::Ordering::Equal,
+                                )
+                        });
+                        let mut topics: Vec<String> =
+                            Vec::new();
+                        for h in hits {
+                            if !topics
+                                .iter()
+                                .any(|t| t == &h.topic)
+                            {
+                                topics.push(h.topic.clone());
+                                if topics.len() >= crate::cooccurrence_ledger::COOCCURRENCE_TOP_K_HITS
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        // Distinct unordered pairs,
+                        // canonicalised so {A,B} and {B,A}
+                        // accumulate into one in-window bucket.
+                        for i in 0..topics.len() {
+                            for j in (i + 1)..topics.len() {
+                                let (lo, hi) = if topics[i]
+                                    <= topics[j]
+                                {
+                                    (
+                                        topics[i].clone(),
+                                        topics[j].clone(),
+                                    )
+                                } else {
+                                    (
+                                        topics[j].clone(),
+                                        topics[i].clone(),
+                                    )
+                                };
+                                *pair_net
+                                    .entry((lo, hi))
+                                    .or_insert(0.0) += sig;
+                            }
+                        }
+                    }
+                    let pairs: Vec<((String, String), f32)> =
+                        pair_net.into_iter().collect();
+                    let folded = pairs.len();
+                    if folded > 0 {
+                        if let Err(e) = cooc
+                            .record_window(&pairs, now_secs)
+                            .await
+                        {
+                            eprintln!(
+                                "aivyx cooccurrence: schedule \
+                                 {:?} fold error: {e}",
+                                sched.name,
+                            );
+                        } else {
+                            let pruned = cooc
+                                .prune(now_secs)
+                                .await
+                                .unwrap_or(0);
+                            eprintln!(
+                                "aivyx cooccurrence: folded \
+                                 {folded} pair(s), pruned \
+                                 {pruned}",
+                            );
+                        }
                     }
                 }
             }
@@ -1343,6 +1453,7 @@ mod tests {
             // cutoff = now_secs - this = 0 → nothing GC'd.
             gc_retain_secs: 2_000,
             helpfulness_ledger: None,
+            cooccurrence_ledger: None,
         };
 
         // now well after the last event; whole window covered.
@@ -1480,6 +1591,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: Some(Arc::clone(&ledger)),
+            cooccurrence_ledger: None,
         };
 
         // Cycle 1 at now_secs = 1_000_000 → seed ewma = +3.
@@ -1523,6 +1635,185 @@ mod tests {
             e2.ewma_score
         );
         assert_eq!(e2.samples, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 83 — co-occurrence fold-in ----------------------
+
+    #[tokio::test]
+    async fn cooccurrence_folds_pairs_across_sessions_and_cycles()
+    {
+        use crate::cooccurrence_ledger::{
+            PersistentCooccurrenceLedger,
+            COOCCURRENCE_HALF_LIFE_SECS,
+        };
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-cooc-fold-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([83u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"cooc-fold-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        // Two DISTINCT sessions, each one clean turn that
+        // co-recalled {deploy, rollback}. Cross-session
+        // aggregation → the canonical pair accrues +1 per
+        // helpful event = +2 this window.
+        let mut summaries: Vec<OutcomeSummary> = Vec::new();
+        for (i, ts) in [(0u64, 1000u64), (1, 1100)] {
+            let s = SessionId::new();
+            let d = memory
+                .put("deploy", &format!("dep {i}"))
+                .await
+                .unwrap();
+            let r = memory
+                .put("rollback", &format!("rb {i}"))
+                .await
+                .unwrap();
+            recall_log
+                .append(&RecallEvent {
+                    ts_secs: ts,
+                    session_id: s,
+                    hits: vec![
+                        RecallHit {
+                            topic: "deploy".into(),
+                            seq: d,
+                            score: 0.9,
+                        },
+                        RecallHit {
+                            topic: "rollback".into(),
+                            seq: r,
+                            score: 0.8,
+                        },
+                    ],
+                })
+                .await
+                .unwrap();
+            summaries.push(OutcomeSummary {
+                session_id: s.to_string(),
+                turn_id: format!("t{i}"),
+                started_at_unix_ms: ts * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 500,
+            });
+        }
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: None,
+            cooccurrence_ledger: Some(Arc::clone(&cooc)),
+        };
+
+        // Cycle 1 → pair {deploy,rollback} = +2 (two helpful
+        // cross-session co-recall events), samples 1.
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            1_000_000_000,
+        )
+        .await;
+        // Order-invariant lookup.
+        let e1 = cooc
+            .pair_score("rollback", "deploy", 1_000_000)
+            .await
+            .unwrap()
+            .expect("pair seeded across sessions");
+        assert!(
+            (e1.ewma_score - 2.0).abs() < 1e-3,
+            "cycle 1 pair ewma got {}",
+            e1.ewma_score
+        );
+        assert_eq!(e1.samples, 1);
+
+        // Cycle 2 one half-life later: decay(2)=1 + 2 = 3.
+        let now2 = 1_000_000 + COOCCURRENCE_HALF_LIFE_SECS;
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            now2 * 1000,
+        )
+        .await;
+        let e2 = cooc
+            .pair_score("deploy", "rollback", now2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            (e2.ewma_score - 3.0).abs() < 2e-2,
+            "cycle 2 decay(2)=1 + 2 = 3, got {}",
+            e2.ewma_score
+        );
+        assert_eq!(e2.samples, 2);
+
+        // Disabled (absent ledger) → complete no-op.
+        let off = RecallFeedbackDeps {
+            cooccurrence_ledger: None,
+            ..deps
+        };
+        run_recall_feedback_pass(
+            &off,
+            &sched,
+            &summaries,
+            now2 * 1000 + 1,
+        )
+        .await;
+        let e3 = cooc
+            .pair_score("deploy", "rollback", now2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            e3.samples, 2,
+            "absent ledger must not fold"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

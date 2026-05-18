@@ -2624,6 +2624,21 @@ async fn run_async(
             ),
         )
     });
+    // Phase 83 — the durable cross-session co-occurrence
+    // ledger. Zero-config, same condition + rationale as the
+    // helpfulness ledger (the pair signal only exists when
+    // auto-recall is on). Folded + pruned on the same cadence.
+    let cooccurrence_ledger: Option<
+        Arc<
+            aivyx_channel::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    > = recall_log.as_ref().map(|_| {
+        Arc::new(
+            aivyx_channel::cooccurrence_ledger::PersistentCooccurrenceLedger::new(
+                storage.domain(KeyDomain::CooccurrenceLedger),
+            ),
+        )
+    });
     // Phase 80 — proactive dedup log, created when the
     // `[proactive]` section is armed (enabled). The reflection
     // cron pass uses it for cross-cycle dedup + the cap.
@@ -3886,6 +3901,9 @@ async fn run_async(
             // Phase 82 — durable helpfulness ledger; the
             // recall-feedback pass folds each window into it.
             helpfulness_ledger: helpfulness_ledger.clone(),
+            // Phase 83 — durable cross-session co-occurrence
+            // ledger; folded by the same pass.
+            cooccurrence_ledger: cooccurrence_ledger.clone(),
             // Phase 79 (Q4a) — same handle the adaptive refiner
             // writes; the GetLearningInsights handler reads it.
             persona_selection_stat: persona_selection_stat.clone(),

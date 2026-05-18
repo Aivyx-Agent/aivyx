@@ -40,6 +40,14 @@ pub const COOCCURRENCE_PRUNE_EPSILON: f32 = 0.05;
 /// been folded into for this long (~90 days).
 pub const COOCCURRENCE_PRUNE_HORIZON_SECS: u64 = 90 * 24 * 3600;
 
+/// The deterministic O(n²) bound (Q4a): per recall event, only
+/// the pairs among the **top-K highest-scoring distinct
+/// topics** are folded. A turn that recalled 30 memories does
+/// not explode into C(30,2)=435 pair rows; it contributes at
+/// most C(8,2)=28. Bounds storage + write amplification while
+/// keeping the strongest co-recalled relationships.
+pub const COOCCURRENCE_TOP_K_HITS: usize = 8;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CooccurrenceLedgerError {
     #[error("cooccurrence ledger storage error: {0}")]
