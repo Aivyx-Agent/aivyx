@@ -1219,6 +1219,34 @@ respond to it. Closing the gap is the inflection point between
   30, PRODUCT.md → **23**, lib.rs → **31** (new record,
   beating Phase 82's 30). Zero new workspace deps.
 
+- **Phase 84 (Cluster-Aware Co-Recall, shipped 2026-05-19).**
+  The first phase that *acts* on the durable learning
+  substrate (Phases 82–83 were surface-only). It introduces
+  **no new product commitment** and weakens none — it deepens
+  the already-delivered G3 recall substrate, and the
+  operator-facing contract is *strengthened* (opt-in,
+  hard-bounded, budget-neutral, fully legible, self-policing).
+  Recall becomes associative: a recalled topic's durable
+  affined siblings (the Phase 83 ledger) the literal query
+  missed are also surfaced, **sharing** the existing
+  `rag_top_k` budget (zero context/token growth). The first
+  hot-path behaviour change, so opt-in (the Phase 80/81
+  discipline); cluster hits are excluded from the
+  co-occurrence fold (no self-reinforcement) yet still scored
+  by the helpfulness loop (a bad expansion self-penalises).
+  Reuse high — a bounded post-step on the existing Phase 76
+  recall seam + one new ledger query + a serde-safe marker;
+  no new scheduler/KeyDomain/LLM/AuditTag. Tests **+10**
+  (1544 → 1554) — a second consecutive miss vs the ~+16-22
+  prediction; confirmed the calibration law that realized
+  test count tracks *new unit-tested pure modules* (detector
+  ≈ +7, KeyDomain ≈ +2, config ≈ +5-6), not config/behaviour
+  breadth — Phase 84 added neither a detector module nor a
+  KeyDomain, so it sits at the ≈ +10 floor. Streak all three
+  correct: DESIGN.md → 31, PRODUCT.md → **24**, lib.rs →
+  **32** (new record, beating Phase 83's 31). Zero new
+  workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

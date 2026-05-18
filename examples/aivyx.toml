@@ -963,3 +963,37 @@ parent_role = "researcher"
 # a "Topics that consistently help together" block (signed
 # score + sample count). Daemon log: `aivyx cooccurrence:
 # folded N, pruned M`. Nothing to configure.
+
+# ----------------------------------------------------------------
+# Cluster-aware co-recall (Phase 84) — OFF BY DEFAULT
+# ----------------------------------------------------------------
+#
+# The first phase that ACTS on the durable learning substrate.
+# When a topic is auto-recalled (Phase 76), its durable
+# affined siblings from the Phase 83 co-occurrence ledger —
+# topics that consistently helped alongside it across sessions
+# — are ALSO surfaced, even when the literal query missed
+# them. Recall becomes associative.
+#
+# It is off unless this [recall_cluster] block is present AND
+# `enabled = true`; with it absent/false recall is
+# byte-identical to pre-Phase-84. It also needs auto-recall
+# configured ([embedding] + a populated co-occurrence ledger).
+#
+# Safety rails: siblings SHARE the existing rag_top_k budget
+# (they displace the weakest primary hits — zero context/token
+# growth); a hard max_siblings cap + min_affinity floor keep
+# weak affinities out; and cluster-injected hits are EXCLUDED
+# from the co-occurrence fold (the ledger never learns from
+# its own expansion) while still measured by the Phase 77/82
+# helpfulness signal (a bad expansion self-penalises).
+#
+# [recall_cluster]
+# enabled = true
+# max_siblings = 3   # optional, default 3  — hard per-turn cap
+# min_affinity = 1.0 # optional, default 1.0 — decayed floor
+#
+# To SEE it: daemon log `aivyx recall-cluster: injected N
+# affined sibling(s)`; `aivyx learning` / Web UI "Learning"
+# tab show a "Cluster co-recall (last turn)" block (count +
+# driver→sibling pairs).

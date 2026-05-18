@@ -929,6 +929,61 @@ and a sample count. The daemon log prints
 `aivyx cooccurrence: folded N pair(s), pruned M` each cycle.
 Nothing to configure.
 
+## Cluster-aware co-recall (Phase 84)
+
+Phases 82–83 built durable learning *surface-only*. Phase 84
+is the first phase that **acts** on it. Auto-recall (Phase
+76) surfaces only the memories whose text your turn
+semantically matched. With cluster-aware co-recall, when a
+topic A is recalled, the durable siblings B that have
+*consistently helped alongside A across sessions* (the Phase
+83 co-occurrence ledger) are **also** surfaced — even when
+the literal query never retrieved them. Recall becomes
+associative: the assistant brings what *goes with* what you
+asked about, not just the keyword match.
+
+Because this is the first time the assistant changes what the
+model sees on the hot path, it ships **opt-in, hard-bounded,
+budget-neutral, and self-policing**:
+
+- **Opt-in.** With no `[recall_cluster]` section (or
+  `enabled = false`) recall is byte-identical to pre-Phase-84.
+  It also needs auto-recall configured (`[embedding]` +
+  the co-occurrence ledger, which exists once auto-recall
+  has been running).
+- **Budget-neutral.** Injected siblings **share** the
+  existing `rag_top_k` budget — they displace the *weakest*
+  primary hits, so recall context never grows: zero extra
+  token cost, no context bloat.
+- **Hard-bounded.** At most `max_siblings` per turn, and only
+  pairs whose decayed co-occurrence score clears
+  `min_affinity` — weak/noisy affinities never reach context.
+- **Self-policing.** Cluster-injected hits are marked and
+  **excluded from the Phase 83 co-occurrence fold**, so the
+  ledger never learns from its own expansion (no runaway
+  self-reinforcement). They *do* count in the Phase 77/82
+  helpfulness signal, so a bad expansion organically lands in
+  worse turns and the affinity that drove it decays away.
+
+**Configure it** in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[recall_cluster]
+enabled = true
+max_siblings = 3   # optional, default 3 — hard per-turn cap
+min_affinity = 1.0 # optional, default 1.0 — decayed-score floor
+```
+
+Validation (only when `enabled = true`): `max_siblings >= 1`,
+`min_affinity > 0.0`. **To turn it off:** set
+`enabled = false` or delete the `[recall_cluster]` block.
+
+**Where to see it.** The daemon log prints
+`aivyx recall-cluster: injected N affined sibling(s)` on turns
+that expand, and `aivyx learning` / the Web UI **Learning**
+tab show a **"Cluster co-recall (last turn)"** block — the
+injected count and each `driver → sibling` pair.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

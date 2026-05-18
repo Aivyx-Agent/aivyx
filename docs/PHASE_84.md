@@ -256,39 +256,106 @@ per reflection cycle):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct (the headline).**
+DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs` are all
+byte-identical to their entry hashes:
+
+- DESIGN.md `89dc8903…` unchanged → streak **31** (predicted
+  "extends to thirty-one" — exact).
+- PRODUCT.md `cd60c4f9…` unchanged → streak **24** (predicted
+  "extends to twenty-four" — exact).
+- `aivyx-core/src/lib.rs` `69fb9af1…` unchanged → streak
+  **32**, a new project record beating Phase 83's 31
+  (predicted "extends to thirty-two (new record)" — exact).
+
+The Phase 76/79 seam held once more: the recall provider is
+the existing `ContextProvider` whose trait lives in
+`llm_planner.rs`, so a hot-path *behaviour* change still
+required no `aivyx-core` edit. Config, the ledger query, the
+`RecallHit` marker, the expansion, the self-policing fold
+exclusion, and the surface all landed in `aivyx-channel` /
+`aivyx-config`; no new `AuditTag`.
+
+**Test delta — +10 (1544 → 1554): a second consecutive miss
+vs the ~+16-22 prediction.** Phase 83 missed +12-16 (landed
++10); Phase 84 predicted ~+16-22 reasoning "config + hot-path
+behaviour ≈ the Phase 80 +20 regime" and again landed **+10**.
+Two misses in the same direction is a model error, not noise.
+The confirmed calibration law: realized test count is driven
+almost entirely by **how many new standalone pure modules
+each get a per-branch unit suite** — empirically a detector
+module ≈ +7, a new `KeyDomain` ≈ +2 (isolation/metadata), a
+config section ≈ +5-6 — and *not* by whether the phase adds
+config, changes the hot path, or threads a wide surface.
+Phase 84 added a config section (+5) but **no new detector
+module and no new `KeyDomain`**: the behaviour change rode the
+*existing* `memory_recall` + Phase 83 ledger modules and was
+integration-tested (2 tests), the marker/query added +2, the
+surface +1 — total +10, the same floor as Phases 82/83.
+
+Recalibration (replacing the earlier band zoo with one rule):
+**predict ≈ +10 unless the phase introduces a new
+unit-tested pure module; add ≈ +7 per detector-class module
+and ≈ +2 per new `KeyDomain` on top.** Phase 84 = +5 (config)
++ ~+5 (query/marker/integration/render) ≈ +10, no detector,
+no domain — the rule now retro-fits all of 80–84. This is a
+*calibration* miss, not a *scope* miss: every planned surface
+(config, `siblings_of`, the marker, bounded budget-neutral
+injection, the self-policing fold exclusion, the Phase 78
+`cluster_recall` surface, IPC round-trip) shipped exactly as
+scoped, and the conservative Q-block answers deliberately
+reused existing modules rather than spawning new ones —
+which is *why* the count is low and the blast radius small.
+
+**Two in-scope clippy resolutions, recorded honestly.**
+(1) `large_enum_variant` on the protocol envelopes was
+already suppressed (Phase 83) — the new `cluster_recall`
+field needed no further action. (2) `render_insights` crossed
+`too_many_arguments` (it accretes one display param per
+learning phase: 79/80/81/82/83/84). Resolved with a justified
+`#[allow(clippy::too_many_arguments)]` — the sanctioned escape
+for an intentionally-wide pure renderer, consistent with the
+codebase's existing `#[allow(too_many_arguments)]` (Phase 81
+`fire_reflection`). No wire change, no behaviour change.
+
+No new clippy warnings. No new workspace deps. Recall is
+byte-identical to pre-Phase-84 when `[recall_cluster]` is
+absent/disabled (asserted), and the co-occurrence ledger +
+recall-feedback loop are unaffected by the self-policing
+exclusion except as intended (asserted).
 
 ## Exit criteria
 
-- [ ] `[recall_cluster]` config + validation + off-when-absent
+- [x] `[recall_cluster]` config + validation + off-when-absent
   — Task 2.
-- [ ] `siblings_of` ledger query + `RecallHit` `cluster`
+- [x] `siblings_of` ledger query + `RecallHit` `cluster`
   marker (serde-safe, Phase 77 unaffected) — Task 3.
-- [ ] Cluster-aware injection on the Phase 76 recall path:
+- [x] Cluster-aware injection on the Phase 76 recall path:
   opt-in, `max_siblings`-capped, `min_affinity`-gated,
   budget-neutral (shares `rag_top_k`), marked; co-occurrence
   fold excludes marked hits (self-policing) — Task 4.
-- [ ] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
+- [x] Breadcrumb + Phase 78 surface extended (CLI + Web UI) —
   Task 5.
-- [ ] Tests across config, ledger query/marker, recall
+- [x] Tests across config, ledger query/marker, recall
   expansion + fold-exclusion integration, observability, IPC
   round-trip, CLI/Web UI render — Task 6.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 6.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 6.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-one.
-- [ ] PRODUCT.md streak extends to twenty-four.
-- [ ] Production-core streak extends to thirty-two (new
+- [x] DESIGN.md streak extends to thirty-one.
+- [x] PRODUCT.md streak extends to twenty-four.
+- [x] Production-core streak extends to thirty-two (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+16-22; the
-  config+behaviour regime per the recalibrated bands — a
-  config section + the bounded recall-expansion logic +
-  `siblings_of` + the marker/fold-exclusion + the surface,
-  closer to the Phase 80 "+20" regime than the 82/83
-  surface-only ≈ +10).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive — **+10 (1544 → 1554)**, a
+  second consecutive miss vs ~+16-22. Confirmed the
+  calibration law (count tracks new unit-tested pure modules,
+  not config/behaviour breadth): no new detector module / no
+  new `KeyDomain` → the ≈ +10 floor. Recalibrated in
+  prediction-vs-reality. Scope fully shipped.
+- [x] Zero clippy warnings (one new justified
+  `#[allow(too_many_arguments)]` on `render_insights`).
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

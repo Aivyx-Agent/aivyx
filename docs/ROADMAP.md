@@ -2158,6 +2158,71 @@ Likely follow-ups (helpfulness-driven Persona decay; pattern
 proposals; sequential/temporal patterns; n-ary clusters;
 operator-tunable top-K/half-life) are operator-feedback-gated.
 
+## Phase 84 — Cluster-Aware Co-Recall (the first consumption phase)
+
+**Frozen — see [PHASE_84.md](PHASE_84.md).** Phases 82–83
+built durable learning substrate surface-only; Phase 84 is the
+first phase that *acts* on it, consuming the freshest piece
+(the Phase 83 co-occurrence ledger). Auto-recall (Phase 76)
+surfaces only literal keyword/semantic matches; now, when a
+topic is recalled, its durable affined siblings the query
+missed are also surfaced — recall becomes associative. Zero
+new deps.
+
+- **Bounded sibling injection (Q1a):** after the base recall,
+  `siblings_of` (a new one-scan per-topic ledger query) yields
+  the strongest affined siblings; the most-recent memory under
+  each new sibling topic is injected. Re-rank-only was
+  rejected — it cannot surface a sibling the query never
+  retrieved.
+- **Opt-in (Q2a):** `[recall_cluster]` in `aivyx-config`, off
+  by default — the first phase that changes hot-path context,
+  so the Phase 80/81 behaviour-change discipline.
+- **Self-policing (Q3a):** a serde-safe `cluster` marker on
+  `RecallHit`; the Phase 83 co-occurrence fold *excludes*
+  marked hits (the ledger never learns from its own expansion
+  — no runaway self-reinforcement), while the Phase 77/82
+  helpfulness signal still measures them (a bad expansion
+  self-penalises and the driving affinity decays).
+- **Budget-neutral + legible (Q4a):** siblings share the
+  existing `rag_top_k` budget (displace the weakest primary
+  hits — zero context/token growth); hard `max_siblings` cap
+  + `min_affinity` floor; a per-turn breadcrumb + a Phase 78
+  `cluster_recall` surface (CLI + Web UI), the persona-
+  selection shared-handle pattern.
+
+Streak all three correct: DESIGN.md → **31**, PRODUCT.md →
+**24**, `aivyx-core/src/lib.rs` → **32** (new record, beats
+Phase 83's 31) — the recall provider is the existing
+`ContextProvider` (the Phase 76/79 `llm_planner.rs` seam, not
+`lib.rs`); config/query/marker/expansion/surface all in
+`aivyx-channel` / `aivyx-config`; no new `AuditTag`,
+byte-identical `lib.rs`. Tests **+10** (1544 → 1554) — **a
+second consecutive miss vs the ~+16-22 prediction**; it
+landed at the same flat ≈ +10 as Phases 82/83. The recurring,
+now-confirmed calibration law: realized test count is driven
+by **new standalone pure modules each carrying a per-branch
+unit suite** (a detector ≈ +7, a new `KeyDomain` ≈ +2, a
+config section ≈ +5-6) — *not* by config-presence or
+hot-path-behaviour breadth. Phase 84 added **no** new detector
+module and **no** new `KeyDomain` (it reused `memory_recall` +
+the Phase 83 ledger, integration-testing the new behaviour),
+so it sits at the floor ≈ +10 regardless of being a
+config+behaviour phase. Future predictions: count new
+unit-tested pure modules, not surface area. A calibration
+miss, not a scope miss — every planned surface shipped. Two
+in-scope clippy resolutions, recorded honestly:
+`#[allow(large_enum_variant)]` was already in place (Phase
+83); `render_insights` crossed `too_many_arguments` (one
+display param per learning phase) → justified
+`#[allow(too_many_arguments)]`, the Phase 81 fire_reflection
+precedent. Zero new clippy warnings. Zero new workspace deps.
+
+Likely follow-ups (helpfulness-driven Persona decay;
+pattern-driven Persona proposals; affinity re-ranking of
+existing candidates; sequential/temporal patterns;
+operator-tunable affinity policy) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
