@@ -235,34 +235,105 @@ extensions:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct (the headline).**
+DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs` are all
+byte-identical to their entry hashes:
+
+- DESIGN.md `89dc8903…` unchanged → streak **29** (predicted
+  "extends to twenty-nine" — exact).
+- PRODUCT.md `cd60c4f9…` unchanged → streak **22** (predicted
+  "extends to twenty-two" — exact).
+- `aivyx-core/src/lib.rs` `69fb9af1…` unchanged → streak
+  **30**, a new project record beating Phase 81's 29
+  (predicted "extends to thirty (new record)" — exact).
+
+The Phase 76/77/80/81 lesson held again: the new persisted
+store is a `KeyDomain` variant in `aivyx-storage`; the ledger,
+the fold-in, and the surface extension live in
+`aivyx-channel`; the fold reuses the *existing*
+recall-feedback pass so it produced no new audit event and no
+`aivyx-core` change.
+
+**Test delta — +10 (1524 → 1534): a MISS, below the predicted
+~+18-24 band.** This is the first miss after two consecutive
+in-band landings (Phase 80 +20, Phase 81 +17). The prediction
+reasoned "comparable to Phase 80's +20 which also added a
+KeyDomain" — and that reasoning was wrong in an instructive
+way. Phase 80's +20 was *not* driven by its `ProactiveLog`
+KeyDomain; it was driven by a full `[proactive]` config
+section (~6 validation tests), a non-trivial proactive
+*detector*, and a behaviour-changing pass. Phase 82 is
+deliberately **zero-config** (no config-validation tests at
+all) and **surface-only** (no detector, no behaviour rewire),
+so even with a new KeyDomain it lands far lighter. **Honest
+recalibration:** a new KeyDomain alone contributes ≈ +7
+(2 isolation/metadata + ~5 store-math tests); the +18-24 band
+applies to phases that *also* add a config section and/or a
+detector/behaviour change. A zero-config, surface-only,
+ledger-style phase belongs in a **new ≈ +8-12 band**. The
+band is now calibrated across four regimes: reuse-only
+≈ +10-15, zero-config/surface-only ≈ +8-12,
+new-surface-no-new-domain ≈ +17, config+detector(+domain)
+≈ +20.
+
+This is a *calibration* miss, not a *scope* miss: every
+planned surface (KeyDomain + isolation, the EWMA ledger with
+decay/prune, the fold-in on the existing pass, the Phase 78
+longitudinal view in CLI + Web UI, IPC round-trip) shipped
+exactly as scoped. The test count is honestly lower because
+the phase is honestly leaner — the conservative Q-block
+answers (zero-config, surface-only) traded test breadth for a
+smaller, cleaner blast radius, which is the right trade for a
+passive signal store.
+
+**One unplanned change, test-only, recorded honestly.** The
+extra (15th) KeyDomain adds one more redb table to
+`RedbStorage::open`, marginally lengthening the open path.
+Under a *loaded parallel* full-workspace run that timing shift
+exposed a **pre-existing** latent flake in
+`tests/storage_persistence_e2e.rs`: `SharedStoreDir::new()`
+derived its path from `pid-nanos`, and the two
+`#[tokio::test]`s in that binary could collide on a coarse
+clock tick → one `RedbStorage::open` lost the file lock and
+failed. Root-caused (not papered over with a retry) and fixed
+by adding a `uuid` suffix to the shared-store path. No
+production code changed, no new dependency (uuid is already a
+dev-dependency used throughout these tests), and two
+consecutive clean full-workspace runs confirm the fix.
+
+No clippy warnings. No new workspace deps. Zero behaviour
+change to the recall-feedback loop (the ledger folds in
+*after* the actuators — verified by the unchanged Phase 77
+pass test).
 
 ## Exit criteria
 
-- [ ] `KeyDomain::HelpfulnessLedger` + isolation test +
+- [x] `KeyDomain::HelpfulnessLedger` + isolation test +
   zero-config `PersistentHelpfulnessLedger` (EWMA fold +
   decayed read + prune) — Task 2.
-- [ ] Fold-in on the reflection recall-feedback pass after
+- [x] Fold-in on the reflection recall-feedback pass after
   `correlate`; no-op when absent; per-cycle prune + breadcrumb
   — Task 3.
-- [ ] Phase 78 surface extended with the accumulated decayed
+- [x] Phase 78 surface extended with the accumulated decayed
   per-topic view + sample counts (CLI + Web UI) — Task 4.
-- [ ] Tests across KeyDomain, ledger math, fold-in pass
+- [x] Tests across KeyDomain, ledger math, fold-in pass
   integration, IPC round-trip, CLI/Web UI render — Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 5.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to twenty-nine.
-- [ ] PRODUCT.md streak extends to twenty-two.
-- [ ] Production-core streak extends to thirty (new record) —
+- [x] DESIGN.md streak extends to twenty-nine.
+- [x] PRODUCT.md streak extends to twenty-two.
+- [x] Production-core streak extends to thirty (new record) —
   `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+18-24; per the converged
-  calibration band — a new KeyDomain + the EWMA ledger math +
-  fold-in integration carry real new surface, comparable to
-  Phase 80's +20 which also added a KeyDomain).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive — **+10 (1524 → 1534)**, but
+  **below the predicted ~+18-24** (first miss after two
+  in-band landings). Calibration miss, not a scope miss: the
+  prediction over-weighted "new KeyDomain ≈ +20"; a
+  zero-config, surface-only phase belongs in a new ≈ +8-12
+  band. Recalibrated in prediction-vs-reality.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

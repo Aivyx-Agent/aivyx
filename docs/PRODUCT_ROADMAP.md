@@ -1164,6 +1164,34 @@ respond to it. Closing the gap is the inflection point between
   PRODUCT.md → **21**, lib.rs → **29** (new record, beating
   Phase 80's 28). Zero new workspace deps.
 
+- **Phase 82 (Persistent Helpfulness Ledger, shipped
+  2026-05-18).** Makes the Phase 77 self-learning signal
+  *durable*: for 81 phases it was recomputed each reflection
+  window and discarded. It introduces **no new product
+  commitment** and weakens none — it deepens the
+  already-delivered G3/P8 substrate, and the operator-facing
+  contract is *strengthened* (a longitudinal "what has
+  consistently helped" view that did not exist). Delivered as
+  conservatively as the signal's passive nature warrants:
+  **zero-config** (the Phase 77 ethos — auto-built whenever
+  auto-recall is on, no block), it **changes no behaviour on
+  its own** (folded *after* the recall-feedback actuators,
+  byte-identical), recency-weighted (a ~60-day EWMA half-life
+  so stale signal fades), and self-pruning. Reuse near-total —
+  a fold of the existing tally into a new HKDF-isolated
+  `KeyDomain` on the existing reflection cron; no new
+  scheduler, no LLM, no new `AuditTag`. All code in
+  `aivyx-storage` (the KeyDomain) + `aivyx-channel`. Tests
+  **+10** (1524 → 1534) — a **miss below the predicted
+  ~+18-24** (first after two in-band landings): a zero-config,
+  surface-only phase lands lighter than a config+detector
+  phase even with a new KeyDomain; recalibrated honestly in
+  PHASE_82.md. One test-only fix (a pre-existing shared-store
+  path-collision flake exposed by the timing shift). Streak
+  all three correct: DESIGN.md → 29, PRODUCT.md → **22**,
+  lib.rs → **30** (new record, beating Phase 81's 29). Zero
+  new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

@@ -908,3 +908,32 @@ parent_role = "researcher"
 # # At least one must stay on.
 # signal_consolidate = true
 # signal_decay = true
+
+# ----------------------------------------------------------------
+# Persistent helpfulness ledger (Phase 82) — no config; automatic
+# ----------------------------------------------------------------
+#
+# For 81 phases the "did recalling this topic help" signal was
+# ephemeral (recomputed each reflection window, then discarded).
+# Phase 82 makes it durable: a per-topic, time-decayed (~60-day
+# half-life) accumulation folded in on the SAME reflection
+# cadence as the recall-feedback loop, so the assistant can show
+# what has CONSISTENTLY helped, not just what helped this week.
+#
+# There is no `[helpfulness_ledger]` block — like the Phase 77
+# recall-feedback loop, it is entirely automatic. It is built +
+# folded whenever auto-recall is configured ([embedding] +
+# a [[reflection_schedule]]); with auto-recall off it does not
+# exist. It is a PASSIVE signal: it changes no behaviour on its
+# own (recall-feedback retention + proposals are byte-identical
+# — the ledger is folded in AFTER those actuators). It
+# self-prunes (decayed-to-zero + ~90d untouched → dropped), so
+# nothing grows forever. Half-life / prune bounds are fixed
+# code constants (tuning deferred, like the recall-log's 30-day
+# retention).
+#
+# To SEE it: `aivyx learning` or the Web UI "Learning" tab now
+# shows an "Accumulated helpfulness (all-time, decayed)" block
+# (signed score + sample count) alongside the windowed view.
+# Daemon log: `aivyx helpfulness-ledger: folded N, pruned M`.
+# Nothing to configure.

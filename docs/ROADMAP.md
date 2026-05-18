@@ -2036,6 +2036,69 @@ contradiction-based supersession, standalone
 `[[persona_lifecycle_schedule]]`, facet-scoped one-click
 revert) are operator-feedback-gated.
 
+## Phase 82 — Persistent Helpfulness Ledger (durable, longitudinal self-learning)
+
+**Frozen — see [PHASE_82.md](PHASE_82.md).** For 81 phases
+the "did recalling this topic help" signal was ephemeral
+(Phase 77 recomputed a tally each window and discarded it) —
+the common cause behind Phase 81's age-only decay, Phase 77's
+deferred cross-session patterns, and Phase 78's deferred
+longitudinal history. Phase 82 makes it durable: a persisted,
+per-topic, time-decayed EWMA folded in on the existing
+reflection cadence. Zero new deps.
+
+- **Zero-config (Q4a):** the Phase 77 / `RecallEvents`
+  precedent — a passive internal signal, auto-initialised, no
+  `[…]` block. New HKDF-isolated `KeyDomain::HelpfulnessLedger`
+  (15th variant, the Phase 80 checklist). It changes no
+  behaviour on its own (folded *after* the recall-feedback
+  actuators, byte-identical).
+- **Recency-weighted EWMA (Q1a/Q2a):** per topic
+  `{ ewma_score, samples, last_update_secs }`; each cycle the
+  stored score is decayed by `0.5^(dt/half_life)` (~60d) then
+  the window net added. A topic that stopped helping fades on
+  its own; per-topic grain survives memory eviction. Self-
+  pruning (decayed-to-epsilon + stale → dropped) so growth
+  mirrors the signal's own decay.
+- **Fold-in on the existing pass (Q… cadence):** the Phase 77
+  `run_recall_feedback_pass` aggregates `tally.ranked()` to a
+  per-topic net and folds + prunes — no new scheduler, no new
+  pass, threaded via the existing `RecallFeedbackDeps`.
+- **Surface-only this phase (Q3a):** the read-only
+  `GetLearningInsights` gains the decayed accumulated
+  top-helpful/unhelpful view + sample counts (the Phase 78
+  longitudinal deferral), rendered in the CLI + Web UI. It
+  does **not** rewire Phase 81 decay — the topic→category
+  mapping is the explicit next phase.
+
+Streak all three correct: DESIGN.md → **29**, PRODUCT.md →
+**22**, `aivyx-core/src/lib.rs` → **30** (new record, beats
+Phase 81's 29) — the new store is a `KeyDomain` in
+`aivyx-storage`; the ledger, fold-in, and surface live in
+`aivyx-channel`; no new `AuditTag`, `lib.rs` byte-identical.
+Tests **+10** (1524 → 1534) — a **MISS below the predicted
+~+18-24 band** (first miss after two in-band landings): the
+prediction over-weighted "has a new KeyDomain ≈ Phase 80's
++20" and under-weighted that this phase is *zero-config*
+(no config-validation tests — Phase 80 had ~6) and
+*surface-only* (no detector/behaviour test breadth). The
+honest recalibration: a new KeyDomain alone is ~+7; it is the
+config + detector + behaviour breadth that drives test count,
+not the storage variant. Every planned surface still shipped;
+this is a calibration miss, not a scope miss. One unplanned
+**test-only** fix (a pre-existing `pid-nanos` shared-store
+path collision in `storage_persistence_e2e`, exposed by the
+extra KeyDomain shifting redb-open timing under loaded
+parallel runs — fixed with a uuid suffix; no production
+change, no new dep). Zero clippy warnings. Zero new workspace
+deps.
+
+Likely follow-ups (helpfulness-driven Persona decay — the
+immediate next phase, needs a topic→category mapping;
+cross-session pattern learning; operator-tunable
+half-life/retention; topic canonicalization) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

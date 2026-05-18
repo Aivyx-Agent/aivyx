@@ -843,6 +843,51 @@ last cycle"). Filed proposals show up in `aivyx persona`
 exactly like reflection-driven ones — the Phase 78 trust
 surface extended once more.
 
+## Persistent helpfulness ledger (Phase 82)
+
+For 81 phases the "did recalling this topic actually help"
+signal was **ephemeral**: the recall-feedback loop (Phase 77)
+recomputed it each reflection cycle over a lookback window and
+discarded it. Phase 82 makes it **durable and longitudinal** —
+a per-topic, time-decayed accumulation that survives restarts
+and spans sessions, so the assistant can show you what has
+*consistently* helped, not just what helped this week.
+
+- **Zero-config and automatic.** Like the recall-feedback
+  loop itself (Phase 77) and the recall log, there is **no
+  `[helpfulness_ledger]` block** — nothing to turn on. It is
+  built and folded automatically whenever auto-recall is
+  configured (an `[embedding]` provider + a
+  `[[reflection_schedule]]`). With auto-recall off it simply
+  does not exist.
+- **It changes no behaviour on its own.** It is a *passive*
+  longitudinal signal. The recall-feedback loop's retention
+  bias and Persona proposals are byte-identical to
+  pre-Phase-82 — the ledger is folded in *after* those
+  actuators run.
+- **Recency-weighted (it forgets, on purpose).** Each
+  reflection cycle the stored per-topic score is first decayed
+  by an exponential half-life (~60 days), then this window's
+  net helpfulness is added. A topic that used to help but
+  hasn't lately fades on its own — the durable signal tracks
+  *current* relevance, not a frozen all-time tally.
+- **Self-pruning.** A topic whose decayed score has fallen to
+  effectively zero *and* has not been touched for ~90 days is
+  dropped on the same reflection cadence. Storage growth
+  mirrors the signal's own decay; nothing accumulates forever.
+- The half-life and prune bounds are code constants (tuning
+  is a deferred follow-up, exactly as the recall-log's 30-day
+  retention is fixed).
+
+**Where to see it.** Run `aivyx learning [--window <secs>]` or
+open the Web UI **Learning** tab: alongside the existing
+*windowed* "Most/Least helpful topics" there is now an
+**"Accumulated helpfulness (all-time, decayed)"** block — each
+topic with its signed decayed score and a sample count (your
+confidence proxy: one cycle is not a trend). The daemon log
+prints `aivyx helpfulness-ledger: folded N topic(s), pruned M`
+each cycle. Nothing to configure.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the
