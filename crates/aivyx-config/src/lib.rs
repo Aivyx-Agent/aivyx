@@ -561,6 +561,12 @@ pub struct AivyxConfig {
     /// only arms the pass; it still no-ops unless
     /// `enabled = true`.
     pub persona_lifecycle: Option<PersonaLifecycleConfig>,
+    /// Phase 84 — `[recall_cluster]` section. `None` when
+    /// absent: Phase 76 recall is unchanged (pre-Phase-84
+    /// behaviour — only literal keyword/semantic hits). `Some`
+    /// only arms cluster expansion; it still no-ops unless
+    /// `enabled = true`.
+    pub recall_cluster: Option<RecallClusterConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1499,6 +1505,39 @@ pub const DEFAULT_PL_DECAY_MAX_AGE_SECS: u64 = 90 * 24 * 3600;
 /// this — a young Soul has nothing to tidy.
 pub const DEFAULT_PL_MIN_SOFT_FACETS: u32 = 6;
 
+/// Phase 84 — operator-facing config for cluster-aware
+/// co-recall (consuming the Phase 83 co-occurrence ledger
+/// inside the Phase 76 recall path). **Off unless a
+/// `[recall_cluster]` section is present *and* `enabled =
+/// true`.** This is the first phase that acts on the learned
+/// signal and changes what the model sees on the hot path, so
+/// it is opt-in and never a surprise-on-upgrade.
+#[derive(Debug, Clone)]
+pub struct RecallClusterConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present and a populated ledger, recall is unchanged
+    /// until this is `true`.
+    pub enabled: bool,
+    /// Hard per-turn cap on injected sibling memories. They
+    /// share the existing `rag_top_k` budget (displacing the
+    /// weakest primary hits), so this also bounds how much of
+    /// the budget cluster expansion may claim.
+    pub max_siblings: u32,
+    /// A sibling's decayed co-occurrence score must be at
+    /// least this for the pair to be eligible — the bar that
+    /// keeps weak/noisy affinities out of recall context.
+    pub min_affinity: f32,
+}
+
+/// Default per-turn sibling cap — small on purpose; cluster
+/// expansion is a scalpel, not a flood, and it shares the
+/// `rag_top_k` budget.
+pub const DEFAULT_RC_MAX_SIBLINGS: u32 = 3;
+/// Default affinity floor: a pair must have accumulated at
+/// least roughly one sustained helpful co-occurrence (after
+/// decay) before it steers recall.
+pub const DEFAULT_RC_MIN_AFFINITY: f32 = 1.0;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1536,6 +1575,10 @@ struct RawToml {
     /// consolidation + decay.
     #[serde(default)]
     persona_lifecycle: RawPersonaLifecycle,
+    /// `[recall_cluster]` section. Phase 84 — cluster-aware
+    /// co-recall.
+    #[serde(default)]
+    recall_cluster: RawRecallCluster,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2150,6 +2193,19 @@ struct RawPersonaLifecycle {
     signal_decay: Option<bool>,
 }
 
+/// Phase 84 — `[recall_cluster]` deserialize target. Absent
+/// section → all-`None` via `Default` → the loader maps to
+/// `recall_cluster: None` (off; recall unchanged).
+#[derive(Debug, Default, Deserialize)]
+struct RawRecallCluster {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_siblings: Option<u32>,
+    #[serde(default)]
+    min_affinity: Option<f32>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2529,6 +2585,9 @@ impl AivyxConfig {
         let proactive = build_proactive_config(&toml.proactive)?;
         let persona_lifecycle = build_persona_lifecycle_config(
             &toml.persona_lifecycle,
+        )?;
+        let recall_cluster = build_recall_cluster_config(
+            &toml.recall_cluster,
         )?;
 
         // --- roles -------------------------------------------------
@@ -3399,6 +3458,7 @@ impl AivyxConfig {
             embedding,
             proactive,
             persona_lifecycle,
+            recall_cluster,
             roles,
             active_role,
             profile,
@@ -4351,6 +4411,52 @@ fn build_persona_lifecycle_config(
         decay_max_age_secs,
         min_soft_facets,
         signals,
+    }))
+}
+
+/// Phase 84 — build the `[recall_cluster]` config. Absent
+/// section (every field `None`) → `Ok(None)` (cluster
+/// expansion off, the common case — recall is unchanged,
+/// pre-Phase-84 behaviour). Validation applies **only when
+/// `enabled`** — a present-but-disabled section may be
+/// incomplete so an operator can stage it before arming.
+fn build_recall_cluster_config(
+    raw: &RawRecallCluster,
+) -> Result<Option<RecallClusterConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_siblings.is_some()
+        || raw.min_affinity.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_siblings =
+        raw.max_siblings.unwrap_or(DEFAULT_RC_MAX_SIBLINGS);
+    let min_affinity =
+        raw.min_affinity.unwrap_or(DEFAULT_RC_MIN_AFFINITY);
+
+    // Only an *armed* config must be coherent — a staged
+    // (enabled = false) section can be partial.
+    if enabled {
+        if max_siblings == 0 {
+            return Err(ConfigError::Invalid {
+                field: "recall_cluster.max_siblings",
+                reason: "`max_siblings` must be >= 1".into(),
+            });
+        }
+        if min_affinity <= 0.0 {
+            return Err(ConfigError::Invalid {
+                field: "recall_cluster.min_affinity",
+                reason: "`min_affinity` must be > 0.0".into(),
+            });
+        }
+    }
+
+    Ok(Some(RecallClusterConfig {
+        enabled,
+        max_siblings,
+        min_affinity,
     }))
 }
 

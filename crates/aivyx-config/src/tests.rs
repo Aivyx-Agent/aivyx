@@ -5984,3 +5984,114 @@ fn persona_lifecycle_enabled_all_signals_off_is_invalid() {
     }
     drop(env);
 }
+
+/// No `[recall_cluster]` section → `recall_cluster: None`
+/// (off; Phase 76 recall is unchanged, pre-Phase-84).
+#[test]
+fn recall_cluster_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.recall_cluster.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config): builds with `enabled = false`, defaults
+/// elsewhere, and is NOT validated.
+#[test]
+fn recall_cluster_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_cluster]\nenabled = false\n",
+        "rc-staged",
+    );
+    let r = cfg.recall_cluster.expect("section present");
+    assert!(!r.enabled);
+    assert_eq!(
+        r.max_siblings,
+        crate::DEFAULT_RC_MAX_SIBLINGS
+    );
+    assert!(
+        (r.min_affinity - crate::DEFAULT_RC_MIN_AFFINITY)
+            .abs()
+            < 1e-6
+    );
+    drop(env);
+}
+
+/// Enabled + valid: explicit fields win.
+#[test]
+fn recall_cluster_enabled_valid() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_cluster]\nenabled = true\n\
+         max_siblings = 5\nmin_affinity = 2.5\n",
+        "rc-valid",
+    );
+    let r = cfg.recall_cluster.expect("section present");
+    assert!(r.enabled);
+    assert_eq!(r.max_siblings, 5);
+    assert!((r.min_affinity - 2.5).abs() < 1e-6);
+    drop(env);
+}
+
+/// Enabled with `max_siblings = 0` → load-time `Invalid`.
+#[test]
+fn recall_cluster_enabled_zero_siblings_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rc-zero-siblings");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[recall_cluster]\nenabled = true\n\
+         max_siblings = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "recall_cluster.max_siblings");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with non-positive `min_affinity` → `Invalid`.
+#[test]
+fn recall_cluster_enabled_nonpositive_affinity_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rc-bad-affinity");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[recall_cluster]\nenabled = true\n\
+         min_affinity = 0.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "recall_cluster.min_affinity");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}

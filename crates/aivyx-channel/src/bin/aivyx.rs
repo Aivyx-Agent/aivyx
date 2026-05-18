@@ -2304,6 +2304,10 @@ async fn run_async(
         // into the daemon's reflection-cron lifecycle pass via
         // DaemonConfig below.
         persona_lifecycle: config_persona_lifecycle,
+        // Phase 84 — `[recall_cluster]` config. Wired into the
+        // recall provider in Task 4 (bound here so the
+        // destructure stays exhaustive).
+        recall_cluster: _config_recall_cluster,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
