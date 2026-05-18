@@ -1490,6 +1490,21 @@ pub struct PersonaLifecycleConfig {
     /// Never act on a soft list with fewer than this many
     /// facets — a small Soul has nothing worth pruning.
     pub min_soft_facets: u32,
+    /// Phase 85 — a recall-feedback-derived facet whose
+    /// associated topic's durable (Phase 82) decayed
+    /// helpfulness is **at or below** this (negative)
+    /// value is treated as "sustained low": it may be
+    /// proposed for decay before the age horizon, and a
+    /// strongly-positive topic (>= the magnitude of this
+    /// value) instead *protects* an age-old facet from
+    /// age-decay. Reflection-authored facets (no topic
+    /// linkage) ignore this and stay age-only.
+    pub decay_unhelpful_threshold: f32,
+    /// Phase 85 — confidence floor: a topic's helpfulness is
+    /// only consulted once it has at least this many ledger
+    /// samples. Identity is never decayed (or protected) on
+    /// thin evidence.
+    pub decay_min_samples: u32,
     /// Which lifecycle action classes may be proposed.
     pub signals: PersonaLifecycleSignals,
 }
@@ -1504,6 +1519,15 @@ pub const DEFAULT_PL_DECAY_MAX_AGE_SECS: u64 = 90 * 24 * 3600;
 /// Default soft-list floor: never prune a list smaller than
 /// this — a young Soul has nothing to tidy.
 pub const DEFAULT_PL_MIN_SOFT_FACETS: u32 = 6;
+/// Phase 85 — default "sustained low helpfulness" floor. A
+/// recall topic whose durable decayed score sits at/below
+/// -2.0 has, net, consistently hurt the turns it was recalled
+/// into; symmetrically, >= +2.0 protects an age-old facet.
+pub const DEFAULT_PL_DECAY_UNHELPFUL_THRESHOLD: f32 = -2.0;
+/// Phase 85 — default confidence floor: don't consult a
+/// topic's helpfulness for decay/protection until it has at
+/// least this many ledger samples.
+pub const DEFAULT_PL_DECAY_MIN_SAMPLES: u32 = 3;
 
 /// Phase 84 — operator-facing config for cluster-aware
 /// co-recall (consuming the Phase 83 co-occurrence ledger
@@ -2187,6 +2211,10 @@ struct RawPersonaLifecycle {
     decay_max_age_secs: Option<u64>,
     #[serde(default)]
     min_soft_facets: Option<u32>,
+    #[serde(default)]
+    decay_unhelpful_threshold: Option<f32>,
+    #[serde(default)]
+    decay_min_samples: Option<u32>,
     #[serde(default)]
     signal_consolidate: Option<bool>,
     #[serde(default)]
@@ -4349,6 +4377,8 @@ fn build_persona_lifecycle_config(
         || raw.consolidation_similarity.is_some()
         || raw.decay_max_age_secs.is_some()
         || raw.min_soft_facets.is_some()
+        || raw.decay_unhelpful_threshold.is_some()
+        || raw.decay_min_samples.is_some()
         || raw.signal_consolidate.is_some()
         || raw.signal_decay.is_some();
     if !any_set {
@@ -4364,6 +4394,12 @@ fn build_persona_lifecycle_config(
         .unwrap_or(DEFAULT_PL_DECAY_MAX_AGE_SECS);
     let min_soft_facets =
         raw.min_soft_facets.unwrap_or(DEFAULT_PL_MIN_SOFT_FACETS);
+    let decay_unhelpful_threshold = raw
+        .decay_unhelpful_threshold
+        .unwrap_or(DEFAULT_PL_DECAY_UNHELPFUL_THRESHOLD);
+    let decay_min_samples = raw
+        .decay_min_samples
+        .unwrap_or(DEFAULT_PL_DECAY_MIN_SAMPLES);
     let signals = PersonaLifecycleSignals {
         consolidate: raw.signal_consolidate.unwrap_or(true),
         decay: raw.signal_decay.unwrap_or(true),
@@ -4403,6 +4439,29 @@ fn build_persona_lifecycle_config(
                     .into(),
             });
         }
+        // Phase 85 — the helpfulness-decay knobs are only
+        // consulted by the decay signal, so validate them
+        // only when decay is actually armed.
+        if signals.decay {
+            if decay_unhelpful_threshold >= 0.0 {
+                return Err(ConfigError::Invalid {
+                    field:
+                        "persona_lifecycle.decay_unhelpful_threshold",
+                    reason: "`decay_unhelpful_threshold` must \
+                             be < 0.0 (it is a net-negative \
+                             helpfulness floor)"
+                        .into(),
+                });
+            }
+            if decay_min_samples == 0 {
+                return Err(ConfigError::Invalid {
+                    field:
+                        "persona_lifecycle.decay_min_samples",
+                    reason: "`decay_min_samples` must be >= 1"
+                        .into(),
+                });
+            }
+        }
     }
 
     Ok(Some(PersonaLifecycleConfig {
@@ -4410,6 +4469,8 @@ fn build_persona_lifecycle_config(
         consolidation_similarity,
         decay_max_age_secs,
         min_soft_facets,
+        decay_unhelpful_threshold,
+        decay_min_samples,
         signals,
     }))
 }

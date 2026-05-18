@@ -5866,9 +5866,103 @@ fn persona_lifecycle_present_disabled_is_allowed_partial() {
         p.min_soft_facets,
         crate::DEFAULT_PL_MIN_SOFT_FACETS
     );
+    // Phase 85 — helpfulness-decay knobs default.
+    assert!(
+        (p.decay_unhelpful_threshold
+            - crate::DEFAULT_PL_DECAY_UNHELPFUL_THRESHOLD)
+            .abs()
+            < 1e-6
+    );
+    assert_eq!(
+        p.decay_min_samples,
+        crate::DEFAULT_PL_DECAY_MIN_SAMPLES
+    );
     // Signals default on.
     assert!(p.signals.consolidate);
     assert!(p.signals.decay);
+    drop(env);
+}
+
+/// Phase 85 — explicit helpfulness-decay knobs win; the two
+/// validation cases fire only when decay is armed.
+#[test]
+fn persona_lifecycle_helpfulness_decay_knobs() {
+    let env = EnvScope::new();
+
+    // Valid override.
+    let cfg = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_unhelpful_threshold = -5.0\n\
+         decay_min_samples = 8\n",
+        "pl-help-valid",
+    );
+    let p = cfg.persona_lifecycle.expect("section present");
+    assert!(
+        (p.decay_unhelpful_threshold - (-5.0)).abs() < 1e-6
+    );
+    assert_eq!(p.decay_min_samples, 8);
+
+    // Non-negative threshold (armed) → Invalid.
+    let tmp = TempDir::new("pl-help-bad-threshold");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_unhelpful_threshold = 1.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error")
+    {
+        ConfigError::Invalid { field, .. } => assert_eq!(
+            field,
+            "persona_lifecycle.decay_unhelpful_threshold"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Zero min-samples (armed) → Invalid.
+    let tmp2 = TempDir::new("pl-help-zero-samples");
+    let toml2 = tmp2.path().join("aivyx.toml");
+    std::fs::write(
+        &toml2,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_min_samples = 0\n",
+    )
+    .unwrap();
+    let opts2 = LoadOptions {
+        toml_path: Some(toml2),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts2)
+        .expect_err("must error")
+    {
+        ConfigError::Invalid { field, .. } => assert_eq!(
+            field,
+            "persona_lifecycle.decay_min_samples"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Decay disarmed → the knobs are NOT validated even if
+    // nonsensical (staged config).
+    let cfg2 = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = true\n\
+         signal_consolidate = true\nsignal_decay = false\n\
+         decay_unhelpful_threshold = 9.0\n\
+         decay_min_samples = 0\n",
+        "pl-help-disarmed",
+    );
+    assert!(cfg2.persona_lifecycle.is_some());
+
     drop(env);
 }
 

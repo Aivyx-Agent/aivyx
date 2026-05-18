@@ -554,6 +554,8 @@ mod tests {
             consolidation_similarity,
             decay_max_age_secs,
             min_soft_facets,
+            decay_unhelpful_threshold: -2.0,
+            decay_min_samples: 3,
             signals: PersonaLifecycleSignals {
                 consolidate,
                 decay,

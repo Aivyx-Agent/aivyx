@@ -2310,6 +2310,8 @@ mod tests {
                 consolidation_similarity: 0.92,
                 decay_max_age_secs: 1_000,
                 min_soft_facets: 2,
+                decay_unhelpful_threshold: -2.0,
+                decay_min_samples: 3,
                 signals:
                     aivyx_config::PersonaLifecycleSignals {
                         consolidate: true,
