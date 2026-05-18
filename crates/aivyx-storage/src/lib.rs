@@ -157,6 +157,14 @@ pub enum KeyDomain {
     /// degrades only the longitudinal learning view, never
     /// memory, recall, or proactive dedup.
     HelpfulnessLedger,
+    /// Persistent co-occurrence ledger (Phase 83). One row per
+    /// canonical topic pair holding the durable, time-decayed
+    /// EWMA of "these two topics were recalled together in a
+    /// turn that helped," folded from each Phase 77 reflection
+    /// cycle. Self-pruning; isolated so a corrupt row degrades
+    /// only the cross-session pattern view, never memory,
+    /// recall, the helpfulness ledger, or proactive dedup.
+    CooccurrenceLedger,
 }
 
 impl KeyDomain {
@@ -183,6 +191,7 @@ impl KeyDomain {
             KeyDomain::RecallEvents => b"recall-events",
             KeyDomain::ProactiveLog => b"proactive-log",
             KeyDomain::HelpfulnessLedger => b"helpfulness-ledger",
+            KeyDomain::CooccurrenceLedger => b"cooccurrence-ledger",
         }
     }
 
@@ -210,12 +219,15 @@ impl KeyDomain {
             KeyDomain::HelpfulnessLedger => {
                 "aivyx_helpfulness_ledger_v1"
             }
+            KeyDomain::CooccurrenceLedger => {
+                "aivyx_cooccurrence_ledger_v1"
+            }
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 15] = [
+    pub const ALL: [KeyDomain; 16] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -231,6 +243,7 @@ impl KeyDomain {
         KeyDomain::RecallEvents,
         KeyDomain::ProactiveLog,
         KeyDomain::HelpfulnessLedger,
+        KeyDomain::CooccurrenceLedger,
     ];
 }
 
@@ -416,7 +429,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 15],
+    subkeys: [SubKey; 16],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -493,7 +506,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 15], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 16], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -514,6 +527,9 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::ProactiveLog.as_bytes())?,
             master.derive_subkey(
                 KeyDomain::HelpfulnessLedger.as_bytes(),
+            )?,
+            master.derive_subkey(
+                KeyDomain::CooccurrenceLedger.as_bytes(),
             )?,
         ])
     }
@@ -538,6 +554,7 @@ impl RedbStorage {
             KeyDomain::RecallEvents => &self.subkeys[12],
             KeyDomain::ProactiveLog => &self.subkeys[13],
             KeyDomain::HelpfulnessLedger => &self.subkeys[14],
+            KeyDomain::CooccurrenceLedger => &self.subkeys[15],
         }
     }
 }
@@ -938,7 +955,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a sixteenth `KeyDomain`
+        // If a future phase adds a seventeenth `KeyDomain`
         // variant, this test fails because `ALL` is a fixed-size
         // array and the match below forces an update. Tripwire
         // for "adding a variant without updating ALL."
@@ -958,7 +975,8 @@ mod tests {
                 | KeyDomain::MemoryVectors
                 | KeyDomain::RecallEvents
                 | KeyDomain::ProactiveLog
-                | KeyDomain::HelpfulnessLedger => {}
+                | KeyDomain::HelpfulnessLedger
+                | KeyDomain::CooccurrenceLedger => {}
             }
         }
     }
@@ -1170,6 +1188,56 @@ mod tests {
             ledger.get(key).await.unwrap(),
             Some(b"a ledger row".to_vec()),
             "HelpfulnessLedger domain returned the recall value"
+        );
+    }
+
+    // ---- Phase 83 — CooccurrenceLedger domain ----------------------
+
+    #[test]
+    fn cooccurrence_ledger_domain_has_stable_metadata() {
+        assert_eq!(
+            KeyDomain::CooccurrenceLedger.as_bytes(),
+            b"cooccurrence-ledger"
+        );
+        assert_eq!(
+            KeyDomain::CooccurrenceLedger.table_name(),
+            "aivyx_cooccurrence_ledger_v1"
+        );
+        assert!(
+            KeyDomain::ALL
+                .contains(&KeyDomain::CooccurrenceLedger)
+        );
+    }
+
+    #[tokio::test]
+    async fn cooccurrence_ledger_domain_isolates_from_helpfulness()
+    {
+        // The pair co-occurrence ledger is distinct from the
+        // per-topic helpfulness ledger: a corrupt/pruned pair
+        // row must degrade only the cross-session pattern
+        // view, never the per-topic longitudinal signal.
+        // Phase 83.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(83)).await;
+
+        let helpful =
+            store.domain(KeyDomain::HelpfulnessLedger);
+        let cooc =
+            store.domain(KeyDomain::CooccurrenceLedger);
+
+        let key = b"shared-key";
+        helpful.put(key, b"a topic row").await.unwrap();
+        cooc.put(key, b"a pair row").await.unwrap();
+
+        assert_eq!(
+            helpful.get(key).await.unwrap(),
+            Some(b"a topic row".to_vec()),
+            "HelpfulnessLedger returned the cooccurrence value"
+        );
+        assert_eq!(
+            cooc.get(key).await.unwrap(),
+            Some(b"a pair row".to_vec()),
+            "CooccurrenceLedger returned the helpfulness value"
         );
     }
 
