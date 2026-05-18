@@ -237,6 +237,12 @@ pub struct DaemonConfig {
     /// reports no selection).
     pub persona_selection_stat:
         Option<crate::persona_context::SharedPersonaSelectionStat>,
+    /// Phase 84 (Q4a) — shared last-turn cluster-recall stat
+    /// the recall provider writes and `GetLearningInsights`
+    /// reads. `None` → cluster expansion not armed (the
+    /// surface reports none).
+    pub recall_cluster_stat:
+        Option<crate::memory_recall::SharedRecallClusterStat>,
     /// Phase 80 — `[proactive]` config. `None` (no section) →
     /// proactive surfacing is off; even `Some` no-ops unless
     /// `enabled`.
@@ -306,6 +312,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         helpfulness_ledger,
         cooccurrence_ledger,
         persona_selection_stat,
+        recall_cluster_stat,
         proactive_config,
         proactive_log,
         proactive_stat,
@@ -747,6 +754,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             helpfulness_ledger: helpfulness_ledger.clone(),
             cooccurrence_ledger: cooccurrence_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
+            recall_cluster_stat: recall_cluster_stat.clone(),
             proactive_stat: proactive_stat.clone(),
             persona_lifecycle_stat: persona_lifecycle_stat.clone(),
         };
@@ -830,6 +838,10 @@ struct ConnectionContext {
     /// `GetLearningInsights` surface.
     persona_selection_stat:
         Option<crate::persona_context::SharedPersonaSelectionStat>,
+    /// Phase 84 (Q4a) — last-turn cluster-recall stat for the
+    /// `GetLearningInsights` surface.
+    recall_cluster_stat:
+        Option<crate::memory_recall::SharedRecallClusterStat>,
     /// Phase 80 (Q4a) — last-proactive-cycle stat for the
     /// `GetLearningInsights` surface.
     proactive_stat:
@@ -861,6 +873,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         helpfulness_ledger,
         cooccurrence_ledger,
         persona_selection_stat,
+        recall_cluster_stat,
         proactive_stat,
         persona_lifecycle_stat,
     } = ctx;
@@ -1197,6 +1210,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 helpfulness_ledger.as_ref(),
                                 cooccurrence_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
+                                recall_cluster_stat.as_ref(),
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
                             )
@@ -1449,6 +1463,7 @@ async fn run_single_connection_daemon(
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
         persona_selection_stat: None,
+        recall_cluster_stat: None,
         proactive_stat: None,
         persona_lifecycle_stat: None,
     })
@@ -1493,6 +1508,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
         persona_selection_stat: None,
+        recall_cluster_stat: None,
         proactive_config: None,
         proactive_log: None,
         proactive_stat: None,
@@ -1673,6 +1689,9 @@ async fn handle_query(
     >,
     persona_selection_stat: Option<
         &crate::persona_context::SharedPersonaSelectionStat,
+    >,
+    recall_cluster_stat: Option<
+        &crate::memory_recall::SharedRecallClusterStat,
     >,
     proactive_stat: Option<
         &crate::proactive_detect::SharedProactiveStat,
@@ -2115,6 +2134,10 @@ async fn handle_query(
             // once and included in every LearningInsights return.
             let persona_selection = persona_selection_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            // Phase 84 (Q4a) — last-turn cluster-recall stat
+            // (same shared-handle pattern as persona_selection).
+            let cluster_recall = recall_cluster_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             let proactive = proactive_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             let persona_lifecycle = persona_lifecycle_stat
@@ -2163,6 +2186,7 @@ async fn handle_query(
                     persona_lifecycle,
                     accumulated_helpfulness,
                     cooccurrence,
+                    cluster_recall,
                 };
             };
 
@@ -2224,6 +2248,7 @@ async fn handle_query(
                 persona_lifecycle,
                 accumulated_helpfulness,
                 cooccurrence,
+                cluster_recall,
             }
         }
     }

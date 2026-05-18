@@ -534,6 +534,7 @@ pub async fn get_learning_insights(
         Option<crate::persona_lifecycle::PersonaLifecycleStat>,
         Option<crate::helpfulness_ledger::AccumulatedHelpfulness>,
         Option<crate::cooccurrence_ledger::CooccurrencePatterns>,
+        Option<crate::memory_recall::RecallClusterStat>,
     ),
     DaemonError,
 > {
@@ -552,6 +553,7 @@ pub async fn get_learning_insights(
             persona_lifecycle,
             accumulated_helpfulness,
             cooccurrence,
+            cluster_recall,
         } => Ok((
             digest,
             proposals,
@@ -560,6 +562,7 @@ pub async fn get_learning_insights(
             persona_lifecycle,
             accumulated_helpfulness,
             cooccurrence,
+            cluster_recall,
         )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))

@@ -2655,6 +2655,15 @@ async fn run_async(
         )),
         _ => None,
     };
+    // Phase 84 (Q4a) — shared last-turn cluster-recall stat:
+    // the recall provider writes it, GetLearningInsights reads
+    // the *same* handle. `None` when [recall_cluster] is
+    // absent (cluster expansion can never run).
+    let recall_cluster_stat = config_recall_cluster
+        .as_ref()
+        .map(|_| {
+            aivyx_channel::memory_recall::shared_recall_cluster_stat()
+        });
     let recall_context: Option<
         Arc<dyn aivyx_core::llm_planner::ContextProvider>,
     > = match (&embedding_provider, config_embedding.as_ref()) {
@@ -2681,6 +2690,9 @@ async fn run_async(
                     Arc::clone(cooc),
                     rc_cfg.clone(),
                 );
+            }
+            if let Some(stat) = &recall_cluster_stat {
+                sc = sc.with_cluster_stat(stat.clone());
             }
             Some(Arc::new(sc))
         }
@@ -3923,6 +3935,9 @@ async fn run_async(
             // Phase 79 (Q4a) — same handle the adaptive refiner
             // writes; the GetLearningInsights handler reads it.
             persona_selection_stat: persona_selection_stat.clone(),
+            // Phase 84 — shared last-turn cluster-recall stat
+            // (same handle the recall provider writes).
+            recall_cluster_stat: recall_cluster_stat.clone(),
             // Phase 80 — proactive surfacing config + dedup log.
             proactive_config: config_proactive.clone(),
             proactive_log: proactive_log.clone(),

@@ -11,10 +11,11 @@
 //! which leaves the turn byte-identical to pre-Phase-76
 //! behavior — recall never errors a turn.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use aivyx_core::llm_planner::ContextProvider;
 use aivyx_llm::embedding::EmbeddingProvider;
@@ -25,6 +26,30 @@ use aivyx_memory::{Memory, MemoryEntry};
 /// bodies are truncated so a handful of hits can't blow the
 /// turn's token budget.
 const MAX_BODY_CHARS: usize = 500;
+
+/// Phase 84 (Q4a) — the last turn's cluster-aware co-recall
+/// outcome, for the Phase 78 trust surface. Ephemeral
+/// (last-turn only, not persisted): an associative recall that
+/// silently widens context must stay legible. `pairs` is
+/// `(driver_topic, injected_sibling_topic)` for what actually
+/// landed (post budget-share).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecallClusterStat {
+    pub ts_secs: u64,
+    pub injected: usize,
+    pub pairs: Vec<(String, String)>,
+}
+
+/// Shared handle the recall provider writes (per turn) and the
+/// `GetLearningInsights` handler reads. `None` inside = no
+/// cluster expansion has run yet this daemon lifetime.
+pub type SharedRecallClusterStat =
+    Arc<RwLock<Option<RecallClusterStat>>>;
+
+/// Construct an empty shared cluster-stat handle.
+pub fn shared_recall_cluster_stat() -> SharedRecallClusterStat {
+    Arc::new(RwLock::new(None))
+}
 
 /// `ContextProvider` backed by the Phase 75 embedding + vector
 /// substrate. Constructed by the binary only when `[embedding]`
@@ -53,6 +78,9 @@ pub struct SemanticMemoryContext {
         >,
     >,
     recall_cluster: Option<aivyx_config::RecallClusterConfig>,
+    /// Phase 84 (Q4a) — optional shared last-turn cluster stat
+    /// for the Phase 78 surface. `None` → breadcrumb-only.
+    cluster_stat: Option<SharedRecallClusterStat>,
 }
 
 impl SemanticMemoryContext {
@@ -70,7 +98,20 @@ impl SemanticMemoryContext {
             recall_log: None,
             cooccurrence_ledger: None,
             recall_cluster: None,
+            cluster_stat: None,
         }
+    }
+
+    /// Phase 84 (Q4a) — attach the shared last-turn cluster
+    /// stat so the Phase 78 learning surface can show what
+    /// cluster expansion did. Builder; the binary passes the
+    /// same handle it puts on `DaemonConfig`.
+    pub fn with_cluster_stat(
+        mut self,
+        stat: SharedRecallClusterStat,
+    ) -> Self {
+        self.cluster_stat = Some(stat);
+        self
     }
 
     /// Phase 84 — attach the Phase 83 co-occurrence ledger +
@@ -180,6 +221,9 @@ impl ContextProvider for SemanticMemoryContext {
         // sibling topic. Best-effort: any error skips a
         // sibling, never the turn.
         let mut sibs: Vec<(MemoryEntry, f32)> = Vec::new();
+        // (driver_topic, sibling_topic), aligned 1:1 with
+        // `sibs`, for the Phase 78 stat.
+        let mut sib_pairs: Vec<(String, String)> = Vec::new();
         if let (Some(cfg), Some(ledger)) = (
             self.recall_cluster.as_ref(),
             self.cooccurrence_ledger.as_ref(),
@@ -220,6 +264,10 @@ impl ContextProvider for SemanticMemoryContext {
                         {
                             if let Some(mem) = es.pop() {
                                 sibs.push((mem, sib.score));
+                                sib_pairs.push((
+                                    entry.topic.clone(),
+                                    sib.b.clone(),
+                                ));
                             }
                         }
                     }
@@ -263,6 +311,22 @@ impl ContextProvider for SemanticMemoryContext {
                 "aivyx recall-cluster: injected {n_sib} affined \
                  sibling(s) (sharing rag_top_k)"
             );
+        }
+        // Phase 84 (Q4a) — record this turn for the Phase 78
+        // surface (the actually-injected driver→sibling pairs,
+        // post budget-share). Written every turn cluster
+        // expansion is armed so "0 injected" is itself legible.
+        if let Some(stat) = &self.cluster_stat {
+            if let Ok(mut w) = stat.write() {
+                *w = Some(RecallClusterStat {
+                    ts_secs: now_secs(),
+                    injected: n_sib,
+                    pairs: sib_pairs
+                        .into_iter()
+                        .take(n_sib)
+                        .collect(),
+                });
+            }
         }
 
         // Phase 77 — capture the recall-feedback signal,

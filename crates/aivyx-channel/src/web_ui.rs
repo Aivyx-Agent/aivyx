@@ -669,6 +669,16 @@ mod tests {
             ),
             "must render the co-occurrence card"
         );
+        // Phase 84 — the Learning pane must surface the
+        // last-turn cluster-aware co-recall stat.
+        assert!(
+            HTML.contains("payload.cluster_recall"),
+            "must read the cluster_recall field"
+        );
+        assert!(
+            HTML.contains("Cluster co-recall (last turn)"),
+            "must render the cluster-recall card"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

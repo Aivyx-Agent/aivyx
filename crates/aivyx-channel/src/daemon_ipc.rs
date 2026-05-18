@@ -374,6 +374,15 @@ pub enum QueryResponsePayload {
         cooccurrence: Option<
             crate::cooccurrence_ledger::CooccurrencePatterns,
         >,
+        /// Phase 84 — the last turn's cluster-aware co-recall
+        /// outcome (driver→sibling pairs injected). `None` if
+        /// cluster expansion is off / has not run this daemon
+        /// lifetime. `#[serde(default)]` so older frames
+        /// decode.
+        #[serde(default)]
+        cluster_recall: Option<
+            crate::memory_recall::RecallClusterStat,
+        >,
     },
 }
 
@@ -1724,6 +1733,16 @@ mod tests {
                                     samples: 5,
                                 },
                             ],
+                        },
+                    ),
+                    cluster_recall: Some(
+                        crate::memory_recall::RecallClusterStat {
+                            ts_secs: 1_715_005_000,
+                            injected: 1,
+                            pairs: vec![(
+                                "deploy".into(),
+                                "rollback".into(),
+                            )],
                         },
                     ),
                 },

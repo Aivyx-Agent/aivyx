@@ -1641,6 +1641,29 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       coocCard.innerHTML = coocHtml;
       body.appendChild(coocCard);
 
+      // Phase 84 — last-turn cluster-aware co-recall.
+      const cr = payload.cluster_recall;
+      const crCard = document.createElement('div');
+      crCard.className = 'row-card';
+      let crHtml =
+        '<div class="row-line"><span class="row-id">' +
+        'Cluster co-recall (last turn)</span>' +
+        '<span class="row-meta">' +
+        (cr
+          ? (cr.injected + ' affined sibling(s) injected')
+          : 'not engaged (off, or no turn yet)') +
+        '</span></div>';
+      if (cr && cr.pairs) {
+        cr.pairs.forEach(function(pr) {
+          crHtml +=
+            '<div class="row-line"><span class="row-meta">' +
+            escapeHtml(pr[0]) + ' → ' + escapeHtml(pr[1]) +
+            '</span></div>';
+        });
+      }
+      crCard.innerHTML = crHtml;
+      body.appendChild(crCard);
+
       if (!proposals.length) {
         const none = document.createElement('div');
         none.className = 'empty';
