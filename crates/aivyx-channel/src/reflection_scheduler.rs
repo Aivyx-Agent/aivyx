@@ -1423,6 +1423,7 @@ mod tests {
                         topic: "proj".into(),
                         seq,
                         score: 0.9,
+                        cluster: false,
                     }],
                 })
                 .await
@@ -1560,6 +1561,7 @@ mod tests {
                         topic: "proj".into(),
                         seq,
                         score: 0.9,
+                        cluster: false,
                     }],
                 })
                 .await
@@ -1714,11 +1716,13 @@ mod tests {
                             topic: "deploy".into(),
                             seq: d,
                             score: 0.9,
+                            cluster: false,
                         },
                         RecallHit {
                             topic: "rollback".into(),
                             seq: r,
                             score: 0.8,
+                            cluster: false,
                         },
                     ],
                 })

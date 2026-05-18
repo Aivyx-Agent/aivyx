@@ -166,6 +166,10 @@ impl ContextProvider for SemanticMemoryContext {
                         topic: e.topic.clone(),
                         seq: e.seq,
                         score: *score,
+                        // Phase 84 — base Phase 76 hits are
+                        // primary; cluster-injected siblings
+                        // (Task 4) set this `true`.
+                        cluster: false,
                     })
                     .collect(),
             };

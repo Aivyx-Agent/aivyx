@@ -307,6 +307,47 @@ impl PersistentCooccurrenceLedger {
         Ok(CooccurrencePatterns { top_pairs })
     }
 
+    /// Phase 84 — the decayed strongest siblings of `topic`:
+    /// every pair containing `topic` whose decayed score is
+    /// `>= min_affinity`, the *other* side returned as a
+    /// `PairScore { a = topic, b = sibling }`, score-descending
+    /// (then sibling, deterministic), capped at `top_n`. One
+    /// scan (reuses `ranked`); the recall hot path makes
+    /// exactly one such call per turn and the ledger
+    /// self-prunes, so this stays bounded.
+    pub async fn siblings_of(
+        &self,
+        topic: &str,
+        now_secs: u64,
+        top_n: usize,
+        min_affinity: f32,
+    ) -> Result<Vec<PairScore>, CooccurrenceLedgerError> {
+        let ranked = self.ranked(now_secs).await?;
+        let out: Vec<PairScore> = ranked
+            .iter()
+            .filter_map(|(lo, hi, e)| {
+                if e.ewma_score < min_affinity {
+                    return None;
+                }
+                let sibling = if lo == topic {
+                    hi
+                } else if hi == topic {
+                    lo
+                } else {
+                    return None;
+                };
+                Some(PairScore {
+                    a: topic.to_string(),
+                    b: sibling.clone(),
+                    score: e.ewma_score,
+                    samples: e.samples,
+                })
+            })
+            .take(top_n)
+            .collect();
+        Ok(out)
+    }
+
     /// Drop pairs whose decayed-to-`now` magnitude is below
     /// [`COOCCURRENCE_PRUNE_EPSILON`] **and** untouched for
     /// [`COOCCURRENCE_PRUNE_HORIZON_SECS`]. Run on the
@@ -555,5 +596,62 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(l.prune(now).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn siblings_of_filters_threshold_and_caps() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        l.record_window(
+            &[
+                (("deploy".into(), "rollback".into()), 9.0),
+                (("deploy".into(), "monitoring".into()), 4.0),
+                (("deploy".into(), "weak".into()), 0.5),
+                (("unrelated".into(), "x".into()), 7.0),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+
+        // min_affinity 1.0 drops the 0.5 "weak" pair; only
+        // pairs containing "deploy" returned, score-desc, the
+        // OTHER side as `b`, queried topic as `a`.
+        let sib = l
+            .siblings_of("deploy", 10, 10, 1.0)
+            .await
+            .unwrap();
+        let names: Vec<&str> =
+            sib.iter().map(|p| p.b.as_str()).collect();
+        assert_eq!(names, vec!["rollback", "monitoring"]);
+        assert!(sib.iter().all(|p| p.a == "deploy"));
+        // "unrelated"/"x" never appears (doesn't contain
+        // "deploy").
+        assert!(!sib.iter().any(|p| p.b == "x"));
+
+        // top_n caps to the strongest.
+        let one = l
+            .siblings_of("deploy", 10, 1, 1.0)
+            .await
+            .unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].b, "rollback");
+
+        // Order-invariant: the queried topic may be on either
+        // side of the stored canonical pair.
+        let rb = l
+            .siblings_of("rollback", 10, 10, 1.0)
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), 1);
+        assert_eq!(rb[0].a, "rollback");
+        assert_eq!(rb[0].b, "deploy");
+
+        // Unknown topic → empty.
+        assert!(l
+            .siblings_of("nope", 10, 10, 1.0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

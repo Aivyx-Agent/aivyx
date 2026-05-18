@@ -26,6 +26,18 @@ pub struct RecallHit {
     pub topic: String,
     pub seq: u64,
     pub score: f32,
+    /// Phase 84 — `true` iff this hit was injected by
+    /// cluster-aware co-recall (a Phase 83 affined sibling the
+    /// literal query missed), `false` for a primary
+    /// keyword/semantic hit. `#[serde(default)]` keeps the
+    /// recall-log + IPC round-trip back-compatible (older rows
+    /// decode as `false`). Phase 77 `correlate_detailed` reads
+    /// only `(topic, seq)` so it is unaffected; the Phase 83
+    /// co-occurrence fold uses this to **exclude** cluster
+    /// hits (the self-policing — the ledger never learns from
+    /// its own expansion).
+    #[serde(default)]
+    pub cluster: bool,
 }
 
 /// The recall that happened on one turn. `ts_secs` is wall
@@ -195,6 +207,7 @@ mod tests {
                 topic: topic.into(),
                 seq,
                 score,
+                cluster: false,
             }],
         }
     }
@@ -254,5 +267,32 @@ mod tests {
         let log = open_log(&scratch, 4).await;
         assert!(log.events_since(0).await.unwrap().is_empty());
         assert_eq!(log.gc_older_than(999).await.unwrap(), 0);
+    }
+
+    /// Phase 84 — the `cluster` marker round-trips, and a row
+    /// written before Phase 84 (no `cluster` key) decodes as
+    /// `false` via `#[serde(default)]` (back-compat).
+    #[test]
+    fn cluster_marker_round_trips_and_defaults_false() {
+        let hit = RecallHit {
+            topic: "deploy".into(),
+            seq: 7,
+            score: 0.9,
+            cluster: true,
+        };
+        let j = serde_json::to_string(&hit).unwrap();
+        let back: RecallHit =
+            serde_json::from_str(&j).unwrap();
+        assert_eq!(back, hit);
+        assert!(back.cluster);
+
+        // A pre-Phase-84 row has no `cluster` field at all.
+        let legacy = r#"{"topic":"t","seq":1,"score":0.5}"#;
+        let decoded: RecallHit =
+            serde_json::from_str(legacy).unwrap();
+        assert!(
+            !decoded.cluster,
+            "missing `cluster` must default to false"
+        );
     }
 }

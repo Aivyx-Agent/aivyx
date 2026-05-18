@@ -416,6 +416,7 @@ mod tests {
                     topic: (*t).into(),
                     seq: *s,
                     score: 0.9,
+                    cluster: false,
                 })
                 .collect(),
         }
