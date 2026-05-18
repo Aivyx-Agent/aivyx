@@ -2305,9 +2305,8 @@ async fn run_async(
         // DaemonConfig below.
         persona_lifecycle: config_persona_lifecycle,
         // Phase 84 — `[recall_cluster]` config. Wired into the
-        // recall provider in Task 4 (bound here so the
-        // destructure stays exhaustive).
-        recall_cluster: _config_recall_cluster,
+        // recall provider's cluster-aware expansion below.
+        recall_cluster: config_recall_cluster,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2669,6 +2668,19 @@ async fn run_async(
                 );
             if let Some(log) = &recall_log {
                 sc = sc.with_recall_log(Arc::clone(log));
+            }
+            // Phase 84 — arm cluster-aware co-recall iff the
+            // [recall_cluster] section is present and the
+            // co-occurrence ledger exists (built above under
+            // the same recall-substrate condition). The pass
+            // still no-ops unless `enabled = true`.
+            if let (Some(rc_cfg), Some(cooc)) =
+                (&config_recall_cluster, &cooccurrence_ledger)
+            {
+                sc = sc.with_cluster(
+                    Arc::clone(cooc),
+                    rc_cfg.clone(),
+                );
             }
             Some(Arc::new(sc))
         }

@@ -700,10 +700,22 @@ async fn run_recall_feedback_pass(
                         };
                         // Top-K highest-scoring DISTINCT
                         // topics for this event (the Q4a
-                        // deterministic O(n²) bound).
+                        // deterministic O(n²) bound). Phase 84
+                        // (Q3a) self-policing: cluster-injected
+                        // hits are EXCLUDED so the co-occurrence
+                        // ledger only ever learns from organic
+                        // keyword/semantic co-recall — never
+                        // from its own expansion (no runaway
+                        // self-reinforcement). They still count
+                        // in the Phase 77/82 helpfulness signal
+                        // (a bad expansion self-penalises).
                         let mut hits: Vec<
                             &crate::recall_log::RecallHit,
-                        > = event.hits.iter().collect();
+                        > = event
+                            .hits
+                            .iter()
+                            .filter(|h| !h.cluster)
+                            .collect();
                         hits.sort_by(|a, b| {
                             b.score
                                 .partial_cmp(&a.score)
@@ -1817,6 +1829,190 @@ mod tests {
         assert_eq!(
             e3.samples, 2,
             "absent ledger must not fold"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Phase 84 (Q3a) self-policing: a cluster-injected hit is
+    /// EXCLUDED from the co-occurrence fold (the ledger never
+    /// learns from its own expansion) but is STILL measured by
+    /// the Phase 82 helpfulness fold (a bad expansion
+    /// self-penalises).
+    #[tokio::test]
+    async fn cluster_hits_excluded_from_cooccurrence_kept_in_helpfulness(
+    ) {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use crate::helpfulness_ledger::PersistentHelpfulnessLedger;
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-cluster-selfpolice-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([85u8; 32]),
+        )
+        .await
+        .unwrap();
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        let help = Arc::new(PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"selfpolice-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        let mut summaries: Vec<OutcomeSummary> = Vec::new();
+
+        // Turn 1: primary "alpha" + CLUSTER-injected "beta".
+        let s1 = SessionId::new();
+        let a = memory.put("alpha", "a").await.unwrap();
+        let b = memory.put("beta", "b").await.unwrap();
+        recall_log
+            .append(&RecallEvent {
+                ts_secs: 1000,
+                session_id: s1,
+                hits: vec![
+                    RecallHit {
+                        topic: "alpha".into(),
+                        seq: a,
+                        score: 0.9,
+                        cluster: false,
+                    },
+                    RecallHit {
+                        topic: "beta".into(),
+                        seq: b,
+                        score: 0.8,
+                        cluster: true, // injected sibling
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        summaries.push(OutcomeSummary {
+            session_id: s1.to_string(),
+            turn_id: "t1".into(),
+            started_at_unix_ms: 1000 * 1000,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 0,
+            duration_ms: 500,
+        });
+
+        // Turn 2 (control): two PRIMARY topics co-recalled.
+        let s2 = SessionId::new();
+        let c = memory.put("cee", "c").await.unwrap();
+        let d = memory.put("dee", "d").await.unwrap();
+        recall_log
+            .append(&RecallEvent {
+                ts_secs: 1100,
+                session_id: s2,
+                hits: vec![
+                    RecallHit {
+                        topic: "cee".into(),
+                        seq: c,
+                        score: 0.9,
+                        cluster: false,
+                    },
+                    RecallHit {
+                        topic: "dee".into(),
+                        seq: d,
+                        score: 0.8,
+                        cluster: false,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        summaries.push(OutcomeSummary {
+            session_id: s2.to_string(),
+            turn_id: "t2".into(),
+            started_at_unix_ms: 1100 * 1000,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 0,
+            duration_ms: 500,
+        });
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: Some(Arc::clone(&help)),
+            cooccurrence_ledger: Some(Arc::clone(&cooc)),
+        };
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            1_000_000_000,
+        )
+        .await;
+        let t = 1_000_000u64;
+
+        // Self-policing: {alpha,beta} is NOT in the
+        // co-occurrence ledger — beta was cluster-injected, so
+        // only alpha survived the fold filter and a lone topic
+        // forms no pair.
+        assert!(
+            cooc.pair_score("alpha", "beta", t)
+                .await
+                .unwrap()
+                .is_none(),
+            "cluster-injected hit must not feed the \
+             co-occurrence ledger"
+        );
+        // Control: the all-primary {cee,dee} pair IS folded.
+        assert!(
+            cooc.pair_score("cee", "dee", t)
+                .await
+                .unwrap()
+                .is_some(),
+            "an all-primary co-recall must still fold"
+        );
+        // But beta IS still measured by the Phase 82
+        // helpfulness ledger (a bad expansion self-penalises).
+        let bscore = help
+            .topic_score("beta", t)
+            .await
+            .unwrap()
+            .expect("cluster hit still scored by helpfulness");
+        assert!(
+            bscore.ewma_score > 0.0,
+            "helpful turn → cluster hit scored positive, got {}",
+            bscore.ewma_score
         );
 
         let _ = std::fs::remove_dir_all(&dir);

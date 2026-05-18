@@ -40,6 +40,19 @@ pub struct SemanticMemoryContext {
     /// turn's session. `None` → capture disabled (the loop just
     /// gets no signal; recall itself is unaffected).
     recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
+    /// Phase 84 — optional cluster-aware co-recall. When the
+    /// ledger + an enabled `[recall_cluster]` config are both
+    /// present, after the base Phase 76 set the durable affined
+    /// siblings the literal query missed are injected, sharing
+    /// the `rag_top_k` budget (they displace the weakest
+    /// primary hits — zero context-size growth). `None` →
+    /// recall is byte-identical to pre-Phase-84.
+    cooccurrence_ledger: Option<
+        Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    >,
+    recall_cluster: Option<aivyx_config::RecallClusterConfig>,
 }
 
 impl SemanticMemoryContext {
@@ -55,7 +68,26 @@ impl SemanticMemoryContext {
             rag_top_k,
             rag_min_similarity,
             recall_log: None,
+            cooccurrence_ledger: None,
+            recall_cluster: None,
         }
+    }
+
+    /// Phase 84 — attach the Phase 83 co-occurrence ledger +
+    /// its config so the base recall set is expanded with
+    /// durable affined siblings. Builder-style; the binary
+    /// calls this only when `[recall_cluster]` is present and
+    /// the co-occurrence domain is available.
+    pub fn with_cluster(
+        mut self,
+        ledger: Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+        config: aivyx_config::RecallClusterConfig,
+    ) -> Self {
+        self.cooccurrence_ledger = Some(ledger);
+        self.recall_cluster = Some(config);
+        self
     }
 
     /// Phase 77 — attach the recall-feedback log so injected
@@ -140,6 +172,83 @@ impl ContextProvider for SemanticMemoryContext {
         if kept.is_empty() {
             return None;
         }
+
+        // Phase 84 — cluster-aware co-recall (opt-in). For the
+        // recalled topics, pull their durable affined siblings
+        // (the Phase 83 ledger) that the literal query missed,
+        // and take the single most-recent memory under each new
+        // sibling topic. Best-effort: any error skips a
+        // sibling, never the turn.
+        let mut sibs: Vec<(MemoryEntry, f32)> = Vec::new();
+        if let (Some(cfg), Some(ledger)) = (
+            self.recall_cluster.as_ref(),
+            self.cooccurrence_ledger.as_ref(),
+        ) {
+            if cfg.enabled {
+                let now = now_secs();
+                let cap = cfg.max_siblings as usize;
+                // Never duplicate-inject a topic already in the
+                // primary set or already injected.
+                let mut seen: std::collections::HashSet<String> =
+                    kept.iter()
+                        .map(|(e, _)| e.topic.clone())
+                        .collect();
+                'outer: for (entry, _) in &kept {
+                    let found = match ledger
+                        .siblings_of(
+                            &entry.topic,
+                            now,
+                            cap,
+                            cfg.min_affinity,
+                        )
+                        .await
+                    {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    for sib in found {
+                        if sibs.len() >= cap {
+                            break 'outer;
+                        }
+                        if !seen.insert(sib.b.clone()) {
+                            continue;
+                        }
+                        if let Ok(mut es) = self
+                            .memory
+                            .get_recent(&sib.b, 1)
+                            .await
+                        {
+                            if let Some(mem) = es.pop() {
+                                sibs.push((mem, sib.score));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Budget-share (Q4a): siblings displace the WEAKEST
+        // primary hits so the final set never exceeds
+        // `rag_top_k` — zero context-size / token growth.
+        // `kept` is score-descending.
+        let n_sib = sibs.len().min(self.rag_top_k);
+        let n_primary = self
+            .rag_top_k
+            .saturating_sub(n_sib)
+            .min(kept.len());
+        let mut final_hits: Vec<(MemoryEntry, f32)> =
+            Vec::with_capacity(n_primary + n_sib);
+        let mut is_cluster: Vec<bool> =
+            Vec::with_capacity(n_primary + n_sib);
+        for (e, s) in kept.into_iter().take(n_primary) {
+            final_hits.push((e, s));
+            is_cluster.push(false);
+        }
+        for (e, s) in sibs.into_iter().take(n_sib) {
+            final_hits.push((e, s));
+            is_cluster.push(true);
+        }
+
         // Phase 76 (Q4b) — visible per-turn marker. A new
         // `AuditTag` variant would break the production-core
         // streak that Q1a was chosen to protect, so the marker
@@ -148,7 +257,13 @@ impl ContextProvider for SemanticMemoryContext {
         // use (`aivyx memory gc: …`, `aivyx memory embed: …`).
         // The *content* recalled is independently visible — it
         // is the labeled block injected into the turn.
-        eprintln!("{}", recall_marker_line(&kept));
+        eprintln!("{}", recall_marker_line(&final_hits));
+        if n_sib > 0 {
+            eprintln!(
+                "aivyx recall-cluster: injected {n_sib} affined \
+                 sibling(s) (sharing rag_top_k)"
+            );
+        }
 
         // Phase 77 — capture the recall-feedback signal,
         // correlated to this turn's session. Strictly
@@ -160,23 +275,28 @@ impl ContextProvider for SemanticMemoryContext {
             let event = crate::recall_log::RecallEvent {
                 ts_secs: ts,
                 session_id,
-                hits: kept
+                hits: final_hits
                     .iter()
-                    .map(|(e, score)| crate::recall_log::RecallHit {
-                        topic: e.topic.clone(),
-                        seq: e.seq,
-                        score: *score,
-                        // Phase 84 — base Phase 76 hits are
-                        // primary; cluster-injected siblings
-                        // (Task 4) set this `true`.
-                        cluster: false,
+                    .zip(is_cluster.iter())
+                    .map(|((e, score), &cl)| {
+                        crate::recall_log::RecallHit {
+                            topic: e.topic.clone(),
+                            seq: e.seq,
+                            score: *score,
+                            // Phase 84 — true iff this hit was
+                            // injected by cluster expansion;
+                            // the Phase 83 fold excludes these
+                            // (self-policing) while Phase 77/82
+                            // still measure them.
+                            cluster: cl,
+                        }
                     })
                     .collect(),
             };
             let _ = log.append(&event).await;
         }
 
-        Some(Self::format_block(&kept, now_secs()))
+        Some(Self::format_block(&final_hits, now_secs()))
     }
 }
 
@@ -450,6 +570,158 @@ mod tests {
             log.events_since(0).await.unwrap().len(),
             1,
             "a no-op recall must not append a signal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 84 — cluster-aware co-recall --------------------
+
+    #[tokio::test]
+    async fn cluster_injects_marked_sibling_budget_neutral() {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use crate::recall_log::PersistentRecallLog;
+        use aivyx_config::RecallClusterConfig;
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-cluster-recall-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([84u8; 32]),
+        )
+        .await
+        .unwrap();
+        let log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        // Durable affinity: "notes" (the literal hit) and
+        // "deploy" (the sibling the query never retrieves).
+        // Stamp it at ~now so the read-time decay (real
+        // wall-clock in `recall`) leaves the score intact.
+        let now = now_secs();
+        cooc.record_window(
+            &[(("notes".into(), "deploy".into()), 5.0)],
+            now,
+        )
+        .await
+        .unwrap();
+
+        // Memory: "notes" vector-aligned to the query (the
+        // primary hit) + a "deploy" memory the query can't
+        // semantically reach.
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+        let ns = memory
+            .put("notes", "favorite color is purple")
+            .await
+            .unwrap();
+        memory
+            .put_vector("notes", ns, vec![1.0, 1.0])
+            .await
+            .unwrap();
+        memory
+            .put("deploy", "deploy runbook lives in the wiki")
+            .await
+            .unwrap();
+
+        let cfg = RecallClusterConfig {
+            enabled: true,
+            max_siblings: 2,
+            min_affinity: 1.0,
+        };
+
+        // rag_top_k = 5: spare budget, sibling co-injected
+        // alongside the primary, marked.
+        let c = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_log(Arc::clone(&log))
+        .with_cluster(Arc::clone(&cooc), cfg.clone());
+        let s = sid();
+        assert!(c
+            .recall("what is my favorite color", s)
+            .await
+            .is_some());
+        let ev = log.events_since(0).await.unwrap();
+        assert_eq!(ev.len(), 1);
+        let hits = &ev[0].hits;
+        assert!(
+            hits.len() <= 5,
+            "must never exceed rag_top_k"
+        );
+        let notes = hits
+            .iter()
+            .find(|h| h.topic == "notes")
+            .expect("primary present");
+        assert!(!notes.cluster, "primary not cluster-marked");
+        let deploy = hits
+            .iter()
+            .find(|h| h.topic == "deploy")
+            .expect("affined sibling injected");
+        assert!(deploy.cluster, "sibling cluster-marked");
+
+        // rag_top_k = 1: budget-neutral — the sibling shares
+        // the single slot so the total never grows. Assert on
+        // the returned block (no shared-log ordering concern):
+        // exactly one recalled line.
+        let c1 = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::new(FakeProvider { fail: false }),
+            1,
+            0.0,
+        )
+        .with_cluster(Arc::clone(&cooc), cfg.clone());
+        let b1 = c1
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("block");
+        assert_eq!(
+            b1.matches("\n- [").count(),
+            1,
+            "rag_top_k=1 stays 1 recalled line — budget-neutral"
+        );
+
+        // Disabled config → byte-identical to pre-Phase-84:
+        // the sibling is never injected (only the primary).
+        let off = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_cluster(
+            Arc::clone(&cooc),
+            RecallClusterConfig {
+                enabled: false,
+                ..cfg
+            },
+        );
+        let boff = off
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("block");
+        assert!(
+            boff.contains("[notes"),
+            "primary still recalled"
+        );
+        assert!(
+            !boff.contains("[deploy"),
+            "disabled → sibling never injected"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
