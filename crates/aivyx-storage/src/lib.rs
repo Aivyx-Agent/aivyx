@@ -150,6 +150,13 @@ pub enum KeyDomain {
     /// Tiny + GC-clamped; isolated so a corrupt row degrades
     /// only proactive dedup, never memory or the recall signal.
     ProactiveLog,
+    /// Persistent helpfulness ledger (Phase 82). One row per
+    /// memory topic holding the durable, time-decayed EWMA of
+    /// "did recalling this topic help" folded from each Phase 77
+    /// reflection cycle. Self-pruning; isolated so a corrupt row
+    /// degrades only the longitudinal learning view, never
+    /// memory, recall, or proactive dedup.
+    HelpfulnessLedger,
 }
 
 impl KeyDomain {
@@ -175,6 +182,7 @@ impl KeyDomain {
             KeyDomain::MemoryVectors => b"memory-vectors",
             KeyDomain::RecallEvents => b"recall-events",
             KeyDomain::ProactiveLog => b"proactive-log",
+            KeyDomain::HelpfulnessLedger => b"helpfulness-ledger",
         }
     }
 
@@ -199,12 +207,15 @@ impl KeyDomain {
             KeyDomain::MemoryVectors => "aivyx_memory_vectors_v1",
             KeyDomain::RecallEvents => "aivyx_recall_events_v1",
             KeyDomain::ProactiveLog => "aivyx_proactive_log_v1",
+            KeyDomain::HelpfulnessLedger => {
+                "aivyx_helpfulness_ledger_v1"
+            }
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 14] = [
+    pub const ALL: [KeyDomain; 15] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -219,6 +230,7 @@ impl KeyDomain {
         KeyDomain::MemoryVectors,
         KeyDomain::RecallEvents,
         KeyDomain::ProactiveLog,
+        KeyDomain::HelpfulnessLedger,
     ];
 }
 
@@ -404,7 +416,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 14],
+    subkeys: [SubKey; 15],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -481,7 +493,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 14], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 15], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -500,6 +512,9 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::MemoryVectors.as_bytes())?,
             master.derive_subkey(KeyDomain::RecallEvents.as_bytes())?,
             master.derive_subkey(KeyDomain::ProactiveLog.as_bytes())?,
+            master.derive_subkey(
+                KeyDomain::HelpfulnessLedger.as_bytes(),
+            )?,
         ])
     }
 
@@ -522,6 +537,7 @@ impl RedbStorage {
             KeyDomain::MemoryVectors => &self.subkeys[11],
             KeyDomain::RecallEvents => &self.subkeys[12],
             KeyDomain::ProactiveLog => &self.subkeys[13],
+            KeyDomain::HelpfulnessLedger => &self.subkeys[14],
         }
     }
 }
@@ -922,7 +938,7 @@ mod tests {
 
     #[test]
     fn key_domain_all_covers_every_variant() {
-        // If a future phase adds a fifteenth `KeyDomain`
+        // If a future phase adds a sixteenth `KeyDomain`
         // variant, this test fails because `ALL` is a fixed-size
         // array and the match below forces an update. Tripwire
         // for "adding a variant without updating ALL."
@@ -941,7 +957,8 @@ mod tests {
                 | KeyDomain::PersonaProposals
                 | KeyDomain::MemoryVectors
                 | KeyDomain::RecallEvents
-                | KeyDomain::ProactiveLog => {}
+                | KeyDomain::ProactiveLog
+                | KeyDomain::HelpfulnessLedger => {}
             }
         }
     }
@@ -1106,6 +1123,53 @@ mod tests {
             proactive.get(key).await.unwrap(),
             Some(b"a surfaced item".to_vec()),
             "ProactiveLog domain returned the recall value"
+        );
+    }
+
+    // ---- Phase 82 — HelpfulnessLedger domain -----------------------
+
+    #[test]
+    fn helpfulness_ledger_domain_has_stable_metadata() {
+        assert_eq!(
+            KeyDomain::HelpfulnessLedger.as_bytes(),
+            b"helpfulness-ledger"
+        );
+        assert_eq!(
+            KeyDomain::HelpfulnessLedger.table_name(),
+            "aivyx_helpfulness_ledger_v1"
+        );
+        assert!(
+            KeyDomain::ALL.contains(&KeyDomain::HelpfulnessLedger)
+        );
+    }
+
+    #[tokio::test]
+    async fn helpfulness_ledger_domain_isolates_from_recall_events()
+    {
+        // The durable helpfulness ledger is distinct from the
+        // ephemeral recall-feedback signal: a corrupt/pruned
+        // ledger row must degrade only the longitudinal
+        // learning view, never the per-cycle recall signal.
+        // Phase 82.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(82)).await;
+
+        let recall = store.domain(KeyDomain::RecallEvents);
+        let ledger = store.domain(KeyDomain::HelpfulnessLedger);
+
+        let key = b"shared-key";
+        recall.put(key, b"a recall event").await.unwrap();
+        ledger.put(key, b"a ledger row").await.unwrap();
+
+        assert_eq!(
+            recall.get(key).await.unwrap(),
+            Some(b"a recall event".to_vec()),
+            "RecallEvents domain returned the ledger value"
+        );
+        assert_eq!(
+            ledger.get(key).await.unwrap(),
+            Some(b"a ledger row".to_vec()),
+            "HelpfulnessLedger domain returned the recall value"
         );
     }
 
