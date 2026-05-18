@@ -12,6 +12,7 @@ use aivyx_channel::daemon_client::{
     daemon_is_running, get_learning_insights,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
+use aivyx_channel::cooccurrence_ledger::CooccurrencePatterns;
 use aivyx_channel::helpfulness_ledger::AccumulatedHelpfulness;
 use aivyx_channel::persona_context::PersonaSelectionStat;
 use aivyx_channel::persona_lifecycle::PersonaLifecycleStat;
@@ -33,6 +34,7 @@ pub async fn run_learning(
         proactive,
         persona_lifecycle,
         accumulated_helpfulness,
+        cooccurrence,
     ) = get_learning_insights(&socket_path, window_secs)
         .await
         .map_err(|e| {
@@ -47,6 +49,7 @@ pub async fn run_learning(
             proactive.as_ref(),
             persona_lifecycle.as_ref(),
             accumulated_helpfulness.as_ref(),
+            cooccurrence.as_ref(),
         )
     );
     Ok(())
@@ -84,6 +87,7 @@ fn render_insights(
     proactive: Option<&ProactiveStat>,
     persona_lifecycle: Option<&PersonaLifecycleStat>,
     accumulated: Option<&AccumulatedHelpfulness>,
+    cooccurrence: Option<&CooccurrencePatterns>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -197,6 +201,25 @@ fn render_insights(
         _ => out.push_str("  (none yet)\n"),
     }
 
+    out.push_str(
+        "\nTopics that consistently help together:\n",
+    );
+    match cooccurrence {
+        Some(c) if !c.top_pairs.is_empty() => {
+            for p in &c.top_pairs {
+                out.push_str(&format!(
+                    "  {:+.1}  {} + {}  ({} sample{})\n",
+                    p.score,
+                    p.a,
+                    p.b,
+                    p.samples,
+                    if p.samples == 1 { "" } else { "s" },
+                ));
+            }
+        }
+        _ => out.push_str("  (none yet)\n"),
+    }
+
     if proposals.is_empty() {
         out.push_str(
             "\nNo recall-driven Persona proposals in this window.\n",
@@ -249,7 +272,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None, None);
+        let out = render_insights(&digest(), &[], None, None, None, None, None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -283,7 +306,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None, None);
+        let out = render_insights(&digest(), &prov, None, None, None, None, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -304,7 +327,7 @@ mod tests {
             top_unhelpful: vec![],
             proposals_in_window: 0,
         };
-        let out = render_insights(&d, &[], None, None, None, None);
+        let out = render_insights(&d, &[], None, None, None, None, None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
@@ -313,7 +336,7 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -323,7 +346,7 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None, None);
+            render_insights(&digest(), &[], Some(&stat), None, None, None, None);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
         ));
@@ -336,7 +359,7 @@ mod tests {
         };
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None);
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -351,7 +374,7 @@ mod tests {
             capped: 1,
         };
         let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None, None);
+            render_insights(&digest(), &[], None, Some(&stat), None, None, None);
         assert!(some_out.contains(
             "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
         ));
@@ -369,7 +392,7 @@ mod tests {
 
         // None → "not engaged" line.
         let none_out =
-            render_insights(&digest(), &[], None, None, None, None);
+            render_insights(&digest(), &[], None, None, None, None, None);
         assert!(
             none_out.contains("persona lifecycle: not engaged")
         );
@@ -392,6 +415,7 @@ mod tests {
             None,
             Some(&stat),
             None,
+            None,
         );
         assert!(some_out.contains(
             "persona lifecycle: 1 proposed last cycle \
@@ -413,6 +437,7 @@ mod tests {
         let none_out = render_insights(
             &digest(),
             &[],
+            None,
             None,
             None,
             None,
@@ -443,10 +468,54 @@ mod tests {
             None,
             None,
             Some(&acc),
+            None,
         );
         assert!(some_out.contains("+4.5  rust  (2 samples)"));
         assert!(
             some_out.contains("-3.0  scratch  (1 sample)")
         );
+    }
+
+    #[test]
+    fn render_cooccurrence_some_and_none() {
+        use aivyx_channel::cooccurrence_ledger::{
+            CooccurrencePatterns, PairScore,
+        };
+
+        // None → header + "(none yet)".
+        let none_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(none_out.contains(
+            "Topics that consistently help together:"
+        ));
+
+        // Some → signed score + "a + b" + sample count.
+        let cooc = CooccurrencePatterns {
+            top_pairs: vec![PairScore {
+                a: "deploy".into(),
+                b: "rollback".into(),
+                score: 8.0,
+                samples: 5,
+            }],
+        };
+        let some_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            Some(&cooc),
+        );
+        assert!(some_out.contains(
+            "+8.0  deploy + rollback  (5 samples)"
+        ));
     }
 }

@@ -745,6 +745,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             embedding_provider: embedding_provider.clone(),
             recall_log: recall_log.clone(),
             helpfulness_ledger: helpfulness_ledger.clone(),
+            cooccurrence_ledger: cooccurrence_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             proactive_stat: proactive_stat.clone(),
             persona_lifecycle_stat: persona_lifecycle_stat.clone(),
@@ -817,6 +818,14 @@ struct ConnectionContext {
     helpfulness_ledger: Option<
         Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
     >,
+    /// Phase 83 — durable co-occurrence ledger for the
+    /// read-only `GetLearningInsights` cross-session pattern
+    /// view. `None` = no auto-recall configured.
+    cooccurrence_ledger: Option<
+        Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    >,
     /// Phase 79 (Q4a) — last-Persona-selection stat for the
     /// `GetLearningInsights` surface.
     persona_selection_stat:
@@ -850,6 +859,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         embedding_provider,
         recall_log,
         helpfulness_ledger,
+        cooccurrence_ledger,
         persona_selection_stat,
         proactive_stat,
         persona_lifecycle_stat,
@@ -1185,6 +1195,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 embedding_provider.as_ref(),
                                 recall_log.as_ref(),
                                 helpfulness_ledger.as_ref(),
+                                cooccurrence_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
@@ -1436,6 +1447,7 @@ async fn run_single_connection_daemon(
         embedding_provider: None,
         recall_log: None,
         helpfulness_ledger: None,
+        cooccurrence_ledger: None,
         persona_selection_stat: None,
         proactive_stat: None,
         persona_lifecycle_stat: None,
@@ -1653,6 +1665,11 @@ async fn handle_query(
     recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
     helpfulness_ledger: Option<
         &Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
+    >,
+    cooccurrence_ledger: Option<
+        &Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
     >,
     persona_selection_stat: Option<
         &crate::persona_context::SharedPersonaSelectionStat,
@@ -2118,6 +2135,17 @@ async fn handle_query(
                         }),
                     None => None,
                 };
+            // Phase 83 — durable cross-session co-occurrence
+            // patterns. Best-effort: ledger error → None,
+            // empty → None (never breaks the surface).
+            let cooccurrence = match cooccurrence_ledger {
+                Some(l) => l
+                    .top_affinities(now_secs, 5)
+                    .await
+                    .ok()
+                    .filter(|p| !p.top_pairs.is_empty()),
+                None => None,
+            };
 
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
@@ -2134,6 +2162,7 @@ async fn handle_query(
                     proactive,
                     persona_lifecycle,
                     accumulated_helpfulness,
+                    cooccurrence,
                 };
             };
 
@@ -2194,6 +2223,7 @@ async fn handle_query(
                 proactive,
                 persona_lifecycle,
                 accumulated_helpfulness,
+                cooccurrence,
             }
         }
     }

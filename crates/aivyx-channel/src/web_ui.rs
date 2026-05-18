@@ -657,6 +657,18 @@ mod tests {
             ),
             "must render the accumulated-helpfulness card"
         );
+        // Phase 83 — the Learning pane must surface the durable
+        // cross-session co-occurrence patterns.
+        assert!(
+            HTML.contains("payload.cooccurrence"),
+            "must read the cooccurrence field"
+        );
+        assert!(
+            HTML.contains(
+                "Topics that consistently help together"
+            ),
+            "must render the co-occurrence card"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

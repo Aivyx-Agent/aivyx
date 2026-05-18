@@ -1614,6 +1614,33 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       accCard.innerHTML = accHtml;
       body.appendChild(accCard);
 
+      // Phase 83 — durable cross-session co-occurrence pairs.
+      const cooc = payload.cooccurrence;
+      const coocCard = document.createElement('div');
+      coocCard.className = 'row-card';
+      let coocHtml =
+        '<div class="row-line"><span class="row-id">' +
+        'Topics that consistently help together' +
+        '</span></div>';
+      const coocPairs =
+        cooc && cooc.top_pairs ? cooc.top_pairs : [];
+      if (!coocPairs.length) {
+        coocHtml += '<div class="row-meta">(none yet)</div>';
+      } else {
+        coocPairs.forEach(function(p) {
+          coocHtml +=
+            '<div class="row-line"><span class="row-meta">' +
+            (p.score >= 0 ? '+' : '') + p.score.toFixed(1) +
+            '</span> <span>' + escapeHtml(p.a) + ' + ' +
+            escapeHtml(p.b) + '</span> ' +
+            '<span class="row-meta">(' + p.samples +
+            ' sample' + (p.samples === 1 ? '' : 's') +
+            ')</span></div>';
+        });
+      }
+      coocCard.innerHTML = coocHtml;
+      body.appendChild(coocCard);
+
       if (!proposals.length) {
         const none = document.createElement('div');
         none.className = 'empty';

@@ -365,6 +365,15 @@ pub enum QueryResponsePayload {
         accumulated_helpfulness: Option<
             crate::helpfulness_ledger::AccumulatedHelpfulness,
         >,
+        /// Phase 83 — the durable cross-session co-occurrence
+        /// patterns (topics that consistently help together).
+        /// `None` if the ledger is absent / empty (no
+        /// auto-recall, or pre-Phase-83). `#[serde(default)]`
+        /// so older frames decode.
+        #[serde(default)]
+        cooccurrence: Option<
+            crate::cooccurrence_ledger::CooccurrencePatterns,
+        >,
     },
 }
 
@@ -743,6 +752,13 @@ pub enum PersonaProposalResolution {
 // Daemon → Frontend (turn-loop traffic)
 // ---------------------------------------------------------------------------
 
+// `QueryResponse`'s `LearningInsights` payload legitimately
+// accretes one read-only surface field per learning phase
+// (79/80/81/82/83…); boxing every protocol field for a
+// non-hot-path control message would harm readability for a
+// marginal stack-size win that the next phase reintroduces.
+// The large variant *is* the common case here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonMessage {
@@ -1041,6 +1057,9 @@ pub fn decode_frame<T: for<'de> Deserialize<'de>>(buf: &[u8]) -> Result<(T, usiz
 /// The daemon's receive loop calls `decode_frame::<FrontendMessage>`.
 /// The frontend's receive loop needs to demux `DaemonMessage` vs.
 /// `DaemonLifecycleEvent` — this enum carries both.
+// See `DaemonMessage` — same accreting-`LearningInsights`
+// rationale; this enum mirrors its variants.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonEnvelope {
@@ -1691,6 +1710,18 @@ mod tests {
                                     topic: "scratch".into(),
                                     score: -4.0,
                                     samples: 3,
+                                },
+                            ],
+                        },
+                    ),
+                    cooccurrence: Some(
+                        crate::cooccurrence_ledger::CooccurrencePatterns {
+                            top_pairs: vec![
+                                crate::cooccurrence_ledger::PairScore {
+                                    a: "deploy".into(),
+                                    b: "rollback".into(),
+                                    score: 8.0,
+                                    samples: 5,
                                 },
                             ],
                         },
