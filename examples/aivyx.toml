@@ -937,3 +937,29 @@ parent_role = "researcher"
 # (signed score + sample count) alongside the windowed view.
 # Daemon log: `aivyx helpfulness-ledger: folded N, pruned M`.
 # Nothing to configure.
+
+# ----------------------------------------------------------------
+# Cross-session pattern learning (Phase 83) — no config; automatic
+# ----------------------------------------------------------------
+#
+# Phase 77 learns WHICH topics help; Phase 82 made that durable.
+# Phase 83 learns the relationships BETWEEN topics: which two
+# get recalled TOGETHER in turns that go well. Over many
+# sessions a stable "these consistently help together" picture
+# emerges (e.g. deploy-runbook + rollback-steps).
+#
+# Like Phase 77/82 there is NO config block — it is built +
+# folded automatically whenever auto-recall is configured
+# ([embedding] + a [[reflection_schedule]]); with auto-recall
+# off it does not exist. It is a PASSIVE signal: folded in
+# AFTER the recall-feedback actuators and the Phase 82 ledger,
+# so both stay byte-identical (acting on the patterns is a
+# future phase). Per turn the top-8 highest-scoring distinct
+# topics are paired and accumulated with the same ~60-day
+# half-life as the Phase 82 ledger; the top-8 cap bounds the
+# combinatorics and it self-prunes (decayed + ~90d untouched).
+#
+# To SEE it: `aivyx learning` / the Web UI "Learning" tab show
+# a "Topics that consistently help together" block (signed
+# score + sample count). Daemon log: `aivyx cooccurrence:
+# folded N, pruned M`. Nothing to configure.

@@ -1192,6 +1192,33 @@ respond to it. Closing the gap is the inflection point between
   lib.rs → **30** (new record, beating Phase 81's 29). Zero
   new workspace deps.
 
+- **Phase 83 (Cross-Session Pattern Learning, shipped
+  2026-05-18).** Phase 77's headline deferral, unblocked by
+  the Phase 82 durable-ledger model. It introduces **no new
+  product commitment** and weakens none — it deepens the
+  already-delivered G3/P8 substrate, and the operator-facing
+  contract is *strengthened* (a cross-session "topics that
+  consistently help together" view that did not exist).
+  Delivered as conservatively as the passive nature warrants:
+  **zero-config** (the Phase 77/82 ethos — auto-built when
+  auto-recall is on, no block), it **changes no behaviour on
+  its own** (folded *after* the recall-feedback actuators and
+  the Phase 82 ledger, both byte-identical), recency-weighted
+  (the same ~60-day half-life), top-8-bounded, and
+  self-pruning. Reuse near-total — a fold of already-
+  correlated recall data into a new HKDF-isolated `KeyDomain`
+  on the existing reflection cron; no new scheduler, no LLM,
+  no new `AuditTag`. All code in `aivyx-storage` (the
+  KeyDomain) + `aivyx-channel`. Tests **+10** (1534 → 1544) —
+  a small miss vs the ~+12-16 refinement but squarely in the
+  Phase-82-recalibrated ≈ +8-12 band; it landed at exactly
+  Phase 82's +10 (the fixed scaffolding, not detector
+  complexity, dominates this regime's test surface).
+  Surface-only this phase; *consuming* the patterns is the
+  explicit next phase. Streak all three correct: DESIGN.md →
+  30, PRODUCT.md → **23**, lib.rs → **31** (new record,
+  beating Phase 82's 30). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

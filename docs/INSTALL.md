@@ -888,6 +888,47 @@ confidence proxy: one cycle is not a trend). The daemon log
 prints `aivyx helpfulness-ledger: folded N topic(s), pruned M`
 each cycle. Nothing to configure.
 
+## Cross-session pattern learning (Phase 83)
+
+Phase 77 learns *which topics help*; Phase 82 made that
+durable. Phase 83 learns the relationships *between* topics:
+which two topics get **recalled together** in turns that go
+well. Over many sessions a stable picture emerges — "whenever
+`deploy runbook` is recalled, `rollback steps` is too, and
+those turns succeed" — and that is exactly the cross-session
+structure a personal assistant should internalize.
+
+- **Zero-config and automatic.** Like the recall-feedback
+  loop (Phase 77) and the helpfulness ledger (Phase 82),
+  there is **no config block** — it is built and folded
+  automatically whenever auto-recall is configured (an
+  `[embedding]` provider + a `[[reflection_schedule]]`). With
+  auto-recall off it does not exist.
+- **It changes no behaviour on its own.** A *passive*
+  cross-session signal: it is folded in *after* the
+  recall-feedback actuators and the Phase 82 ledger, so both
+  remain byte-identical. (Acting on the patterns —
+  cluster-aware recall, pattern-driven proposals — is a
+  deliberate future phase.)
+- **What a "pattern" is.** For each recall turn, the
+  **top-8 highest-scoring distinct topics** are paired up;
+  every unordered pair gets that turn's helpfulness signal
+  (+ if it went well, − if not). The per-pair signal is
+  accumulated with the same ~60-day exponential half-life as
+  the Phase 82 ledger — a relationship that *used* to hold but
+  hasn't lately fades on its own.
+- **Bounded.** The top-8 cap keeps a turn that recalled 30
+  memories from exploding into hundreds of pair rows; the
+  ledger self-prunes (decayed-to-zero **and** ~90 days
+  untouched → dropped), so storage tracks the live signal.
+
+**Where to see it.** `aivyx learning` and the Web UI
+**Learning** tab now show a **"Topics that consistently help
+together"** block — each pair with its signed decayed score
+and a sample count. The daemon log prints
+`aivyx cooccurrence: folded N pair(s), pruned M` each cycle.
+Nothing to configure.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

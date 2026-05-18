@@ -249,36 +249,107 @@ extensions exactly:
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Streak — all three predictions correct (the headline).**
+DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs` are all
+byte-identical to their entry hashes:
+
+- DESIGN.md `89dc8903…` unchanged → streak **30** (predicted
+  "extends to thirty" — exact).
+- PRODUCT.md `cd60c4f9…` unchanged → streak **23** (predicted
+  "extends to twenty-three" — exact).
+- `aivyx-core/src/lib.rs` `69fb9af1…` unchanged → streak
+  **31**, a new project record beating Phase 82's 30
+  (predicted "extends to thirty-one (new record)" — exact).
+
+The Phase 76/77/80/81/82 lesson held again: the new persisted
+store is a `KeyDomain` variant in `aivyx-storage`; the ledger,
+the fold-in, and the surface live in `aivyx-channel`; the
+fold reuses the *existing* recall-feedback pass, so no new
+audit event and no `aivyx-core` change.
+
+**Test delta — +10 (1534 → 1544): a small miss vs the
+phase-specific ~+12-16 refinement, but in the recalibrated
+≈ +8-12 band.** Phase 82 (the first instance of this regime)
+landed +10 and was recalibrated to "zero-config/surface-only
++ new KeyDomain ≈ +8-12." For Phase 83 the prediction *raised*
+that to ~+12-16, betting the pair detector's canonical-key +
+top-K-bound + co-occurrence enumeration would carry "more
+pure-logic tests than Phase 82's per-topic EWMA." Reality:
+Phase 83 landed at **exactly Phase 82's +10**. The bet was
+wrong, instructively: the cooccurrence ledger had 6 unit
+tests vs the helpfulness ledger's 5 (+1 for the canonical-key
+test), but the rest of the test surface is *fixed
+scaffolding* that doesn't scale with detector complexity —
+KeyDomain isolation (×2), ledger CRUD/decay/prune (×~6),
+fold-in integration (×1), CLI render (×1). The empirical
+constant for this regime is **≈ +10**, and "the store keys on
+pairs not topics" does not move it. Recalibration: do **not**
+inflate the band for detector/key sophistication within the
+zero-config/surface-only/one-KeyDomain regime — it is ≈ +10,
+full stop. (Bands now: reuse-only ≈ +10-15;
+zero-config/surface-only+KeyDomain ≈ +10; new-surface-no-new-
+domain ≈ +17; config+detector(+domain) ≈ +20.)
+
+This is a *calibration* miss, not a *scope* miss: every
+planned surface (16th KeyDomain + isolation, the canonical-
+pair ledger with EWMA/decay/prune, the top-K-bounded fold-in
+on the existing pass, the Phase 78 cross-session view in
+CLI + Web UI, IPC round-trip) shipped exactly as scoped, and
+the conservative Q-block answers (pairs not sequences,
+surface-only, zero-config) deliberately kept the blast radius
+minimal.
+
+**One in-scope clippy resolution, recorded honestly.** Adding
+the seventh per-phase read-only field to the
+`LearningInsights` payload pushed the `DaemonMessage` /
+`DaemonEnvelope` protocol enums past clippy's
+`large_enum_variant` threshold (Phase 82's sixth field was
+just under). The `LearningInsights` payload *legitimately*
+accretes one surface field per learning phase and is the
+common `QueryResponse` case; boxing every protocol field for
+a non-hot-path control message is churn the next phase
+reintroduces. Resolved with a justified
+`#[allow(clippy::large_enum_variant)]` on the two envelopes —
+the sanctioned escape for an intentionally-large protocol
+variant, consistent with the codebase's existing
+`#[allow(clippy::too_many_arguments)]` (Phase 81). No wire
+change, no behaviour change.
+
+No new clippy warnings. No new workspace deps. Zero behaviour
+change to the recall-feedback loop or the Phase 82 ledger
+(the co-occurrence fold runs *after* both — verified by their
+unchanged pass/fold tests).
 
 ## Exit criteria
 
-- [ ] `KeyDomain::CooccurrenceLedger` (16th) + isolation test
+- [x] `KeyDomain::CooccurrenceLedger` (16th) + isolation test
   + zero-config `PersistentCooccurrenceLedger` (canonical-pair
   key, EWMA fold + decayed read + prune) — Task 2.
-- [ ] Fold-in on the reflection recall-feedback pass after the
+- [x] Fold-in on the reflection recall-feedback pass after the
   actuators + Phase 82 fold; top-K-bounded pair enumeration;
   no-op when absent; per-cycle prune + breadcrumb — Task 3.
-- [ ] Phase 78 surface extended with the durable affined-pair
+- [x] Phase 78 surface extended with the durable affined-pair
   view + sample counts (CLI + Web UI) — Task 4.
-- [ ] Tests across KeyDomain, ledger math/canonical-key,
+- [x] Tests across KeyDomain, ledger math/canonical-key,
   fold-in pass integration (incl. cross-session), IPC
   round-trip, CLI/Web UI render — Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
   Task 5.
-- [ ] All four Q-block questions resolved with operator
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty.
-- [ ] PRODUCT.md streak extends to twenty-three.
-- [ ] Production-core streak extends to thirty-one (new
+- [x] DESIGN.md streak extends to thirty.
+- [x] PRODUCT.md streak extends to twenty-three.
+- [x] Production-core streak extends to thirty-one (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+12-16; per the Phase 82
-  recalibration — a zero-config/surface-only phase with a new
-  KeyDomain is ≈ +8-12, plus the pair detector's
-  canonical-key + top-K-bound + co-occurrence enumeration
-  carry more pure-logic tests than Phase 82's per-topic EWMA).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [~] Test count delta: positive — **+10 (1534 → 1544)**, a
+  small miss vs the ~+12-16 refinement but in the
+  Phase-82-recalibrated ≈ +8-12 band (landed at exactly
+  Phase 82's +10; the regime constant is ≈ +10 — fixed
+  scaffolding, not detector complexity, dominates).
+  Recalibrated in prediction-vs-reality.
+- [x] Zero clippy warnings (one justified
+  `#[allow(large_enum_variant)]` on the protocol envelopes).
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

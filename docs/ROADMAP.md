@@ -2093,11 +2093,70 @@ parallel runs — fixed with a uuid suffix; no production
 change, no new dep). Zero clippy warnings. Zero new workspace
 deps.
 
-Likely follow-ups (helpfulness-driven Persona decay — the
-immediate next phase, needs a topic→category mapping;
-cross-session pattern learning; operator-tunable
-half-life/retention; topic canonicalization) are
-operator-feedback-gated.
+Likely follow-ups (helpfulness-driven Persona decay — needs a
+topic→category mapping; operator-tunable half-life/retention;
+topic canonicalization) are operator-feedback-gated.
+
+## Phase 83 — Cross-Session Pattern Learning (the durable co-occurrence ledger)
+
+**Frozen — see [PHASE_83.md](PHASE_83.md).** Phase 77's
+headline deferral, unblocked by the Phase 82 durable-ledger
+model. Per-topic helpfulness is shallow; the relationships
+*between* topics — which travel together and jointly help —
+are where cross-session structure lives. Phase 83 adds a
+persistent, time-decayed **co-occurrence ledger** folded in on
+the existing reflection cadence. Zero new deps.
+
+- **Co-occurrence pairs (Q1a):** unordered `{A,B}` recalled in
+  the same `RecallEvent`; the Phase 77 uniform per-event
+  signal makes "this co-recalled set landed in a helpful
+  turn" directly observable. Sequential/n-ary defer.
+- **Durable derived store (Q2a):** a new HKDF-isolated
+  `KeyDomain::CooccurrenceLedger` (16th), key = a
+  collision-safe **length-prefixed** canonical pair (so
+  `{A,B}=={B,A}` yet `("a|","b")≠("a","|b")`), value = the
+  Phase 82 EWMA `{score,samples,last_update}`. The raw recall
+  log GC's at 30 days, so the durable derived store is the
+  only genuine cross-session path. Exactly the Phase 82
+  model.
+- **Surface-only (Q3a):** detect + persist + show on the
+  Phase 78 surface; change no behaviour. Consumption is the
+  explicit next phase — the Phase 82 substrate-then-
+  consumption discipline.
+- **Zero-config, bounded (Q4a):** the Phase 77/82
+  passive-signal precedent; the O(n²) blowup bounded by
+  folding only pairs among the **top-8 highest-scoring
+  distinct topics** per event; EWMA-decay + self-prune;
+  surfaced on `GetLearningInsights` (CLI + Web UI) +
+  breadcrumb; constants not config.
+
+Streak all three correct: DESIGN.md → **30**, PRODUCT.md →
+**23**, `aivyx-core/src/lib.rs` → **31** (new record, beats
+Phase 82's 30) — the new store is a `KeyDomain` in
+`aivyx-storage`; the ledger, fold-in, and surface live in
+`aivyx-channel`; no new `AuditTag`, `lib.rs` byte-identical.
+Tests **+10** (1534 → 1544) — **a small miss vs the
+phase-specific ~+12-16 refinement**, but squarely in the
+Phase-82-recalibrated ≈ +8-12 band: the cross-session pair
+detector landed at *exactly* Phase 82's +10, not above it.
+The empirical lesson (refined again): a zero-config,
+surface-only, one-new-KeyDomain phase is ≈ +10 regardless of
+whether the store is per-topic or per-pair — the test surface
+is dominated by the fixed scaffolding (KeyDomain isolation ×2,
+ledger CRUD/decay/prune ×~6, integration ×1, render ×1), not
+by detector complexity. Every planned surface shipped. One
+in-scope clippy resolution: the `LearningInsights` protocol
+payload accretes one read-only field per learning phase, so
+`#[allow(clippy::large_enum_variant)]` on the
+`DaemonMessage`/`DaemonEnvelope` envelopes with justification
+(consistent with the codebase's existing
+`#[allow(too_many_arguments)]` practice). Zero clippy
+warnings. Zero new workspace deps.
+
+Likely follow-ups (helpfulness-driven Persona decay; pattern
+*consumption* — cluster-aware co-recall, pattern-driven
+proposals; sequential/temporal patterns; n-ary clusters;
+operator-tunable top-K/half-life) are operator-feedback-gated.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
