@@ -645,6 +645,18 @@ mod tests {
             HTML.contains("proposed last cycle"),
             "must render the persona-lifecycle last-cycle line"
         );
+        // Phase 82 — the Learning pane must surface the durable
+        // accumulated (decayed) helpfulness view.
+        assert!(
+            HTML.contains("payload.accumulated_helpfulness"),
+            "must read the accumulated_helpfulness field"
+        );
+        assert!(
+            HTML.contains(
+                "Accumulated helpfulness (all-time, decayed)"
+            ),
+            "must render the accumulated-helpfulness card"
+        );
     }
 
     /// Phase 73 — the embedded HTML must wire the Notifications

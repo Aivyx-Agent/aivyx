@@ -728,6 +728,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             memory: memory.clone(),
             embedding_provider: embedding_provider.clone(),
             recall_log: recall_log.clone(),
+            helpfulness_ledger: helpfulness_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             proactive_stat: proactive_stat.clone(),
             persona_lifecycle_stat: persona_lifecycle_stat.clone(),
@@ -794,6 +795,12 @@ struct ConnectionContext {
     /// `GetLearningInsights` query. `None` = no auto-recall
     /// configured (the query returns an empty digest).
     recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
+    /// Phase 82 — durable helpfulness ledger for the read-only
+    /// `GetLearningInsights` longitudinal view. `None` = no
+    /// auto-recall configured (no accumulated view).
+    helpfulness_ledger: Option<
+        Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
+    >,
     /// Phase 79 (Q4a) — last-Persona-selection stat for the
     /// `GetLearningInsights` surface.
     persona_selection_stat:
@@ -826,6 +833,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         memory,
         embedding_provider,
         recall_log,
+        helpfulness_ledger,
         persona_selection_stat,
         proactive_stat,
         persona_lifecycle_stat,
@@ -1160,6 +1168,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 memory.as_ref(),
                                 embedding_provider.as_ref(),
                                 recall_log.as_ref(),
+                                helpfulness_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
@@ -1410,6 +1419,7 @@ async fn run_single_connection_daemon(
         memory: None,
         embedding_provider: None,
         recall_log: None,
+        helpfulness_ledger: None,
         persona_selection_stat: None,
         proactive_stat: None,
         persona_lifecycle_stat: None,
@@ -1624,6 +1634,9 @@ async fn handle_query(
         &Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
     >,
     recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
+    helpfulness_ledger: Option<
+        &Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
+    >,
     persona_selection_stat: Option<
         &crate::persona_context::SharedPersonaSelectionStat,
     >,
@@ -2072,6 +2085,22 @@ async fn handle_query(
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             let persona_lifecycle = persona_lifecycle_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            // Phase 82 — durable accumulated helpfulness (the
+            // longitudinal view). Best-effort: a ledger error
+            // collapses to `None`, never breaking the surface;
+            // an empty ledger is reported as "none yet."
+            let accumulated_helpfulness =
+                match helpfulness_ledger {
+                    Some(l) => l
+                        .accumulated(now_secs, 5)
+                        .await
+                        .ok()
+                        .filter(|a| {
+                            !a.top_helpful.is_empty()
+                                || !a.top_unhelpful.is_empty()
+                        }),
+                    None => None,
+                };
 
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
@@ -2087,6 +2116,7 @@ async fn handle_query(
                     persona_selection,
                     proactive,
                     persona_lifecycle,
+                    accumulated_helpfulness,
                 };
             };
 
@@ -2146,6 +2176,7 @@ async fn handle_query(
                 persona_selection,
                 proactive,
                 persona_lifecycle,
+                accumulated_helpfulness,
             }
         }
     }

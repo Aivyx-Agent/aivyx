@@ -355,6 +355,16 @@ pub enum QueryResponsePayload {
         persona_lifecycle: Option<
             crate::persona_lifecycle::PersonaLifecycleStat,
         >,
+        /// Phase 82 — the durable, decayed accumulated
+        /// per-topic helpfulness (the longitudinal view Phase
+        /// 78 deferred, distinct from the windowed
+        /// `digest.top_helpful`). `None` if the ledger is
+        /// absent / empty (no auto-recall, or pre-Phase-82).
+        /// `#[serde(default)]` so older frames decode.
+        #[serde(default)]
+        accumulated_helpfulness: Option<
+            crate::helpfulness_ledger::AccumulatedHelpfulness,
+        >,
     },
 }
 
@@ -1665,6 +1675,24 @@ mod tests {
                                 },
                             ],
                             deduped: 1,
+                        },
+                    ),
+                    accumulated_helpfulness: Some(
+                        crate::helpfulness_ledger::AccumulatedHelpfulness {
+                            top_helpful: vec![
+                                crate::helpfulness_ledger::TopicScore {
+                                    topic: "project/x".into(),
+                                    score: 12.5,
+                                    samples: 7,
+                                },
+                            ],
+                            top_unhelpful: vec![
+                                crate::helpfulness_ledger::TopicScore {
+                                    topic: "scratch".into(),
+                                    score: -4.0,
+                                    samples: 3,
+                                },
+                            ],
                         },
                     ),
                 },

@@ -532,6 +532,7 @@ pub async fn get_learning_insights(
         Option<crate::persona_context::PersonaSelectionStat>,
         Option<crate::proactive_detect::ProactiveStat>,
         Option<crate::persona_lifecycle::PersonaLifecycleStat>,
+        Option<crate::helpfulness_ledger::AccumulatedHelpfulness>,
     ),
     DaemonError,
 > {
@@ -548,12 +549,14 @@ pub async fn get_learning_insights(
             persona_selection,
             proactive,
             persona_lifecycle,
+            accumulated_helpfulness,
         } => Ok((
             digest,
             proposals,
             persona_selection,
             proactive,
             persona_lifecycle,
+            accumulated_helpfulness,
         )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))

@@ -1587,6 +1587,33 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       topicList('Most helpful topics', d.top_helpful);
       topicList('Least helpful topics', d.top_unhelpful);
 
+      // Phase 82 — durable accumulated (decayed) helpfulness.
+      const acc = payload.accumulated_helpfulness;
+      const accCard = document.createElement('div');
+      accCard.className = 'row-card';
+      let accHtml =
+        '<div class="row-line"><span class="row-id">' +
+        'Accumulated helpfulness (all-time, decayed)' +
+        '</span></div>';
+      const accRows = acc
+        ? (acc.top_helpful || []).concat(acc.top_unhelpful || [])
+        : [];
+      if (!accRows.length) {
+        accHtml += '<div class="row-meta">(none yet)</div>';
+      } else {
+        accRows.forEach(function(t) {
+          accHtml +=
+            '<div class="row-line"><span class="row-meta">' +
+            (t.score >= 0 ? '+' : '') + t.score.toFixed(1) +
+            '</span> <span>' + escapeHtml(t.topic) +
+            '</span> <span class="row-meta">(' + t.samples +
+            ' sample' + (t.samples === 1 ? '' : 's') +
+            ')</span></div>';
+        });
+      }
+      accCard.innerHTML = accHtml;
+      body.appendChild(accCard);
+
       if (!proposals.length) {
         const none = document.createElement('div');
         none.className = 'empty';

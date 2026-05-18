@@ -12,6 +12,7 @@ use aivyx_channel::daemon_client::{
     daemon_is_running, get_learning_insights,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
+use aivyx_channel::helpfulness_ledger::AccumulatedHelpfulness;
 use aivyx_channel::persona_context::PersonaSelectionStat;
 use aivyx_channel::persona_lifecycle::PersonaLifecycleStat;
 use aivyx_channel::proactive_detect::ProactiveStat;
@@ -31,6 +32,7 @@ pub async fn run_learning(
         persona_selection,
         proactive,
         persona_lifecycle,
+        accumulated_helpfulness,
     ) = get_learning_insights(&socket_path, window_secs)
         .await
         .map_err(|e| {
@@ -44,6 +46,7 @@ pub async fn run_learning(
             persona_selection.as_ref(),
             proactive.as_ref(),
             persona_lifecycle.as_ref(),
+            accumulated_helpfulness.as_ref(),
         )
     );
     Ok(())
@@ -80,6 +83,7 @@ fn render_insights(
     persona_selection: Option<&PersonaSelectionStat>,
     proactive: Option<&ProactiveStat>,
     persona_lifecycle: Option<&PersonaLifecycleStat>,
+    accumulated: Option<&AccumulatedHelpfulness>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -163,6 +167,36 @@ fn render_insights(
     out.push_str("\nLeast helpful topics:\n");
     out.push_str(&fmt_topics(&d.top_unhelpful));
 
+    out.push_str(
+        "\nAccumulated helpfulness (all-time, decayed):\n",
+    );
+    match accumulated {
+        Some(a)
+            if !a.top_helpful.is_empty()
+                || !a.top_unhelpful.is_empty() =>
+        {
+            for t in &a.top_helpful {
+                out.push_str(&format!(
+                    "  {:+.1}  {}  ({} sample{})\n",
+                    t.score,
+                    t.topic,
+                    t.samples,
+                    if t.samples == 1 { "" } else { "s" },
+                ));
+            }
+            for t in &a.top_unhelpful {
+                out.push_str(&format!(
+                    "  {:+.1}  {}  ({} sample{})\n",
+                    t.score,
+                    t.topic,
+                    t.samples,
+                    if t.samples == 1 { "" } else { "s" },
+                ));
+            }
+        }
+        _ => out.push_str("  (none yet)\n"),
+    }
+
     if proposals.is_empty() {
         out.push_str(
             "\nNo recall-driven Persona proposals in this window.\n",
@@ -215,7 +249,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None);
+        let out = render_insights(&digest(), &[], None, None, None, None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -249,7 +283,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None);
+        let out = render_insights(&digest(), &prov, None, None, None, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -270,7 +304,7 @@ mod tests {
             top_unhelpful: vec![],
             proposals_in_window: 0,
         };
-        let out = render_insights(&d, &[], None, None, None);
+        let out = render_insights(&d, &[], None, None, None, None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
@@ -279,7 +313,7 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -289,7 +323,7 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None);
+            render_insights(&digest(), &[], Some(&stat), None, None, None);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
         ));
@@ -302,7 +336,7 @@ mod tests {
         };
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None);
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -317,7 +351,7 @@ mod tests {
             capped: 1,
         };
         let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None);
+            render_insights(&digest(), &[], None, Some(&stat), None, None);
         assert!(some_out.contains(
             "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
         ));
@@ -335,7 +369,7 @@ mod tests {
 
         // None → "not engaged" line.
         let none_out =
-            render_insights(&digest(), &[], None, None, None);
+            render_insights(&digest(), &[], None, None, None, None);
         assert!(
             none_out.contains("persona lifecycle: not engaged")
         );
@@ -357,6 +391,7 @@ mod tests {
             None,
             None,
             Some(&stat),
+            None,
         );
         assert!(some_out.contains(
             "persona lifecycle: 1 proposed last cycle \
@@ -366,5 +401,52 @@ mod tests {
             "consolidate learned_context 'dup a' — \
              2 near-duplicate facets"
         ));
+    }
+
+    #[test]
+    fn render_accumulated_helpfulness_some_and_none() {
+        use aivyx_channel::helpfulness_ledger::{
+            AccumulatedHelpfulness, TopicScore,
+        };
+
+        // None → header + "(none yet)".
+        let none_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(none_out.contains(
+            "Accumulated helpfulness (all-time, decayed):"
+        ));
+        assert!(none_out.contains("(none yet)"));
+
+        // Some → signed score + topic + sample count.
+        let acc = AccumulatedHelpfulness {
+            top_helpful: vec![TopicScore {
+                topic: "rust".into(),
+                score: 4.5,
+                samples: 2,
+            }],
+            top_unhelpful: vec![TopicScore {
+                topic: "scratch".into(),
+                score: -3.0,
+                samples: 1,
+            }],
+        };
+        let some_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            Some(&acc),
+        );
+        assert!(some_out.contains("+4.5  rust  (2 samples)"));
+        assert!(
+            some_out.contains("-3.0  scratch  (1 sample)")
+        );
     }
 }

@@ -86,6 +86,27 @@ fn decayed(score: f32, last_update: u64, now: u64) -> f32 {
     score * factor
 }
 
+/// One topic's decayed accumulated helpfulness, for the Phase
+/// 78 longitudinal surface. `samples` is the confidence proxy
+/// (one EWMA point is not a trend).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopicScore {
+    pub topic: String,
+    pub score: f32,
+    pub samples: u32,
+}
+
+/// The durable, decayed top-helpful / top-unhelpful per-topic
+/// view (the longitudinal picture Phase 78 deferred — distinct
+/// from the windowed `LearningDigest.top_helpful`).
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize,
+)]
+pub struct AccumulatedHelpfulness {
+    pub top_helpful: Vec<TopicScore>,
+    pub top_unhelpful: Vec<TopicScore>,
+}
+
 /// Persistent helpfulness ledger over
 /// [`aivyx_storage::KeyDomain::HelpfulnessLedger`]. Key = topic
 /// bytes; value = JSON [`LedgerEntry`].
@@ -234,6 +255,48 @@ impl PersistentHelpfulnessLedger {
                 .then_with(|| a.0.cmp(&b.0))
         });
         Ok(out)
+    }
+
+    /// The decayed accumulated top-helpful / top-unhelpful
+    /// per-topic view (≤ `top_n` each) for the Phase 78
+    /// longitudinal surface. Helpful = score > 0 (highest
+    /// first); unhelpful = score < 0 (most negative first).
+    /// Zero-score topics are omitted.
+    pub async fn accumulated(
+        &self,
+        now_secs: u64,
+        top_n: usize,
+    ) -> Result<AccumulatedHelpfulness, HelpfulnessLedgerError>
+    {
+        // `ranked` is already score-desc, then topic.
+        let ranked = self.ranked(now_secs).await?;
+        let top_helpful: Vec<TopicScore> = ranked
+            .iter()
+            .filter(|(_, e)| e.ewma_score > 0.0)
+            .take(top_n)
+            .map(|(t, e)| TopicScore {
+                topic: t.clone(),
+                score: e.ewma_score,
+                samples: e.samples,
+            })
+            .collect();
+        let mut unhelpful: Vec<TopicScore> = ranked
+            .iter()
+            .filter(|(_, e)| e.ewma_score < 0.0)
+            .map(|(t, e)| TopicScore {
+                topic: t.clone(),
+                score: e.ewma_score,
+                samples: e.samples,
+            })
+            .collect();
+        // Most-negative first (ranked had them least-negative
+        // first since it is score-desc).
+        unhelpful.reverse();
+        unhelpful.truncate(top_n);
+        Ok(AccumulatedHelpfulness {
+            top_helpful,
+            top_unhelpful: unhelpful,
+        })
     }
 
     /// Drop rows whose decayed-to-`now` magnitude is below
@@ -424,6 +487,39 @@ mod tests {
         let order: Vec<&str> =
             r.iter().map(|(t, _)| t.as_str()).collect();
         assert_eq!(order, vec!["high", "mid", "low"]);
+    }
+
+    #[tokio::test]
+    async fn accumulated_splits_helpful_and_unhelpful() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        l.record_window(
+            &[
+                ("good".into(), 7.0),
+                ("bad".into(), -4.0),
+                ("worse".into(), -9.0),
+                ("meh".into(), 0.0),
+            ],
+            50,
+        )
+        .await
+        .unwrap();
+        let a = l.accumulated(50, 10).await.unwrap();
+        // Helpful: only positive, highest first.
+        assert_eq!(a.top_helpful.len(), 1);
+        assert_eq!(a.top_helpful[0].topic, "good");
+        assert_eq!(a.top_helpful[0].samples, 1);
+        // Unhelpful: only negative, MOST negative first.
+        let un: Vec<&str> = a
+            .top_unhelpful
+            .iter()
+            .map(|t| t.topic.as_str())
+            .collect();
+        assert_eq!(un, vec!["worse", "bad"]);
+        // top_n caps each side.
+        let capped = l.accumulated(50, 1).await.unwrap();
+        assert_eq!(capped.top_unhelpful.len(), 1);
+        assert_eq!(capped.top_unhelpful[0].topic, "worse");
     }
 
     #[tokio::test]
