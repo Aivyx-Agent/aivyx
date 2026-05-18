@@ -2608,6 +2608,22 @@ async fn run_async(
         }
         _ => None,
     };
+    // Phase 82 — the durable helpfulness ledger. Zero-config:
+    // built under the same condition as the recall log (the
+    // signal it folds only exists when auto-recall is on), no
+    // `[…]` block. The reflection recall-feedback pass folds
+    // each window into it and prunes on the same cadence.
+    let helpfulness_ledger: Option<
+        Arc<
+            aivyx_channel::helpfulness_ledger::PersistentHelpfulnessLedger,
+        >,
+    > = recall_log.as_ref().map(|_| {
+        Arc::new(
+            aivyx_channel::helpfulness_ledger::PersistentHelpfulnessLedger::new(
+                storage.domain(KeyDomain::HelpfulnessLedger),
+            ),
+        )
+    });
     // Phase 80 — proactive dedup log, created when the
     // `[proactive]` section is armed (enabled). The reflection
     // cron pass uses it for cross-cycle dedup + the cap.
@@ -3867,6 +3883,9 @@ async fn run_async(
             // iff auto-recall is configured; the reflection
             // scheduler reads/clamps it on cadence.
             recall_log: recall_log.clone(),
+            // Phase 82 — durable helpfulness ledger; the
+            // recall-feedback pass folds each window into it.
+            helpfulness_ledger: helpfulness_ledger.clone(),
             // Phase 79 (Q4a) — same handle the adaptive refiner
             // writes; the GetLearningInsights handler reads it.
             persona_selection_stat: persona_selection_stat.clone(),

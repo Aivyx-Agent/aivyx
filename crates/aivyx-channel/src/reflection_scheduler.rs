@@ -74,6 +74,16 @@ pub struct RecallFeedbackDeps {
         std::sync::Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
     /// Retention window for the recall-log GC clamp (seconds).
     pub gc_retain_secs: u64,
+    /// Phase 82 — the durable helpfulness ledger. The pass
+    /// folds each window's per-topic net into it (after
+    /// `correlate`, so Actuators A/B are untouched) and prunes
+    /// on the same cadence. `None` → no fold (the ledger is a
+    /// passive add-on; recall-feedback is unaffected).
+    pub helpfulness_ledger: Option<
+        std::sync::Arc<
+            crate::helpfulness_ledger::PersistentHelpfulnessLedger,
+        >,
+    >,
 }
 
 /// Phase 80 — handles the proactive-surfacing pass needs.
@@ -616,6 +626,45 @@ async fn run_recall_feedback_pass(
                     tally.len(),
                     if tally.len() == 1 { "y" } else { "ies" },
                 );
+
+                // Phase 82 — fold this window's per-topic net
+                // into the durable ledger (after the actuators,
+                // so recall-feedback is byte-identical). The
+                // ledger is a passive longitudinal signal:
+                // absent → skipped, present → it never changes
+                // recall-feedback behaviour.
+                if let Some(ledger) = &deps.helpfulness_ledger {
+                    let mut net: std::collections::HashMap<
+                        String,
+                        f32,
+                    > = std::collections::HashMap::new();
+                    for (topic, _seq, score) in tally.ranked() {
+                        *net.entry(topic).or_insert(0.0) +=
+                            score;
+                    }
+                    let net_by_topic: Vec<(String, f32)> =
+                        net.into_iter().collect();
+                    let folded = net_by_topic.len();
+                    if let Err(e) = ledger
+                        .record_window(&net_by_topic, now_secs)
+                        .await
+                    {
+                        eprintln!(
+                            "aivyx helpfulness-ledger: schedule \
+                             {:?} fold error: {e}",
+                            sched.name,
+                        );
+                    } else {
+                        let pruned = ledger
+                            .prune(now_secs)
+                            .await
+                            .unwrap_or(0);
+                        eprintln!(
+                            "aivyx helpfulness-ledger: folded \
+                             {folded} topic(s), pruned {pruned}",
+                        );
+                    }
+                }
             }
         }
         Ok(_) => {}
@@ -1293,6 +1342,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             // cutoff = now_secs - this = 0 → nothing GC'd.
             gc_retain_secs: 2_000,
+            helpfulness_ledger: None,
         };
 
         // now well after the last event; whole window covered.
@@ -1329,6 +1379,150 @@ mod tests {
             1,
             "second pass must not re-file the proposal"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 82 — helpfulness-ledger fold-in -----------------
+
+    #[tokio::test]
+    async fn helpfulness_ledger_folds_across_two_cycles() {
+        use crate::helpfulness_ledger::{
+            PersistentHelpfulnessLedger, HELPFULNESS_HALF_LIFE_SECS,
+        };
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-ledger-fold-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([82u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let ledger = Arc::new(PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"ledger-fold-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        // Topic "proj": three entries each recalled in its own
+        // clean turn → per-topic net +3 each cycle.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        for i in 0..3u64 {
+            let seq = memory
+                .put("proj", &format!("note {i}"))
+                .await
+                .unwrap();
+            recall_log
+                .append(&RecallEvent {
+                    ts_secs: 1000 + i * 100,
+                    session_id: s,
+                    hits: vec![RecallHit {
+                        topic: "proj".into(),
+                        seq,
+                        score: 0.9,
+                    }],
+                })
+                .await
+                .unwrap();
+        }
+        let summaries: Vec<OutcomeSummary> = (0..3u64)
+            .map(|i| OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: format!("t{i}"),
+                started_at_unix_ms: (1000 + i * 100) * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 500,
+            })
+            .collect();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            // Huge window + GC retain so the recall events stay
+            // in-window and un-GC'd across both cycles.
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: Some(Arc::clone(&ledger)),
+        };
+
+        // Cycle 1 at now_secs = 1_000_000 → seed ewma = +3.
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            1_000_000_000,
+        )
+        .await;
+        let e1 = ledger
+            .topic_score("proj", 1_000_000)
+            .await
+            .unwrap()
+            .expect("seeded after cycle 1");
+        assert!(
+            (e1.ewma_score - 3.0).abs() < 1e-3,
+            "cycle 1 ewma got {}",
+            e1.ewma_score
+        );
+        assert_eq!(e1.samples, 1);
+
+        // Cycle 2 exactly one half-life later: stored +3 decays
+        // to +1.5, then +3 folded in → +4.5; samples → 2.
+        let now2_secs = 1_000_000 + HELPFULNESS_HALF_LIFE_SECS;
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            now2_secs * 1000,
+        )
+        .await;
+        let e2 = ledger
+            .topic_score("proj", now2_secs)
+            .await
+            .unwrap()
+            .expect("present after cycle 2");
+        assert!(
+            (e2.ewma_score - 4.5).abs() < 2e-2,
+            "cycle 2 decay(3)=1.5 + 3 = 4.5, got {}",
+            e2.ewma_score
+        );
+        assert_eq!(e2.samples, 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
