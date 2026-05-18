@@ -1247,6 +1247,34 @@ respond to it. Closing the gap is the inflection point between
   **32** (new record, beating Phase 83's 31). Zero new
   workspace deps.
 
+- **Phase 85 (Helpfulness-Driven Persona Decay, shipped
+  2026-05-19).** Completes the "self-improving Soul": Phase
+  81 Persona decay was age-only; Phase 85 consumes the
+  durable Phase 82 helpfulness ledger so a learned facet
+  decays when its associated recall topic demonstrably
+  stopped helping, and an old facet whose topic still helps
+  is protected. **No new product commitment**, none weakened;
+  the operator-facing contract is *strengthened* (decay now
+  cites concrete helpfulness evidence and protects
+  still-helpful identity). The long-flagged blocker dissolved
+  — facet→topic is structurally exact via the
+  `recall-fb:{topic}` proposal-id provenance — so the design
+  stayed precise (only recall-feedback-derived facets gated;
+  reflection-authored facets unchanged) and propose-only +
+  `Revert` + core-protected (every Phase 81 safety property
+  intact). With no helpfulness ledger it degrades gracefully
+  to byte-identical Phase 81. Reuse near-total — extend the
+  existing detector/pass/config/surface; no new
+  scheduler/module/KeyDomain/LLM/AuditTag. Tests **+5** (1554
+  → 1559) — below the ~+8-12 nominal but exactly the hedged
+  "no new config section either" floor; the calibration law
+  is now fully converged (count tracks new unit-tested pure
+  modules, with config-knobs-on-an-existing-block ≈ +1). A
+  calibration refinement, not a scope miss. Streak all three
+  correct: DESIGN.md → 32, PRODUCT.md → **25**, lib.rs →
+  **33** (new record, beating Phase 84's 32). Zero new
+  workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

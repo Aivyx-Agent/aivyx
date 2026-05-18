@@ -843,6 +843,55 @@ last cycle"). Filed proposals show up in `aivyx persona`
 exactly like reflection-driven ones — the Phase 78 trust
 surface extended once more.
 
+### Helpfulness-driven decay (Phase 85)
+
+Phase 81 decay is **age-only** — a weak proxy. Phase 85 makes
+decay consult the durable Phase 82 helpfulness ledger so the
+Soul retires identity that **demonstrably stopped helping**,
+and *keeps* old identity that **still helps**:
+
+- **Precise, not fuzzy.** Only a facet whose recall topic is
+  *known exactly* is helpfulness-gated. Facets the
+  recall-feedback loop produced carry a `recall-fb:{topic}`
+  provenance that survives onto the persona chain; everything
+  else (reflection-authored facets — no topic linkage) stays
+  age-only, byte-identical to Phase 81.
+- **Symmetric.** A topic with sustained-negative helpfulness
+  can trigger its facet's decay *before* the age horizon (a
+  facet that keeps hurting shouldn't wait a quarter);
+  symmetrically, a sustained-*positive* topic **protects** an
+  age-old facet from age-decay.
+- **Conservative evidence.** "Sustained" means the topic's
+  decayed ledger score is at/below `decay_unhelpful_threshold`
+  (negative) **and** it has at least `decay_min_samples`
+  observations — identity is never retired (or protected) on
+  thin evidence.
+- **Same safety posture.** Still propose-only, operator-gated,
+  `Revert`-able, core-protected — every Phase 81 property is
+  unchanged. With no helpfulness ledger it degrades gracefully
+  to pure age-only.
+
+Two optional knobs on the **same `[persona_lifecycle]`**
+block (gated by the existing `signal_decay`):
+
+```toml
+[persona_lifecycle]
+enabled = true
+# … Phase 81 knobs …
+decay_unhelpful_threshold = -2.0  # optional, default -2.0
+decay_min_samples = 3             # optional, default 3
+```
+
+Validation (only when enabled and `signal_decay` is on):
+`decay_unhelpful_threshold < 0.0`, `decay_min_samples >= 1`.
+**To keep pure age-only behaviour:** don't run auto-recall
+(no ledger), or leave the knobs at defaults — a facet is only
+ever helpfulness-decayed when its `recall-fb` topic has
+genuinely, sustainedly hurt. Decay proposals cite the
+evidence (e.g. *"topic 'deploy' net -8.2 over 14 windows
+(sustained low helpfulness)"*) in the same `aivyx persona` /
+Phase 78 surface.
+
 ## Persistent helpfulness ledger (Phase 82)
 
 For 81 phases the "did recalling this topic actually help"

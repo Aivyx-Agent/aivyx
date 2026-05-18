@@ -904,6 +904,16 @@ parent_role = "researcher"
 # consolidation_similarity = 0.92   # optional, default 0.92
 # decay_max_age_secs = 7776000      # optional, default ~90d
 # min_soft_facets = 6               # optional, default 6
+# # Phase 85 — helpfulness-driven decay (gated by signal_decay):
+# # a recall-fb-derived facet whose topic's durable (Phase 82)
+# # decayed helpfulness is <= this (negative) decays BEFORE the
+# # age horizon; >= its magnitude PROTECTS an age-old facet.
+# # Only consulted with >= decay_min_samples ledger samples
+# # (no decay/protect on thin evidence). No helpfulness ledger
+# # (auto-recall off) → graceful pure age-only (= Phase 81).
+# # Validated only when enabled AND signal_decay is on.
+# decay_unhelpful_threshold = -2.0  # optional, default -2.0
+# decay_min_samples = 3             # optional, default 3
 # # Each class defaults ON when enabled; set false to mute one.
 # # At least one must stay on.
 # signal_consolidate = true

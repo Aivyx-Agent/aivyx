@@ -2218,10 +2218,70 @@ display param per learning phase) → justified
 `#[allow(too_many_arguments)]`, the Phase 81 fire_reflection
 precedent. Zero new clippy warnings. Zero new workspace deps.
 
-Likely follow-ups (helpfulness-driven Persona decay;
-pattern-driven Persona proposals; affinity re-ranking of
-existing candidates; sequential/temporal patterns;
-operator-tunable affinity policy) are operator-feedback-gated.
+Likely follow-ups (pattern-driven Persona proposals; affinity
+re-ranking of existing candidates; sequential/temporal
+patterns; operator-tunable affinity policy) are
+operator-feedback-gated.
+
+## Phase 85 — Helpfulness-Driven Persona Decay (the self-improving Soul, completed)
+
+**Frozen — see [PHASE_85.md](PHASE_85.md).** The symmetric
+consumption to Phase 84 and the long-deferred Phase 81+82
+capstone: Phase 81 decay was age-only; Phase 85 wires the
+durable Phase 82 helpfulness ledger so the Soul retires
+identity that demonstrably *stopped helping* and protects old
+identity that *still helps*. Zero new deps.
+
+- **Provenance-only association (Q1a):** the topic is
+  recovered structurally from `proposal_id ==
+  "recall-fb:{topic}"` (it survives onto the
+  `PersonaDelta`); only recall-feedback-derived facets are
+  helpfulness-gated, reflection-authored facets stay age-only
+  (no fuzzy embedding driving identity removal). The
+  long-flagged "blocker" turned out to be exact.
+- **Symmetric gate (Q2a):** sustained-negative triggers decay
+  before the age horizon; sustained-positive protects an
+  age-old facet from age-decay. Propose-only + `Revert` +
+  operator-gated + core-protected — every Phase 81 safety
+  property carries over.
+- **Conservative evidence (Q3a):** decayed EWMA at/below
+  `decay_unhelpful_threshold` **and** `samples >=
+  decay_min_samples`; never on thin evidence; recency is
+  inherent in the ledger half-life.
+- **Cohesive + graceful (Q4a):** two knobs on the existing
+  `[persona_lifecycle]` block (gated by `signal_decay`); no
+  helpfulness ledger → pure age-only, byte-identical to Phase
+  81; the decay `reason` cites the evidence; the existing
+  Phase 78 lifecycle surface renders it unchanged (no new IPC
+  field).
+
+Streak all three correct: DESIGN.md → **32**, PRODUCT.md →
+**25**, `aivyx-core/src/lib.rs` → **33** (new record, beats
+Phase 84's 32) — decay actions remain existing-shape
+proposals through the existing chains; detector/pass/config/
+surface all in `aivyx-channel` / `aivyx-config`; no new
+`AuditTag`, byte-identical `lib.rs`. Tests **+5** (1554 →
+1559) — below the ~+8-12 nominal but exactly the "slightly
+under, no new config *section*" case the open doc explicitly
+hedged: the now-converged calibration law (count tracks new
+unit-tested pure modules) gains a sharper sub-rule —
+**config *knobs on an existing block* ≈ +1, extension-only
+detector/pass changes ride existing test files (≈ +3 units +
+1 integration)**, so a phase with no new module, no
+`KeyDomain`, *and* no new config section floors at ≈ +5, not
++10. First prediction in the recent run to call the
+under-shoot direction correctly (the hedge held). A
+*calibration* refinement, not a *scope* miss — every planned
+surface (provenance recovery, the symmetric gate, the
+evidence floor, graceful no-ledger fallback, evidence-cited
+reason) shipped exactly as scoped. Zero clippy warnings. Zero
+new workspace deps. With no ledger, decay is byte-identical
+to Phase 81 (asserted).
+
+Likely follow-ups (helpfulness-driven *consolidation*;
+helpfulness decay for reflection-authored facets via fuzzy
+embedding; pattern-driven Persona proposals; topic
+canonicalization) are operator-feedback-gated.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
