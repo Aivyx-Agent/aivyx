@@ -21,6 +21,10 @@ use aivyx_core::llm_planner::ContextProvider;
 use aivyx_llm::embedding::EmbeddingProvider;
 use aivyx_memory::{Memory, MemoryEntry};
 
+use crate::conversation_window::{
+    assemble_for, SharedConversationWindows,
+};
+
 /// Per-entry body cap in the injected block. Recall is a
 /// pointer back into memory, not a transcript dump — long
 /// bodies are truncated so a handful of hits can't blow the
@@ -81,6 +85,15 @@ pub struct SemanticMemoryContext {
     /// Phase 84 (Q4a) — optional shared last-turn cluster stat
     /// for the Phase 78 surface. `None` → breadcrumb-only.
     cluster_stat: Option<SharedRecallClusterStat>,
+    /// Phase 86 — optional per-session recent-turns buffer. When
+    /// `Some` and `recall_window_turns > 1`, the embedded query
+    /// is the assembled conversation window instead of the bare
+    /// user message; otherwise byte-identical pre-Phase-86 path.
+    conversation_windows: Option<SharedConversationWindows>,
+    /// Phase 86 — operator-tunable window depth (turns of prior
+    /// context to concatenate before `current`). `1` (the
+    /// default) disables the window — byte-identical fallback.
+    recall_window_turns: usize,
 }
 
 impl SemanticMemoryContext {
@@ -99,7 +112,24 @@ impl SemanticMemoryContext {
             cooccurrence_ledger: None,
             recall_cluster: None,
             cluster_stat: None,
+            conversation_windows: None,
+            recall_window_turns: 1,
         }
+    }
+
+    /// Phase 86 — attach the shared per-session conversation
+    /// windows + the operator-set window depth. Builder; the
+    /// binary calls this with the daemon-startup handle. When
+    /// `recall_window_turns <= 1` the provider is byte-identical
+    /// to pre-Phase-86 even if a handle is attached.
+    pub fn with_conversation_windows(
+        mut self,
+        windows: SharedConversationWindows,
+        recall_window_turns: usize,
+    ) -> Self {
+        self.conversation_windows = Some(windows);
+        self.recall_window_turns = recall_window_turns;
+        self
     }
 
     /// Phase 84 (Q4a) — attach the shared last-turn cluster
@@ -187,12 +217,19 @@ impl ContextProvider for SemanticMemoryContext {
         user_message: &str,
         session_id: aivyx_core::SessionId,
     ) -> Option<String> {
-        // Embed the query (Q2a — latest user message only).
-        let qvec = match self
-            .provider
-            .embed(std::slice::from_ref(&user_message.to_string()))
-            .await
-        {
+        // Phase 86 — when the conversation window is engaged the
+        // embedded query is the assembled prior-turns context +
+        // the current message (which lands last so it dominates);
+        // otherwise byte-identical pre-Phase-86 single-message
+        // path.
+        let query_text = assemble_for(
+            self.conversation_windows.as_ref(),
+            session_id,
+            self.recall_window_turns,
+            user_message,
+        )
+        .unwrap_or_else(|| user_message.to_string());
+        let qvec = match self.provider.embed(&[query_text]).await {
             Ok(mut v) if !v.is_empty() => v.remove(0),
             _ => return None,
         };

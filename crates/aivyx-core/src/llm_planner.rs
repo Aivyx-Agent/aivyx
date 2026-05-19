@@ -123,7 +123,17 @@ pub trait SystemPromptRefiner: Send + Sync {
     /// `None` to keep the planner's base prompt unchanged. Must
     /// never panic and must swallow its own errors into `None`
     /// (best-effort — refinement is never fatal).
-    async fn refine(&self, user_message: &str) -> Option<String>;
+    ///
+    /// Phase 86 — `session_id` is provided so implementations
+    /// that consult a per-session conversational window (the
+    /// recall-window-relevance work) can locate the right
+    /// recent-turns buffer. Mirrors `ContextProvider::recall`,
+    /// which already carries `session_id`.
+    async fn refine(
+        &self,
+        user_message: &str,
+        session_id: crate::SessionId,
+    ) -> Option<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,8 +522,9 @@ impl TurnPlanner for LlmPlanner {
         let refiner = self.config.system_prompt_refiner.clone();
         if let Some(refiner) = refiner {
             if has_query {
-                if let Some(refined) =
-                    refiner.refine(&query_text).await
+                if let Some(refined) = refiner
+                    .refine(&query_text, message.session_id)
+                    .await
                 {
                     self.config.system_prompt = Some(refined);
                 }
@@ -1244,7 +1255,11 @@ mod tests {
 
     #[async_trait]
     impl SystemPromptRefiner for FakeRefiner {
-        async fn refine(&self, user_message: &str) -> Option<String> {
+        async fn refine(
+            &self,
+            user_message: &str,
+            _session_id: crate::SessionId,
+        ) -> Option<String> {
             self.seen.lock().unwrap().push(user_message.to_string());
             self.refined.clone()
         }

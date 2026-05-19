@@ -2664,6 +2664,16 @@ async fn run_async(
         .map(|_| {
             aivyx_channel::memory_recall::shared_recall_cluster_stat()
         });
+    // Phase 86 — daemon-scoped per-session conversation windows.
+    // Built iff the embedding substrate is configured (without
+    // embeddings there is nothing to feed the window into and no
+    // recall + Persona-selection path that would read it). The
+    // same Arc handle is attached to both relevance providers
+    // and to `DaemonConfig` so the turn loop's write site and
+    // the read sites share state.
+    let conversation_windows = embedding_provider.as_ref().map(|_| {
+        aivyx_channel::conversation_window::shared_conversation_windows()
+    });
     let recall_context: Option<
         Arc<dyn aivyx_core::llm_planner::ContextProvider>,
     > = match (&embedding_provider, config_embedding.as_ref()) {
@@ -2693,6 +2703,18 @@ async fn run_async(
             }
             if let Some(stat) = &recall_cluster_stat {
                 sc = sc.with_cluster_stat(stat.clone());
+            }
+            // Phase 86 — opt-in conversational-window relevance:
+            // when `[embedding].recall_window_turns > 1` the
+            // assembled prior-turns context (read from the shared
+            // handle the daemon turn loop writes) becomes the
+            // embedded query; otherwise byte-identical to
+            // pre-Phase-86.
+            if let Some(windows) = &conversation_windows {
+                sc = sc.with_conversation_windows(
+                    windows.clone(),
+                    cfg.recall_window_turns,
+                );
             }
             Some(Arc::new(sc))
         }
@@ -2740,6 +2762,18 @@ async fn run_async(
                 );
             if let Some(stat) = &persona_selection_stat {
                 r = r.with_stat(stat.clone());
+            }
+            // Phase 86 — same shared conversational-window
+            // handle the recall provider above uses; the
+            // adaptive Persona selection now considers the
+            // recent-turns context (same opt-in floor).
+            if let (Some(windows), Some(cfg)) =
+                (&conversation_windows, config_embedding.as_ref())
+            {
+                r = r.with_conversation_windows(
+                    windows.clone(),
+                    cfg.recall_window_turns,
+                );
             }
             Some(Arc::new(r))
         }
@@ -3950,6 +3984,12 @@ async fn run_async(
                 .clone(),
             persona_lifecycle_stat: persona_lifecycle_stat
                 .clone(),
+            // Phase 86 — shared per-session windows. The daemon
+            // turn loop writes `(user, assistant)` pairs into
+            // this on every `TurnOutcome::Completed`; both
+            // relevance providers read via the same handle.
+            // `None` → embedding off → no window path.
+            conversation_windows: conversation_windows.clone(),
         })
             .await;
 

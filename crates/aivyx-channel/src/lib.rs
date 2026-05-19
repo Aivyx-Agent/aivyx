@@ -43,6 +43,7 @@ pub mod webhook_tool;
 pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
+pub mod conversation_window;
 pub mod cooccurrence_ledger;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;

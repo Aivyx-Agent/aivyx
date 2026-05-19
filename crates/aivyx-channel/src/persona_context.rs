@@ -24,6 +24,9 @@ use serde::{Deserialize, Serialize};
 use aivyx_core::llm_planner::SystemPromptRefiner;
 use aivyx_llm::embedding::EmbeddingProvider;
 
+use crate::conversation_window::{
+    assemble_for, SharedConversationWindows,
+};
 use crate::persona::SharedEffectivePersona;
 use crate::profile_prompt::{
     assemble_session_prompt_selected, reducible_facet_count,
@@ -96,6 +99,15 @@ pub struct PersonaContextRefiner {
     /// Phase 79 (Q4a) — optional last-selection sink for the
     /// Phase 78 surface. `None` → breadcrumb-only.
     stat: Option<SharedPersonaSelectionStat>,
+    /// Phase 86 — optional per-session recent-turns buffer. When
+    /// `Some` and `recall_window_turns > 1`, the embedded query
+    /// is the assembled conversation window instead of the bare
+    /// user message; otherwise byte-identical pre-Phase-86 path.
+    conversation_windows: Option<SharedConversationWindows>,
+    /// Phase 86 — operator-tunable window depth (turns of prior
+    /// context to concatenate before `current`). `1` (the
+    /// default) disables the window — byte-identical fallback.
+    recall_window_turns: usize,
 }
 
 impl PersonaContextRefiner {
@@ -120,6 +132,8 @@ impl PersonaContextRefiner {
             top_k,
             min_similarity,
             stat: None,
+            conversation_windows: None,
+            recall_window_turns: 1,
         }
     }
 
@@ -132,6 +146,21 @@ impl PersonaContextRefiner {
         stat: SharedPersonaSelectionStat,
     ) -> Self {
         self.stat = Some(stat);
+        self
+    }
+
+    /// Phase 86 — attach the shared per-session conversation
+    /// windows + the operator-set window depth. Builder; the
+    /// binary calls this with the daemon-startup handle. When
+    /// `recall_window_turns <= 1` the refiner is byte-identical
+    /// to pre-Phase-86 even if a handle is attached.
+    pub fn with_conversation_windows(
+        mut self,
+        windows: SharedConversationWindows,
+        recall_window_turns: usize,
+    ) -> Self {
+        self.conversation_windows = Some(windows);
+        self.recall_window_turns = recall_window_turns;
         self
     }
 
@@ -158,7 +187,11 @@ impl PersonaContextRefiner {
 
 #[async_trait]
 impl SystemPromptRefiner for PersonaContextRefiner {
-    async fn refine(&self, user_message: &str) -> Option<String> {
+    async fn refine(
+        &self,
+        user_message: &str,
+        session_id: aivyx_core::SessionId,
+    ) -> Option<String> {
         // Snapshot under the read lock, then drop it before any
         // await (never hold a std RwLock across .await).
         let snapshot = {
@@ -193,9 +226,20 @@ impl SystemPromptRefiner for PersonaContextRefiner {
             return None;
         }
 
+        // Phase 86 — relevance query is the assembled
+        // conversation window when opt-in is engaged; otherwise
+        // the bare user message (byte-identical to pre-Phase-86).
+        let query_text = assemble_for(
+            self.conversation_windows.as_ref(),
+            session_id,
+            self.recall_window_turns,
+            user_message,
+        )
+        .unwrap_or_else(|| user_message.to_string());
+
         // One embed call: query first, then every facet.
         let mut inputs = Vec::with_capacity(facets.len() + 1);
-        inputs.push(user_message.to_string());
+        inputs.push(query_text);
         inputs.extend(facets.iter().cloned());
         let vecs = match self.provider.embed(&inputs).await {
             Ok(v) if v.len() == inputs.len() => v,
@@ -355,14 +399,16 @@ mod tests {
             learned_context: vec!["a".into(), "b".into()],
             ..EffectivePersona::default()
         };
-        let out = refiner(p, false, 12).refine("anything").await;
+        let out = refiner(p, false, 12)
+            .refine("anything", aivyx_core::SessionId::new())
+            .await;
         assert!(out.is_none());
     }
 
     #[tokio::test]
     async fn embed_failure_falls_back_to_none() {
         let out = refiner(big_persona(), true, 12)
-            .refine("how do I deploy")
+            .refine("how do I deploy", aivyx_core::SessionId::new())
             .await;
         assert!(out.is_none());
     }
@@ -370,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn selects_relevant_facets_and_keeps_core_and_constraints() {
         let out = refiner(big_persona(), false, 12)
-            .refine("how do I deploy")
+            .refine("how do I deploy", aivyx_core::SessionId::new())
             .await
             .expect("large persona + ok embed → Some");
 
@@ -390,7 +436,7 @@ mod tests {
         // No facet matches; large Soul still bounds to just the
         // always-on core + constraints (the adaptive point).
         let out = refiner(big_persona(), false, 12)
-            .refine("tell me a joke")
+            .refine("tell me a joke", aivyx_core::SessionId::new())
             .await
             .expect("Some");
         assert!(!out.contains("deploy runbook lives in wiki"));
@@ -402,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn empty_persona_is_none() {
         let out = refiner(EffectivePersona::default(), false, 0)
-            .refine("hi")
+            .refine("hi", aivyx_core::SessionId::new())
             .await;
         // threshold 0 but zero facets → still None (nothing to
         // select).
