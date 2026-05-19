@@ -1094,6 +1094,86 @@ to the pre-Phase-86 path. The buffer caps the window at 16
 turns regardless of the knob (the relevant signal is recency,
 not a transcript).
 
+## Pattern-driven Persona proposals (Phase 87)
+
+Phase 84 made auto-recall **act** on the Phase 83 co-occurrence
+ledger (durable affined siblings on the hot path). Phase 85
+made Persona decay **act** on the Phase 82 helpfulness ledger
+(sustained-negative topics retire identity). Phase 87 closes
+the symmetric arc: the same co-occurrence ledger now drives
+Persona *construction* too — durable, consistently-co-occurring
+pairs of *helpful* topics propose a new `learned_context`
+facet so the Soul learns the *relationships* between topics,
+not just the per-topic warmth.
+
+The actuator ships through the **existing Phase 70 proposal
+chain** — same propose-only + edit-then-approve + `Revert` +
+core-protected flow. Phase 87 only adds a new *source* of
+proposals; the resolution path is unchanged.
+
+- **Opt-in, off by default.** Like Phase 80/81/84, this is an
+  actuator block. With no `[persona_consolidation]` section
+  (or `enabled = false`) the pass never runs — byte-identical
+  to pre-Phase-87. It also needs auto-recall configured (the
+  Phase 82 helpfulness ledger and the Phase 83 co-occurrence
+  ledger only exist once auto-recall has been running).
+- **Conservative double-gate.** A pair `(A, B)` only proposes
+  when its decayed Phase 83 affinity clears `min_affinity`
+  AND has at least `min_samples` observations AND **both
+  endpoints'** Phase 82 helpfulness scores are at least
+  `min_topic_helpfulness`. A pattern of topics that
+  individually hurt is never proposed (mirroring Phase 85's
+  evidence-floor discipline).
+- **LLM-summarized facets.** Each surviving pair is handed to
+  the same reflection LLM the agent uses; it phrases one
+  short factual statement (under 30 words) that lands as a
+  Pending `LearnedContext` facet. The operator reviews — and
+  may edit — the prose before approving. A per-candidate LLM
+  hiccup skips that pair; a cycle-wide LLM outage is recorded
+  on the **Learning** surface so you can distinguish a quiet
+  cycle from a broken one.
+- **Reflection cadence, dedupless, capped.** Runs on your
+  existing `[[reflection_schedule]]` cron — the same trigger
+  every "act on durable learning" pass uses (77, 82, 83, 85).
+  Cross-cycle dedup is absolute: a pair already present in
+  the proposal chain (any status — Pending, Approved,
+  Rejected, Superseded) is never re-filed. Per-cycle filings
+  are bounded by `max_proposals_per_cycle` (default `3`) so
+  the review queue can never flood.
+
+**Configure it** in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[persona_consolidation]
+enabled = true
+min_affinity = 1.0           # optional, default 1.0
+min_samples = 3              # optional, default 3
+min_topic_helpfulness = 0.0  # optional, default 0.0 (non-negative)
+max_proposals_per_cycle = 3  # optional, default 3
+```
+
+Validation (only when `enabled = true`):
+`min_affinity > 0.0`, `min_samples >= 1`,
+`min_topic_helpfulness` finite,
+`max_proposals_per_cycle >= 1`. **To turn it off:** set
+`enabled = false` or delete the `[persona_consolidation]`
+block — the Persona proposal pipeline is byte-identical to
+pre-Phase-87.
+
+**Where to see it.** The daemon log prints
+`aivyx persona-consolidation: schedule "X" — filed N` on
+cycles that fire (with `(LLM unavailable)` appended when the
+LLM is unreachable). `aivyx learning` / the Web UI
+**Learning** tab show a **"Pattern-driven Persona proposals
+(last cycle, opt-in)"** block with the filed pair list, or
+the engaged-but-quiet / LLM-down / off cases. The proposals
+themselves appear in `aivyx persona proposals` + the
+**Proposals** pane exactly like reflection-driven and
+lifecycle proposals — each one with provenance citing the
+specific co-occurrence pair (`co-occurrence pair X + Y —
+decayed affinity N over M observation(s); both topics
+helpful`).
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

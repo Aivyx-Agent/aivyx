@@ -2339,6 +2339,57 @@ Likely follow-ups (token-budget context sizing, embed-each-
 and-pool windows, persisted windows, heuristic recall gate)
 are operator-feedback-gated.
 
+## Phase 87 — Pattern-Driven Persona Proposals (the self-improving Soul, the second consumption, completed)
+
+**Frozen — see [PHASE_87.md](PHASE_87.md).** Closes the
+deliberate Phase 85 deferral. After 84 (recall acts on the
+Phase 83 co-occurrence ledger) and 85 (decay acts on the
+Phase 82 helpfulness ledger), the visible asymmetry was that
+the co-occurrence ledger fed only *recall*, not the *Soul*.
+Phase 87 closes the symmetric arc: durable consistently-
+co-occurring pairs of *helpful* topics propose a new
+`learned_context` facet through the existing Phase 70 chain —
+same propose-only + edit-then-approve + Revert + core-
+protected flow, just driven by the second durable signal.
+
+- **Conservative double-gate (Q1a):** pair affinity AND both
+  endpoints helpful — a pattern made of topics that
+  individually hurt is never proposed. Mirrors Phase 85's
+  evidence-floor discipline; same `min_topic_helpfulness`
+  knob defaults to `0.0` (non-negative).
+- **LLM-summarized facets (Q2b):** the existing reflection
+  LLM phrases each surviving pair into a one-sentence
+  `learned_context` facet. The operator is still the final
+  filter (edit-then-approve / reject); a per-candidate LLM
+  hiccup skips that pair, a cycle-wide outage records
+  `llm_unavailable = true` on the Phase 78 surface so a quiet
+  cycle stays distinguishable from a broken one.
+- **Reflection cron + cap + dual dedup (Q3a):** the
+  established "act on durable learning" cadence (Phase 77 /
+  82 / 83 / 85); idempotent — a pair already in the proposal
+  chain (any status) is never re-filed; per-cycle filings
+  bounded by `max_proposals_per_cycle`.
+- **Opt-in by default (Q4a):** new `[persona_consolidation]`
+  config block, `enabled = false` default; with no block the
+  pass never runs (byte-identical to pre-Phase-87). The Phase
+  80/81/84 actuator posture.
+
+Streak all three correct: DESIGN.md → **34**, PRODUCT.md →
+**27**, `aivyx-core/src/lib.rs` → **35** (new project
+record, beats Phase 86's 34) — the new pass + config block +
+Phase 78 surface stat all live in `aivyx-channel` /
+`aivyx-config` / `bin/aivyx`; proposals land through the
+existing `PersistentPersonaProposalLog::append` API (no new
+chain operation); no new `AuditTag`. Test count delta within
+the predicted `+11-15` band (`+15` exactly — config section
++6, pure module +8, integration +1). Zero clippy warnings.
+Zero new workspace deps.
+
+Likely follow-ups (pattern-driven Persona *decay*, n-ary
+cluster proposals, pattern-driven supersession, operator-
+tunable LLM prompt, topic canonicalization) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

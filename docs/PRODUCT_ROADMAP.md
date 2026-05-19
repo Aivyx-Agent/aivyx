@@ -1304,6 +1304,36 @@ respond to it. Closing the gap is the inflection point between
   buffer key load-bearing and corrects Phase 77's recall
   correlation.
 
+- **Phase 87 (Pattern-Driven Persona Proposals, shipped
+  2026-05-20).** Closes the deliberate Phase 85 deferral.
+  After Phase 84 (recall acts on the Phase 83 co-occurrence
+  ledger) and Phase 85 (decay acts on the Phase 82
+  helpfulness ledger), the visible asymmetry was that the
+  co-occurrence ledger fed only *recall*, not the *Soul*.
+  Phase 87 closes the symmetric arc: durable consistently-
+  co-occurring pairs of *helpful* topics propose a new
+  `learned_context` facet through the existing Phase 70
+  proposal chain — same propose-only + edit-then-approve +
+  Revert + core-protected flow, just driven by the second
+  durable signal. **No new product commitment**, none
+  weakened; the operator-facing contract is *strengthened*
+  (P14 Persona now also learns cross-topic *relationships*,
+  not only per-topic warmth). Opt-in via a new
+  `[persona_consolidation]` block (`enabled = false`
+  default — the Phase 80/81/84 actuator posture);
+  conservative double-gate (pair affinity + samples + both
+  endpoints individually helpful); LLM-summarized facet prose
+  with operator-as-final-filter; reflection-cron cadence with
+  hard per-cycle cap + absolute dedup against the proposal
+  chain in any status. Streak all three correct: DESIGN.md →
+  34, PRODUCT.md → **27**, lib.rs → **35** (new project
+  record, beating Phase 86's 34) — pass + config + Phase 78
+  surface stat all live in `aivyx-channel` / `aivyx-config` /
+  `bin/aivyx`; proposals land through the existing chain API
+  (no new chain operation); no new AuditTag. Test count delta
+  `+15` (workspace 1573 → 1588), exactly the upper edge of
+  the predicted `+11-15` band. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

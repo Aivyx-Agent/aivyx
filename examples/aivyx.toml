@@ -1034,3 +1034,47 @@ parent_role = "researcher"
 # affined sibling(s)`; `aivyx learning` / Web UI "Learning"
 # tab show a "Cluster co-recall (last turn)" block (count +
 # driver→sibling pairs).
+
+# ----------------------------------------------------------------
+# Pattern-driven Persona proposals (Phase 87) — OFF BY DEFAULT
+# ----------------------------------------------------------------
+#
+# The second consumption of the Phase 83 co-occurrence ledger,
+# symmetric with the recall-side Phase 84. When a pair of
+# topics has consistently co-occurred AND both topics are
+# independently helpful (Phase 82 ledger), the reflection
+# cron asks the LLM to phrase a one-sentence `learned_context`
+# facet and files it as a Pending Persona proposal — same
+# Phase 70 propose-only + edit-then-approve + Revert flow.
+#
+# It is off unless this [persona_consolidation] block is
+# present AND `enabled = true`; with it absent/false the
+# Persona proposal pipeline is byte-identical to pre-Phase-87.
+# It also needs auto-recall configured ([embedding] + a
+# populated co-occurrence ledger + a populated helpfulness
+# ledger + a [[reflection_schedule]]).
+#
+# Safety rails: a conservative DOUBLE-GATE — pair affinity +
+# samples AND both endpoints independently helpful (a pattern
+# of consistently-hurting topics is never proposed); per-cycle
+# filings hard-capped (default 3); cross-cycle dedup is
+# absolute (a pair already in the chain in ANY status is never
+# re-filed); the LLM phrases the prose but the operator is
+# still the final filter (edit-then-approve / reject via the
+# Web UI Proposals pane or `aivyx persona proposals`).
+#
+# [persona_consolidation]
+# enabled = true
+# min_affinity = 1.0           # optional, default 1.0
+# min_samples = 3              # optional, default 3
+# min_topic_helpfulness = 0.0  # optional, default 0.0
+# max_proposals_per_cycle = 3  # optional, default 3
+#
+# To SEE it: daemon log `aivyx persona-consolidation: schedule
+# "X" — filed N` each cycle that fires (with
+# `(LLM unavailable)` appended when the LLM is unreachable);
+# `aivyx learning` / Web UI "Learning" tab show a
+# "Pattern-driven Persona proposals (last cycle, opt-in)"
+# block; the proposals themselves appear in `aivyx persona
+# proposals` like every other Phase 70 / Phase 81 / Phase 85
+# proposal.

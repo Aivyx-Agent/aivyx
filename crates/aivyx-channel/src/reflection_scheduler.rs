@@ -2757,4 +2757,271 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- Phase 87 — pattern-driven Persona consolidation -------
+
+    #[tokio::test]
+    async fn consolidation_pass_files_dedups_and_handles_llm_outage()
+    {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use crate::helpfulness_ledger::PersistentHelpfulnessLedger;
+        use crate::persona::{
+            PersonaDeltaCategory, PersonaDeltaOp,
+            ProposedPersonaDelta,
+        };
+        use crate::persona_consolidation::{
+            shared_persona_consolidation_stat, PairPhraser,
+        };
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use async_trait::async_trait;
+
+        struct OkPhraser;
+        #[async_trait]
+        impl PairPhraser for OkPhraser {
+            async fn phrase(
+                &self,
+                a: &str,
+                b: &str,
+            ) -> Option<String> {
+                Some(format!(
+                    "You consistently work with {a} and {b}."
+                ))
+            }
+        }
+        struct DownPhraser;
+        #[async_trait]
+        impl PairPhraser for DownPhraser {
+            async fn phrase(
+                &self,
+                _a: &str,
+                _b: &str,
+            ) -> Option<String> {
+                None
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-pc-integ-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([87u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        let help = Arc::new(PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        ));
+        let plog = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"consolidation-integ-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        // Seed three eligible pairs. All helpful endpoints, all
+        // affinity-sufficient, samples >= 2 (after the second
+        // record_window).
+        let now = 1_000_000u64;
+        let now_ms = now * 1000;
+        let seeds = [
+            (("deploy", "rollback"), 10.0),
+            (("frontend", "css"), 8.0),
+            (("rust", "borrow"), 6.0),
+        ];
+        for ((a, b), score) in &seeds {
+            cooc.record_window(
+                &[((a.to_string(), b.to_string()), *score)],
+                now,
+            )
+            .await
+            .unwrap();
+            cooc.record_window(
+                &[((a.to_string(), b.to_string()), 0.001)],
+                now,
+            )
+            .await
+            .unwrap();
+        }
+        // All six endpoints individually helpful.
+        let topics: Vec<(String, f32)> = seeds
+            .iter()
+            .flat_map(|((a, b), _)| {
+                [(a.to_string(), 1.0), (b.to_string(), 1.0)]
+            })
+            .collect();
+        help.record_window(&topics, now).await.unwrap();
+
+        // Pre-stamp ONE pair in the proposal chain to exercise
+        // the dedup arm — the canonical id is alphabetical, so
+        // (deploy, rollback) hashes as `deploy+rollback`.
+        plog.append_pending(
+            "consolidate-pair:deploy+rollback".into(),
+            now_ms,
+            "test-preseed".into(),
+            ProposedPersonaDelta {
+                category: PersonaDeltaCategory::LearnedContext,
+                op: PersonaDeltaOp::AppendList {
+                    value: "already filed".into(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stat = shared_persona_consolidation_stat();
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 1_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = PersonaConsolidationDeps {
+            config: aivyx_config::PersonaConsolidationConfig {
+                enabled: true,
+                min_affinity: 1.0,
+                min_samples: 2,
+                min_topic_helpfulness: 0.0,
+                max_proposals_per_cycle: 5,
+            },
+            cooccurrence_ledger: Arc::clone(&cooc),
+            helpfulness_ledger: Arc::clone(&help),
+            proposal_log: Arc::clone(&plog),
+            phraser: Arc::new(OkPhraser),
+            stat: Some(stat.clone()),
+        };
+
+        // Cycle 1: two new proposals filed (the third was
+        // pre-seeded, so it dedups).
+        run_persona_consolidation_pass(&deps, &sched, now_ms)
+            .await;
+        let pending = plog.list(ProposalStatusFilter::Pending);
+        assert_eq!(
+            pending.len(),
+            3,
+            "1 pre-seed + 2 newly filed"
+        );
+        let new_ids: std::collections::HashSet<String> = pending
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        assert!(new_ids.contains(
+            "consolidate-pair:deploy+rollback"
+        ));
+        assert!(new_ids
+            .contains("consolidate-pair:css+frontend"));
+        assert!(
+            new_ids.contains("consolidate-pair:borrow+rust")
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.filed, 2);
+            assert!(!s.llm_unavailable);
+        }
+
+        // Cycle 2: idempotent — no NEW proposals since every
+        // eligible pair is already in the chain.
+        run_persona_consolidation_pass(&deps, &sched, now_ms)
+            .await;
+        let pending2 = plog.list(ProposalStatusFilter::Pending);
+        assert_eq!(
+            pending2.len(),
+            3,
+            "second cycle is a no-op (full dedup)"
+        );
+
+        // Cycle 3: disabled config — even with new evidence,
+        // nothing fires (byte-identical to pre-Phase-87).
+        let off = PersonaConsolidationDeps {
+            config: aivyx_config::PersonaConsolidationConfig {
+                enabled: false,
+                ..deps.config.clone()
+            },
+            ..deps
+        };
+        run_persona_consolidation_pass(&off, &sched, now_ms)
+            .await;
+        assert_eq!(
+            plog.list(ProposalStatusFilter::Pending).len(),
+            3,
+            "disabled config is a complete no-op"
+        );
+
+        // Cycle 4: armed but LLM unavailable — every survivor's
+        // phrasing returns None; nothing files; the surface
+        // flag flips so the operator can distinguish "quiet"
+        // from "broken". To create new evidence the
+        // consolidation pass can act on, introduce a fourth
+        // pair (the prior three are all already in the chain).
+        cooc.record_window(
+            &[(("alpha".into(), "beta".into()), 10.0)],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("alpha".into(), "beta".into()), 0.001)],
+            now,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[("alpha".into(), 1.0), ("beta".into(), 1.0)],
+            now,
+        )
+        .await
+        .unwrap();
+        let down = PersonaConsolidationDeps {
+            config: aivyx_config::PersonaConsolidationConfig {
+                enabled: true,
+                min_affinity: 1.0,
+                min_samples: 2,
+                min_topic_helpfulness: 0.0,
+                max_proposals_per_cycle: 5,
+            },
+            cooccurrence_ledger: Arc::clone(&cooc),
+            helpfulness_ledger: Arc::clone(&help),
+            proposal_log: Arc::clone(&plog),
+            phraser: Arc::new(DownPhraser),
+            stat: Some(stat.clone()),
+        };
+        run_persona_consolidation_pass(&down, &sched, now_ms)
+            .await;
+        assert_eq!(
+            plog.list(ProposalStatusFilter::Pending).len(),
+            3,
+            "LLM-down cycle files nothing"
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.filed, 0);
+            assert!(
+                s.llm_unavailable,
+                "every survivor's phrasing failed → cycle-wide \
+                 LLM unavailable"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -278,47 +278,96 @@ this as "pattern-driven Persona proposals."
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** No locked technical-contract decision
+  reopened; a new actuator on existing chains using existing
+  signals is exactly the post-Phase-86 ratio. Streak: **34
+  consecutive phases** (was 33).
+- **PRODUCT.md — held.** No new commitment, none weakened;
+  the operator-facing contract was *strengthened* (P14
+  Persona now also learns cross-topic *relationships*, not
+  only per-topic warmth). Streak: **27 consecutive phases**
+  (was 26).
+- **`aivyx-core/src/lib.rs` — held, by design.** The new
+  pass + config + Phase 78 surface stat all live in
+  `aivyx-channel` / `aivyx-config` / `bin/aivyx`; proposals
+  land through the existing
+  `PersistentPersonaProposalLog::append` API (no new chain
+  operation, no new `AuditTag`). Streak: **35 consecutive
+  phases** — new project record, beating Phase 86's 34.
+
+**Test count — `+15`** (workspace `1573 → 1588`). At the
+upper edge of the predicted `+11-15` band, on the nose. The
+breakdown matches the converged calibration law exactly:
+new config *section* `+6` (absent / staged-disabled-partial /
+enabled-valid / each of the three numeric-bound rejects),
+new pure pass module `+8` (id canonicalization; the four
+selector rejection arms in one sweep; chain dedup; cap +
+order; disabled short-circuit; canonical-id filing; cycle-
+wide LLM unavailability flag; quiet-empty-input distinct
+from LLM-down), reflection_scheduler integration `+1` (one
+end-to-end test exercising filed → idempotent-dedup →
+disabled-noop → LLM-down-flag in a single multi-phase
+scenario). The integration test does more per test than the
+nominal `+1-2` band assumed but lands the count on
+prediction — the convergent law continues to hold.
+
+**Scope — every planned surface shipped exactly as scoped.**
+The config block + the Q1a conservative double-gate selector +
+the Q2b LLM-phrased facet (with both per-candidate skip and
+cycle-wide `llm_unavailable` flagging) + the Q3a reflection-
+cron cadence with dual dedup + cap + the Q4a opt-in posture
+all landed as the open-doc described. The reflection
+scheduler signature grew by one optional deps parameter;
+every `DaemonConfig` fixture (compat + 7 e2e) got the three
+new `None` defaults. Daemon-log breadcrumb (`aivyx
+persona-consolidation: schedule "X" — filed N`) + the new
+`aivyx learning` block ("Pattern-driven Persona proposals
+(last cycle, opt-in)") + the Phase 78 surface stat all
+shipped on the established Q4a pattern (`#[serde(default)]`
+on the new IPC field, wire-compat preserved). Zero clippy
+warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[persona_consolidation]` config block: `enabled`
+- [x] `[persona_consolidation]` config block: `enabled`
   (default `false`), `min_affinity` (default `1.0`),
   `min_samples` (default `3`), `min_topic_helpfulness`
   (default `0.0`), `max_proposals_per_cycle` (default `3`);
-  validation when enabled — Task 2.
-- [ ] Pure selector: top-K affined pairs above
+  validation when enabled — Task 2 (commit `8f33288`).
+- [x] Pure selector: top-K affined pairs above
   `min_affinity`/`min_samples` with **both endpoints**
   Phase 82-helpful at `>= min_topic_helpfulness`; dual dedup
-  against Persona chain + Pending; cap respected — Task 3.
-- [ ] LLM-phrased `learned_context` facet via the existing
+  against Persona chain + Pending; cap respected — Task 3
+  (commit `377dd97`).
+- [x] LLM-phrased `learned_context` facet via the existing
   reflection LLM provider; per-candidate LLM error → skip
   that candidate; cycle-wide failure → "0 filed, LLM
-  unavailable" — Task 3.
-- [ ] Pass wired into `reflection_scheduler` on the existing
+  unavailable" — Task 3 (commit `377dd97`).
+- [x] Pass wired into `reflection_scheduler` on the existing
   cron; proposals filed via the existing
   `PersistentPersonaProposalLog::append` with `proposal_id =
-  "consolidate-pair:{A}+{B}"` — Task 3.
-- [ ] `PersonaConsolidationStat` + shared handle + Phase 78
-  surface ("Pattern-driven Persona proposals (last cycle)")
-  + daemon-log breadcrumb — Task 4.
-- [ ] Integration tests: filed, dedup-chain, dedup-pending,
+  "consolidate-pair:{lo}+{hi}"` — Task 3 (commit `377dd97`).
+- [x] `PersonaConsolidationStat` + shared handle + Phase 78
+  surface ("Pattern-driven Persona proposals (last cycle,
+  opt-in)") + daemon-log breadcrumb — Task 4 (commit
+  `7c66734`).
+- [x] Integration tests: filed, dedup-chain, dedup-pending,
   cap, one-endpoint-unhelpful skip, disabled-byte-identical,
-  LLM-unavailable graceful — Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  LLM-unavailable graceful — Task 5 (this commit).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-four.
-- [ ] PRODUCT.md streak extends to twenty-seven.
-- [ ] Production-core streak extends to thirty-five (new
+- [x] DESIGN.md streak extends to thirty-four.
+- [x] PRODUCT.md streak extends to twenty-seven.
+- [x] Production-core streak extends to thirty-five (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+11-15; per the converged
-  calibration law — new config *section* (≈ +5-6) + new pure
-  pass module (≈ +5-7) + surface integration (≈ +1-2); no
-  new `KeyDomain`, no new detector module).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+15`, upper edge of the
+  predicted `+11-15` band).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.
