@@ -827,4 +827,144 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- Phase 86 — conversational-window relevance ------------
+
+    /// Records every `embed()` input so a test can assert what
+    /// query string the provider actually received — that's the
+    /// only observable difference between a bare-message embed
+    /// (pre-Phase-86) and an assembled-window embed (Phase 86).
+    struct RecordingProvider {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for RecordingProvider {
+        async fn embed(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .extend(texts.iter().cloned());
+            Ok(texts.iter().map(|_| vec![1.0, 1.0]).collect())
+        }
+        fn model(&self) -> &str {
+            "recording"
+        }
+        fn dimensions(&self) -> usize {
+            2
+        }
+    }
+
+    /// Phase 86 — opt-in engaged: the provider must embed the
+    /// assembled window text (prior turns + current last), NOT
+    /// the bare current message.
+    #[tokio::test]
+    async fn recall_embeds_assembled_window_when_opt_in_engaged() {
+        use crate::conversation_window::{
+            record_turn, shared_conversation_windows,
+        };
+
+        let memory = seed().await;
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(&windows, s, "earlier the user asked X", "I answered Y");
+
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::clone(&provider) as Arc<dyn EmbeddingProvider>,
+            5,
+            0.0,
+        )
+        .with_conversation_windows(windows.clone(), 3);
+
+        let _ = ctx.recall("now my follow-up", s).await;
+
+        let seen = provider.seen.lock().unwrap().clone();
+        let q = seen
+            .iter()
+            .find(|t| t.contains("now my follow-up"))
+            .expect("the query embed must have happened");
+        assert!(
+            q.contains("earlier the user asked X"),
+            "assembled window must include prior user turn: {q}"
+        );
+        assert!(
+            q.contains("I answered Y"),
+            "assembled window must include prior assistant turn: {q}"
+        );
+        assert!(
+            q.ends_with("\nuser: now my follow-up"),
+            "current message must land LAST and labelled: {q}"
+        );
+    }
+
+    /// Phase 86 — every fallback case must embed the *bare*
+    /// current message verbatim (byte-identical to pre-Phase-86).
+    /// One test sweeps the matrix so a future regression on any
+    /// arm is loud.
+    #[tokio::test]
+    async fn recall_falls_through_to_bare_query_in_every_fallback() {
+        use crate::conversation_window::{
+            record_turn, shared_conversation_windows,
+        };
+
+        for case in [
+            "no_handle",
+            "floor_one",
+            "unknown_session",
+            "empty_window",
+        ] {
+            let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+            let provider = Arc::new(RecordingProvider {
+                seen: std::sync::Mutex::new(Vec::new()),
+            });
+            let mut ctx = SemanticMemoryContext::new(
+                Arc::clone(&memory),
+                Arc::clone(&provider) as Arc<dyn EmbeddingProvider>,
+                5,
+                0.0,
+            );
+            let s = sid();
+            match case {
+                "no_handle" => {}
+                "floor_one" => {
+                    let w = shared_conversation_windows();
+                    record_turn(&w, s, "prior u", "prior a");
+                    ctx = ctx.with_conversation_windows(w, 1);
+                }
+                "unknown_session" => {
+                    let w = shared_conversation_windows();
+                    record_turn(&w, sid(), "prior u", "prior a");
+                    ctx = ctx.with_conversation_windows(w, 5);
+                }
+                "empty_window" => {
+                    // Handle attached + window > 1 but the
+                    // session has no recorded turns —
+                    // `assemble_for` returns None, the bare path
+                    // is taken.
+                    ctx = ctx.with_conversation_windows(
+                        shared_conversation_windows(),
+                        5,
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            let _ = ctx.recall("bare message", s).await;
+            let seen = provider.seen.lock().unwrap().clone();
+            assert_eq!(
+                seen,
+                vec!["bare message".to_string()],
+                "{case}: embedded query must be the bare \
+                 current message (byte-identical to \
+                 pre-Phase-86)"
+            );
+        }
+    }
 }

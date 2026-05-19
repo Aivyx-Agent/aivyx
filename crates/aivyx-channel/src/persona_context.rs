@@ -454,4 +454,156 @@ mod tests {
         // select).
         assert!(out.is_none());
     }
+
+    // ---- Phase 86 — conversational-window relevance ------------
+
+    /// Records every `embed()` input so a test can assert what
+    /// query string the refiner actually used to score facets —
+    /// that's the only observable behavior change Phase 86
+    /// introduces in this provider.
+    struct RecordingProvider {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for RecordingProvider {
+        async fn embed(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .extend(texts.iter().cloned());
+            // All-equal vectors → ranking is irrelevant; the
+            // test only asserts which query was embedded.
+            Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0]).collect())
+        }
+        fn model(&self) -> &str {
+            "recording"
+        }
+        fn dimensions(&self) -> usize {
+            3
+        }
+    }
+
+    fn refiner_with_recorder(
+        provider: Arc<RecordingProvider>,
+    ) -> PersonaContextRefiner {
+        PersonaContextRefiner::new(
+            profile(),
+            shared_effective_persona(big_persona()),
+            "default".into(),
+            "ROLE PROMPT".into(),
+            provider as Arc<dyn EmbeddingProvider>,
+            12,
+            12,
+            0.20,
+        )
+    }
+
+    /// Phase 86 — opt-in engaged: the refiner must embed the
+    /// assembled window (prior turns + current last) as facet 0
+    /// in the single batched `embed()` call, NOT the bare user
+    /// message.
+    #[tokio::test]
+    async fn refine_embeds_assembled_window_when_opt_in_engaged() {
+        use crate::conversation_window::{
+            record_turn, shared_conversation_windows,
+        };
+
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let windows = shared_conversation_windows();
+        let s = aivyx_core::SessionId::new();
+        record_turn(
+            &windows,
+            s,
+            "remind me the deploy runbook",
+            "it lives in the wiki",
+        );
+
+        let r = refiner_with_recorder(Arc::clone(&provider))
+            .with_conversation_windows(windows.clone(), 3);
+        let _ = r.refine("how do I deploy", s).await;
+
+        let seen = provider.seen.lock().unwrap().clone();
+        let query = seen
+            .iter()
+            .find(|t| t.contains("how do I deploy"))
+            .expect("the query embed must have happened");
+        assert!(
+            query.contains("remind me the deploy runbook"),
+            "assembled window must include prior user turn: \
+             {query}"
+        );
+        assert!(
+            query.contains("it lives in the wiki"),
+            "assembled window must include prior assistant \
+             turn: {query}"
+        );
+        assert!(
+            query.ends_with("\nuser: how do I deploy"),
+            "current message must land LAST and labelled: {query}"
+        );
+    }
+
+    /// Phase 86 — every fallback case must embed the *bare*
+    /// current message verbatim (byte-identical to pre-Phase-86).
+    /// Mirrors the matrix in `memory_recall.rs` so a regression
+    /// on either provider is loud.
+    #[tokio::test]
+    async fn refine_falls_through_to_bare_query_in_every_fallback() {
+        use crate::conversation_window::{
+            record_turn, shared_conversation_windows,
+        };
+
+        for case in [
+            "no_handle",
+            "floor_one",
+            "unknown_session",
+            "empty_window",
+        ] {
+            let provider = Arc::new(RecordingProvider {
+                seen: std::sync::Mutex::new(Vec::new()),
+            });
+            let mut r = refiner_with_recorder(Arc::clone(&provider));
+            let s = aivyx_core::SessionId::new();
+            match case {
+                "no_handle" => {}
+                "floor_one" => {
+                    let w = shared_conversation_windows();
+                    record_turn(&w, s, "prior u", "prior a");
+                    r = r.with_conversation_windows(w, 1);
+                }
+                "unknown_session" => {
+                    let w = shared_conversation_windows();
+                    record_turn(
+                        &w,
+                        aivyx_core::SessionId::new(),
+                        "prior u",
+                        "prior a",
+                    );
+                    r = r.with_conversation_windows(w, 5);
+                }
+                "empty_window" => {
+                    r = r.with_conversation_windows(
+                        shared_conversation_windows(),
+                        5,
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            let _ = r.refine("bare message", s).await;
+            let seen = provider.seen.lock().unwrap().clone();
+            assert_eq!(
+                seen.first(),
+                Some(&"bare message".to_string()),
+                "{case}: query input must be the bare current \
+                 message (byte-identical to pre-Phase-86)"
+            );
+        }
+    }
 }
