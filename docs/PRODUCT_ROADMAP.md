@@ -1275,6 +1275,35 @@ respond to it. Closing the gap is the inflection point between
   **33** (new record, beating Phase 84's 32). Zero new
   workspace deps.
 
+- **Phase 86 (Conversational-Window Relevance, shipped
+  2026-05-20).** The twice-deferred (Phase 76 *and* Phase 79)
+  input-quality gap closed. For 85 phases the assistant judged
+  relevance off *one line* — the latest user message — so
+  auto-recall pulled the wrong memories and the Soul selected
+  the wrong facets in exactly the multi-turn usage that
+  matters most. Phase 86 gives both consumers a recent
+  conversational window: a small recency-ordered slice of the
+  last few `(user, assistant)` turns concatenated into the
+  same single embed they already make (current message last
+  so it dominates). **No new product commitment**, none
+  weakened; the operator-facing contract is *strengthened*
+  (G3 recall + P14 adaptive Persona now see multi-turn intent
+  instead of a one-liner). Opt-in by a single
+  `[embedding].recall_window_turns` knob (default `1` =
+  pre-Phase-86 byte-identical); the buffer is ephemeral
+  (daemon-memory only); the existing `rag_min_similarity` /
+  Persona-selection floors are the unchanged safety net
+  against a drifted window. Streak all three correct:
+  DESIGN.md → **33**, PRODUCT.md → **26**, lib.rs → **34**
+  (new record, beating Phase 85's 33) — the trait-extension
+  ripple is `llm_planner.rs`-only, the new module lives in
+  `aivyx-channel`, and the knob is a field on the existing
+  `[embedding]` block. Zero new workspace deps. Positive
+  cascade: the daemon's `Message::session_id` is now stable
+  across turns (was fresh-per-turn), which both makes the
+  buffer key load-bearing and corrects Phase 77's recall
+  correlation.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

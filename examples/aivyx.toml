@@ -794,12 +794,39 @@ parent_role = "researcher"
 #   # ... base_url / model / api_key / dimensions as above ...
 #   rag_top_k = 5             # max memories injected per turn
 #   rag_min_similarity = 0.20 # drop hits below this cosine score
+#   recall_window_turns = 1   # conversational-window relevance (Phase 86)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
 # noise. Raise it (e.g. 0.35) for stricter, fewer injections;
 # lower it (e.g. 0.10) to recall more aggressively. Valid range
 # is [0.0, 1.0]; `rag_top_k` must be >= 1.
+#
+# ----------------------------------------------------------------
+# Conversational-window relevance (Phase 86) — recall_window_turns
+# ----------------------------------------------------------------
+#
+# For 85 phases auto-recall (Phase 76) and adaptive Persona
+# selection (Phase 79) embedded only your LATEST message — a
+# lossy proxy for multi-turn intent. Phase 86 lets the
+# relevance ranker see the last few turns by concatenating
+# them into the same single embed it already makes (current
+# message last, so it dominates).
+#
+# Opt-in, byte-identical by default:
+#
+#   [embedding]
+#   # ... rag_top_k / rag_min_similarity above ...
+#   recall_window_turns = 3   # default 1 = pre-Phase-86 single line
+#
+# Set 1 to keep exactly today's behaviour. Raise it (2–5 is
+# typical) to let recall + Persona selection consider recent
+# context. The window is capped at 16 turns regardless; the
+# `rag_min_similarity` / Persona-selection floors still filter
+# weakly-related hits, so a drifted window never drags in
+# noise. The window itself is ephemeral (daemon-memory only;
+# a restart starts fresh). Validation when `[embedding]` is
+# present: `recall_window_turns >= 1`.
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

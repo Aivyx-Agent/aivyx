@@ -2283,6 +2283,62 @@ helpfulness decay for reflection-authored facets via fuzzy
 embedding; pattern-driven Persona proposals; topic
 canonicalization) are operator-feedback-gated.
 
+## Phase 86 — Conversational-Window Relevance (sharpening the whole stack's input, completed)
+
+**Frozen — see [PHASE_86.md](PHASE_86.md).** The twice-deferred
+(Phase 76 *and* Phase 79) input-quality gap: for 85 phases the
+assistant judged relevance off *one line*. Phase 86 gives both
+relevance consumers — auto-recall (76) and adaptive Persona
+selection (79) — a recent conversational window: a small,
+recency-ordered slice of the last few `(user, assistant)`
+turns concatenated into the same single embed they already
+make (current message last so it dominates). Sharper input
+under the entire self-learning stack with zero new deps and
+opt-in defaults.
+
+- **Daemon-scoped session-keyed buffer (Q1a):** a new
+  `conversation_window` module in `aivyx-channel` —
+  `Arc<RwLock<HashMap<SessionId, ConversationWindow>>>` shared
+  at daemon startup (the Phase 82/84 shared-handle precedent),
+  written by the daemon turn loop on each
+  `TurnOutcome::Completed`. Ephemeral by design (no new
+  `KeyDomain`); a restart starts fresh.
+- **Single-vector composition (Q2a):** the last
+  `recall_window_turns - 1` prior turns (oldest → newest,
+  role-labelled) followed by the current message, char-budgeted
+  with oldest-first eviction; current message is never
+  truncated. One embed call, unchanged ranking math.
+- **Both consumers (Q3a):** auto-recall *and* Persona
+  selection — same seam, same knob; the deferral came from
+  both, fixing one without the other was incoherent.
+- **Opt-in, byte-identical by default (Q4a):**
+  `[embedding].recall_window_turns` (default `1` = exactly the
+  latest single message); below the floor the embedded query
+  is bit-for-bit pre-Phase-86. The trait-extension ripple
+  (adding `session_id` to `SystemPromptRefiner::refine`) lives
+  in `llm_planner.rs`, *not* the byte-identical `lib.rs`. A
+  positive cascade: the daemon's `Message::session_id` is now
+  stable across turns (was fresh per turn), which both makes
+  the buffer key load-bearing and corrects Phase 77 recall
+  correlation.
+
+Streak all three correct: DESIGN.md → **33**, PRODUCT.md →
+**26**, `aivyx-core/src/lib.rs` → **34** (new record, beats
+Phase 85's 33) — the trait edit lives in `llm_planner.rs`, the
+new module + handle thread through `aivyx-channel`, and the
+config knob is a field on the existing `[embedding]` block.
+Test count delta within the converged calibration band — one
+new pure module + a knob on an existing config section + two
+provider integration tests on each side (the assemble-engaged
+and fallback-matrix pairs). Zero clippy warnings. Zero new
+workspace deps. With `recall_window_turns = 1` (the default),
+both consumers are byte-identical to pre-Phase-86 (asserted on
+both providers via recording-provider matrix tests).
+
+Likely follow-ups (token-budget context sizing, embed-each-
+and-pool windows, persisted windows, heuristic recall gate)
+are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

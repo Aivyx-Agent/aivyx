@@ -1033,6 +1033,67 @@ that expand, and `aivyx learning` / the Web UI **Learning**
 tab show a **"Cluster co-recall (last turn)"** block — the
 injected count and each `driver → sibling` pair.
 
+## Conversational-window relevance (Phase 86)
+
+For 85 phases auto-recall (Phase 76) and adaptive Persona
+selection (Phase 79) judged relevance off **one line** — the
+latest user message. In a real multi-turn conversation the
+topic drifts, the operator's intent spans several turns, and a
+single line is a lossy proxy. Phase 86 gives both consumers a
+**recent conversational window**: a small recency-ordered slice
+of the last few turns (user + assistant) concatenated into the
+*same* single embedding the relevance ranking already makes —
+so recall pulls memories the multi-turn intent points at, and
+the Soul selects facets matched to the actual thread of
+conversation, not the literal last sentence.
+
+The window is sharper *input* for the existing rankers; every
+downstream guarantee (the `rag_min_similarity` floor, the
+Phase 79 always-on-core invariant, the Phase 84 budget-neutral
+sibling injection) is unchanged.
+
+- **Opt-in, byte-identical by default.** A new
+  `[embedding].recall_window_turns` knob defaults to `1` —
+  exactly today's single-message behaviour. The window engages
+  *only* when an operator raises it; no existing operator's
+  recalled context changes on upgrade.
+- **Recency, current message last.** When engaged, the
+  embedded query is the last `recall_window_turns - 1` prior
+  turns (oldest → newest, role-labelled `user:` / `assistant:`)
+  followed by the current message — placed **last** so it
+  dominates the embedding. Char-budgeted: prior turns are
+  dropped oldest-first to fit; the current message is never
+  truncated.
+- **Ephemeral.** The buffer lives in daemon memory only —
+  a restart starts fresh. Durable per-session transcripts are
+  intentionally not persisted (recall context is re-derivable
+  from memory + the Phase 82/83 ledgers; the *chatter* is not
+  itself the record).
+- **Applies to both consumers.** Auto-recall (Phase 76) and
+  adaptive Persona selection (Phase 79) share the same handle
+  and the same knob — the deferral came from both phases and
+  fixing one without the other was incoherent.
+- **Safety net unchanged.** A drifted window that drags in
+  noise is filtered by the existing `rag_min_similarity` /
+  Persona-selection floors; a stale window never injects a
+  weakly-related memory or facet.
+
+**Configure it** in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[embedding]
+# … existing knobs …
+recall_window_turns = 3   # optional, default 1 (= pre-Phase-86)
+```
+
+Validation (only when `[embedding]` is present):
+`recall_window_turns >= 1`. **To turn it off:** leave the knob
+at the default (or set `recall_window_turns = 1`) — recall and
+Persona selection embed just the latest message, byte-identical
+to the pre-Phase-86 path. The buffer caps the window at 16
+turns regardless of the knob (the relevant signal is recency,
+not a transcript).
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

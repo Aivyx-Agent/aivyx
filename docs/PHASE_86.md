@@ -236,42 +236,83 @@ Phase 84/85 field-addition precedent):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** No locked technical-contract decision
+  was reopened; widening the existing relevance hooks is a
+  contained behaviour change inside the seams DESIGN.md
+  already named. Streak: **33 consecutive phases** (was 32).
+- **PRODUCT.md — held.** No new commitment, none weakened;
+  the operator-facing contract was *strengthened* (G3 recall +
+  P14 adaptive Persona now see multi-turn intent instead of a
+  one-liner). Streak: **26 consecutive phases** (was 25).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  `SystemPromptRefiner::refine(session_id)` trait edit lives
+  in `llm_planner.rs`, *not* `lib.rs`; the new buffer module
+  is in `aivyx-channel`; the shared-handle plumbing is
+  `aivyx-channel` + `bin/aivyx`. Streak: **34 consecutive
+  phases** — new project record, beating Phase 85's 33.
+
+**Test count — `+14`** (workspace `1559 → 1573`). At the top
+edge of the predicted `+9-13` band, `+1` over. The breakdown
+matches the converged calibration law almost exactly: config
+knob on an existing block `+3` (default, explicit, zero-
+invalid), the new pure module `+8` (eviction, recency, char-
+budget oldest-first, current-never-truncated, empty, window=1,
+record_turn blank-skip, assemble_for fallback matrix), two
+recording-provider matrix tests on each consumer side `+4`
+(assembled-window engaged + bare-fallback matrix on both
+`recall` and `refine`). The slight over-shoot vs. the central
+estimate is the matrix tests doing more per test than the
+nominal `≈ +2-4` integration band assumed; the law's
+predicted-band lower bound stayed correct.
+
+**Scope — every planned surface shipped exactly as scoped.**
+The config knob, the bounded-ring + char-budget module, the
+daemon-startup shared-handle, the `record_turn` write site on
+`TurnOutcome::Completed`, the `assemble_for` consumption in
+both providers, the opt-in `recall_window_turns > 1` floor,
+and the byte-identical fallback matrix all landed as the
+open-doc described. One positive cascade was discovered
+mid-implementation: the daemon's `Message::session_id` was
+fresh per turn (which would have made the per-session buffer
+key useless), so it now derives from the `StartSession` `sid`
+— a latent Phase 77 recall-correlation buglet fixed in the
+same breath. Zero clippy warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[embedding].recall_window_turns` (default 1,
-  validation `>= 1`) — Task 2.
-- [ ] `conversation_window` module: bounded ring (turn cap +
+- [x] `[embedding].recall_window_turns` (default 1,
+  validation `>= 1`) — Task 2 (commit `0cb9458`).
+- [x] `conversation_window` module: bounded ring (turn cap +
   char budget), recency assembly with current message
   dominant; `SharedConversationWindows` session-keyed —
-  Task 3.
-- [ ] Daemon turn loop records each completed turn
-  (user + assistant) best-effort — Task 3.
-- [ ] `SystemPromptRefiner::refine` gains `session_id`
+  Task 3 (commit `336b1f9`).
+- [x] Daemon turn loop records each completed turn
+  (user + assistant) best-effort — Task 3 (commit `336b1f9`).
+- [x] `SystemPromptRefiner::refine` gains `session_id`
   (`llm_planner.rs` + `begin_turn` + `FakeRefiner`); shared
-  handle threaded to both providers — Task 3.
-- [ ] Both `recall` and `refine` use the assembled window
+  handle threaded to both providers — Task 3 (commit
+  `336b1f9`).
+- [x] Both `recall` and `refine` use the assembled window
   when `recall_window_turns > 1` + handle + non-empty buffer;
   else bare current message = byte-identical to pre-Phase-86
-  — Task 4.
-- [ ] Tests across config, window-buffer units, both provider
-  integrations (windowed / bare / graceful) — Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  — Task 3 (consumption call) + Task 4 (commit `d80f640`,
+  matrix tests on both providers).
+- [x] Tests across config, window-buffer units, both provider
+  integrations (windowed / bare / graceful) — Tasks 2, 3, 4.
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-three.
-- [ ] PRODUCT.md streak extends to twenty-six.
-- [ ] Production-core streak extends to thirty-four (new
+- [x] DESIGN.md streak extends to thirty-three.
+- [x] PRODUCT.md streak extends to twenty-six.
+- [x] Production-core streak extends to thirty-four (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+9-13; per the converged
-  calibration law — one new pure module (the window ring,
-  ≈ +6-8 unit tests) + a config knob on an existing section
-  (≈ +1) + provider/seam integration (≈ +2-4); no new
-  detector module, no new `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (workspace `+14`, top edge
+  of the predicted `+9-13` band).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.
