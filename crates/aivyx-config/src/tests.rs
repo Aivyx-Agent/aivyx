@@ -5345,6 +5345,13 @@ api_key = "sk-emb-toml"
         emb.rag_min_similarity,
         crate::DEFAULT_RAG_MIN_SIMILARITY
     );
+    // Phase 86 — recall-window default is 1 (= byte-identical
+    // to pre-Phase-86 single-message behaviour).
+    assert_eq!(
+        emb.recall_window_turns,
+        crate::DEFAULT_RECALL_WINDOW_TURNS
+    );
+    assert_eq!(emb.recall_window_turns, 1);
     let key = emb.api_key.expect("key from toml");
     assert_eq!(key.source, FieldSource::Toml);
     assert_eq!(key.value.expose_secret(), "sk-emb-toml");
@@ -5566,6 +5573,72 @@ rag_min_similarity = 1.5
     match err {
         ConfigError::Invalid { field, .. } => {
             assert_eq!(field, "embedding.rag_min_similarity");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Phase 86 — explicit `recall_window_turns` wins; the
+/// default-when-absent is asserted in
+/// `embedding_partial_section_applies_defaults`.
+#[test]
+fn embedding_recall_window_turns_explicit_wins() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-window-explicit");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+recall_window_turns = 5
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect("load");
+    assert_eq!(
+        cfg.embedding.expect("section").recall_window_turns,
+        5
+    );
+    drop(env);
+}
+
+/// Phase 86 — `recall_window_turns = 0` is a load-time
+/// `Invalid` (1 is the byte-identical-to-pre-Phase-86 floor).
+#[test]
+fn embedding_recall_window_turns_zero_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embedding-window-zero");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[embedding]
+recall_window_turns = 0
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "embedding.recall_window_turns"
+            );
         }
         other => panic!("expected Invalid, got {other:?}"),
     }

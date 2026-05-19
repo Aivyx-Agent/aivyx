@@ -1364,6 +1364,14 @@ pub struct EmbeddingConfig {
     /// unrelated prompt. Default [`DEFAULT_RAG_MIN_SIMILARITY`].
     /// Must be in `[0.0, 1.0]`.
     pub rag_min_similarity: f32,
+    /// Phase 86 — conversational-window relevance: the number
+    /// of recent turns (current user message included) that
+    /// auto-recall and adaptive-Persona selection embed
+    /// together as their relevance query. Default
+    /// [`DEFAULT_RECALL_WINDOW_TURNS`] (`1`) is
+    /// byte-identical to pre-Phase-86 (the latest message
+    /// only). Must be `>= 1`.
+    pub recall_window_turns: usize,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -1386,6 +1394,12 @@ pub const DEFAULT_RAG_TOP_K: usize = 5;
 /// hits while dropping the near-orthogonal noise that an
 /// unrelated prompt would otherwise pull in.
 pub const DEFAULT_RAG_MIN_SIMILARITY: f32 = 0.20;
+/// Phase 86 — default conversational-window size: 1 means
+/// "just the latest message" = byte-identical to pre-Phase-86
+/// recall/Persona-selection. The operator opts into a larger
+/// window by raising this; the project's behaviour-change-is-
+/// opt-in discipline (recall context feeds model output).
+pub const DEFAULT_RECALL_WINDOW_TURNS: usize = 1;
 
 /// Phase 80 — which structural signal classes the proactive
 /// pass is allowed to surface. All default `true`: an operator
@@ -2172,6 +2186,8 @@ struct RawEmbedding {
     rag_top_k: Option<usize>,
     #[serde(default)]
     rag_min_similarity: Option<f32>,
+    #[serde(default)]
+    recall_window_turns: Option<usize>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -4210,7 +4226,8 @@ fn build_embedding_config(
         || raw.api_key.is_some()
         || raw.dimensions.is_some()
         || raw.rag_top_k.is_some()
-        || raw.rag_min_similarity.is_some();
+        || raw.rag_min_similarity.is_some()
+        || raw.recall_window_turns.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4265,6 +4282,18 @@ fn build_embedding_config(
         });
     }
 
+    let recall_window_turns = raw
+        .recall_window_turns
+        .unwrap_or(DEFAULT_RECALL_WINDOW_TURNS);
+    if recall_window_turns == 0 {
+        return Err(ConfigError::Invalid {
+            field: "embedding.recall_window_turns",
+            reason: "`recall_window_turns` must be >= 1 (1 = \
+                     just the latest message, pre-Phase-86)"
+                .into(),
+        });
+    }
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -4284,6 +4313,7 @@ fn build_embedding_config(
         dimensions,
         rag_top_k,
         rag_min_similarity,
+        recall_window_turns,
     }))
 }
 
