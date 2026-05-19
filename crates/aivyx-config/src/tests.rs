@@ -6262,3 +6262,169 @@ fn recall_cluster_enabled_nonpositive_affinity_is_invalid() {
     }
     drop(env);
 }
+
+// ---- Phase 87 — [persona_consolidation] ---------------------
+
+/// No `[persona_consolidation]` section →
+/// `persona_consolidation: None` (off; the Persona proposal
+/// pipeline is byte-identical to pre-Phase-87).
+#[test]
+fn persona_consolidation_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.persona_consolidation.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config): builds with `enabled = false`, defaults elsewhere,
+/// and is NOT validated.
+#[test]
+fn persona_consolidation_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_consolidation]\nenabled = false\n",
+        "pc-staged",
+    );
+    let p = cfg.persona_consolidation.expect("section present");
+    assert!(!p.enabled);
+    assert!(
+        (p.min_affinity - crate::DEFAULT_PC_MIN_AFFINITY).abs()
+            < 1e-6
+    );
+    assert_eq!(
+        p.min_samples,
+        crate::DEFAULT_PC_MIN_SAMPLES
+    );
+    assert!(
+        (p.min_topic_helpfulness
+            - crate::DEFAULT_PC_MIN_TOPIC_HELPFULNESS)
+            .abs()
+            < 1e-6
+    );
+    assert_eq!(
+        p.max_proposals_per_cycle,
+        crate::DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE
+    );
+    drop(env);
+}
+
+/// Enabled + valid: explicit fields win.
+#[test]
+fn persona_consolidation_enabled_valid() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_consolidation]\nenabled = true\n\
+         min_affinity = 2.5\nmin_samples = 7\n\
+         min_topic_helpfulness = 0.5\n\
+         max_proposals_per_cycle = 5\n",
+        "pc-valid",
+    );
+    let p = cfg.persona_consolidation.expect("section present");
+    assert!(p.enabled);
+    assert!((p.min_affinity - 2.5).abs() < 1e-6);
+    assert_eq!(p.min_samples, 7);
+    assert!((p.min_topic_helpfulness - 0.5).abs() < 1e-6);
+    assert_eq!(p.max_proposals_per_cycle, 5);
+    drop(env);
+}
+
+/// Enabled with non-positive `min_affinity` → `Invalid`.
+#[test]
+fn persona_consolidation_enabled_nonpositive_affinity_is_invalid()
+{
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pc-bad-affinity");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_consolidation]\nenabled = true\n\
+         min_affinity = 0.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "persona_consolidation.min_affinity"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with `min_samples = 0` → `Invalid`.
+#[test]
+fn persona_consolidation_enabled_zero_samples_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pc-zero-samples");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_consolidation]\nenabled = true\n\
+         min_samples = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "persona_consolidation.min_samples"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Enabled with `max_proposals_per_cycle = 0` → `Invalid`.
+#[test]
+fn persona_consolidation_enabled_zero_cap_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pc-zero-cap");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_consolidation]\nenabled = true\n\
+         max_proposals_per_cycle = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "persona_consolidation.max_proposals_per_cycle"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}

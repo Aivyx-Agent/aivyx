@@ -567,6 +567,12 @@ pub struct AivyxConfig {
     /// only arms cluster expansion; it still no-ops unless
     /// `enabled = true`.
     pub recall_cluster: Option<RecallClusterConfig>,
+    /// Phase 87 — `[persona_consolidation]` section. `None`
+    /// when absent: the Persona proposal pipeline is unchanged
+    /// (pre-Phase-87 behaviour — no pattern-driven proposals).
+    /// `Some` only arms the pass; it still no-ops unless
+    /// `enabled = true`.
+    pub persona_consolidation: Option<PersonaConsolidationConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1576,6 +1582,69 @@ pub const DEFAULT_RC_MAX_SIBLINGS: u32 = 3;
 /// decay) before it steers recall.
 pub const DEFAULT_RC_MIN_AFFINITY: f32 = 1.0;
 
+/// Phase 87 — `[persona_consolidation]` runtime config.
+///
+/// The actuator surface for pattern-driven Persona proposals:
+/// when the Phase 83 co-occurrence ledger surfaces a durable
+/// pair `(A, B)` whose endpoints are *both* helpful (Phase 82
+/// ledger, Q1a's conservative double-gate), the reflection
+/// cron asks the existing reflection LLM (Q2b) to phrase a
+/// `learned_context` facet and files it through the existing
+/// Phase 70 proposal chain. Same propose-only + edit-then-
+/// approve + Revert + core-protected flow; opt-in (Q4a).
+///
+/// `None` (no section) → the pass never runs; the Persona
+/// proposal pipeline is byte-identical to pre-Phase-87.
+/// `Some` arms the pass; it still no-ops unless
+/// `enabled = true`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonaConsolidationConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present and ledgers populated, no consolidation
+    /// proposals are filed until this is `true`.
+    pub enabled: bool,
+    /// The decayed Phase 83 pair-affinity floor a candidate
+    /// must clear — the same idea (and same default) as the
+    /// Phase 84 `recall_cluster.min_affinity`, applied to the
+    /// proposal-side of the symmetric arc.
+    pub min_affinity: f32,
+    /// Minimum observation count on the pair before it is
+    /// proposal-eligible. Mirrors Phase 85's
+    /// `decay_min_samples`: identity is never proposed on
+    /// thin evidence.
+    pub min_samples: u32,
+    /// Both endpoints' Phase 82 helpfulness-ledger scores must
+    /// be at least this value (Q1a's conservative double-gate).
+    /// Default `0.0` enforces "non-negative" — a pattern made
+    /// of topics that individually hurt is never proposed;
+    /// raise it to require *positive* helpfulness on both
+    /// sides.
+    pub min_topic_helpfulness: f32,
+    /// Hard cap on filings per reflection cycle. Mirrors the
+    /// Phase 80 `max_per_cycle` precedent — actuators on the
+    /// reflection cadence never flood the operator's queue.
+    pub max_proposals_per_cycle: u32,
+}
+
+/// Default pair-affinity floor. Same value (and same
+/// reasoning) as `DEFAULT_RC_MIN_AFFINITY` — the proposal-side
+/// of the symmetric arc adopts the recall-side's already-tuned
+/// floor.
+pub const DEFAULT_PC_MIN_AFFINITY: f32 = 1.0;
+/// Default sample-count floor on the pair. Same value as
+/// Phase 85's `DEFAULT_DECAY_MIN_SAMPLES` — identity is never
+/// proposed on thin evidence.
+pub const DEFAULT_PC_MIN_SAMPLES: u32 = 3;
+/// Default helpfulness floor on each endpoint: non-negative.
+/// A pattern of consistently-hurting topics is never proposed;
+/// "merely-not-harmful" is enough at the default.
+pub const DEFAULT_PC_MIN_TOPIC_HELPFULNESS: f32 = 0.0;
+/// Default per-cycle filing cap. Same value as the Phase 80
+/// proactive cap — the operator's review queue is the
+/// bottleneck, and a passive actuator should err on the side
+/// of patience.
+pub const DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1617,6 +1686,10 @@ struct RawToml {
     /// co-recall.
     #[serde(default)]
     recall_cluster: RawRecallCluster,
+    /// `[persona_consolidation]` section. Phase 87 —
+    /// pattern-driven Persona proposals.
+    #[serde(default)]
+    persona_consolidation: RawPersonaConsolidation,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2250,6 +2323,24 @@ struct RawRecallCluster {
     min_affinity: Option<f32>,
 }
 
+/// Phase 87 — `[persona_consolidation]` deserialize target.
+/// Absent section → all-`None` via `Default` → the loader
+/// maps to `persona_consolidation: None` (off; Persona
+/// proposal pipeline unchanged).
+#[derive(Debug, Default, Deserialize)]
+struct RawPersonaConsolidation {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    min_affinity: Option<f32>,
+    #[serde(default)]
+    min_samples: Option<u32>,
+    #[serde(default)]
+    min_topic_helpfulness: Option<f32>,
+    #[serde(default)]
+    max_proposals_per_cycle: Option<u32>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2633,6 +2724,10 @@ impl AivyxConfig {
         let recall_cluster = build_recall_cluster_config(
             &toml.recall_cluster,
         )?;
+        let persona_consolidation =
+            build_persona_consolidation_config(
+                &toml.persona_consolidation,
+            )?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3503,6 +3598,7 @@ impl AivyxConfig {
             proactive,
             persona_lifecycle,
             recall_cluster,
+            persona_consolidation,
             roles,
             active_role,
             profile,
@@ -4548,6 +4644,77 @@ fn build_recall_cluster_config(
         enabled,
         max_siblings,
         min_affinity,
+    }))
+}
+
+/// Phase 87 — `[persona_consolidation]` → optional runtime
+/// config. Absent section → `None`; partial section (any key
+/// set) → fill defaults and, only if `enabled = true`, validate
+/// the bounds (the Phase 80/81/84 staged-config pattern).
+fn build_persona_consolidation_config(
+    raw: &RawPersonaConsolidation,
+) -> Result<Option<PersonaConsolidationConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.min_affinity.is_some()
+        || raw.min_samples.is_some()
+        || raw.min_topic_helpfulness.is_some()
+        || raw.max_proposals_per_cycle.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let min_affinity =
+        raw.min_affinity.unwrap_or(DEFAULT_PC_MIN_AFFINITY);
+    let min_samples =
+        raw.min_samples.unwrap_or(DEFAULT_PC_MIN_SAMPLES);
+    let min_topic_helpfulness = raw
+        .min_topic_helpfulness
+        .unwrap_or(DEFAULT_PC_MIN_TOPIC_HELPFULNESS);
+    let max_proposals_per_cycle = raw
+        .max_proposals_per_cycle
+        .unwrap_or(DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE);
+
+    // Only an *armed* config must be coherent — a staged
+    // (enabled = false) section can be partial.
+    if enabled {
+        if min_affinity <= 0.0 {
+            return Err(ConfigError::Invalid {
+                field: "persona_consolidation.min_affinity",
+                reason: "`min_affinity` must be > 0.0".into(),
+            });
+        }
+        if min_samples == 0 {
+            return Err(ConfigError::Invalid {
+                field: "persona_consolidation.min_samples",
+                reason: "`min_samples` must be >= 1".into(),
+            });
+        }
+        if !min_topic_helpfulness.is_finite() {
+            return Err(ConfigError::Invalid {
+                field:
+                    "persona_consolidation.min_topic_helpfulness",
+                reason: "`min_topic_helpfulness` must be finite"
+                    .into(),
+            });
+        }
+        if max_proposals_per_cycle == 0 {
+            return Err(ConfigError::Invalid {
+                field:
+                    "persona_consolidation.max_proposals_per_cycle",
+                reason:
+                    "`max_proposals_per_cycle` must be >= 1"
+                        .into(),
+            });
+        }
+    }
+
+    Ok(Some(PersonaConsolidationConfig {
+        enabled,
+        min_affinity,
+        min_samples,
+        min_topic_helpfulness,
+        max_proposals_per_cycle,
     }))
 }
 

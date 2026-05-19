@@ -2307,6 +2307,12 @@ async fn run_async(
         // Phase 84 — `[recall_cluster]` config. Wired into the
         // recall provider's cluster-aware expansion below.
         recall_cluster: config_recall_cluster,
+        // Phase 87 — `[persona_consolidation]` config. Bound
+        // here so the new field on `AivyxConfig` is consumed
+        // by the destructure; Task 3 of Phase 87 wires it
+        // through `DaemonConfig` to the reflection-cron
+        // consolidation pass.
+        persona_consolidation: _config_persona_consolidation,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
