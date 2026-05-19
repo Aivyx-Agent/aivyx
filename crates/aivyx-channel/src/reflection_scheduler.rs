@@ -157,6 +157,33 @@ pub struct PersonaLifecycleDeps {
     >,
 }
 
+/// Phase 87 — handles the consolidation pass needs. Bundled
+/// like [`PersonaLifecycleDeps`]. `None` (no
+/// `[persona_consolidation]` / no co-occurrence + helpfulness
+/// substrate) → the pass is skipped entirely (pre-Phase-87
+/// behavior — no pattern-driven proposals). Even when `Some`,
+/// the pass no-ops unless `config.enabled`.
+pub struct PersonaConsolidationDeps {
+    pub config: aivyx_config::PersonaConsolidationConfig,
+    pub cooccurrence_ledger: std::sync::Arc<
+        crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+    >,
+    pub helpfulness_ledger: std::sync::Arc<
+        crate::helpfulness_ledger::PersistentHelpfulnessLedger,
+    >,
+    pub proposal_log: std::sync::Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    pub phraser: std::sync::Arc<
+        dyn crate::persona_consolidation::PairPhraser,
+    >,
+    /// Phase 87 (Q4a) — optional last-cycle stat sink for the
+    /// Phase 78 surface. `None` → breadcrumb-only.
+    pub stat: Option<
+        crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
+}
+
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
 /// short cron pattern) are picked up promptly even if the
 /// next computed fire happens to be hours away.
@@ -435,6 +462,7 @@ fn outcome_kind_label(summary: &TurnOutcomeSummary) -> &'static str {
 ///    `TriggerDispatch::fire(TriggerSource::Reflection, ...)`.
 /// 3. Sleep until the earliest pending fire (capped at
 ///    [`MAX_TICK_INTERVAL`]).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_reflection_scheduler(
     schedules: Vec<ReflectionScheduleConfig>,
     dispatch: TriggerDispatch,
@@ -442,6 +470,7 @@ pub async fn run_reflection_scheduler(
     recall_feedback: Option<RecallFeedbackDeps>,
     proactive: Option<ProactiveDeps>,
     persona_lifecycle: Option<PersonaLifecycleDeps>,
+    persona_consolidation: Option<PersonaConsolidationDeps>,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -493,6 +522,7 @@ pub async fn run_reflection_scheduler(
                     recall_feedback.as_ref(),
                     proactive.as_ref(),
                     persona_lifecycle.as_ref(),
+                    persona_consolidation.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -528,6 +558,7 @@ async fn fire_reflection(
     recall_feedback: Option<&RecallFeedbackDeps>,
     proactive: Option<&ProactiveDeps>,
     persona_lifecycle: Option<&PersonaLifecycleDeps>,
+    persona_consolidation: Option<&PersonaConsolidationDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -575,6 +606,14 @@ async fn fire_reflection(
     // It only files Pending proposals — never resolves them.
     if let Some(deps) = persona_lifecycle {
         run_persona_lifecycle_pass(deps, sched, now_ms).await;
+    }
+
+    // Phase 87 — pattern-driven Persona consolidation on the
+    // same cadence (Q3a). Independent of the above; no-op when
+    // absent or disabled. Files Pending proposals only (same
+    // Phase 70 propose-only + edit-then-approve flow).
+    if let Some(deps) = persona_consolidation {
+        run_persona_consolidation_pass(deps, sched, now_ms).await;
     }
 
     let user_message = format!(
@@ -1165,6 +1204,76 @@ async fn run_persona_lifecycle_pass(
                     },
                 );
             }
+        }
+    }
+}
+
+/// Phase 87 — drive the pattern-driven Persona consolidation
+/// pass on the reflection cadence (Q3a). For each surviving
+/// `(A, B)` from the conservative double-gate selector, ask
+/// the LLM phraser (Q2b) for a `learned_context` facet and
+/// file it as a Pending proposal — same Phase 70 propose-only
+/// + edit-then-approve flow.
+///
+/// Best-effort throughout: a per-candidate phrasing failure
+/// skips that candidate; an append failure is logged and
+/// skipped. A cycle-wide LLM outage (every survivor's
+/// phrasing returns `None`) is recorded on the Phase 78 stat
+/// so a quiet "0 filed" cycle stays distinguishable from "LLM
+/// unavailable."
+async fn run_persona_consolidation_pass(
+    deps: &PersonaConsolidationDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let now_secs = now_ms / 1000;
+
+    let candidates =
+        crate::persona_consolidation::select_candidates(
+            deps.cooccurrence_ledger.as_ref(),
+            deps.helpfulness_ledger.as_ref(),
+            deps.proposal_log.as_ref(),
+            &deps.config,
+            now_secs,
+        )
+        .await;
+    if candidates.is_empty() {
+        // Nothing to surface — the quiet case is a valid
+        // outcome (Phase 70 / 80 / 85 same shape). Skip the
+        // breadcrumb so chatty reflection cadences don't
+        // spam stderr.
+        return;
+    }
+
+    let source_label =
+        format!("persona-consolidation:{}", sched.name);
+    let stat = crate::persona_consolidation::consolidate(
+        candidates,
+        deps.phraser.as_ref(),
+        deps.proposal_log.as_ref(),
+        &source_label,
+        now_ms,
+    )
+    .await;
+
+    let llm_note =
+        if stat.llm_unavailable { " (LLM unavailable)" } else { "" };
+    eprintln!(
+        "aivyx persona-consolidation: schedule {:?} — \
+         filed {}{}",
+        sched.name, stat.filed, llm_note,
+    );
+
+    // Q4a — record this cycle for the Phase 78 surface (the
+    // actually-filed pairs + the LLM-availability flag, post
+    // selector dedup). Written every armed cycle so "0 filed"
+    // is itself legible.
+    if let Some(sink) = &deps.stat {
+        if let Ok(mut w) = sink.write() {
+            *w = Some(stat);
         }
     }
 }

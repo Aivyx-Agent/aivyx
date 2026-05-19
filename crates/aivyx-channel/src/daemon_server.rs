@@ -550,6 +550,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_recall_feedback,
                     rs_proactive,
                     rs_persona_lifecycle,
+                    // Phase 87 — pattern-driven Persona
+                    // consolidation deps; wired in Task 4
+                    // alongside the Phase 78 surface stat.
+                    // `None` for now → the pass is skipped
+                    // (byte-identical to pre-Phase-87).
+                    None,
                     rs_shutdown,
                 )
                 .await;

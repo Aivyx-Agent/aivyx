@@ -77,6 +77,7 @@ mod daemon_session;
 mod local;
 pub mod passphrase;
 pub mod persona;
+pub mod persona_consolidation;
 pub mod persona_context;
 pub mod persona_lifecycle;
 pub mod persona_proposal;
