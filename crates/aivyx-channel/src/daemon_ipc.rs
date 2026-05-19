@@ -383,6 +383,16 @@ pub enum QueryResponsePayload {
         cluster_recall: Option<
             crate::memory_recall::RecallClusterStat,
         >,
+        /// Phase 87 — the last reflection cycle's pattern-
+        /// driven Persona consolidation outcome (filed pairs +
+        /// the LLM-availability flag). `None` if
+        /// `[persona_consolidation]` is off, no cycle has
+        /// fired this daemon lifetime, or the substrate is
+        /// missing. `#[serde(default)]` so older frames decode.
+        #[serde(default)]
+        persona_consolidation: Option<
+            crate::persona_consolidation::PersonaConsolidationStat,
+        >,
     },
 }
 
@@ -1739,6 +1749,19 @@ mod tests {
                         crate::memory_recall::RecallClusterStat {
                             ts_secs: 1_715_005_000,
                             injected: 1,
+                            pairs: vec![(
+                                "deploy".into(),
+                                "rollback".into(),
+                            )],
+                        },
+                    ),
+                    persona_consolidation: Some(
+                        crate::persona_consolidation::PersonaConsolidationStat {
+                            ts_secs: 1_715_005_500,
+                            filed: 1,
+                            deduped: 0,
+                            skipped_unhelpful: 0,
+                            llm_unavailable: false,
                             pairs: vec![(
                                 "deploy".into(),
                                 "rollback".into(),

@@ -2307,12 +2307,10 @@ async fn run_async(
         // Phase 84 — `[recall_cluster]` config. Wired into the
         // recall provider's cluster-aware expansion below.
         recall_cluster: config_recall_cluster,
-        // Phase 87 — `[persona_consolidation]` config. Bound
-        // here so the new field on `AivyxConfig` is consumed
-        // by the destructure; Task 3 of Phase 87 wires it
-        // through `DaemonConfig` to the reflection-cron
-        // consolidation pass.
-        persona_consolidation: _config_persona_consolidation,
+        // Phase 87 — `[persona_consolidation]` config. Wired
+        // into the daemon's reflection-cron consolidation
+        // pass via DaemonConfig below.
+        persona_consolidation: config_persona_consolidation,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -2752,6 +2750,31 @@ async fn run_async(
         Some(p) if p.enabled => Some(
             aivyx_channel::persona_lifecycle::shared_persona_lifecycle_stat(),
         ),
+        _ => None,
+    };
+    // Phase 87 (Q4a) — shared last-consolidation-cycle stat:
+    // the pass writes it, GetLearningInsights reads the same
+    // handle. Created iff the consolidation pass is armed.
+    let persona_consolidation_stat =
+        match &config_persona_consolidation {
+            Some(p) if p.enabled => Some(
+                aivyx_channel::persona_consolidation::shared_persona_consolidation_stat(),
+            ),
+            _ => None,
+        };
+    // Phase 87 — production `PairPhraser` adapting the same
+    // `LlmProvider` the agent uses. Created iff the
+    // consolidation pass is armed; the reflection-cron path
+    // skips the pass when this is None (no LLM access).
+    let persona_consolidation_phraser: Option<
+        Arc<dyn aivyx_channel::persona_consolidation::PairPhraser>,
+    > = match &config_persona_consolidation {
+        Some(p) if p.enabled => Some(Arc::new(
+            aivyx_channel::persona_consolidation::LlmPairPhraser::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
         _ => None,
     };
     let persona_refiner: Option<
@@ -3996,6 +4019,17 @@ async fn run_async(
             // relevance providers read via the same handle.
             // `None` → embedding off → no window path.
             conversation_windows: conversation_windows.clone(),
+            // Phase 87 — pattern-driven Persona consolidation
+            // config + Phase 78 surface stat + LLM phraser.
+            // All three are `Some` iff the section is enabled
+            // (the daemon arms the pass only when every piece
+            // is present).
+            persona_consolidation_config:
+                config_persona_consolidation.clone(),
+            persona_consolidation_stat:
+                persona_consolidation_stat.clone(),
+            persona_consolidation_phraser:
+                persona_consolidation_phraser.clone(),
         })
             .await;
 

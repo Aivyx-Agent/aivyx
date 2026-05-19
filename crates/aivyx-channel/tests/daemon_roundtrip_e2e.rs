@@ -827,6 +827,9 @@ async fn two_concurrent_connections() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1125,6 +1128,9 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1221,6 +1227,9 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1641,6 +1650,9 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1914,6 +1926,9 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
         })
         .await
         .expect("daemon must complete");
@@ -2299,6 +2314,9 @@ async fn mission_queries_round_trip_over_ipc() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2588,6 +2606,9 @@ async fn audit_queries_round_trip_over_ipc() {
             persona_lifecycle_stat: None,
             memory_retention: Vec::new(),
             conversation_windows: None,
+            persona_consolidation_config: None,
+            persona_consolidation_stat: None,
+            persona_consolidation_phraser: None,
         })
         .await
         .expect("daemon must complete successfully");

@@ -281,6 +281,28 @@ pub struct DaemonConfig {
     /// recall query is byte-identical to pre-Phase-86).
     pub conversation_windows:
         Option<crate::conversation_window::SharedConversationWindows>,
+    /// Phase 87 — `[persona_consolidation]` config. `None` (no
+    /// section) → pattern-driven proposals are off; even
+    /// `Some` no-ops unless `enabled`. The reflection pass
+    /// reads this alongside the co-occurrence + helpfulness
+    /// ledgers + the proposal chain.
+    pub persona_consolidation_config:
+        Option<aivyx_config::PersonaConsolidationConfig>,
+    /// Phase 87 (Q4a) — shared last-cycle consolidation stat
+    /// the pass writes and `GetLearningInsights` reads. `None`
+    /// → consolidation not armed (the surface reports none).
+    pub persona_consolidation_stat: Option<
+        crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
+    /// Phase 87 — production `PairPhraser` for the
+    /// LLM-summarized facet phrasing (Q2b). `None` → the pass
+    /// has no LLM access and skips the cycle (the actuator
+    /// stays best-effort).
+    pub persona_consolidation_phraser: Option<
+        std::sync::Arc<
+            dyn crate::persona_consolidation::PairPhraser,
+        >,
+    >,
 }
 
 /// Run the daemon server.
@@ -331,6 +353,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_lifecycle_config,
         persona_lifecycle_stat,
         conversation_windows,
+        persona_consolidation_config,
+        persona_consolidation_stat,
+        persona_consolidation_phraser,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -535,6 +560,39 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Phase 87 — pattern-driven Persona consolidation
+            // deps: armed only when the section is enabled AND
+            // every substrate is present (co-occurrence ledger
+            // + helpfulness ledger + proposal chain + an LLM
+            // phraser the binary builds with the existing
+            // reflection LLM provider). Any missing piece →
+            // None → the pass is skipped while reflection
+            // still fires (byte-identical to pre-Phase-87).
+            let rs_persona_consolidation = match (
+                persona_consolidation_config.clone(),
+                cooccurrence_ledger.clone(),
+                helpfulness_ledger.clone(),
+                persona_proposal_log.clone(),
+                persona_consolidation_phraser.clone(),
+            ) {
+                (
+                    Some(cfg),
+                    Some(cooc),
+                    Some(helps),
+                    Some(plog),
+                    Some(phraser),
+                ) if cfg.enabled => Some(
+                    crate::reflection_scheduler::PersonaConsolidationDeps {
+                        config: cfg,
+                        cooccurrence_ledger: cooc,
+                        helpfulness_ledger: helps,
+                        proposal_log: plog,
+                        phraser,
+                        stat: persona_consolidation_stat.clone(),
+                    },
+                ),
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -550,12 +608,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_recall_feedback,
                     rs_proactive,
                     rs_persona_lifecycle,
-                    // Phase 87 — pattern-driven Persona
-                    // consolidation deps; wired in Task 4
-                    // alongside the Phase 78 surface stat.
-                    // `None` for now → the pass is skipped
-                    // (byte-identical to pre-Phase-87).
-                    None,
+                    rs_persona_consolidation,
                     rs_shutdown,
                 )
                 .await;
@@ -782,6 +835,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             proactive_stat: proactive_stat.clone(),
             persona_lifecycle_stat: persona_lifecycle_stat.clone(),
             conversation_windows: conversation_windows.clone(),
+            persona_consolidation_stat:
+                persona_consolidation_stat.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -882,6 +937,12 @@ struct ConnectionContext {
     /// embed a multi-turn query.
     conversation_windows:
         Option<crate::conversation_window::SharedConversationWindows>,
+    /// Phase 87 (Q4a) — last-reflection-cycle pattern-driven
+    /// Persona consolidation stat for the
+    /// `GetLearningInsights` surface.
+    persona_consolidation_stat: Option<
+        crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -908,6 +969,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         proactive_stat,
         persona_lifecycle_stat,
         conversation_windows,
+        persona_consolidation_stat,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1286,6 +1348,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_cluster_stat.as_ref(),
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
+                                persona_consolidation_stat.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1540,6 +1603,7 @@ async fn run_single_connection_daemon(
         proactive_stat: None,
         persona_lifecycle_stat: None,
         conversation_windows: None,
+        persona_consolidation_stat: None,
     })
     .await
 }
@@ -1590,6 +1654,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_lifecycle_stat: None,
         memory_retention: Vec::new(),
         conversation_windows: None,
+        persona_consolidation_config: None,
+        persona_consolidation_stat: None,
+        persona_consolidation_phraser: None,
     }).await
 }
 
@@ -1773,6 +1840,9 @@ async fn handle_query(
     >,
     persona_lifecycle_stat: Option<
         &crate::persona_lifecycle::SharedPersonaLifecycleStat,
+    >,
+    persona_consolidation_stat: Option<
+        &crate::persona_consolidation::SharedPersonaConsolidationStat,
     >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
@@ -2217,6 +2287,12 @@ async fn handle_query(
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             let persona_lifecycle = persona_lifecycle_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            // Phase 87 (Q4a) — last reflection cycle's
+            // pattern-driven consolidation outcome (same
+            // shared-handle pattern as persona_selection /
+            // cluster_recall).
+            let persona_consolidation = persona_consolidation_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 82 — durable accumulated helpfulness (the
             // longitudinal view). Best-effort: a ledger error
             // collapses to `None`, never breaking the surface;
@@ -2262,6 +2338,7 @@ async fn handle_query(
                     accumulated_helpfulness,
                     cooccurrence,
                     cluster_recall,
+                    persona_consolidation,
                 };
             };
 
@@ -2324,6 +2401,7 @@ async fn handle_query(
                 accumulated_helpfulness,
                 cooccurrence,
                 cluster_recall,
+                persona_consolidation,
             }
         }
     }
