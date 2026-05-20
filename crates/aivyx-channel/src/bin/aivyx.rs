@@ -2315,11 +2315,12 @@ async fn run_async(
         // Task 4 of Phase 91 wires it through DaemonConfig
         // to the reflection-cron LLM-judged recall pass.
         recall_judgment: _config_recall_judgment,
-        // Phase 93 — `[recall_feedback]` config. Bound here;
-        // Task 4 of Phase 93 wires it through DaemonConfig
-        // to thread the per-hit judgment-signal switch into
-        // `correlate_detailed`.
-        recall_feedback: _config_recall_feedback,
+        // Phase 93 — `[recall_feedback]` config. Wired
+        // through DaemonConfig to thread the per-hit
+        // judgment-signal switch into `correlate_detailed`
+        // (both the reflection-cron actuator + the
+        // GetLearningInsights surface).
+        recall_feedback: config_recall_feedback,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -4102,6 +4103,14 @@ async fn run_async(
             recall_judgment_stat:
                 recall_judgment_stat.clone(),
             recall_judge: recall_judge.clone(),
+            // Phase 93 — `[recall_feedback]` config threaded
+            // into the daemon. Drives `correlate_detailed` in
+            // both the reflection-cron recall-feedback pass
+            // AND the `GetLearningInsights` IPC surface so
+            // the operator's insights view reflects the same
+            // signal source the actuator uses.
+            recall_feedback_config:
+                config_recall_feedback.clone(),
         })
             .await;
 

@@ -94,6 +94,13 @@ pub struct RecallFeedbackDeps {
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    /// Phase 93 — flip `correlate_detailed` from the
+    /// pre-Phase-93 structural-only behaviour (the default,
+    /// `false`) to per-hit judgment override with structural
+    /// fallback for un-judged hits (`true`). Threaded from
+    /// `[recall_feedback].use_judgment_signal`; absent
+    /// section → `false`.
+    pub use_judgment_signal: bool,
 }
 
 /// Phase 80 — handles the proactive-surfacing pass needs.
@@ -727,7 +734,9 @@ async fn run_recall_feedback_pass(
     match deps.recall_log.events_since(since).await {
         Ok(recalls) if !recalls.is_empty() => {
             let tally = crate::recall_feedback::correlate(
-                &recalls, summaries, false,
+                &recalls,
+                summaries,
+                deps.use_judgment_signal,
             );
             if !tally.is_empty() {
                 let promoted =
@@ -801,7 +810,9 @@ async fn run_recall_feedback_pass(
                 if let Some(cooc) = &deps.cooccurrence_ledger {
                     let detail =
                         crate::recall_feedback::correlate_detailed(
-                            &recalls, summaries, false,
+                            &recalls,
+                            summaries,
+                            deps.use_judgment_signal,
                         )
                         .1;
                     let mut pair_net: std::collections::HashMap<
@@ -980,6 +991,14 @@ async fn run_proactive_pass(
                 .saturating_sub(sched.lookback_window_secs);
             match rl.events_since(since).await {
                 Ok(recalls) => {
+                    // Phase 93 — proactive's RecallCluster
+                    // signal stays on the structural-only
+                    // path even when `[recall_feedback]
+                    // .use_judgment_signal = true`. The
+                    // augment is scoped to the recall-feedback
+                    // actuator (memory promotion + Persona
+                    // proposals); extending it into proactive
+                    // surfacing is a future-phase decision.
                     crate::recall_feedback::correlate(
                         &recalls, summaries, false,
                     )
@@ -2164,6 +2183,7 @@ mod tests {
             gc_retain_secs: 2_000,
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
+            use_judgment_signal: false,
         };
 
         // now well after the last event; whole window covered.
@@ -2199,6 +2219,194 @@ mod tests {
             proposal_log.list(ProposalStatusFilter::Pending).len(),
             1,
             "second pass must not re-file the proposal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 93 — judgment-signal-driven recall feedback ----
+
+    /// Phase 93 — the recall-feedback pass with
+    /// `use_judgment_signal = true` accumulates per-hit
+    /// judgment-driven contributions through to the
+    /// retention actuator. Three entries under one topic,
+    /// each recalled in its own clean (+WEIGHT structural)
+    /// turn. The hits carry: Used / Hurt / None judgments.
+    /// With the knob on:
+    /// - Used → +WEIGHT (judgment) → promoted.
+    /// - Hurt → -WEIGHT (judgment overrides positive
+    ///   structural) → NOT promoted.
+    /// - None → +WEIGHT (structural fallback) → promoted.
+    /// Topic net = +WEIGHT (Used) + -WEIGHT (Hurt) + +WEIGHT
+    /// (None) = +WEIGHT, below `PROPOSAL_TOPIC_THRESHOLD =
+    /// 3*WEIGHT` → no proposal filed (the augment changes
+    /// what gets pruned, not the proposal pipeline's
+    /// threshold).
+    #[tokio::test]
+    async fn judgment_signal_drives_per_hit_promotion() {
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+            RecallJudgment,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-judg-signal-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([93u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"judgment-signal-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        let s = SessionId::new();
+        let sid = s.to_string();
+
+        let seq_used = memory
+            .put("proj", "used-note")
+            .await
+            .unwrap();
+        let seq_hurt = memory
+            .put("proj", "hurt-note")
+            .await
+            .unwrap();
+        let seq_none = memory
+            .put("proj", "unjudged-note")
+            .await
+            .unwrap();
+
+        let judgments = [
+            (seq_used, Some(RecallJudgment::Used)),
+            (seq_hurt, Some(RecallJudgment::Hurt)),
+            (seq_none, None),
+        ];
+        for (i, (seq, judgment)) in
+            judgments.iter().enumerate()
+        {
+            recall_log
+                .append(&RecallEvent {
+                    ts_secs: 1000 + (i as u64) * 100,
+                    session_id: s,
+                    hits: vec![RecallHit {
+                        topic: "proj".into(),
+                        seq: *seq,
+                        score: 0.9,
+                        cluster: false,
+                        judgment: *judgment,
+                    }],
+                })
+                .await
+                .unwrap();
+        }
+        let summaries: Vec<OutcomeSummary> = (0..3u64)
+            .map(|i| OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: format!("t{i}"),
+                started_at_unix_ms: (1000 + i * 100) * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 500,
+            })
+            .collect();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 1_000_000,
+            role_override: None,
+            enabled: true,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 2_000,
+            helpfulness_ledger: None,
+            cooccurrence_ledger: None,
+            // Phase 93 — the knob under test.
+            use_judgment_signal: true,
+        };
+
+        run_recall_feedback_pass(&deps, &sched, &summaries, 2_000_000)
+            .await;
+
+        // Actuator A — per-hit judgment-driven outcome:
+        //   Used → promoted (judgment +WEIGHT)
+        //   Hurt → NOT promoted (judgment -WEIGHT overrides +turn)
+        //   None → promoted (structural fallback +WEIGHT)
+        let groups =
+            memory.scan_prefix("", usize::MAX).await.unwrap();
+        let proj = groups
+            .iter()
+            .find(|(t, _)| t == "proj")
+            .map(|(_, e)| e.clone())
+            .unwrap();
+        let used_lr = proj
+            .iter()
+            .find(|e| e.seq == seq_used)
+            .unwrap()
+            .last_read_at_secs;
+        let hurt_lr = proj
+            .iter()
+            .find(|e| e.seq == seq_hurt)
+            .unwrap()
+            .last_read_at_secs;
+        let none_lr = proj
+            .iter()
+            .find(|e| e.seq == seq_none)
+            .unwrap()
+            .last_read_at_secs;
+        assert!(
+            used_lr > 0,
+            "Used-judged entry must be promoted (got {used_lr})"
+        );
+        assert_eq!(
+            hurt_lr, 0,
+            "Hurt-judged entry must NOT be promoted despite \
+             the +WEIGHT structural turn signal"
+        );
+        assert!(
+            none_lr > 0,
+            "Un-judged entry must fall back to the structural \
+             +WEIGHT signal and be promoted (got {none_lr})"
+        );
+
+        // Actuator B — topic net is +1 (Used) + -1 (Hurt) +
+        // +1 (None) = +1 < PROPOSAL_TOPIC_THRESHOLD = 3*WEIGHT
+        // → no Pending proposal filed.
+        let pending = proposal_log.list(ProposalStatusFilter::Pending);
+        assert!(
+            pending.is_empty(),
+            "topic net is below the proposal threshold; no \
+             proposal should have been filed (got {} pending)",
+            pending.len(),
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2304,6 +2512,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: Some(Arc::clone(&ledger)),
             cooccurrence_ledger: None,
+            use_judgment_signal: false,
         };
 
         // Cycle 1 at now_secs = 1_000_000 → seed ewma = +3.
@@ -2464,6 +2673,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: None,
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            use_judgment_signal: false,
         };
 
         // Cycle 1 → pair {deploy,rollback} = +2 (two helpful
@@ -2676,6 +2886,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: Some(Arc::clone(&help)),
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            use_judgment_signal: false,
         };
         run_recall_feedback_pass(
             &deps,

@@ -321,6 +321,14 @@ pub struct DaemonConfig {
     pub recall_judge: Option<
         std::sync::Arc<dyn crate::recall_judgment::RecallJudge>,
     >,
+    /// Phase 93 — `[recall_feedback]` config. `None` (no
+    /// section) → `correlate_detailed` runs with the
+    /// pre-Phase-93 structural-only behaviour. `Some` with
+    /// `use_judgment_signal = true` flips the correlator to
+    /// per-hit judgment override (un-judged hits keep the
+    /// structural fallback).
+    pub recall_feedback_config:
+        Option<aivyx_config::RecallFeedbackConfig>,
 }
 
 /// Run the daemon server.
@@ -377,6 +385,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         recall_judgment_config,
         recall_judgment_stat,
         recall_judge,
+        recall_feedback_config,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -521,6 +530,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         // ledger (zero-config, same substrate).
                         cooccurrence_ledger:
                             cooccurrence_ledger.clone(),
+                        // Phase 93 — per-hit judgment override
+                        // when `[recall_feedback].use_judgment_signal
+                        // = true`. Absent section → `false`
+                        // (byte-identical to pre-Phase-93).
+                        use_judgment_signal: recall_feedback_config
+                            .as_ref()
+                            .map(|c| c.use_judgment_signal)
+                            .unwrap_or(false),
                     })
                 }
                 _ => None,
@@ -915,6 +932,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             persona_consolidation_stat:
                 persona_consolidation_stat.clone(),
             recall_judgment_stat: recall_judgment_stat.clone(),
+            recall_feedback_config: recall_feedback_config.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1026,6 +1044,11 @@ struct ConnectionContext {
     recall_judgment_stat: Option<
         crate::recall_judgment::SharedRecallJudgmentStat,
     >,
+    /// Phase 93 — `[recall_feedback]` config for the
+    /// `GetLearningInsights` surface so the insights view
+    /// reflects the same per-hit judgment override that the
+    /// reflection-cron actuator is using.
+    recall_feedback_config: Option<aivyx_config::RecallFeedbackConfig>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1054,6 +1077,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         conversation_windows,
         persona_consolidation_stat,
         recall_judgment_stat,
+        recall_feedback_config,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1434,6 +1458,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 persona_lifecycle_stat.as_ref(),
                                 persona_consolidation_stat.as_ref(),
                                 recall_judgment_stat.as_ref(),
+                                recall_feedback_config.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1690,6 +1715,7 @@ async fn run_single_connection_daemon(
         conversation_windows: None,
         persona_consolidation_stat: None,
         recall_judgment_stat: None,
+        recall_feedback_config: None,
     })
     .await
 }
@@ -1746,6 +1772,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_judgment_config: None,
         recall_judgment_stat: None,
         recall_judge: None,
+        recall_feedback_config: None,
     }).await
 }
 
@@ -1936,6 +1963,7 @@ async fn handle_query(
     recall_judgment_stat: Option<
         &crate::recall_judgment::SharedRecallJudgmentStat,
     >,
+    recall_feedback_config: Option<&aivyx_config::RecallFeedbackConfig>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -2476,7 +2504,11 @@ async fn handle_query(
             };
             let (tally, detail) =
                 crate::recall_feedback::correlate_detailed(
-                    &recalls, &outcomes, false,
+                    &recalls,
+                    &outcomes,
+                    recall_feedback_config
+                        .map(|c| c.use_judgment_signal)
+                        .unwrap_or(false),
                 );
             let proposals = persona_proposal_log
                 .map(|l| {
