@@ -197,6 +197,28 @@ pub struct PersonaConsolidationDeps {
     >,
 }
 
+/// Phase 91 — handles the LLM-judged recall pass needs.
+/// Bundled like [`PersonaConsolidationDeps`]. `None` (no
+/// `[recall_judgment]` / no recall-log + judge substrate) →
+/// the pass is skipped entirely (pre-Phase-91 behavior — the
+/// structural recall-feedback signal is the only signal).
+/// Even when `Some`, the pass no-ops unless `config.enabled`.
+pub struct RecallJudgmentDeps {
+    pub config: aivyx_config::RecallJudgmentConfig,
+    pub recall_log: std::sync::Arc<
+        crate::recall_log::PersistentRecallLog,
+    >,
+    pub memory: std::sync::Arc<dyn aivyx_memory::Memory>,
+    pub judge: std::sync::Arc<
+        dyn crate::recall_judgment::RecallJudge,
+    >,
+    /// Phase 91 (Q4a) — optional last-cycle stat sink for the
+    /// Phase 78 surface. `None` → breadcrumb-only.
+    pub stat: Option<
+        crate::recall_judgment::SharedRecallJudgmentStat,
+    >,
+}
+
 /// Cap the adaptive sleep so newly-firing schedules (e.g. a
 /// short cron pattern) are picked up promptly even if the
 /// next computed fire happens to be hours away.
@@ -484,6 +506,7 @@ pub async fn run_reflection_scheduler(
     proactive: Option<ProactiveDeps>,
     persona_lifecycle: Option<PersonaLifecycleDeps>,
     persona_consolidation: Option<PersonaConsolidationDeps>,
+    recall_judgment: Option<RecallJudgmentDeps>,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -536,6 +559,7 @@ pub async fn run_reflection_scheduler(
                     proactive.as_ref(),
                     persona_lifecycle.as_ref(),
                     persona_consolidation.as_ref(),
+                    recall_judgment.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -572,6 +596,7 @@ async fn fire_reflection(
     proactive: Option<&ProactiveDeps>,
     persona_lifecycle: Option<&PersonaLifecycleDeps>,
     persona_consolidation: Option<&PersonaConsolidationDeps>,
+    recall_judgment: Option<&RecallJudgmentDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -627,6 +652,16 @@ async fn fire_reflection(
     // Phase 70 propose-only + edit-then-approve flow).
     if let Some(deps) = persona_consolidation {
         run_persona_consolidation_pass(deps, sched, now_ms).await;
+    }
+
+    // Phase 91 — LLM-judged per-recall classification on the
+    // same cadence (Q1a). Independent of the above; no-op when
+    // absent or disabled. Writes the new `judgment` field on
+    // unjudged recall hits (Q3a augment) — every existing
+    // accumulator stays byte-identical (no consumer reads the
+    // new field in v1).
+    if let Some(deps) = recall_judgment {
+        run_recall_judgment_pass(deps, sched, now_ms).await;
     }
 
     let user_message = format!(
@@ -1322,6 +1357,214 @@ async fn run_persona_consolidation_pass(
     if let Some(sink) = &deps.stat {
         if let Ok(mut w) = sink.write() {
             *w = Some(stat);
+        }
+    }
+}
+
+/// Phase 91 — drive the LLM-judged recall pass on the
+/// reflection cadence (Q1a). Reads unjudged recall events in
+/// the lookback window (oldest-first, up to
+/// `max_recalls_per_cycle` HITS), recovers the recalled
+/// memory body for each hit, builds the batch, calls the
+/// judge once (Q1a — one LLM call per cycle), patches each
+/// judgment back to the recall log (Q3a augment — every
+/// existing accumulator stays byte-identical).
+///
+/// Best-effort throughout: a per-hit recovery failure skips
+/// that hit; a cycle-wide LLM failure records
+/// `llm_unavailable = true` and ends gracefully.
+///
+/// **v1 simplification.** `RecallJudgeInput.response_text` is
+/// filled with the recalled topic name as a context hint —
+/// not the model's actual response text (which isn't in the
+/// audit chain today). The Phase 91 LLM judgment is therefore
+/// based on `(topic, body, topic-as-hint)` in v1; future
+/// phases enrich the response context via audit-chain
+/// extension or per-turn capture. The Q3a augment posture
+/// means even this weaker v1 signal changes no existing
+/// accumulator behavior — it is captured for inspection +
+/// validated by a future actuator-side phase.
+async fn run_recall_judgment_pass(
+    deps: &RecallJudgmentDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let now_secs = now_ms / 1000;
+    let since = now_secs.saturating_sub(sched.lookback_window_secs);
+
+    let mut rows = match deps
+        .recall_log
+        .events_with_keys_since(since)
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return, // ledger error — quiet best-effort
+    };
+    // Cap: the operator-set per-cycle bound is on HITS, not
+    // events. Walk rows oldest-first and stop once the
+    // unjudged-hit budget is exhausted; the remainder rolls
+    // to the next cycle.
+    let cap = deps.config.max_recalls_per_cycle as usize;
+    let mut budget = cap;
+    let mut total_unjudged = 0usize;
+    let mut judge_inputs: Vec<crate::recall_judgment::RecallJudgeInput> =
+        Vec::new();
+    // `(row_index, hit_index)` for each input, so the post-
+    // judge update knows where to put each result back.
+    let mut targets: Vec<(usize, usize)> = Vec::new();
+    for (row_i, (_, event)) in rows.iter().enumerate() {
+        for (hit_i, hit) in event.hits.iter().enumerate() {
+            if hit.judgment.is_some() {
+                continue;
+            }
+            total_unjudged += 1;
+            if budget == 0 {
+                continue;
+            }
+            // Best-effort body recovery from the substrate.
+            // The recall log carries `(topic, seq)`; we walk
+            // the topic's recent entries and find the one
+            // matching `seq`. A missing entry (evicted /
+            // forgotten) → skip this hit; the budget is
+            // unchanged.
+            let body = match deps
+                .memory
+                .get_recent(&hit.topic, 32)
+                .await
+            {
+                Ok(entries) => entries
+                    .into_iter()
+                    .find(|e| e.seq == hit.seq)
+                    .map(|e| e.body),
+                Err(_) => None,
+            };
+            let Some(body) = body else {
+                continue;
+            };
+            judge_inputs.push(
+                crate::recall_judgment::RecallJudgeInput {
+                    recalled_topic: hit.topic.clone(),
+                    recalled_body: body,
+                    // v1 — `response_text` placeholder; the
+                    // recalled topic itself is a weak
+                    // context hint. Future phases enrich.
+                    response_text: hit.topic.clone(),
+                },
+            );
+            targets.push((row_i, hit_i));
+            budget -= 1;
+        }
+    }
+
+    let skipped = total_unjudged.saturating_sub(judge_inputs.len());
+
+    if judge_inputs.is_empty() {
+        // Nothing to judge this cycle: either every recall is
+        // already judged or every unjudged hit failed body
+        // recovery. Record the (skipped) stat if a sink is
+        // attached so the surface stays legible; no LLM call.
+        if let Some(sink) = &deps.stat {
+            if let Ok(mut w) = sink.write() {
+                *w = Some(
+                    crate::recall_judgment::RecallJudgmentStat {
+                        ts_secs: now_secs,
+                        judged: 0,
+                        used: 0,
+                        irrelevant: 0,
+                        hurt: 0,
+                        skipped: skipped as u32,
+                        llm_unavailable: false,
+                        pairs: Vec::new(),
+                    },
+                );
+            }
+        }
+        return;
+    }
+
+    let judgments = deps.judge.judge(&judge_inputs).await;
+    let llm_unavailable = judgments.iter().all(Option::is_none);
+
+    let mut used = 0u32;
+    let mut irrelevant = 0u32;
+    let mut hurt = 0u32;
+    let mut pairs: Vec<(
+        String,
+        crate::recall_judgment::RecallJudgment,
+    )> = Vec::new();
+    // Track which rows we actually mutated so we only write
+    // them back once each (one PUT per row, no matter how
+    // many hits got patched).
+    let mut dirty: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    for ((row_i, hit_i), judgment) in
+        targets.iter().zip(judgments.iter())
+    {
+        let Some(j) = judgment else {
+            continue;
+        };
+        match j {
+            crate::recall_judgment::RecallJudgment::Used => {
+                used += 1;
+            }
+            crate::recall_judgment::RecallJudgment::Irrelevant => {
+                irrelevant += 1;
+            }
+            crate::recall_judgment::RecallJudgment::Hurt => {
+                hurt += 1;
+            }
+        }
+        let topic = rows[*row_i].1.hits[*hit_i].topic.clone();
+        pairs.push((topic, *j));
+        rows[*row_i].1.hits[*hit_i].judgment = Some(*j);
+        dirty.insert(*row_i);
+    }
+    let judged = used + irrelevant + hurt;
+
+    // Write back the dirty rows. A persist error per row
+    // is logged but never fatal — the next cycle re-picks
+    // up the still-unjudged hits.
+    for row_i in &dirty {
+        let (key, event) = &rows[*row_i];
+        if let Err(e) =
+            deps.recall_log.update_event(key, event).await
+        {
+            eprintln!(
+                "aivyx recall-judgment: schedule {:?} \
+                 update_event failed for row {}: {e}",
+                sched.name, row_i,
+            );
+        }
+    }
+
+    let note = if llm_unavailable {
+        " (LLM unavailable)"
+    } else {
+        ""
+    };
+    eprintln!(
+        "aivyx recall-judgment: schedule {:?} — judged {} \
+         (used={}, irrelevant={}, hurt={}, skipped={}){note}",
+        sched.name, judged, used, irrelevant, hurt, skipped,
+    );
+
+    if let Some(sink) = &deps.stat {
+        if let Ok(mut w) = sink.write() {
+            *w = Some(
+                crate::recall_judgment::RecallJudgmentStat {
+                    ts_secs: now_secs,
+                    judged,
+                    used,
+                    irrelevant,
+                    hurt,
+                    skipped: skipped as u32,
+                    llm_unavailable,
+                    pairs,
+                },
+            );
         }
     }
 }
@@ -3371,6 +3614,302 @@ mod tests {
             1,
             "decay-signal disarmed → no new proposals"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 91 — LLM-judged recall pass ---------------------
+
+    #[tokio::test]
+    async fn judgment_pass_records_idempotent_with_dedup_and_cap()
+    {
+        use crate::recall_judgment::{
+            shared_recall_judgment_stat, RecallJudgeInput,
+            RecallJudge, RecallJudgment,
+        };
+        use crate::recall_log::{
+            PersistentRecallLog, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::InMemoryMemory;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use async_trait::async_trait;
+        use std::sync::Arc;
+
+        /// Returns `Used` for the first input, `Irrelevant`
+        /// for the second, `Hurt` for the third, ... cycling.
+        struct DeterministicJudge;
+        #[async_trait]
+        impl RecallJudge for DeterministicJudge {
+            async fn judge(
+                &self,
+                inputs: &[RecallJudgeInput],
+            ) -> Vec<Option<RecallJudgment>> {
+                inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| match i % 3 {
+                        0 => Some(RecallJudgment::Used),
+                        1 => Some(RecallJudgment::Irrelevant),
+                        _ => Some(RecallJudgment::Hurt),
+                    })
+                    .collect()
+            }
+        }
+        /// Returns `None` for every input — simulates a
+        /// cycle-wide LLM outage.
+        struct DownJudge;
+        #[async_trait]
+        impl RecallJudge for DownJudge {
+            async fn judge(
+                &self,
+                inputs: &[RecallJudgeInput],
+            ) -> Vec<Option<RecallJudgment>> {
+                vec![None; inputs.len()]
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-rj-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([91u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let memory: Arc<dyn aivyx_memory::Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        // Seed three recallable entries — body recovery
+        // succeeds for all three.
+        let s1 = memory.put("deploy", "the runbook").await.unwrap();
+        let s2 =
+            memory.put("rollback", "git revert").await.unwrap();
+        let s3 = memory.put("auth", "JWT details").await.unwrap();
+
+        // Append one recall event with three unjudged hits.
+        let now_secs = 1_000_000u64;
+        let now_ms = now_secs * 1000;
+        recall_log
+            .append(&crate::recall_log::RecallEvent {
+                ts_secs: now_secs,
+                session_id: aivyx_core::SessionId::new(),
+                hits: vec![
+                    RecallHit {
+                        topic: "deploy".into(),
+                        seq: s1,
+                        score: 0.9,
+                        cluster: false,
+                        judgment: None,
+                    },
+                    RecallHit {
+                        topic: "rollback".into(),
+                        seq: s2,
+                        score: 0.8,
+                        cluster: false,
+                        judgment: None,
+                    },
+                    RecallHit {
+                        topic: "auth".into(),
+                        seq: s3,
+                        score: 0.7,
+                        cluster: false,
+                        judgment: None,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+        let stat = shared_recall_judgment_stat();
+        let deps = RecallJudgmentDeps {
+            config: aivyx_config::RecallJudgmentConfig {
+                enabled: true,
+                max_recalls_per_cycle: 10,
+            },
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            judge: Arc::new(DeterministicJudge),
+            stat: Some(Arc::clone(&stat)),
+        };
+
+        // Cycle 1: every hit is unjudged → all three get
+        // classified (Used / Irrelevant / Hurt rotation).
+        run_recall_judgment_pass(&deps, &sched, now_ms).await;
+        let events =
+            recall_log.events_since(0).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].hits[0].judgment,
+            Some(RecallJudgment::Used),
+        );
+        assert_eq!(
+            events[0].hits[1].judgment,
+            Some(RecallJudgment::Irrelevant),
+        );
+        assert_eq!(
+            events[0].hits[2].judgment,
+            Some(RecallJudgment::Hurt),
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.judged, 3);
+            assert_eq!(s.used, 1);
+            assert_eq!(s.irrelevant, 1);
+            assert_eq!(s.hurt, 1);
+            assert_eq!(s.skipped, 0);
+            assert!(!s.llm_unavailable);
+            assert_eq!(s.pairs.len(), 3);
+        }
+
+        // Cycle 2: every hit is already judged → idempotent.
+        // The pass walks the row, finds no unjudged hits,
+        // builds an empty input batch, never calls the LLM.
+        // The stat records `judged = 0, skipped = 0`.
+        run_recall_judgment_pass(&deps, &sched, now_ms).await;
+        let events2 =
+            recall_log.events_since(0).await.unwrap();
+        // Same three judgments — no mutation.
+        assert_eq!(
+            events2[0].hits[0].judgment,
+            Some(RecallJudgment::Used),
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.judged, 0);
+            assert_eq!(s.skipped, 0);
+            assert!(!s.llm_unavailable);
+        }
+
+        // Cycle 3: a new event with two unjudged hits + a
+        // cap of 1 → exactly one hit gets judged, one is
+        // skipped (and rolled to the next cycle).
+        recall_log
+            .append(&crate::recall_log::RecallEvent {
+                ts_secs: now_secs + 1,
+                session_id: aivyx_core::SessionId::new(),
+                hits: vec![
+                    RecallHit {
+                        topic: "deploy".into(),
+                        seq: s1,
+                        score: 0.5,
+                        cluster: false,
+                        judgment: None,
+                    },
+                    RecallHit {
+                        topic: "rollback".into(),
+                        seq: s2,
+                        score: 0.4,
+                        cluster: false,
+                        judgment: None,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        let capped_deps = RecallJudgmentDeps {
+            config: aivyx_config::RecallJudgmentConfig {
+                enabled: true,
+                max_recalls_per_cycle: 1,
+            },
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            judge: Arc::new(DeterministicJudge),
+            stat: Some(Arc::clone(&stat)),
+        };
+        run_recall_judgment_pass(
+            &capped_deps,
+            &sched,
+            now_ms + 1000,
+        )
+        .await;
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.judged, 1, "cap = 1 → one judged");
+            assert_eq!(s.skipped, 1, "the other rolls over");
+        }
+
+        // Cycle 4: `enabled = false` → no-op even with new
+        // unjudged hits (a fresh recall event seeded below).
+        recall_log
+            .append(&crate::recall_log::RecallEvent {
+                ts_secs: now_secs + 2,
+                session_id: aivyx_core::SessionId::new(),
+                hits: vec![RecallHit {
+                    topic: "deploy".into(),
+                    seq: s1,
+                    score: 0.3,
+                    cluster: false,
+                    judgment: None,
+                }],
+            })
+            .await
+            .unwrap();
+        let off = RecallJudgmentDeps {
+            config: aivyx_config::RecallJudgmentConfig {
+                enabled: false,
+                max_recalls_per_cycle: 10,
+            },
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            judge: Arc::new(DeterministicJudge),
+            stat: Some(Arc::clone(&stat)),
+        };
+        // Stat from cycle 3 is preserved (the pass returns
+        // immediately on disabled config without touching
+        // the sink). Re-read after cycle 4 to confirm.
+        let snapshot_before =
+            stat.read().unwrap().clone().unwrap();
+        run_recall_judgment_pass(&off, &sched, now_ms + 2000)
+            .await;
+        let snapshot_after =
+            stat.read().unwrap().clone().unwrap();
+        assert_eq!(snapshot_before, snapshot_after);
+
+        // Cycle 5: LLM-down judge → every survivor returns
+        // `None`; `llm_unavailable = true` records, no hit
+        // mutates.
+        let down = RecallJudgmentDeps {
+            config: aivyx_config::RecallJudgmentConfig {
+                enabled: true,
+                max_recalls_per_cycle: 10,
+            },
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            judge: Arc::new(DownJudge),
+            stat: Some(Arc::clone(&stat)),
+        };
+        run_recall_judgment_pass(&down, &sched, now_ms + 3000)
+            .await;
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert!(
+                s.llm_unavailable,
+                "every survivor's judgment was `None`"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

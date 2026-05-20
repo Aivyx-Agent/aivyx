@@ -187,6 +187,51 @@ impl PersistentRecallLog {
         }
         Ok(deleted)
     }
+
+    /// Phase 91 — variant of [`Self::events_since`] that also
+    /// returns each row's storage key, so the caller can call
+    /// [`Self::update_event`] to write back an updated event
+    /// (e.g. with `judgment` field patched). Same `ts_secs >=
+    /// since_secs` filter; same ascending order.
+    pub async fn events_with_keys_since(
+        &self,
+        since_secs: u64,
+    ) -> Result<Vec<(Vec<u8>, RecallEvent)>, RecallLogError> {
+        let rows = self
+            .storage
+            .scan_prefix(&[])
+            .await
+            .map_err(|e| RecallLogError::Storage(e.to_string()))?;
+        let mut out = Vec::new();
+        for (k, v) in &rows {
+            let ev: RecallEvent = serde_json::from_slice(v)
+                .map_err(|e| RecallLogError::Encode(e.to_string()))?;
+            if ev.ts_secs >= since_secs {
+                out.push((k.clone(), ev));
+            }
+        }
+        out.sort_by_key(|(_, e)| e.ts_secs);
+        Ok(out)
+    }
+
+    /// Phase 91 — overwrite the row at `key` with `event`. The
+    /// caller obtained `key` from
+    /// [`Self::events_with_keys_since`]; mutating only the
+    /// `judgment` field on existing hits is the v1 use case.
+    /// The key is preserved verbatim (no re-keying) so a
+    /// concurrent `gc_older_than` still works.
+    pub async fn update_event(
+        &self,
+        key: &[u8],
+        event: &RecallEvent,
+    ) -> Result<(), RecallLogError> {
+        let value = serde_json::to_vec(event)
+            .map_err(|e| RecallLogError::Encode(e.to_string()))?;
+        self.storage
+            .put(key, &value)
+            .await
+            .map_err(|e| RecallLogError::Storage(e.to_string()))
+    }
 }
 
 #[cfg(test)]

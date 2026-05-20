@@ -616,6 +616,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_proactive,
                     rs_persona_lifecycle,
                     rs_persona_consolidation,
+                    // Phase 91 — LLM-judged recall deps;
+                    // wired in Task 5 alongside the Phase 78
+                    // surface stat. `None` for now → the
+                    // pass is skipped (byte-identical to
+                    // pre-Phase-91).
+                    None,
                     rs_shutdown,
                 )
                 .await;
