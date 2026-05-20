@@ -1390,6 +1390,18 @@ pub struct EmbeddingConfig {
     /// byte-identical to pre-Phase-86 (the latest message
     /// only). Must be `>= 1`.
     pub recall_window_turns: usize,
+    /// Phase 90 — heuristic recall gate: when the trimmed
+    /// user message is **shorter than this many Unicode
+    /// characters**, both auto-recall (Phase 76) and adaptive
+    /// Persona selection (Phase 79) short-circuit before any
+    /// embed call (they return `None`, which the planner
+    /// already honours as the existing best-effort fallback).
+    /// Default [`DEFAULT_RECALL_GATE_MIN_CHARS`] (`0`) means
+    /// the gate is disabled — byte-identical to pre-Phase-90;
+    /// raise it (typical: `4`-`8`) to skip recall on
+    /// single-token acknowledgments (`ok` / `yes` /
+    /// `thanks`).
+    pub recall_gate_min_chars: usize,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -1418,6 +1430,14 @@ pub const DEFAULT_RAG_MIN_SIMILARITY: f32 = 0.20;
 /// window by raising this; the project's behaviour-change-is-
 /// opt-in discipline (recall context feeds model output).
 pub const DEFAULT_RECALL_WINDOW_TURNS: usize = 1;
+/// Phase 90 — default heuristic-recall-gate threshold:
+/// `0` means the gate is disabled (byte-identical to
+/// pre-Phase-90; recall fires on every turn). The operator
+/// opts into gating by raising it; the project's
+/// behaviour-change-is-opt-in discipline (the gate
+/// short-circuits both auto-recall and adaptive Persona
+/// selection, both of which feed model output).
+pub const DEFAULT_RECALL_GATE_MIN_CHARS: usize = 0;
 
 /// Phase 80 — which structural signal classes the proactive
 /// pass is allowed to surface. All default `true`: an operator
@@ -2298,6 +2318,8 @@ struct RawEmbedding {
     rag_min_similarity: Option<f32>,
     #[serde(default)]
     recall_window_turns: Option<usize>,
+    #[serde(default)]
+    recall_gate_min_chars: Option<usize>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -4375,7 +4397,8 @@ fn build_embedding_config(
         || raw.dimensions.is_some()
         || raw.rag_top_k.is_some()
         || raw.rag_min_similarity.is_some()
-        || raw.recall_window_turns.is_some();
+        || raw.recall_window_turns.is_some()
+        || raw.recall_gate_min_chars.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4442,6 +4465,13 @@ fn build_embedding_config(
         });
     }
 
+    // Phase 90 — heuristic recall gate threshold. `0` (the
+    // default) means the gate is disabled; any value is legal
+    // (large values gate aggressively — the operator's call).
+    let recall_gate_min_chars = raw
+        .recall_gate_min_chars
+        .unwrap_or(DEFAULT_RECALL_GATE_MIN_CHARS);
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -4462,6 +4492,7 @@ fn build_embedding_config(
         rag_top_k,
         rag_min_similarity,
         recall_window_turns,
+        recall_gate_min_chars,
     }))
 }
 

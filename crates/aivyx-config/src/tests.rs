@@ -5645,6 +5645,53 @@ recall_window_turns = 0
     drop(env);
 }
 
+/// Phase 90 — `recall_gate_min_chars` defaults to `0`
+/// (gate disabled = byte-identical to pre-Phase-90).
+#[test]
+fn embedding_recall_gate_min_chars_default_is_zero() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nmodel = \"any\"\n",
+        "embed-gate-default",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(
+        emb.recall_gate_min_chars,
+        crate::DEFAULT_RECALL_GATE_MIN_CHARS,
+    );
+    assert_eq!(emb.recall_gate_min_chars, 0);
+    drop(env);
+}
+
+/// Phase 90 — explicit `recall_gate_min_chars` wins.
+#[test]
+fn embedding_recall_gate_min_chars_explicit_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_gate_min_chars = 6\n",
+        "embed-gate-explicit",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.recall_gate_min_chars, 6);
+    drop(env);
+}
+
+/// Phase 90 — explicit `recall_gate_min_chars = 0` is
+/// honored (the operator can express the default explicitly
+/// without changing behaviour). Any value is legal —
+/// large thresholds gate aggressively, the operator's call.
+#[test]
+fn embedding_recall_gate_min_chars_explicit_zero_honored() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_gate_min_chars = 0\n",
+        "embed-gate-explicit-zero",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.recall_gate_min_chars, 0);
+    drop(env);
+}
+
 /// Env + TOML do not supply the embedding key, but the
 /// encrypted store has a `secret_keys::EMBEDDING_API_KEY` row.
 /// After hydration the key is populated with
