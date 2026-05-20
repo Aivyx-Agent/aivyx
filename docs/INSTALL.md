@@ -892,6 +892,69 @@ evidence (e.g. *"topic 'deploy' net -8.2 over 14 windows
 (sustained low helpfulness)"*) in the same `aivyx persona` /
 Phase 78 surface.
 
+### Pattern-driven decay (Phase 88)
+
+The decay-side complement of Phase 87's pattern-driven
+proposals. Phase 87 makes the co-occurrence ledger drive
+Persona *construction* — a durable affined pair proposes a
+new `learned_context` facet; Phase 88 makes the **same
+ledger** drive Persona *decay*: when the pair underlying an
+already-applied `consolidate-pair:` facet has demonstrably
+weakened, the facet's justification is gone — propose to
+retire it. The opposite move lands symmetrically: a still-
+durable pair **protects** its facet from age-decay (the
+relationship still applies, so the identity still applies).
+
+After Phase 88, the assistant retires identity when the
+**relationship** behind it dissolves — not only when the
+underlying *topic* stopped helping. Every existing safety
+property carries: propose-only, operator-gated, `Revert`-
+able, core-protected.
+
+- **Conservative, single-signal gate.** The pair's decayed
+  Phase 83 affinity must be **below** the
+  `decay_pair_below_affinity` floor (default `1.0` — mirrors
+  Phase 87's `min_affinity` so the construction floor and the
+  decay floor coincide by default). Endpoint helpfulness is
+  **not** double-consulted: the facet's justification IS the
+  relationship's durability, and tying decay to individual
+  topic helpfulness would leave drifted-but-warm pair facets
+  in place forever — the very case Phase 88 is meant to
+  handle.
+- **Symmetric protection.** A pair whose decayed affinity is
+  *still* at or above the floor protects its `consolidate-
+  pair:` facet from age-decay. Mirrors the Phase 85
+  protection arm; reuses the same OR-protection machinery in
+  the detector.
+- **Provenance-only.** Only facets whose origin delta has a
+  `consolidate-pair:{A}+{B}` proposal_id are pair-gated.
+  Every other facet (reflection-authored, recall-feedback-
+  derived) follows whatever signal it already had — age-only,
+  or the Phase 85 helpfulness path.
+- **Graceful fallback.** With no co-occurrence ledger (no
+  auto-recall configured), the pair arm sits out entirely —
+  byte-identical to Phase 85.
+
+One new knob on the **same `[persona_lifecycle]`** block
+(gated by the existing `signal_decay`):
+
+```toml
+[persona_lifecycle]
+enabled = true
+# … Phase 81 + 85 knobs …
+decay_pair_below_affinity = 1.0  # optional, default 1.0
+```
+
+Validation (only when enabled and `signal_decay` is on):
+`decay_pair_below_affinity` finite and ≥ `0.0`. **To widen
+the keep-zone:** tune it *below* Phase 87's `min_affinity`
+to add explicit hysteresis (e.g. propose at affinity ≥ 1.0,
+decay only at affinity < 0.5). Decay proposals cite the
+pair + the decayed affinity ("co-occurrence pair `deploy` +
+`rollback` decayed affinity 0.30 (below floor 1.00);
+relationship no longer durable") in the same `aivyx persona`
+/ Phase 78 surface.
+
 ## Persistent helpfulness ledger (Phase 82)
 
 For 81 phases the "did recalling this topic actually help"

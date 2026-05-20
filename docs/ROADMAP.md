@@ -2385,10 +2385,55 @@ the predicted `+11-15` band (`+15` exactly — config section
 +6, pure module +8, integration +1). Zero clippy warnings.
 Zero new workspace deps.
 
-Likely follow-ups (pattern-driven Persona *decay*, n-ary
-cluster proposals, pattern-driven supersession, operator-
-tunable LLM prompt, topic canonicalization) are
-operator-feedback-gated.
+Likely follow-ups (**pattern-driven Persona *decay* —
+shipped in Phase 88**, n-ary cluster proposals, pattern-
+driven supersession, operator-tunable LLM prompt, topic
+canonicalization) are operator-feedback-gated.
+
+## Phase 88 — Pattern-Driven Persona Decay (the decay-side of the Phase 87 arc, completed)
+
+**Frozen — see [PHASE_88.md](PHASE_88.md).** Closes the
+deliberate Phase 87 deferral with the decay half of the
+symmetric arc. After Phase 87 made the Phase 83 co-occurrence
+ledger drive Persona *construction*, Phase 88 makes the
+**same ledger** drive Persona *decay*: a `consolidate-pair:`
+facet whose underlying pair has demonstrably weakened
+(decayed Phase 83 affinity below the new
+`decay_pair_below_affinity` floor) is decay-proposed — the
+relationship that justified the identity no longer holds.
+Symmetrically, a still-durable pair **protects** its facet
+from age-decay (the relationship still applies, so the
+identity still applies). After Phase 88, every durable
+learning signal is consumed on both sides of the Soul
+lifecycle.
+
+- **Single-signal decay (Q1a/Q2a):** decayed affinity below
+  the floor is sufficient. Endpoint helpfulness is not
+  double-consulted; conditioning would leave drifted-but-
+  warm pair facets in place forever — the very case Phase
+  88 is meant to handle.
+- **Symmetric protection (Q3a):** pair at/above the floor
+  protects from age-decay. Reuses the Phase 85 OR-protection
+  machinery on a parallel provenance arm.
+- **Same `[persona_lifecycle]` block (Q4a):** new
+  `decay_pair_below_affinity` knob (default `1.0` — mirrors
+  Phase 87's `min_affinity` so the construction and decay
+  floors coincide by default; operators tune below for
+  hysteresis). Gated by the existing `signal_decay`.
+
+Streak all three correct: DESIGN.md → **35**, PRODUCT.md →
+**28**, `aivyx-core/src/lib.rs` → **36** (new project
+record, beats Phase 87's 35) — detector extension + config
+knob + fold-site read all live in `aivyx-channel` /
+`aivyx-config`; the decay proposals land through the existing
+`PersistentPersonaProposalLog::append` API (no new chain
+operation, no new `AuditTag` — the Phase 85 precedent).
+Test count delta `+6` (`+1` config, `+4` detector, `+1`
+integration) — inside the predicted `+3-7` band. Zero clippy
+warnings. Zero new workspace deps. With no co-occurrence
+ledger the pair arm sits out entirely → byte-identical to
+Phase 85 (asserted on the existing Phase 85 test, which
+runs with `cooccurrence_ledger: None`).
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 

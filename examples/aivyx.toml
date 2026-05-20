@@ -941,6 +941,18 @@ parent_role = "researcher"
 # # Validated only when enabled AND signal_decay is on.
 # decay_unhelpful_threshold = -2.0  # optional, default -2.0
 # decay_min_samples = 3             # optional, default 3
+# # Phase 88 — pattern-driven decay (gated by signal_decay):
+# # a consolidate-pair: facet whose underlying Phase 83 pair
+# # has decayed BELOW this floor decays before the age
+# # horizon (the relationship that justified the facet is
+# # gone); a pair STILL at/above the floor PROTECTS the
+# # facet from age-decay (mirrors the Phase 85 helpfulness
+# # protection arm). Default 1.0 mirrors Phase 87's
+# # [persona_consolidation].min_affinity so the construction
+# # floor and the decay floor coincide; tune it BELOW to
+# # add explicit hysteresis. No co-occurrence ledger (auto-
+# # recall off) → byte-identical Phase 85 fallback.
+# decay_pair_below_affinity = 1.0   # optional, default 1.0
 # # Each class defaults ON when enabled; set false to mute one.
 # # At least one must stay on.
 # signal_consolidate = true

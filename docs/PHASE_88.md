@@ -282,42 +282,98 @@ core-protected.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** A second provenance arm on an
+  existing detector touched no locked technical-contract
+  decision (the exact Phase 85 precedent shape on a
+  different ledger). Streak: **35 consecutive phases** (was
+  34).
+- **PRODUCT.md — held.** P14 (Persona) is already delivered;
+  this strengthens its decay pipeline. No new commitment,
+  none weakened; the operator-facing contract was
+  *strengthened* (the Soul now retires identity whose
+  underlying *relationship* dissolved, not only identity
+  whose underlying topic stopped helping). Streak: **28
+  consecutive phases** (was 27).
+- **`aivyx-core/src/lib.rs` — held, by design.** Detector
+  extension + config knob + fold-site read all live in
+  `aivyx-channel` / `aivyx-config`. Decay proposals land
+  through the existing
+  `PersistentPersonaProposalLog::append` API (no new chain
+  operation, no new `AuditTag`). Streak: **36 consecutive
+  phases** — new project record, beating Phase 87's 35.
+
+**Test count — `+6`** (workspace `1588 → 1594`). Squarely
+inside the predicted `+3-7` band. The breakdown matches the
+converged calibration law exactly: knob on an existing block
+`+1` (extends the Phase 85 `persona_lifecycle_present_disabled
+_is_allowed_partial` default-coverage test by one assertion;
+adds a new `persona_lifecycle_pair_affinity_decay_knob` for
+explicit override + the two reject arms + the disarmed
+staged-partial case), detector extension `+4` (pair-below-
+floor triggers early-decay with the right reason; pair-at-
+or-above-floor protects an age-old facet; absent
+`pair_affinity` falls back to age-only; pair + helpfulness
+combine OR-wise), reflection-scheduler integration `+1` (a
+single multi-cycle scenario that runs the durable + drifted
+contrast end-to-end, then asserts idempotency + disarmed-
+signal no-op).
+
+**Scope — every planned surface shipped exactly as scoped.**
+The new knob with sane defaults + validation, the two new
+optional `LifecycleFacet` fields (`pair` + `pair_affinity`),
+the detector's twin decay/protect branches keyed on the new
+provenance arm, the fold-site's structural pair recovery from
+the `consolidate-pair:{lo}+{hi}` proposal_id + ledger read,
+and the `PersonaLifecycleDeps.cooccurrence_ledger` field
+wired through `DaemonConfig` all landed as the open-doc
+described. The integration test surfaced and codified an
+important property of the existing `reinforced` rule: in a
+single-category chain only the LAST delta is un-reinforced,
+which means a drifted-pair facet in the middle would never
+have age-decayed *anyway* — the pair signal's decay arm
+genuinely adds a new capability, not just an earlier trigger
+of an existing one. The test placement (drifted-in-middle,
+durable-as-last) demonstrates both arms in one scenario.
+Zero clippy warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[persona_lifecycle].decay_pair_below_affinity`
+- [x] `[persona_lifecycle].decay_pair_below_affinity`
   (default `1.0`, validated finite ≥ 0.0 when armed) —
-  Task 2.
-- [ ] `LifecycleFacet` gains `pair: Option<(String,
+  Task 2 (commit `c3eb824`).
+- [x] `LifecycleFacet` gains `pair: Option<(String,
   String)>` + `pair_affinity: Option<PairAffinityHint>`;
   detector's decay arm gains the consolidate-pair branch
-  (decay-trigger and age-protection both) — Task 3.
-- [ ] Lifecycle pass resolves the pair's decayed affinity
+  (decay-trigger and age-protection both) — Task 3 (commit
+  `ef5d921`).
+- [x] Lifecycle pass resolves the pair's decayed affinity
   from the co-occurrence ledger when present and threads it
   to the detector; `None` → byte-identical to pre-Phase-88
-  for `consolidate-pair:` facets — Task 4.
-- [ ] Pure detector unit tests: pair-decay-triggers,
+  for `consolidate-pair:` facets — Task 4 (commit `7a6c422`).
+- [x] Pure detector unit tests: pair-decay-triggers,
   pair-protects-from-age, absent-pair-affinity-falls-back,
-  collision-free with the `recall-fb:` arm — Task 3.
-- [ ] Integration test: durable pair protected,
-  drifted pair decays, disabled config no-op, ledger-absent
-  no-op — Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  collision-free with the `recall-fb:` arm — Task 3 (commit
+  `ef5d921`).
+- [x] Integration test: durable pair protected, drifted pair
+  decays, disabled config no-op, ledger-absent no-op —
+  Task 4 (commit `7a6c422`; the ledger-absent fallback is
+  asserted by the existing Phase 85
+  `helpfulness_decay_uses_recall_fb_provenance` test in the
+  same module, which runs with `cooccurrence_ledger: None`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-five.
-- [ ] PRODUCT.md streak extends to twenty-eight.
-- [ ] Production-core streak extends to thirty-six (new
+- [x] DESIGN.md streak extends to thirty-five.
+- [x] PRODUCT.md streak extends to twenty-eight.
+- [x] Production-core streak extends to thirty-six (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+3-7; per the converged
-  calibration law — knob on an existing block (≈ +1) +
-  detector extension (≈ +3-4 unit tests) + integration
-  (≈ +1); no new module, no new `KeyDomain`, no new config
-  section).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+6`, squarely inside the
+  predicted `+3-7` band).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

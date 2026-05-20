@@ -1334,6 +1334,34 @@ respond to it. Closing the gap is the inflection point between
   `+15` (workspace 1573 → 1588), exactly the upper edge of
   the predicted `+11-15` band. Zero new workspace deps.
 
+- **Phase 88 (Pattern-Driven Persona Decay, shipped
+  2026-05-20).** Closes the deliberate Phase 87 deferral with
+  the decay half of the symmetric arc. After Phase 87 made
+  the co-occurrence ledger drive Persona *construction*,
+  Phase 88 makes the **same ledger** drive Persona *decay*:
+  a `consolidate-pair:` facet whose underlying pair has
+  demonstrably weakened is decay-proposed (the relationship
+  that justified the identity no longer holds), and
+  symmetrically, a still-durable pair **protects** its facet
+  from age-decay. After Phase 88, every durable learning
+  signal feeds both sides of the Soul lifecycle. **No new
+  product commitment**, none weakened; the operator-facing
+  contract is *strengthened* (the Soul now retires identity
+  when the relationship behind it dissolves, not only when
+  the underlying topic stopped helping). Single new
+  `decay_pair_below_affinity` knob on the existing
+  `[persona_lifecycle]` block (default `1.0` — mirrors
+  Phase 87's `min_affinity`); gated by the existing
+  `signal_decay`; no helpfulness conditioning (single-
+  signal gate); symmetric OR-protection extension. Streak
+  all three correct: DESIGN.md → 35, PRODUCT.md → **28**,
+  lib.rs → **36** (new project record, beating Phase 87's
+  35) — detector extension + config knob + fold-site read
+  all in `aivyx-channel` / `aivyx-config`; proposals land
+  through the existing chain (no new operation, no new
+  AuditTag). Test count delta `+6` (workspace 1588 → 1594),
+  inside the predicted `+3-7` band. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
