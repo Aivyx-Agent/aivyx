@@ -50,6 +50,7 @@ pub mod memory_embedding;
 pub mod memory_gc_tool;
 pub mod memory_recall;
 pub mod recall_feedback;
+pub mod recall_gate;
 pub mod recall_insights;
 pub mod recall_log;
 pub mod prune_sink;
