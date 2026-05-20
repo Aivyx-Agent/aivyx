@@ -585,6 +585,15 @@ pub struct AivyxConfig {
     /// `Some` only arms the pass; it still no-ops unless
     /// `enabled = true`.
     pub persona_consolidation: Option<PersonaConsolidationConfig>,
+    /// Phase 91 — `[recall_judgment]` section. `None` when
+    /// absent: the recall-feedback loop runs unchanged (the
+    /// Phase 77 structural proxy is the only signal). `Some`
+    /// arms the LLM-judged per-recall pass on the reflection
+    /// cron; it still no-ops unless `enabled = true`. The
+    /// judgment is recorded as a new optional field on
+    /// `RecallHit` — every existing accumulator stays
+    /// byte-identical to pre-Phase-91 (Q3a augment).
+    pub recall_judgment: Option<RecallJudgmentConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1697,6 +1706,44 @@ pub const DEFAULT_PC_MIN_TOPIC_HELPFULNESS: f32 = 0.0;
 /// of patience.
 pub const DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
 
+/// Phase 91 — `[recall_judgment]` runtime config.
+///
+/// The opt-in surface for the LLM-judged per-recall
+/// classification pass. On each reflection cron tick (when
+/// `enabled = true`), a batched LLM call judges every recall
+/// event in the lookback window (up to
+/// `max_recalls_per_cycle`, oldest-first) and records a 3-way
+/// `RecallJudgment` (`Used` / `Irrelevant` / `Hurt`) on each
+/// hit. The judgment is recorded as a new optional field on
+/// `RecallHit` — every existing accumulator stays
+/// byte-identical to pre-Phase-91 (Q3a augment).
+///
+/// `None` (no section) → the pass never runs. The Phase 77
+/// structural recall-feedback signal remains the only signal
+/// (byte-identical to pre-Phase-91). `Some` arms the pass; it
+/// still no-ops unless `enabled = true`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallJudgmentConfig {
+    /// Master switch. Default `false`. The LLM call has real
+    /// cost; the operator opts into paying it.
+    pub enabled: bool,
+    /// Hard upper bound on how many recall events the
+    /// batched LLM call may judge in one cron tick. Past
+    /// this cap, the oldest unjudged recalls in the window
+    /// are skipped for the cycle (recorded on the stat
+    /// surface but never fail the cron). Mirrors the
+    /// Phase 80 `max_per_cycle` precedent — bounded cost on
+    /// every reflection-cron pass.
+    pub max_recalls_per_cycle: u32,
+}
+
+/// Default per-cycle judgment cap. Generous enough that
+/// typical reflection windows finish in one cycle, but small
+/// enough that a runaway recall log cannot inflate the LLM
+/// bill in a single cron tick. The unjudged remainder rolls
+/// to the next cycle.
+pub const DEFAULT_RJ_MAX_RECALLS_PER_CYCLE: u32 = 30;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1742,6 +1789,10 @@ struct RawToml {
     /// pattern-driven Persona proposals.
     #[serde(default)]
     persona_consolidation: RawPersonaConsolidation,
+    /// `[recall_judgment]` section. Phase 91 — LLM-judged
+    /// per-recall classification on the reflection cron.
+    #[serde(default)]
+    recall_judgment: RawRecallJudgment,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2402,6 +2453,18 @@ struct RawPersonaConsolidation {
     max_proposals_per_cycle: Option<u32>,
 }
 
+/// Phase 91 — `[recall_judgment]` deserialize target.
+/// Absent section → all-`None` via `Default` → the loader
+/// maps to `recall_judgment: None` (off; the recall-feedback
+/// loop runs unchanged, pre-Phase-91 behaviour).
+#[derive(Debug, Default, Deserialize)]
+struct RawRecallJudgment {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_recalls_per_cycle: Option<u32>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2801,6 +2864,8 @@ impl AivyxConfig {
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
             )?;
+        let recall_judgment =
+            build_recall_judgment_config(&toml.recall_judgment)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3673,6 +3738,7 @@ impl AivyxConfig {
             persona_lifecycle,
             recall_cluster,
             persona_consolidation,
+            recall_judgment,
             roles,
             active_role,
             profile,
@@ -4820,6 +4886,37 @@ fn build_persona_consolidation_config(
         min_samples,
         min_topic_helpfulness,
         max_proposals_per_cycle,
+    }))
+}
+
+/// Phase 91 — `[recall_judgment]` → optional runtime config.
+/// Absent section → `None`; partial section (any key set) →
+/// fill defaults and, only if `enabled = true`, validate the
+/// bounds (the established staged-config pattern).
+fn build_recall_judgment_config(
+    raw: &RawRecallJudgment,
+) -> Result<Option<RecallJudgmentConfig>, ConfigError> {
+    let any_set =
+        raw.enabled.is_some() || raw.max_recalls_per_cycle.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_recalls_per_cycle = raw
+        .max_recalls_per_cycle
+        .unwrap_or(DEFAULT_RJ_MAX_RECALLS_PER_CYCLE);
+
+    if enabled && max_recalls_per_cycle == 0 {
+        return Err(ConfigError::Invalid {
+            field: "recall_judgment.max_recalls_per_cycle",
+            reason: "`max_recalls_per_cycle` must be >= 1".into(),
+        });
+    }
+
+    Ok(Some(RecallJudgmentConfig {
+        enabled,
+        max_recalls_per_cycle,
     }))
 }
 

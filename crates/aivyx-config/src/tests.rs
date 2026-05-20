@@ -6618,3 +6618,103 @@ fn memory_canonicalize_topics_explicit_false_wins() {
     );
     drop(env);
 }
+
+// ---- Phase 91 — [recall_judgment] -----------------------------
+
+/// No `[recall_judgment]` section → `recall_judgment: None`
+/// (off; the Phase 77 structural recall-feedback signal is
+/// the only signal — byte-identical to pre-Phase-91).
+#[test]
+fn recall_judgment_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.recall_judgment.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config). It builds with `enabled = false`, defaults
+/// elsewhere, and is NOT validated.
+#[test]
+fn recall_judgment_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_judgment]\nenabled = false\n",
+        "rj-staged",
+    );
+    let rj = cfg.recall_judgment.expect("section present");
+    assert!(!rj.enabled);
+    assert_eq!(
+        rj.max_recalls_per_cycle,
+        crate::DEFAULT_RJ_MAX_RECALLS_PER_CYCLE,
+    );
+    drop(env);
+}
+
+/// Enabled + valid: explicit field wins.
+#[test]
+fn recall_judgment_enabled_valid() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_judgment]\nenabled = true\n\
+         max_recalls_per_cycle = 7\n",
+        "rj-valid",
+    );
+    let rj = cfg.recall_judgment.expect("section present");
+    assert!(rj.enabled);
+    assert_eq!(rj.max_recalls_per_cycle, 7);
+    drop(env);
+}
+
+/// Enabled with `max_recalls_per_cycle = 0` → `Invalid`.
+#[test]
+fn recall_judgment_enabled_zero_cap_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("rj-zero-cap");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[recall_judgment]\nenabled = true\n\
+         max_recalls_per_cycle = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "recall_judgment.max_recalls_per_cycle",
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Decay disarmed (the `enabled = false` staged-config
+/// posture) → the cap knob is NOT validated even if
+/// nonsensical (mirrors the Phase 85 / Phase 87 staged-
+/// config behaviour).
+#[test]
+fn recall_judgment_disabled_partial_allows_nonsense() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_judgment]\nenabled = false\n\
+         max_recalls_per_cycle = 0\n",
+        "rj-disabled-nonsense",
+    );
+    let rj = cfg.recall_judgment.expect("section present");
+    assert!(!rj.enabled);
+    assert_eq!(rj.max_recalls_per_cycle, 0);
+    drop(env);
+}

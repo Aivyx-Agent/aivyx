@@ -2311,6 +2311,10 @@ async fn run_async(
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
         persona_consolidation: config_persona_consolidation,
+        // Phase 91 — `[recall_judgment]` config. Bound here;
+        // Task 4 of Phase 91 wires it through DaemonConfig
+        // to the reflection-cron LLM-judged recall pass.
+        recall_judgment: _config_recall_judgment,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
