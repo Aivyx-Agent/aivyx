@@ -1778,6 +1778,7 @@ mod tests {
                                 "deploy".into(),
                                 "rollback".into(),
                             )],
+                            superseded: 0,
                         },
                     ),
                     recall_judgment: Some(

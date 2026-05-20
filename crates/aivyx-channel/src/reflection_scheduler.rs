@@ -195,6 +195,24 @@ pub struct PersonaConsolidationDeps {
     pub stat: Option<
         crate::persona_consolidation::SharedPersonaConsolidationStat,
     >,
+    /// Phase 92 — Persona chain handle for supersession
+    /// detection. Read-only; the pass walks applied
+    /// `consolidate-pair:` facets and feeds them to
+    /// `detect_supersession`. `None` (or
+    /// `config.enable_supersession = false`) → the
+    /// supersession-detection branch is skipped, Phase
+    /// 87/88 flow is byte-identical to pre-Phase-92.
+    pub persona_log: Option<
+        std::sync::Arc<crate::persona::PersistentPersonaLog>,
+    >,
+    /// Phase 92 — the Phase 88 `[persona_lifecycle].
+    /// decay_pair_below_affinity` floor, threaded from
+    /// `DaemonConfig`. Determines when a pair counts as
+    /// "decayed" for supersession purposes. Default `1.0`
+    /// matches the Phase 88 default; the binary fills it
+    /// from the operator's actual `[persona_lifecycle]`
+    /// config when present.
+    pub pair_below_affinity: f32,
 }
 
 /// Phase 91 — handles the LLM-judged recall pass needs.
@@ -1313,8 +1331,53 @@ async fn run_persona_consolidation_pass(
         return;
     }
     let now_secs = now_ms / 1000;
+    let source_label =
+        format!("persona-consolidation:{}", sched.name);
 
-    let candidates =
+    // Phase 92 — supersession detection. Runs BEFORE the
+    // standard Phase 87 `select_candidates` so the new pairs
+    // it claims are skipped from the standard selector
+    // (avoiding duplicate filing). When `enable_supersession`
+    // is false (the default) OR the Persona log isn't on the
+    // deps, this branch is a no-op.
+    let mut superseded_new_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut superseded_filed = 0u32;
+    if deps.config.enable_supersession {
+        if let Some(persona_log) = &deps.persona_log {
+            let applied = collect_applied_pair_facets(
+                persona_log.as_ref(),
+            );
+            let candidates =
+                crate::persona_consolidation::detect_supersession(
+                    &applied,
+                    deps.cooccurrence_ledger.as_ref(),
+                    deps.helpfulness_ledger.as_ref(),
+                    deps.proposal_log.as_ref(),
+                    &deps.config,
+                    deps.pair_below_affinity,
+                    now_secs,
+                )
+                .await;
+            for cand in candidates {
+                if file_supersession(
+                    &cand,
+                    deps.phraser.as_ref(),
+                    deps.proposal_log.as_ref(),
+                    &source_label,
+                    now_ms,
+                )
+                .await
+                {
+                    superseded_filed += 1;
+                    superseded_new_ids
+                        .insert(cand.new_proposal_id);
+                }
+            }
+        }
+    }
+
+    let mut candidates =
         crate::persona_consolidation::select_candidates(
             deps.cooccurrence_ledger.as_ref(),
             deps.helpfulness_ledger.as_ref(),
@@ -1323,7 +1386,20 @@ async fn run_persona_consolidation_pass(
             now_secs,
         )
         .await;
-    if candidates.is_empty() {
+    // Phase 92 — exclude any pair the supersession path has
+    // already filed under its canonical id. The standard
+    // selector wouldn't dedup against fresh-this-cycle
+    // proposals (the chain reads happen at the START of the
+    // selector); we filter here.
+    candidates.retain(|c| {
+        !superseded_new_ids.contains(
+            &crate::persona_consolidation::pair_proposal_id(
+                &c.a, &c.b,
+            ),
+        )
+    });
+
+    if candidates.is_empty() && superseded_filed == 0 {
         // Nothing to surface — the quiet case is a valid
         // outcome (Phase 70 / 80 / 85 same shape). Skip the
         // breadcrumb so chatty reflection cadences don't
@@ -1331,9 +1407,7 @@ async fn run_persona_consolidation_pass(
         return;
     }
 
-    let source_label =
-        format!("persona-consolidation:{}", sched.name);
-    let stat = crate::persona_consolidation::consolidate(
+    let mut stat = crate::persona_consolidation::consolidate(
         candidates,
         deps.phraser.as_ref(),
         deps.proposal_log.as_ref(),
@@ -1341,13 +1415,23 @@ async fn run_persona_consolidation_pass(
         now_ms,
     )
     .await;
+    // Phase 92 — supersession events landed two chain entries
+    // each. Add to the standard `filed` count (twice each)
+    // and stamp the per-event count.
+    stat.filed += superseded_filed * 2;
+    stat.superseded = superseded_filed;
 
+    let super_note = if superseded_filed > 0 {
+        format!(" (superseded={superseded_filed})")
+    } else {
+        String::new()
+    };
     let llm_note =
         if stat.llm_unavailable { " (LLM unavailable)" } else { "" };
     eprintln!(
         "aivyx persona-consolidation: schedule {:?} — \
-         filed {}{}",
-        sched.name, stat.filed, llm_note,
+         filed {}{super_note}{llm_note}",
+        sched.name, stat.filed,
     );
 
     // Q4a — record this cycle for the Phase 78 surface (the
@@ -1359,6 +1443,174 @@ async fn run_persona_consolidation_pass(
             *w = Some(stat);
         }
     }
+}
+
+/// Phase 92 — walk the Persona chain and return every
+/// CURRENTLY-APPLIED `consolidate-pair:` facet as
+/// `(proposal_id, facet_value, (lo, hi))`. The supersession
+/// detector iterates this list.
+///
+/// An applied facet is one whose LATEST chain entry for the
+/// same `(category, value)` is an `AppendList` (i.e. not
+/// subsequently removed). The pair is recovered from the
+/// proposal_id via `parse_pair_proposal_id`; any entry whose
+/// id doesn't parse is skipped silently.
+fn collect_applied_pair_facets(
+    persona_log: &crate::persona::PersistentPersonaLog,
+) -> Vec<(String, String, (String, String))> {
+    let entries = persona_log.entries();
+    let persona =
+        crate::persona::compute_effective_persona(&entries);
+    let mut out: Vec<(String, String, (String, String))> =
+        Vec::new();
+    for value in &persona.learned_context {
+        // Find the LATEST AppendList in LearnedContext that
+        // put this value into effect.
+        let Some(origin) = entries.iter().rev().find(|e| {
+            e.delta.category
+                == crate::persona::PersonaDeltaCategory::LearnedContext
+                && matches!(
+                    &e.delta.op,
+                    crate::persona::PersonaDeltaOp::AppendList {
+                        value: v,
+                    } if *v == *value
+                )
+        }) else {
+            continue;
+        };
+        let Some(pair) =
+            crate::persona_consolidation::parse_pair_proposal_id(
+                &origin.delta.proposal_id,
+            )
+        else {
+            continue;
+        };
+        out.push((
+            origin.delta.proposal_id.clone(),
+            value.clone(),
+            pair,
+        ));
+    }
+    out
+}
+
+/// Phase 92 — file the two linked proposals for one
+/// supersession candidate. Returns `true` iff BOTH halves
+/// land (the `RemoveList` for the old facet AND the
+/// `AppendList` for the new facet, each carrying the other
+/// half's `proposal_id` in its
+/// `supersedes_proposal_id` field).
+///
+/// LLM-phrase failure on the new facet → return `false`;
+/// the supersession is skipped this cycle (the operator may
+/// see it next cycle when the structural conditions still
+/// hold). An `append_pending` failure on the
+/// `RemoveList`-side after the `AppendList`-side succeeded
+/// leaves the chain with the `AppendList` already filed —
+/// the operator can still review it; the linkage is one-way
+/// in that case but the supersession still fires.
+async fn file_supersession(
+    cand: &crate::persona_consolidation::SupersessionCandidate,
+    phraser: &dyn crate::persona_consolidation::PairPhraser,
+    proposal_log: &crate::persona_proposal::PersistentPersonaProposalLog,
+    source_label: &str,
+    now_ms: u64,
+) -> bool {
+    let Some(new_value) = phraser
+        .phrase(&cand.new_pair.0, &cand.new_pair.1)
+        .await
+    else {
+        return false;
+    };
+    let new_value = new_value.trim().to_string();
+    if new_value.is_empty() {
+        return false;
+    }
+
+    let (new_a, new_c) = &cand.new_pair;
+    let new_reason = format!(
+        "supersedes proposal `{old}`: co-occurrence pair \
+         `{a}` + `{c}` — decayed affinity {aff:.2}; both \
+         topics helpful (min score {hmin:.2})",
+        old = cand.old_proposal_id,
+        a = new_a,
+        c = new_c,
+        aff = cand.new_affinity,
+        hmin = cand.new_helpfulness_min,
+    );
+    let new_op = crate::persona::ProposedPersonaDelta {
+        category:
+            crate::persona::PersonaDeltaCategory::LearnedContext,
+        op: crate::persona::PersonaDeltaOp::AppendList {
+            value: new_value,
+        },
+        reason: Some(new_reason),
+        supersedes_proposal_id: Some(
+            cand.old_proposal_id.clone(),
+        ),
+    };
+    if let Err(e) = proposal_log
+        .append_pending(
+            cand.new_proposal_id.clone(),
+            now_ms,
+            source_label.to_string(),
+            new_op,
+        )
+        .await
+    {
+        eprintln!(
+            "aivyx persona-consolidation: append_pending \
+             failed for new (AppendList) supersession half \
+             {}: {e}",
+            cand.new_proposal_id,
+        );
+        return false;
+    }
+
+    let remove_id = format!(
+        "supersede-remove:{old}",
+        old = cand.old_proposal_id,
+    );
+    let remove_reason = format!(
+        "superseded by proposal `{new}`: the original pair \
+         `{a}` + `{b}` has decayed; replaced by `{na}` + \
+         `{nc}` (the new facet's prose)",
+        new = cand.new_proposal_id,
+        a = cand.old_pair.0,
+        b = cand.old_pair.1,
+        na = cand.new_pair.0,
+        nc = cand.new_pair.1,
+    );
+    let remove_op = crate::persona::ProposedPersonaDelta {
+        category:
+            crate::persona::PersonaDeltaCategory::LearnedContext,
+        op: crate::persona::PersonaDeltaOp::RemoveList {
+            value: cand.old_facet_value.clone(),
+        },
+        reason: Some(remove_reason),
+        supersedes_proposal_id: Some(
+            cand.new_proposal_id.clone(),
+        ),
+    };
+    if let Err(e) = proposal_log
+        .append_pending(
+            remove_id.clone(),
+            now_ms,
+            source_label.to_string(),
+            remove_op,
+        )
+        .await
+    {
+        // The new facet is already filed (one-way linkage).
+        // Log and continue — the operator can still review.
+        eprintln!(
+            "aivyx persona-consolidation: append_pending \
+             failed for old (RemoveList) supersession half \
+             {}: {e}",
+            remove_id,
+        );
+    }
+    true
 }
 
 /// Phase 91 — drive the LLM-judged recall pass on the
@@ -3214,6 +3466,8 @@ mod tests {
             proposal_log: Arc::clone(&plog),
             phraser: Arc::new(OkPhraser),
             stat: Some(stat.clone()),
+            persona_log: None,
+            pair_below_affinity: 1.0,
         };
 
         // Cycle 1: two new proposals filed (the third was
@@ -3311,6 +3565,8 @@ mod tests {
             proposal_log: Arc::clone(&plog),
             phraser: Arc::new(DownPhraser),
             stat: Some(stat.clone()),
+            persona_log: None,
+            pair_below_affinity: 1.0,
         };
         run_persona_consolidation_pass(&down, &sched, now_ms)
             .await;
@@ -3913,6 +4169,235 @@ mod tests {
                 "every survivor's judgment was `None`"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 92 — pattern-driven supersession ----------------
+
+    #[tokio::test]
+    async fn supersession_pass_files_two_linked_proposals_then_dedups()
+    {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use crate::helpfulness_ledger::PersistentHelpfulnessLedger;
+        use crate::persona::{
+            PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
+            PersistentPersonaLog,
+        };
+        use crate::persona_consolidation::{
+            shared_persona_consolidation_stat, PairPhraser,
+        };
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use async_trait::async_trait;
+        use std::sync::Arc;
+
+        struct DeterministicPhraser;
+        #[async_trait]
+        impl PairPhraser for DeterministicPhraser {
+            async fn phrase(
+                &self,
+                a: &str,
+                b: &str,
+            ) -> Option<String> {
+                Some(format!(
+                    "You consistently work with `{a}` and \
+                     `{b}` together."
+                ))
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-supersede-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([92u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let cooc =
+            Arc::new(PersistentCooccurrenceLedger::new(
+                store.domain(KeyDomain::CooccurrenceLedger),
+            ));
+        let help =
+            Arc::new(PersistentHelpfulnessLedger::new(
+                store.domain(KeyDomain::HelpfulnessLedger),
+            ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"supersede-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let persona_log = Arc::new(
+            PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                vec![3u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+
+        // Seed an APPLIED `consolidate-pair:auth+jwt` facet
+        // on the Persona chain.
+        let now_secs = 1_000_000u64;
+        let now_ms = now_secs * 1000;
+        persona_log
+            .append(PersonaDelta {
+                delta_id: "d1".into(),
+                proposed_at_unix_ms: now_ms,
+                approved_at_unix_ms: now_ms,
+                proposal_id:
+                    "consolidate-pair:auth+jwt".into(),
+                category: PersonaDeltaCategory::LearnedContext,
+                op: PersonaDeltaOp::AppendList {
+                    value: "you work auth with jwt".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        // (auth, jwt) decayed, (auth, sessions) strong + helpful.
+        cooc.record_window(
+            &[(("auth".into(), "jwt".into()), 0.3)],
+            now_secs,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 5.0)],
+            now_secs,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 0.001)],
+            now_secs,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("sessions".into(), 1.0),
+            ],
+            now_secs,
+        )
+        .await
+        .unwrap();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+        let stat = shared_persona_consolidation_stat();
+        let deps = PersonaConsolidationDeps {
+            config: aivyx_config::PersonaConsolidationConfig {
+                enabled: true,
+                min_affinity: 1.0,
+                min_samples: 2,
+                min_topic_helpfulness: 0.0,
+                max_proposals_per_cycle: 5,
+                enable_supersession: true,
+            },
+            cooccurrence_ledger: Arc::clone(&cooc),
+            helpfulness_ledger: Arc::clone(&help),
+            proposal_log: Arc::clone(&proposal_log),
+            phraser: Arc::new(DeterministicPhraser),
+            stat: Some(Arc::clone(&stat)),
+            persona_log: Some(Arc::clone(&persona_log)),
+            pair_below_affinity: 1.0,
+        };
+
+        // Cycle 1: two linked proposals file.
+        run_persona_consolidation_pass(&deps, &sched, now_ms)
+            .await;
+        let pending = proposal_log.list(ProposalStatusFilter::Pending);
+        // Expect exactly two pending proposals — the
+        // RemoveList (under `supersede-remove:…`) and the
+        // AppendList (under
+        // `consolidate-pair:auth+sessions`).
+        assert_eq!(
+            pending.len(),
+            2,
+            "supersession files two linked proposals"
+        );
+        let ids: std::collections::HashSet<String> = pending
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        assert!(
+            ids.contains("consolidate-pair:auth+sessions"),
+            "the new facet's AppendList is filed under the \
+             canonical id"
+        );
+        assert!(
+            ids.contains(
+                "supersede-remove:consolidate-pair:auth+jwt",
+            ),
+            "the old facet's RemoveList is filed under a \
+             distinct id linked to the original"
+        );
+        // The AppendList's `supersedes_proposal_id` points at
+        // the original old proposal_id; the RemoveList's
+        // points at the new one (cross-linked).
+        let append = pending
+            .iter()
+            .find(|p| {
+                p.id == "consolidate-pair:auth+sessions"
+            })
+            .unwrap();
+        assert_eq!(
+            append.proposed_op.supersedes_proposal_id,
+            Some("consolidate-pair:auth+jwt".to_string()),
+        );
+        let remove = pending
+            .iter()
+            .find(|p| {
+                p.id == "supersede-remove:consolidate-pair:auth+jwt"
+            })
+            .unwrap();
+        assert_eq!(
+            remove.proposed_op.supersedes_proposal_id,
+            Some(
+                "consolidate-pair:auth+sessions".to_string(),
+            ),
+        );
+        {
+            let s = stat.read().unwrap();
+            let s = s.as_ref().expect("stat populated");
+            assert_eq!(s.superseded, 1);
+            assert_eq!(s.filed, 2);
+        }
+
+        // Cycle 2: idempotent — the AppendList side dedups
+        // against the chain; the supersession detector won't
+        // emit a candidate whose new_id is already present.
+        run_persona_consolidation_pass(&deps, &sched, now_ms)
+            .await;
+        let pending2 = proposal_log.list(ProposalStatusFilter::Pending);
+        assert_eq!(
+            pending2.len(),
+            2,
+            "second cycle is a no-op (full dedup)"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

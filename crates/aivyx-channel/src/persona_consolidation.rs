@@ -75,6 +75,17 @@ pub struct PersonaConsolidationStat {
     /// `(A, B)` of each actually-filed pair, for the Phase 78
     /// surface. Stable order = filing order.
     pub pairs: Vec<(String, String)>,
+    /// Phase 92 — how many supersession pairs the cycle
+    /// filed. Each supersession produces TWO chain entries
+    /// (a `RemoveList` for the old facet + an `AppendList`
+    /// for the new); `superseded` counts the supersession
+    /// EVENTS, not the chain entries. The `filed` count
+    /// includes both halves of every supersession plus any
+    /// standard Phase 87 consolidations. `#[serde(default)]`
+    /// so older frames decode unchanged (Phase 84/91
+    /// wire-compat precedent).
+    #[serde(default)]
+    pub superseded: u32,
 }
 
 /// Shared handle the consolidation pass writes (per cycle)
@@ -544,6 +555,12 @@ pub async fn consolidate(
         skipped_unhelpful: 0, // selector handled the gate
         llm_unavailable,
         pairs,
+        // Phase 92 — `consolidate(...)` only handles standard
+        // construction; the supersession-event count is
+        // tallied by the reflection-pass wrapper (Task 4)
+        // before this function is called for the standard
+        // remainder. Default `0` here.
+        superseded: 0,
     }
 }
 

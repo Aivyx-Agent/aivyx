@@ -617,6 +617,25 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         proposal_log: plog,
                         phraser,
                         stat: persona_consolidation_stat.clone(),
+                        // Phase 92 — Persona chain handle +
+                        // Phase 88 floor. The binary fills
+                        // these so the supersession-detection
+                        // branch (gated on
+                        // `config.enable_supersession`) can
+                        // walk applied `consolidate-pair:`
+                        // facets. The bin/aivyx wiring uses
+                        // the operator's actual
+                        // `[persona_lifecycle].decay_pair_
+                        // below_affinity` when present;
+                        // None / 1.0 here is the default
+                        // (the same default as Phase 88).
+                        persona_log: persona_log.clone(),
+                        pair_below_affinity: persona_lifecycle_config
+                            .as_ref()
+                            .map(|c| c.decay_pair_below_affinity)
+                            .unwrap_or(
+                                aivyx_config::DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY,
+                            ),
                     },
                 ),
                 _ => None,
