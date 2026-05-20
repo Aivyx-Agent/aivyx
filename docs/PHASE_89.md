@@ -280,42 +280,105 @@ the natural infrastructure pause before the next big surface.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** A normalization function at an
+  existing trait boundary touched no locked technical-
+  contract decision. Memory's contract has always been
+  `(topic, body) → seq`; canonicalizing `topic` is an
+  implementation detail under that contract. Streak: **36
+  consecutive phases** (was 35).
+- **PRODUCT.md — held.** No new commitment, none weakened;
+  the operator-facing contract was *strengthened* (G3
+  recall + P14 Persona both learn from cleaner accumulated
+  signal). Streak: **29 consecutive phases** (was 28).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  `Memory` trait + impls + the new canonicalization helper
+  + the `CanonicalizingMemory` wrapper all live in
+  `aivyx-memory`; the config knob is in `aivyx-config`;
+  no new `AuditTag`. Streak: **37 consecutive phases** —
+  new project record, beating Phase 88's 36.
+
+**Test count — `+20`** (workspace `1594 → 1614`).
+Comfortably above the predicted `+6-10` band; the rich rule
+coverage in Task 3 was the right trade. Breakdown:
+
+- Config knob `+3` (slightly above the calibration law's
+  "+1" floor for a knob on an existing block — `Sourced<bool>`
+  gave three distinct assertion shapes: default-source, TOML-
+  source-true, TOML-source-false).
+- Pure module `+13` (each of the five suffix rules — `ies`,
+  `ing`, `ed`, `es`, `s` — has a positive test;
+  `es_rule_skips_non_hissing_stems` codifies the
+  `roles → role` contrast against `boxes → box`; double-`s`
+  guard for `process` / `kiss`; short-string len guards;
+  idempotency over the full matrix; identity on canonical
+  input; non-ASCII pass-through; path-like-topic trailing-
+  segment behavior; lowercase + whitespace fold).
+- Wrapper integration `+4` (the seam contract: variant puts
+  collapse + variant reads find them; without-wrapper
+  baseline that documents the exact fragmentation Phase 89
+  fixes; `forget` canonicalizes; `put_vector` canonicalizes
+  so the embedding index aligns).
+
+The wrapper-delegate architecture saved scope vs. the
+inline-flag alternative: instead of threading
+`canonicalize: bool` through both `InMemoryMemory` and
+`RedbMemory` (14 sites across two impls), a single
+`CanonicalizingMemory` wrapper canonicalizes once per
+method and applies uniformly to either inner impl.
+
+**Scope — every planned surface shipped exactly as scoped.**
+The config knob with default-off + `Sourced<bool>`
+provenance tracking, the v1 rule set with the documented
+hissing-sound guard on `es`, the `Memory::put` boundary
+seam (extended to every topic-keyed read path so writes
+remain findable), the binary's flag-gated wrapper
+construction — all landed as the open-doc described. One
+mid-implementation refinement surfaced during Task 3
+testing: the initial `es`-rule design over-stripped `roles`
+to `rol`. The fix (require the stem to end in a hissing-
+sound letter, the real English rule) is now codified in
+both the implementation and the dedicated
+`es_rule_skips_non_hissing_stems` test. Zero clippy
+warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[memory].canonicalize_topics: bool` (default
-  `false`) — Task 2.
-- [ ] `canonicalize_topic(&str) -> String` pure function in
+- [x] `[memory].canonicalize_topics: bool` (default
+  `false`) — Task 2 (commit `78b860f`).
+- [x] `canonicalize_topic(&str) -> String` pure function in
   `aivyx-memory`, implementing the Q1a rule set
   (lowercase + trim + whitespace fold + the five-rule
-  suffix stripper); idempotent — Task 3.
-- [ ] Unit tests on the pure function: each rule case,
+  suffix stripper); idempotent — Task 3 (commit `84593cf`).
+- [x] Unit tests on the pure function: each rule case,
   idempotency, lowercase, whitespace folding, short-string
   guards, ASCII-fold guard, identity on canonical input —
-  Task 3.
-- [ ] `Memory::put` + matching topic-keyed read APIs apply
+  Task 3 (commit `84593cf`).
+- [x] `Memory::put` + matching topic-keyed read APIs apply
   the canonicalization when the flag is on; byte-identical
-  to pre-Phase-89 when off — Task 4.
-- [ ] `bin/aivyx` threads `config.memory.canonicalize_
-  topics` to the memory constructor — Task 4.
-- [ ] Integration test: write `Deploys`, read with
-  `deploy`, both fold; downstream consumer (recall-feedback
-  fold) inherits the canonical key — Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  to pre-Phase-89 when off — Task 4 (commit `15a63f1`),
+  via the `CanonicalizingMemory` wrapper-delegate.
+- [x] `bin/aivyx` threads `config.memory_canonicalize_
+  topics` to the memory constructor — Task 4 (commit
+  `15a63f1`).
+- [x] Integration test: write `Deploys`, read with
+  `deploy`, both fold; downstream consumer (vector index)
+  inherits the canonical key — Task 4 (commit `15a63f1`,
+  `put_with_variant_and_get_with_variant_match_via_canonical
+  _fold` + `put_vector_canonicalizes_so_index_aligns`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-six.
-- [ ] PRODUCT.md streak extends to twenty-nine.
-- [ ] Production-core streak extends to thirty-seven (new
+- [x] DESIGN.md streak extends to thirty-six.
+- [x] PRODUCT.md streak extends to twenty-nine.
+- [x] Production-core streak extends to thirty-seven (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+6-10; per the
-  converged calibration law — knob on an existing block
-  (≈ +1) + new pure helper (≈ +4-6) + seam integration
-  (≈ +1-2); no new module, no new `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+20`, above the
+  predicted `+6-10` band — the rich rule coverage paid off).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

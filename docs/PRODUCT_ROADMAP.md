@@ -1362,6 +1362,39 @@ respond to it. Closing the gap is the inflection point between
   AuditTag). Test count delta `+6` (workspace 1588 → 1594),
   inside the predicted `+3-7` band. Zero new workspace deps.
 
+- **Phase 89 (Topic Canonicalization, shipped 2026-05-20).**
+  Closes the longest-standing learning-stack deferral — the
+  Phase 82 deferral carried forward six times. For 88 phases
+  every topic-keyed accumulator (memory, recall log,
+  helpfulness ledger, co-occurrence ledger, Persona
+  consolidate-pair provenance) keyed by the operator's typed
+  topic VERBATIM — so `deploy` / `Deploy` / `deploys` /
+  `deploying` were four distinct topics across every signal,
+  and the value that should add up across them was silently
+  fragmented. The first phase since the act-on-durable-
+  learning arc closed that **sharpens existing signals**
+  rather than adding a new capability. **No new product
+  commitment**, none weakened; the operator-facing contract
+  is *strengthened* (G3 recall and P14 Persona learn from
+  cleaner accumulated signal). Single opt-in
+  `[memory].canonicalize_topics: bool` knob (default `false`,
+  matching the 88-phase behaviour-change-is-opt-in
+  discipline); hand-rolled English stemmer (lowercase + trim
+  + whitespace fold + `ies → y` / `ing` / `ed` / hissing-`es`
+  / `s` strips, idempotent, zero new deps); write-side only
+  (no migration; existing fragmented signal decays out via
+  the Phase 82/83 ~60-day half-life + the Phase 77 ~30-day
+  recall-log retention). Implemented as a thin
+  `CanonicalizingMemory` wrapper-delegate at the `Memory`
+  trait boundary — one canonicalization site per method,
+  applied uniformly to whichever inner impl the binary
+  picked. Streak all three correct: DESIGN.md → 36, PRODUCT.md
+  → **29**, lib.rs → **37** (new project record, beating
+  Phase 88's 36) — Memory trait + helper + wrapper all live
+  in `aivyx-memory`, not aivyx-core. Test count delta `+20`
+  (workspace 1594 → 1614), comfortably above the predicted
+  `+6-10` band. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

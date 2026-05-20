@@ -725,6 +725,43 @@ parent_role = "researcher"
 # retention_days = 30
 
 # ----------------------------------------------------------------
+# Topic canonicalization (Phase 89) — OFF BY DEFAULT
+# ----------------------------------------------------------------
+#
+# For 88 phases every topic-keyed accumulator (memory, recall
+# log, helpfulness ledger, co-occurrence ledger, Persona
+# consolidate-pair provenance) keyed by the operator's typed
+# topic VERBATIM — so `deploy`, `Deploy`, `deploys`, and
+# `deploying` were four distinct topics across every signal,
+# and the value that should add up across them was silently
+# fragmented.
+#
+# Phase 89 fixes this with the smallest possible substrate
+# change: an opt-in canonicalization seam at the Memory
+# trait's topic-string boundary. With the flag on, every
+# topic argument is lowercased + trimmed + stemmed (`ies → y`,
+# `ing` / `ed` / hissing-`es` / `s` drop, with min-length +
+# `ss` / non-hissing guards) before storage; lookups fold the
+# same way; every downstream consumer inherits the canonical
+# form through the existing pipeline.
+#
+# Off by default: with no `canonicalize_topics` key (or set
+# to `false`) the memory layer is byte-identical to
+# pre-Phase-89. No migration: existing fragmented signal
+# decays out via the Phase 82/83 ~60-day half-life + Phase 77
+# ~30-day recall-log retention (~quarter to converge).
+#
+# [memory]
+# canonicalize_topics = true   # optional, default false
+#
+# Trade-off: the stemmer lowercases proper-noun-looking
+# topics too (`Deploy` → `deploy`). Slugs in this codebase
+# are category labels (`auth`, `frontend`, `tests`), so the
+# trade is positive in practice. Operator-tunable aliases
+# (`[[topic_alias]]`) + a topic-by-topic exception list are
+# deferred follow-ups.
+
+# ----------------------------------------------------------------
 # Semantic memory search (Phase 75) — optional `[embedding]`
 # ----------------------------------------------------------------
 #

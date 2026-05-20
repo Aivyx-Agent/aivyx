@@ -474,6 +474,74 @@ automatic once `max_per_topic` is set. Distinct from the
 prior FIFO-on-write eviction: an old note the agent keeps
 recalling now survives a younger note it never reads.
 
+### Topic canonicalization (Phase 89)
+
+For 88 phases the assistant has accumulated topic-keyed
+signal everywhere (Phase 7 memory, Phase 77 recall log,
+Phase 82 helpfulness ledger, Phase 83 co-occurrence ledger,
+Phase 87 consolidate-pair proposal IDs) — but every layer
+keyed by the operator's typed topic string verbatim. That
+means `deploy`, `Deploy`, `deploys`, and `deploying` are
+four distinct topics across every accumulator, and the
+signal that should add up across them was silently
+fragmented.
+
+Phase 89 closes the long-standing Phase 82 deferral with the
+smallest possible substrate fix: an **opt-in canonicalization
+seam at the `Memory` trait boundary**. With the flag on,
+every topic-string argument is folded to a canonical form
+before storage, and every topic-keyed lookup folds the same
+way — so `Deploys`-the-write is found by `deploy`-the-read,
+and the downstream signals (recall log, helpfulness ledger,
+co-occurrence ledger, Persona facet provenance) all inherit
+clean keys through the existing pipeline. No per-layer
+plumbing; one seam, every consumer benefits.
+
+- **Off by default.** With no `[memory] canonicalize_topics`
+  key (or set to `false`), the memory layer is byte-identical
+  to pre-Phase-89. Matches the project's 88-phase
+  behaviour-change-is-opt-in discipline.
+- **No migration.** Existing fragmented data stays as-is and
+  decays out naturally via the Phase 82/83 ~60-day half-life
+  + the Phase 77 ~30-day recall-log retention. The past
+  converges to clean within roughly a quarter without
+  intervention; no MAC-signed Persona chain entries are
+  rewritten.
+- **The v1 rule set.** A small hand-rolled English stemmer
+  (no new workspace deps). Lowercase + trim + collapse
+  whitespace, then **one** suffix-strip rule fires with
+  min-length guards: `ies → y` (`policies → policy`),
+  `ing` drop (`testing → test`), `ed` drop (`tested →
+  test`), `es` drop **only when the stem ends in a
+  hissing-sound letter — `sh` / `ch` / `s` / `x` / `z`**
+  (`boxes → box`; `roles` falls through to the next rule),
+  `s` drop (`tests → test`; `process` stays — the `ss`
+  guard skips). The function is idempotent.
+- **Applies to every topic-string trait entry point.**
+  `put`, `get_recent`, `forget`, `gc_topic`,
+  `evict_oldest_unread`, `put_vector`,
+  `promote_recall_helpful`. **Does not** apply to prefix
+  matching (`scan_prefix`), text queries (`search`), or
+  topic-less methods (`gc_expired`, `list_topics`, the
+  vector-only `semantic_search` paths).
+
+Enable it in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[memory]
+canonicalize_topics = true   # optional, default false
+```
+
+**To keep pre-Phase-89 behaviour:** leave the key out (or
+set `false`). **Trade-off:** the stemmer lowercases proper-
+noun-looking topics too (`Deploy` → `deploy`). The codebase's
+typical topic slugs are category labels (`auth`, `frontend`,
+`tests`), not entity names — the assumption is positive in
+practice; an operator who needs case-sensitive topics
+declines the opt-in. An operator-tunable alias table
+(`[[topic_alias]]`) and a topic-by-topic exception list are
+likely follow-ups if real-world fragmentation cases need them.
+
 ## Semantic memory search (Phase 75)
 
 Phase 75 adds **embedding-ranked** memory retrieval on top of

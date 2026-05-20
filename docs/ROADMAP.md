@@ -2435,6 +2435,74 @@ ledger the pair arm sits out entirely → byte-identical to
 Phase 85 (asserted on the existing Phase 85 test, which
 runs with `cooccurrence_ledger: None`).
 
+## Phase 89 — Topic Canonicalization (sharper learning through sharper bookkeeping, completed)
+
+**Frozen — see [PHASE_89.md](PHASE_89.md).** Closes the
+longest-standing learning-stack deferral — the Phase 82
+deferral carried forward six times through Phases 83-88. For
+88 phases every topic-keyed accumulator (the Phase 7 memory,
+the Phase 77 recall log, the Phase 82 helpfulness ledger,
+the Phase 83 co-occurrence ledger, the Phase 87 consolidate-
+pair proposal IDs) keyed by the operator's typed topic string
+verbatim — so `deploy`, `Deploy`, `deploys`, `deploying` were
+four distinct topics across every signal, and the value that
+should add up across them was silently fragmented. Phase 89
+is the first phase since the act-on-durable-learning arc
+closed that **sharpens existing signals** rather than adding
+a new capability — the natural infrastructure pause before
+the next big surface.
+
+The fix is the smallest possible substrate change: an opt-in
+canonicalization seam at the `Memory` trait's topic-string
+boundary. Every downstream consumer inherits clean signal
+through the existing pipeline — no per-layer plumbing.
+
+- **Hand-rolled English stemmer (Q1a):** lowercase + trim +
+  whitespace fold + one suffix-strip rule with min-length
+  guards (`ies → y`, `ing` / `ed` / hissing-`es` / `s`).
+  The `es` rule fires only when the stem ends in a hissing
+  sound (`sh` / `ch` / `s` / `x` / `z`) — the real English
+  plural rule — so `boxes → box` but `roles` falls through
+  to `s` rule → `role`. Idempotent. Zero new deps.
+- **Write-side only (Q2a):** no migration. Existing
+  fragmented signal decays out via the Phase 82/83 ~60-day
+  half-life + the Phase 77 ~30-day recall-log retention;
+  the past converges to clean within ~quarter without
+  intervention; MAC-signed Persona chain entries stay
+  untouched.
+- **`Memory::put` boundary (Q3a):** a single wrapper-
+  delegate (`CanonicalizingMemory`) canonicalizes at every
+  topic-keyed trait entry point (`put` / `get_recent` /
+  `forget` / `gc_topic` / `evict_oldest_unread` /
+  `put_vector` / `promote_recall_helpful`). One
+  canonicalization site per method; prefix matching,
+  text-search queries, and topic-less methods pass through
+  unchanged.
+- **Opt-in (Q4a):** `[memory].canonicalize_topics: bool`,
+  default `false`. Matches the 88-phase
+  behaviour-change-is-opt-in discipline; with the flag off
+  the memory layer is byte-identical to pre-Phase-89.
+
+Streak all three correct: DESIGN.md → **36**, PRODUCT.md →
+**29**, `aivyx-core/src/lib.rs` → **37** (new project record,
+beats Phase 88's 36) — the canonicalization function +
+wrapper live in `aivyx-memory`, not `aivyx-core`; the config
+knob + binary wiring touch no production-core code. Test
+count delta `+20` workspace (`+3` config, `+13` pure module,
+`+4` wrapper) — comfortably above the predicted `+6-10`
+band; the rich rule coverage in Task 3 (each suffix rule +
+the hissing-sound guard + idempotency + non-ASCII pass-
+through + path-like-topic + short-string guards) all earned
+their own test. Zero clippy warnings. Zero new workspace
+deps. With `canonicalize_topics = false` (the default), the
+memory layer is byte-identical to pre-Phase-89 (asserted on
+the `without_wrapper_variants_stay_distinct_baseline` test).
+
+Likely follow-ups (operator-tunable `[[topic_alias]]`
+mappings, topic-by-topic exception list, one-time migration
+of existing fragmented data, non-ASCII / Unicode stemming)
+are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
