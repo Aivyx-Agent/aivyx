@@ -150,6 +150,19 @@ pub struct PersonaLifecycleDeps {
             crate::helpfulness_ledger::PersistentHelpfulnessLedger,
         >,
     >,
+    /// Phase 88 — the durable co-occurrence ledger. When
+    /// present, a facet whose `consolidate-pair:{lo}+{hi}`
+    /// provenance resolves is gated by that pair's decayed
+    /// affinity (symmetric with the helpfulness arm: a
+    /// pair-below-floor triggers early decay, a still-strong
+    /// pair protects an age-old facet). `None` → no
+    /// pair-affinity signal, exact Phase 85/81 fallback for
+    /// `consolidate-pair:` facets.
+    pub cooccurrence_ledger: Option<
+        std::sync::Arc<
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
+        >,
+    >,
     /// Phase 81 (Q4a) — optional last-cycle stat sink for the
     /// Phase 78 surface. `None` → breadcrumb-only.
     pub stat: Option<
@@ -1113,6 +1126,39 @@ async fn run_persona_lifecycle_pass(
             },
             _ => None,
         };
+        // Phase 88 — recover the topic pair structurally from
+        // `consolidate-pair:{lo}+{hi}` provenance. Only
+        // consolidation-actuator-derived facets carry it; every
+        // other provenance arm → `None` (the pair arm sits out,
+        // the detector follows whatever other signal it has).
+        let pair = origin
+            .delta
+            .proposal_id
+            .strip_prefix("consolidate-pair:")
+            .and_then(|rest| rest.split_once('+'))
+            .map(|(a, b)| (a.to_string(), b.to_string()));
+        // Resolve the pair's durable decayed affinity once,
+        // here, so the detector stays pure. `None` when no
+        // ledger, no provenance, or the pair is unseen → the
+        // detector's pair arm sits out (age-only fallback for
+        // `consolidate-pair:` facets, byte-identical to
+        // pre-Phase-88).
+        let pair_affinity =
+            match (&deps.cooccurrence_ledger, pair.as_ref()) {
+                (Some(ledger), Some((a, b))) => match ledger
+                    .pair_score(a, b, now_secs)
+                    .await
+                {
+                    Ok(Some(e)) => Some(
+                        crate::persona_lifecycle::PairAffinityHint {
+                            affinity: e.ewma_score,
+                            samples: e.samples,
+                        },
+                    ),
+                    _ => None,
+                },
+                _ => None,
+            };
         facets.push(crate::persona_lifecycle::LifecycleFacet {
             category: cat,
             value,
@@ -1121,13 +1167,8 @@ async fn run_persona_lifecycle_pass(
             reinforced,
             recall_topic,
             helpfulness,
-            // Phase 88 — `pair` + `pair_affinity` resolution
-            // lands in Task 4 alongside the co-occurrence
-            // ledger thread-through. `None` here keeps the
-            // pass byte-identical to pre-Phase-88 for the
-            // intermediate Task 3 commit.
-            pair: None,
-            pair_affinity: None,
+            pair,
+            pair_affinity,
         });
     }
 
@@ -2483,6 +2524,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(FakeEmb),
             helpfulness_ledger: None,
+            cooccurrence_ledger: None,
             stat: Some(Arc::clone(&stat)),
         };
         let sched = aivyx_config::ReflectionScheduleConfig {
@@ -2545,6 +2587,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(FakeEmb),
             helpfulness_ledger: None,
+            cooccurrence_ledger: None,
             stat: None,
         };
         run_persona_lifecycle_pass(&off, &sched, 10_000_002)
@@ -2714,6 +2757,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(NoEmb),
             helpfulness_ledger: None,
+            cooccurrence_ledger: None,
             stat: None,
         };
         run_persona_lifecycle_pass(&no_ledger, &sched, now_ms)
@@ -2735,6 +2779,7 @@ mod tests {
             proposal_log: Arc::clone(&proposal_log),
             embedding: Arc::new(NoEmb),
             helpfulness_ledger: Some(Arc::clone(&ledger)),
+            cooccurrence_ledger: None,
             stat: None,
         };
         run_persona_lifecycle_pass(&with_ledger, &sched, now_ms)
@@ -3030,6 +3075,294 @@ mod tests {
                  LLM unavailable"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 88 — pattern-driven Persona decay ---------------
+
+    #[tokio::test]
+    async fn pair_decay_protects_durable_pair_and_retires_drifted_pair()
+    {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use crate::persona::{
+            PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
+            PersistentPersonaLog,
+        };
+        use crate::persona_proposal::{
+            PersistentPersonaProposalLog, ProposalStatusFilter,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_llm::embedding::{
+            EmbeddingError, EmbeddingProvider,
+        };
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+
+        struct NoEmb;
+        #[async_trait::async_trait]
+        impl EmbeddingProvider for NoEmb {
+            async fn embed(
+                &self,
+                _t: &[String],
+            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+                Ok(vec![])
+            }
+            fn model(&self) -> &str {
+                "noemb"
+            }
+            fn dimensions(&self) -> usize {
+                1
+            }
+        }
+
+        fn delta(
+            id: &str,
+            value: &str,
+            proposal_id: &str,
+            approved_ms: u64,
+        ) -> PersonaDelta {
+            PersonaDelta {
+                delta_id: id.into(),
+                proposed_at_unix_ms: approved_ms,
+                approved_at_unix_ms: approved_ms,
+                proposal_id: proposal_id.into(),
+                category: PersonaDeltaCategory::LearnedContext,
+                op: PersonaDeltaOp::AppendList {
+                    value: value.into(),
+                },
+            }
+        }
+
+        let base = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-pl-pair-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([88u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let persona_log = Arc::new(
+            PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                vec![1u8; 32],
+            )
+            .await
+            .unwrap(),
+        );
+        // OLD facets (origin = 0; now > age horizon 1000) so
+        // age-decay is eligible on every facet whose
+        // `reinforced` flag is *false*. The Phase 81/85 rule is
+        // "reinforced = any later delta in the same category";
+        // the LAST delta in a category is the only one not
+        // reinforced. So we put the protection-target LAST so
+        // age-decay would naturally fire on it — only the pair
+        // signal protects it. The drifted facet sits in the
+        // middle (reinforced, so age-decay would NOT fire on
+        // it) — the pair signal must be what early-decays it,
+        // bypassing the reinforced check.
+        let now_ms = 1_000_000_000u64;
+        let now_secs = now_ms / 1000; // 1_000_000
+        // Padding to clear `min_soft_facets` (2): two old
+        // reflection-authored facets, reinforced by later
+        // deltas → age-decay suppressed on them. Pure controls.
+        persona_log
+            .append(delta(
+                "p1",
+                "filler one",
+                "seed",
+                0,
+            ))
+            .await
+            .unwrap();
+        persona_log
+            .append(delta(
+                "p2",
+                "filler two",
+                "seed",
+                0,
+            ))
+            .await
+            .unwrap();
+        // Drifted pair facet (alpha + beta, affinity 0.3).
+        // Reinforced by the later durable delta → age-decay
+        // CANNOT fire. Decay must come from the pair signal
+        // alone (sustained_pair_decay bypasses reinforced).
+        persona_log
+            .append(delta(
+                "a",
+                "you mix alpha + beta",
+                "consolidate-pair:alpha+beta",
+                0,
+            ))
+            .await
+            .unwrap();
+        // Durable pair facet (deploy + rollback, affinity 5.0).
+        // LAST delta in LearnedContext → reinforced = false.
+        // Age-decay WOULD fire without protection; only the
+        // sustained-positive pair signal saves it.
+        persona_log
+            .append(delta(
+                "b",
+                "you deploy with rollback in mind",
+                "consolidate-pair:deploy+rollback",
+                0,
+            ))
+            .await
+            .unwrap();
+
+        // Co-occurrence ledger: deploy+rollback durable,
+        // alpha+beta drifted. Stamp at `now_secs` so read-time
+        // decay leaves the scores intact.
+        let cooc =
+            Arc::new(PersistentCooccurrenceLedger::new(
+                store.domain(KeyDomain::CooccurrenceLedger),
+            ));
+        cooc.record_window(
+            &[
+                (("deploy".into(), "rollback".into()), 5.0),
+                (("alpha".into(), "beta".into()), 0.3),
+            ],
+            now_secs,
+        )
+        .await
+        .unwrap();
+
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"pl-pair-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        let cfg = aivyx_config::PersonaLifecycleConfig {
+            enabled: true,
+            consolidation_similarity: 0.92,
+            decay_max_age_secs: 1_000,
+            min_soft_facets: 2,
+            decay_unhelpful_threshold: -2.0,
+            decay_min_samples: 3,
+            decay_pair_below_affinity: 1.0,
+            signals: aivyx_config::PersonaLifecycleSignals {
+                consolidate: false,
+                decay: true,
+            },
+        };
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 86_400,
+            role_override: None,
+            enabled: true,
+        };
+
+        // With the co-occurrence ledger present + `signal_decay
+        // = true`, Phase 88's two arms engage:
+        // - `sustained_pair_decay` early-decays the drifted
+        //   pair facet (bypassing the `reinforced` check that
+        //   would otherwise suppress age-decay).
+        // - `sustained_pair_strong` PROTECTS the durable pair
+        //   facet from age-decay (the only un-reinforced facet
+        //   in the chain, so age-decay would otherwise fire).
+        // The fallback path (no ledger → byte-identical Phase
+        // 85 age-only) is covered by the existing Phase 85
+        // `helpfulness_decay_uses_recall_fb_provenance` test
+        // already in this module.
+        let with_ledger = PersonaLifecycleDeps {
+            config: cfg.clone(),
+            persona_log: Arc::clone(&persona_log),
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(NoEmb),
+            helpfulness_ledger: None,
+            cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            stat: None,
+        };
+        run_persona_lifecycle_pass(&with_ledger, &sched, now_ms)
+            .await;
+        let pending =
+            proposal_log.list(ProposalStatusFilter::Pending);
+        assert_eq!(
+            pending.len(),
+            1,
+            "exactly one proposal: the drifted pair early-\
+             decays; the durable pair is protected from \
+             age-decay"
+        );
+        let good = match &pending[0].proposed_op.op {
+            PersonaDeltaOp::RemoveList { value } => value.clone(),
+            o => panic!("expected RemoveList, got {o:?}"),
+        };
+        assert_eq!(
+            good, "you mix alpha + beta",
+            "drifted pair early-decays via the pair signal"
+        );
+        // The reason text cites the pair + the decayed
+        // affinity (the operator-visible provenance).
+        let reason = pending[0]
+            .proposed_op
+            .reason
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            reason
+                .contains("co-occurrence pair `alpha` + `beta`"),
+            "reason cites the pair: {reason}"
+        );
+        assert!(
+            reason.contains("relationship no longer durable"),
+            "reason cites the relationship signal: {reason}"
+        );
+
+        // Second cycle is idempotent — same proposal id, dedup
+        // hits, nothing new files.
+        run_persona_lifecycle_pass(&with_ledger, &sched, now_ms)
+            .await;
+        assert_eq!(
+            proposal_log
+                .list(ProposalStatusFilter::Pending)
+                .len(),
+            1,
+            "second cycle is a no-op (dedup against the \
+             existing proposal id)"
+        );
+
+        // `signal_decay = false` (decay arm disarmed) → no
+        // additional proposals fire even with the ledger
+        // present. Reuses the same proposal chain so the cycle
+        // ABOVE's one proposal is still the only one when
+        // we're done.
+        let off = PersonaLifecycleDeps {
+            config: aivyx_config::PersonaLifecycleConfig {
+                signals: aivyx_config::PersonaLifecycleSignals {
+                    consolidate: true,
+                    decay: false,
+                },
+                ..cfg
+            },
+            persona_log,
+            proposal_log: Arc::clone(&proposal_log),
+            embedding: Arc::new(NoEmb),
+            helpfulness_ledger: None,
+            cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            stat: None,
+        };
+        run_persona_lifecycle_pass(&off, &sched, now_ms).await;
+        assert_eq!(
+            proposal_log
+                .list(ProposalStatusFilter::Pending)
+                .len(),
+            1,
+            "decay-signal disarmed → no new proposals"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

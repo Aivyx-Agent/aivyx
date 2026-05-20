@@ -554,6 +554,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                             // (already wired for Phase 82).
                             helpfulness_ledger:
                                 helpfulness_ledger.clone(),
+                            // Phase 88 — gate decay by durable
+                            // pair affinity when available
+                            // (already wired for Phase 83);
+                            // `None` → pure age-only fallback
+                            // for `consolidate-pair:` facets.
+                            cooccurrence_ledger:
+                                cooccurrence_ledger.clone(),
                             stat: persona_lifecycle_stat.clone(),
                         },
                     )
