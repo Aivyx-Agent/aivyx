@@ -2355,6 +2355,11 @@ async fn run_async(
         // pass respects first-match retention before falling
         // back to the global memory_ttl_secs.
         memory_retention: config_memory_retention,
+        // Phase 89 — opt-in topic canonicalization at the
+        // `Memory::put` boundary. Bound here; Task 4 of Phase
+        // 89 wires it into the memory constructor at daemon
+        // startup.
+        memory_canonicalize_topics: _config_memory_canonicalize_topics,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {

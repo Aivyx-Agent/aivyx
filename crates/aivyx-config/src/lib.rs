@@ -527,6 +527,18 @@ pub struct AivyxConfig {
     /// the global `memory_ttl_secs` default (no behavior change
     /// for pre-Phase-74 configs).
     pub memory_retention: Vec<MemoryRetentionRule>,
+    /// Phase 89 — opt-in topic canonicalization at the
+    /// `Memory::put` boundary (and matching topic-keyed read
+    /// paths). When `true`, the operator's typed topic string
+    /// is lowercased + whitespace-folded + suffix-stemmed
+    /// before storage, so `Deploy` / `deploys` / `deploying`
+    /// all collapse to `deploy` — and every downstream signal
+    /// (recall log, helpfulness ledger, co-occurrence ledger,
+    /// Persona facet provenance) inherits the canonical form
+    /// through the existing pipeline. With `false` (default —
+    /// the 88-phase behaviour-change-is-opt-in discipline) the
+    /// memory layer is byte-identical to pre-Phase-89.
+    pub memory_canonicalize_topics: Sourced<bool>,
     /// Aivyx store passphrase. `None` means "no source supplied one"
     /// and the binary should either prompt the user (tty branch) or
     /// error out (non-tty branch). Config layer does not do terminal
@@ -2227,6 +2239,11 @@ struct RawMemory {
     /// public type.
     #[serde(default)]
     retention: Vec<RawMemoryRetention>,
+    /// Phase 89 — opt-in topic canonicalization. Default
+    /// `false`; with no key (or `false`) memory is byte-
+    /// identical to pre-Phase-89.
+    #[serde(default)]
+    canonicalize_topics: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2584,6 +2601,18 @@ impl AivyxConfig {
                 Some(Sourced::new(parsed, FieldSource::Env))
             }
             None => toml.memory.ttl_secs.map(|n| Sourced::new(n, FieldSource::Toml)),
+        };
+
+        // --- memory.canonicalize_topics (Phase 89) -----------------
+        // Opt-in `[memory].canonicalize_topics` (default `false`).
+        // No env var — TOML or default; matches the project's
+        // 88-phase behaviour-change-is-opt-in discipline.
+        let memory_canonicalize_topics = match toml
+            .memory
+            .canonicalize_topics
+        {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(false, FieldSource::Default),
         };
 
         // --- memory.retention (Phase 74) ---------------------------
@@ -3613,6 +3642,7 @@ impl AivyxConfig {
             memory_max_per_topic,
             memory_ttl_secs,
             memory_retention,
+            memory_canonicalize_topics,
             passphrase,
             telegram,
             email,

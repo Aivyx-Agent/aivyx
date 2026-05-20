@@ -6516,3 +6516,58 @@ fn persona_consolidation_enabled_zero_cap_is_invalid() {
     }
     drop(env);
 }
+
+// ---- Phase 89 — [memory].canonicalize_topics ----------------
+
+/// No `[memory]` block (or no `canonicalize_topics` key) →
+/// `memory_canonicalize_topics = false` (the memory layer is
+/// byte-identical to pre-Phase-89).
+#[test]
+fn memory_canonicalize_topics_absent_defaults_false() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(!cfg.memory_canonicalize_topics.value);
+    assert_eq!(
+        cfg.memory_canonicalize_topics.source,
+        crate::FieldSource::Default,
+    );
+    drop(env);
+}
+
+/// Explicit `canonicalize_topics = true` wins; source records
+/// it came from the TOML.
+#[test]
+fn memory_canonicalize_topics_explicit_true_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\ncanonicalize_topics = true\n",
+        "mem-canon-on",
+    );
+    assert!(cfg.memory_canonicalize_topics.value);
+    assert_eq!(
+        cfg.memory_canonicalize_topics.source,
+        crate::FieldSource::Toml,
+    );
+    drop(env);
+}
+
+/// Explicit `canonicalize_topics = false` is honored (the
+/// operator can express the default explicitly without
+/// changing behaviour).
+#[test]
+fn memory_canonicalize_topics_explicit_false_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\ncanonicalize_topics = false\n",
+        "mem-canon-off",
+    );
+    assert!(!cfg.memory_canonicalize_topics.value);
+    assert_eq!(
+        cfg.memory_canonicalize_topics.source,
+        crate::FieldSource::Toml,
+    );
+    drop(env);
+}
