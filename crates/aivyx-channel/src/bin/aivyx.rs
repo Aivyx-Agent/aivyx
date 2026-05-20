@@ -2356,10 +2356,10 @@ async fn run_async(
         // back to the global memory_ttl_secs.
         memory_retention: config_memory_retention,
         // Phase 89 — opt-in topic canonicalization at the
-        // `Memory::put` boundary. Bound here; Task 4 of Phase
-        // 89 wires it into the memory constructor at daemon
-        // startup.
-        memory_canonicalize_topics: _config_memory_canonicalize_topics,
+        // `Memory` trait's topic-string boundary. When
+        // `true`, the memory below is wrapped in a
+        // `CanonicalizingMemory` delegate.
+        memory_canonicalize_topics: config_memory_canonicalize_topics,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -2589,6 +2589,24 @@ async fn run_async(
     let memory: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
         .await
         .map_err(|e| format!("failed to open memory substrate: {e}"))?;
+    // Phase 89 — opt-in topic canonicalization. When the
+    // operator sets `[memory].canonicalize_topics = true`,
+    // wrap the redb-backed memory in a `CanonicalizingMemory`
+    // delegate that lowercases + stems the topic argument at
+    // every topic-keyed trait entry point before delegating.
+    // Every downstream signal (recall log, helpfulness
+    // ledger, co-occurrence ledger, Persona facet provenance)
+    // inherits the canonical topic form through the existing
+    // pipeline. With the flag off (default), the memory is
+    // byte-identical to pre-Phase-89.
+    let memory: Arc<dyn Memory> =
+        if config_memory_canonicalize_topics.value {
+            Arc::new(
+                aivyx_memory::CanonicalizingMemory::new(memory),
+            )
+        } else {
+            memory
+        };
     // Phase 75 — construct the embedding provider once iff
     // `[embedding]` is configured. Shared two ways: the write
     // tool's synchronous write-time hook, and the daemon's

@@ -98,6 +98,14 @@ pub use crate::tools::{
 pub mod canonical;
 pub use crate::canonical::canonicalize_topic;
 
+/// Phase 89 — `Memory` wrapper that canonicalizes the
+/// topic-string argument at every topic-keyed entry point
+/// before delegating to an inner impl. The binary constructs
+/// one of these around the active `Memory` when
+/// `[memory].canonicalize_topics = true`.
+pub mod canonicalizing;
+pub use crate::canonicalizing::CanonicalizingMemory;
+
 /// A single memory record.
 ///
 /// This is what `Memory::put` stores and what `Memory::get_recent`
