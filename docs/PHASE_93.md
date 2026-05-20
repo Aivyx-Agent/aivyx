@@ -1,93 +1,97 @@
-# Phase 93 — Recall-Judge → Gate Calibration Loop (closing the learning loop)
+# Phase 93 — Recall-Feedback Switches to LLM-Judgment Signal (closing the Phase 91 deferral)
 
-Phase 90 introduced the heuristic recall gate with per-domain
-`min_score` thresholds. Phase 91 introduced `LlmRecallJudge`,
-which emits a structured `RecallJudgment` per recall hit:
-`helpful` / `unhelpful` / `irrelevant`. Today these two
-components don't talk to each other. The gate uses static
-thresholds the operator picked at config time; the judge
-produces judgments that flow into the audit chain but **no
-runtime component reads them back**. The loop is open.
+Phase 91 introduced `LlmRecallJudge` and added the per-hit
+`judgment: Option<RecallJudgment>` field to `RecallHit`. The
+judge populates it via the `run_recall_judgment_pass`
+reflection-cron pass. But the field was scoped as **v1
+augment, not replace** — the comment on the field's
+definition states the policy explicitly: *"No existing
+accumulator (Phase 82 / 83 / 85 / 87 / 88) consumes this
+field in v1."* The judgments flow into the audit chain and
+the Phase 78 surface; no actuator reads them.
 
-Phase 93 closes the loop. A new per-domain rolling buffer
-collects `LlmRecallJudge` verdicts as they're produced. A new
-reflection-cron pass (`run_recall_calibration_pass`) reads
-the buffer per cycle and nudges the gate's `min_score`
-threshold: up when recent judgments above the current cutoff
-are mostly unhelpful (the gate is letting too much through);
-down when judgments **below** the current cutoff would have
-been helpful (the gate is gating too aggressively). With the
-new `[recall_gate].enable_calibration` knob off (the default),
-the gate is byte-identical to pre-Phase-93.
+Phase 93 closes that loop. The Phase 91 deferral
+documented in `docs/PHASE_92.md` line-for-line ("actuator-
+side switch from structural proxy to the new judgment
+signal") is shipped: `correlate_detailed` — the single
+source of truth that produces the `HelpfulnessTally` both
+the memory-promotion (Phase 77 Task 6) and Persona-
+proposal (Phase 77 Task 7) actuators read — now consults
+the per-hit `judgment` field where present and falls back
+to the existing turn-level structural proxy where absent.
+
+With the new `[recall_feedback].use_judgment_signal = false`
+knob (the default), `correlate_detailed` is byte-identical
+to pre-Phase-93. With the knob on, **per-hit overrides
+turn-uniform**: a hit judged `Used` contributes `+WEIGHT`
+regardless of the turn's structural signal, a hit judged
+`Hurt` contributes `-WEIGHT`, a hit judged `Irrelevant`
+contributes `0`, and any un-judged hit (`None`) keeps the
+turn-level structural signal it already had. The downstream
+actuators read the same `HelpfulnessTally` shape; only the
+signal source changes.
 
 ## Why this, why now
 
-- After Phase 91, the `LlmRecallJudge` produces useful
-  per-hit judgments **that no other runtime component
-  reads**. The audit trail captures them; the operator can
-  manually consult them; nothing in the system actuates on
-  them. Phase 93 is the natural symmetry move: judgments
-  earn their cost by influencing the gate they were
-  generated from.
-- After Phase 92's Soul-side actuator deferral closed, the
-  recall-side learning loop is the next-most-leveraged open
-  surface. The Soul has filed → applied → decay →
-  consolidate → supersede. Recall has gather → gate →
-  recall → judge **with no learning feedback**. Phase 93
-  fills that.
+- The Phase 91 deferral is exactly one phase old and was
+  named verbatim in the Phase 92 open doc's "rolling
+  deferrals" list. The judge produces verdicts that
+  currently flow only to visibility surfaces (audit chain
+  + Phase 78 insights); no runtime actuator consumes
+  them. Closing this is the natural symmetry move.
+- Surface area is tiny. One knob, one function-body
+  change inside `correlate_detailed`, no new module, no
+  new IPC contract, no new `KeyDomain`. The
+  `HelpfulnessTally` shape is unchanged; downstream
+  actuators read it identically.
 - The change is **purely additive**. With
-  `enable_calibration = false` the gate's behaviour is
-  byte-identical to Phase 90. The new buffer is in-memory,
-  daemon-lifetime, lost on restart — no on-disk schema, no
-  IPC contract change at the recall-hit boundary (the
-  buffer ingests the existing `RecallJudgment` shape from
-  Phase 91 unchanged).
-- Reuse is near-total. The reflection-cron orchestration
-  already runs Phase 87 phrasing + Phase 91 judgment +
-  Phase 92 supersession; the new calibration pass slots in
-  alongside them with the same `enable_X = false` opt-in
-  posture. The Phase 78 `*Stat` surface pattern absorbs
-  the new `RecallCalibrationStat`.
+  `use_judgment_signal = false` (the default), the
+  correlator's behaviour is byte-identical to Phase 77.
+  Operators who haven't enabled the Phase 91 judge see no
+  judgments to consume; operators who have enabled the
+  judge for visibility-only see no actuator behaviour
+  change unless they also flip this new knob.
+- Reuse is total. The judgment field already exists; the
+  reflection-cron pass already populates it; the
+  `correlate_detailed` call sites already exist; the
+  config block already exists. Phase 93 just connects two
+  already-built pieces.
 
 ## Streak predictions
 
-- **DESIGN.md** — **Will hold.** Tuning a per-domain
-  threshold from operator-validated signal touches no locked
-  technical-contract decision. The gate's threshold is
-  already a runtime value; the calibrator just nudges it
-  in response to the judge's verdicts. No new locked
-  contract. Hash at entry:
+- **DESIGN.md** — **Will hold.** Switching the per-hit
+  signal source from a structural proxy to an LLM
+  classification touches no locked technical-contract
+  decision. The signal magnitude (`±WEIGHT`), the tally
+  shape, the actuator contracts, the audit-chain shape —
+  all preserved. Hash at entry:
   `89dc89035f15daefa45d3e6df2c2c5327ed754707a8c8c2cdf8279fd70a94bce`.
   Prediction: streak **extends to forty** (currently 39).
 
-- **PRODUCT.md** — **Will hold.** The recall pipeline is
-  delivered; this strengthens its self-improving posture
-  without changing any operator-facing commitment. P9
-  (recall) and P15 (learning loop, if any commitments
-  exist) are not weakened; the per-domain gate continues
-  to be operator-tunable via `[recall_gate]` config and now
-  *also* self-calibrates when the operator opts in. Hash
-  at entry:
+- **PRODUCT.md** — **Will hold.** P9 (recall) and the
+  Persona-actuator commitment are unchanged; the
+  operator-facing behaviour with the knob off is byte-
+  identical, and with the knob on the only observable
+  change is "memory promotion and Persona proposals
+  reflect the LLM's per-hit assessment rather than the
+  structural turn-level proxy" — a *strengthening*, not a
+  weakening, of the existing commitment. Hash at entry:
   `cd60c4f9ec39d970243ab90d8e071938eacb5bbfa9eca085e265aa339511088e`.
   Prediction: streak **extends to thirty-three** (currently
   32).
 
 - **Production-core `aivyx-core/src/lib.rs`** — **Will
-  hold, by design.** The buffer + the pure `calibrate(...)`
-  function + the reflection-scheduler pass + the config
-  knob + the recording integration all live in
-  `aivyx-channel` / `aivyx-config`. The gate config lives
-  in `aivyx-config` already; the `RecallJudgment` type
-  lives in `aivyx-channel` (Phase 91). No `aivyx-core`
-  touch; no new `AuditTag`; no new `KeyDomain`. Hash at
-  entry:
+  hold, by design.** All changes land in `aivyx-channel`
+  (`recall_feedback.rs` augmentation + recall-log already
+  has the field) and `aivyx-config` (the new knob). No
+  `aivyx-core` touch; no new `AuditTag`; no new
+  `KeyDomain`. Hash at entry:
   `69fb9af1814f3f0741baca884b8b67690533046a634e87bbc61ef00f11d0c844`.
   Prediction: streak **extends to forty-one** consecutive
   phases (new project record, beats Phase 92's 40).
 
-- **New workspace deps** — Zero. The calibrator is pure
-  arithmetic over the `RecallJudgment` shape; the buffer
-  is a `VecDeque` from `std`.
+- **New workspace deps** — Zero. The augmentation is pure
+  arithmetic over the `RecallJudgment` enum.
 
 ## Tasks
 
@@ -95,154 +99,145 @@ the gate is byte-identical to pre-Phase-93.
 
 `docs/PHASE_93.md` + `docs/README.md` status row.
 
-### Task 2 — `[recall_gate].enable_calibration` knob
+### Task 2 — `[recall_feedback].use_judgment_signal` knob
 
 `aivyx-config`:
 
-- `RecallGateConfig` gains
-  `enable_calibration: bool` (default `false`). With
-  `false` the recording side is a no-op and the
-  calibration pass short-circuits — byte-identical to
-  pre-Phase-93.
-- `RawRecallGate` + the build path. Validation: trivial
-  (boolean).
-- A second knob `calibration_buffer_size: usize` (default
-  32) — the rolling buffer's per-domain capacity. Bounded
-  in `(0, 1024]` to prevent pathological config.
-- A third knob `calibration_nudge_step: f32` (default
-  `0.02`) — the maximum threshold delta per pass. Bounded
-  in `(0.0, 0.25]`.
-- Tests: defaults; explicit values win; buffer-size
-  bounds; nudge-step bounds; absent section builds None
-  (no calibration); any-field-set builds Some.
+- New `RecallFeedbackConfig` block (or extension of the
+  existing one if present) with
+  `use_judgment_signal: bool` (default `false`). The
+  block goes under `[recall_feedback]`; the producer
+  (`[recall_judgment]`) and consumer (`[recall_feedback]`)
+  knobs stay cleanly separated.
+- `RawRecallFeedback` + the build path. Validation:
+  trivial (boolean).
+- Tests: default false; explicit true wins; absent block
+  builds None / honors default; any-field-set builds
+  Some.
 
-### Task 3 — `RecallJudgmentBuffer` + pure `calibrate(...)` (the crux)
+### Task 3 — Augment `correlate_detailed` (the crux)
+
+`aivyx-channel/src/recall_feedback.rs`:
+
+- `correlate_detailed` (and its thin wrapper `correlate`)
+  gains a `use_judgment_signal: bool` parameter. The
+  per-hit signal derivation becomes:
+  1. If `use_judgment_signal = true` AND
+     `hit.judgment.is_some()`: derive the hit's signal
+     from the verdict per **Q2**'s mapping —
+     `Used → +WEIGHT`, `Hurt → -WEIGHT`, `Irrelevant → 0`
+     (no signal accumulated).
+  2. Otherwise: fall back to the turn-level structural
+     signal (the existing `turn_signal(outcome, all)`
+     contribution applied uniformly to the hit).
+- The `RecallContribution` struct gains a per-hit
+  signal-source breakdown — a new field
+  `signal_source: SignalSource { Structural, Judgment }`
+  per hit (or carried on the contribution if all hits
+  agree). The Phase 78 insights surface reads this so
+  the operator can see *why* a hit got the signal it
+  did. Wire-compat: `#[serde(default)]` if the contrib
+  is serialized (it isn't currently — pure
+  in-process); marker only.
+- Unit tests on the augmented logic — **single mixed
+  fixture per Q4a**:
+  - Recall with three hits — `Used` / `Hurt` / un-judged
+    — on a turn whose structural signal is `+WEIGHT`.
+    With `use_judgment_signal = false`: all three
+    accumulate `+WEIGHT`. With `true`: `Used` accumulates
+    `+WEIGHT` (from verdict), `Hurt` accumulates
+    `-WEIGHT` (from verdict overriding structural),
+    un-judged accumulates `+WEIGHT` (from structural
+    fallback).
+  - Single-hit case: `Irrelevant` with knob on
+    accumulates `0` (no contribution); knob off
+    accumulates the structural `+WEIGHT`.
+  - Knob-on with a turn whose structural signal is `None`
+    (escalated/cancelled): un-judged hits still
+    accumulate nothing; `Used` / `Hurt` judgments still
+    fire (judgment runs even when structural is silent).
+  - Knob-off back-compat: byte-identical to pre-Phase-93
+    behaviour (one or two existing-shape regression tests
+    pinned).
+
+### Task 4 — Threading + integration
 
 `aivyx-channel`:
 
-- New `recall_calibration` module with:
-  - `pub struct RecallJudgmentBuffer { per_domain:
-    HashMap<KeyDomain, VecDeque<RecordedJudgment>>, cap:
-    usize }` where `RecordedJudgment { score: f32,
-    verdict: RecallVerdict }` captures the heuristic score
-    the hit entered at + the LLM verdict.
-  - `pub fn record(&mut self, domain: KeyDomain, score:
-    f32, verdict: RecallVerdict)` appends + truncates to
-    `cap` from the front.
-  - `pub fn calibrate(buffer: &VecDequeView, threshold:
-    f32, nudge_step: f32) -> CalibrationOutcome` where
-    `CalibrationOutcome { new_threshold: f32, direction:
-    Direction, applied: bool }`. **Rule (Q2a):** among
-    judgments **above** the current threshold, if
-    `unhelpful + irrelevant` ≥ 60% of N, nudge threshold
-    *up* by `min(nudge_step, gap_to_lowest_unhelpful)`;
-    among judgments **below** the threshold, if `helpful`
-    ≥ 60% of N, nudge *down* by `min(nudge_step,
-    gap_to_highest_helpful)`. Bounded in `[0.0, 1.0]`. If
-    both sides have signal, the larger-evidence side wins
-    deterministically.
-- Recording integration: the `RecallJudge::judge(...)`
-  result path in `recall_feedback.rs` records into the
-  buffer when `enable_calibration = true` (gated lookup;
-  no-op when off). The recording side carries the
-  heuristic score the hit entered the gate with — that's
-  already known at recall time.
-- Unit tests on the pure function: above-threshold-mostly-
-  unhelpful nudges up; below-threshold-mostly-helpful
-  nudges down; balanced signal doesn't move; nudge clamps
-  at `nudge_step`; nudge clamps at the bounds `[0.0,
-  1.0]`; under-N buffer (insufficient evidence) doesn't
-  move; identical-buffer second call is idempotent (same
-  threshold in → same threshold out → same direction).
-- Buffer tests: under-cap appends; at-cap rotates oldest;
-  per-domain isolation.
-
-### Task 4 — Reflection-scheduler integration
-
-`aivyx-channel/src/reflection_scheduler.rs`:
-
-- New `run_recall_calibration_pass` that iterates per
-  `KeyDomain` in the buffer, calls `calibrate(...)` per
-  domain, applies the new threshold to the in-memory
-  `RecallGateConfig` snapshot (the gate config is loaded
-  per recall call, so the in-memory mutation is visible
-  immediately to the next recall), and accumulates
-  per-domain outcomes into a new `RecallCalibrationStat
-  { calibrated: u32, raised: u32, lowered: u32, held:
-  u32 }`.
-- `PersonaConsolidationStat`-style IPC wire-compat via
-  `#[serde(default)]` on the new fields. The stat surfaces
-  through the existing Phase 78 `learning` IPC + CLI
-  surface.
-- `daemon_server.rs` threads the calibration deps into
-  `RecallCalibrationDeps` (buffer handle + gate config
-  handle + `nudge_step` + `buffer_size`).
-- Integration test: seed the per-domain buffer with eight
-  unhelpful-above-threshold judgments at scores
-  `[0.85..0.95]` against a threshold of `0.80`; run one
-  calibration pass; assert the in-memory threshold moved
-  up by exactly `nudge_step` (clamped at the lowest
-  unhelpful score's gap, which is the smaller of the
-  two); `stat.raised == 1, stat.calibrated == 1`. Run a
-  second pass against the same buffer; assert byte-
-  identical state (same outcome, idempotent because the
-  threshold has caught up to the gap).
+- Every call site of `correlate_detailed` /
+  `correlate` is updated to thread the boolean from
+  `[recall_feedback]` config. Call sites:
+  - `reflection_scheduler` (the recall-feedback-pass that
+    drives the actuators).
+  - `recall_insights` (the Phase 78 surface — reads the
+    same correlation so the operator sees consistent
+    numbers).
+  - `recall_feedback` internal tests (pin the existing
+    behaviour explicitly).
+- `daemon_server.rs` threads the config bool into the
+  reflection-scheduler deps.
+- Integration test: a reflection-cron cycle with three
+  recall events whose hits carry mixed judgments;
+  assert the resulting `HelpfulnessTally` matches the
+  per-hit verdict-driven sum (not the turn-level
+  structural sum). One test, mirroring the Phase 91/92
+  integration-test shape.
 
 ### Task 5 — Surface + tests + docs + exit
 
-- `aivyx learning` render block extended with the new
-  `RecallCalibrationStat`: a line under the existing
-  recall section showing `N calibrated last cycle (R
-  raised, L lowered, H held)`. When the count is 0 (the
-  default-off state for almost every operator at first)
-  the line is omitted to avoid noise.
-- `docs/INSTALL.md` — new "Recall-gate calibration loop
-  (Phase 93)" subsection under the existing Phase 90
-  recall-gate section: the recording side, the rolling
-  buffer, the threshold-nudging rule, the opt-in knob,
-  the bounded nudge step, the in-memory-only buffer
-  (lost on restart), the operator-tunable buffer size.
-- `examples/aivyx.toml` — document the new
-  `enable_calibration`, `calibration_buffer_size`,
-  `calibration_nudge_step` keys alongside the existing
-  `[recall_gate]` block.
+- `aivyx learning` render block: extend the existing
+  recall-feedback section with the source split
+  (e.g., `N entries scored: J judgment-driven, S
+  structural`). When the knob is off the line falls back
+  to the existing `N entries scored` shape.
+- `docs/INSTALL.md` — new "Judgment-driven recall
+  feedback (Phase 93)" subsection under the existing
+  Phase 91 `[recall_judgment]` section: explains the
+  augment semantics, the `Used`/`Hurt`/`Irrelevant`
+  mapping, the structural fallback for un-judged hits,
+  the opt-in knob, the consequence on memory-promotion
+  + Persona-proposal actuators.
+- `examples/aivyx.toml` — document
+  `[recall_feedback].use_judgment_signal = true` (with
+  the canonical default-off comment).
 - Exit: ROADMAP + PRODUCT_ROADMAP frozen entries,
   docs/README status flip, prediction-vs-reality, hash
   backfill.
 
 ## Q-block resolutions (signed off pre-Task 2)
 
-- **Q1 — Signal:** (a) Per-domain rolling buffer of last
-  N judgments (default N=32, operator-tunable in `(0,
-  1024]`). Bounded memory, simple aggregation math, no
-  decay-rate hyperparameter, no on-disk schema. The
-  in-memory variant can graduate to disk in a later
-  phase if operators want survival across daemon
-  restart; for v1 the loop converges quickly enough that
-  loss-on-restart is acceptable.
-- **Q2 — Knob:** (a) The existing per-domain `min_score`
-  threshold. Reuses the Phase 90 gate's own knob; no
-  new gate-internal parameters. One axis of motion,
-  well-understood semantics, easy to revert by clearing
-  the buffer or toggling the knob off (the threshold
-  snaps back to the configured value on daemon restart).
-- **Q3 — Cadence:** (a) Reflection cron + `enable_calibration
-  = false` default. Matches the Phase 87 / 88 / 91 / 92
-  actuator opt-in pattern. The calibration pass runs
-  alongside the other reflection passes (phrasing,
-  judging, supersession) on the same cron schedule.
-- **Q4 — Test:** (a) One-cycle nudge + idempotency.
-  Seed the buffer with mostly-unhelpful judgments above
-  threshold; assert the calibrator moves the threshold up
-  by the expected amount in one pass; assert a second
-  pass against the same buffer produces byte-identical
-  state. Matches the Phase 87 / 92 integration-test
-  shape; doesn't couple the test to the calibrator's
-  precise long-run convergence behaviour.
+- **Q1 — Posture:** (a) **Augment.** Per-hit `Some(judgment)`
+  overrides the turn-level structural signal for that
+  specific hit; un-judged (`None`) hits fall back to the
+  turn-level proxy. Smooth migration — every un-judged
+  hit continues to work exactly as before; judgments
+  take effect incrementally as the Phase 91 cron
+  processes them. Matches the Phase 91 field doc's own
+  framing ("v1 augment, not replace").
+- **Q2 — Mapping:** (a) `Used → +WEIGHT`,
+  `Hurt → -WEIGHT`, `Irrelevant → 0` (no contribution).
+  Symmetric with the existing structural mapping; single
+  source of magnitude; irrelevant hits are dead weight,
+  not negative signal (the entry isn't punished for being
+  surfaced on a topic-tangential turn).
+- **Q3 — Knob:** (a) New `[recall_feedback].use_judgment_signal:
+  bool`, default `false`. Matches the Phase 87/88/91/92
+  actuator opt-in pattern. With the knob off the
+  correlator is byte-identical to pre-Phase-93. The knob
+  lives on the consumer side (`[recall_feedback]`), not
+  the producer side (`[recall_judgment]`), preserving the
+  clean producer/consumer separation.
+- **Q4 — Test:** (a) Single mixed-fixture test against
+  `correlate_detailed` — three hits (Used / Hurt / un-
+  judged) on a turn with `+WEIGHT` structural signal,
+  exercising knob-off / knob-on / fallback / Irrelevant
+  cases in one fixture. Matches the Phase 91/92
+  integration-test shape.
 
 ## Deferrals
 
-**Rolling deferrals carried into Phase 93:**
+**Rolling deferrals carried into Phase 93** (Phase 91's
+actuator-switch deferral is **THIS PHASE**):
 
 - v0.1.0 publication (Phase 61 Task 7).
 - System-prompt notification-target enumeration (Phase 62).
@@ -262,7 +257,8 @@ the gate is byte-identical to pre-Phase-93.
 - Phase 75 deferrals (ANN index, `aivyx memory reembed`,
   hybrid keyword+semantic fusion, query-embedding cache).
 - Phase 76 deferrals (token-budget context sizing).
-- Phase 77 deferrals (`[recall_feedback]` tuning knob).
+- Phase 77 deferrals (`[recall_feedback]` tuning knob —
+  **THIS PHASE introduces the first knob to that block**).
 - Phase 78 deferrals (per-memory-entry drill-down, Web UI
   live refresh, actionable insights).
 - Phase 79 deferrals (`[persona]` tuning block, behavioural
@@ -291,9 +287,7 @@ the gate is byte-identical to pre-Phase-93.
   migration of existing fragmented data, non-ASCII /
   Unicode stemming).
 - Phase 90 deferrals (pattern-based stoplist, LLM-judged
-  gate — **partially addressed THIS PHASE via threshold
-  calibration**, adaptive thresholds — **THIS PHASE**,
-  token-budget context sizing).
+  gate, adaptive thresholds, token-budget context sizing).
 - Phase 91 deferrals (**actuator-side switch from
   structural proxy to the new judgment signal — THIS
   PHASE**, per-recall LLM critique, adaptive batch size,
@@ -306,32 +300,25 @@ the gate is byte-identical to pre-Phase-93.
 
 **Likely Phase 93 deferrals:**
 
-- **On-disk persistence of the per-domain buffer.** v1's
-  in-memory buffer is lost on daemon restart; the
-  threshold reverts to the configured value and the loop
-  warms up again. Operators with long calibration runs
-  may want survival across restart — defers as a Phase
-  78/79 ledger-style follow-up.
-- **Persisted threshold writes.** v1 mutates the in-memory
-  gate config only; the persisted `[recall_gate]` config
-  on disk is unchanged. The operator's hand-set
-  thresholds are preserved on restart; the calibrated
-  values are not. A future phase could optionally write
-  calibrated values back to disk (with operator opt-in,
-  per-domain audit trail).
-- **Non-linear nudge rules.** v1's bounded-step linear
-  nudge is conservative. A future phase could let the
-  step size react to evidence strength (e.g., nudge
-  faster when 90% of buffer agrees, slower at 60%).
-- **Cross-domain regularization.** v1 calibrates each
-  domain independently. Domains with sparse signal could
-  borrow strength from related domains — defers as a
-  speculative extension.
-- **Per-recall LLM critique of the calibration decision.**
-  An LLM seam reviewing the calibrator's chosen direction
-  before applying it — symmetric to Phase 87's
-  `PairPhraser` seam on writes. Defers; the linear rule
-  is interpretable enough for v1.
+- **Per-domain or per-topic weights.** Q2d's operator-
+  tunable per-variant weights defer. The fixed
+  `±WEIGHT`/`0` mapping is sufficient for v1; tuning the
+  magnitudes belongs to a later phase that can also
+  defend the chosen values empirically.
+- **Replace mode.** Q1b's hard switch defers — the
+  augment posture is strictly more conservative and the
+  operator can always disable the Phase 91 cron to
+  effectively achieve "judgment-only on" + "structural
+  off" with one extra knob. A future phase could collapse
+  the two configs into a per-mode enum if the operator
+  surface demands it.
+- **Asymmetric Hurt penalty.** Q2b's `-2*WEIGHT` for
+  `Hurt` defers. v1 keeps symmetry with the structural
+  mapping; a future phase can revisit if observed Hurt
+  rates suggest entries are being insufficiently pruned.
+- **Sum mode.** Q1c's stack-both-signals option defers —
+  it risks double-counting on agreement and was the
+  weakest of the four candidates.
 
 ## Prediction vs. reality
 
@@ -339,29 +326,22 @@ To be filled in at phase exit.
 
 ## Exit criteria
 
-- [ ] `[recall_gate].enable_calibration: bool` (default
-  `false`) + `calibration_buffer_size: usize` (default
-  32, bounded `(0, 1024]`) + `calibration_nudge_step: f32`
-  (default `0.02`, bounded `(0.0, 0.25]`) — Task 2.
-- [ ] `RecallJudgmentBuffer` + pure `calibrate(...)` in
-  a new `recall_calibration` module; recording integration
-  into the `RecallJudge::judge(...)` result path — Task 3.
-- [ ] Unit tests on the pure calibrator: above-threshold-
-  mostly-unhelpful nudges up; below-threshold-mostly-
-  helpful nudges down; balanced doesn't move; nudge
-  clamps at step; nudge clamps at bounds; under-N
-  doesn't move; idempotent on identical input — Task 3.
-- [ ] Buffer tests: under-cap; at-cap rotation; per-domain
-  isolation — Task 3.
-- [ ] `run_recall_calibration_pass` runs alongside the
-  Phase 87 / 91 / 92 reflection passes; applies threshold
-  to in-memory gate config — Task 4.
-- [ ] `RecallCalibrationStat { calibrated, raised,
-  lowered, held }` with IPC wire-compat — Task 4.
-- [ ] Integration test: one-cycle nudge in the expected
-  direction by the expected amount; second cycle byte-
-  identical (idempotent) — Task 4.
-- [ ] `aivyx learning` surface extended — Task 5.
+- [ ] `[recall_feedback].use_judgment_signal: bool`
+  (default `false`) — Task 2.
+- [ ] `correlate_detailed` augmented with the per-hit
+  override rule; structural fallback for un-judged hits;
+  byte-identical behaviour with knob off — Task 3.
+- [ ] Unit tests on `correlate_detailed`: knob-off
+  regression; knob-on with mixed-judgment hits; per-
+  verdict mapping (`Used`/`Hurt`/`Irrelevant`);
+  structural fallback for `None` — Task 3.
+- [ ] All `correlate_detailed` / `correlate` call sites
+  thread the knob from config — Task 4.
+- [ ] Integration test: reflection-cron cycle with mixed-
+  judgment hits → tally matches per-hit verdict-driven
+  sum — Task 4.
+- [ ] `aivyx learning` surface extended (judgment-vs-
+  structural source split) — Task 5.
 - [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
   Task 5.
 - [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
@@ -372,12 +352,12 @@ To be filled in at phase exit.
 - [ ] PRODUCT.md streak extends to thirty-three.
 - [ ] Production-core streak extends to forty-one (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+8-12; per the
-  converged calibration law — knob on existing block
-  (≈ +3-4, three knobs) + new pure module (≈ +7-9,
-  buffer + calibrate + their failure modes) + recording
-  integration (≈ +1) + reflection integration (≈ +1);
-  no new `KeyDomain`).
+- [ ] Test count delta: positive (~+6-10; per the
+  converged calibration law — knob on a new (effectively
+  new) block (≈ +3-4) + augmentation logic (≈ +3-5,
+  knob-off regression + knob-on per-verdict mapping +
+  structural fallback) + integration (≈ +1); no new
+  module, no new `KeyDomain`).
 - [ ] Zero clippy warnings.
 - [ ] Zero new workspace deps.
 - [ ] Prediction-vs-reality block filled.
