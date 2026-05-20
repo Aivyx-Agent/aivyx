@@ -6771,3 +6771,66 @@ fn recall_judgment_disabled_partial_allows_nonsense() {
     assert_eq!(rj.max_recalls_per_cycle, 0);
     drop(env);
 }
+
+// ---- Phase 93 — [recall_feedback] -----------------------------
+
+/// No `[recall_feedback]` section → `recall_feedback: None`
+/// (off; `correlate_detailed` keeps the Phase 77 structural
+/// turn-level proxy — byte-identical to pre-Phase-93).
+#[test]
+fn recall_feedback_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.recall_feedback.is_none());
+    drop(env);
+}
+
+/// Present-but-default: `use_judgment_signal` not set →
+/// section is treated as absent (no field set means no
+/// section in build terms). Mirrors the established
+/// `any_set` guard.
+#[test]
+fn recall_feedback_present_empty_is_none() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_feedback]\n",
+        "rf-empty",
+    );
+    assert!(cfg.recall_feedback.is_none());
+    drop(env);
+}
+
+/// Explicit `use_judgment_signal = true` → `Some(.. {
+/// use_judgment_signal: true })`.
+#[test]
+fn recall_feedback_explicit_true_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_feedback]\nuse_judgment_signal = true\n",
+        "rf-true",
+    );
+    let rf = cfg.recall_feedback.expect("section present");
+    assert!(rf.use_judgment_signal);
+    drop(env);
+}
+
+/// Explicit `use_judgment_signal = false` is honored — the
+/// operator may want the section present (for documentation
+/// or staged rollout) with the augment off. The build path
+/// returns `Some(.. { use_judgment_signal: false })`, which
+/// is equivalent to `None` for the correlator's behaviour
+/// but distinguishable in the config surface.
+#[test]
+fn recall_feedback_explicit_false_honored() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[recall_feedback]\nuse_judgment_signal = false\n",
+        "rf-false",
+    );
+    let rf = cfg.recall_feedback.expect("section present");
+    assert!(!rf.use_judgment_signal);
+    drop(env);
+}

@@ -594,6 +594,16 @@ pub struct AivyxConfig {
     /// `RecallHit` — every existing accumulator stays
     /// byte-identical to pre-Phase-91 (Q3a augment).
     pub recall_judgment: Option<RecallJudgmentConfig>,
+    /// Phase 93 — `[recall_feedback]` section. `None` when
+    /// absent: `correlate_detailed` uses the Phase 77
+    /// structural turn-level proxy uniformly across every hit
+    /// (byte-identical to pre-Phase-93). `Some` with
+    /// `use_judgment_signal = true` switches the per-hit
+    /// signal source to the LLM judgment recorded by the
+    /// Phase 91 `run_recall_judgment_pass`; un-judged hits
+    /// fall back to the structural proxy (augment, not
+    /// replace).
+    pub recall_feedback: Option<RecallFeedbackConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1758,6 +1768,34 @@ pub struct RecallJudgmentConfig {
 /// to the next cycle.
 pub const DEFAULT_RJ_MAX_RECALLS_PER_CYCLE: u32 = 30;
 
+/// Phase 93 — `[recall_feedback]` runtime config.
+///
+/// The consumer-side switch that closes the Phase 91
+/// deferral: when `use_judgment_signal = true`,
+/// `correlate_detailed` consults the per-hit
+/// `judgment: Option<RecallJudgment>` field where present
+/// and falls back to the existing turn-level structural
+/// proxy where absent. Per-hit `Used` contributes `+WEIGHT`,
+/// `Hurt` contributes `-WEIGHT`, `Irrelevant` contributes
+/// `0` (no signal), and `None` (un-judged) falls back to
+/// the structural turn-level signal.
+///
+/// `None` (no section) → behaviour byte-identical to
+/// pre-Phase-93 (the structural proxy is the only signal,
+/// applied uniformly to every hit on the matched turn).
+/// `Some` with `use_judgment_signal = false` is equivalent
+/// to `None` for the correlator's behaviour — the section
+/// is present in config but the augmentation is off.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallFeedbackConfig {
+    /// Master switch. Default `false`. With `false` the
+    /// correlator's behaviour is byte-identical to
+    /// pre-Phase-93; with `true` the per-hit judgment field
+    /// (Phase 91) overrides the turn-level structural signal
+    /// for every hit that carries one.
+    pub use_judgment_signal: bool,
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -1807,6 +1845,10 @@ struct RawToml {
     /// per-recall classification on the reflection cron.
     #[serde(default)]
     recall_judgment: RawRecallJudgment,
+    /// `[recall_feedback]` section. Phase 93 — consumer-side
+    /// switch from structural proxy to LLM judgment signal.
+    #[serde(default)]
+    recall_feedback: RawRecallFeedback,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2481,6 +2523,16 @@ struct RawRecallJudgment {
     max_recalls_per_cycle: Option<u32>,
 }
 
+/// Phase 93 — `[recall_feedback]` deserialize target.
+/// Absent section → all-`None` via `Default` → the loader
+/// maps to `recall_feedback: None` (off; the correlator's
+/// behaviour is byte-identical to pre-Phase-93).
+#[derive(Debug, Default, Deserialize)]
+struct RawRecallFeedback {
+    #[serde(default)]
+    use_judgment_signal: Option<bool>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -2882,6 +2934,8 @@ impl AivyxConfig {
             )?;
         let recall_judgment =
             build_recall_judgment_config(&toml.recall_judgment)?;
+        let recall_feedback =
+            build_recall_feedback_config(&toml.recall_feedback)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -3755,6 +3809,7 @@ impl AivyxConfig {
             recall_cluster,
             persona_consolidation,
             recall_judgment,
+            recall_feedback,
             roles,
             active_role,
             profile,
@@ -4942,6 +4997,24 @@ fn build_recall_judgment_config(
         enabled,
         max_recalls_per_cycle,
     }))
+}
+
+/// Phase 93 — `[recall_feedback]` → optional runtime config.
+/// Absent section → `None`; partial section (any key set) →
+/// fill defaults. There are no numeric bounds to validate (the
+/// only field is a boolean), so the build is total.
+fn build_recall_feedback_config(
+    raw: &RawRecallFeedback,
+) -> Result<Option<RecallFeedbackConfig>, ConfigError> {
+    let any_set = raw.use_judgment_signal.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let use_judgment_signal =
+        raw.use_judgment_signal.unwrap_or(false);
+
+    Ok(Some(RecallFeedbackConfig { use_judgment_signal }))
 }
 
 ///

@@ -2315,6 +2315,11 @@ async fn run_async(
         // Task 4 of Phase 91 wires it through DaemonConfig
         // to the reflection-cron LLM-judged recall pass.
         recall_judgment: _config_recall_judgment,
+        // Phase 93 — `[recall_feedback]` config. Bound here;
+        // Task 4 of Phase 93 wires it through DaemonConfig
+        // to thread the per-hit judgment-signal switch into
+        // `correlate_detailed`.
+        recall_feedback: _config_recall_feedback,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
