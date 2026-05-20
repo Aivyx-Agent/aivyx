@@ -393,6 +393,17 @@ pub enum QueryResponsePayload {
         persona_consolidation: Option<
             crate::persona_consolidation::PersonaConsolidationStat,
         >,
+        /// Phase 91 — last reflection cycle's LLM-judged
+        /// recall outcome (per-classification counts +
+        /// `(topic, judgment)` pairs + the
+        /// `llm_unavailable` flag). `None` when the
+        /// `[recall_judgment]` section is off / the pass
+        /// has never run. `#[serde(default)]` so older
+        /// frames decode unchanged.
+        #[serde(default)]
+        recall_judgment: Option<
+            crate::recall_judgment::RecallJudgmentStat,
+        >,
     },
 }
 
@@ -1766,6 +1777,25 @@ mod tests {
                                 "deploy".into(),
                                 "rollback".into(),
                             )],
+                        },
+                    ),
+                    recall_judgment: Some(
+                        crate::recall_judgment::RecallJudgmentStat {
+                            ts_secs: 1_715_005_600,
+                            judged: 3,
+                            used: 1,
+                            irrelevant: 1,
+                            hurt: 1,
+                            skipped: 0,
+                            llm_unavailable: false,
+                            pairs: vec![
+                                ("deploy".into(),
+                                 crate::recall_judgment::RecallJudgment::Used),
+                                ("rollback".into(),
+                                 crate::recall_judgment::RecallJudgment::Irrelevant),
+                                ("auth".into(),
+                                 crate::recall_judgment::RecallJudgment::Hurt),
+                            ],
                         },
                     ),
                 },

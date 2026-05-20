@@ -743,6 +743,74 @@ behavior). Each cycle prints a daemon-log breadcrumb:
 aivyx recall-feedback: schedule "nightly" — 12 entries scored, 4 promoted, 1 proposal(s) filed
 ```
 
+### LLM-judged recall usefulness (Phase 91)
+
+For 90 phases the recall-feedback signal above has been
+**structural**: every recall in a successfully-completed turn
+inherits `+1` helpfulness; every recall in a failed turn
+inherits `-1`. Phase 91 adds an opt-in **LLM-judged per-recall
+classification** alongside the structural proxy — a 3-way
+verdict (`used` / `irrelevant` / `hurt`) recorded on each
+recall hit so downstream consumers can eventually consult a
+sharper signal than turn-level outcome.
+
+After the input-quality arc (86 windows, 89 canonicalization,
+90 recall gate), Phase 91 is the missing-half **feedback-
+quality** move:
+
+- **Phase 86** sharpened *what* gets embedded (windows).
+- **Phase 89** sharpened *how* signals key (canonical topics).
+- **Phase 90** sharpened *when* recall fires at all.
+- **Phase 91** sharpens *whether* recall actually helped.
+
+Important: Phase 91 is **augment, not replace** (Q3a). The
+new `judgment: Option<RecallJudgment>` field is captured on
+every recall hit, but no existing accumulator (Phase 82
+helpfulness ledger, Phase 83 co-occurrence ledger, Phase 85/88
+Persona decay, Phase 87 pattern-driven proposals) reads it in
+v1. Every existing behaviour stays byte-identical. A future
+phase consumes the new signal once it is validated in
+production.
+
+- **Off by default.** With no `[recall_judgment]` block (or
+  `enabled = false`) the LLM judge never runs — zero added
+  cost, zero behaviour change. Matches the 90-phase
+  behaviour-change-is-opt-in discipline.
+- **Reflection-cron batched.** One LLM call per cron tick
+  judges every unjudged recall in the lookback window (up to
+  `max_recalls_per_cycle`, default `30`); the remainder rolls
+  to the next cycle. Bounded cost shape, identical to Phase
+  87's `LlmPairPhraser` cadence.
+- **v1 simplification.** The judge classifies based on the
+  recall's `(topic, body)` content + a weak context hint —
+  it does NOT see the model's actual response text (which
+  isn't in the audit chain today). A future phase enriches
+  the input via audit-chain extension or per-turn capture;
+  the Q3a augment posture means even this weaker v1 judgment
+  changes nothing it shouldn't.
+- **Operator-visible.** Each cycle prints a breadcrumb
+  (`aivyx recall-judgment: schedule "nightly" — judged 12
+  (used=7, irrelevant=4, hurt=1, skipped=0)`); `aivyx
+  learning` + the Web UI Learning tab render a new
+  "LLM-judged recall usefulness (last cycle, opt-in)" block
+  showing per-classification counts + the `(topic, judgment)`
+  pairs.
+
+Enable it in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[recall_judgment]
+enabled = true
+max_recalls_per_cycle = 30   # optional, default 30
+```
+
+Validation (only when `enabled = true`):
+`max_recalls_per_cycle >= 1`. **To turn it off:** set
+`enabled = false` or delete the block — every accumulator
+returns to pre-Phase-91 behaviour (which is exactly what they
+all do today even when Phase 91 is on, since v1 captures the
+data but doesn't yet consume it).
+
 ## Learning insights (Phase 78)
 
 The Phase 77 loop changes behaviour on its own. Phase 78 makes

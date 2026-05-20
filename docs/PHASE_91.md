@@ -334,52 +334,118 @@ The learning loop's quality picture is complete after Phase
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Adding a new optional field on the
+  existing `RecallHit` IPC type + a new optional pass to the
+  reflection scheduler touched no locked technical-contract
+  decision. The recall log evolves with
+  `#[serde(default)]`-tolerant wire-compat (the Phase 84
+  `cluster: bool` precedent applied verbatim). Streak: **38
+  consecutive phases** (was 37).
+- **PRODUCT.md — held.** No new commitment, none weakened;
+  the operator-facing contract was *strengthened* (the
+  learning loop now captures a sharper signal that future
+  phases consume). Streak: **31 consecutive phases** (was
+  30).
+- **`aivyx-core/src/lib.rs` — held, by design.** `RecallEvent`
+  / `RecallHit` live in `aivyx-channel`, not `aivyx-core`;
+  the new `RecallJudgment` enum + `RecallJudge` trait +
+  `LlmRecallJudge` adapter + pass + stat + IPC field all
+  in `aivyx-channel`; config block in `aivyx-config`. No
+  new `AuditTag`. Streak: **39 consecutive phases** — new
+  project record, beating Phase 90's 38.
+
+**Test count — `+14`** (workspace `1629 → 1643`). Squarely
+inside the predicted `+9-15` band. Breakdown:
+
+- Config section `+5` (absent → None; staged-disabled
+  allowed partial; enabled-valid; max-zero rejects when
+  armed; disabled-with-nonsense allowed — the staged-config
+  flexibility carrying over from Phase 85 / Phase 87).
+- Pure module + wire-compat `+8` (each enum variant
+  round-trips via serde; the `judgment` field is back-compat
+  with Phase 84-shape rows + serializes-without-the-field
+  when `None` + serializes-with-snake_case-label when
+  `Some`; prompt-composition pure test; parser tolerates
+  case + whitespace + short-response padding + unparseable
+  lines + empty input).
+- Reflection-scheduler integration `+1` (one multi-cycle
+  scenario covering filed → idempotent dedup → cap-1 →
+  disabled-config-preserves-prior-stat → LLM-down-flips-
+  flag — five contract assertions in one test).
+
+**Scope — every planned surface shipped exactly as scoped.**
+The opt-in config block with sane defaults + validation
+when armed; the `RecallJudgment` enum + `Option<...>` field
+on `RecallHit` with full wire-compat via the Phase 84
+precedent; the `RecallJudge` trait + `LlmRecallJudge`
+production adapter (mirrors Phase 87's `LlmPairPhraser`
+shape); the new `events_with_keys_since` + `update_event`
+helpers on `PersistentRecallLog` (the minimum surface to
+patch judgments in place); the `run_recall_judgment_pass`
+on the reflection cron (oldest-first, hit-budget-capped,
+batched single LLM call, per-row write-back); the Phase 78
+surface stat with full IPC + `aivyx learning` render + the
+daemon-log breadcrumb; the binary's flag-gated
+deps-construction — all landed as the open-doc described.
+
+The single v1 simplification (documented in the
+`run_recall_judgment_pass` doc-comment + the open doc): the
+LLM judges based on `(topic, body)` + the recall's topic as
+a context hint, not the model's actual response text
+(which isn't in the audit chain today). The Q3a augment
+posture means even this weaker v1 signal changes no
+existing accumulator's behavior; future phases enrich the
+input via audit-chain extension or per-turn capture.
+
+Zero clippy warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[recall_judgment]` config block: `enabled` (default
+- [x] `[recall_judgment]` config block: `enabled` (default
   `false`), `max_recalls_per_cycle` (default `30`);
-  validation when armed — Task 2.
-- [ ] `RecallJudgment { Used, Irrelevant, Hurt }` enum
-  with stable serde labels — Task 3.
-- [ ] `RecallHit` gains
+  validation when armed — Task 2 (commit `cd3c912`).
+- [x] `RecallJudgment { Used, Irrelevant, Hurt }` enum
+  with stable serde labels — Task 3 (commit `bb60433`).
+- [x] `RecallHit` gains
   `judgment: Option<RecallJudgment>` with
   `#[serde(default, skip_serializing_if = "Option::is_none")]`;
-  old recall log decodes unchanged — Task 3.
-- [ ] `RecallJudge` trait + `LlmRecallJudge` adapter
-  (one batched LLM call per `judge(…)`) — Task 3.
-- [ ] Reflection-scheduler pass:
+  old recall log decodes unchanged — Task 3 (commit
+  `bb60433`).
+- [x] `RecallJudge` trait + `LlmRecallJudge` adapter
+  (one batched LLM call per `judge(…)`) — Task 3 (commit
+  `bb60433`).
+- [x] Reflection-scheduler pass:
   `run_recall_judgment_pass` reads unjudged events in
   the window (oldest-first up to
-  `max_recalls_per_cycle`), recovers response + body
-  text, calls the judge once, patches each judgment
-  back to the recall log — Task 4.
-- [ ] `bin/aivyx` builds `RecallJudgmentDeps` iff
+  `max_recalls_per_cycle`), recovers body text, calls
+  the judge once, patches each judgment back to the
+  recall log via the new `update_event` helper — Task 4
+  (commit `bb1c0c7`).
+- [x] `bin/aivyx` builds `RecallJudgmentDeps` iff
   the section is enabled, every substrate is present,
-  and an `LlmRecallJudge` is constructable — Task 4.
-- [ ] Phase 78 surface (`RecallJudgmentStat` + shared
+  and an `LlmRecallJudge` is constructable — Task 5
+  (this commit).
+- [x] Phase 78 surface (`RecallJudgmentStat` + shared
   handle + IPC wire field + `aivyx learning` render +
-  daemon-log breadcrumb) — Task 5.
-- [ ] Integration test (idempotent across cycles;
-  disabled config no-op; LLM-unavailable flag flips) —
-  Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  daemon-log breadcrumb) — Task 5 (this commit).
+- [x] Integration test (idempotent across cycles;
+  per-cycle cap respected; disabled config preserves
+  prior stat; LLM-unavailable flag flips) — Task 4
+  (commit `bb1c0c7`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-eight.
-- [ ] PRODUCT.md streak extends to thirty-one.
-- [ ] Production-core streak extends to thirty-nine (new
+- [x] DESIGN.md streak extends to thirty-eight.
+- [x] PRODUCT.md streak extends to thirty-one.
+- [x] Production-core streak extends to thirty-nine (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+9-15; per the
-  converged calibration law — new config section
-  (≈ +5-6) + new pure module (≈ +3-4) + reflection-pass
-  integration (≈ +1-2) + IPC wire-compat assertion
-  (≈ +1); no new `KeyDomain` (the recall log
-  already owns this domain).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+14`, squarely inside
+  the predicted `+9-15` band).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

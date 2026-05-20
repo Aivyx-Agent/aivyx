@@ -2562,6 +2562,76 @@ adaptive thresholds from operator message-length
 distribution, token-budget context sizing) are
 operator-feedback-gated.
 
+## Phase 91 — LLM-Judged Recall Usefulness (the missing half of the learning loop, completed)
+
+**Frozen — see [PHASE_91.md](PHASE_91.md).** Closes the
+longest-running feedback-side deferral — the Phase 77
+deferral carried forward 14 phases through 78-90. For 90
+phases the recall-feedback signal has been STRUCTURAL: every
+recall in a successfully-completed turn inherits `+1`
+helpfulness, every recall in a failed turn inherits `-1`. The
+proxy works but operates at turn-level granularity. Phase 91
+adds an opt-in LLM-judged per-recall classification
+alongside the structural proxy — a 3-way verdict
+(`Used` / `Irrelevant` / `Hurt`) recorded on each recall
+hit, finer than turn-level.
+
+After the input-quality arc (86 windows, 89 canonical, 90
+gate), Phase 91 is the symmetric **feedback-quality** move
+that completes the learning-loop picture:
+
+|                                                | Sharpens               |
+|------------------------------------------------|------------------------|
+| Phase 86 — Conversational window               | *What* gets embedded   |
+| Phase 89 — Topic canonicalization              | *How* signals key      |
+| Phase 90 — Heuristic recall gate               | *When* recall fires    |
+| **Phase 91** — LLM-judged recall usefulness    | **Whether** it helped  |
+
+- **Reflection cron, batched (Q1a):** one LLM call per
+  cron tick judging every unjudged recall in the lookback
+  window (up to `max_recalls_per_cycle`); the remainder
+  rolls to the next cycle. Bounded cost.
+- **3-way structured (Q2a):** the LLM produces `Used` /
+  `Irrelevant` / `Hurt` per recall — easy to aggregate to
+  the existing `+1 / 0 / -1` helpfulness shape, deterministic
+  decode, trivially mockable.
+- **Augment, NOT replace (Q3a):** the new
+  `judgment: Option<RecallJudgment>` field on `RecallHit` is
+  captured but no existing accumulator (Phase 82 helpfulness
+  ledger, Phase 83 co-occurrence ledger, Phase 85/88 decay,
+  Phase 87 proposals) consumes it in v1. Every existing
+  behaviour stays byte-identical to pre-Phase-91. A future
+  phase reads the new signal once it's validated in
+  production.
+- **Opt-in (Q4a):** `[recall_judgment].enabled`, default
+  `false`. The LLM call has real cost; the operator opts
+  into paying it.
+
+Streak all three correct: DESIGN.md → **38**, PRODUCT.md →
+**31**, `aivyx-core/src/lib.rs` → **39** (new project
+record, beats Phase 90's 38) — the new trait + adapter +
+pass + stat + IPC field all live in `aivyx-channel`; the
+config block + provenance tracking in `aivyx-config`; no
+new `AuditTag` (the judgment is recorded on the existing
+recall log, not on the audit chain). Test count delta
+**`+14`** workspace (`+5` config, `+8` module + wire-compat,
+`+1` reflection-scheduler integration) — inside the
+predicted `+9-15` band. Zero clippy warnings. Zero new
+workspace deps.
+
+**v1 simplification.** The judge classifies based on the
+recall's `(topic, body)` content + a weak context hint —
+not the model's actual response text (which isn't in the
+audit chain today). The Q3a augment posture means even this
+weaker v1 judgment changes nothing; future phases enrich
+the input via audit-chain extension or per-turn capture.
+
+Likely follow-ups (actuator-side switch from structural
+proxy to the new judgment signal, per-recall LLM critique,
+adaptive batch size, multi-model ensembling, response-text
+recovery via audit-chain extension) are operator-feedback-
+gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

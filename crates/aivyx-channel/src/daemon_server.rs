@@ -303,6 +303,24 @@ pub struct DaemonConfig {
             dyn crate::persona_consolidation::PairPhraser,
         >,
     >,
+    /// Phase 91 — `[recall_judgment]` config. `None` (no
+    /// section) → LLM-judged recall is off; `Some` arms the
+    /// reflection-cron pass only when `enabled = true`.
+    pub recall_judgment_config:
+        Option<aivyx_config::RecallJudgmentConfig>,
+    /// Phase 91 (Q4a) — shared last-cycle judgment stat the
+    /// pass writes and `GetLearningInsights` reads. `None` →
+    /// the pass has not run this daemon lifetime.
+    pub recall_judgment_stat: Option<
+        crate::recall_judgment::SharedRecallJudgmentStat,
+    >,
+    /// Phase 91 — production `RecallJudge` for the
+    /// LLM-judged classification (Q2a). `None` → the pass
+    /// has no LLM access and skips every cycle (the actuator
+    /// stays best-effort).
+    pub recall_judge: Option<
+        std::sync::Arc<dyn crate::recall_judgment::RecallJudge>,
+    >,
 }
 
 /// Run the daemon server.
@@ -356,6 +374,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_consolidation_config,
         persona_consolidation_stat,
         persona_consolidation_phraser,
+        recall_judgment_config,
+        recall_judgment_stat,
+        recall_judge,
     } = config;
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
@@ -600,6 +621,35 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 ),
                 _ => None,
             };
+            // Phase 91 — LLM-judged recall deps: armed only
+            // when the section is enabled AND every substrate
+            // is present (recall log + memory + an
+            // `LlmRecallJudge` the binary built with the
+            // existing reflection LLM provider). Any missing
+            // piece → None → the pass is skipped (the Phase 77
+            // structural signal remains the only signal,
+            // byte-identical to pre-Phase-91).
+            let rs_recall_judgment = match (
+                recall_judgment_config.clone(),
+                recall_log.clone(),
+                memory.clone(),
+                recall_judge.clone(),
+            ) {
+                (Some(cfg), Some(rlog), Some(mem), Some(judge))
+                    if cfg.enabled =>
+                {
+                    Some(
+                        crate::reflection_scheduler::RecallJudgmentDeps {
+                            config: cfg,
+                            recall_log: rlog,
+                            memory: mem,
+                            judge,
+                            stat: recall_judgment_stat.clone(),
+                        },
+                    )
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -616,12 +666,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_proactive,
                     rs_persona_lifecycle,
                     rs_persona_consolidation,
-                    // Phase 91 — LLM-judged recall deps;
-                    // wired in Task 5 alongside the Phase 78
-                    // surface stat. `None` for now → the
-                    // pass is skipped (byte-identical to
-                    // pre-Phase-91).
-                    None,
+                    rs_recall_judgment,
                     rs_shutdown,
                 )
                 .await;
@@ -850,6 +895,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             conversation_windows: conversation_windows.clone(),
             persona_consolidation_stat:
                 persona_consolidation_stat.clone(),
+            recall_judgment_stat: recall_judgment_stat.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -956,6 +1002,11 @@ struct ConnectionContext {
     persona_consolidation_stat: Option<
         crate::persona_consolidation::SharedPersonaConsolidationStat,
     >,
+    /// Phase 91 (Q4a) — last-reflection-cycle LLM-judged
+    /// recall stat for the `GetLearningInsights` surface.
+    recall_judgment_stat: Option<
+        crate::recall_judgment::SharedRecallJudgmentStat,
+    >,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -983,6 +1034,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         persona_lifecycle_stat,
         conversation_windows,
         persona_consolidation_stat,
+        recall_judgment_stat,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1362,6 +1414,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
                                 persona_consolidation_stat.as_ref(),
+                                recall_judgment_stat.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1617,6 +1670,7 @@ async fn run_single_connection_daemon(
         persona_lifecycle_stat: None,
         conversation_windows: None,
         persona_consolidation_stat: None,
+        recall_judgment_stat: None,
     })
     .await
 }
@@ -1670,6 +1724,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_consolidation_config: None,
         persona_consolidation_stat: None,
         persona_consolidation_phraser: None,
+        recall_judgment_config: None,
+        recall_judgment_stat: None,
+        recall_judge: None,
     }).await
 }
 
@@ -1856,6 +1913,9 @@ async fn handle_query(
     >,
     persona_consolidation_stat: Option<
         &crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
+    recall_judgment_stat: Option<
+        &crate::recall_judgment::SharedRecallJudgmentStat,
     >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
@@ -2306,6 +2366,10 @@ async fn handle_query(
             // cluster_recall).
             let persona_consolidation = persona_consolidation_stat
                 .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            // Phase 91 (Q4a) — last reflection cycle's
+            // LLM-judged recall outcome.
+            let recall_judgment = recall_judgment_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 82 — durable accumulated helpfulness (the
             // longitudinal view). Best-effort: a ledger error
             // collapses to `None`, never breaking the surface;
@@ -2352,6 +2416,7 @@ async fn handle_query(
                     cooccurrence,
                     cluster_recall,
                     persona_consolidation,
+                    recall_judgment,
                 };
             };
 
@@ -2415,6 +2480,7 @@ async fn handle_query(
                 cooccurrence,
                 cluster_recall,
                 persona_consolidation,
+                recall_judgment,
             }
         }
     }

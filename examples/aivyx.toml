@@ -922,7 +922,52 @@ parent_role = "researcher"
 # `aivyx learning [--window <secs>]` or open the Web UI
 # "Learning" tab — a read-only digest + per-proposal
 # provenance. Also nothing to configure.
+
+# ----------------------------------------------------------------
+# LLM-judged recall usefulness (Phase 91) — OFF BY DEFAULT
+# ----------------------------------------------------------------
 #
+# For 90 phases the recall-feedback signal above has been
+# STRUCTURAL: every recall in a successful turn inherits +1,
+# every recall in a failed turn inherits -1. Phase 91 adds an
+# opt-in LLM-judged per-recall classification alongside the
+# structural proxy — a 3-way verdict (used / irrelevant /
+# hurt) recorded on each recall hit, finer than turn-level.
+#
+# AUGMENT, NOT REPLACE (Q3a). The new field is captured but
+# no existing accumulator (Phase 82 helpfulness ledger,
+# Phase 83 co-occurrence ledger, Phase 85/88 decay,
+# Phase 87 proposals) consumes it in v1 — every behaviour
+# stays byte-identical to pre-Phase-91. A future phase reads
+# the new signal once it's validated in production.
+#
+# Off by default; ENABLE adds one LLM call per reflection
+# cron tick (bounded cost — batched across the window's
+# recalls, capped at max_recalls_per_cycle):
+#
+# [recall_judgment]
+# enabled = true
+# max_recalls_per_cycle = 30   # optional, default 30
+#
+# Validation (only when `enabled = true`):
+# `max_recalls_per_cycle >= 1`. To turn it off: delete the
+# block or set `enabled = false` — every accumulator stays
+# at its pre-Phase-91 behaviour (which is also what they all
+# do today even with Phase 91 ON, since v1 captures but
+# doesn't yet consume the judgment).
+#
+# v1 simplification: the LLM judges based on the recall's
+# (topic, body) content + a weak context hint — it does NOT
+# see the model's actual response text (not in the audit
+# chain today). A future phase enriches the input.
+#
+# To SEE it: daemon log `aivyx recall-judgment: schedule "X"
+# — judged N (used=…, irrelevant=…, hurt=…, skipped=…)` each
+# cycle that fires; `aivyx learning` / Web UI "Learning"
+# tab show a new "LLM-judged recall usefulness (last cycle,
+# opt-in)" block.
+
+# ----------------------------------------------------------------
 # Adaptive Persona (Phase 79): with [embedding] configured,
 # once the Persona is large the assistant injects only the
 # facets relevant to each turn instead of the whole accreted

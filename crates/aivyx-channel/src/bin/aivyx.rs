@@ -2808,6 +2808,27 @@ async fn run_async(
         )),
         _ => None,
     };
+    // Phase 91 — `[recall_judgment]` config + stat + LLM
+    // judge. Built when the section is enabled; the daemon
+    // arms the pass only when every piece is present.
+    let recall_judgment_stat =
+        match &_config_recall_judgment {
+            Some(r) if r.enabled => Some(
+                aivyx_channel::recall_judgment::shared_recall_judgment_stat(),
+            ),
+            _ => None,
+        };
+    let recall_judge: Option<
+        Arc<dyn aivyx_channel::recall_judgment::RecallJudge>,
+    > = match &_config_recall_judgment {
+        Some(r) if r.enabled => Some(Arc::new(
+            aivyx_channel::recall_judgment::LlmRecallJudge::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
+        _ => None,
+    };
     let persona_refiner: Option<
         Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
     > = match &embedding_provider {
@@ -4068,6 +4089,14 @@ async fn run_async(
                 persona_consolidation_stat.clone(),
             persona_consolidation_phraser:
                 persona_consolidation_phraser.clone(),
+            // Phase 91 — `[recall_judgment]` config + stat +
+            // LLM judge. All three are `Some` iff the
+            // section is enabled.
+            recall_judgment_config:
+                _config_recall_judgment.clone(),
+            recall_judgment_stat:
+                recall_judgment_stat.clone(),
+            recall_judge: recall_judge.clone(),
         })
             .await;
 

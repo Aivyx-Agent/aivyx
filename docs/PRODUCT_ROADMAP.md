@@ -1422,6 +1422,37 @@ respond to it. Closing the gap is the inflection point between
   — recording-provider matrix on both providers earned its
   coverage. Zero new workspace deps.
 
+- **Phase 91 (LLM-Judged Recall Usefulness, shipped
+  2026-05-21).** Closes the longest-running feedback-side
+  deferral (Phase 77, carried forward 14 phases). For 90
+  phases the recall-feedback signal had been STRUCTURAL
+  (turn-level proxy) — every recall in a successful turn
+  inherited `+1` helpfulness, every recall in a failed turn
+  `-1`. Phase 91 adds an opt-in LLM-judged per-recall
+  classification (`Used` / `Irrelevant` / `Hurt`) alongside
+  the structural proxy. **Augment, not replace (Q3a):** the
+  new `judgment: Option<RecallJudgment>` field on
+  `RecallHit` is captured but every existing accumulator
+  (Phase 82 ledger, Phase 83 co-occurrence, Phase 85/88
+  decay, Phase 87 proposals) stays byte-identical in v1; a
+  future phase consumes the new signal once validated in
+  production. **No new product commitment**, none weakened;
+  the operator-facing contract is *strengthened* (the
+  learning loop now captures a sharper signal even though
+  consumers continue to use the structural proxy). After
+  the input-quality arc (86/89/90), Phase 91 is the
+  symmetric **feedback-quality** move that completes the
+  learning-loop picture. Single opt-in `[recall_judgment]`
+  block (`enabled = false` default). Reflection-cron batched
+  (one LLM call per cron tick, the Phase 87
+  `LlmPairPhraser` precedent). Streak all three correct:
+  DESIGN.md → 38, PRODUCT.md → **31**, lib.rs → **39** (new
+  project record, beating Phase 90's 38) — new trait +
+  adapter + pass + stat + IPC field all in `aivyx-channel`,
+  config in `aivyx-config`, no new AuditTag. Test count
+  delta `+14` (workspace 1629 → 1643), inside the predicted
+  `+9-15` band. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
