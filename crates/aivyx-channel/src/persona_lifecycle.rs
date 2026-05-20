@@ -630,6 +630,7 @@ mod tests {
             min_soft_facets,
             decay_unhelpful_threshold: -2.0,
             decay_min_samples: 3,
+            decay_pair_below_affinity: 1.0,
             signals: PersonaLifecycleSignals {
                 consolidate,
                 decay,

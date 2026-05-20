@@ -1525,6 +1525,18 @@ pub struct PersonaLifecycleConfig {
     /// samples. Identity is never decayed (or protected) on
     /// thin evidence.
     pub decay_min_samples: u32,
+    /// Phase 88 — a `consolidate-pair:` facet whose pair's
+    /// decayed Phase 83 affinity is **below** this floor is
+    /// treated as "relationship no longer durable": the facet
+    /// may be proposed for decay before the age horizon, and
+    /// symmetrically, a pair whose affinity is **at or above**
+    /// this floor *protects* its facet from age-decay. Mirrors
+    /// the Phase 87 `[persona_consolidation].min_affinity`
+    /// default (1.0) — a pair must be ≥ 1.0 to propose a facet
+    /// (Phase 87), and staying ≥ 1.0 keeps the facet (Phase
+    /// 88). Reflection-authored facets (no `consolidate-pair:`
+    /// provenance) ignore this and stay age-only.
+    pub decay_pair_below_affinity: f32,
     /// Which lifecycle action classes may be proposed.
     pub signals: PersonaLifecycleSignals,
 }
@@ -1548,6 +1560,14 @@ pub const DEFAULT_PL_DECAY_UNHELPFUL_THRESHOLD: f32 = -2.0;
 /// topic's helpfulness for decay/protection until it has at
 /// least this many ledger samples.
 pub const DEFAULT_PL_DECAY_MIN_SAMPLES: u32 = 3;
+/// Phase 88 — default pair-affinity floor for the decay /
+/// protection arm. Mirrors the Phase 87
+/// `DEFAULT_PC_MIN_AFFINITY` (= `1.0`) so the construction
+/// floor and the decay floor coincide by default: a pair must
+/// be ≥ 1.0 to propose a facet, and staying ≥ 1.0 keeps the
+/// facet. An operator who wants explicit hysteresis can tune
+/// this *below* `min_affinity` to widen the keep-zone.
+pub const DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY: f32 = 1.0;
 
 /// Phase 84 — operator-facing config for cluster-aware
 /// co-recall (consuming the Phase 83 co-occurrence ledger
@@ -2304,6 +2324,8 @@ struct RawPersonaLifecycle {
     decay_unhelpful_threshold: Option<f32>,
     #[serde(default)]
     decay_min_samples: Option<u32>,
+    #[serde(default)]
+    decay_pair_below_affinity: Option<f32>,
     #[serde(default)]
     signal_consolidate: Option<bool>,
     #[serde(default)]
@@ -4505,6 +4527,7 @@ fn build_persona_lifecycle_config(
         || raw.min_soft_facets.is_some()
         || raw.decay_unhelpful_threshold.is_some()
         || raw.decay_min_samples.is_some()
+        || raw.decay_pair_below_affinity.is_some()
         || raw.signal_consolidate.is_some()
         || raw.signal_decay.is_some();
     if !any_set {
@@ -4526,6 +4549,9 @@ fn build_persona_lifecycle_config(
     let decay_min_samples = raw
         .decay_min_samples
         .unwrap_or(DEFAULT_PL_DECAY_MIN_SAMPLES);
+    let decay_pair_below_affinity = raw
+        .decay_pair_below_affinity
+        .unwrap_or(DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY);
     let signals = PersonaLifecycleSignals {
         consolidate: raw.signal_consolidate.unwrap_or(true),
         decay: raw.signal_decay.unwrap_or(true),
@@ -4587,6 +4613,23 @@ fn build_persona_lifecycle_config(
                         .into(),
                 });
             }
+            // Phase 88 — pair-affinity floor must be a sane
+            // non-negative number. Zero is permitted (means
+            // "never fire pair-driven decay / never protect"),
+            // mirroring Phase 87's posture that a knob's
+            // floor-of-zero is a valid no-op tuning.
+            if !decay_pair_below_affinity.is_finite()
+                || decay_pair_below_affinity < 0.0
+            {
+                return Err(ConfigError::Invalid {
+                    field:
+                        "persona_lifecycle.decay_pair_below_affinity",
+                    reason:
+                        "`decay_pair_below_affinity` must be \
+                         a finite non-negative number"
+                            .into(),
+                });
+            }
         }
     }
 
@@ -4597,6 +4640,7 @@ fn build_persona_lifecycle_config(
         min_soft_facets,
         decay_unhelpful_threshold,
         decay_min_samples,
+        decay_pair_below_affinity,
         signals,
     }))
 }

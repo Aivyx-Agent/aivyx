@@ -5950,6 +5950,13 @@ fn persona_lifecycle_present_disabled_is_allowed_partial() {
         p.decay_min_samples,
         crate::DEFAULT_PL_DECAY_MIN_SAMPLES
     );
+    // Phase 88 — pair-affinity decay floor default.
+    assert!(
+        (p.decay_pair_below_affinity
+            - crate::DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY)
+            .abs()
+            < 1e-6
+    );
     // Signals default on.
     assert!(p.signals.consolidate);
     assert!(p.signals.decay);
@@ -6033,6 +6040,87 @@ fn persona_lifecycle_helpfulness_decay_knobs() {
          decay_unhelpful_threshold = 9.0\n\
          decay_min_samples = 0\n",
         "pl-help-disarmed",
+    );
+    assert!(cfg2.persona_lifecycle.is_some());
+
+    drop(env);
+}
+
+/// Phase 88 — explicit `decay_pair_below_affinity` wins;
+/// validation fires only when decay is armed; non-finite +
+/// negative are rejects.
+#[test]
+fn persona_lifecycle_pair_affinity_decay_knob() {
+    let env = EnvScope::new();
+
+    // Valid override.
+    let cfg = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_pair_below_affinity = 0.4\n",
+        "pl-pair-valid",
+    );
+    let p = cfg.persona_lifecycle.expect("section present");
+    assert!(
+        (p.decay_pair_below_affinity - 0.4).abs() < 1e-6
+    );
+
+    // Negative pair floor (armed) → Invalid.
+    let tmp = TempDir::new("pl-pair-neg");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_pair_below_affinity = -1.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error")
+    {
+        ConfigError::Invalid { field, .. } => assert_eq!(
+            field,
+            "persona_lifecycle.decay_pair_below_affinity"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Non-finite pair floor (armed) → Invalid.
+    let tmp2 = TempDir::new("pl-pair-nan");
+    let toml2 = tmp2.path().join("aivyx.toml");
+    std::fs::write(
+        &toml2,
+        "\n[persona_lifecycle]\nenabled = true\n\
+         decay_pair_below_affinity = nan\n",
+    )
+    .unwrap();
+    let opts2 = LoadOptions {
+        toml_path: Some(toml2),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts2)
+        .expect_err("must error")
+    {
+        ConfigError::Invalid { field, .. } => assert_eq!(
+            field,
+            "persona_lifecycle.decay_pair_below_affinity"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Decay disarmed → the knob is NOT validated even if
+    // nonsensical (staged config — same Phase 85 posture).
+    let cfg2 = load_with_toml(
+        "\n[persona_lifecycle]\nenabled = true\n\
+         signal_consolidate = true\nsignal_decay = false\n\
+         decay_pair_below_affinity = -42.0\n",
+        "pl-pair-disarmed",
     );
     assert!(cfg2.persona_lifecycle.is_some());
 

@@ -2465,6 +2465,7 @@ mod tests {
                 min_soft_facets: 2,
                 decay_unhelpful_threshold: -2.0,
                 decay_min_samples: 3,
+                decay_pair_below_affinity: 1.0,
                 signals:
                     aivyx_config::PersonaLifecycleSignals {
                         consolidate: true,
@@ -2684,6 +2685,7 @@ mod tests {
             min_soft_facets: 2,
             decay_unhelpful_threshold: -2.0,
             decay_min_samples: 3,
+            decay_pair_below_affinity: 1.0,
             signals: aivyx_config::PersonaLifecycleSignals {
                 consolidate: false,
                 decay: true,
