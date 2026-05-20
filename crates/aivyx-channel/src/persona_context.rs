@@ -108,6 +108,14 @@ pub struct PersonaContextRefiner {
     /// context to concatenate before `current`). `1` (the
     /// default) disables the window — byte-identical fallback.
     recall_window_turns: usize,
+    /// Phase 90 — heuristic recall gate threshold. `0` (the
+    /// default) disables the gate — every turn flows through
+    /// to the embed (byte-identical to pre-Phase-90). When
+    /// raised, turns whose trimmed user message is shorter
+    /// than this Unicode-char count short-circuit `refine` to
+    /// `None` at the top — the planner uses the full Persona
+    /// base prompt (the existing pre-Phase-79 fallback).
+    recall_gate_min_chars: usize,
 }
 
 impl PersonaContextRefiner {
@@ -134,7 +142,24 @@ impl PersonaContextRefiner {
             stat: None,
             conversation_windows: None,
             recall_window_turns: 1,
+            recall_gate_min_chars: 0,
         }
+    }
+
+    /// Phase 90 — set the heuristic recall-gate threshold.
+    /// Builder; the binary calls this with
+    /// `config.embedding.recall_gate_min_chars`. With `0`
+    /// (default), the refiner is byte-identical to
+    /// pre-Phase-90; with `n >= 1`, turns whose trimmed user
+    /// message is shorter than `n` Unicode chars short-circuit
+    /// `refine` to `None` before any embed call (the planner
+    /// uses the full Persona base prompt).
+    pub fn with_recall_gate(
+        mut self,
+        min_chars: usize,
+    ) -> Self {
+        self.recall_gate_min_chars = min_chars;
+        self
     }
 
     /// Phase 79 (Q4a) — attach the shared last-selection stat
@@ -192,6 +217,16 @@ impl SystemPromptRefiner for PersonaContextRefiner {
         user_message: &str,
         session_id: aivyx_core::SessionId,
     ) -> Option<String> {
+        // Phase 90 — heuristic recall gate. On a noise turn
+        // short-circuit before any embed call; the planner
+        // uses the full Persona base prompt (the existing
+        // pre-Phase-79 / Soul-too-small fallback path).
+        if crate::recall_gate::should_gate_recall(
+            user_message,
+            self.recall_gate_min_chars,
+        ) {
+            return None;
+        }
         // Snapshot under the read lock, then drop it before any
         // await (never hold a std RwLock across .await).
         let snapshot = {
@@ -605,5 +640,87 @@ mod tests {
                  message (byte-identical to pre-Phase-86)"
             );
         }
+    }
+
+    // ---- Phase 90 — heuristic recall gate ----------------------
+
+    /// A gated turn (trimmed user message shorter than the
+    /// threshold) short-circuits before any embed call: the
+    /// refiner returns `None` (planner uses the full Persona
+    /// base prompt), and the `RecordingProvider` records zero
+    /// inputs.
+    #[tokio::test]
+    async fn refine_gate_short_circuits_before_embed_on_noise_turn(
+    ) {
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let r = refiner_with_recorder(Arc::clone(&provider))
+            .with_recall_gate(4);
+        let out =
+            r.refine("ok", aivyx_core::SessionId::new()).await;
+        assert!(out.is_none(), "gated turn returns None");
+        assert!(
+            provider.seen.lock().unwrap().is_empty(),
+            "gated turn must not call embed"
+        );
+    }
+
+    /// An ungated turn proceeds to the embed normally.
+    #[tokio::test]
+    async fn refine_gate_passes_when_message_meets_threshold() {
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let r = refiner_with_recorder(Arc::clone(&provider))
+            .with_recall_gate(4);
+        // The big_persona fixture has 14 reducible facets, so
+        // the size_threshold (12) is cleared and refine
+        // proceeds to the embed when the gate doesn't fire.
+        let _ = r
+            .refine(
+                "how do I deploy",
+                aivyx_core::SessionId::new(),
+            )
+            .await;
+        let seen = provider.seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty(),
+            "ungated turn proceeds to the embed batch"
+        );
+        assert!(
+            seen.iter().any(|s| s.contains("how do I deploy")),
+            "the embed batch includes the user message: \
+             {seen:?}"
+        );
+    }
+
+    /// `recall_gate_min_chars = 0` (default) is the opt-out:
+    /// a would-be-gated message flows through normally —
+    /// byte-identical to pre-Phase-90.
+    #[tokio::test]
+    async fn refine_gate_zero_min_chars_is_byte_identical_to_pre_phase_90(
+    ) {
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        // No `with_recall_gate` call — default `0`.
+        let r = refiner_with_recorder(Arc::clone(&provider));
+        // big_persona has 14 reducible facets → clears the
+        // size_threshold → refine runs the embed batch.
+        let _ = r
+            .refine("ok", aivyx_core::SessionId::new())
+            .await;
+        let seen = provider.seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty(),
+            "with the gate disabled the embed batch fires \
+             even on a short message (pre-Phase-90)"
+        );
+        assert_eq!(
+            seen.first(),
+            Some(&"ok".to_string()),
+            "the bare short message is the query (pre-Phase-90)"
+        );
     }
 }

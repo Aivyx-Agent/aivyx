@@ -94,6 +94,13 @@ pub struct SemanticMemoryContext {
     /// context to concatenate before `current`). `1` (the
     /// default) disables the window — byte-identical fallback.
     recall_window_turns: usize,
+    /// Phase 90 — heuristic recall gate threshold. `0` (the
+    /// default) disables the gate — every turn flows through
+    /// to the embed (byte-identical to pre-Phase-90). When
+    /// raised, turns whose trimmed user message is shorter
+    /// than this Unicode-char count short-circuit to `None`
+    /// at the top of `recall` (no embed, no memory walk).
+    recall_gate_min_chars: usize,
 }
 
 impl SemanticMemoryContext {
@@ -114,7 +121,23 @@ impl SemanticMemoryContext {
             cluster_stat: None,
             conversation_windows: None,
             recall_window_turns: 1,
+            recall_gate_min_chars: 0,
         }
+    }
+
+    /// Phase 90 — set the heuristic recall-gate threshold.
+    /// Builder; the binary calls this with
+    /// `config.embedding.recall_gate_min_chars`. With `0` (the
+    /// default) the provider is byte-identical to
+    /// pre-Phase-90; with `n >= 1`, turns whose trimmed user
+    /// message is shorter than `n` Unicode chars short-circuit
+    /// `recall` to `None` before any embed call.
+    pub fn with_recall_gate(
+        mut self,
+        min_chars: usize,
+    ) -> Self {
+        self.recall_gate_min_chars = min_chars;
+        self
     }
 
     /// Phase 86 — attach the shared per-session conversation
@@ -217,6 +240,17 @@ impl ContextProvider for SemanticMemoryContext {
         user_message: &str,
         session_id: aivyx_core::SessionId,
     ) -> Option<String> {
+        // Phase 90 — heuristic recall gate. On a noise turn
+        // (trimmed message shorter than the operator-set
+        // threshold), short-circuit before any embed call;
+        // returning `None` uses the existing best-effort
+        // fallback contract the planner already honours.
+        if crate::recall_gate::should_gate_recall(
+            user_message,
+            self.recall_gate_min_chars,
+        ) {
+            return None;
+        }
         // Phase 86 — when the conversation window is engaged the
         // embedded query is the assembled prior-turns context +
         // the current message (which lands last so it dominates);
@@ -966,5 +1000,99 @@ mod tests {
                  pre-Phase-86)"
             );
         }
+    }
+
+    // ---- Phase 90 — heuristic recall gate ----------------------
+
+    /// A gated turn (trimmed user message shorter than the
+    /// threshold) short-circuits before any embed call: the
+    /// provider returns `None`, and the `RecordingProvider`
+    /// records zero inputs.
+    #[tokio::test]
+    async fn recall_gate_short_circuits_before_embed_on_noise_turn(
+    ) {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::clone(&provider) as Arc<dyn EmbeddingProvider>,
+            5,
+            0.0,
+        )
+        .with_recall_gate(4);
+
+        // Trimmed length 2 (`"ok"`) < threshold 4 → gate.
+        let out = ctx.recall("ok", sid()).await;
+        assert!(out.is_none(), "gated turn returns None");
+        assert!(
+            provider.seen.lock().unwrap().is_empty(),
+            "gated turn must not call embed"
+        );
+    }
+
+    /// An ungated turn (trimmed message at or above the
+    /// threshold) proceeds to the embed normally. Confirms
+    /// the gate is selective, not a kill-switch.
+    #[tokio::test]
+    async fn recall_gate_passes_when_message_meets_threshold() {
+        let memory = seed().await;
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::clone(&provider) as Arc<dyn EmbeddingProvider>,
+            5,
+            0.0,
+        )
+        .with_recall_gate(4);
+
+        // Trimmed length is much greater than threshold 4 →
+        // recall fires, embed is called, the seeded memory
+        // hits.
+        let out =
+            ctx.recall("how do I deploy", sid()).await;
+        assert!(
+            out.is_some(),
+            "ungated turn proceeds to recall"
+        );
+        let seen = provider.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec!["how do I deploy".to_string()],
+            "embed called with the bare user message"
+        );
+    }
+
+    /// `recall_gate_min_chars = 0` (the default) is the
+    /// opt-out: a short-trimmed message that WOULD be gated
+    /// at a non-zero threshold flows through normally —
+    /// byte-identical to pre-Phase-90.
+    #[tokio::test]
+    async fn recall_gate_zero_min_chars_is_byte_identical_to_pre_phase_90(
+    ) {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let provider = Arc::new(RecordingProvider {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        // No `with_recall_gate` call — default `0`.
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::clone(&provider) as Arc<dyn EmbeddingProvider>,
+            5,
+            0.0,
+        );
+
+        // A would-be-gated turn flows through to the embed.
+        let _ = ctx.recall("ok", sid()).await;
+        let seen = provider.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec!["ok".to_string()],
+            "with the gate disabled the bare message is \
+             embedded (pre-Phase-90 behaviour)"
+        );
     }
 }

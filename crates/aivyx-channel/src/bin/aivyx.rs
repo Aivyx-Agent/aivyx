@@ -2743,6 +2743,10 @@ async fn run_async(
                     cfg.recall_window_turns,
                 );
             }
+            // Phase 90 — heuristic recall gate. Default `0`
+            // (gate disabled) is byte-identical to
+            // pre-Phase-90.
+            sc = sc.with_recall_gate(cfg.recall_gate_min_chars);
             Some(Arc::new(sc))
         }
         _ => None,
@@ -2826,6 +2830,13 @@ async fn run_async(
                     windows.clone(),
                     cfg.recall_window_turns,
                 );
+            }
+            // Phase 90 — heuristic recall gate. Same opt-in
+            // knob as the auto-recall provider above; with
+            // the default `0` the refiner is byte-identical
+            // to pre-Phase-90.
+            if let Some(cfg) = config_embedding.as_ref() {
+                r = r.with_recall_gate(cfg.recall_gate_min_chars);
             }
             Some(Arc::new(r))
         }
