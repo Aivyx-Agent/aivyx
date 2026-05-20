@@ -91,6 +91,13 @@ pub use crate::tools::{
     DEFAULT_MAX_PER_TOPIC,
 };
 
+/// Phase 89 — topic canonicalization helper. Public so the
+/// memory-write tool, future test fixtures, and any caller
+/// that wants to canonicalize a topic before a lookup can
+/// share the single canonical implementation.
+pub mod canonical;
+pub use crate::canonical::canonicalize_topic;
+
 /// A single memory record.
 ///
 /// This is what `Memory::put` stores and what `Memory::get_recent`
