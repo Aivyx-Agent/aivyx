@@ -266,46 +266,103 @@ plausibly something to recall *for*.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** A length-based short-circuit at
+  the top of an existing best-effort hook touches no
+  locked technical-contract decision. The hooks have
+  always returned `None` (the planner's `recall: Option`
+  contract); Phase 90 adds one more reason to return it.
+  Streak: **37 consecutive phases** (was 36).
+- **PRODUCT.md — held.** No new commitment, none weakened;
+  the operator-facing contract was *strengthened*
+  (G3 recall + P14 Persona no longer waste embed cost or
+  pollute their rankers on noise turns). Streak: **30
+  consecutive phases** (was 29).
+- **`aivyx-core/src/lib.rs` — held, by design.** The gate
+  function lives in `aivyx-channel`, the config knob is a
+  new field on the existing `EmbeddingConfig` in
+  `aivyx-config`, the two short-circuits are in
+  `memory_recall.rs` and `persona_context.rs`. No
+  `aivyx-core` touch. Streak: **38 consecutive phases** —
+  new project record, beating Phase 89's 37.
+
+**Test count — `+15`** (workspace `1614 → 1629`). Slightly
+over the predicted `+6-10` band. The breakdown:
+
+- Config knob `+3` (default `0`; explicit override;
+  explicit `0` honored — the same +3 shape Phase 89's
+  Sourced<usize> test set used).
+- Pure helper `+6` (opt-out path; exact-threshold strict-
+  less-than boundary; whitespace-only gates at any
+  non-zero threshold; trim runs before count; Unicode chars
+  vs. UTF-8 bytes; internal whitespace counts).
+- Provider integration `+6` (a symmetric trio on each of
+  the two relevance providers: gated turn returns `None`
+  with zero embed calls; ungated turn proceeds normally;
+  `min_chars = 0` is byte-identical to pre-Phase-90 — both
+  on `SemanticMemoryContext::recall` and on
+  `PersonaContextRefiner::refine`).
+
+The recording-provider matrix on both providers earned its
+own coverage. The +5 over the central band estimate is the
+same pattern Phase 89 ran (rich rule coverage in the pure
+helper) — the calibration law's "≈ +2-4 integration" band
+underestimates when both consumers get the same treatment.
+
+**Scope — every planned surface shipped exactly as scoped.**
+The config knob with `Sourced<usize>` provenance, the
+Unicode-char-counted (not byte-counted) gate rule with the
+`min_chars == 0` opt-out short-circuit, the
+`with_recall_gate(min_chars)` builder on both providers,
+the two short-circuits at the top of each provider's hook
+method, and the binary's wiring all landed as the open-doc
+described. The integration tests codify the operator
+contract: a gated turn produces zero embed calls (not just
+zero memory walks), and the default `0` is byte-identical
+to pre-Phase-90 across both providers. Zero clippy warnings.
+Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[embedding].recall_gate_min_chars: usize` (default
-  `0` = disabled) — Task 2.
-- [ ] `should_gate_recall(text, min_chars) -> bool` pure
-  function in `aivyx-channel`; trimmed-char count rule
-  with the `min_chars == 0` opt-out short-circuit;
-  Unicode-char-counted (not byte-counted) — Task 3.
-- [ ] Unit tests on the gate function: opt-out boundary,
-  exact-threshold boundary, whitespace-only / empty
-  inputs, Unicode-char counting, trim-then-measure
-  semantics — Task 3.
-- [ ] `SemanticMemoryContext::recall` and
+- [x] `[embedding].recall_gate_min_chars: usize` (default
+  `0` = disabled) — Task 2 (commit `500f520`).
+- [x] `should_gate_recall(text, min_chars) -> bool` pure
+  function in `aivyx-channel::recall_gate`; trimmed-char
+  count rule with the `min_chars == 0` opt-out;
+  Unicode-char-counted (not byte-counted) — Task 3
+  (commit `4f647d9`).
+- [x] Unit tests on the gate function: opt-out boundary,
+  exact-threshold strict-less-than boundary, whitespace-
+  only / empty inputs gate at any non-zero threshold,
+  Unicode-char counting, trim-then-measure semantics —
+  Task 3 (commit `4f647d9`).
+- [x] `SemanticMemoryContext::recall` and
   `PersonaContextRefiner::refine` short-circuit to `None`
   before any embed call when the gate fires; both gain
-  the `with_recall_gate(min_chars)` builder — Task 4.
-- [ ] `bin/aivyx` threads
+  the `with_recall_gate(min_chars)` builder — Task 4
+  (commit `d6002b0`).
+- [x] `bin/aivyx` threads
   `config.embedding.recall_gate_min_chars` to both
-  providers — Task 4.
-- [ ] Integration tests: gated turn (short input)
-  produces `None` from both providers; ungated turn
-  (longer input) is unaffected; `min_chars = 0` is
-  byte-identical to pre-Phase-90 — Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  providers — Task 4 (commit `d6002b0`).
+- [x] Integration tests: gated turn produces `None` from
+  both providers (zero embed calls recorded); ungated
+  turn proceeds normally; `min_chars = 0` is byte-
+  identical to pre-Phase-90 — Task 4 (commit `d6002b0`,
+  symmetric trio on each provider).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-seven.
-- [ ] PRODUCT.md streak extends to thirty.
-- [ ] Production-core streak extends to thirty-eight (new
+- [x] DESIGN.md streak extends to thirty-seven.
+- [x] PRODUCT.md streak extends to thirty.
+- [x] Production-core streak extends to thirty-eight (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+6-10; per the
-  converged calibration law — knob on an existing block
-  (≈ +1-2) + new pure helper (≈ +3-4) + two-provider
-  integration (≈ +2-4); no new module, no new
-  `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+15`, slightly over
+  the predicted `+6-10` band — same pattern as Phase 89's
+  rich-coverage `+20`).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

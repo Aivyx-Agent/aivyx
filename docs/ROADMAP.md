@@ -2503,6 +2503,65 @@ mappings, topic-by-topic exception list, one-time migration
 of existing fragmented data, non-ASCII / Unicode stemming)
 are operator-feedback-gated.
 
+## Phase 90 — Heuristic Recall Gate (the third move in the input-quality arc, completed)
+
+**Frozen — see [PHASE_90.md](PHASE_90.md).** Closes the
+longest-running recall-side deferral (Phase 76, carried
+forward 14 phases through 77-89). For 89 phases both
+auto-recall (Phase 76) and adaptive Persona selection
+(Phase 79) fired on **every** conversational turn —
+including turns where the user message is a single-token
+acknowledgment (`ok` / `thanks` / `yes` / `cool`) that
+cannot meaningfully steer recall or facet selection.
+
+Phase 90 closes this with the smallest possible gate: a
+length-based heuristic at the top of both relevance hooks
+that skips the embed (and everything downstream) when the
+trimmed user message is shorter than `recall_gate_min_chars`
+Unicode characters. Both consumers share the same gate
+under one opt-in knob, exactly as Phase 86's window work
+shipped both consumers under one switch.
+
+The third move in the input-quality arc:
+- **Phase 86** — sharpened *what* gets embedded (windows)
+- **Phase 89** — sharpened *how* signals key (canonical)
+- **Phase 90** — sharpens *when* recall fires at all
+
+- **Length-based gate (Q1a):** trimmed Unicode-char count
+  strictly-less-than `recall_gate_min_chars` → short-
+  circuit. Simple, deterministic, language-agnostic.
+- **Opt-in (Q2a):** `[embedding].recall_gate_min_chars`,
+  default `0` (gate disabled = byte-identical to
+  pre-Phase-90). Matches the 89-phase
+  behaviour-change-is-opt-in discipline.
+- **Both consumers (Q3a):** `SemanticMemoryContext::recall`
+  AND `PersonaContextRefiner::refine` short-circuit on the
+  same gate under the same shared knob. Symmetric Phase 86
+  design.
+- **Skip embed entirely (Q4a):** the gated turn pays zero
+  embed cost (not just memory-walk or ranking) — the
+  cheapest possible noise-turn path; uses the existing
+  best-effort `None` fallback contract both providers
+  already honoured.
+
+Streak all three correct: DESIGN.md → **37**, PRODUCT.md →
+**30**, `aivyx-core/src/lib.rs` → **38** (new project
+record, beats Phase 89's 37) — the gate function +
+provider short-circuits live in `aivyx-channel`, not
+`aivyx-core`; the config knob is a new field on the
+existing `EmbeddingConfig`; zero new `AuditTag`. Test count
+delta **`+15`** workspace (`+3` config, `+6` pure helper,
+`+6` provider integration) — over the predicted `+6-10`
+band; the recording-provider matrix on both providers
+earned its own coverage. Zero clippy warnings. Zero new
+workspace deps. With `recall_gate_min_chars = 0` (the
+default), both providers are byte-identical to pre-Phase-90.
+
+Likely follow-ups (pattern-based stoplist, LLM-judged gate,
+adaptive thresholds from operator message-length
+distribution, token-budget context sizing) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

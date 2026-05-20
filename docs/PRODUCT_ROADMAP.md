@@ -1395,6 +1395,33 @@ respond to it. Closing the gap is the inflection point between
   (workspace 1594 → 1614), comfortably above the predicted
   `+6-10` band. Zero new workspace deps.
 
+- **Phase 90 (Heuristic Recall Gate, shipped 2026-05-20).**
+  Closes the longest-running recall-side deferral (Phase 76,
+  carried forward 14 phases). For 89 phases auto-recall and
+  adaptive Persona selection fired on EVERY turn, including
+  single-token acknowledgments (`ok` / `thanks` / `yes` /
+  `cool`) where the bare-message embed is essentially a
+  random vector that pollutes the ranker. **No new product
+  commitment**, none weakened; the operator-facing contract
+  is *strengthened* (G3 recall + P14 Persona no longer waste
+  embed cost or pollute their rankers on noise turns). The
+  third move in the input-quality arc after Phase 86
+  (windows) + Phase 89 (canonicalization): Phase 90 sharpens
+  *when* recall fires at all. Single opt-in
+  `[embedding].recall_gate_min_chars` knob (default `0` =
+  disabled = byte-identical to pre-Phase-90; raise to gate
+  trimmed-Unicode-char-count shorter messages). Same gate
+  drives both relevance providers (auto-recall + adaptive
+  Persona); both short-circuit to `None` before any embed
+  call. Streak all three correct: DESIGN.md → 37, PRODUCT.md
+  → **30**, lib.rs → **38** (new project record, beating
+  Phase 89's 37) — gate function + provider short-circuits
+  all in `aivyx-channel`, knob is a new field on the
+  existing `EmbeddingConfig`. Test count delta `+15`
+  (workspace 1614 → 1629), over the predicted `+6-10` band
+  — recording-provider matrix on both providers earned its
+  coverage. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

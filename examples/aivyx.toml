@@ -832,6 +832,7 @@ parent_role = "researcher"
 #   rag_top_k = 5             # max memories injected per turn
 #   rag_min_similarity = 0.20 # drop hits below this cosine score
 #   recall_window_turns = 1   # conversational-window relevance (Phase 86)
+#   recall_gate_min_chars = 0 # heuristic recall gate (Phase 90)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
@@ -864,6 +865,35 @@ parent_role = "researcher"
 # noise. The window itself is ephemeral (daemon-memory only;
 # a restart starts fresh). Validation when `[embedding]` is
 # present: `recall_window_turns >= 1`.
+#
+# ----------------------------------------------------------------
+# Heuristic recall gate (Phase 90) — recall_gate_min_chars
+# ----------------------------------------------------------------
+#
+# For 89 phases auto-recall and adaptive Persona selection
+# fired on EVERY turn, including single-token acknowledgments
+# (`ok` / `thanks` / `yes` / `cool`) where the bare-message
+# embed is essentially a random vector that pollutes the
+# ranker. Phase 90 adds a length-based gate: when the trimmed
+# user message is SHORTER than `recall_gate_min_chars`
+# Unicode characters, both relevance hooks short-circuit
+# before any embed call (recall returns None, the Persona
+# refiner falls through to the full base prompt).
+#
+# Opt-in, off by default:
+#
+#   [embedding]
+#   # ... rag_top_k / rag_min_similarity / recall_window_turns ...
+#   recall_gate_min_chars = 4   # default 0 = disabled
+#
+# Set 0 (default) to keep today's behaviour. Raise to gate
+# noise turns; 4 is a conservative starting point that gates
+# `ok` / `yes` / `cool` without touching normal messages.
+# Counted in UNICODE characters, not bytes (`héllo` is 5
+# chars whether or not it's 6 UTF-8 bytes). Trade-off: short
+# but meaningful messages (`run!`, `ack`, `git`) gate
+# alongside fillers — keep the threshold conservative if
+# you use them.
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

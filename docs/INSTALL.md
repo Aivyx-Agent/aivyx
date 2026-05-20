@@ -641,6 +641,57 @@ The block is explicitly framed to the model as background
 reference, not instructions — a recalled note cannot hijack
 the turn.
 
+### Heuristic recall gate (Phase 90)
+
+For 89 phases auto-recall and adaptive Persona selection
+(Phase 79) fired on **every** conversational turn —
+including turns where the user message is a one- or two-token
+acknowledgment (`ok` / `thanks` / `yes` / `cool`) that
+cannot meaningfully steer recall. The bare-message embed on
+those turns is essentially a random vector that pollutes the
+ranker; the recall block and adaptive Persona selection
+injected on top are noise the planner has to defend against.
+
+Phase 90 adds the smallest possible fix: a length-based
+**heuristic gate** at the top of both relevance hooks that
+skips the embed (and everything downstream) when the trimmed
+user message is shorter than `recall_gate_min_chars`. Both
+consumers (auto-recall + adaptive Persona) share the same
+gate and the same opt-in knob, exactly as Phase 86's window
+work shipped both consumers under one switch.
+
+- **Opt-in, off by default.** With `recall_gate_min_chars =
+  0` (the default) the gate is disabled and behaviour is
+  byte-identical to pre-Phase-90. Raise it (`4` is a
+  conservative starting point that gates single-token
+  acknowledgments without affecting normal messages) to
+  engage.
+- **Same gate, both consumers.** A gated turn produces no
+  recall block AND no adaptive Persona facet selection
+  (the planner uses the full Persona base prompt, exactly
+  the pre-Phase-79 fallback). Symmetric Phase 86 design.
+- **Maximum cost saving.** A gated turn skips the embed
+  call entirely (not just the memory walk or the ranking)
+  — the cheapest possible noise-turn path.
+- **Unicode-char counted.** The threshold is in characters,
+  not bytes — `héllo` is 5 characters whether you measure
+  it semantically or not.
+
+Configure under `[embedding]`:
+
+```toml
+[embedding]
+# ... existing knobs ...
+recall_gate_min_chars = 4   # optional, default 0 (disabled)
+```
+
+**Trade-off.** A short but meaningful message (`run!`,
+`ack`, `git`) gets gated alongside fillers. The current
+heuristic is operator-tunable but not pattern-aware; an
+operator who needs more nuance can keep the gate at `0` or
+configure a low threshold (`2` or `3`) that catches only
+the very shortest noise turns.
+
 ## Recall feedback loop (Phase 77)
 
 Auto-recall (Phase 76) made the assistant *remember*. Phase 77
