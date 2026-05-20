@@ -2632,6 +2632,67 @@ adaptive batch size, multi-model ensembling, response-text
 recovery via audit-chain extension) are operator-feedback-
 gated.
 
+## Phase 92 — Pattern-Driven Supersession (the longest-running Persona-actuator deferral, closed)
+
+**Frozen — see [PHASE_92.md](PHASE_92.md).** Closes the
+Phase 70 proposal-supersession deferral — 22 phases old,
+deferred again at Phase 87 and Phase 88. After Phase 87
+(pattern-driven construction) and Phase 88 (pattern-driven
+decay), the Soul actuator handled a shifting co-occurrence
+pair `(A, B) → (A, C)` as TWO independent operator
+decisions. Phase 92 introduces opt-in **shared-endpoint
+supersession**: when an existing applied `consolidate-pair:`
+facet's pair decays while a new pair sharing one endpoint
+strengthens, the consolidation pass files the `RemoveList`
++ `AppendList` proposals **linked by metadata** so the
+operator-facing surface presents them as a single
+supersession decision.
+
+- **Shared-endpoint detection (Q1a):** old `(A, B)`
+  decayed below the Phase 88 floor AND new `(A, C)`
+  sharing one endpoint above the Phase 87 construction
+  floor with both endpoints helpful. Conservative;
+  deterministic; only fires on clear "replacement"
+  relationships.
+- **Reuse Phase 87's `PairPhraser` (Q2a):** structural
+  detection is pure; the new facet's prose comes from
+  the same LLM seam Phase 87 already pays. Per-candidate
+  phrasing failure → skip that supersession; the facet
+  stays via the standard Phase 87/88 flow.
+- **Linked, not atomic (Q3a):** the new optional
+  `supersedes_proposal_id: Option<String>` field on
+  `ProposedPersonaDelta` carries the cross-link. The
+  `AppendList`-side proposal points at the
+  `RemoveList`-side proposal_id; the `RemoveList`-side
+  points back. Each half remains independently
+  `Revert`-able; no new proposal kind; no chain-schema
+  migration. Wire-compat via the Phase 84 / Phase 91
+  `#[serde(default, skip_serializing_if = "...")]`
+  precedent.
+- **Opt-in (Q4a):** new
+  `enable_supersession: bool` knob on the existing
+  `[persona_consolidation]` block, default `false`.
+  Operators running Phase 87 consolidation enable it with
+  one extra key; with the knob off the Phase 87 / Phase 88
+  proposal flow is byte-identical to pre-Phase-92.
+
+Streak all three correct: DESIGN.md → **39**, PRODUCT.md →
+**32**, `aivyx-core/src/lib.rs` → **40** (new project
+record, beats Phase 91's 39) — detector + field + pass
+integration all in `aivyx-channel`; config knob in
+`aivyx-config`; no new `AuditTag`. Test count delta
+**`+10`** workspace (`+3` config, `+6` field + detector,
+`+1` integration) — squarely inside the predicted `+6-10`
+band. Zero clippy warnings. Zero new workspace deps.
+
+Likely follow-ups (Web UI visual grouping of linked
+supersession proposals, atomic chain-level supersession
+primitive via a new `Supersede` proposal kind or
+`Compound` proposals, n-ary cluster supersession,
+semantic-similarity supersession for synonym pairs that
+share zero literal endpoints) are operator-feedback-
+gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

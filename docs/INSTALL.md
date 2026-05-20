@@ -1424,6 +1424,70 @@ specific co-occurrence pair (`co-occurrence pair X + Y —
 decayed affinity N over M observation(s); both topics
 helpful`).
 
+### Pattern-driven supersession (Phase 92)
+
+Phase 87 proposes new `consolidate-pair:` facets when a
+durable + helpful pair shows up; Phase 88 decays old facets
+when their pair weakens. But a real operator workflow shifts
+continuously — `(auth, jwt)` dominates one quarter, then
+`(auth, sessions)` the next. Today the actuator handles this
+as **two independent operator decisions**: Phase 88 proposes
+decay of the old facet, Phase 87 proposes the new one.
+Nothing tells the operator they're logically linked.
+
+Phase 92 adds opt-in **pattern-driven supersession**: when
+an existing applied `consolidate-pair:{A}+{B}` facet's pair
+has decayed below the Phase 88 floor AND a new pair
+`(A, C)` sharing one endpoint has strengthened above the
+Phase 87 floor (both endpoints helpful), the consolidation
+pass files the `RemoveList` + `AppendList` proposals
+**linked by metadata** so the operator-facing surface
+presents them as a single supersession decision.
+
+- **Opt-in, off by default.** With
+  `[persona_consolidation].enable_supersession = false`
+  (the default) the Phase 87 / Phase 88 proposal flow is
+  byte-identical to pre-Phase-92.
+- **Shared-endpoint detection.** The old pair `(A, B)` and
+  the new pair `(A, C)` must share exactly one endpoint —
+  conservative, deterministic, fires only on clear
+  "replacement" relationships. Pairs that drift to
+  unrelated `(C, D)` clusters are not supersessions; the
+  Phase 87/88 flow handles those as two phases.
+- **Linked, not atomic.** Each half is filed as a separate
+  proposal on the existing Phase 70 chain (no new proposal
+  kind, no chain-schema migration). The
+  `supersedes_proposal_id` field on `ProposedPersonaDelta`
+  carries the cross-link: the `AppendList`-side points at
+  the `RemoveList`-side and vice versa. The operator can
+  still approve one half and reject the other (operator
+  flexibility); the linkage is **operator-visible context**
+  for grouping, not a chain-level atomic primitive.
+- **Reuses Phase 87's LLM phraser.** The new facet's prose
+  comes from the same `PairPhraser` Phase 87 already uses;
+  no second LLM dependency. Per-candidate phrasing failure
+  → skip that supersession this cycle (the facet stays via
+  the standard Phase 87/88 flow on a future cycle).
+
+Enable it in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[persona_consolidation]
+enabled = true
+enable_supersession = true   # optional, default false
+# ... other Phase 87 knobs ...
+```
+
+**What you'll see.** Each supersession produces TWO chain
+entries (counted as `filed = 2` on the surface; the
+`superseded` counter on `aivyx learning` shows the
+supersession event count). The `RemoveList` half's `reason`
+cites the new proposal as the replacement; the
+`AppendList` half's `reason` cites the old proposal as the
+one being superseded. Both appear in the **Proposals** pane
+with their normal per-proposal `Revert` actions; future
+Web UI work will visually group them.
+
 ## Reflection auto-loop (Phase 70)
 
 Phase 70 closes the self-learning half of **P14 Persona**: the

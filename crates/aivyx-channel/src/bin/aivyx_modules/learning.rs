@@ -267,8 +267,16 @@ fn render_insights(
     );
     match persona_consolidation {
         Some(c) if c.filed > 0 => {
+            // Phase 92 — surface the supersession count
+            // when non-zero. Each supersession event lands
+            // two chain entries already included in `filed`.
+            let supersede_note = if c.superseded > 0 {
+                format!(", superseded {}", c.superseded)
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "  {} filed last cycle\n",
+                "  {} filed last cycle{supersede_note}\n",
                 c.filed,
             ));
             for (a, b) in &c.pairs {

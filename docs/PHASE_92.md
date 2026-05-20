@@ -321,51 +321,113 @@ context, not a chain-level atomic primitive.
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Linking two existing proposals by
+  metadata touched no locked technical-contract decision.
+  The Phase 70 proposal chain already supports multi-
+  proposal flows; Phase 92 tags some of them as belonging
+  together. Streak: **39 consecutive phases** (was 38).
+- **PRODUCT.md — held.** P14 (Persona) is delivered; this
+  is a UX refinement on its proposal pipeline. No new
+  commitment, none weakened; the operator-facing contract
+  was *strengthened* (the Soul's proposal flow groups
+  linked decisions). Streak: **32 consecutive phases**
+  (was 31).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  detector + the proposal-chain field + the reflection-
+  scheduler integration + the config knob all live in
+  `aivyx-channel` / `aivyx-config`. The proposal chain's
+  `PersonaProposal` + `ProposedPersonaDelta` types are in
+  `aivyx-channel`. No new `AuditTag`. Streak: **40
+  consecutive phases** — new project record, beating
+  Phase 91's 39.
+
+**Test count — `+10`** (workspace `1643 → 1653`). Squarely
+inside the predicted `+6-10` band. Breakdown:
+
+- Config knob `+3` (default false even when consolidation
+  enabled; explicit-true wins; supersession-only-key
+  section builds Some via the any-field-set predicate).
+- Field + detector `+6` (`parse_pair_proposal_id`
+  round-trip + malformed rejection; `detect_supersession`
+  shared-endpoint fires; no-shared-endpoint skipped;
+  durable-old-pair skipped; unhelpful-new-endpoint
+  skipped; `enable_supersession = false` short-circuits).
+- Reflection-scheduler integration `+1` (one multi-cycle
+  scenario covering filed → idempotent dedup; both linked
+  halves carry cross-referenced `supersedes_proposal_id`;
+  `superseded = 1, filed = 2` on the stat).
+
+**Scope — every planned surface shipped exactly as scoped.**
+The opt-in knob; the optional `supersedes_proposal_id`
+field on `ProposedPersonaDelta` with full HMAC-chain wire-
+compat (the `serde_jcs` canonicalization respects
+`skip_serializing_if` — absent fields don't appear in the
+canonical bytes, so old entries still verify and fresh
+`None` round-trips identically to pre-Phase-92); the pure
+`detect_supersession` detector with shared-endpoint
+detection + Phase 87 double-gate inheritance + Phase 88
+floor reuse; the reflection-pass wiring that runs
+supersession BEFORE the standard selector and excludes
+already-filed canonical ids from the selector's
+candidates; the `superseded: u32` counter on the Phase 78
+surface stat with IPC wire-compat; the binary's threading
+of `persona_log` + `pair_below_affinity` from the
+`[persona_lifecycle]` config — all landed as the open-doc
+described. The `RemoveList` side uses a distinct
+`supersede-remove:<old_id>` id (rather than reusing the
+old `consolidate-pair:` id) so it can't collide with a
+future re-proposal of the same canonical pair. Both
+halves carry the cross-linked `supersedes_proposal_id`
+field. Zero clippy warnings. Zero new workspace deps.
 
 ## Exit criteria
 
-- [ ] `[persona_consolidation].enable_supersession: bool`
-  (default `false`) — Task 2.
-- [ ] `PersonaProposal` gains
+- [x] `[persona_consolidation].enable_supersession: bool`
+  (default `false`) — Task 2 (commit `a5b2abb`).
+- [x] `ProposedPersonaDelta` gains
   `supersedes_proposal_id: Option<String>` with
   `#[serde(default, skip_serializing_if = "Option::is_none")]`;
-  old proposal-chain entries decode unchanged — Task 3.
-- [ ] `detect_supersession(...)` pure function in
+  old proposal-chain entries decode unchanged — Task 3
+  (commit `5d36b80`). Field placed on
+  `ProposedPersonaDelta` (the chained type) rather than on
+  `PersonaProposal` (the derived view) for single source
+  of truth; surface reads it via
+  `proposed_op.supersedes_proposal_id`.
+- [x] `detect_supersession(...)` pure function in
   `persona_consolidation` module: shared-endpoint match,
   pair-floor + helpfulness gates, deterministic ranking
-  on ambiguity — Task 3.
-- [ ] Unit tests on the pure detector: shared-endpoint
+  on ambiguity — Task 3 (commit `5d36b80`).
+- [x] Unit tests on the pure detector: shared-endpoint
   fires; no-overlap doesn't; helpfulness gate enforced;
-  duplicate-detection deterministic — Task 3.
-- [ ] `run_persona_consolidation_pass` files linked
-  proposals when `enable_supersession = true`; the
-  `RemoveList`-side and `AppendList`-side both carry the
-  shared `supersedes_proposal_id` for operator-side
-  resolution; the standard `consolidate(...)` selector
-  skips the superseded pairs to avoid duplicate filing —
-  Task 4.
-- [ ] `PersonaConsolidationStat` gains
-  `superseded: u32` with IPC wire-compat — Task 4.
-- [ ] Integration test: existing applied facet + weakening
+  duplicate-detection deterministic — Task 3 (commit
+  `5d36b80`).
+- [x] `run_persona_consolidation_pass` files linked
+  proposals when `enable_supersession = true`; both
+  halves carry the cross-linked `supersedes_proposal_id`;
+  the standard `consolidate(...)` selector skips the
+  superseded pairs to avoid duplicate filing — Task 4
+  (commit `0c7cb1c`).
+- [x] `PersonaConsolidationStat` gains
+  `superseded: u32` with IPC wire-compat
+  (`#[serde(default)]`) — Task 4 (commit `0c7cb1c`).
+- [x] Integration test: existing applied facet + weakening
   pair + strengthening shared-endpoint pair → cycle 1
   files two linked proposals; idempotent on cycle 2 —
-  Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  Task 4 (commit `0c7cb1c`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to thirty-nine.
-- [ ] PRODUCT.md streak extends to thirty-two.
-- [ ] Production-core streak extends to forty (new
+- [x] DESIGN.md streak extends to thirty-nine.
+- [x] PRODUCT.md streak extends to thirty-two.
+- [x] Production-core streak extends to forty (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+6-10; per the
-  converged calibration law — knob on existing block
-  (≈ +1-2) + new pure detector (≈ +3-5) + IPC wire-compat
-  (≈ +1) + integration (≈ +1-2); no new module, no new
-  `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+10`, squarely inside
+  the predicted `+6-10` band).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

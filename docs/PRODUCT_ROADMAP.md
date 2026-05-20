@@ -1453,6 +1453,38 @@ respond to it. Closing the gap is the inflection point between
   delta `+14` (workspace 1629 → 1643), inside the predicted
   `+9-15` band. Zero new workspace deps.
 
+- **Phase 92 (Pattern-Driven Supersession, shipped
+  2026-05-21).** Closes the longest-running Persona-actuator
+  deferral — the Phase 70 proposal-supersession deferral, 22
+  phases old, deferred again at Phase 87 and Phase 88. After
+  Phases 87 + 88 closed the construction + decay arcs, the
+  Soul actuator handled a shifting co-occurrence pair
+  `(A, B) → (A, C)` as TWO independent operator decisions
+  (Phase 88 proposing decay of the old facet, Phase 87
+  proposing the new one). Phase 92 introduces opt-in
+  shared-endpoint supersession: when the conditions align,
+  the `RemoveList` + `AppendList` proposals are filed
+  **linked by metadata** so the operator-facing surface
+  presents them as a single supersession decision. **No new
+  product commitment**, none weakened; the operator-facing
+  contract is *strengthened* (the Soul's proposal flow
+  groups linked decisions). Single new `enable_supersession`
+  knob on the existing `[persona_consolidation]` block
+  (default `false`). Reuses Phase 87's `PairPhraser`;
+  reuses the existing Phase 70 proposal chain (no new
+  proposal kind, no chain-schema migration); new optional
+  `supersedes_proposal_id: Option<String>` field on
+  `ProposedPersonaDelta` with full wire-compat via the
+  Phase 84 / Phase 91 `#[serde(default, skip_serializing_
+  if = "...")]` shape. Each half remains independently
+  `Revert`-able. Streak all three correct: DESIGN.md →
+  39, PRODUCT.md → **32**, lib.rs → **40** (new project
+  record, beating Phase 91's 39) — detector + field + pass
+  integration all in `aivyx-channel`, config in
+  `aivyx-config`, no new AuditTag. Test count delta `+10`
+  (workspace 1643 → 1653), squarely inside the predicted
+  `+6-10` band. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

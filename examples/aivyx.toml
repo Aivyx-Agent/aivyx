@@ -1193,12 +1193,31 @@ parent_role = "researcher"
 # min_samples = 3              # optional, default 3
 # min_topic_helpfulness = 0.0  # optional, default 0.0
 # max_proposals_per_cycle = 3  # optional, default 3
+# enable_supersession = true   # optional, default false — Phase 92
+#
+# Phase 92: when `enable_supersession = true`, the
+# consolidation pass also detects SUPERSESSION: an existing
+# applied `consolidate-pair:{A}+{B}` facet whose pair has
+# decayed (per the Phase 88 `[persona_lifecycle].decay_pair_
+# below_affinity` floor) PLUS a new candidate pair `(A, C)`
+# sharing one endpoint that strengthens past the Phase 87
+# construction floor (both endpoints helpful) → file two
+# LINKED proposals (a `RemoveList` for the old facet + an
+# `AppendList` for the new one), each carrying a
+# `supersedes_proposal_id` cross-link so the operator-
+# facing surface presents them as a single supersession
+# decision. Each half is still independently `Revert`-able.
+# With `enable_supersession = false` (the default) the
+# Phase 87 / Phase 88 proposal flow is byte-identical to
+# pre-Phase-92.
 #
 # To SEE it: daemon log `aivyx persona-consolidation: schedule
 # "X" — filed N` each cycle that fires (with
-# `(LLM unavailable)` appended when the LLM is unreachable);
+# `(LLM unavailable)` appended when the LLM is unreachable;
+# `(superseded=K)` appended when supersession fires);
 # `aivyx learning` / Web UI "Learning" tab show a
 # "Pattern-driven Persona proposals (last cycle, opt-in)"
-# block; the proposals themselves appear in `aivyx persona
-# proposals` like every other Phase 70 / Phase 81 / Phase 85
-# proposal.
+# block (with a "superseded N" suffix on the count line
+# when supersession fires); the proposals themselves
+# appear in `aivyx persona proposals` like every other
+# Phase 70 / Phase 81 / Phase 85 proposal.
