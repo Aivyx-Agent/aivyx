@@ -1357,6 +1357,7 @@ mod tests {
                             value: "operator-edited preference".into(),
                         },
                         reason: None,
+                        supersedes_proposal_id: None,
                     },
                 },
             },

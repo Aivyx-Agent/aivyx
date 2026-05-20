@@ -3289,6 +3289,7 @@ mod tests {
                 value: "prefer terse".into(),
             },
             reason: Some("operator confirmed".into()),
+            supersedes_proposal_id: None,
         }
     }
 
@@ -3349,6 +3350,7 @@ mod tests {
                 value: "operator-edited preference".into(),
             },
             reason: None,
+            supersedes_proposal_id: None,
         };
         resolve_persona_proposal(
             Some(proposal_log.as_ref()),

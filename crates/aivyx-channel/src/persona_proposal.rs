@@ -65,6 +65,9 @@ pub struct PersonaProposal {
     /// The proposal the agent originally generated. Distinct
     /// from `Approved::applied_op` so the audit trail captures
     /// any operator modification at approval time (Q3(a)).
+    /// Phase 92's `supersedes_proposal_id` linkage lives on
+    /// the inner `ProposedPersonaDelta` (chained) — the
+    /// surface reads it via `proposed_op.supersedes_proposal_id`.
     pub proposed_op: ProposedPersonaDelta,
     /// Current status, derived from the latest chain entry
     /// referencing this proposal's `id`.
@@ -678,6 +681,7 @@ mod tests {
                 value: "prefer terse responses".into(),
             },
             reason: Some("operator confirmed preference 3 turns in a row".into()),
+            supersedes_proposal_id: None,
         }
     }
 

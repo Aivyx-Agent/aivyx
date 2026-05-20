@@ -758,6 +758,20 @@ pub struct ProposedPersonaDelta {
     /// HMAC-chained body — kept on the proposal record only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Phase 92 — when this proposal is one half of a linked
+    /// supersession pair (Phase 92 pattern-driven
+    /// supersession), this field carries the OTHER half's
+    /// `proposal_id`. The `AppendList`-side (the new facet)
+    /// points at the `RemoveList`-side (the old facet); the
+    /// `RemoveList`-side points back at the `AppendList`-side.
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]`
+    /// — full wire-compat (Phase 84 / Phase 91 precedent):
+    /// `None` serializes without the field; old proposal-
+    /// chain JSON decodes unchanged; the HMAC over the JCS
+    /// bytes verifies against old entries because absent
+    /// fields don't appear in the canonical bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_proposal_id: Option<String>,
 }
 
 impl ProposedPersonaDelta {
@@ -1062,6 +1076,7 @@ mod tests {
                 value: "never auto-commit".into(),
             },
             reason: Some("operator reverted three auto-commits".into()),
+            supersedes_proposal_id: None,
         };
         assert!(good.validate().is_ok());
 
@@ -1071,6 +1086,7 @@ mod tests {
                 value: "nope".into(),
             },
             reason: None,
+            supersedes_proposal_id: None,
         };
         assert!(bad.validate().is_err());
     }

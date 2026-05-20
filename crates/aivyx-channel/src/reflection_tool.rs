@@ -1112,6 +1112,7 @@ mod tests {
                     value: "prefer terse".into(),
                 },
                 reason: Some("operator revised 3 verbose answers".into()),
+                supersedes_proposal_id: None,
             }],
         };
         let json = serde_json::to_string(&record).unwrap();

@@ -278,6 +278,7 @@ mod tests {
                     value: "v".into(),
                 },
                 reason: Some("net +3".into()),
+                supersedes_proposal_id: None,
             },
             status: ProposalStatus::Pending,
         }

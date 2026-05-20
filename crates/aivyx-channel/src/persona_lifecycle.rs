@@ -291,6 +291,7 @@ impl PersonaLifecycleAction {
                         value: value.clone(),
                     },
                     reason: Some(self.reason.clone()),
+                    supersedes_proposal_id: None,
                 },
             )],
             LifecycleActionKind::Consolidate {
@@ -317,6 +318,7 @@ impl PersonaLifecycleAction {
                                  facet {merged:?})",
                                 self.reason,
                             )),
+                            supersedes_proposal_id: None,
                         },
                     )
                 })

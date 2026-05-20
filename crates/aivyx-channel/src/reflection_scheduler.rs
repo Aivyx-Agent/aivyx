@@ -3186,6 +3186,7 @@ mod tests {
                     value: "already filed".into(),
                 },
                 reason: None,
+                supersedes_proposal_id: None,
             },
         )
         .await

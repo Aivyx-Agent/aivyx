@@ -224,6 +224,10 @@ pub fn proposals_from_tally(
                          topic '{topic}' (no LLM judgement; the \
                          operator decides)."
                     )),
+                    // Phase 92 — recall-feedback proposals never
+                    // supersede; only the consolidation pass
+                    // files supersession-linked pairs.
+                    supersedes_proposal_id: None,
                 },
             }
         })

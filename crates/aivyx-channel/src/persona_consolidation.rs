@@ -117,6 +117,240 @@ pub fn pair_proposal_id(a: &str, b: &str) -> String {
     format!("consolidate-pair:{lo}+{hi}")
 }
 
+/// Phase 92 — parse an existing `consolidate-pair:{lo}+{hi}`
+/// proposal id back into its `(lo, hi)` topic pair. Returns
+/// `None` for any id that isn't in the canonical form (e.g.
+/// `recall-fb:{topic}` or arbitrary operator strings).
+pub fn parse_pair_proposal_id(
+    proposal_id: &str,
+) -> Option<(String, String)> {
+    let rest = proposal_id.strip_prefix("consolidate-pair:")?;
+    let (lo, hi) = rest.split_once('+')?;
+    if lo.is_empty() || hi.is_empty() {
+        return None;
+    }
+    Some((lo.to_string(), hi.to_string()))
+}
+
+/// Phase 92 — one detected supersession opportunity. The
+/// reflection-cron pass files two linked proposals from each
+/// candidate: a `RemoveList` for the old facet (referenced
+/// by `old_proposal_id` + `old_facet_value`) and an
+/// `AppendList` for the new facet (the new pair phrased by
+/// the Phase 87 `PairPhraser`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SupersessionCandidate {
+    /// The original `consolidate-pair:{A}+{B}` proposal id
+    /// the operator approved into the chain.
+    pub old_proposal_id: String,
+    /// The `(A, B)` topic pair the operator-approved facet
+    /// was built from.
+    pub old_pair: (String, String),
+    /// The current `AppendList` value of the approved facet
+    /// (needed for the `RemoveList`-side payload).
+    pub old_facet_value: String,
+    /// The new `(A, C)` topic pair (sharing one endpoint
+    /// with `old_pair`) that has strengthened past the
+    /// Phase 87 floor.
+    pub new_pair: (String, String),
+    /// The canonical `consolidate-pair:{lo}+{hi}` id that
+    /// the new pair will be filed under (the lexically
+    /// sorted form).
+    pub new_proposal_id: String,
+    /// The new pair's decayed affinity at detection time —
+    /// for the operator-visible `reason` line.
+    pub new_affinity: f32,
+    /// The new pair's smaller endpoint helpfulness — same
+    /// shape as `ConsolidationCandidate.helpfulness_min`,
+    /// for the proposal `reason` line.
+    pub new_helpfulness_min: f32,
+}
+
+/// Phase 92 Task 3 — the pure supersession detector. Walks
+/// applied `consolidate-pair:` facets on the Persona chain;
+/// for each whose underlying pair has decayed below the
+/// `[persona_lifecycle].decay_pair_below_affinity` floor,
+/// scans the Phase 83 ledger for a new pair `(A, C)` or
+/// `(B, C)` sharing one endpoint that strengthens past
+/// `min_affinity`, has at least `min_samples` observations,
+/// and whose endpoints clear `min_topic_helpfulness` on the
+/// Phase 82 ledger. The strongest such match (by
+/// `(affinity desc, helpfulness_min desc, (lo, hi) asc)`)
+/// per old facet is emitted as a candidate.
+///
+/// Deterministic; best-effort (any ledger / chain error
+/// drops that candidate; the cycle continues).
+///
+/// Inputs:
+/// - `applied_pair_facets`: every applied (not removed,
+///   not rejected) `consolidate-pair:` facet, derived from
+///   the Persona chain. Caller flattens to
+///   `(proposal_id, facet_value, (A, B))` triples — keeps
+///   this function chain-agnostic.
+/// - The two ledgers + the proposal log.
+/// - `config`: the Phase 87 block; we read the Phase 87
+///   construction floors here (the Phase 88 decay floor
+///   lives on `[persona_lifecycle]`; we pass it in as
+///   `pair_below_affinity`).
+pub async fn detect_supersession(
+    applied_pair_facets: &[(String, String, (String, String))],
+    co_ledger: &PersistentCooccurrenceLedger,
+    helpfulness: &PersistentHelpfulnessLedger,
+    proposal_log: &PersistentPersonaProposalLog,
+    config: &PersonaConsolidationConfig,
+    pair_below_affinity: f32,
+    now_secs: u64,
+) -> Vec<SupersessionCandidate> {
+    if !config.enabled || !config.enable_supersession {
+        return Vec::new();
+    }
+    let ranked = match co_ledger.ranked(now_secs).await {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out: Vec<SupersessionCandidate> = Vec::new();
+    // Track new-pair canonical ids already proposed (Phase 70
+    // dedup) so we don't pick a new pair that's already in
+    // the chain — the Phase 87 selector would also have
+    // de-duplicated, but the supersession detector runs
+    // BEFORE that selector and shouldn't introduce a row
+    // that the standard path would have skipped.
+    let mut used_new_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for (old_id, old_value, (a, b)) in applied_pair_facets {
+        // Gate 1: the old pair must have decayed below the
+        // Phase 88 floor — otherwise nothing is being
+        // superseded.
+        let old_affinity = match co_ledger
+            .pair_score(a, b, now_secs)
+            .await
+        {
+            Ok(Some(entry)) => entry.ewma_score,
+            // No ledger entry → the pair has been pruned
+            // (Phase 83's 90-day untouched rule) which counts
+            // as fully decayed; allow supersession.
+            Ok(None) => 0.0,
+            Err(_) => continue,
+        };
+        if old_affinity >= pair_below_affinity {
+            continue;
+        }
+
+        // Gate 2: scan the ranked ledger for the strongest
+        // shared-endpoint candidate that clears the Phase 87
+        // construction floor + the helpfulness gate.
+        let mut best: Option<SupersessionCandidate> = None;
+        for (lo, hi, entry) in &ranked {
+            if entry.ewma_score < config.min_affinity {
+                // ranked is score-descending → nothing below
+                // here will qualify; stop scanning.
+                break;
+            }
+            if entry.samples < config.min_samples {
+                continue;
+            }
+            // Shared-endpoint condition (Q1a): one of (lo,
+            // hi) must equal one of (A, B) AND the other
+            // endpoint must differ (otherwise it's the same
+            // pair — not a supersession).
+            let (new_a, new_c) = if lo == a {
+                if hi == b {
+                    continue; // same pair
+                }
+                (lo, hi)
+            } else if lo == b {
+                if hi == a {
+                    continue; // same pair, swapped
+                }
+                (lo, hi)
+            } else if hi == a {
+                if lo == b {
+                    continue;
+                }
+                (hi, lo)
+            } else if hi == b {
+                if lo == a {
+                    continue;
+                }
+                (hi, lo)
+            } else {
+                continue;
+            };
+
+            // Helpfulness double-gate on both endpoints
+            // (Q1a from Phase 87 — same posture).
+            let sa = helpfulness
+                .topic_score(new_a, now_secs)
+                .await
+                .ok()
+                .flatten();
+            let sc = helpfulness
+                .topic_score(new_c, now_secs)
+                .await
+                .ok()
+                .flatten();
+            let (Some(ea), Some(ec)) = (sa, sc) else {
+                continue;
+            };
+            if ea.ewma_score < config.min_topic_helpfulness
+                || ec.ewma_score < config.min_topic_helpfulness
+            {
+                continue;
+            }
+            let helpfulness_min =
+                ea.ewma_score.min(ec.ewma_score);
+
+            // Dedup: the proposal id must not already exist
+            // in the chain (any status).
+            let new_id = pair_proposal_id(new_a, new_c);
+            if used_new_ids.contains(&new_id) {
+                continue;
+            }
+            if proposal_log.get(&new_id).is_some() {
+                continue;
+            }
+
+            // Stable ordering: prefer higher affinity, then
+            // higher helpfulness-min, then lexically-sorted
+            // (lo, hi). `ranked` is already affinity-desc so
+            // the FIRST shared-endpoint match is the
+            // strongest by affinity; we keep `best` and only
+            // replace if a later one has strictly higher
+            // affinity (which can't happen since `ranked` is
+            // sorted) OR same affinity but better
+            // helpfulness-min.
+            let candidate = SupersessionCandidate {
+                old_proposal_id: old_id.clone(),
+                old_pair: (a.clone(), b.clone()),
+                old_facet_value: old_value.clone(),
+                new_pair: (new_a.clone(), new_c.clone()),
+                new_proposal_id: new_id,
+                new_affinity: entry.ewma_score,
+                new_helpfulness_min: helpfulness_min,
+            };
+            best = match best {
+                None => Some(candidate),
+                Some(prev) => {
+                    if (candidate.new_affinity, candidate.new_helpfulness_min)
+                        > (prev.new_affinity, prev.new_helpfulness_min)
+                    {
+                        Some(candidate)
+                    } else {
+                        Some(prev)
+                    }
+                }
+            };
+        }
+        if let Some(c) = best {
+            used_new_ids.insert(c.new_proposal_id.clone());
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Phase 87 Task 3 — the pure-ish selector. Reads the two
 /// ledgers + the proposal log, applies the Q1a conservative
 /// double-gate, dedups against the chain, sorts, caps. Output
@@ -272,6 +506,11 @@ pub async fn consolidate(
                 value: value.to_string(),
             },
             reason: Some(reason),
+            // Phase 92 — non-supersession standard consolidation
+            // proposal; Task 4's supersession path threads
+            // `Some(other_proposal_id)` here when filing the
+            // linked pair.
+            supersedes_proposal_id: None,
         };
         match proposal_log
             .append_pending(
@@ -479,6 +718,39 @@ mod tests {
         );
     }
 
+    /// Phase 92 — `parse_pair_proposal_id` is the inverse of
+    /// `pair_proposal_id` for the canonical shape; rejects
+    /// every non-canonical id (recall-fb provenance, free-
+    /// form operator strings, malformed prefixes).
+    #[test]
+    fn parse_pair_proposal_id_round_trips_and_rejects_malformed() {
+        assert_eq!(
+            parse_pair_proposal_id(
+                "consolidate-pair:deploy+rollback"
+            ),
+            Some(("deploy".into(), "rollback".into()))
+        );
+        // Reject every non-matching prefix.
+        assert_eq!(
+            parse_pair_proposal_id("recall-fb:deploy"),
+            None
+        );
+        assert_eq!(parse_pair_proposal_id("seed"), None);
+        // Reject malformed (missing separator / empty halves).
+        assert_eq!(
+            parse_pair_proposal_id("consolidate-pair:deploy"),
+            None
+        );
+        assert_eq!(
+            parse_pair_proposal_id("consolidate-pair:+rollback"),
+            None
+        );
+        assert_eq!(
+            parse_pair_proposal_id("consolidate-pair:deploy+"),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn selector_filters_floor_samples_and_helpfulness() {
         let dir = tmp_dir("filter");
@@ -627,6 +899,7 @@ mod tests {
                     value: "previously proposed".into(),
                 },
                 reason: None,
+                supersedes_proposal_id: None,
             },
         )
         .await
@@ -863,6 +1136,415 @@ mod tests {
             !stat.llm_unavailable,
             "no candidates is the quiet case — not LLM down"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 92 — supersession detector ----------------------
+
+    fn supersession_cfg() -> PersonaConsolidationConfig {
+        PersonaConsolidationConfig {
+            enabled: true,
+            min_affinity: 1.0,
+            min_samples: 2,
+            min_topic_helpfulness: 0.0,
+            max_proposals_per_cycle: 3,
+            enable_supersession: true,
+        }
+    }
+
+    /// Shared-endpoint case (Q1a): old pair `(A, B)` has
+    /// decayed below the Phase 88 floor; new pair `(A, C)`
+    /// shares endpoint A and is above the Phase 87 floor
+    /// with both endpoints helpful → ONE supersession
+    /// candidate fires.
+    #[tokio::test]
+    async fn detect_supersession_shared_endpoint_fires() {
+        let dir = tmp_dir("super-shared");
+        let store = open_store(&dir, 94).await;
+        let cooc = PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        );
+        let help = PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        );
+        let plog = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"super-shared-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let now = 1_000_000u64;
+        // Old pair (auth, jwt): seeded ONCE, decayed to a
+        // negligible affinity by passing `pair_below_affinity
+        // = 1.0` while the ledger never reached that floor.
+        cooc.record_window(
+            &[(("auth".into(), "jwt".into()), 0.3)],
+            now,
+        )
+        .await
+        .unwrap();
+        // New pair (auth, sessions): strong + sampled twice.
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 5.0)],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 0.001)],
+            now,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("sessions".into(), 1.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![(
+            "consolidate-pair:auth+jwt".to_string(),
+            "you work auth with jwt".to_string(),
+            ("auth".to_string(), "jwt".to_string()),
+        )];
+
+        let out = detect_supersession(
+            &applied,
+            &cooc,
+            &help,
+            &plog,
+            &supersession_cfg(),
+            1.0,
+            now,
+        )
+        .await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].old_proposal_id,
+            "consolidate-pair:auth+jwt"
+        );
+        assert_eq!(
+            out[0].new_proposal_id,
+            "consolidate-pair:auth+sessions"
+        );
+        assert_eq!(
+            out[0].new_pair,
+            ("auth".into(), "sessions".into())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No shared endpoint → no supersession. The new strong
+    /// pair `(C, D)` is the Phase 87 standard-selector's job;
+    /// supersession only handles pairs that genuinely
+    /// replace an existing facet.
+    #[tokio::test]
+    async fn detect_supersession_no_shared_endpoint_skipped() {
+        let dir = tmp_dir("super-noshare");
+        let store = open_store(&dir, 95).await;
+        let cooc = PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        );
+        let help = PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        );
+        let plog = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"super-noshare-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let now = 1_000_000u64;
+        cooc.record_window(
+            &[(("auth".into(), "jwt".into()), 0.3)],
+            now,
+        )
+        .await
+        .unwrap();
+        // New strong pair shares NEITHER endpoint with
+        // (auth, jwt).
+        cooc.record_window(
+            &[(("frontend".into(), "css".into()), 5.0)],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("frontend".into(), "css".into()), 0.001)],
+            now,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("frontend".into(), 1.0),
+                ("css".into(), 1.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![(
+            "consolidate-pair:auth+jwt".to_string(),
+            "auth+jwt facet".to_string(),
+            ("auth".to_string(), "jwt".to_string()),
+        )];
+
+        let out = detect_supersession(
+            &applied,
+            &cooc,
+            &help,
+            &plog,
+            &supersession_cfg(),
+            1.0,
+            now,
+        )
+        .await;
+        assert!(
+            out.is_empty(),
+            "no shared endpoint → not a supersession"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The old pair must be BELOW the decay floor; if it
+    /// remains durable, no supersession (Phase 88 wouldn't
+    /// decay it, and Phase 87 already proposes the new
+    /// shared-endpoint pair on its own).
+    #[tokio::test]
+    async fn detect_supersession_skipped_when_old_pair_still_durable()
+    {
+        let dir = tmp_dir("super-durable");
+        let store = open_store(&dir, 96).await;
+        let cooc = PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        );
+        let help = PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        );
+        let plog = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"super-durable-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let now = 1_000_000u64;
+        // Both pairs above the floor.
+        cooc.record_window(
+            &[
+                (("auth".into(), "jwt".into()), 5.0),
+                (("auth".into(), "sessions".into()), 5.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[
+                (("auth".into(), "jwt".into()), 0.001),
+                (("auth".into(), "sessions".into()), 0.001),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("sessions".into(), 1.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![(
+            "consolidate-pair:auth+jwt".to_string(),
+            "old facet".to_string(),
+            ("auth".to_string(), "jwt".to_string()),
+        )];
+
+        let out = detect_supersession(
+            &applied,
+            &cooc,
+            &help,
+            &plog,
+            &supersession_cfg(),
+            1.0,
+            now,
+        )
+        .await;
+        assert!(
+            out.is_empty(),
+            "old pair still durable → no supersession"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Helpfulness gate: the new pair's new endpoint must
+    /// be helpful. An unhelpful third topic blocks
+    /// supersession.
+    #[tokio::test]
+    async fn detect_supersession_skipped_when_new_endpoint_unhelpful()
+    {
+        let dir = tmp_dir("super-unhelpful");
+        let store = open_store(&dir, 97).await;
+        let cooc = PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        );
+        let help = PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        );
+        let plog = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"super-unhelpful-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let now = 1_000_000u64;
+        cooc.record_window(
+            &[(("auth".into(), "jwt".into()), 0.3)],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 5.0)],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 0.001)],
+            now,
+        )
+        .await
+        .unwrap();
+        // `sessions` is net-negative on helpfulness → fails
+        // the Phase 87 double-gate that the supersession
+        // detector also enforces.
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("sessions".into(), -1.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![(
+            "consolidate-pair:auth+jwt".to_string(),
+            "old facet".to_string(),
+            ("auth".to_string(), "jwt".to_string()),
+        )];
+
+        let out = detect_supersession(
+            &applied,
+            &cooc,
+            &help,
+            &plog,
+            &supersession_cfg(),
+            1.0,
+            now,
+        )
+        .await;
+        assert!(
+            out.is_empty(),
+            "unhelpful new endpoint → no supersession"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `enable_supersession = false` (the default) short-
+    /// circuits the detector entirely — the cycle never
+    /// considers supersession, byte-identical to pre-Phase-92.
+    #[tokio::test]
+    async fn detect_supersession_disabled_returns_empty() {
+        let dir = tmp_dir("super-off");
+        let store = open_store(&dir, 98).await;
+        let cooc = PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        );
+        let help = PersistentHelpfulnessLedger::new(
+            store.domain(KeyDomain::HelpfulnessLedger),
+        );
+        let plog = PersistentPersonaProposalLog::open(
+            store.domain(KeyDomain::PersonaProposals),
+            b"super-off-key".to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let now = 1_000_000u64;
+        cooc.record_window(
+            &[
+                (("auth".into(), "jwt".into()), 0.3),
+                (("auth".into(), "sessions".into()), 5.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+        cooc.record_window(
+            &[(("auth".into(), "sessions".into()), 0.001)],
+            now,
+        )
+        .await
+        .unwrap();
+        help.record_window(
+            &[
+                ("auth".into(), 1.0),
+                ("jwt".into(), 1.0),
+                ("sessions".into(), 1.0),
+            ],
+            now,
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![(
+            "consolidate-pair:auth+jwt".to_string(),
+            "old facet".to_string(),
+            ("auth".to_string(), "jwt".to_string()),
+        )];
+
+        let mut cfg = supersession_cfg();
+        cfg.enable_supersession = false;
+        let out = detect_supersession(
+            &applied,
+            &cooc,
+            &help,
+            &plog,
+            &cfg,
+            1.0,
+            now,
+        )
+        .await;
+        assert!(
+            out.is_empty(),
+            "knob off → no supersession (Phase 87/88 flow \
+             remains byte-identical)"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
