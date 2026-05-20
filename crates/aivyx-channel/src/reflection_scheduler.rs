@@ -1121,6 +1121,13 @@ async fn run_persona_lifecycle_pass(
             reinforced,
             recall_topic,
             helpfulness,
+            // Phase 88 — `pair` + `pair_affinity` resolution
+            // lands in Task 4 alongside the co-occurrence
+            // ledger thread-through. `None` here keeps the
+            // pass byte-identical to pre-Phase-88 for the
+            // intermediate Task 3 commit.
+            pair: None,
+            pair_affinity: None,
         });
     }
 

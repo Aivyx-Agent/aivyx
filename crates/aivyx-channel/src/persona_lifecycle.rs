@@ -161,6 +161,19 @@ pub struct HelpfulnessHint {
     pub samples: u32,
 }
 
+/// Phase 88 — the resolved durable Phase 83 co-occurrence
+/// affinity for a facet's underlying pair. Shape mirrors
+/// `HelpfulnessHint`. `None` on a `LifecycleFacet` means "no
+/// signal" (no `consolidate-pair:` provenance, no ledger, or
+/// the pair has been pruned) → the detector's pair arm sits
+/// out and the facet follows the Phase 81 age rule (or any
+/// `helpfulness` signal it carries).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PairAffinityHint {
+    pub affinity: f32,
+    pub samples: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LifecycleFacet {
     pub category: SoftCategory,
@@ -175,6 +188,15 @@ pub struct LifecycleFacet {
     /// `recall_topic` (decayed score + sample count), or
     /// `None` (no signal → age-only).
     pub helpfulness: Option<HelpfulnessHint>,
+    /// Phase 88 — the topic pair recovered from
+    /// `consolidate-pair:{lo}+{hi}` provenance, canonical
+    /// alphabetic order. `None` for any facet that didn't
+    /// come from the Phase 87 consolidation actuator.
+    pub pair: Option<(String, String)>,
+    /// Phase 88 — the resolved durable co-occurrence affinity
+    /// for `pair` (decayed score + sample count), or `None`
+    /// (no signal → the pair arm sits out).
+    pub pair_affinity: Option<PairAffinityHint>,
 }
 
 /// What a lifecycle action proposes. Both are expressible
@@ -428,6 +450,8 @@ impl PersonaLifecycleDetector {
                 let neg = self.config.decay_unhelpful_threshold;
                 let pos = -neg;
                 let min_s = self.config.decay_min_samples;
+                let pair_floor =
+                    self.config.decay_pair_below_affinity;
                 for f in &group {
                     let age =
                         now_secs.saturating_sub(f.origin_ts_secs);
@@ -442,17 +466,71 @@ impl PersonaLifecycleDetector {
                         f.helpfulness.is_some_and(|h| {
                             h.samples >= min_s && h.score >= pos
                         });
-                    // Trigger: actively-harmful → decay even
-                    // before the age horizon. Protect: an
-                    // age-old facet whose topic still clearly
-                    // helps is kept.
+                    // Phase 88 — symmetric pair-affinity gate.
+                    // A `consolidate-pair:` facet whose pair
+                    // has fallen below the floor has lost its
+                    // justification (the relationship is no
+                    // longer durable); a pair still at/above
+                    // the floor *protects* the facet from
+                    // age-decay (the relationship still holds,
+                    // so the identity still applies).
+                    let sustained_pair_decay =
+                        f.pair_affinity.is_some_and(|p| {
+                            p.affinity < pair_floor
+                        });
+                    let sustained_pair_strong =
+                        f.pair_affinity.is_some_and(|p| {
+                            p.affinity >= pair_floor
+                        });
+                    // Trigger: any sustained-negative signal
+                    // (helpfulness OR pair-affinity) fires
+                    // decay before the age horizon. Protect:
+                    // any sustained-positive signal blocks
+                    // age-decay. An unsignalled facet (no
+                    // `helpfulness` and no `pair_affinity`)
+                    // follows the pure Phase 81 age rule.
                     let decay = sustained_negative
+                        || sustained_pair_decay
                         || (age_eligible
-                            && !sustained_positive);
+                            && !sustained_positive
+                            && !sustained_pair_strong);
                     if !decay {
                         continue;
                     }
-                    let reason = if sustained_negative {
+                    let reason = if sustained_pair_decay {
+                        let p = f.pair_affinity.unwrap();
+                        let (lo, hi) = f
+                            .pair
+                            .as_ref()
+                            .map(|(a, b)| {
+                                (a.as_str(), b.as_str())
+                            })
+                            .unwrap_or(("?", "?"));
+                        if age_eligible {
+                            format!(
+                                "unreinforced for {age}s \
+                                 (> {}s) AND co-occurrence \
+                                 pair `{lo}` + `{hi}` decayed \
+                                 affinity {:.2} (below floor \
+                                 {pair_floor:.2}); \
+                                 relationship no longer \
+                                 durable",
+                                self.config.decay_max_age_secs,
+                                p.affinity,
+                            )
+                        } else {
+                            format!(
+                                "co-occurrence pair `{lo}` + \
+                                 `{hi}` decayed affinity \
+                                 {:.2} (below floor \
+                                 {pair_floor:.2}); \
+                                 relationship no longer \
+                                 durable — decayed before the \
+                                 age horizon",
+                                p.affinity,
+                            )
+                        }
+                    } else if sustained_negative {
                         let h = f.helpfulness.unwrap();
                         let topic = f
                             .recall_topic
@@ -651,6 +729,8 @@ mod tests {
             reinforced,
             recall_topic: None,
             helpfulness: None,
+            pair: None,
+            pair_affinity: None,
         }
     }
 
@@ -673,6 +753,40 @@ mod tests {
             recall_topic: Some(topic.to_string()),
             helpfulness: Some(HelpfulnessHint {
                 score,
+                samples,
+            }),
+            pair: None,
+            pair_affinity: None,
+        }
+    }
+
+    /// A facet with `consolidate-pair:` provenance + a resolved
+    /// pair-affinity hint (the Phase 88 path). Mirrors
+    /// `facet_h` for the helpfulness arm — the lint is a
+    /// test-helper accumulator (8 fields the detector reads),
+    /// same posture as `facet_h`'s shape.
+    #[allow(clippy::too_many_arguments)]
+    fn facet_p(
+        cat: SoftCategory,
+        v: &str,
+        origin_ts_secs: u64,
+        reinforced: bool,
+        a: &str,
+        b: &str,
+        affinity: f32,
+        samples: u32,
+    ) -> LifecycleFacet {
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        LifecycleFacet {
+            category: cat,
+            value: v.to_string(),
+            origin_ts_secs,
+            reinforced,
+            recall_topic: None,
+            helpfulness: None,
+            pair: Some((lo.to_string(), hi.to_string())),
+            pair_affinity: Some(PairAffinityHint {
+                affinity,
                 samples,
             }),
         }
@@ -1047,5 +1161,214 @@ mod tests {
         assert!(!out[0]
             .reason
             .contains("sustained low helpfulness"));
+    }
+
+    // ---- Phase 88 — pattern-driven decay -----------------------
+
+    /// A `consolidate-pair:` facet whose pair has fallen
+    /// **below** `decay_pair_below_affinity` is decayed even
+    /// before the age horizon — the relationship that
+    /// justified the identity no longer holds.
+    #[tokio::test]
+    async fn pair_affinity_below_floor_triggers_decay_early() {
+        let f = vec![
+            // Pad to the floor; these two never decay (young,
+            // no pair signal).
+            facet(SoftCategory::LearnedContext, "filler-1", 9_000, false),
+            facet(SoftCategory::LearnedContext, "filler-2", 9_000, false),
+            // Young pair facet with affinity 0.3 < floor 1.0
+            // → triggers decay before age.
+            facet_p(
+                SoftCategory::LearnedContext,
+                "deploy + rollback pair note",
+                9_000,
+                false,
+                "deploy",
+                "rollback",
+                0.3,
+                5,
+            ),
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "deploy + rollback pair note");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        // Reason cites the pair + the decayed affinity.
+        assert!(out[0]
+            .reason
+            .contains("co-occurrence pair `deploy` + `rollback`"));
+        assert!(out[0]
+            .reason
+            .contains("relationship no longer durable"));
+        assert!(out[0]
+            .reason
+            .contains("decayed before the age horizon"));
+    }
+
+    /// A still-durable pair (affinity ≥ floor) on an OLD
+    /// `consolidate-pair:` facet **protects** it from age-
+    /// decay — the symmetric move to Phase 85's helpfulness
+    /// protection.
+    #[tokio::test]
+    async fn pair_affinity_at_or_above_floor_protects_age_old_facet() {
+        let f = vec![
+            facet(SoftCategory::LearnedContext, "filler-1", 9_000, false),
+            facet(SoftCategory::LearnedContext, "filler-2", 9_000, false),
+            // Age 10000 > horizon 1000, unreinforced; would
+            // age-decay normally. Pair affinity 5.0 ≥ floor
+            // 1.0 → protected.
+            facet_p(
+                SoftCategory::LearnedContext,
+                "still durable",
+                0,
+                false,
+                "deploy",
+                "rollback",
+                5.0,
+                10,
+            ),
+            // Same shape but NO pair signal → still decays by
+            // age (control case: protection requires the
+            // signal to be present).
+            facet(
+                SoftCategory::LearnedContext,
+                "no pair signal",
+                0,
+                false,
+            ),
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        // Only the no-pair-signal facet decays; the protected
+        // one survives.
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "no pair signal");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        assert!(out[0].reason.contains("with no later"));
+    }
+
+    /// Absent `pair_affinity` falls back to exact Phase
+    /// 81/85 behaviour — a `consolidate-pair:` facet whose
+    /// ledger entry is gone (or whose ledger is absent
+    /// entirely) follows age-only.
+    #[tokio::test]
+    async fn absent_pair_affinity_falls_back_to_age_only() {
+        let f = vec![
+            facet(SoftCategory::LearnedContext, "filler-1", 9_000, false),
+            facet(SoftCategory::LearnedContext, "filler-2", 9_000, false),
+            // Pair set but pair_affinity = None (signal not
+            // resolved). YOUNG facet → no decay (no signal
+            // can early-trigger; age horizon not crossed).
+            LifecycleFacet {
+                category: SoftCategory::LearnedContext,
+                value: "no-signal young pair".into(),
+                origin_ts_secs: 9_000,
+                reinforced: false,
+                recall_topic: None,
+                helpfulness: None,
+                pair: Some(("deploy".into(), "rollback".into())),
+                pair_affinity: None,
+            },
+            // OLD pair-without-signal facet → age-decay still
+            // fires (protection requires a positive signal).
+            LifecycleFacet {
+                category: SoftCategory::LearnedContext,
+                value: "no-signal old pair".into(),
+                origin_ts_secs: 0,
+                reinforced: false,
+                recall_topic: None,
+                helpfulness: None,
+                pair: Some(("deploy".into(), "rollback".into())),
+                pair_affinity: None,
+            },
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "no-signal old pair");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        // Age-only reason — no pair signal to cite.
+        assert!(out[0].reason.contains("with no later"));
+        assert!(!out[0].reason.contains("co-occurrence pair"));
+    }
+
+    /// The pair arm and the helpfulness arm are independent.
+    /// A single facet only ever carries one provenance, but
+    /// the detector must still handle a hypothetical with
+    /// both signals: either sustained-negative fires decay;
+    /// either sustained-positive blocks age-decay.
+    #[tokio::test]
+    async fn pair_and_helpfulness_signals_combine_orwise() {
+        let f = vec![
+            facet(SoftCategory::LearnedContext, "filler-1", 9_000, false),
+            facet(SoftCategory::LearnedContext, "filler-2", 9_000, false),
+            // Both signals positive on an OLD facet →
+            // protected (either-strong-protects).
+            LifecycleFacet {
+                category: SoftCategory::LearnedContext,
+                value: "both strong old".into(),
+                origin_ts_secs: 0,
+                reinforced: false,
+                recall_topic: Some("deploy".into()),
+                helpfulness: Some(HelpfulnessHint {
+                    score: 5.0,
+                    samples: 10,
+                }),
+                pair: Some(("deploy".into(), "rollback".into())),
+                pair_affinity: Some(PairAffinityHint {
+                    affinity: 5.0,
+                    samples: 10,
+                }),
+            },
+            // Helpfulness positive (protect-eligible) but pair
+            // sub-floor (decay-eligible) on a YOUNG facet →
+            // decay still fires (sustained-negative wins over
+            // sustained-positive — the OR-trigger).
+            LifecycleFacet {
+                category: SoftCategory::LearnedContext,
+                value: "mixed young".into(),
+                origin_ts_secs: 9_000,
+                reinforced: false,
+                recall_topic: Some("deploy".into()),
+                helpfulness: Some(HelpfulnessHint {
+                    score: 5.0,
+                    samples: 10,
+                }),
+                pair: Some(("deploy".into(), "rollback".into())),
+                pair_affinity: Some(PairAffinityHint {
+                    affinity: 0.2,
+                    samples: 10,
+                }),
+            },
+        ];
+        let out = det(cfg(false, true, 2, 0.92, 1_000), false)
+            .detect(&f, 10_000)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0].kind {
+            LifecycleActionKind::Decay { value } => {
+                assert_eq!(value, "mixed young");
+            }
+            o => panic!("expected Decay, got {o:?}"),
+        }
+        assert!(out[0]
+            .reason
+            .contains("relationship no longer durable"));
     }
 }
