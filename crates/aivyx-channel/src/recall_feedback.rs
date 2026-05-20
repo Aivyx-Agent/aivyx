@@ -417,6 +417,7 @@ mod tests {
                     seq: *s,
                     score: 0.9,
                     cluster: false,
+                    judgment: None,
                 })
                 .collect(),
         }

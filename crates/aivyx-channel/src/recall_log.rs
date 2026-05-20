@@ -19,6 +19,26 @@ use serde::{Deserialize, Serialize};
 use aivyx_core::SessionId;
 use aivyx_storage::DomainHandle;
 
+/// Phase 91 — the 3-way LLM-judged per-recall classification
+/// (Q2a). Mirrors the operator-facing helpfulness shape of
+/// the existing structural signal at finer granularity:
+///   `Used`       — the response leveraged the recall.
+///   `Irrelevant` — the response ignored it; no harm done.
+///   `Hurt`       — the recall misled the response.
+///
+/// Stable string labels for JSON wire-format: `"used"`,
+/// `"irrelevant"`, `"hurt"` (snake_case, matching the rest of
+/// the IPC enum convention).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallJudgment {
+    Used,
+    Irrelevant,
+    Hurt,
+}
+
 /// One memory that auto-recall injected into a turn, with the
 /// cosine score it was ranked at.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +58,19 @@ pub struct RecallHit {
     /// its own expansion).
     #[serde(default)]
     pub cluster: bool,
+    /// Phase 91 — the LLM-judged classification, recorded by
+    /// the reflection-cron `run_recall_judgment_pass` when
+    /// `[recall_judgment]` is enabled. `None` for un-judged
+    /// hits (the pass is off, the cron hasn't run yet, or the
+    /// per-cycle cap rolled this hit to a later cycle).
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]`
+    /// keeps the recall-log + IPC round-trip back-compatible —
+    /// the established wire-compat shape Phase 84 introduced
+    /// with `cluster: bool`. No existing accumulator (Phase
+    /// 82 / 83 / 85 / 87 / 88) consumes this field in v1
+    /// (Q3a augment, not replace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment: Option<RecallJudgment>,
 }
 
 /// The recall that happened on one turn. `ts_secs` is wall
@@ -208,6 +241,7 @@ mod tests {
                 seq,
                 score,
                 cluster: false,
+                judgment: None,
             }],
         }
     }
@@ -279,6 +313,7 @@ mod tests {
             seq: 7,
             score: 0.9,
             cluster: true,
+            judgment: None,
         };
         let j = serde_json::to_string(&hit).unwrap();
         let back: RecallHit =
@@ -294,5 +329,61 @@ mod tests {
             !decoded.cluster,
             "missing `cluster` must default to false"
         );
+    }
+
+    /// Phase 91 — `judgment: Option<RecallJudgment>` wire-
+    /// compat. An old `RecallHit` row (Phase 84-style, no
+    /// `judgment` field) decodes as `judgment: None`; a
+    /// fresh row with `judgment: None` serializes WITHOUT
+    /// the field thanks to
+    /// `#[serde(skip_serializing_if = "Option::is_none")]`,
+    /// so an old reader still parses the new JSON.
+    #[test]
+    fn judgment_field_is_back_compat_with_phase_84_rows() {
+        // Pre-Phase-91 row (Phase 84 shape with `cluster`).
+        let legacy = r#"
+            {"topic":"deploy","seq":7,"score":0.9,
+             "cluster":false}
+        "#;
+        let decoded: RecallHit =
+            serde_json::from_str(legacy).unwrap();
+        assert!(
+            decoded.judgment.is_none(),
+            "missing `judgment` must default to None"
+        );
+
+        // A fresh row with `judgment: None` serializes
+        // without the field (skip_serializing_if). Old
+        // readers parse this as a pre-Phase-91 row.
+        let fresh = RecallHit {
+            topic: "deploy".into(),
+            seq: 8,
+            score: 0.8,
+            cluster: false,
+            judgment: None,
+        };
+        let json = serde_json::to_string(&fresh).unwrap();
+        assert!(
+            !json.contains("judgment"),
+            "judgment: None must be omitted from JSON: {json}"
+        );
+
+        // A fresh row with `judgment: Some(Used)` serializes
+        // the field with the snake_case label.
+        let judged = RecallHit {
+            topic: "deploy".into(),
+            seq: 9,
+            score: 0.7,
+            cluster: false,
+            judgment: Some(RecallJudgment::Used),
+        };
+        let json = serde_json::to_string(&judged).unwrap();
+        assert!(
+            json.contains("\"judgment\":\"used\""),
+            "snake_case judgment label expected: {json}"
+        );
+        let back: RecallHit =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(back.judgment, Some(RecallJudgment::Used));
     }
 }

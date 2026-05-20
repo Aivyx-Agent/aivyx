@@ -1637,6 +1637,7 @@ mod tests {
                         seq,
                         score: 0.9,
                         cluster: false,
+                        judgment: None,
                     }],
                 })
                 .await
@@ -1775,6 +1776,7 @@ mod tests {
                         seq,
                         score: 0.9,
                         cluster: false,
+                        judgment: None,
                     }],
                 })
                 .await
@@ -1930,12 +1932,14 @@ mod tests {
                             seq: d,
                             score: 0.9,
                             cluster: false,
+                            judgment: None,
                         },
                         RecallHit {
                             topic: "rollback".into(),
                             seq: r,
                             score: 0.8,
                             cluster: false,
+                            judgment: None,
                         },
                     ],
                 })
@@ -2105,12 +2109,14 @@ mod tests {
                         seq: a,
                         score: 0.9,
                         cluster: false,
+                        judgment: None,
                     },
                     RecallHit {
                         topic: "beta".into(),
                         seq: b,
                         score: 0.8,
                         cluster: true, // injected sibling
+                        judgment: None,
                     },
                 ],
             })
@@ -2139,12 +2145,14 @@ mod tests {
                         seq: c,
                         score: 0.9,
                         cluster: false,
+                        judgment: None,
                     },
                     RecallHit {
                         topic: "dee".into(),
                         seq: d,
                         score: 0.8,
                         cluster: false,
+                        judgment: None,
                     },
                 ],
             })

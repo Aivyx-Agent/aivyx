@@ -424,6 +424,11 @@ impl ContextProvider for SemanticMemoryContext {
                             // (self-policing) while Phase 77/82
                             // still measure them.
                             cluster: cl,
+                            // Phase 91 — unjudged at write
+                            // time. The reflection-cron pass
+                            // fills it in later when
+                            // `[recall_judgment]` is armed.
+                            judgment: None,
                         }
                     })
                     .collect(),
