@@ -1685,6 +1685,20 @@ pub struct PersonaConsolidationConfig {
     /// Phase 80 `max_per_cycle` precedent — actuators on the
     /// reflection cadence never flood the operator's queue.
     pub max_proposals_per_cycle: u32,
+    /// Phase 92 — when `true`, the consolidation pass also
+    /// detects **supersession**: an existing applied
+    /// `consolidate-pair:{A}+{B}` facet whose pair has
+    /// decayed (per the Phase 88 floor) plus a new candidate
+    /// pair `(A, C)` sharing one endpoint that strengthens
+    /// past the Phase 87 construction floor → file two linked
+    /// proposals (`RemoveList` for the old facet,
+    /// `AppendList` for the new one) sharing a
+    /// `supersedes_proposal_id` so the operator-facing
+    /// surface presents them as a single supersession
+    /// decision. Default `false` (opt-in); with `false` the
+    /// Phase 87 / Phase 88 flow is byte-identical to
+    /// pre-Phase-92.
+    pub enable_supersession: bool,
 }
 
 /// Default pair-affinity floor. Same value (and same
@@ -2451,6 +2465,8 @@ struct RawPersonaConsolidation {
     min_topic_helpfulness: Option<f32>,
     #[serde(default)]
     max_proposals_per_cycle: Option<u32>,
+    #[serde(default)]
+    enable_supersession: Option<bool>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -4829,7 +4845,8 @@ fn build_persona_consolidation_config(
         || raw.min_affinity.is_some()
         || raw.min_samples.is_some()
         || raw.min_topic_helpfulness.is_some()
-        || raw.max_proposals_per_cycle.is_some();
+        || raw.max_proposals_per_cycle.is_some()
+        || raw.enable_supersession.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4845,6 +4862,12 @@ fn build_persona_consolidation_config(
     let max_proposals_per_cycle = raw
         .max_proposals_per_cycle
         .unwrap_or(DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE);
+    // Phase 92 — supersession is opt-in even within an armed
+    // consolidation block. Validation is trivial (a boolean
+    // can't be invalid); the staged-config pattern means we
+    // don't reject an unarmed section either.
+    let enable_supersession =
+        raw.enable_supersession.unwrap_or(false);
 
     // Only an *armed* config must be coherent — a staged
     // (enabled = false) section can be partial.
@@ -4886,6 +4909,7 @@ fn build_persona_consolidation_config(
         min_samples,
         min_topic_helpfulness,
         max_proposals_per_cycle,
+        enable_supersession,
     }))
 }
 

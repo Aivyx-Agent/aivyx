@@ -430,6 +430,7 @@ mod tests {
             min_samples: 2,
             min_topic_helpfulness: 0.0,
             max_proposals_per_cycle: 3,
+            enable_supersession: false,
         }
     }
 

@@ -6564,6 +6564,59 @@ fn persona_consolidation_enabled_zero_cap_is_invalid() {
     drop(env);
 }
 
+/// Phase 92 — `enable_supersession` defaults to `false` even
+/// when the block is present and `enabled = true`. Operators
+/// running Phase 87 consolidation must explicitly opt into
+/// supersession.
+#[test]
+fn persona_consolidation_supersession_defaults_false() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_consolidation]\nenabled = true\n",
+        "pc-supersede-default",
+    );
+    let p = cfg.persona_consolidation.expect("section present");
+    assert!(p.enabled);
+    assert!(
+        !p.enable_supersession,
+        "supersession is opt-in; default false even when \
+         consolidation itself is enabled"
+    );
+    drop(env);
+}
+
+/// Phase 92 — explicit `enable_supersession = true` wins.
+#[test]
+fn persona_consolidation_supersession_explicit_true_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_consolidation]\nenabled = true\n\
+         enable_supersession = true\n",
+        "pc-supersede-on",
+    );
+    let p = cfg.persona_consolidation.expect("section present");
+    assert!(p.enable_supersession);
+    drop(env);
+}
+
+/// Phase 92 — a staged-disabled section can carry the
+/// supersession key partially (the staged-config flexibility
+/// from Phase 85 / 87). Setting only the supersession key (no
+/// other persona_consolidation fields) still builds Some(...)
+/// because the "any field set" predicate fires.
+#[test]
+fn persona_consolidation_supersession_only_builds_some() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_consolidation]\nenable_supersession = true\n",
+        "pc-supersede-only",
+    );
+    let p = cfg.persona_consolidation.expect("section present");
+    assert!(!p.enabled, "enabled defaults to false");
+    assert!(p.enable_supersession);
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →
