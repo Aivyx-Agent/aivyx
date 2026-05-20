@@ -37,7 +37,7 @@ use crate::persona::{
     PersonaDeltaCategory, PersonaDeltaOp, ProposedPersonaDelta,
 };
 use crate::persona_proposal::PersistentPersonaProposalLog;
-use crate::recall_log::RecallEvent;
+use crate::recall_log::{RecallEvent, RecallJudgment};
 use crate::reflection_scheduler::OutcomeSummary;
 
 /// Minimum net helpfulness for the retention actuator to
@@ -349,15 +349,39 @@ pub struct RecallContribution {
     pub signal: Option<f32>,
 }
 
+/// Phase 93 — per-hit verdict → signed contribution.
+/// `Used` and `Hurt` produce the symmetric `±WEIGHT` signal
+/// (same magnitude as the structural turn-level proxy);
+/// `Irrelevant` produces `None` (no contribution — the hit
+/// was dead weight but not actively harmful, so it neither
+/// rewards nor punishes the entry).
+fn judgment_signal(verdict: RecallJudgment) -> Option<f32> {
+    match verdict {
+        RecallJudgment::Used => Some(WEIGHT),
+        RecallJudgment::Hurt => Some(-WEIGHT),
+        RecallJudgment::Irrelevant => None,
+    }
+}
+
 /// Correlate the window's recalls against its outcomes,
 /// returning both the aggregate [`HelpfulnessTally`] and the
 /// per-recall [`RecallContribution`] detail. The detail is what
 /// the Phase 78 insights surface reconstructs provenance from;
 /// keeping one matching pass guarantees the surface and the
 /// actuators can never diverge.
+///
+/// Phase 93 — when `use_judgment_signal = true`, each hit's
+/// per-hit `RecallJudgment` (Phase 91) overrides the turn-
+/// level structural signal for that specific hit. Un-judged
+/// hits (`judgment: None`) fall back to the turn-level
+/// signal, so the augment is incremental as the Phase 91 cron
+/// processes hits. When `use_judgment_signal = false`, the
+/// behaviour is byte-identical to pre-Phase-93: the structural
+/// signal applies uniformly to every hit on the matched turn.
 pub fn correlate_detailed(
     recalls: &[RecallEvent],
     outcomes: &[OutcomeSummary],
+    use_judgment_signal: bool,
 ) -> (HelpfulnessTally, Vec<RecallContribution>) {
     let mut tally = HelpfulnessTally::default();
     let mut detail = Vec::with_capacity(recalls.len());
@@ -370,9 +394,16 @@ pub fn correlate_detailed(
         let matched = match_outcome(recall, outcomes);
         let outcome_kind =
             matched.map(|o| o.outcome_kind.clone());
-        let signal = matched.and_then(|o| turn_signal(o, outcomes));
-        if let Some(sig) = signal {
-            for hit in &recall.hits {
+        let turn_sig = matched.and_then(|o| turn_signal(o, outcomes));
+        for hit in &recall.hits {
+            let hit_signal = match (
+                use_judgment_signal,
+                hit.judgment,
+            ) {
+                (true, Some(verdict)) => judgment_signal(verdict),
+                _ => turn_sig,
+            };
+            if let Some(sig) = hit_signal {
                 tally.add(&hit.topic, hit.seq, sig);
             }
         }
@@ -381,7 +412,7 @@ pub fn correlate_detailed(
             session_id: recall.session_id.to_string(),
             topic_seqs,
             outcome_kind,
-            signal,
+            signal: turn_sig,
         });
     }
     (tally, detail)
@@ -393,11 +424,16 @@ pub fn correlate_detailed(
 /// contribute nothing — they'll match on a later cycle once
 /// their `TurnEnded` is in the window, or age out with the
 /// recall-log GC clamp.
+///
+/// Phase 93 — `use_judgment_signal` toggles per-hit judgment
+/// override of the turn-level structural signal. See
+/// [`correlate_detailed`].
 pub fn correlate(
     recalls: &[RecallEvent],
     outcomes: &[OutcomeSummary],
+    use_judgment_signal: bool,
 ) -> HelpfulnessTally {
-    correlate_detailed(recalls, outcomes).0
+    correlate_detailed(recalls, outcomes, use_judgment_signal).0
 }
 
 #[cfg(test)]
@@ -455,7 +491,7 @@ mod tests {
             2_000,
             "completed",
         )];
-        let tally = correlate(&recalls, &outcomes);
+        let tally = correlate(&recalls, &outcomes, false);
         assert_eq!(tally.score("notes", 7), WEIGHT);
         assert_eq!(tally.ranked(), vec![("notes".into(), 7, WEIGHT)]);
     }
@@ -467,7 +503,7 @@ mod tests {
         let outcomes =
             [outcome(&s.to_string(), "t1", 100_000, 500, "failed")];
         assert_eq!(
-            correlate(&recalls, &outcomes).score("notes", 7),
+            correlate(&recalls, &outcomes, false).score("notes", 7),
             -WEIGHT
         );
     }
@@ -484,7 +520,7 @@ mod tests {
             outcome(&sid, "t2", 106_000, 1_000, "completed"),
         ];
         // t1's recalled memory is penalized; t2 had no recall.
-        assert_eq!(correlate(&recalls, &outcomes).score("a", 1), -WEIGHT);
+        assert_eq!(correlate(&recalls, &outcomes, false).score("a", 1), -WEIGHT);
     }
 
     #[test]
@@ -497,7 +533,7 @@ mod tests {
             // 2 minutes later — outside the correction window.
             outcome(&sid, "t2", 221_000, 1_000, "completed"),
         ];
-        assert_eq!(correlate(&recalls, &outcomes).score("a", 1), WEIGHT);
+        assert_eq!(correlate(&recalls, &outcomes, false).score("a", 1), WEIGHT);
     }
 
     #[test]
@@ -508,7 +544,7 @@ mod tests {
             let recalls = [recall(100, s, &[("a", 1)])];
             let outcomes =
                 [outcome(&sid, "t1", 100_000, 100, kind)];
-            let tally = correlate(&recalls, &outcomes);
+            let tally = correlate(&recalls, &outcomes, false);
             assert_eq!(tally.score("a", 1), 0.0);
             assert!(tally.is_empty(), "{kind} must produce no entry");
         }
@@ -521,12 +557,12 @@ mod tests {
         let recalls = [recall(100, s, &[("a", 1)])];
         let outcomes =
             [outcome("other-session", "t1", 100_000, 100, "completed")];
-        assert!(correlate(&recalls, &outcomes).is_empty());
+        assert!(correlate(&recalls, &outcomes, false).is_empty());
 
         // Outcome too far from the recall timestamp.
         let outcomes2 =
             [outcome(&s.to_string(), "t1", 999_000, 100, "completed")];
-        assert!(correlate(&recalls, &outcomes2).is_empty());
+        assert!(correlate(&recalls, &outcomes2, false).is_empty());
     }
 
     // ---- Actuator A — retention self-tuning --------------------
@@ -619,8 +655,168 @@ mod tests {
             outcome(&sid, "t2", 500_000, 100, "completed"),
         ];
         assert_eq!(
-            correlate(&recalls, &outcomes).score("fav", 3),
+            correlate(&recalls, &outcomes, false).score("fav", 3),
             2.0 * WEIGHT
+        );
+    }
+
+    // ---- Phase 93 — per-hit judgment-signal augmentation ------
+
+    /// Helper: build a recall whose three hits carry the
+    /// explicit per-hit judgments `(Used, Hurt, None)` in
+    /// that order on topics `(used, hurt, none)`. All scores
+    /// fixed at 0.9, all `cluster = false` (Phase 84 — these
+    /// are primary hits, not cluster-injected siblings).
+    fn recall_with_judgments(
+        ts_secs: u64,
+        session: SessionId,
+        triples: &[(&str, u64, Option<RecallJudgment>)],
+    ) -> RecallEvent {
+        RecallEvent {
+            ts_secs,
+            session_id: session,
+            hits: triples
+                .iter()
+                .map(|(t, s, j)| RecallHit {
+                    topic: (*t).into(),
+                    seq: *s,
+                    score: 0.9,
+                    cluster: false,
+                    judgment: *j,
+                })
+                .collect(),
+        }
+    }
+
+    /// Phase 93 — direct test of the per-verdict mapping.
+    /// `Used` and `Hurt` are symmetric `±WEIGHT`;
+    /// `Irrelevant` is `None` (no contribution).
+    #[test]
+    fn judgment_signal_per_verdict_mapping() {
+        assert_eq!(
+            judgment_signal(RecallJudgment::Used),
+            Some(WEIGHT)
+        );
+        assert_eq!(
+            judgment_signal(RecallJudgment::Hurt),
+            Some(-WEIGHT)
+        );
+        assert_eq!(judgment_signal(RecallJudgment::Irrelevant), None);
+    }
+
+    /// Phase 93 — knob off (the default): per-hit judgment is
+    /// ignored. A turn whose structural signal is `+WEIGHT`
+    /// applies it uniformly to every hit regardless of
+    /// `judgment`. Byte-identical to pre-Phase-93.
+    #[test]
+    fn knob_off_ignores_judgment_and_uses_structural() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_with_judgments(
+            100,
+            s,
+            &[
+                ("used", 1, Some(RecallJudgment::Used)),
+                ("hurt", 1, Some(RecallJudgment::Hurt)),
+                ("none", 1, None),
+            ],
+        )];
+        let outcomes =
+            [outcome(&sid, "t1", 100_000, 1_000, "completed")];
+        let tally = correlate(&recalls, &outcomes, false);
+        assert_eq!(tally.score("used", 1), WEIGHT);
+        assert_eq!(tally.score("hurt", 1), WEIGHT);
+        assert_eq!(tally.score("none", 1), WEIGHT);
+    }
+
+    /// Phase 93 — knob on, per-hit judgment overrides the
+    /// turn-level structural signal for each judged hit;
+    /// un-judged hits fall back to the structural signal.
+    /// Three-way mixed fixture per Q4a.
+    #[test]
+    fn knob_on_per_hit_judgment_overrides_with_fallback() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_with_judgments(
+            100,
+            s,
+            &[
+                ("used", 1, Some(RecallJudgment::Used)),
+                ("hurt", 1, Some(RecallJudgment::Hurt)),
+                ("none", 1, None),
+            ],
+        )];
+        // Turn-level structural signal = +WEIGHT (clean
+        // completion, no quick follow-up).
+        let outcomes =
+            [outcome(&sid, "t1", 100_000, 1_000, "completed")];
+        let tally = correlate(&recalls, &outcomes, true);
+        // Used overrides → +WEIGHT (same magnitude as
+        // structural, but sourced from the verdict).
+        assert_eq!(tally.score("used", 1), WEIGHT);
+        // Hurt overrides → -WEIGHT despite the +WEIGHT turn.
+        assert_eq!(tally.score("hurt", 1), -WEIGHT);
+        // Un-judged falls back to structural → +WEIGHT.
+        assert_eq!(tally.score("none", 1), WEIGHT);
+    }
+
+    /// Phase 93 — `Irrelevant` with the knob on contributes
+    /// nothing (the hit was dead weight but not harmful —
+    /// the entry is neither rewarded nor punished). The
+    /// tally has no entry for that hit.
+    #[test]
+    fn irrelevant_with_knob_on_contributes_nothing() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_with_judgments(
+            100,
+            s,
+            &[("irr", 1, Some(RecallJudgment::Irrelevant))],
+        )];
+        // Even on a clean +WEIGHT turn, the judgment-driven
+        // path returns None for Irrelevant → no accumulation.
+        let outcomes =
+            [outcome(&sid, "t1", 100_000, 1_000, "completed")];
+        let tally = correlate(&recalls, &outcomes, true);
+        assert_eq!(tally.score("irr", 1), 0.0);
+        assert!(
+            tally.is_empty(),
+            "Irrelevant must not produce a tally entry"
+        );
+    }
+
+    /// Phase 93 — when the turn-level structural signal is
+    /// `None` (escalated/cancelled), judgment-driven hits
+    /// still fire. The structural fallback for `None`
+    /// judgments also produces nothing — so an escalated
+    /// turn with one Used hit + one un-judged hit yields
+    /// only the Used contribution.
+    #[test]
+    fn judgment_fires_even_when_structural_silent() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_with_judgments(
+            100,
+            s,
+            &[
+                ("used", 1, Some(RecallJudgment::Used)),
+                ("none", 1, None),
+            ],
+        )];
+        // escalated → turn_signal returns None.
+        let outcomes =
+            [outcome(&sid, "t1", 100_000, 100, "escalated")];
+        let tally = correlate(&recalls, &outcomes, true);
+        assert_eq!(
+            tally.score("used", 1),
+            WEIGHT,
+            "Used must accumulate from the verdict even when \
+             structural is silent",
+        );
+        assert_eq!(
+            tally.score("none", 1),
+            0.0,
+            "un-judged hit on silent turn contributes nothing"
         );
     }
 

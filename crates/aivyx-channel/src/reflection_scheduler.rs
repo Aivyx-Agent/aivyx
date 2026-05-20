@@ -727,7 +727,7 @@ async fn run_recall_feedback_pass(
     match deps.recall_log.events_since(since).await {
         Ok(recalls) if !recalls.is_empty() => {
             let tally = crate::recall_feedback::correlate(
-                &recalls, summaries,
+                &recalls, summaries, false,
             );
             if !tally.is_empty() {
                 let promoted =
@@ -801,7 +801,7 @@ async fn run_recall_feedback_pass(
                 if let Some(cooc) = &deps.cooccurrence_ledger {
                     let detail =
                         crate::recall_feedback::correlate_detailed(
-                            &recalls, summaries,
+                            &recalls, summaries, false,
                         )
                         .1;
                     let mut pair_net: std::collections::HashMap<
@@ -981,7 +981,7 @@ async fn run_proactive_pass(
             match rl.events_since(since).await {
                 Ok(recalls) => {
                     crate::recall_feedback::correlate(
-                        &recalls, summaries,
+                        &recalls, summaries, false,
                     )
                 }
                 Err(_) => {

@@ -302,7 +302,7 @@ mod tests {
             outcome(&sid, "t4", 15_000_000, "failed"),
         ];
         let (tally, detail) =
-            correlate_detailed(&recalls, &outcomes);
+            correlate_detailed(&recalls, &outcomes, false);
         let props = vec![recall_proposal("good")];
         let d = build_digest(3600, &tally, &detail, &props);
 
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn empty_inputs_yield_empty_digest() {
-        let (tally, detail) = correlate_detailed(&[], &[]);
+        let (tally, detail) = correlate_detailed(&[], &[], false);
         let d = build_digest(60, &tally, &detail, &[]);
         assert_eq!(d.recalls_total, 0);
         assert_eq!(d.recalls_scored, 0);
@@ -343,7 +343,7 @@ mod tests {
             outcome(&sid, "t2", 5_000_000, "failed"),
             outcome(&sid, "t3", 9_000_000, "completed"),
         ];
-        let (_t, detail) = correlate_detailed(&recalls, &outcomes);
+        let (_t, detail) = correlate_detailed(&recalls, &outcomes, false);
 
         // A recall proposal for "proj" + a non-recall proposal
         // that must be ignored.
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn provenance_empty_when_no_proposals() {
-        let (_t, detail) = correlate_detailed(&[], &[]);
+        let (_t, detail) = correlate_detailed(&[], &[], false);
         assert!(build_provenance(&detail, &[]).is_empty());
     }
 }

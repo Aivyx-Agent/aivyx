@@ -2476,7 +2476,7 @@ async fn handle_query(
             };
             let (tally, detail) =
                 crate::recall_feedback::correlate_detailed(
-                    &recalls, &outcomes,
+                    &recalls, &outcomes, false,
                 );
             let proposals = persona_proposal_log
                 .map(|l| {
