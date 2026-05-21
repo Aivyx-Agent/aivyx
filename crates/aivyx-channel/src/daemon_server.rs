@@ -2454,6 +2454,8 @@ async fn handle_query(
                         &crate::recall_feedback::HelpfulnessTally::default(),
                         &[],
                         &[],
+                        recall_feedback_config
+                            .map(|c| c.use_judgment_signal),
                     ),
                     proposals: Vec::new(),
                     persona_selection,
@@ -2519,7 +2521,12 @@ async fn handle_query(
                 .unwrap_or_default();
             QueryResponsePayload::LearningInsights {
                 digest: crate::recall_insights::build_digest(
-                    window, &tally, &detail, &proposals,
+                    window,
+                    &tally,
+                    &detail,
+                    &proposals,
+                    recall_feedback_config
+                        .map(|c| c.use_judgment_signal),
                 ),
                 proposals: crate::recall_insights::build_provenance(
                     &detail, &proposals,

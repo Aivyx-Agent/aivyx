@@ -807,9 +807,63 @@ max_recalls_per_cycle = 30   # optional, default 30
 Validation (only when `enabled = true`):
 `max_recalls_per_cycle >= 1`. **To turn it off:** set
 `enabled = false` or delete the block — every accumulator
-returns to pre-Phase-91 behaviour (which is exactly what they
-all do today even when Phase 91 is on, since v1 captures the
-data but doesn't yet consume it).
+returns to pre-Phase-91 behaviour.
+
+### Judgment-driven recall feedback (Phase 93)
+
+Phase 91 records per-hit `RecallJudgment` (`Used` /
+`Irrelevant` / `Hurt`) on every recall hit. Phase 93 lets the
+**recall-feedback actuator** consume those verdicts. With
+the new `[recall_feedback].use_judgment_signal = true` knob,
+the correlator (`correlate_detailed`) reads each hit's
+`judgment` field and uses it to derive that hit's signal —
+overriding the Phase 77 turn-level structural proxy for any
+hit that carries one. Un-judged hits keep using the
+structural proxy, so the augment is incremental as the
+Phase 91 cron processes hits.
+
+Per-verdict mapping (symmetric with the structural
+`±WEIGHT`):
+
+- `Used` → `+WEIGHT` (the hit was helpful, regardless of
+  the turn-level outcome).
+- `Hurt` → `-WEIGHT` (the hit was actively misleading,
+  regardless of the turn-level outcome).
+- `Irrelevant` → no contribution (dead weight; neither
+  rewarded nor punished).
+- `None` (un-judged) → falls back to the turn-level
+  structural signal.
+
+The downstream actuators (memory promotion via
+`apply_retention_feedback`, Persona proposals via
+`emit_persona_proposals`) read the same `HelpfulnessTally`
+shape — only the signal source per hit changes. Operators
+who enabled Phase 91 for *visibility only* (the v1
+"augment, not replace" posture documented at field
+introduction) see no actuator-behaviour change unless they
+also flip this knob.
+
+```toml
+[recall_feedback]
+use_judgment_signal = true   # optional, default false — Phase 93
+```
+
+The knob lives in `[recall_feedback]` (the consumer side),
+separate from `[recall_judgment]` (the producer side from
+Phase 91), so the two configs stay independently
+reason-aboutable. Turning the judge on without flipping
+this knob keeps the actuator on the structural signal it
+has used since Phase 77; flipping both turns on the
+self-improving loop end-to-end. **To turn it off:** set
+`use_judgment_signal = false` or delete the block —
+`correlate_detailed` returns to byte-identical pre-Phase-93
+behaviour.
+
+The `aivyx learning` surface flags the augment with a
+`signal source: judgment-driven` banner under the recall
+count when the knob is on, so the operator can confirm at
+a glance that the loop is in the augmented mode they
+expect.
 
 ## Learning insights (Phase 78)
 

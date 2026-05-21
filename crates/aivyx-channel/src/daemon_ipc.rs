@@ -1672,6 +1672,7 @@ mod tests {
                         top_helpful: vec![("project/x".into(), 5.0)],
                         top_unhelpful: vec![("scratch".into(), -3.0)],
                         proposals_in_window: 1,
+                        judgment_signal: None,
                     },
                     proposals: vec![
                         crate::recall_insights::ProposalProvenance {

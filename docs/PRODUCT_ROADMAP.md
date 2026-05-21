@@ -1485,6 +1485,50 @@ respond to it. Closing the gap is the inflection point between
   (workspace 1643 → 1653), squarely inside the predicted
   `+6-10` band. Zero new workspace deps.
 
+- **Phase 93 (Recall-Feedback → Judgment Signal, shipped
+  2026-05-21).** Closes the Phase 91 deferral named
+  verbatim in the Phase 92 open doc: *"actuator-side
+  switch from structural proxy to the new judgment
+  signal."* Phase 91 introduced `LlmRecallJudge` and
+  recorded per-hit `judgment: Option<RecallJudgment>` on
+  every recall hit, but explicitly scoped that change as
+  **v1 augment, not replace** — the judgments flowed into
+  the audit chain and Phase 78 surface without any
+  runtime actuator consuming them. Phase 93 wires the
+  consumer: `correlate_detailed` (the function driving
+  memory promotion and Persona proposal filing) now reads
+  per-hit verdicts where present
+  (`Used → +WEIGHT`, `Hurt → -WEIGHT`,
+  `Irrelevant → 0`) and falls back to the existing
+  Phase 77 turn-level structural proxy where absent.
+  Single new
+  `[recall_feedback].use_judgment_signal: bool` knob
+  (default `false`); with it off the correlator is
+  byte-identical to pre-Phase-93. The knob lives on the
+  consumer side, separate from the Phase 91 producer-side
+  `[recall_judgment]` block, keeping the two configs
+  independently reason-aboutable. **No new product
+  commitment**, none weakened; the operator-facing
+  contract is *strengthened* (the self-improving loop is
+  closed end-to-end when both knobs are on). The
+  `LearningDigest` gains an optional `judgment_signal`
+  field surfacing the augment state to the operator. Mid-
+  phase the scope was corrected — the original open
+  commit pivoted around a per-domain `min_score`
+  threshold that doesn't exist in the codebase; the
+  re-scope commit redirected Phase 93 to the loop closure
+  that actually exists. Streak all three correct: DESIGN.md
+  → **40**, PRODUCT.md → **33**, lib.rs → **41** (new
+  project record, beating Phase 92's 40) —
+  augmentation in `aivyx-channel`, config in
+  `aivyx-config`, `HelpfulnessTally` shape unchanged so
+  downstream actuators byte-identical. Test count delta
+  `+11` (workspace 1653 → 1664), one over the predicted
+  `+6-10` band, accounted for by the optional
+  `judgment_signal` digest field earning its own surface-
+  rendering test alongside the field plumbing. Zero new
+  workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

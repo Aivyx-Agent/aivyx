@@ -968,6 +968,50 @@ parent_role = "researcher"
 # opt-in)" block.
 
 # ----------------------------------------------------------------
+# Judgment-driven recall feedback (Phase 93) — OFF BY DEFAULT.
+#
+# Phase 91 records per-hit judgments; Phase 93 lets the
+# recall-feedback actuator consume them. With this knob ON,
+# `correlate_detailed` (the function that drives memory
+# promotion + Persona proposal filing) uses each hit's
+# RecallJudgment:
+#
+#   Used        → +WEIGHT  (the hit helped, regardless of
+#                            turn-level outcome)
+#   Hurt        → -WEIGHT  (the hit misled, regardless of
+#                            turn-level outcome)
+#   Irrelevant  → 0        (dead weight; neither rewards nor
+#                            punishes the entry)
+#   None        → falls back to the Phase 77 turn-level
+#                  structural proxy (smooth migration as the
+#                  Phase 91 cron processes hits incrementally)
+#
+# Augment, not replace: un-judged hits keep using the
+# structural signal, so the loop never loses data while the
+# judgment cron catches up.
+#
+# [recall_feedback]
+# use_judgment_signal = true   # optional, default false — Phase 93
+#
+# To turn it off: delete the block or set the knob to false
+# — `correlate_detailed` returns to byte-identical
+# pre-Phase-93 behaviour.
+#
+# Two-knob composition: turning ON `[recall_judgment]` but
+# leaving this knob OFF keeps Phase 91 in visibility-only
+# mode (the v1 default posture documented at the field's
+# introduction). Turning both ON closes the self-improving
+# loop end-to-end. The knob lives on the consumer side
+# (`[recall_feedback]`), separate from the producer side
+# (`[recall_judgment]`), so the two configs remain
+# independently reason-aboutable.
+#
+# To SEE it: `aivyx learning` flags the augment with a
+# `signal source: judgment-driven (Phase 93 — augmenting
+# structural)` banner under the recall count when the knob
+# is on.
+
+# ----------------------------------------------------------------
 # Adaptive Persona (Phase 79): with [embedding] configured,
 # once the Persona is large the assistant injects only the
 # facets relevant to each turn instead of the whole accreted

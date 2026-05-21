@@ -124,6 +124,16 @@ fn render_insights(
         "  recalls: {} total, {} scored\n",
         d.recalls_total, d.recalls_scored,
     ));
+    // Phase 93 — only surfaces when the operator opted into
+    // judgment-driven recall feedback. Pre-Phase-93 digests
+    // (and operators who haven't enabled the augment) carry
+    // `None` and the line is omitted.
+    if let Some(true) = d.judgment_signal {
+        out.push_str(
+            "    signal source: judgment-driven \
+             (Phase 93 — augmenting structural)\n",
+        );
+    }
     out.push_str(&format!(
         "  retention: {} promoted, {} left to age out\n",
         d.promoted, d.not_promoted,
@@ -380,6 +390,7 @@ mod tests {
             top_helpful: vec![("project/x".into(), 5.0)],
             top_unhelpful: vec![("scratch".into(), -2.0)],
             proposals_in_window: 1,
+            judgment_signal: None,
         }
     }
 
@@ -393,6 +404,36 @@ mod tests {
         assert!(out.contains("-2  scratch"));
         assert!(out.contains(
             "No recall-driven Persona proposals in this window."
+        ));
+    }
+
+    /// Phase 93 — the judgment-signal banner renders only
+    /// when the operator has opted in
+    /// (`judgment_signal = Some(true)`); the default-off and
+    /// pre-Phase-93 paths emit the line unchanged.
+    #[test]
+    fn render_judgment_signal_banner() {
+        let mut d = digest();
+        // Default (None) — banner absent.
+        let out_none = render_insights(
+            &d, &[], None, None, None, None, None, None, None, None,
+        );
+        assert!(!out_none.contains("signal source"));
+        // Explicit-off (Some(false)) — banner still absent
+        // (the operator declared but the knob is off; no
+        // augment in effect).
+        d.judgment_signal = Some(false);
+        let out_off = render_insights(
+            &d, &[], None, None, None, None, None, None, None, None,
+        );
+        assert!(!out_off.contains("signal source"));
+        // Augment on — the banner fires.
+        d.judgment_signal = Some(true);
+        let out_on = render_insights(
+            &d, &[], None, None, None, None, None, None, None, None,
+        );
+        assert!(out_on.contains(
+            "signal source: judgment-driven (Phase 93 — augmenting structural)"
         ));
     }
 
@@ -439,6 +480,7 @@ mod tests {
             top_helpful: vec![],
             top_unhelpful: vec![],
             proposals_in_window: 0,
+            judgment_signal: None,
         };
         let out = render_insights(&d, &[], None, None, None, None, None, None, None, None);
         assert!(out.contains("last 3600s"));

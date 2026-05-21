@@ -84,6 +84,17 @@ pub struct LearningDigest {
     pub top_unhelpful: Vec<(String, f32)>,
     /// Recall-driven Persona proposals visible in the chain.
     pub proposals_in_window: usize,
+    /// Phase 93 — whether the recall-feedback correlator
+    /// was running with per-hit judgment override
+    /// (`[recall_feedback].use_judgment_signal = true`).
+    /// `None` for pre-Phase-93 digests; `Some(false)`
+    /// distinguishes "knob explicitly off" from "section
+    /// absent" on the surface. `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` keeps the
+    /// IPC wire-compat — older `aivyx learning` clients
+    /// decode the digest unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment_signal: Option<bool>,
 }
 
 /// Sum a tally to per-topic net scores.
@@ -98,11 +109,17 @@ fn per_topic(tally: &HelpfulnessTally) -> Vec<(String, f32)> {
 
 /// Build the digest. `proposals` is the full proposal chain
 /// snapshot; only the recall-driven ones are counted.
+/// Phase 93 — `use_judgment_signal` is recorded on the
+/// digest so the CLI / Web UI surface can flag the
+/// augment to the operator. Passing `None` is the
+/// pre-Phase-93 default (the surface renders no judgment-
+/// signal line).
 pub fn build_digest(
     window_secs: u64,
     tally: &HelpfulnessTally,
     contributions: &[RecallContribution],
     proposals: &[PersonaProposal],
+    use_judgment_signal: Option<bool>,
 ) -> LearningDigest {
     let recalls_scored =
         contributions.iter().filter(|c| c.signal.is_some()).count();
@@ -145,6 +162,7 @@ pub fn build_digest(
         window_secs,
         recalls_total: contributions.len(),
         recalls_scored,
+        judgment_signal: use_judgment_signal,
         promoted,
         not_promoted,
         top_helpful,
@@ -304,7 +322,7 @@ mod tests {
         let (tally, detail) =
             correlate_detailed(&recalls, &outcomes, false);
         let props = vec![recall_proposal("good")];
-        let d = build_digest(3600, &tally, &detail, &props);
+        let d = build_digest(3600, &tally, &detail, &props, None);
 
         assert_eq!(d.window_secs, 3600);
         assert_eq!(d.recalls_total, 4);
@@ -320,7 +338,7 @@ mod tests {
     #[test]
     fn empty_inputs_yield_empty_digest() {
         let (tally, detail) = correlate_detailed(&[], &[], false);
-        let d = build_digest(60, &tally, &detail, &[]);
+        let d = build_digest(60, &tally, &detail, &[], None);
         assert_eq!(d.recalls_total, 0);
         assert_eq!(d.recalls_scored, 0);
         assert_eq!(d.promoted, 0);

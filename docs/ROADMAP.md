@@ -2693,6 +2693,81 @@ semantic-similarity supersession for synonym pairs that
 share zero literal endpoints) are operator-feedback-
 gated.
 
+## Phase 93 — Recall-Feedback Switches to LLM-Judgment Signal (closing the Phase 91 deferral)
+
+**Frozen — see [PHASE_93.md](PHASE_93.md).** Closes the
+Phase 91 deferral named verbatim in the Phase 92 open doc:
+"actuator-side switch from structural proxy to the new
+judgment signal." Phase 91 added the per-hit
+`judgment: Option<RecallJudgment>` field on `RecallHit`
+but explicitly scoped the change as **v1 augment, not
+replace** — the field was recorded into the audit chain
+and the Phase 78 insights surface, but no runtime
+accumulator consumed it. Phase 93 wires the consumer:
+`correlate_detailed` — the single source of truth that
+drives memory promotion (Phase 77 Task 6) and Persona
+proposal filing (Phase 77 Task 7) — now reads the per-hit
+verdict where present and falls back to the existing
+turn-level structural proxy where absent.
+
+- **Augment, not replace (Q1a):** per-hit `Some(judgment)`
+  overrides the turn-level structural signal for that hit;
+  `None` hits keep using the structural proxy. Smooth
+  migration — judgments take effect incrementally as the
+  Phase 91 cron processes hits; the loop never loses
+  signal while the cron catches up. Matches the Phase 91
+  field doc's own framing.
+- **Symmetric ±WEIGHT mapping (Q2a):**
+  `Used → +WEIGHT`, `Hurt → -WEIGHT`,
+  `Irrelevant → 0` (dead weight; neither rewards nor
+  punishes). Same magnitude as the existing structural
+  mapping — single source of magnitude.
+- **Consumer-side knob (Q3a):** new
+  `[recall_feedback].use_judgment_signal: bool`, default
+  `false`. Matches the Phase 87 / 88 / 91 / 92 actuator
+  opt-in pattern. The knob lives on the consumer
+  (`[recall_feedback]`), separate from the Phase 91
+  producer-side `[recall_judgment]`, so the two configs
+  remain independently reason-aboutable. Turning the
+  judge on alone keeps Phase 91 in visibility-only mode
+  (the v1 default posture); turning both on closes the
+  self-improving loop end-to-end.
+- **Single-fixture integration test (Q4a):** one recall
+  with three hits — `Used` / `Hurt` / un-judged — on a
+  +WEIGHT structural turn. With the knob on: Used
+  promoted, Hurt NOT promoted (judgment overrides
+  positive structural), un-judged promoted via fallback.
+
+Streak all three correct: DESIGN.md → **40**, PRODUCT.md
+→ **33**, `aivyx-core/src/lib.rs` → **41** (new project
+record, beats Phase 92's 40) — augmentation in
+`aivyx-channel`; config knob in `aivyx-config`; the
+`HelpfulnessTally` shape unchanged so downstream
+actuators are byte-identical. Test count delta **`+11`**
+workspace (`+4` config knob, `+5` augmentation +
+judgment-signal mapping, `+1` reflection-cron integration,
+`+1` surface banner) — one over the predicted `+6-10`
+band, accounted for by the wire-compat surface field
+earning its own test alongside the field plumbing. Zero
+clippy warnings. Zero new workspace deps.
+
+Mid-phase scope correction: the open commit
+(`9f875c6`) scoped Phase 93 around calibrating a per-
+domain `min_score` recall-gate threshold. On reading the
+codebase that knob doesn't exist — Phase 90's gate is a
+single global `recall_gate_min_chars` input-length check,
+not a per-domain post-recall score filter. The
+re-scope commit (`27d8c41`) pivoted to the loop closure
+that actually exists in the codebase (the Phase 91
+deferral). Phase ritual followed: new Q-block resolved
+pre-Task 2.
+
+Likely follow-ups (per-domain or per-topic weights for
+the verdict→signal mapping; "replace" mode that drops
+the structural fallback; asymmetric Hurt penalty; sum
+mode that stacks both signals — see PHASE_93.md
+deferrals list) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
