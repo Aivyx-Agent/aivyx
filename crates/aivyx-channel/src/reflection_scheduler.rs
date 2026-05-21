@@ -2174,6 +2174,8 @@ mod tests {
             lookback_window_secs: 1_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = RecallFeedbackDeps {
             recall_log: Arc::clone(&recall_log),
@@ -2342,6 +2344,8 @@ mod tests {
             lookback_window_secs: 1_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = RecallFeedbackDeps {
             recall_log: Arc::clone(&recall_log),
@@ -2504,6 +2508,8 @@ mod tests {
             lookback_window_secs: 10_000_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = RecallFeedbackDeps {
             recall_log: Arc::clone(&recall_log),
@@ -2665,6 +2671,8 @@ mod tests {
             lookback_window_secs: 10_000_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = RecallFeedbackDeps {
             recall_log: Arc::clone(&recall_log),
@@ -2878,6 +2886,8 @@ mod tests {
             lookback_window_secs: 10_000_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = RecallFeedbackDeps {
             recall_log: Arc::clone(&recall_log),
@@ -3025,6 +3035,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
 
         // now well past the @due:1000.
@@ -3247,6 +3259,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
 
         // now_ms = 10_000_000 → now_secs 10_000.
@@ -3461,6 +3475,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
 
         // 1) No ledger → graceful pure age-only. Both facets
@@ -3662,6 +3678,8 @@ mod tests {
             lookback_window_secs: 1_000_000,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let deps = PersonaConsolidationDeps {
             config: aivyx_config::PersonaConsolidationConfig {
@@ -3984,6 +4002,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
 
         // With the co-occurrence ledger present + `signal_decay
@@ -4208,6 +4228,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let stat = shared_recall_judgment_stat();
         let deps = RecallJudgmentDeps {
@@ -4517,6 +4539,8 @@ mod tests {
             lookback_window_secs: 86_400,
             role_override: None,
             enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
         };
         let stat = shared_persona_consolidation_stat();
         let deps = PersonaConsolidationDeps {

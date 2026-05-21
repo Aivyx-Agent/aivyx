@@ -4017,6 +4017,89 @@ cron = "0 0 23 * * *"
     assert_eq!(s.lookback_window_secs, 86400); // 24h default
     assert!(s.role_override.is_none());
     assert!(s.enabled);
+    // Phase 95 — defaults: skip_when_idle off, threshold 1.
+    assert!(!s.skip_when_idle);
+    assert_eq!(s.min_audit_entries_to_fire, 1);
+    drop(env);
+}
+
+/// Phase 95 — explicit `skip_when_idle = true` +
+/// `min_audit_entries_to_fire = 10` round-trips through the
+/// loader.
+#[test]
+fn reflection_schedule_skip_when_idle_explicit_values_win() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[anthropic]\napi_key = \"sk-test\"\n\n\
+         [[reflection_schedule]]\nname = \"hourly\"\n\
+         cron = \"0 0 * * * *\"\n\
+         skip_when_idle = true\n\
+         min_audit_entries_to_fire = 10\n",
+        "refl-cadence-explicit",
+    );
+    assert_eq!(cfg.reflection_schedules.len(), 1);
+    let s = &cfg.reflection_schedules[0];
+    assert!(s.skip_when_idle);
+    assert_eq!(s.min_audit_entries_to_fire, 10);
+    drop(env);
+}
+
+/// Phase 95 — staged config: `min_audit_entries_to_fire =
+/// 5` set but `skip_when_idle` not declared (defaults to
+/// `false`) is honored without validation. The operator
+/// pre-stages the threshold for later flip without it
+/// having to be valid.
+#[test]
+fn reflection_schedule_skip_when_idle_staged_threshold_unvalidated() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[anthropic]\napi_key = \"sk-test\"\n\n\
+         [[reflection_schedule]]\nname = \"staged\"\n\
+         cron = \"0 0 23 * * *\"\n\
+         min_audit_entries_to_fire = 5\n",
+        "refl-cadence-staged",
+    );
+    let s = &cfg.reflection_schedules[0];
+    assert!(!s.skip_when_idle);
+    assert_eq!(s.min_audit_entries_to_fire, 5);
+    drop(env);
+}
+
+/// Phase 95 — `skip_when_idle = true` +
+/// `min_audit_entries_to_fire = 0` is rejected at load time.
+/// Zero would skip every cycle unconditionally; the loader
+/// defends.
+#[test]
+fn reflection_schedule_skip_when_idle_with_zero_threshold_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("refl-cadence-zero");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[anthropic]\napi_key = \"sk-test\"\n\n\
+         [[reflection_schedule]]\nname = \"zero\"\n\
+         cron = \"0 0 23 * * *\"\n\
+         skip_when_idle = true\n\
+         min_audit_entries_to_fire = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "reflection_schedule.min_audit_entries_to_fire",
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
     drop(env);
 }
 

@@ -1159,6 +1159,23 @@ pub struct ReflectionScheduleConfig {
     /// `true` when the entry is active; `false` keeps the entry
     /// in the config but skips scheduler registration.
     pub enabled: bool,
+    /// Phase 95 — when `true`, the scheduler reads
+    /// `audit_log.len()` delta since the last fired cycle for
+    /// this schedule; if growth is below
+    /// `min_audit_entries_to_fire`, the cycle is skipped
+    /// entirely (no LLM calls; just a log line + a counter
+    /// bump). The operator's `cron` remains the upper bound
+    /// on firing rate — cadence learning is monotonic-slower-
+    /// only. Default `false` (pre-Phase-95 behaviour: every
+    /// cron tick fires unconditionally).
+    pub skip_when_idle: bool,
+    /// Phase 95 — audit-chain growth threshold the cycle must
+    /// clear when `skip_when_idle = true`. `1` means "any new
+    /// audit entry triggers the cycle"; higher values raise
+    /// the bar. Bounded `>= 1` when `skip_when_idle = true`
+    /// (zero would skip every cycle including ones the
+    /// operator wants unconditionally active). Default `1`.
+    pub min_audit_entries_to_fire: u32,
 }
 
 /// Phase 74 — retention policy for a `[[memory.retention]]` block.
@@ -2100,6 +2117,14 @@ struct RawReflectionSchedule {
     role_override: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    /// Phase 95 — opt-in skip-when-idle. Absent → `false`
+    /// (pre-Phase-95 behaviour: every cron tick fires).
+    #[serde(default)]
+    skip_when_idle: bool,
+    /// Phase 95 — audit-entries threshold. Absent → `1`.
+    /// Validated `>= 1` only when `skip_when_idle = true`.
+    #[serde(default)]
+    min_audit_entries_to_fire: Option<u32>,
 }
 
 /// One `[[memory.retention]]` entry in the TOML file. Phase 74.
@@ -3727,12 +3752,29 @@ impl AivyxConfig {
                     });
                 }
             }
+            // Phase 95 — validate the two new cadence knobs.
+            let min_audit_entries_to_fire =
+                raw.min_audit_entries_to_fire.unwrap_or(1);
+            if raw.skip_when_idle && min_audit_entries_to_fire == 0 {
+                return Err(ConfigError::Invalid {
+                    field: "reflection_schedule.min_audit_entries_to_fire",
+                    reason: format!(
+                        "reflection_schedule `{}` has \
+                         `min_audit_entries_to_fire = 0` while \
+                         `skip_when_idle = true` — must be >= 1 \
+                         (zero would skip every cycle unconditionally)",
+                        raw.name
+                    ),
+                });
+            }
             reflection_schedules.push(ReflectionScheduleConfig {
                 name: raw.name,
                 cron: raw.cron,
                 lookback_window_secs: raw.lookback_window_secs,
                 role_override: raw.role_override,
                 enabled: true,
+                skip_when_idle: raw.skip_when_idle,
+                min_audit_entries_to_fire,
             });
         }
 
