@@ -2970,6 +2970,78 @@ centroid seeding; ANN for the `aivyx memory search`
 operator path — see PHASE_96.md deferrals list) are
 operator-feedback-gated.
 
+## Phase 97 — Token-Budget Context Sizing (Phase 76's + Phase 86's longest-running content deferral, closed)
+
+**Frozen — see [PHASE_97.md](PHASE_97.md).** Closes the
+twice-deferred token-budget item carried 21 phases
+(Phase 76) and 11 phases (Phase 86). Auto-recall,
+adaptive Persona selection, and the conversational
+window have all capped injection by **entry count** —
+a proxy for token cost, not the cost itself. A single
+4 KB memory body silently displaced multiple shorter
+ones from the same `rag_top_k` budget; a grown Persona
+facet ate turn after turn of input. Phase 97 adds an
+opt-in token budget that caps both recall + Persona
+injection paths AFTER their existing rank-and-filter
+steps: the lowest-ranked items drop until the running
+estimate fits.
+
+- **Hand-rolled `chars/4` estimator (Q1a):** preserves
+  the project's zero-new-deps streak; ~20 lines of code
+  in `aivyx-channel::token_budget`. Accuracy ~±20% for
+  English — adequate for budget enforcement at any
+  realistic operator threshold. Unicode `chars()`-
+  counted, not bytes.
+- **Combined recall + Persona scope (Q2a):** one knob
+  caps both. The existing `rag_top_k` and Persona
+  K-facet caps become soft hints; the token budget is
+  the hard cap. One coherent operator-facing number.
+- **Drop-lowest-ranked eviction (Q3a):** the first item
+  whose addition would exceed the budget AND every item
+  after it are dropped. No mid-item truncation. The
+  caller pre-ranked, so the dropped tail is by
+  construction the lowest-priority subset.
+- **Single opt-in knob (Q4a):** new
+  `[embedding].recall_token_budget: u32` (default `0`
+  = disabled). Matches the established Phase 87 / 88 /
+  91 / 92 / 93 / 95 / 96 actuator opt-in pattern. With
+  the knob at `0`, the recall + Persona paths are
+  byte-identical to pre-Phase-97.
+
+The protected Persona core (behavioral constraints +
+identity scalars) is ALWAYS present regardless of
+budget — the budget only trims soft-facet selection.
+The recall breadcrumb + Phase 78 learning surface +
+Phase 84 cluster stat + Phase 77 recall_log all see
+the post-budget set so observers match what's actually
+injected. Edge case: if every recall hit falls out of
+the budget, auto-recall returns no block (planner falls
+back to the base prompt).
+
+Streak all three correct: DESIGN.md → **44**, PRODUCT.md
+→ **37**, `aivyx-core/src/lib.rs` → **45** (new project
+record, beats Phase 96's 44) — `token_budget` module +
+recall integration + Persona integration all in
+`aivyx-channel`; config knob in `aivyx-config`. Test
+count delta `+21` workspace (`+3` config knob, `+13`
+pure module with comprehensive coverage of both
+`estimate_tokens` and `apply_token_budget` boundary
+cases, `+3` recall integration including the "every hit
+fell out → None" path, `+2` Persona integration
+including the "protected core always present" pin) —
+**over** the predicted `+10-15` band, accounted for by
+the pure helper module earning ~12 individual tests
+instead of the calibration law's expected 5-7. Zero
+clippy warnings (one trivial `into_iter` cleanup). Zero
+new workspace deps.
+
+Likely follow-ups (exact-tokenizer integration; per-
+category budgets; auto-derive from model context window;
+conversational-window budget; mid-item truncation
+strategy; surface line for dropped-by-budget count —
+see PHASE_97.md deferrals list) are operator-feedback-
+gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

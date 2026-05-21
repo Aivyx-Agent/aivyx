@@ -342,40 +342,119 @@ Phase 86's "token-budget context sizing" deferrals are
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Token-budget enforcement is a
+  post-rank trim over existing structures; touches no
+  locked technical-contract decision. The recall and
+  Persona ordering rules are unchanged; the budget just
+  truncates the tail. Streak: **44 consecutive phases**
+  (was 43).
+- **PRODUCT.md — held.** P9 (recall) + P14 (Persona)
+  commitments are unchanged; the operator-facing
+  contract is *strengthened* (the loop won't silently
+  inflate context cost when entries grow long when the
+  operator opts in). Streak: **37 consecutive phases**
+  (was 36).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  `token_budget` module + the recall integration + the
+  Persona integration all live in `aivyx-channel`; the
+  config knob lives in `aivyx-config`. No `aivyx-core`
+  touch; no new `AuditTag`; no new `KeyDomain`. Streak:
+  **45 consecutive phases** — new project record,
+  beating Phase 96's 44.
+
+**Test count — `+21`** (workspace `1709 → 1730`).
+**Over** the predicted `+10-15` band by 6. Breakdown:
+
+- Config knob `+3` (default, explicit-value round-trip,
+  explicit-zero honored).
+- Pure `token_budget` module `+13` (estimate_tokens:
+  empty / single char / short words / long text /
+  Unicode by chars; apply_token_budget: zero budget /
+  empty input / under / at threshold / over with tail
+  drop / single over-budget item / mixed costs / order
+  preserved).
+- Recall integration `+3` (zero-budget pass-through,
+  tight-budget tail drop with seq-tiebreak fixture,
+  every-hit-falls-out returns None).
+- Persona integration `+2` (zero-budget pass-through,
+  tight-budget keeps exactly one of two cosine-tied
+  facets with the protected core still present).
+
+The `+6 over` is accounted for by the pure module
+earning ~12 individual boundary-case tests instead of
+the calibration law's expected 5-7. Two helpers, each
+with their own defensive edge cases — `estimate_tokens`
+covers empty/single/short/long/Unicode; `apply_token_budget`
+covers zero/empty/under/at/over/single-over/mixed/order-
+preservation. Following the project's pattern for "new
+pure module with multiple boundary cases" (Phase 96 was
++15 tests on its pure ANN module; Phase 89 was +20).
+
+**Scope — every planned surface shipped exactly as scoped.**
+The hand-rolled `chars/4` estimator with non-empty fudge;
+the `apply_token_budget` helper with the strict-order
+preservation contract (the helper never skips and
+continues past an over-budget item to opportunistically
+include cheap ones); the recall integration applied
+AFTER cluster-expansion and the existing budget-share
+dance; the Persona integration applied AFTER the
+`min_similarity` filter + cosine sort + top_k
+truncation; the "every hit fell out → return None"
+graceful-degradation path on the recall side; the
+"protected core always present" invariant preserved on
+the Persona side. Zero clippy warnings. Zero new
+workspace deps.
+
+**One implementation note on the recall fixture.** The
+recall integration test for "tight budget drops the long
+body" needed the short body to win the seq-descending
+tiebreak in `rank_by_cosine` (newer-seq wins on equal
+cosine). Initial fixture put the short entry first; the
+test failed because the long entry won the tiebreak,
+landed at position 0 in the pre-ranked input, and
+triggered the helper's "first item over budget → return
+empty" defensive case. Fixed by writing the long entry
+FIRST so the short entry gets the newer seq → wins the
+tiebreak → lands at position 0 → budget drops the long
+tail as intended. Documented inline in the fixture with
+an explanatory comment so future readers don't trip on
+the same path.
 
 ## Exit criteria
 
-- [ ] `[embedding].recall_token_budget: u32` (default
-  `0`) — Task 2.
-- [ ] `estimate_tokens` + `apply_token_budget` pure
-  helpers in `aivyx-channel` — Task 3.
-- [ ] Unit tests on the pure helpers: estimator
+- [x] `[embedding].recall_token_budget: u32` (default
+  `0`) — Task 2 (commit `934e80e`).
+- [x] `estimate_tokens` + `apply_token_budget` pure
+  helpers in `aivyx-channel` — Task 3 (commit `8576f50`).
+- [x] Unit tests on the pure helpers: estimator
   accuracy on common shapes; budget enforcement on
   under / at / over-budget inputs; empty input;
-  zero-budget — Task 3.
-- [ ] `SemanticMemoryContext::recall` applies the
+  zero-budget — Task 3 (commit `8576f50`).
+- [x] `SemanticMemoryContext::recall` applies the
   budget AFTER rank + `rag_min_similarity` + cluster
-  expansion — Task 4.
-- [ ] `PersonaContextRefiner::refine` applies the
+  expansion — Task 4 (commit `1b943dd`).
+- [x] `PersonaContextRefiner::refine` applies the
   budget AFTER adaptive selection's K-facet cap —
-  Task 4.
-- [ ] Integration test: recall + Persona with mixed-
+  Task 4 (commit `1b943dd`).
+- [x] Integration tests: recall + Persona with mixed-
   length items, budget tight enough to drop the
-  bottom-ranked items — Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml`
-  updated — Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README
-  refreshed — Task 5.
-- [ ] All four Q-block questions resolved with
+  bottom-ranked items — Task 4 (commit `1b943dd`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml`
+  updated — Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README
+  refreshed — Task 5 (this commit).
+- [x] All four Q-block questions resolved with
   operator sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-four.
-- [ ] PRODUCT.md streak extends to thirty-seven.
-- [ ] Production-core streak extends to forty-five
+- [x] DESIGN.md streak extends to forty-four.
+- [x] PRODUCT.md streak extends to thirty-seven.
+- [x] Production-core streak extends to forty-five
   (new record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+10-15; config
-  knob ≈ +3-4; pure helpers ≈ +5-7 with multiple
-  boundary cases; integration ≈ +2-4).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+21`, over the
+  predicted `+10-15` band — accounted for by the pure
+  module earning ~12 boundary tests across both
+  helpers).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

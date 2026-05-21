@@ -872,6 +872,7 @@ parent_role = "researcher"
 #   recall_gate_min_chars = 0 # heuristic recall gate (Phase 90)
 #   ann_index = false         # ANN-index opt-in (Phase 96)
 #   ann_rebuild_threshold = 100   # ANN stale-rebuild threshold (Phase 96)
+#   recall_token_budget = 0   # token-budget context sizing (Phase 97)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
@@ -979,6 +980,57 @@ parent_role = "researcher"
 # query after restart rebuilds from the persisted
 # embeddings (no startup stall — the rebuild is on the
 # first query, not on boot).
+#
+# ----------------------------------------------------------------
+# Token-budget context sizing (Phase 97) — recall_token_budget
+# ----------------------------------------------------------------
+#
+# Auto-recall (`rag_top_k`) and adaptive Persona selection
+# (internal K-facet cap) both cap injection by ENTRY
+# COUNT. Count is a proxy for token cost, not the cost
+# itself. A 4 KB memory body silently displaces several
+# shorter memories from the same `rag_top_k` budget; a
+# Persona facet that grew from a sentence to ten
+# paragraphs eats turn after turn of input — sometimes
+# enough to bump the prompt past the model's context limit.
+#
+# Phase 97 adds an opt-in token budget that caps both
+# paths AFTER their existing rank-and-filter steps. The
+# count caps remain in place as soft hints; the token
+# budget is the hard cap. Items are already in rank order
+# (cosine score for recall, selection priority for
+# Persona); the budget walks them and drops the first
+# over-budget item along with every item after it. No
+# mid-item truncation — full items or nothing.
+#
+# Opt-in, off by default:
+#
+#   [embedding]
+#   # ... rag_top_k / rag_min_similarity / ... ...
+#   recall_token_budget = 2000   # default 0 = disabled
+#
+# `0` (the default): no budget enforcement (byte-identical
+# to pre-Phase-97). `>= 1`: both recall + Persona
+# injection drop their lowest-ranked items until the
+# running estimate fits.
+#
+# Estimator: hand-rolled `chars / 4` (the OpenAI rule-of-
+# thumb for English) with a small fudge. Accuracy ~±20%;
+# sub-token accuracy isn't worth a new tokenizer
+# dependency. Unicode `chars()`-counted, not bytes.
+#
+# What's preserved with the budget on:
+# - The protected Persona core (behavioral constraints +
+#   identity scalars) is ALWAYS present regardless of
+#   budget; the budget only trims soft-facet selection.
+# - Edge case: if every recall hit falls out of the
+#   budget, auto-recall returns no block (the planner
+#   falls back to the base prompt — no empty recall
+#   section).
+# - The recall breadcrumb + Phase 78 learning surface +
+#   Phase 84 cluster stat + Phase 77 recall_log all see
+#   the post-budget set so observers match what's
+#   actually injected.
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

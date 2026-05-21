@@ -743,6 +743,62 @@ operator who needs more nuance can keep the gate at `0` or
 configure a low threshold (`2` or `3`) that catches only
 the very shortest noise turns.
 
+### Token-budget context sizing (Phase 97)
+
+Auto-recall and adaptive Persona selection have always
+capped injection by **entry count** (`rag_top_k` for
+recall, an internal K-facet limit for adaptive Persona).
+Count is a proxy for token cost, not the cost itself. A
+single memory body with a 4 KB blob silently displaces
+multiple shorter memories from the same `rag_top_k`
+budget; a Persona facet that grew from one sentence to ten
+paragraphs eats turn after turn of input — sometimes
+enough to bump the prompt past the model's context limit.
+
+Phase 97 adds an opt-in **token budget** that caps both
+paths after their existing rank-and-filter steps. The
+existing count caps remain in place as **soft hints**;
+the token budget is the hard cap. Items are already in
+rank order (cosine score for recall, selection priority
+for Persona); the budget walks them, and the **first
+item whose addition would exceed the budget** (along with
+every item after it) is dropped. No mid-item truncation
+— operators get full items or nothing.
+
+```toml
+[embedding]
+# ... existing knobs ...
+recall_token_budget = 2000   # optional, default 0 (disabled)
+```
+
+**Semantics:**
+- `recall_token_budget = 0` (the default): no budget
+  enforcement; behaviour is byte-identical to
+  pre-Phase-97.
+- `recall_token_budget = N` (any `N >= 1`): both recall
+  and Persona injection drop their lowest-ranked items
+  until the running estimate fits.
+
+**Estimator:** hand-rolled `chars / 4` (the OpenAI rule-
+of-thumb for English) with a small fudge factor.
+Accuracy ~±20%; sub-token accuracy isn't worth a new
+tokenizer dependency. Unicode `chars()`-counted, not
+bytes.
+
+**What the operator sees:** the existing recall
+breadcrumb (`aivyx recall: injected N memor[y|ies]`)
+reflects the post-budget set, so observers match what
+was actually injected. The Phase 78 learning surface +
+the Phase 84 cluster stat + the Phase 77 recall_log all
+see the same post-budget hits.
+
+**Edge case:** if every hit falls out of the budget,
+auto-recall returns no block (the planner falls back to
+the base prompt without an empty recall section).
+Adaptive Persona's protected core (constraints + scalar
+identity) is **always** present regardless of the
+budget — the budget only trims soft-facet selection.
+
 ## Recall feedback loop (Phase 77)
 
 Auto-recall (Phase 76) made the assistant *remember*. Phase 77

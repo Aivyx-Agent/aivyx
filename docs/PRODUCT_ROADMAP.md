@@ -1640,6 +1640,41 @@ respond to it. Closing the gap is the inflection point between
   1709), squarely inside the predicted +15-25 band.
   Zero new workspace deps.
 
+- **Phase 97 (Token-Budget Context Sizing, shipped
+  2026-05-21).** Closes the twice-deferred token-budget
+  item carried 21 phases (Phase 76) and 11 phases (Phase
+  86) — the longest-running content/correctness deferral
+  on the backlog. Auto-recall, adaptive Persona, and
+  the conversational window have all capped injection
+  by ENTRY COUNT (a proxy for token cost, not the cost
+  itself). A single 4 KB memory body could silently
+  displace multiple shorter ones from the same
+  `rag_top_k` budget; a grown Persona facet could eat
+  turn after turn of input — sometimes enough to bump
+  the prompt past the model's context limit. Phase 97
+  adds an opt-in `recall_token_budget` that caps both
+  recall + Persona injection paths AFTER their existing
+  rank-and-filter steps: lowest-ranked items drop until
+  the running estimate fits. Hand-rolled `chars/4`
+  estimator (~±20% accuracy; no new tokenizer dep). No
+  mid-item truncation — full items or nothing. The
+  protected Persona core (constraints + identity
+  scalars) is always present regardless of budget; the
+  budget only trims soft-facet selection. **No new
+  product commitment**, none weakened; the operator-
+  facing contract is *strengthened* (the loop no longer
+  silently inflates context cost when entries grow
+  long). Streak all three correct: DESIGN.md → **44**,
+  PRODUCT.md → **37**, lib.rs → **45** (new project
+  record, beating Phase 96's 44) — token_budget module
+  + recall integration + Persona integration all in
+  aivyx-channel, config in aivyx-config. Test count
+  delta `+21` (workspace 1709 → 1730), over the
+  predicted +10-15 band, accounted for by the pure
+  helper module earning ~12 individual boundary-case
+  tests instead of the calibration law's expected 5-7.
+  Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
