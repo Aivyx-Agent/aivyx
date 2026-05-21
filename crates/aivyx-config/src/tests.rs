@@ -5829,6 +5829,51 @@ fn embedding_ann_index_staged_threshold_unvalidated() {
     drop(env);
 }
 
+/// Phase 97 — default `recall_token_budget = 0` means
+/// budget enforcement is disabled. Pre-Phase-97
+/// behaviour byte-identical for every operator.
+#[test]
+fn embedding_recall_token_budget_default_is_zero() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "embed-budget-default",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.recall_token_budget, 0);
+    drop(env);
+}
+
+/// Phase 97 — explicit `recall_token_budget = 2000`
+/// round-trips through the loader.
+#[test]
+fn embedding_recall_token_budget_explicit_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_token_budget = 2000\n",
+        "embed-budget-explicit",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.recall_token_budget, 2000);
+    drop(env);
+}
+
+/// Phase 97 — explicit `recall_token_budget = 0` honored
+/// (operator can declare the default explicitly without
+/// changing behaviour). No bounds-rejection — any value
+/// is legal.
+#[test]
+fn embedding_recall_token_budget_explicit_zero_honored() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_token_budget = 0\n",
+        "embed-budget-zero",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert_eq!(emb.recall_token_budget, 0);
+    drop(env);
+}
+
 /// Phase 96 — `ann_index = true` +
 /// `ann_rebuild_threshold = 0` is rejected. Zero would
 /// force a rebuild every recall and defeat the perf win.

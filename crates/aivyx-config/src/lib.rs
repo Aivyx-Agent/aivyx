@@ -1455,6 +1455,18 @@ pub struct EmbeddingConfig {
     /// `ann_index = true` (zero would force a rebuild every
     /// recall and defeat the perf win); default `100`.
     pub ann_rebuild_threshold: u32,
+    /// Phase 97 — token-cost hard cap on the per-turn
+    /// recall + adaptive-Persona injection. With `0` (the
+    /// default), the existing `rag_top_k` and Persona
+    /// K-facet caps are the only constraint (byte-identical
+    /// to pre-Phase-97). With `>= 1`, the recall path and
+    /// the adaptive-Persona path each apply the budget
+    /// AFTER their own rank-ordering: items are dropped
+    /// from the lowest-ranked end until the running token
+    /// estimate fits. Estimator is hand-rolled `chars/4`
+    /// with a small fudge factor; ±20% accuracy is
+    /// adequate for budget enforcement.
+    pub recall_token_budget: u32,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -2487,6 +2499,14 @@ struct RawEmbedding {
     /// only when `ann_index = true`.
     #[serde(default)]
     ann_rebuild_threshold: Option<u32>,
+    /// Phase 97 — token-cost hard cap on recall + Persona
+    /// injection. Absent → 0 (disabled, byte-identical to
+    /// pre-Phase-97). Any non-zero value enables; no
+    /// upper-bound validation (a `100_000` budget
+    /// effectively disables enforcement for realistic
+    /// recall).
+    #[serde(default)]
+    recall_token_budget: Option<u32>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -4614,7 +4634,8 @@ fn build_embedding_config(
         || raw.recall_window_turns.is_some()
         || raw.recall_gate_min_chars.is_some()
         || raw.ann_index.is_some()
-        || raw.ann_rebuild_threshold.is_some();
+        || raw.ann_rebuild_threshold.is_some()
+        || raw.recall_token_budget.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4708,6 +4729,12 @@ fn build_embedding_config(
         });
     }
 
+    // Phase 97 — token-budget hard cap. `0` is the
+    // meaningful disabled value; any non-zero value enables.
+    // No upper-bound validation (the operator's call).
+    let recall_token_budget =
+        raw.recall_token_budget.unwrap_or(0);
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -4731,6 +4758,7 @@ fn build_embedding_config(
         recall_gate_min_chars,
         ann_index,
         ann_rebuild_threshold,
+        recall_token_budget,
     }))
 }
 
