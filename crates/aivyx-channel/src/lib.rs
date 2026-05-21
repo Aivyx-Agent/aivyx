@@ -87,6 +87,7 @@ pub mod proactive_detect;
 pub mod proactive_log;
 pub mod profile_prompt;
 pub mod proposal_grouping;
+pub mod recall_fusion;
 pub mod reflection_scheduler;
 pub mod token_budget;
 mod render;
