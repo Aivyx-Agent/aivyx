@@ -873,6 +873,7 @@ parent_role = "researcher"
 #   ann_index = false         # ANN-index opt-in (Phase 96)
 #   ann_rebuild_threshold = 100   # ANN stale-rebuild threshold (Phase 96)
 #   recall_token_budget = 0   # token-budget context sizing (Phase 97)
+#   recall_hybrid = false     # hybrid keyword+semantic fusion (Phase 98)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
@@ -1031,6 +1032,52 @@ parent_role = "researcher"
 #   Phase 84 cluster stat + Phase 77 recall_log all see
 #   the post-budget set so observers match what's
 #   actually injected.
+#
+# ----------------------------------------------------------------
+# Hybrid keyword+semantic recall (Phase 98) — recall_hybrid
+# ----------------------------------------------------------------
+#
+# Auto-recall ranks by cosine similarity over embeddings.
+# Embeddings encode semantic relationships well but miss
+# rare-term recall — acronyms ("ATC-417"), proper nouns
+# ("Jane Henderson"), code identifiers
+# (`HashMap::insert`), project codenames. The keyword
+# search tool (Phase 74, `Memory::search`) handles these
+# exact-match cases via substring matching but operates
+# as a separate manual path.
+#
+# Phase 98 fuses the two via Reciprocal Rank Fusion
+# (RRF): the auto-recall hook runs the semantic ranker
+# AND the substring search on every recall, then
+# combines their rankings via
+# `score = Σ 1 / (k + rank + 1)` with `k = 60` (the
+# industry-standard constant).
+#
+# Opt-in, off by default:
+#
+#   [embedding]
+#   # ... rag_top_k / rag_min_similarity / ... ...
+#   recall_hybrid = true   # default false
+#
+# Why RRF over score fusion: cosine scores in [-1, 1]
+# and substring hit counts don't share a scale. RRF is
+# RANK-based — it ignores raw scores and just counts
+# each item's position contribution. No normalization,
+# no tuning, no new dependency.
+#
+# Note on `rag_min_similarity`: RRF scores aren't on
+# the cosine scale, so the configured similarity floor
+# is skipped in the hybrid path. The `rag_top_k` cap
+# still limits the fused output; items that only one
+# ranker surfaces get small RRF scores that tend to be
+# pushed out by stronger items. A `rag_hybrid_min_rrf`
+# knob defers to a future phase.
+#
+# What this fixes: queries like "what's the status of
+# ATC-417" or "did Jane mention anything about the
+# refactor" now reliably surface memories about those
+# rare terms, even when the semantic side doesn't
+# strongly link them to a learnable concept.
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

@@ -351,38 +351,131 @@ hybrid-fusion deferral is **THIS PHASE**):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Hybrid fusion composes two
+  existing rankers via a pure rank-aggregation rule;
+  touched no locked technical-contract decision. The
+  recall pipeline's downstream stages
+  (cluster expansion, token budget) see the same
+  `Vec<(MemoryEntry, f32)>` shape they always have —
+  only the score's meaning shifts from cosine to RRF
+  on the hybrid path. Streak: **45 consecutive phases**
+  (was 44).
+- **PRODUCT.md — held.** P9 (recall) is delivered;
+  this is a quality refinement on its ranking. No
+  commitment changed; the operator-facing contract is
+  *strengthened* (rare-term queries reliably surface
+  memories when the operator opts in). Streak: **38
+  consecutive phases** (was 37).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  RRF helper + the recall integration all live in
+  `aivyx-channel`; the config knob in `aivyx-config`.
+  No `aivyx-core` touch; no new `AuditTag`; no new
+  `KeyDomain`. Streak: **46 consecutive phases** —
+  new project record, beating Phase 97's 45.
+
+**Test count — `+16`** (workspace `1730 → 1746`).
+**Slightly over** the predicted `+10-15` band by 1.
+Breakdown:
+
+- Config knob `+3` (default, explicit-true, explicit-
+  false-honored).
+- Pure RRF module `+10` (empty rankings; all-empty;
+  zero-limit; single-ranker preserves order; two
+  identical rankings double scores; the core RRF
+  claim — item in both outranks single-ranker hits;
+  limit truncates; defended k=0; disjoint rankings;
+  deterministic on tied scores).
+- Recall integration `+3` (off-is-semantic-only
+  regression pin; rare-term surfaces via keyword side;
+  both-rankers-agree top hit wins).
+
+The `+1 over` is consistent with the project's pattern
+for "new pure module with multiple boundary cases."
+Phase 96 was +15 on its pure ANN module; Phase 97 was
++13 on its pure token-budget module. The RRF helper
+similarly earned ~10 individual boundary-case tests,
+matching the established calibration shape.
+
+**Scope — every planned surface shipped exactly as scoped.**
+The `recall_fusion` module with `RRF_K = 60` constant +
+`reciprocal_rank_fusion` helper; the `SemanticMemoryContext`
+gains `recall_hybrid: bool` + `with_recall_hybrid(bool)`
+builder; the recall path dispatches on `recall_hybrid`
+to either the pre-Phase-98 semantic-only path or the
+new hybrid path that runs both `semantic_search_scored`
+AND `Memory::search`, fuses via RRF, and maps fused
+`(topic, seq)` back to `MemoryEntry`; the
+`rag_min_similarity` floor is explicitly skipped on the
+hybrid path (RRF scores incomparable to cosine) with a
+documented `rag_hybrid_min_rrf` deferral; the binary
+wires the knob from `[embedding].recall_hybrid`. Zero
+clippy warnings after two trivial `cloned_ref_to_slice_refs`
+cleanups (a pattern that's now appeared in both Phase 97
+and Phase 98 — newer clippy revision). Zero new
+workspace deps.
+
+**Implementation note on entry-body lookup.** The fused
+result is `Vec<(topic, seq, f32)>` but the downstream
+pipeline (cluster expansion, token budget, format_block)
+expects `Vec<(MemoryEntry, f32)>`. The hybrid path
+builds a `HashMap<(String, u64), MemoryEntry>` lookup
+from BOTH rankers' returns (the semantic side returns
+`(MemoryEntry, f32)`; the keyword side returns
+`Vec<MemoryEntry>`). Each entry inserts once
+(`or_insert_with` on the keyword side avoids
+overwriting the semantic-side clone). The fused list
+then `filter_map`s through the lookup to recover the
+bodies — items that fell out of both rankers' top-K
+(impossible by construction but defensively handled)
+are filtered out. No extra memory fetch; no extra
+storage I/O on the recall hot path.
+
+**Why the floor is skipped, restated.** The `rag_min_similarity`
+default is `0.20` (cosine in `[-1, 1]`). An RRF score
+for a position-0 item with `k=60` is `1/61 ≈ 0.0164`;
+for an item in both rankings at position 0 it's
+`2/61 ≈ 0.0328`. The floor `0.20` would reject every
+fused hit. The correct fix is a separate `rag_hybrid_min_rrf`
+knob (a documented deferral), not running the cosine
+floor against incomparable RRF scores. v1 makes this
+trade-off explicitly; the `rag_top_k` cap still bounds
+the output size.
 
 ## Exit criteria
 
-- [ ] `[embedding].recall_hybrid: bool` (default
-  `false`) — Task 2.
-- [ ] `reciprocal_rank_fusion` pure helper in
-  `aivyx-channel::recall_fusion` — Task 3.
-- [ ] Unit tests on the pure helper: empty / single
+- [x] `[embedding].recall_hybrid: bool` (default
+  `false`) — Task 2 (commit `faabd11`).
+- [x] `reciprocal_rank_fusion` pure helper in
+  `aivyx-channel::recall_fusion` — Task 3 (commit
+  `da0ac58`).
+- [x] Unit tests on the pure helper: empty / single
   ranker / two identical / two disjoint / item in
   both / `limit` truncation / deterministic on
-  ties — Task 3.
-- [ ] `SemanticMemoryContext::recall` runs both
+  ties — Task 3 (commit `da0ac58`).
+- [x] `SemanticMemoryContext::recall` runs both
   rankers + fuses when `recall_hybrid = true`; byte-
   identical pre-Phase-98 path with the knob off —
-  Task 4.
-- [ ] Integration tests: hybrid-off regression, hybrid-
+  Task 4 (commit `5ad87cd`).
+- [x] Integration tests: hybrid-off regression, hybrid-
   on rare-term recall, hybrid-on both-rankers-agree —
-  Task 4.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml`
-  updated — Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README
-  refreshed — Task 5.
-- [ ] All four Q-block questions resolved with
+  Task 4 (commit `5ad87cd`).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml`
+  updated — Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README
+  refreshed — Task 5 (this commit).
+- [x] All four Q-block questions resolved with
   operator sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-five.
-- [ ] PRODUCT.md streak extends to thirty-eight.
-- [ ] Production-core streak extends to forty-six
+- [x] DESIGN.md streak extends to forty-five.
+- [x] PRODUCT.md streak extends to thirty-eight.
+- [x] Production-core streak extends to forty-six
   (new record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+10-15; config
-  knob ≈ +3; pure helper ≈ +5-7 with boundary cases;
-  integration ≈ +2-3).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+16`, slightly over
+  the predicted `+10-15` band by 1 — accounted for by
+  the RRF module earning ~10 boundary-case tests in
+  line with the project's pattern for new pure
+  modules).
+- [x] Zero clippy warnings (two trivial cleanups).
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

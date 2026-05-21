@@ -1675,6 +1675,42 @@ respond to it. Closing the gap is the inflection point between
   tests instead of the calibration law's expected 5-7.
   Zero new workspace deps.
 
+- **Phase 98 (Hybrid Keyword+Semantic Recall Fusion,
+  shipped 2026-05-21).** Closes Phase 75's 23-phase-old
+  hybrid-fusion deferral. Auto-recall has ranked by
+  cosine similarity over embeddings since Phase 75 —
+  strong on semantic relationships but weak on rare-term
+  recall (acronyms, proper nouns, code identifiers,
+  project codenames). The keyword search tool (Phase 74,
+  `Memory::search`) handles those exact-match cases via
+  case-insensitive substring matching but operated as a
+  separate manual path. Phase 98 fuses the two via
+  Reciprocal Rank Fusion (RRF) — the industry-standard
+  rank-aggregation approach. With
+  `[embedding].recall_hybrid = true`, auto-recall runs
+  both rankers at recall time and combines their
+  rankings via `score = Σ 1 / (k + rank + 1)` with
+  `k = 60`. Rank-based fusion means cosine scores and
+  substring hit counts don't need normalization. Hand-
+  rolled (~30 lines in aivyx-channel::recall_fusion);
+  preserves the zero-new-deps streak. The
+  `rag_min_similarity` floor is skipped on the hybrid
+  path (RRF scores aren't on the cosine scale); a
+  separate `rag_hybrid_min_rrf` knob is a documented
+  deferral. **No new product commitment**, none
+  weakened; the operator-facing contract is
+  *strengthened* (rare-term queries like "ATC-417" or
+  "Jane Henderson" or `HashMap::insert` now reliably
+  surface memories about those terms when the operator
+  opts in). Streak all three correct: DESIGN.md →
+  **45**, PRODUCT.md → **38**, lib.rs → **46** (new
+  project record, beating Phase 97's 45) — recall_fusion
+  module + recall integration in aivyx-channel, config
+  in aivyx-config. Test count delta `+16` (workspace
+  1730 → 1746), slightly over the predicted +10-15
+  band, accounted for by the RRF module's comprehensive
+  boundary coverage. Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

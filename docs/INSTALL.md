@@ -799,6 +799,69 @@ Adaptive Persona's protected core (constraints + scalar
 identity) is **always** present regardless of the
 budget — the budget only trims soft-facet selection.
 
+### Hybrid keyword+semantic recall (Phase 98)
+
+Auto-recall has ranked by cosine similarity over
+embeddings since Phase 75. Embeddings encode semantic
+relationships well but struggle with **rare-term recall**:
+acronyms, proper nouns, code identifiers, project
+codenames. A query mentioning "ATC-417" or "kubernetes"
+or "Jane Henderson" may miss the memory specifically
+about that term because the embedding doesn't strongly
+link the rare token to a learnable concept.
+
+The keyword search tool (Phase 74,
+`Memory::search`) handles these exact-match cases via
+case-insensitive substring matching, but operates as a
+**separate manual path** — the agent / operator drives
+`aivyx memory search`, not auto-recall.
+
+Phase 98 closes that gap with **Reciprocal Rank Fusion
+(RRF)**. With `[embedding].recall_hybrid = true`,
+auto-recall runs both the semantic ranker AND the
+substring search on every recall, then fuses the two
+rankings before feeding the downstream pipeline
+(cluster expansion, token budget, etc.).
+
+```toml
+[embedding]
+# ... existing knobs ...
+recall_hybrid = true   # optional, default false
+```
+
+**Why RRF over score fusion.** Cosine scores in
+`[-1, 1]` and substring hit counts don't share a scale.
+Score-fusion approaches (`α * cosine + (1-α) *
+keyword_score`) require normalization and an alpha tuning
+knob. RRF is **rank-based** — it sums each item's
+position-based contribution
+(`1 / (k + rank + 1)` with `k = 60`, the industry-
+standard constant) and ignores raw scores entirely. No
+normalization, no tuning, no new dependency.
+
+**Semantics:**
+- `recall_hybrid = false` (default): semantic-only,
+  byte-identical to pre-Phase-98.
+- `recall_hybrid = true`: both rankers run; their
+  rankings fuse via RRF; the fused top-K feeds the
+  downstream pipeline.
+
+**The `rag_min_similarity` floor.** RRF scores aren't on
+the cosine scale, so the configured similarity floor
+isn't directly comparable. v1 **skips** the floor on the
+hybrid path. The `rag_top_k` cap still limits the fused
+output, and items that only one ranker surfaces tend to
+get small RRF scores (`1/61 ≈ 0.0164`) that get pushed
+out by stronger items. A future phase could add a
+separate `rag_hybrid_min_rrf` knob.
+
+**What this fixes:** queries with rare or technical
+terms now reliably surface memories about those terms,
+even when the semantic side doesn't rate them highly.
+The semantic side still catches the conceptually
+similar memories. The fusion is the union of both
+signals.
+
 ## Recall feedback loop (Phase 77)
 
 Auto-recall (Phase 76) made the assistant *remember*. Phase 77

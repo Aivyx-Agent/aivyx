@@ -3042,6 +3042,76 @@ strategy; surface line for dropped-by-budget count —
 see PHASE_97.md deferrals list) are operator-feedback-
 gated.
 
+## Phase 98 — Hybrid Keyword+Semantic Recall Fusion (Phase 75's hybrid-fusion deferral, closed)
+
+**Frozen — see [PHASE_98.md](PHASE_98.md).** Closes
+Phase 75's 23-phase-old hybrid-fusion deferral. The
+recall pipeline has ranked by cosine similarity over
+embeddings since Phase 75 — strong on semantic
+relationships but weak on rare-term recall (acronyms,
+proper nouns, code identifiers, project codenames). The
+keyword search tool (Phase 74) handles those exact-
+match cases but operates as a separate manual path.
+
+Phase 98 fuses the two paths via **Reciprocal Rank
+Fusion (RRF)**. With `[embedding].recall_hybrid = true`,
+auto-recall runs both the semantic ranker AND the
+existing `Memory::search` substring search at recall
+time; the two rankings fuse via RRF before feeding the
+downstream pipeline (cluster expansion, token budget,
+etc.).
+
+- **Reciprocal Rank Fusion (Q1a):** industry-standard
+  fusion. `score = Σ 1 / (k + rank + 1)` with `k = 60`
+  (Cormack et al.'s standard value). Rank-based —
+  cosine scores and substring hit counts don't need
+  normalization because RRF doesn't read scores. ~30
+  lines of pure code in
+  `aivyx-channel::recall_fusion`.
+- **Reuse Phase 74's substring search (Q2a):**
+  `Memory::search` is what the operator-facing search
+  already uses. No new tokenization; no corpus stats;
+  no BM25-style state to maintain. RRF is rank-based,
+  so the simple substring path gives RRF the ranks it
+  needs.
+- **Same query text both sides (Q3a):** Phase 86's
+  conversational window (if engaged) or the bare
+  current message — whatever the semantic side
+  embeds. Single source of truth; consistent ranking
+  targets.
+- **Single opt-in knob (Q4a):**
+  `[embedding].recall_hybrid: bool` (default `false`).
+  Matches the established actuator opt-in pattern.
+
+Trade-off documented: the `rag_min_similarity` floor is
+**skipped on the hybrid path** because RRF scores
+aren't on the cosine scale. The `rag_top_k` cap still
+limits the fused output; items only one ranker surfaces
+get small RRF scores that get pushed out by stronger
+items. A separate `rag_hybrid_min_rrf` knob is a
+documented deferral.
+
+Streak all three correct: DESIGN.md → **45**, PRODUCT.md
+→ **38**, `aivyx-core/src/lib.rs` → **46** (new project
+record, beats Phase 97's 45) — `recall_fusion` module +
+recall integration all in `aivyx-channel`; config knob
+in `aivyx-config`. Test count delta `+16` workspace
+(`+3` config knob, `+10` pure RRF helper with the full
+boundary set including the core "item in both rankings
+outranks single-ranker top hits" claim, `+3` recall
+integration including the rare-term case the deferral
+named) — slightly over the predicted `+10-15` band,
+accounted for by the RRF module's comprehensive
+boundary coverage. Zero clippy warnings (two trivial
+cleanups). Zero new workspace deps.
+
+Likely follow-ups (rag_hybrid_min_rrf floor knob; BM25-
+style keyword scoring; tokenization-aware substring
+matching; operator-tunable recall_hybrid_k; surface
+line for fused stats; shared embedding cache between
+rankers — see PHASE_98.md deferrals list) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
