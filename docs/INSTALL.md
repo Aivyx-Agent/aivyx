@@ -602,6 +602,57 @@ gradually. Swapping embedding models is safe — vectors of the
 old dimension are detected as stale and re-embedded by the
 same backfill.
 
+### ANN index for semantic memory search (Phase 96)
+
+By default semantic memory search is **brute-force cosine**:
+every query compares against every stored vector. That's
+O(N) per query and works for any operator with up to a few
+thousand entries. Phase 96 adds opt-in **IVF-style
+approximate-nearest-neighbor** indexing for larger stores.
+
+How it works: at build time, the vector index is partitioned
+into K ≈ √N clusters via deterministic spaced-sampling +
+one-pass nearest-centroid assignment. At query time, the
+query vector is cosine-ranked against the K centroids
+(cheap — K is small), the top-N clusters are selected, and
+brute-force cosine then runs only within those clusters'
+members. The candidate set narrows to ≈ N · (top_N / K),
+which the existing brute-force re-rank then orders
+**exactly** within that pool. End-to-end: O(N) → O(√N).
+
+```toml
+[embedding]
+# ... existing fields ...
+ann_index = true                # optional, default false
+ann_rebuild_threshold = 100     # optional, default 100
+```
+
+**Semantics:**
+- `ann_index = false` (default): brute-force only,
+  byte-identical to pre-Phase-96.
+- `ann_index = true`: ANN narrows candidates → brute-force
+  re-ranks within. The final top-K is **exactly** ordered
+  within the candidate set (the hybrid composition
+  preserves the exact-cosine guarantee).
+
+**Stale-rebuild:** the index lives in-memory and is rebuilt
+on demand. `ann_rebuild_threshold = 100` means "after 100
+new vector writes, the next recall rebuilds the index."
+Lower the threshold for tighter freshness; raise it for
+fewer rebuilds. Daemon restart drops the in-memory index;
+the first ANN query after restart rebuilds from the
+persisted embeddings.
+
+**Quality:** IVF with one-pass nearest-centroid assignment
+trades some recall for simplicity + zero new dependencies.
+For very large stores (>100K entries) where recall quality
+matters more, HNSW-level indexing is documented as a
+Phase 96 deferral.
+
+**To turn it off:** delete the `ann_index` key or set it to
+`false`. `semantic_search_scored` returns to brute-force
+byte-identically.
+
 ## Automatic recall (Phase 76)
 
 Phase 75 gave the agent a semantic-search *tool*. Phase 76

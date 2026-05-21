@@ -101,6 +101,16 @@ pub struct SemanticMemoryContext {
     /// than this Unicode-char count short-circuit to `None`
     /// at the top of `recall` (no embed, no memory walk).
     recall_gate_min_chars: usize,
+    /// Phase 96 — when `true`, `recall` dispatches to
+    /// `Memory::semantic_search_scored_ann` (ANN narrows →
+    /// brute-force re-ranks) instead of the brute-force
+    /// `semantic_search_scored`. Default `false`
+    /// (byte-identical pre-Phase-96).
+    ann_index: bool,
+    /// Phase 96 — passed through to
+    /// `semantic_search_scored_ann` as the stale-rebuild
+    /// threshold. Ignored when `ann_index = false`.
+    ann_rebuild_threshold: u32,
 }
 
 impl SemanticMemoryContext {
@@ -122,7 +132,26 @@ impl SemanticMemoryContext {
             conversation_windows: None,
             recall_window_turns: 1,
             recall_gate_min_chars: 0,
+            ann_index: false,
+            ann_rebuild_threshold: 100,
         }
+    }
+
+    /// Phase 96 — set the ANN-index opt-in + rebuild
+    /// threshold. Builder; the binary calls this with
+    /// `config.embedding.ann_index` +
+    /// `config.embedding.ann_rebuild_threshold`. With the
+    /// default (`false`, `100`) recall is byte-identical
+    /// to pre-Phase-96; with `true`, `recall` dispatches to
+    /// `Memory::semantic_search_scored_ann`.
+    pub fn with_ann_index(
+        mut self,
+        enabled: bool,
+        rebuild_threshold: u32,
+    ) -> Self {
+        self.ann_index = enabled;
+        self.ann_rebuild_threshold = rebuild_threshold;
+        self
     }
 
     /// Phase 90 — set the heuristic recall-gate threshold.
@@ -269,13 +298,35 @@ impl ContextProvider for SemanticMemoryContext {
         };
         // Rank with scores so the relevance floor can drop weak
         // hits even when top_k isn't filled (Q3a).
-        let scored = match self
-            .memory
-            .semantic_search_scored(&qvec, self.rag_top_k)
-            .await
-        {
-            Ok(s) => s,
-            Err(_) => return None,
+        //
+        // Phase 96 — dispatch to ANN when the operator opts
+        // in. The ANN path narrows via the IVF index, then
+        // the brute-force re-rank within candidates is what
+        // `semantic_search_scored_ann` returns. With
+        // `ann_index = false` (the default) this is the
+        // pre-Phase-96 brute-force path verbatim.
+        let scored = if self.ann_index {
+            match self
+                .memory
+                .semantic_search_scored_ann(
+                    &qvec,
+                    self.rag_top_k,
+                    self.ann_rebuild_threshold,
+                )
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => return None,
+            }
+        } else {
+            match self
+                .memory
+                .semantic_search_scored(&qvec, self.rag_top_k)
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => return None,
+            }
         };
         let kept: Vec<(MemoryEntry, f32)> = scored
             .into_iter()

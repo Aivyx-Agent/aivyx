@@ -2910,6 +2910,66 @@ stat across daemon restarts; LLM-based signal-density
 classifier; per-pass skip granularity — see PHASE_95.md
 deferrals list) are operator-feedback-gated.
 
+## Phase 96 — ANN Index for Semantic Memory Search (Phase 75's ANN-index deferral, closed)
+
+**Frozen — see [PHASE_96.md](PHASE_96.md).** Closes the
+Phase 75 deferral that's been carried 20 phases: the
+approximate-nearest-neighbor index for semantic memory
+search. The brute-force `rank_by_cosine` over the full
+`vector_index: Vec<(String, u64, Vec<f32>)>` has been
+the only path since Phase 75; it scales linearly with
+memory size. Phase 96 adds opt-in **IVF-style
+clustering** that scales `O(N) → O(√N)` at query time.
+
+- **Hand-rolled IVF (Q1a):** vectors partition into
+  `K ≈ √N` clusters at build time via deterministic
+  spaced-sampling seeds + one-pass nearest-centroid
+  assignment. ~150 lines in
+  `aivyx-memory::ann_index`. Preserves the project's
+  zero-new-deps streak.
+- **In-memory + rebuild-on-demand (Q2a):** the
+  `AnnIndex` lives in a `tokio::sync::Mutex<Option<...>>`
+  alongside the flat `vector_index`; rebuilt on the first
+  ANN query after boot AND when the
+  `writes_since_ann_build: AtomicU32` counter crosses
+  the operator-configured threshold. No new schema, no
+  serialization, no incremental-update complexity.
+- **ANN narrows → brute-force re-ranks (Q3a):** the ANN
+  returns a candidate pool of `4 * limit` candidates
+  searched from `default_top_clusters(K) = max(2, K/4)`
+  clusters; the existing brute-force ordering rule then
+  re-ranks within and returns the top-K. The exact-
+  cosine guarantee on the final ordering is preserved
+  within the candidate set.
+- **Two consumer-side knobs (Q4a):**
+  `[embedding].ann_index: bool` (default `false`) +
+  `ann_rebuild_threshold: u32` (default `100`).
+  Validation: `ann_rebuild_threshold >= 1` when armed
+  (zero would force a rebuild every recall). With the
+  knob off, recall is byte-identical to pre-Phase-96.
+
+Streak all three correct: DESIGN.md → **43**, PRODUCT.md
+→ **36**, `aivyx-core/src/lib.rs` → **44** (new project
+record, beats Phase 95's 43) — the ANN data structure +
+build + query + RedbMemory integration all in
+`aivyx-memory`; the dispatch in
+`aivyx-channel::memory_recall`; the config knobs in
+`aivyx-config`. No `aivyx-core` touch; no new
+`AuditTag`; no new `KeyDomain`. Test count delta `+22`
+workspace (`+4` config knobs, `+15` pure ANN module
+with comprehensive boundary coverage, `+3` RedbMemory
+integration — small-N brute-equivalence, large-N
+top-1 recall, stale-counter increment/reset) —
+**squarely inside the predicted +15-25 band**. Zero
+clippy warnings. Zero new workspace deps.
+
+Likely follow-ups (HNSW-quality recall for very large
+stores; iterative k-means refinement; persisted index
+across daemon restarts; incremental updates; topic-aware
+centroid seeding; ANN for the `aivyx memory search`
+operator path — see PHASE_96.md deferrals list) are
+operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

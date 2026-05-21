@@ -2757,6 +2757,13 @@ async fn run_async(
             // (gate disabled) is byte-identical to
             // pre-Phase-90.
             sc = sc.with_recall_gate(cfg.recall_gate_min_chars);
+            // Phase 96 — ANN index opt-in. Default
+            // `false` is byte-identical to pre-Phase-96
+            // brute-force.
+            sc = sc.with_ann_index(
+                cfg.ann_index,
+                cfg.ann_rebuild_threshold,
+            );
             Some(Arc::new(sc))
         }
         _ => None,

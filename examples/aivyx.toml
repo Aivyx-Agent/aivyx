@@ -870,6 +870,8 @@ parent_role = "researcher"
 #   rag_min_similarity = 0.20 # drop hits below this cosine score
 #   recall_window_turns = 1   # conversational-window relevance (Phase 86)
 #   recall_gate_min_chars = 0 # heuristic recall gate (Phase 90)
+#   ann_index = false         # ANN-index opt-in (Phase 96)
+#   ann_rebuild_threshold = 100   # ANN stale-rebuild threshold (Phase 96)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
@@ -931,6 +933,52 @@ parent_role = "researcher"
 # but meaningful messages (`run!`, `ack`, `git`) gate
 # alongside fillers — keep the threshold conservative if
 # you use them.
+#
+# ----------------------------------------------------------------
+# ANN index (Phase 96) — ann_index / ann_rebuild_threshold
+# ----------------------------------------------------------------
+#
+# Semantic memory search is brute-force cosine by default:
+# every query compares against every stored vector. That's
+# O(N) per query and is fine for any operator with up to a
+# few thousand entries. Phase 96 adds opt-in IVF-style
+# approximate-nearest-neighbor indexing for larger stores.
+#
+# How it works: vectors partition into K ≈ √N clusters at
+# build time; queries cosine-rank the K centroids, pick the
+# top-N clusters, and brute-force within those. The
+# existing brute-force re-rank then orders the final top-K
+# exactly within the candidate set (ANN narrows → brute
+# re-ranks; the hybrid composition preserves the exact-
+# cosine guarantee). End-to-end: O(N) → O(√N).
+#
+# Opt-in, off by default:
+#
+#   [embedding]
+#   # ... rag_top_k / rag_min_similarity / recall_window_turns ...
+#   ann_index = true                # default false
+#   ann_rebuild_threshold = 100     # default 100
+#
+# `ann_index = false` (the default): brute-force only,
+# byte-identical to pre-Phase-96. `ann_index = true`:
+# ANN narrows → brute-force re-ranks within. The
+# `ann_rebuild_threshold` is the number of new vector
+# writes after the last build before the index is marked
+# stale and the next recall rebuilds. Lower for tighter
+# freshness; raise for fewer rebuilds.
+#
+# Trade-off: the IVF approach trades some recall for
+# simplicity + zero new workspace dependencies. For very
+# large stores (>100K entries) where recall quality
+# matters more, HNSW-level indexing is a future
+# phase. Validation: `ann_rebuild_threshold >= 1` when
+# `ann_index = true`.
+#
+# To turn it off: delete the key or set `ann_index = false`.
+# Daemon restart drops the in-memory index; the first ANN
+# query after restart rebuilds from the persisted
+# embeddings (no startup stall — the rebuild is on the
+# first query, not on boot).
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

@@ -1608,6 +1608,38 @@ respond to it. Closing the gap is the inflection point between
   `QueryResponsePayload` since the addition tipped a long-
   running additive-fields variant past clippy's threshold.
 
+- **Phase 96 (ANN Index for Semantic Memory Search,
+  shipped 2026-05-21).** Closes the Phase 75 deferral
+  carried 20 phases: the approximate-nearest-neighbor
+  index for semantic memory search. The brute-force
+  `rank_by_cosine` has been the only path since Phase 75
+  and scales linearly with memory size. Phase 96 adds
+  opt-in IVF-style clustering — vectors partition into
+  K ≈ √N clusters at build time; queries cosine-rank the
+  centroids, take top-N clusters, and brute-force within
+  those. The existing brute-force then re-ranks the
+  candidate set so the final top-K ordering is exact
+  within candidates. End-to-end: O(N) → O(√N) per query.
+  Hand-rolled (~150 lines in aivyx-memory) — preserves
+  the project's zero-new-deps streak. Index lives in-
+  memory, rebuilt on demand when an atomic write-count
+  counter crosses the operator-configured threshold.
+  Two new optional fields on `[embedding]`:
+  `ann_index: bool` (default `false`) +
+  `ann_rebuild_threshold: u32` (default `100`). With
+  `ann_index = false` the recall path is byte-identical
+  to pre-Phase-96 brute-force. **No new product
+  commitment**, none weakened; the operator-facing
+  contract is *strengthened* (large memory stores stay
+  responsive when the operator opts in). Streak all
+  three correct: DESIGN.md → **43**, PRODUCT.md → **36**,
+  lib.rs → **44** (new project record, beating Phase
+  95's 43) — ANN module + RedbMemory integration in
+  aivyx-memory, dispatch in aivyx-channel, config in
+  aivyx-config. Test count delta `+22` (workspace 1687 →
+  1709), squarely inside the predicted +15-25 band.
+  Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;
