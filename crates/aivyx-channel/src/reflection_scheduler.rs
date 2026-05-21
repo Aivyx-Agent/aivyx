@@ -51,17 +51,84 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronSchedule;
+use serde::{Deserialize, Serialize};
 
 use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
 use aivyx_config::ReflectionScheduleConfig;
 use aivyx_core::{CancellationToken, TurnId, TurnOutcomeSummary};
 
 use crate::trigger::{TriggerDispatch, TriggerSource};
+
+/// Phase 95 — per-schedule "should we fire this cycle"
+/// decision. Pure arithmetic over the operator-configured
+/// knobs + the observed audit-chain growth since the last
+/// fired cycle for the same schedule.
+///
+/// Returns `false` only when:
+/// - `skip_when_idle = true`, AND
+/// - `min_to_fire >= 1` (defended — `0` always fires; the
+///   loader validates against this combination, but the
+///   helper defends defensively), AND
+/// - `audit_growth < min_to_fire as u64`.
+///
+/// In all other cases the cycle fires. The operator's
+/// `cron` interval is the upper bound on firing rate — this
+/// helper can only suppress a fire, never schedule one.
+pub fn should_fire_cycle(
+    audit_growth: u64,
+    min_to_fire: u32,
+    skip_when_idle: bool,
+) -> bool {
+    if !skip_when_idle {
+        return true;
+    }
+    if min_to_fire == 0 {
+        // Defended: zero would always-skip; the loader
+        // rejects this combination, but if it somehow
+        // reaches the helper, fire instead of locking the
+        // operator out of every cycle.
+        return true;
+    }
+    audit_growth >= u64::from(min_to_fire)
+}
+
+/// Phase 95 — per-schedule accumulating cadence stat. The
+/// scheduler increments `fired` on every actual fire and
+/// `skipped` on every `should_fire_cycle = false` decision.
+/// In-memory across the daemon lifetime; daemon restart
+/// resets to all-zero.
+///
+/// `#[serde(default)]` on each field keeps the IPC round-
+/// trip wire-compatible — clients on older versions decode
+/// the stat with zeroed missing fields, and pre-Phase-95
+/// daemons (which never produce this shape) still satisfy
+/// new clients' default-zero expectation.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize,
+)]
+pub struct RecentReflectionStat {
+    #[serde(default)]
+    pub fired: u32,
+    #[serde(default)]
+    pub skipped: u32,
+}
+
+/// Shared per-schedule cadence stats handle, keyed by
+/// schedule name. The scheduler writes to it on every cycle
+/// decision; the `GetLearningInsights` IPC reads to surface
+/// the per-schedule cadence picture.
+pub type SharedRecentReflectionStats =
+    Arc<RwLock<HashMap<String, RecentReflectionStat>>>;
+
+/// Construct an empty shared cadence-stat handle.
+pub fn shared_recent_reflection_stats() -> SharedRecentReflectionStats {
+    Arc::new(RwLock::new(HashMap::new()))
+}
 
 /// Phase 77 — handles the recall→reflection feedback pass needs.
 /// Bundled so `run_reflection_scheduler`'s signature doesn't grow
@@ -1864,6 +1931,94 @@ mod tests {
     use aivyx_audit::AuditEvent;
     use aivyx_capability::CapabilitySet;
     use aivyx_core::SessionId;
+
+    // ---- Phase 95 — should_fire_cycle pure helper -----------
+
+    /// Phase 95 — `skip_when_idle = false` short-circuits
+    /// the check; every cycle fires regardless of growth.
+    /// This is the pre-Phase-95 default — operators who
+    /// haven't opted in see byte-identical behaviour.
+    #[test]
+    fn should_fire_skip_off_always_fires() {
+        assert!(should_fire_cycle(0, 1, false));
+        assert!(should_fire_cycle(0, 100, false));
+        assert!(should_fire_cycle(50, 100, false));
+        assert!(should_fire_cycle(u64::MAX, 100, false));
+    }
+
+    /// Phase 95 — `skip_when_idle = true` with audit-growth
+    /// strictly below threshold skips. The boundary uses
+    /// `>=`, so growth-at-threshold fires (next test).
+    #[test]
+    fn should_fire_skip_on_below_threshold_skips() {
+        assert!(!should_fire_cycle(0, 1, true));
+        assert!(!should_fire_cycle(4, 5, true));
+        assert!(!should_fire_cycle(99, 100, true));
+    }
+
+    /// Phase 95 — `skip_when_idle = true` with audit-growth
+    /// AT the threshold fires. Boundary semantics: `>=`,
+    /// not strictly-greater-than. An operator setting
+    /// `min_audit_entries_to_fire = 1` gets "any new entry
+    /// fires" not "any entry beyond the first."
+    #[test]
+    fn should_fire_skip_on_at_threshold_fires() {
+        assert!(should_fire_cycle(1, 1, true));
+        assert!(should_fire_cycle(5, 5, true));
+        assert!(should_fire_cycle(100, 100, true));
+    }
+
+    /// Phase 95 — `skip_when_idle = true` with audit-growth
+    /// above the threshold fires.
+    #[test]
+    fn should_fire_skip_on_above_threshold_fires() {
+        assert!(should_fire_cycle(2, 1, true));
+        assert!(should_fire_cycle(50, 5, true));
+        assert!(should_fire_cycle(u64::MAX, 1, true));
+    }
+
+    /// Phase 95 — defended: `min_to_fire = 0` always fires
+    /// regardless of growth, even with `skip_when_idle =
+    /// true`. The loader rejects this combination at config
+    /// time, but the helper defends against it reaching
+    /// runtime (defense-in-depth).
+    #[test]
+    fn should_fire_defended_threshold_zero_always_fires() {
+        assert!(should_fire_cycle(0, 0, true));
+        assert!(should_fire_cycle(0, 0, false));
+        assert!(should_fire_cycle(100, 0, true));
+    }
+
+    /// Phase 95 — `RecentReflectionStat::default()` is zero/
+    /// zero. Pinned because every per-schedule entry in the
+    /// shared stats map initializes from this default.
+    #[test]
+    fn recent_reflection_stat_default_is_zero() {
+        let s = RecentReflectionStat::default();
+        assert_eq!(s.fired, 0);
+        assert_eq!(s.skipped, 0);
+    }
+
+    /// Phase 95 — `RecentReflectionStat` round-trips
+    /// through serde with all fields present, and decodes
+    /// from an empty `{}` document (the wire-compat
+    /// shape — pre-Phase-95 daemons send nothing for these
+    /// fields).
+    #[test]
+    fn recent_reflection_stat_serde_wire_compat() {
+        let s = RecentReflectionStat {
+            fired: 7,
+            skipped: 3,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let round: RecentReflectionStat =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(round, s);
+        // Wire-compat decode from absent fields.
+        let from_empty: RecentReflectionStat =
+            serde_json::from_str("{}").unwrap();
+        assert_eq!(from_empty, RecentReflectionStat::default());
+    }
 
     /// Test-only: build a fresh `SignedEntry` for `TurnStarted`
     /// with a given timestamp. Returns `(entry, turn_id,
