@@ -395,6 +395,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             .map_err(|e| DaemonError::Bind { path: parent.display().to_string(), source: e })?;
     }
 
+    // Phase 95 — shared per-schedule cadence stats (fired /
+    // skipped counts, accumulated across the daemon lifetime).
+    // Created once here; cloned into both the reflection-
+    // scheduler spawn (writer) and per-connection contexts
+    // (reader for `GetLearningInsights`).
+    let cadence_stats =
+        crate::reflection_scheduler::shared_recent_reflection_stats();
+
     let listener = UnixListener::bind(socket_path)
         .map_err(|e| DaemonError::Bind { path: socket_path.display().to_string(), source: e })?;
 
@@ -502,6 +510,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let rs_shutdown = shutdown.clone();
             let rs_audit = Arc::clone(al);
             let rs_schedules = reflection_schedules.clone();
+            let rs_cadence_stats = cadence_stats.clone();
             // Phase 77 — bundle the recall→reflection feedback
             // deps iff the whole substrate is present (recall
             // log + memory + proposal chain). Any missing piece
@@ -703,6 +712,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_persona_lifecycle,
                     rs_persona_consolidation,
                     rs_recall_judgment,
+                    rs_cadence_stats,
                     rs_shutdown,
                 )
                 .await;

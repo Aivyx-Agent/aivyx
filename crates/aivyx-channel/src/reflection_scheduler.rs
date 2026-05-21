@@ -130,6 +130,64 @@ pub fn shared_recent_reflection_stats() -> SharedRecentReflectionStats {
     Arc::new(RwLock::new(HashMap::new()))
 }
 
+/// Phase 95 — per-cycle cadence decision. Returns whether
+/// the cycle should fire AND increments the `skipped`
+/// counter on the cadence stat if it shouldn't. Called by
+/// `run_reflection_scheduler` before per-pass dispatch.
+///
+/// The first cycle (no entry in `last_fired_audit_len`)
+/// always fires — no prior baseline to compare against.
+/// Subsequent cycles compare audit-chain growth (current
+/// minus last-fired) against the schedule's
+/// `min_audit_entries_to_fire` via `should_fire_cycle`.
+fn decide_cadence_action(
+    schedule_name: &str,
+    skip_when_idle: bool,
+    min_to_fire: u32,
+    current_audit_len: u64,
+    last_fired_audit_len: &HashMap<String, u64>,
+    cadence_stats: &SharedRecentReflectionStats,
+) -> bool {
+    let should_fire = match last_fired_audit_len.get(schedule_name) {
+        None => true,
+        Some(prev) => {
+            let growth = current_audit_len.saturating_sub(*prev);
+            should_fire_cycle(growth, min_to_fire, skip_when_idle)
+        }
+    };
+    if !should_fire {
+        if let Ok(mut stats) = cadence_stats.write() {
+            let entry = stats
+                .entry(schedule_name.to_string())
+                .or_default();
+            entry.skipped = entry.skipped.saturating_add(1);
+        }
+    }
+    should_fire
+}
+
+/// Phase 95 — record that the cycle for `schedule_name`
+/// fired. Stores the current audit-log length as the
+/// baseline for the next cycle's growth comparison, and
+/// increments the `fired` counter on the cadence stat.
+fn mark_cycle_fired(
+    schedule_name: &str,
+    current_audit_len: u64,
+    last_fired_audit_len: &mut HashMap<String, u64>,
+    cadence_stats: &SharedRecentReflectionStats,
+) {
+    last_fired_audit_len.insert(
+        schedule_name.to_string(),
+        current_audit_len,
+    );
+    if let Ok(mut stats) = cadence_stats.write() {
+        let entry = stats
+            .entry(schedule_name.to_string())
+            .or_default();
+        entry.fired = entry.fired.saturating_add(1);
+    }
+}
+
 /// Phase 77 — handles the recall→reflection feedback pass needs.
 /// Bundled so `run_reflection_scheduler`'s signature doesn't grow
 /// per-handle. `None` (no `[embedding]` / no recall substrate) →
@@ -599,6 +657,7 @@ pub async fn run_reflection_scheduler(
     persona_lifecycle: Option<PersonaLifecycleDeps>,
     persona_consolidation: Option<PersonaConsolidationDeps>,
     recall_judgment: Option<RecallJudgmentDeps>,
+    cadence_stats: SharedRecentReflectionStats,
     shutdown: CancellationToken,
 ) {
     if schedules.is_empty() {
@@ -614,6 +673,10 @@ pub async fn run_reflection_scheduler(
     // schedule is operator-declared and the cadence is large
     // (typical: daily / weekly).
     let mut last_fired: HashMap<String, DateTime<Utc>> = HashMap::new();
+    // Phase 95 — per-schedule audit-log length at last fired
+    // cycle. `None` means "this schedule hasn't fired yet
+    // since daemon boot" — the first cycle is unconditional.
+    let mut last_fired_audit_len: HashMap<String, u64> = HashMap::new();
     let mut cache = OutcomeSummaryCache::new(8);
 
     loop {
@@ -641,6 +704,45 @@ pub async fn run_reflection_scheduler(
                 continue;
             };
             if next_fire <= now {
+                // Phase 95 — skip-when-idle gate. The first
+                // cycle (no prior `last_fired_audit_len`)
+                // fires unconditionally; subsequent cycles
+                // consult audit-chain growth. The operator's
+                // cron remains the upper bound on firing
+                // rate — this gate only suppresses fires,
+                // never schedules them.
+                let current_len = audit_log.len() as u64;
+                let should_fire = decide_cadence_action(
+                    &sched.name,
+                    sched.skip_when_idle,
+                    sched.min_audit_entries_to_fire,
+                    current_len,
+                    &last_fired_audit_len,
+                    &cadence_stats,
+                );
+                if !should_fire {
+                    if let Some(prev) =
+                        last_fired_audit_len.get(&sched.name)
+                    {
+                        eprintln!(
+                            "aivyx reflection: schedule {:?} — \
+                             skipped (audit-growth {} \
+                             below threshold {})",
+                            sched.name,
+                            current_len.saturating_sub(*prev),
+                            sched.min_audit_entries_to_fire,
+                        );
+                    }
+                    last_fired.insert(sched.name.clone(), now);
+                    if let Some(after_now) =
+                        next_fire_after(&sched.cron, now)
+                    {
+                        update_earliest(
+                            &mut earliest_next, after_now, now,
+                        );
+                    }
+                    continue;
+                }
                 fire_reflection(
                     &dispatch,
                     audit_log.as_ref(),
@@ -655,6 +757,12 @@ pub async fn run_reflection_scheduler(
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
+                mark_cycle_fired(
+                    &sched.name,
+                    audit_log.len() as u64,
+                    &mut last_fired_audit_len,
+                    &cadence_stats,
+                );
                 if let Some(after_now) = next_fire_after(&sched.cron, now) {
                     update_earliest(&mut earliest_next, after_now, now);
                 }
@@ -2018,6 +2126,111 @@ mod tests {
         let from_empty: RecentReflectionStat =
             serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty, RecentReflectionStat::default());
+    }
+
+    /// Phase 95 — end-to-end multi-cycle integration over
+    /// the helpers that the scheduler loop uses. Models a
+    /// schedule with `skip_when_idle = true,
+    /// min_audit_entries_to_fire = 5` across four cycles:
+    ///
+    /// - Cycle 1 (audit_len = 0, no prior baseline) →
+    ///   unconditional fire; stat = (1, 0); cursor = 0.
+    /// - Cycle 2 (audit_len = 3, growth = 3 < 5) → skip;
+    ///   stat = (1, 1); cursor unchanged (= 0).
+    /// - Cycle 3 (audit_len = 8, growth since cursor = 8
+    ///   >= 5) → fire; stat = (2, 1); cursor = 8.
+    /// - Cycle 4 (audit_len = 10, growth = 2 < 5) → skip;
+    ///   stat = (2, 2); cursor unchanged (= 8).
+    ///
+    /// Exercises the cursor-not-updated-on-skip invariant,
+    /// the first-cycle-unconditional rule, the boundary
+    /// `>=` rule, and the accumulating stat shape.
+    #[test]
+    fn cadence_helpers_multi_cycle_fire_skip_fire_skip() {
+        let schedule_name = "test";
+        let skip_when_idle = true;
+        let min_to_fire: u32 = 5;
+        let stats = shared_recent_reflection_stats();
+        let mut last_fired_audit_len: HashMap<String, u64> =
+            HashMap::new();
+
+        // Cycle 1 — first cycle, no baseline, unconditional
+        // fire.
+        let should_fire = decide_cadence_action(
+            schedule_name,
+            skip_when_idle,
+            min_to_fire,
+            0,
+            &last_fired_audit_len,
+            &stats,
+        );
+        assert!(should_fire, "first cycle must fire unconditionally");
+        mark_cycle_fired(
+            schedule_name,
+            0,
+            &mut last_fired_audit_len,
+            &stats,
+        );
+        let s = stats.read().unwrap().get(schedule_name).cloned().unwrap();
+        assert_eq!(s.fired, 1);
+        assert_eq!(s.skipped, 0);
+        assert_eq!(*last_fired_audit_len.get(schedule_name).unwrap(), 0);
+
+        // Cycle 2 — audit grew to 3 (growth 3 < threshold 5)
+        // → skip.
+        let should_fire = decide_cadence_action(
+            schedule_name,
+            skip_when_idle,
+            min_to_fire,
+            3,
+            &last_fired_audit_len,
+            &stats,
+        );
+        assert!(!should_fire, "growth 3 < threshold 5 must skip");
+        let s = stats.read().unwrap().get(schedule_name).cloned().unwrap();
+        assert_eq!(s.fired, 1);
+        assert_eq!(s.skipped, 1);
+        // Cursor must NOT have advanced on skip.
+        assert_eq!(*last_fired_audit_len.get(schedule_name).unwrap(), 0);
+
+        // Cycle 3 — audit grew to 8 (growth 8 >= threshold
+        // 5) → fire.
+        let should_fire = decide_cadence_action(
+            schedule_name,
+            skip_when_idle,
+            min_to_fire,
+            8,
+            &last_fired_audit_len,
+            &stats,
+        );
+        assert!(should_fire, "growth 8 >= threshold 5 must fire");
+        mark_cycle_fired(
+            schedule_name,
+            8,
+            &mut last_fired_audit_len,
+            &stats,
+        );
+        let s = stats.read().unwrap().get(schedule_name).cloned().unwrap();
+        assert_eq!(s.fired, 2);
+        assert_eq!(s.skipped, 1);
+        assert_eq!(*last_fired_audit_len.get(schedule_name).unwrap(), 8);
+
+        // Cycle 4 — audit grew to 10 (growth since cursor 8
+        // is 2; 2 < threshold 5) → skip.
+        let should_fire = decide_cadence_action(
+            schedule_name,
+            skip_when_idle,
+            min_to_fire,
+            10,
+            &last_fired_audit_len,
+            &stats,
+        );
+        assert!(!should_fire, "growth 2 < threshold 5 must skip");
+        let s = stats.read().unwrap().get(schedule_name).cloned().unwrap();
+        assert_eq!(s.fired, 2);
+        assert_eq!(s.skipped, 2);
+        // Cursor still at last-fired value.
+        assert_eq!(*last_fired_audit_len.get(schedule_name).unwrap(), 8);
     }
 
     /// Test-only: build a fresh `SignedEntry` for `TurnStarted`
