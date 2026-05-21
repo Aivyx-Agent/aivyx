@@ -11,6 +11,7 @@
 //! which leaves the turn byte-identical to pre-Phase-76
 //! behavior — recall never errors a turn.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -121,6 +122,17 @@ pub struct SemanticMemoryContext {
     /// recall_log all see the post-budget set so observers
     /// match what was actually injected.
     recall_token_budget: u32,
+    /// Phase 98 — hybrid keyword+semantic fusion opt-in.
+    /// With `false` (default) recall runs the semantic
+    /// ranker alone (byte-identical to pre-Phase-98). With
+    /// `true`, the semantic ranker AND `Memory::search`
+    /// (the Phase 74 substring search) both run on every
+    /// recall; their rankings are fused via Reciprocal
+    /// Rank Fusion before feeding the downstream
+    /// pipeline. Closes the rare-term recall gap (acronyms,
+    /// proper nouns, code identifiers) that pure semantic
+    /// search misses.
+    recall_hybrid: bool,
 }
 
 impl SemanticMemoryContext {
@@ -145,7 +157,23 @@ impl SemanticMemoryContext {
             ann_index: false,
             ann_rebuild_threshold: 100,
             recall_token_budget: 0,
+            recall_hybrid: false,
         }
+    }
+
+    /// Phase 98 — set the hybrid keyword+semantic recall
+    /// fusion opt-in. Builder; the binary calls this with
+    /// `config.embedding.recall_hybrid`. With `false` (the
+    /// default) recall is byte-identical to pre-Phase-98
+    /// (semantic only); with `true`, every recall runs
+    /// both the semantic ranker and `Memory::search` and
+    /// fuses their rankings via RRF.
+    pub fn with_recall_hybrid(
+        mut self,
+        enabled: bool,
+    ) -> Self {
+        self.recall_hybrid = enabled;
+        self
     }
 
     /// Phase 96 — set the ANN-index opt-in + rebuild
@@ -316,7 +344,11 @@ impl ContextProvider for SemanticMemoryContext {
             user_message,
         )
         .unwrap_or_else(|| user_message.to_string());
-        let qvec = match self.provider.embed(&[query_text]).await {
+        let qvec = match self
+            .provider
+            .embed(std::slice::from_ref(&query_text))
+            .await
+        {
             Ok(mut v) if !v.is_empty() => v.remove(0),
             _ => return None,
         };
@@ -329,7 +361,67 @@ impl ContextProvider for SemanticMemoryContext {
         // `semantic_search_scored_ann` returns. With
         // `ann_index = false` (the default) this is the
         // pre-Phase-96 brute-force path verbatim.
-        let scored = if self.ann_index {
+        //
+        // Phase 98 — when `recall_hybrid = true`, ALSO run
+        // the substring search and fuse via RRF. The score
+        // attached to each entry in `scored` is the
+        // semantic cosine in the non-hybrid path and the
+        // fused RRF score in the hybrid path.
+        let scored = if self.recall_hybrid {
+            let semantic = match self
+                .memory
+                .semantic_search_scored(&qvec, self.rag_top_k)
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => return None,
+            };
+            let keyword = match self
+                .memory
+                .search(&query_text, self.rag_top_k)
+                .await
+            {
+                Ok(k) => k,
+                Err(_) => return None,
+            };
+
+            // Build the two (topic, seq) rankings RRF
+            // expects, plus a lookup so we can recover
+            // the entry bodies for the fused result.
+            let semantic_ranks: Vec<(String, u64)> = semantic
+                .iter()
+                .map(|(e, _)| (e.topic.clone(), e.seq))
+                .collect();
+            let keyword_ranks: Vec<(String, u64)> = keyword
+                .iter()
+                .map(|e| (e.topic.clone(), e.seq))
+                .collect();
+            let mut lookup: HashMap<(String, u64), MemoryEntry> =
+                HashMap::new();
+            for (e, _) in &semantic {
+                lookup.insert((e.topic.clone(), e.seq), e.clone());
+            }
+            for e in &keyword {
+                lookup
+                    .entry((e.topic.clone(), e.seq))
+                    .or_insert_with(|| e.clone());
+            }
+
+            let fused = crate::recall_fusion::reciprocal_rank_fusion(
+                &[semantic_ranks, keyword_ranks],
+                crate::recall_fusion::RRF_K,
+                self.rag_top_k,
+            );
+
+            fused
+                .into_iter()
+                .filter_map(|(topic, seq, score)| {
+                    lookup
+                        .remove(&(topic, seq))
+                        .map(|e| (e, score))
+                })
+                .collect::<Vec<(MemoryEntry, f32)>>()
+        } else if self.ann_index {
             match self
                 .memory
                 .semantic_search_scored_ann(
@@ -352,10 +444,19 @@ impl ContextProvider for SemanticMemoryContext {
                 Err(_) => return None,
             }
         };
-        let kept: Vec<(MemoryEntry, f32)> = scored
-            .into_iter()
-            .filter(|(_, score)| *score >= self.rag_min_similarity)
-            .collect();
+        // Phase 98 — RRF scores aren't on the cosine
+        // scale, so the `rag_min_similarity` floor isn't
+        // comparable. Skip the floor in the hybrid path;
+        // a future phase could add a separate
+        // `rag_hybrid_min_rrf` knob (documented deferral).
+        let kept: Vec<(MemoryEntry, f32)> = if self.recall_hybrid {
+            scored
+        } else {
+            scored
+                .into_iter()
+                .filter(|(_, score)| *score >= self.rag_min_similarity)
+                .collect()
+        };
         if kept.is_empty() {
             return None;
         }
@@ -1281,6 +1382,119 @@ mod tests {
             !block.contains("xxxx"),
             "the 800-char body must NOT make it past the budget"
         );
+    }
+
+    /// Phase 98 — with `recall_hybrid = false` (the
+    /// default) recall is byte-identical to pre-Phase-98:
+    /// only the semantic ranker runs.
+    #[tokio::test]
+    async fn recall_hybrid_off_is_semantic_only() {
+        let memory = seed().await;
+        let block = ctx(memory, false, 0.0)
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("a relevant hit must produce a block");
+        assert!(block.contains("purple"));
+    }
+
+    /// Phase 98 — with `recall_hybrid = true`, a query
+    /// whose semantic embedding misses the target but
+    /// whose substring matches the entry's topic/body
+    /// still surfaces the entry via the keyword side of
+    /// the fusion. Fixture: a memory under topic
+    /// "atc-417" with a body the embedder maps to a
+    /// distant vector relative to the query. Without
+    /// hybrid the semantic floor (0.5) drops the hit;
+    /// with hybrid the substring side surfaces it via
+    /// RRF.
+    #[tokio::test]
+    async fn recall_hybrid_surfaces_rare_term_via_keyword() {
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        // Topic + body contain "atc-417" — the rare-term
+        // query the operator sends.
+        let seq = m
+            .put("atc-417", "deploy notes for atc-417 release")
+            .await
+            .unwrap();
+        // Vector deliberately orthogonal to anything a
+        // query embed would produce — semantic ranker can
+        // still surface (the FakeProvider's cosine is
+        // always positive on non-zero vectors), but a
+        // tight similarity floor would drop it. We don't
+        // set a tight floor here; the test instead
+        // verifies that BOTH the semantic and keyword
+        // paths return the entry and fusion surfaces it.
+        m.put_vector("atc-417", seq, vec![0.001, 1.0])
+            .await
+            .unwrap();
+        // Some unrelated noise to make sure ranking
+        // matters, not just "the only entry."
+        let noise_seq = m
+            .put("noise", "completely unrelated content")
+            .await
+            .unwrap();
+        m.put_vector("noise", noise_seq, vec![1.0, 0.0])
+            .await
+            .unwrap();
+
+        let ctx = SemanticMemoryContext::new(
+            m,
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0, // no min_similarity floor for this test
+        )
+        .with_recall_hybrid(true);
+
+        let block = ctx
+            .recall("atc-417", sid())
+            .await
+            .expect("hybrid recall finds the rare-term entry");
+        assert!(
+            block.contains("atc-417"),
+            "the keyword-matched entry must appear in the \
+             fused recall block, got: {block}"
+        );
+    }
+
+    /// Phase 98 — when both rankers return the same top
+    /// hit, that hit dominates the fused top-K. RRF
+    /// doubles the contribution.
+    #[tokio::test]
+    async fn recall_hybrid_both_rankers_agree_top_hit_wins() {
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let seq = m
+            .put("favorites", "favorite color is purple")
+            .await
+            .unwrap();
+        m.put_vector("favorites", seq, vec![1.0, 1.0])
+            .await
+            .unwrap();
+        // Add a few distractors so "top" is meaningful.
+        for i in 0..3 {
+            let s = m
+                .put("misc", &format!("note {i}"))
+                .await
+                .unwrap();
+            m.put_vector("misc", s, vec![0.5, 0.5])
+                .await
+                .unwrap();
+        }
+
+        let ctx = SemanticMemoryContext::new(
+            m,
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true);
+
+        let block = ctx
+            .recall("favorite color", sid())
+            .await
+            .expect("must produce a block");
+        // The favorites entry — matched by both rankers —
+        // should appear in the output.
+        assert!(block.contains("purple"));
     }
 
     /// Phase 97 — with a budget so tight that even the

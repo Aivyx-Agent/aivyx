@@ -2769,6 +2769,10 @@ async fn run_async(
             sc = sc.with_recall_token_budget(
                 cfg.recall_token_budget,
             );
+            // Phase 98 — hybrid keyword+semantic fusion.
+            // Default `false` is byte-identical to
+            // pre-Phase-98 semantic-only.
+            sc = sc.with_recall_hybrid(cfg.recall_hybrid);
             Some(Arc::new(sc))
         }
         _ => None,
