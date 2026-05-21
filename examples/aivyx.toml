@@ -678,6 +678,43 @@ parent_role = "researcher"
 # cron = "0 0 23 * * *"            # 11pm daily
 # lookback_window_secs = 86400     # last 24 hours
 # # role_override = "reflective"   # optional
+#
+# Phase 95 — cadence learning (skip-when-idle). Opt in
+# per-schedule. When `skip_when_idle = true`, the scheduler
+# reads the audit-chain growth since the last *fired* cycle;
+# if growth is below `min_audit_entries_to_fire`, the cycle
+# is skipped entirely (no LLM cost). The cron remains the
+# upper bound on firing rate — this is monotonic-slower-only,
+# never faster.
+#
+# Two example shapes:
+#
+# # Idle-friendly daily schedule: only reflect when the day
+# # produced real activity. Saves LLM cost on quiet days /
+# # vacations / weekends.
+# [[reflection_schedule]]
+# name = "daily-when-busy"
+# cron = "0 0 23 * * *"
+# lookback_window_secs = 86400
+# skip_when_idle = true             # optional, default false
+# min_audit_entries_to_fire = 100   # optional, default 1
+#
+# # Hourly responsive schedule: low threshold so the cron
+# # fires whenever there's been *any* recent activity but
+# # silently skips dead hours overnight.
+# [[reflection_schedule]]
+# name = "hourly-touch"
+# cron = "0 0 * * * *"
+# lookback_window_secs = 3600
+# skip_when_idle = true
+# min_audit_entries_to_fire = 5
+#
+# To SEE it: daemon log `aivyx reflection: schedule "X" —
+# skipped (audit-growth K below threshold M)` each skipped
+# cycle; `aivyx learning` / Web UI "Learning" tab show a
+# "Reflection cadence (Phase 95)" block with per-schedule
+# `K fired, S skipped` counts. Schedules without cadence
+# decisions are omitted from the block.
 
 # ----------------------------------------------------------------
 # Memory polish (Phase 74) — search, retention, LRU

@@ -537,6 +537,10 @@ pub async fn get_learning_insights(
         Option<crate::memory_recall::RecallClusterStat>,
         Option<crate::persona_consolidation::PersonaConsolidationStat>,
         Option<crate::recall_judgment::RecallJudgmentStat>,
+        Vec<(
+            String,
+            crate::reflection_scheduler::RecentReflectionStat,
+        )>,
     ),
     DaemonError,
 > {
@@ -558,6 +562,7 @@ pub async fn get_learning_insights(
             cluster_recall,
             persona_consolidation,
             recall_judgment,
+            cadence,
         } => Ok((
             digest,
             proposals,
@@ -569,6 +574,7 @@ pub async fn get_learning_insights(
             cluster_recall,
             persona_consolidation,
             recall_judgment,
+            cadence,
         )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))

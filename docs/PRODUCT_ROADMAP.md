@@ -1569,6 +1569,45 @@ respond to it. Closing the gap is the inflection point between
   pair, dangling partner, position-determinism, empty
   input all worth a test apiece). Zero new workspace deps.
 
+- **Phase 95 (Reflection Cadence Learning — Skip-When-Idle,
+  shipped 2026-05-21).** Closes the Phase 71 deferral
+  *"reflection cadence learning"* carried 24 phases. The
+  reflection cron has been firing unconditionally on its
+  configured `cron` since Phase 71, paying LLM cost for
+  Phase 87 phrasing + Phase 91 judgment + Phase 92
+  supersession passes even on idle days. Phase 95 closes
+  the deferral with the simplest leverage shape — the
+  scheduler reads audit-chain growth since the last
+  *fired* cycle for that schedule; if growth is below
+  `min_audit_entries_to_fire` AND `skip_when_idle = true`,
+  the cycle is skipped entirely (no LLM calls; just a log
+  line + a counter bump). Two new optional fields on the
+  existing `[[reflection_schedule]]` block;
+  per-schedule independence so different schedules can carry
+  different idleness tolerances. The operator's cron
+  remains the **upper bound** on firing rate — cadence
+  learning is monotonic-slower-only, never faster.
+  **No new product commitment**, none weakened; the
+  operator-facing contract is *strengthened* (operators
+  with idle days no longer pay LLM tokens for
+  passes that find nothing actionable when they opt in).
+  First cycle after daemon boot is unconditional (no prior
+  baseline); subsequent cycles consult audit-growth. The
+  `aivyx learning` surface gains a "Reflection cadence"
+  block with per-schedule `K fired, S skipped` counts;
+  daemon log shows skipped cycles in real time. Streak all
+  three correct: DESIGN.md → **42**, PRODUCT.md → **35**,
+  lib.rs → **43** (new project record, beating Phase
+  94's 42) — helper + state + integration all in
+  `aivyx-channel`, config knobs in `aivyx-config`. Test
+  count delta `+12` (workspace 1675 → 1687), two over the
+  predicted `+6-10` band, accounted for by the helper +
+  state earning more individual boundary-case tests than
+  the calibration law anticipated. Zero new workspace
+  deps; one `large_enum_variant` allow added to
+  `QueryResponsePayload` since the addition tipped a long-
+  running additive-fields variant past clippy's threshold.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

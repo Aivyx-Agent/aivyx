@@ -1654,6 +1654,57 @@ turns within the window, prefer narrower categories
 return empty when no clear pattern emerges. An empty reflection
 turn is valid and preferred over speculation.
 
+### Cadence learning — skip-when-idle (Phase 95)
+
+By default the reflection cron fires on every cron boundary
+regardless of how much activity happened in the lookback
+window. Phase 95 adds opt-in **skip-when-idle**: when
+`skip_when_idle = true` on a `[[reflection_schedule]]`, the
+scheduler reads the audit-chain growth since the last *fired*
+cycle for that schedule. If growth is below
+`min_audit_entries_to_fire`, the cycle is skipped entirely
+(no LLM calls for Phase 87 phrasing / Phase 91 judgment /
+Phase 92 supersession — just a log line + a counter bump).
+
+The operator's `cron` remains the **upper bound** on firing
+rate. Cadence learning is monotonic-slower-only: the
+scheduler can suppress a fire, never schedule one.
+
+```toml
+[[reflection_schedule]]
+name = "nightly-reflection"
+cron = "0 0 23 * * *"
+lookback_window_secs = 86400
+skip_when_idle = true                # opt-in, default false
+min_audit_entries_to_fire = 50       # default 1
+```
+
+The first cycle after a daemon boot fires unconditionally
+(no prior baseline to compare against). Subsequent cycles
+consult audit-growth. The `last_fired_audit_len` cursor is
+updated only on actual fires; a long run of skips
+accumulates growth until the threshold is crossed and the
+next cycle fires.
+
+Validation: `min_audit_entries_to_fire >= 1` is required
+when `skip_when_idle = true` (zero would skip every cycle
+unconditionally; the loader rejects this at config time).
+
+**What you'll see.** Each skipped cycle logs
+`aivyx reflection: schedule "X" — skipped (audit-growth K
+below threshold M)`. The `aivyx learning` surface adds a
+**Reflection cadence (Phase 95)** block with one line per
+schedule that's made cadence decisions:
+
+```
+Reflection cadence (Phase 95):
+  nightly-reflection: 7 fired, 2 skipped
+```
+
+Schedules with both counts at zero (or schedules the
+operator hasn't enabled `skip_when_idle` on) are omitted
+from the block to avoid noise.
+
 ## Uninstall
 
 ```sh

@@ -25,6 +25,7 @@ use aivyx_channel::recall_judgment::{
 use aivyx_channel::recall_insights::{
     LearningDigest, ProposalProvenance,
 };
+use aivyx_channel::reflection_scheduler::RecentReflectionStat;
 
 /// `aivyx learning [--window <secs>]`
 pub async fn run_learning(
@@ -43,6 +44,7 @@ pub async fn run_learning(
         cluster_recall,
         persona_consolidation,
         recall_judgment,
+        cadence,
     ) = get_learning_insights(&socket_path, window_secs)
         .await
         .map_err(|e| {
@@ -61,6 +63,7 @@ pub async fn run_learning(
             cluster_recall.as_ref(),
             persona_consolidation.as_ref(),
             recall_judgment.as_ref(),
+            &cadence,
         )
     );
     Ok(())
@@ -107,6 +110,7 @@ fn render_insights(
     cluster_recall: Option<&RecallClusterStat>,
     persona_consolidation: Option<&PersonaConsolidationStat>,
     recall_judgment: Option<&RecallJudgmentStat>,
+    cadence: &[(String, RecentReflectionStat)],
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -195,6 +199,25 @@ fn render_insights(
              (off, or no cycle yet)\n",
         ),
     }
+    // Phase 95 — reflection-cron cadence. Renders one line
+    // per schedule with non-zero stats. Schedules with both
+    // counts at zero (or no entry at all) are omitted to
+    // avoid noise for operators who haven't enabled
+    // skip-when-idle.
+    let cadence_visible: Vec<&(String, RecentReflectionStat)> = cadence
+        .iter()
+        .filter(|(_, s)| s.fired > 0 || s.skipped > 0)
+        .collect();
+    if !cadence_visible.is_empty() {
+        out.push_str("\nReflection cadence (Phase 95):\n");
+        for (name, stat) in &cadence_visible {
+            out.push_str(&format!(
+                "  {name}: {} fired, {} skipped\n",
+                stat.fired, stat.skipped,
+            ));
+        }
+    }
+
     out.push_str("\nMost helpful topics:\n");
     out.push_str(&fmt_topics(&d.top_helpful));
     out.push_str("\nLeast helpful topics:\n");
@@ -396,7 +419,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None);
+        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -416,7 +439,7 @@ mod tests {
         let mut d = digest();
         // Default (None) — banner absent.
         let out_none = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None,
+            &d, &[], None, None, None, None, None, None, None, None, &[],
         );
         assert!(!out_none.contains("signal source"));
         // Explicit-off (Some(false)) — banner still absent
@@ -424,13 +447,13 @@ mod tests {
         // augment in effect).
         d.judgment_signal = Some(false);
         let out_off = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None,
+            &d, &[], None, None, None, None, None, None, None, None, &[],
         );
         assert!(!out_off.contains("signal source"));
         // Augment on — the banner fires.
         d.judgment_signal = Some(true);
         let out_on = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None,
+            &d, &[], None, None, None, None, None, None, None, None, &[],
         );
         assert!(out_on.contains(
             "signal source: judgment-driven (Phase 93 — augmenting structural)"
@@ -460,7 +483,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None);
+        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[]);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -482,7 +505,7 @@ mod tests {
             proposals_in_window: 0,
             judgment_signal: None,
         };
-        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None);
+        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[]);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
@@ -491,7 +514,7 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -501,7 +524,7 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None);
+            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[]);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
         ));
@@ -514,7 +537,7 @@ mod tests {
         };
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -529,7 +552,7 @@ mod tests {
             capped: 1,
         };
         let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None);
+            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[]);
         assert!(some_out.contains(
             "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
         ));
@@ -547,7 +570,7 @@ mod tests {
 
         // None → "not engaged" line.
         let none_out =
-            render_insights(&digest(), &[], None, None, None, None, None, None, None, None);
+            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
         assert!(
             none_out.contains("persona lifecycle: not engaged")
         );
@@ -574,6 +597,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(some_out.contains(
             "persona lifecycle: 1 proposed last cycle \
@@ -603,6 +627,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(none_out.contains(
             "Accumulated helpfulness (all-time, decayed):"
@@ -633,6 +658,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(some_out.contains("+4.5  rust  (2 samples)"));
         assert!(
@@ -658,6 +684,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(none_out.contains(
             "Topics that consistently help together:"
@@ -683,10 +710,59 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(some_out.contains(
             "+8.0  deploy + rollback  (5 samples)"
         ));
+    }
+
+    /// Phase 95 — the reflection-cadence block renders one
+    /// line per schedule with non-zero stats, and is omitted
+    /// entirely when the cadence slice is empty OR all
+    /// schedules have zero counts.
+    #[test]
+    fn render_reflection_cadence_block() {
+        // Empty → no cadence section.
+        let out_empty = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &[],
+        );
+        assert!(!out_empty.contains("Reflection cadence"));
+
+        // All-zero schedule → also omitted.
+        let zero = vec![(
+            "nightly".to_string(),
+            RecentReflectionStat { fired: 0, skipped: 0 },
+        )];
+        let out_zero = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &zero,
+        );
+        assert!(!out_zero.contains("Reflection cadence"));
+
+        // Mixed: one schedule with activity, one without →
+        // only the active one renders.
+        let mixed = vec![
+            (
+                "nightly".to_string(),
+                RecentReflectionStat { fired: 7, skipped: 2 },
+            ),
+            (
+                "hourly".to_string(),
+                RecentReflectionStat { fired: 0, skipped: 0 },
+            ),
+        ];
+        let out_mixed = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &mixed,
+        );
+        assert!(out_mixed.contains("Reflection cadence (Phase 95):"));
+        assert!(out_mixed.contains("nightly: 7 fired, 2 skipped"));
+        assert!(
+            !out_mixed.contains("hourly:"),
+            "hourly schedule with zero counts must be omitted"
+        );
     }
 
     #[test]
@@ -705,6 +781,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert!(none_out.contains(
             "Cluster co-recall (last turn, opt-in):"
@@ -733,6 +810,7 @@ mod tests {
             Some(&cr),
             None,
             None,
+            &[],
         );
         assert!(some_out.contains(
             "1 affined sibling(s) injected"
@@ -758,6 +836,7 @@ mod tests {
             Some(&cr0),
             None,
             None,
+            &[],
         );
         assert!(
             z.contains("engaged, 0 injected last turn")

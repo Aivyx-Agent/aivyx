@@ -210,6 +210,14 @@ pub enum QueryPayload {
 /// the query was sent with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+// Phase 95 — `LearningInsights` accumulates ~14 optional
+// stat fields across phases 78-93 plus the Phase 95 cadence
+// vec. Boxing each Option<Stat> would churn serde wire
+// formats for marginal benefit (the variant is heap-
+// allocated in practice — most fields are `None` or short
+// `Vec`s). The size disparity is an artifact of the
+// wire-compat-via-additive-fields pattern the project uses.
+#[allow(clippy::large_enum_variant)]
 pub enum QueryResponsePayload {
     /// Response to [`QueryPayload::ListSessions`].
     ListSessions {
@@ -404,6 +412,19 @@ pub enum QueryResponsePayload {
         recall_judgment: Option<
             crate::recall_judgment::RecallJudgmentStat,
         >,
+        /// Phase 95 — per-schedule accumulating cadence
+        /// stats. Each entry is `(schedule_name,
+        /// RecentReflectionStat { fired, skipped })`.
+        /// Empty `Vec` when no schedule has ever made a
+        /// cadence decision (the in-memory map starts
+        /// empty; first cycle decisions populate it).
+        /// `#[serde(default)]` so older frames decode
+        /// unchanged.
+        #[serde(default)]
+        cadence: Vec<(
+            String,
+            crate::reflection_scheduler::RecentReflectionStat,
+        )>,
     },
 }
 
@@ -1813,6 +1834,15 @@ mod tests {
                             ],
                         },
                     ),
+                    cadence: vec![
+                        (
+                            "nightly".into(),
+                            crate::reflection_scheduler::RecentReflectionStat {
+                                fired: 6,
+                                skipped: 1,
+                            },
+                        ),
+                    ],
                 },
             },
             // Phase 70 — proposal query responses.

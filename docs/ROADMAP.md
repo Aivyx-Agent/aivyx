@@ -2842,6 +2842,74 @@ affordances; n-ary group rendering once Phase 83's n-ary
 cluster supersession deferral closes — see PHASE_94.md
 deferrals list) are operator-feedback-gated.
 
+## Phase 95 — Reflection Cadence Learning (Skip-When-Idle) (Phase 71's reflection-cadence deferral, closed)
+
+**Frozen — see [PHASE_95.md](PHASE_95.md).** Closes the
+Phase 71 deferral that's been carried 24 phases:
+*"reflection cadence learning."* The reflection cron has
+been firing unconditionally on its `cron` schedule since
+Phase 71, paying LLM cost for Phase 87 phrasing + Phase 91
+judgment + Phase 92 supersession passes even on idle days
+where there's nothing actionable to find. Phase 95 closes
+the deferral with the simplest leverage shape: **skip-when-
+idle**. The scheduler reads audit-chain growth since the
+last *fired* cycle for that schedule; if growth is below
+the operator-configured threshold AND `skip_when_idle =
+true`, the cycle is skipped entirely (no LLM calls; just a
+log line + a counter bump). The operator's cron remains
+the **upper bound** on firing rate — cadence learning is
+monotonic-slower-only, never faster.
+
+- **Audit-growth signal (Q1a):** the scheduler reads
+  `audit_log.len()` delta since the last fired cycle for
+  the same schedule. Simple, deterministic, no LLM cost,
+  no new substrate. The first cycle after a daemon boot
+  fires unconditionally (no prior baseline to compare).
+- **Skip-when-idle binary (Q2a):** either fire or skip;
+  monotonic-slower-only. The boundary uses `>=` so
+  `min_audit_entries_to_fire = 1` means "any new entry
+  fires," not "any entry beyond the first."
+- **Per-schedule knob (Q3a):** two new optional fields on
+  the existing `[[reflection_schedule]]` block.
+  `skip_when_idle: bool` (default `false`) +
+  `min_audit_entries_to_fire: u32` (default `1`). Wire-
+  compat via the established `Option<T>` +
+  `#[serde(default)]` pattern. Different schedules may
+  carry different idleness tolerances — a daily housekeeping
+  schedule wants a high threshold; an hourly responsive
+  schedule wants a low one.
+- **Observable (Q4a):** daemon log on skip
+  (`aivyx reflection: schedule "X" — skipped (audit-growth
+  K below threshold M)`) + `aivyx learning` surface
+  block (`Reflection cadence (Phase 95):` with per-
+  schedule `K fired, S skipped` counts). Real-time + aggregate.
+
+Streak all three correct: DESIGN.md → **42**, PRODUCT.md →
+**35**, `aivyx-core/src/lib.rs` → **43** (new project
+record, beats Phase 94's 42) — helper + state + integration
+all in `aivyx-channel/src/reflection_scheduler.rs`; config
+knobs in `aivyx-config`; surface in
+`bin/aivyx_modules/learning.rs`; IPC field added with full
+wire-compat. Test count delta `+12` workspace (`+3` config
+knobs covering defaults / explicit values / staged
+posture / zero-threshold rejection, `+7` helper covering
+boundary + defended-zero + stat default + serde wire-
+compat, `+1` multi-cycle integration over the helpers, `+1`
+surface rendering with empty / all-zero / mixed cases) —
+**two over** the predicted `+6-10` band, accounted for by
+the helper + stat earning more individual unit tests than
+the calibration law anticipated for "new pure module with
+multiple boundary cases." Zero clippy warnings (one
+`large_enum_variant` allow added to `QueryResponsePayload`
+since the addition tipped a long-running additive-fields
+variant past clippy's threshold). Zero new workspace deps.
+
+Likely follow-ups (backoff-multiplier mode; adaptive
+interval; time-of-day pattern learning; persisted cadence
+stat across daemon restarts; LLM-based signal-density
+classifier; per-pass skip granularity — see PHASE_95.md
+deferrals list) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

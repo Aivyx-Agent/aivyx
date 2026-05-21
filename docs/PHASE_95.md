@@ -314,47 +314,141 @@ reflection-cadence-learning deferral is **THIS PHASE**):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Skip-when-idle is a rate-limiting
+  decision over an existing trigger; touched no locked
+  technical-contract decision. The audit chain is read-
+  only here; the reflection cron's per-pass contracts
+  are unchanged. Streak: **42 consecutive phases** (was
+  41).
+- **PRODUCT.md — held.** P15 (the self-learning loop) is
+  delivered; this is a cost-and-noise refinement on its
+  cron. No commitment changed; the operator-facing
+  contract is *strengthened* (operators with idle days
+  no longer pay LLM tokens for empty passes when they opt
+  in). Streak: **35 consecutive phases** (was 34).
+- **`aivyx-core/src/lib.rs` — held, by design.** Helper +
+  state + integration all in `aivyx-channel/src/
+  reflection_scheduler.rs`; config knobs in
+  `aivyx-config`; surface in
+  `bin/aivyx_modules/learning.rs`; IPC field on
+  `QueryResponsePayload::LearningInsights` (in
+  `daemon_ipc.rs`). No `aivyx-core` touch; no new
+  `AuditTag`; no new `KeyDomain`. Streak: **43
+  consecutive phases** — new project record, beating
+  Phase 94's 42.
+
+**Test count — `+12`** (workspace `1675 → 1687`). **Two
+over** the predicted `+6-10` band. Breakdown:
+
+- Config knobs `+3` (defaults pinned, explicit values
+  win, staged-config posture honored, zero-threshold
+  rejection).
+- Pure helper + stat `+7` (knob-off always-fires
+  regression; knob-on below / at / above threshold;
+  defended threshold-zero; `RecentReflectionStat`
+  default-zero; serde wire-compat round-trip + decode-
+  from-empty).
+- Integration `+1` (multi-cycle fire/skip/fire/skip
+  scenario over the `decide_cadence_action` +
+  `mark_cycle_fired` helpers — exercises first-cycle-
+  unconditional, boundary `>=` rule, and cursor-not-
+  updated-on-skip invariant in one fixture).
+- Surface render `+1` (three-state cadence block: empty
+  / all-zero-omitted / mixed-with-only-active-rendered).
+
+The `+2 over` is accounted for by the helper + stat
+earning more individual boundary tests than the
+calibration law's "new pure module (≈ +4-5)" anticipated.
+The stat's serde wire-compat shape earned its own test
+because the codebase's IPC-additive-fields pattern now
+explicitly pins decode-from-empty as a wire-compat
+contract (the test fails if `#[serde(default)]` is
+accidentally removed). Within the project's pattern for
+"new pure module with multiple boundary cases" this is
+on-track with Phase 94's `+11` (helper + edge cases).
+
+**Scope — every planned surface shipped exactly as scoped.**
+Two new optional fields on the existing
+`[[reflection_schedule]]` block with full wire-compat;
+the pure `should_fire_cycle` helper; the
+`RecentReflectionStat` + `SharedRecentReflectionStats`
+shape; the `decide_cadence_action` /
+`mark_cycle_fired` helpers refactored out of the loop
+body for testability; the `run_reflection_scheduler`
+loop integration that consults the gate BEFORE per-pass
+dispatch; the daemon-server IPC plumbing that surfaces
+the per-schedule stats via `GetLearningInsights`; the
+`aivyx learning` surface block. Zero clippy warnings
+after one `large_enum_variant` allow added to
+`QueryResponsePayload` (the new optional field tipped a
+long-running additive-fields variant past clippy's
+threshold; boxing each Option<Stat> would churn serde
+wire formats for marginal benefit). Zero new workspace
+deps.
+
+**Boundary semantics noted explicitly.** The helper uses
+`audit_growth >= min_to_fire` (not strictly greater
+than). An operator setting `min_audit_entries_to_fire =
+1` gets "any new audit entry fires the cycle" — not
+"any entry beyond the first." This is the intuitive
+reading; pinned in the
+`should_fire_skip_on_at_threshold_fires` test for future
+readers.
+
+**Cursor invariant.** `last_fired_audit_len` is updated
+ONLY on actual fires — skip cycles preserve the old
+baseline. This is the key invariant that makes a long
+run of skips eventually accumulate enough growth to
+fire. Pinned in the multi-cycle integration test (cycle
+2 skips, cycle 3 then sees growth 8 since the cursor
+that was last set in cycle 1).
 
 ## Exit criteria
 
-- [ ] `[[reflection_schedule]].skip_when_idle: bool`
+- [x] `[[reflection_schedule]].skip_when_idle: bool`
   (default `false`) + `min_audit_entries_to_fire: u32`
   (default `1`, bounded `>= 1` when `skip_when_idle =
-  true`) — Task 2.
-- [ ] `should_fire_cycle` pure helper + per-schedule
-  `LastFiredCursor` state + `RecentReflectionStat` —
-  Task 3.
-- [ ] Unit tests on the pure helper: knob-off always
+  true`) — Task 2 (commit `54fb77e`).
+- [x] `should_fire_cycle` pure helper +
+  `RecentReflectionStat` + `SharedRecentReflectionStats`
+  — Task 3 (commit `ce63091`).
+- [x] Unit tests on the pure helper: knob-off always
   fires; knob-on with growth below / at / above
-  threshold; defended threshold-zero — Task 3.
-- [ ] `run_reflection_scheduler` calls the helper BEFORE
-  per-pass dispatch; updates `last_fired_audit_len` on
-  every actual fire — Task 4.
-- [ ] `RecentReflectionStat { fired, skipped }` IPC
-  wire-compat — Task 4.
-- [ ] Integration test: schedule with `skip_when_idle =
-  true, min_audit_entries_to_fire = 5` fires
-  unconditionally on cycle 1, skips on cycle 2 with
-  audit-growth 3, fires on cycle 3 with audit-growth 8
-  — Task 4.
-- [ ] `aivyx learning` surface extended with cadence
-  stat — Task 5.
-- [ ] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
-  Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  threshold; defended threshold-zero; stat-default-zero;
+  serde wire-compat — Task 3 (commit `ce63091`).
+- [x] `run_reflection_scheduler` calls the helper BEFORE
+  per-pass dispatch via `decide_cadence_action`; updates
+  `last_fired_audit_len` on every actual fire via
+  `mark_cycle_fired` — Task 4 (commit `7bcef6c`).
+- [x] `RecentReflectionStat { fired, skipped }` IPC
+  wire-compat via `#[serde(default)]` — Task 3 +
+  surfaced through `GetLearningInsights` in Task 5.
+- [x] Integration test: multi-cycle fire/skip/fire/skip
+  scenario over the helpers — Task 4 (commit
+  `7bcef6c`).
+- [x] `aivyx learning` surface extended with cadence
+  block — Task 5 (this commit).
+- [x] `docs/INSTALL.md` + `examples/aivyx.toml` updated —
+  Task 5 (this commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-two.
-- [ ] PRODUCT.md streak extends to thirty-five.
-- [ ] Production-core streak extends to forty-three (new
+- [x] DESIGN.md streak extends to forty-two.
+- [x] PRODUCT.md streak extends to thirty-five.
+- [x] Production-core streak extends to forty-three (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+6-10; per the
-  converged calibration law — two knobs on existing
-  block (≈ +3-4) + pure helper (≈ +4-5, multiple
-  boundary cases) + integration (≈ +1-2); no new
-  module, no new `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+12`, two over the
+  predicted `+6-10` band — accounted for by the helper
+  + stat earning more individual boundary tests than
+  the calibration law anticipated, including a serde
+  wire-compat test that pins the additive-fields
+  contract).
+- [x] Zero clippy warnings (one `large_enum_variant`
+  allow added to `QueryResponsePayload` since the
+  addition tipped a long-running additive-fields
+  variant past clippy's threshold).
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

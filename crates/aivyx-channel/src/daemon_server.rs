@@ -943,6 +943,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 persona_consolidation_stat.clone(),
             recall_judgment_stat: recall_judgment_stat.clone(),
             recall_feedback_config: recall_feedback_config.clone(),
+            cadence_stats: cadence_stats.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1059,6 +1060,10 @@ struct ConnectionContext {
     /// reflects the same per-hit judgment override that the
     /// reflection-cron actuator is using.
     recall_feedback_config: Option<aivyx_config::RecallFeedbackConfig>,
+    /// Phase 95 — per-schedule cadence stats (fired /
+    /// skipped counts) the `GetLearningInsights` surface
+    /// reads to render the cadence section.
+    cadence_stats: crate::reflection_scheduler::SharedRecentReflectionStats,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1088,6 +1093,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         persona_consolidation_stat,
         recall_judgment_stat,
         recall_feedback_config,
+        cadence_stats,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1469,6 +1475,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 persona_consolidation_stat.as_ref(),
                                 recall_judgment_stat.as_ref(),
                                 recall_feedback_config.as_ref(),
+                                &cadence_stats,
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1726,6 +1733,7 @@ async fn run_single_connection_daemon(
         persona_consolidation_stat: None,
         recall_judgment_stat: None,
         recall_feedback_config: None,
+        cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
     })
     .await
 }
@@ -1974,6 +1982,7 @@ async fn handle_query(
         &crate::recall_judgment::SharedRecallJudgmentStat,
     >,
     recall_feedback_config: Option<&aivyx_config::RecallFeedbackConfig>,
+    cadence_stats: &crate::reflection_scheduler::SharedRecentReflectionStats,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -2455,6 +2464,24 @@ async fn handle_query(
                 None => None,
             };
 
+            // Phase 95 — snapshot per-schedule cadence stats.
+            // Sorted by schedule name for stable rendering.
+            let cadence: Vec<(
+                String,
+                crate::reflection_scheduler::RecentReflectionStat,
+            )> = cadence_stats
+                .read()
+                .ok()
+                .map(|g| {
+                    let mut v: Vec<_> = g
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    v.sort_by(|a, b| a.0.cmp(&b.0));
+                    v
+                })
+                .unwrap_or_default();
+
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
             let Some(rlog) = recall_log else {
@@ -2476,6 +2503,7 @@ async fn handle_query(
                     cluster_recall,
                     persona_consolidation,
                     recall_judgment,
+                    cadence,
                 };
             };
 
@@ -2549,6 +2577,7 @@ async fn handle_query(
                 cluster_recall,
                 persona_consolidation,
                 recall_judgment,
+                cadence,
             }
         }
     }
