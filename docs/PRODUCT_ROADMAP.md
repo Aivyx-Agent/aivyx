@@ -1529,6 +1529,46 @@ respond to it. Closing the gap is the inflection point between
   rendering test alongside the field plumbing. Zero new
   workspace deps.
 
+- **Phase 94 (Web UI Grouping for Linked Supersession
+  Proposals, shipped 2026-05-21).** Closes Phase 92's
+  first deferral: the linked supersession pair (the
+  `RemoveList` half retiring an old `consolidate-pair:`
+  facet + the `AppendList` half proposing the new one,
+  cross-referenced via Phase 92's `supersedes_proposal_id`)
+  now renders as one grouped unit in both the
+  `aivyx persona proposals` CLI and the Web UI Persona-
+  pane Proposals tab, instead of two unrelated rows. The
+  CLI gets `└─ supersedes:` / `└─ superseded by:`
+  indicators under each half; the Web UI gets a single
+  outer card with a `↔ linked supersession` banner, both
+  halves stacked with a `↓ supersedes ↓` arrow between
+  them, and a shared action row offering primary
+  **Approve both** + **⋮ Split** menu + **Reject both**.
+  **No new product commitment**, none weakened; the
+  operator-facing contract is *strengthened* (a confusing
+  two-decision flow becomes one ergonomic decision). Pure
+  client-side rendering — no chain primitives changed,
+  no daemon-side enrichment, no new IPC method; the
+  `supersedes_proposal_id` field added to
+  `PersonaProposalSummary` is wire-compatible via
+  `#[serde(default, skip_serializing_if =
+  "Option::is_none")]`. Generic via a small
+  `GroupableProposal` trait so the same algorithm runs
+  on both surfaces. Web UI **Approve both** fires two
+  sequential `ResolvePersonaProposal` IPC calls; Phase
+  92's `each half independently Revert-able` guarantee
+  covers the half-approved-on-failure case without
+  needing a transactional primitive. Streak all three
+  correct: DESIGN.md → **41**, PRODUCT.md → **34**, lib.rs
+  → **42** (new project record, beating Phase 93's 41) —
+  helper + CLI render in `aivyx-channel`, Web UI in the
+  embedded static HTML asset. Test count delta `+11`
+  (workspace 1664 → 1675), one over the predicted `+6-10`
+  band, accounted for by the helper earning extra edge-
+  case coverage (self-reference, asymmetric link, same-op
+  pair, dangling partner, position-determinism, empty
+  input all worth a test apiece). Zero new workspace deps.
+
 - **WebPush / service-worker notifications (future).**
   Phase 69 requires the Web UI tab to be open. WebPush
   would let notifications fire even with the tab closed;

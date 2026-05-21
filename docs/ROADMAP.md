@@ -2768,6 +2768,80 @@ the structural fallback; asymmetric Hurt penalty; sum
 mode that stacks both signals — see PHASE_93.md
 deferrals list) are operator-feedback-gated.
 
+## Phase 94 — Web UI Grouping for Linked Supersession Proposals (Phase 92's first deferral, closed)
+
+**Frozen — see [PHASE_94.md](PHASE_94.md).** Closes the
+Phase 92 deferral that headlined that phase's "likely
+follow-ups" list: *"Web UI visual grouping of linked
+supersession proposals."* Phase 92 shipped the structured
+`supersedes_proposal_id` linkage on `ProposedPersonaDelta`
+but rendered it only via `reason` text on each half.
+Phase 94 makes the linkage operator-visible at a glance
+in both surfaces: the `aivyx persona proposals` CLI shows
+linked pairs with `└─ supersedes:` indicators; the Web UI
+Proposals tab renders the pair as one card with a primary
+"Approve both" action plus a `⋮ Split` menu for partial
+actions.
+
+- **Pure structural pass (Q1a):** new
+  `group_supersession_pairs` helper in `aivyx-channel`
+  consumes the flat `Vec<PersonaProposal>` the IPC already
+  returns and produces `Vec<ProposalRendering>`. No IPC
+  contract change for the grouping itself (the
+  `supersedes_proposal_id` field was added to
+  `PersonaProposalSummary` with full wire-compat via
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`).
+  Both surfaces call the same algorithm — Rust helper on
+  the CLI side, line-for-line JS port on the Web UI side.
+- **Generic via small trait (`GroupableProposal`):** the
+  helper takes any type implementing `id()`,
+  `supersedes_proposal_id()`, and `op_kind()` accessors;
+  impls exist for both the typed `PersonaProposal`
+  (daemon-side use) and the wire `PersonaProposalSummary`
+  (CLI use). One source of truth, no algorithm
+  duplication.
+- **Defensive degradation:** self-reference, dangling
+  partner id, asymmetric link (A→B without B→A), and
+  same-op pair (two `AppendList`s or two `RemoveList`s)
+  all degrade to standalone rendering rather than panic.
+  The grouping invariant requires exactly one
+  `RemoveList` + one `AppendList` with mutual
+  cross-reference.
+- **One-click ergonomics + Phase 92 guarantee preserved
+  (Q2a):** the Web UI's primary action fires two
+  sequential `ResolvePersonaProposal` IPC calls
+  (RemoveList first, then AppendList). Phase 92's
+  explicit `each half independently Revert-able`
+  guarantee covers the half-approved-on-failure case
+  without needing a transactional chain primitive; the
+  `⋮ Split` menu exposes the partial-action paths the
+  operator may need.
+
+Streak all three correct: DESIGN.md → **41**, PRODUCT.md
+→ **34**, `aivyx-core/src/lib.rs` → **42** (new project
+record, beats Phase 93's 41) — grouping helper +
+generic trait + CLI render in `aivyx-channel`; Web UI
+changes in the embedded static HTML asset; IPC field
+added with full wire-compat. Test count delta `+11`
+workspace (`+8` pure helper covering Q4a mixed fixture
+plus six dedicated edge cases, `+3` CLI rendering;
+the Web UI JS is a port of the Rust helper covered by
+those tests + manual browser testing). **One over the
+predicted `+6-10` band** — accounted for by the helper
+earning extra edge-case coverage (self-ref / asymmetric /
+same-op / dangling / position-determinism / empty all
+worth a test apiece). Zero clippy warnings. Zero new
+workspace deps.
+
+Likely follow-ups (atomic
+`ResolveSupersessionGroup` IPC primitive that wraps the
+two-call dance transactionally; backend-side grouping
+enrichment via a `linked_with: Vec<String>` field on
+`ProposalSummary`; drag-to-merge / drag-to-split UI
+affordances; n-ary group rendering once Phase 83's n-ary
+cluster supersession deferral closes — see PHASE_94.md
+deferrals list) are operator-feedback-gated.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,

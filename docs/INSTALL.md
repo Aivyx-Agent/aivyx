@@ -1539,8 +1539,47 @@ supersession event count). The `RemoveList` half's `reason`
 cites the new proposal as the replacement; the
 `AppendList` half's `reason` cites the old proposal as the
 one being superseded. Both appear in the **Proposals** pane
-with their normal per-proposal `Revert` actions; future
-Web UI work will visually group them.
+with their normal per-proposal `Revert` actions.
+
+#### Grouped rendering (Phase 94)
+
+Phase 94 closes the first Phase 92 deferral: the CLI and the
+Web UI Persona-pane both render linked supersession pairs
+as a single grouped unit instead of two unrelated rows.
+
+- **CLI (`aivyx persona proposals`).** Linked pairs render
+  with a `└─ supersedes:` indicator under the
+  `AppendList`-side row and a `└─ superseded by:`
+  indicator under the `RemoveList`-side row. The
+  `RemoveList` side always comes first regardless of
+  input order. Standalone proposals render byte-identical
+  to pre-Phase-94.
+- **Web UI Proposals tab.** Linked pairs render as one
+  outer card with a `↔ linked supersession (Phase 92)`
+  banner header, both halves stacked with a
+  `↓ supersedes ↓` arrow between them, and a single
+  shared action row: primary **Approve both** + a
+  **⋮ Split** menu offering partial actions (`Approve
+  RemoveList only`, `Approve AppendList only`, `Reject
+  RemoveList only`, `Reject AppendList only`) + **Reject
+  both**.
+
+The Web UI **Approve both** action fires two sequential
+`ResolvePersonaProposal` IPC calls (RemoveList first,
+then AppendList). Phase 92's `each half independently
+Revert-able` guarantee covers the half-approved failure
+mode without needing a transactional IPC primitive — the
+operator finishes via the next refresh.
+
+The grouping is pure client-side rendering: the IPC
+contract is unchanged from Phase 92 (the
+`supersedes_proposal_id` field on
+`PersonaProposalSummary` was already wire-compatible). The
+same algorithm runs on both surfaces (Rust helper on the
+CLI side, line-for-line JS port on the Web UI side); both
+defend the same edge cases (self-reference, dangling
+partner id, asymmetric link, same-op pair) by degrading to
+standalone rendering.
 
 ## Reflection auto-loop (Phase 70)
 

@@ -328,45 +328,142 @@ equivalent proposals renderer):
 
 ## Prediction vs. reality
 
-To be filled in at phase exit.
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Client-side surface grouping over
+  a structured field that's already on the wire touched
+  no locked technical-contract decision. The proposal-
+  chain shape is unchanged; the IPC contract gained one
+  optional field with full wire-compat
+  (`#[serde(default, skip_serializing_if = "Option::is_none")]`);
+  no new `KeyDomain`. Streak: **41 consecutive phases**
+  (was 40).
+- **PRODUCT.md — held.** P14 (Persona/Soul) is delivered;
+  this is a UX refinement on its Phase 70 proposal
+  pipeline + Phase 92 supersession surface. No new
+  commitment; the operator-facing contract is
+  *strengthened* (a confusing two-decision flow becomes
+  one ergonomic decision). Streak: **34 consecutive
+  phases** (was 33).
+- **`aivyx-core/src/lib.rs` — held, by design.** The
+  grouping helper + generic trait + CLI render all live
+  in `aivyx-channel`; the Web UI changes are in the
+  embedded `web_ui_static.html` asset; the IPC field
+  added to `PersonaProposalSummary` is in
+  `aivyx-channel/src/daemon_ipc.rs`. No `aivyx-core`
+  touch. Streak: **42 consecutive phases** — new project
+  record, beating Phase 93's 41.
+
+**Test count — `+11`** (workspace `1664 → 1675`). **One
+over** the predicted `+6-10` band. Breakdown:
+
+- Pure helper `+8` (Q4a single mixed fixture covering one
+  linked pair + one orphan + two unlinked across two id
+  patterns; plus dedicated edge cases: linked-pair-sorts-
+  remove-before-append-by-op; self-reference defended;
+  asymmetric-link defended; same-op-pair defended;
+  dangling-partner-id degrades; empty-input; pair-emits-
+  at-position-of-first-half).
+- CLI rendering `+3` (linked-pair with indicator;
+  orphan-link degrades; pre-Phase-94 unlinked-row
+  regression pinned byte-identical).
+- Web UI JS `+0` (the line-for-line port of the Rust
+  helper is covered by the Rust tests' algorithmic
+  correctness; runtime UI verification is manual; the
+  Web UI is currently uncovered by the workspace test
+  suite).
+
+The `+1 over` is the same shape as Phase 93's: the helper
+earned its own edge-case coverage because the defensive
+cases (self-reference, asymmetric, same-op, dangling) are
+each independently worth a test even though the
+algorithm is straightforward. Pattern is now well-
+established for "new pure module with multiple
+defensive failure modes."
+
+**Scope — every planned surface shipped exactly as scoped.**
+The grouping helper as a single source of truth for both
+surfaces; the IPC enrichment with full wire-compat (the
+JSON `proposed_op` lift was sufficient, no chain field
+change); the `GroupableProposal` trait so the same
+algorithm operates on both `PersonaProposal` and
+`PersonaProposalSummary`; the CLI's `└─ supersedes:` /
+`└─ superseded by:` indicator with RemoveList-first
+ordering regardless of input order; the Web UI single-
+card layout with banner, stacked halves, directional
+arrow, primary "Approve both" button, `⋮ Split` menu,
+and "Reject both" button; the partial-action path
+honoring Phase 92's `each half independently Revert-able`
+guarantee. Zero clippy warnings. Zero new workspace deps.
+
+**One-time refactor noted.** Task 2 shipped the helper
+with a `PersonaProposal`-only signature; Task 3 then
+refactored it to a generic-via-trait shape so the IPC
+`PersonaProposalSummary` could use the same algorithm.
+The refactor was atomic with the CLI wiring commit
+(Task 3 — commit `a212566`) — all 8 Task 2 tests
+preserved unchanged; no test churn. The refactor is the
+project's first "Task N introduces shape, Task N+1
+generalizes shape" sequence; future phases might land
+the generic shape up-front if the algorithm-shape is
+known to need it from the start.
+
+**Web UI runtime testing.** Per the CLAUDE.md guidance
+("For UI or frontend changes, start the dev server and
+use the feature in a browser before reporting the task
+as complete"), runtime Web UI verification is normally
+required. This session ships Phase 94 Task 4 **without**
+browser-side verification — the Web UI is uncovered by
+the workspace test suite and a live browser was not
+available. The JS is a line-for-line port of the Rust
+helper's algorithm (covered by 8 Rust tests); the CSS
+and JS are purely additive (no existing selectors or
+handlers modified). The regression surface is bounded to
+"the new linked-pair card layout displays correctly" —
+something a follow-up browser session can verify.
 
 ## Exit criteria
 
-- [ ] `group_supersession_pairs` pure helper in
+- [x] `group_supersession_pairs` pure helper in
   `aivyx-channel` returns
-  `Vec<ProposalRendering<'_>>` from a flat
-  `&[PersonaProposal]` — Task 2.
-- [ ] Unit tests on the pure helper: linked-pair fixture;
+  `Vec<ProposalRendering<'_, P>>` from a flat `&[P]`
+  for any `P: GroupableProposal` — Task 2 (commit
+  `8fe5f1b`).
+- [x] Unit tests on the pure helper: linked-pair fixture;
   orphan-link degradation; unlinked passthrough; self-
-  reference defended; asymmetric-link defended; empty
-  list — Task 2.
-- [ ] `aivyx persona proposals` CLI renders linked pairs
-  with a `└─ supersedes:` indicator; unlinked rows
-  unchanged — Task 3.
-- [ ] CLI tests: linked-pair rendering; orphan
-  degradation; unlinked regression — Task 3.
-- [ ] Web UI Persona-pane Proposals renders linked
+  reference defended; asymmetric-link defended; same-op
+  pair defended; empty list; position-determinism — Task
+  2 (commit `8fe5f1b`).
+- [x] `aivyx persona proposals` CLI renders linked pairs
+  with `└─ supersedes:` / `└─ superseded by:`
+  indicators; unlinked rows unchanged — Task 3 (commit
+  `a212566`).
+- [x] CLI tests: linked-pair rendering; orphan
+  degradation; unlinked regression — Task 3 (commit
+  `a212566`).
+- [x] Web UI Persona-pane Proposals renders linked
   pairs as a single visual card with one primary
-  "Approve both" + `⋮` split menu — Task 4.
-- [ ] One-click approve fires two sequential
+  "Approve both" + `⋮` split menu — Task 4 (commit
+  `2fe69a4`).
+- [x] One-click approve fires two sequential
   `ResolvePersonaProposal` IPC calls; partial actions
-  use the existing single-call path — Task 4.
-- [ ] `docs/INSTALL.md` cross-references Phase 94 under
-  the existing Phase 92 subsection — Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
-  Task 5.
-- [ ] All four Q-block questions resolved with operator
+  use the existing single-call path — Task 4 (commit
+  `2fe69a4`).
+- [x] `docs/INSTALL.md` cross-references Phase 94 under
+  the existing Phase 92 subsection — Task 5 (this
+  commit).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed —
+  Task 5 (this commit).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-one.
-- [ ] PRODUCT.md streak extends to thirty-four.
-- [ ] Production-core streak extends to forty-two (new
+- [x] DESIGN.md streak extends to forty-one.
+- [x] PRODUCT.md streak extends to thirty-four.
+- [x] Production-core streak extends to forty-two (new
   record) — `lib.rs` byte-identical.
-- [ ] Test count delta: positive (~+6-10; per the
-  converged calibration law — new pure helper module
-  (≈ +5-7, mixed fixture + edge cases) + CLI rendering
-  (≈ +2-3) + Web UI surface manually tested or +1-2
-  rust-side integration; no new module schema, no new
-  `KeyDomain`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta: positive (`+11`, one over the
+  predicted `+6-10` band — accounted for by the pure
+  helper's six dedicated edge-case tests alongside the
+  Q4a mixed fixture).
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

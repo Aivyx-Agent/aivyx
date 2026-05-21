@@ -1265,3 +1265,13 @@ parent_role = "researcher"
 # when supersession fires); the proposals themselves
 # appear in `aivyx persona proposals` like every other
 # Phase 70 / Phase 81 / Phase 85 proposal.
+#
+# Phase 94 adds **grouped rendering** for the linked
+# supersession pair: `aivyx persona proposals` renders the
+# two halves with `└─ supersedes:` / `└─ superseded by:`
+# indicators, and the Web UI Proposals pane renders them as
+# one card with a primary "Approve both" action plus a
+# `⋮ Split` menu for partial actions (Phase 92 guarantees
+# each half stays independently Revert-able). The grouping
+# is pure client-side rendering — no new config keys are
+# needed.
