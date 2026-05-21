@@ -111,6 +111,16 @@ pub struct SemanticMemoryContext {
     /// `semantic_search_scored_ann` as the stale-rebuild
     /// threshold. Ignored when `ann_index = false`.
     ann_rebuild_threshold: u32,
+    /// Phase 97 — token-cost hard cap on the final recall
+    /// injection set. `0` (default) disables budget
+    /// enforcement (byte-identical to pre-Phase-97). When
+    /// `>= 1`, applied AFTER cluster-expansion and the
+    /// existing `rag_top_k` budget-share: lowest-ranked
+    /// items drop until the running estimate fits. The
+    /// recall breadcrumb + Phase 84 cluster stat + Phase 77
+    /// recall_log all see the post-budget set so observers
+    /// match what was actually injected.
+    recall_token_budget: u32,
 }
 
 impl SemanticMemoryContext {
@@ -134,6 +144,7 @@ impl SemanticMemoryContext {
             recall_gate_min_chars: 0,
             ann_index: false,
             ann_rebuild_threshold: 100,
+            recall_token_budget: 0,
         }
     }
 
@@ -151,6 +162,19 @@ impl SemanticMemoryContext {
     ) -> Self {
         self.ann_index = enabled;
         self.ann_rebuild_threshold = rebuild_threshold;
+        self
+    }
+
+    /// Phase 97 — set the token-cost budget on the final
+    /// recall injection. Builder; the binary calls this
+    /// with `config.embedding.recall_token_budget`. With
+    /// `0` (the default) budget enforcement is off and
+    /// behaviour is byte-identical to pre-Phase-97.
+    pub fn with_recall_token_budget(
+        mut self,
+        budget: u32,
+    ) -> Self {
+        self.recall_token_budget = budget;
         self
     }
 
@@ -417,6 +441,39 @@ impl ContextProvider for SemanticMemoryContext {
         for (e, s) in sibs.into_iter().take(n_sib) {
             final_hits.push((e, s));
             is_cluster.push(true);
+        }
+
+        // Phase 97 — token-budget enforcement. Applied
+        // AFTER the rank + cluster-expansion + budget-share
+        // dance so the lowest-cosine items drop first. The
+        // recall breadcrumb + cluster stat + recall_log
+        // below all see the post-budget set so observers
+        // match what's actually injected.
+        if self.recall_token_budget > 0 {
+            let paired: Vec<((MemoryEntry, f32), bool)> = final_hits
+                .into_iter()
+                .zip(is_cluster)
+                .collect();
+            let trimmed = crate::token_budget::apply_token_budget(
+                paired,
+                self.recall_token_budget,
+                |((entry, _score), _cl)| {
+                    crate::token_budget::estimate_tokens(&entry.body)
+                },
+            );
+            final_hits = Vec::with_capacity(trimmed.len());
+            is_cluster = Vec::with_capacity(trimmed.len());
+            for (hit, cl) in trimmed {
+                final_hits.push(hit);
+                is_cluster.push(cl);
+            }
+            if final_hits.is_empty() {
+                // Every hit fell out of the budget. Treat
+                // the same as "no kept hits" — return None
+                // so the caller can fall back to the
+                // base prompt without an empty recall block.
+                return None;
+            }
         }
 
         // Phase 76 (Q4b) — visible per-turn marker. A new
@@ -1150,5 +1207,109 @@ mod tests {
             "with the gate disabled the bare message is \
              embedded (pre-Phase-90 behaviour)"
         );
+    }
+
+    /// Phase 97 — with `recall_token_budget = 0` (the
+    /// default), recall is byte-identical to pre-Phase-97:
+    /// the existing relevant hit injects normally.
+    #[tokio::test]
+    async fn recall_token_budget_zero_passes_through() {
+        let memory = seed().await;
+        let block = ctx(memory, false, 0.0)
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("a relevant hit must produce a block");
+        assert!(
+            block.contains("purple"),
+            "default budget = 0 must not drop the relevant hit"
+        );
+    }
+
+    /// Phase 97 — with `recall_token_budget` set tightly,
+    /// long memory bodies fall out of the budget and the
+    /// recall block omits them. Seed two hits with the
+    /// same vector but very different body lengths; cap
+    /// the budget so only the first (shorter, equal-
+    /// ranked-by-cosine) survives.
+    ///
+    /// Note: both hits hash the same vector via
+    /// FakeProvider (the body bytes are different but the
+    /// fake provider keys on byte-sum which differs).
+    /// We instead use a manual vector to keep both at the
+    /// same cosine, then use input order to determine
+    /// rank.
+    #[tokio::test]
+    async fn recall_token_budget_drops_long_body_tail() {
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        // Two notes with identical embeddings, very
+        // different body lengths. Long is written FIRST so
+        // the newer-seq-wins cosine tiebreak in
+        // rank_by_cosine puts the short body at position 0
+        // (the budget walks pre-ranked input order; it
+        // doesn't reorder).
+        let long_seq = m
+            .put("notes", &"x".repeat(800))
+            .await
+            .unwrap();
+        m.put_vector("notes", long_seq, vec![1.0, 1.0])
+            .await
+            .unwrap();
+        let short_seq = m
+            .put("notes", "short")
+            .await
+            .unwrap();
+        m.put_vector("notes", short_seq, vec![1.0, 1.0])
+            .await
+            .unwrap();
+
+        // Estimator: short = 1 + 1 = 2 tokens; long = 200
+        // + 1 = 201 tokens. Budget 50 → only short fits.
+        let ctx = SemanticMemoryContext::new(
+            m,
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_token_budget(50);
+
+        let block = ctx
+            .recall("anything that maps", sid())
+            .await
+            .expect("at least the short body fits");
+        assert!(block.contains("short"));
+        assert!(
+            !block.contains("xxxx"),
+            "the 800-char body must NOT make it past the budget"
+        );
+    }
+
+    /// Phase 97 — with a budget so tight that even the
+    /// top-ranked hit doesn't fit, recall returns `None`
+    /// (the planner falls back to the base prompt with no
+    /// recall injection). The "all items fell out" path
+    /// is treated the same as "no kept hits."
+    #[tokio::test]
+    async fn recall_token_budget_zero_kept_returns_none() {
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let seq = m
+            .put("notes", &"y".repeat(400))
+            .await
+            .unwrap();
+        m.put_vector("notes", seq, vec![1.0, 1.0])
+            .await
+            .unwrap();
+
+        // 400-char body → ~101 estimated tokens. Budget 10
+        // → falls out → returns None.
+        let ctx = SemanticMemoryContext::new(
+            m,
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_token_budget(10);
+
+        let block = ctx.recall("anything", sid()).await;
+        assert!(block.is_none());
     }
 }

@@ -2764,6 +2764,11 @@ async fn run_async(
                 cfg.ann_index,
                 cfg.ann_rebuild_threshold,
             );
+            // Phase 97 — token-budget. Default `0` is
+            // byte-identical to pre-Phase-97 count-based.
+            sc = sc.with_recall_token_budget(
+                cfg.recall_token_budget,
+            );
             Some(Arc::new(sc))
         }
         _ => None,
@@ -2875,6 +2880,12 @@ async fn run_async(
             // to pre-Phase-90.
             if let Some(cfg) = config_embedding.as_ref() {
                 r = r.with_recall_gate(cfg.recall_gate_min_chars);
+                // Phase 97 — token-budget for adaptive
+                // Persona facet selection. Default `0` is
+                // byte-identical to pre-Phase-97.
+                r = r.with_recall_token_budget(
+                    cfg.recall_token_budget,
+                );
             }
             Some(Arc::new(r))
         }

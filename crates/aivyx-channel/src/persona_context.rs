@@ -116,6 +116,14 @@ pub struct PersonaContextRefiner {
     /// `None` at the top — the planner uses the full Persona
     /// base prompt (the existing pre-Phase-79 fallback).
     recall_gate_min_chars: usize,
+    /// Phase 97 — token-cost hard cap on the adaptive
+    /// Persona facet selection. `0` (default) disables
+    /// budget enforcement (byte-identical to pre-Phase-97).
+    /// When `>= 1`, applied AFTER the existing top_k +
+    /// min_similarity filter: lowest-priority facets drop
+    /// until the running estimate fits. The Phase 79
+    /// selection stat sees the post-budget set.
+    recall_token_budget: u32,
 }
 
 impl PersonaContextRefiner {
@@ -143,7 +151,21 @@ impl PersonaContextRefiner {
             conversation_windows: None,
             recall_window_turns: 1,
             recall_gate_min_chars: 0,
+            recall_token_budget: 0,
         }
+    }
+
+    /// Phase 97 — set the token-cost budget on adaptive
+    /// Persona facet selection. Builder; the binary calls
+    /// this with `config.embedding.recall_token_budget`.
+    /// With `0` (the default) budget enforcement is off
+    /// and behaviour is byte-identical to pre-Phase-97.
+    pub fn with_recall_token_budget(
+        mut self,
+        budget: u32,
+    ) -> Self {
+        self.recall_token_budget = budget;
+        self
     }
 
     /// Phase 90 — set the heuristic recall-gate threshold.
@@ -295,6 +317,23 @@ impl SystemPromptRefiner for PersonaContextRefiner {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         scored.truncate(self.top_k);
+
+        // Phase 97 — token-budget enforcement on the
+        // post-rank, post-top_k selection. Facets are
+        // already in cosine-descending order; the budget
+        // walks them, dropping the lowest-priority tail
+        // once the running estimate exceeds the budget.
+        // With `recall_token_budget = 0` (default) this is
+        // a no-op.
+        if self.recall_token_budget > 0 {
+            scored = crate::token_budget::apply_token_budget(
+                scored,
+                self.recall_token_budget,
+                |(i, _)| {
+                    crate::token_budget::estimate_tokens(&facets[*i])
+                },
+            );
+        }
 
         let kept: HashSet<String> = scored
             .iter()
@@ -722,5 +761,59 @@ mod tests {
             Some(&"ok".to_string()),
             "the bare short message is the query (pre-Phase-90)"
         );
+    }
+
+    /// Phase 97 — with `recall_token_budget = 0` (default),
+    /// adaptive Persona selection is byte-identical to
+    /// pre-Phase-97: the existing relevant facets are
+    /// selected normally.
+    #[tokio::test]
+    async fn refine_token_budget_zero_passes_through() {
+        let out = refiner(big_persona(), false, 12)
+            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .await
+            .expect("large persona + ok embed → Some");
+        // Both deploy-relevant facets selected as before.
+        assert!(out.contains("deploy runbook lives in wiki"));
+        assert!(out.contains("deploy window is Friday"));
+    }
+
+    /// Phase 97 — with `recall_token_budget` set tighter
+    /// than the sum of selected facets' estimated tokens,
+    /// the lowest-priority facets drop from the selection.
+    /// Both "deploy" facets are cosine-relevant; the
+    /// budget keeps only the top one.
+    #[tokio::test]
+    async fn refine_token_budget_drops_lowest_priority_facet() {
+        // Both deploy facets estimate ~7 tokens each. A
+        // budget of 8 fits only the top-ranked one.
+        let refiner = refiner(big_persona(), false, 12)
+            .with_recall_token_budget(8);
+
+        let out = refiner
+            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .await
+            .expect("large persona + ok embed → Some");
+
+        // Exactly one of the two deploy-relevant
+        // soft-facets should survive the budget. (Cosine
+        // ranking determines which; both are tied in our
+        // fixture, so we just count that at most one
+        // appears.)
+        let kept_runbook =
+            out.contains("deploy runbook lives in wiki");
+        let kept_window =
+            out.contains("deploy window is Friday");
+        assert!(
+            kept_runbook ^ kept_window,
+            "exactly one of the two facets should survive \
+             the budget; got runbook={kept_runbook} \
+             window={kept_window}"
+        );
+        // Protected constraint + identity scalar still
+        // ALWAYS present — the budget only trims
+        // soft-facet selection, never the protected core.
+        assert!(out.contains("never deploy without approval"));
+        assert!(out.contains("Ada"));
     }
 }
