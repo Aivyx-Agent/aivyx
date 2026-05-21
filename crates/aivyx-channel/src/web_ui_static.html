@@ -640,6 +640,66 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   margin-top: 6px;
 }
 
+/* Phase 94 — linked supersession pair card. Two halves
+   stacked inside one outer card with a banner header + a
+   directional arrow between them. Visually distinct so the
+   operator sees the linkage at a glance. */
+.proposal-card.linked-supersession {
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+.linked-supersession-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+.linked-supersession-halves {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.linked-supersession-arrow {
+  text-align: center;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  margin: 2px 0;
+  letter-spacing: 1px;
+}
+.proposal-card-inner {
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.linked-split-menu {
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+.linked-split-menu.show { display: flex; }
+.linked-split-menu button {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.linked-split-menu button:hover {
+  background: var(--accent-dim);
+}
+
 /* Phase 69 — desktop notification permission banner + in-page toast stack. */
 #notif-permission-banner {
   display: none;
@@ -1957,8 +2017,17 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       body.appendChild(empty);
       return;
     }
-    proposals.forEach(function(p) {
-      body.appendChild(renderProposalCard(p));
+    // Phase 94 — pre-group linked supersession pairs. Each
+    // pair renders as one card with a single primary
+    // "Approve both" action; standalone proposals render
+    // exactly as pre-Phase-94.
+    const grouped = groupSupersessionPairs(proposals);
+    grouped.forEach(function(g) {
+      if (g.kind === 'Linked') {
+        body.appendChild(renderLinkedPairCard(g.removeSide, g.appendSide));
+      } else {
+        body.appendChild(renderProposalCard(g.proposal));
+      }
     });
     if (total_len > proposals.length) {
       const note = document.createElement('div');
@@ -1967,6 +2036,247 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         '(showing first ' + proposals.length + ' of ' + total_len + ')';
       body.appendChild(note);
     }
+  }
+
+  // ---- Phase 94 — supersession-pair grouping (mirrors the
+  // Rust `proposal_grouping::group_supersession_pairs`
+  // helper). Pure JS over the flat proposal list returned by
+  // ListPersonaProposals; no IPC contract change.
+  //
+  // Returns an array of:
+  //   { kind: 'Linked', removeSide: p1, appendSide: p2 }
+  //   { kind: 'Unlinked', proposal: p }
+  //
+  // Defensive cases (self-ref, dangling, asymmetric, same-
+  // op pair) all degrade to Unlinked, matching the Rust
+  // helper's behaviour. ----
+  function groupSupersessionPairs(proposals) {
+    const byId = {};
+    proposals.forEach(function(p) { byId[p.id] = p; });
+    const emitted = {};
+    const out = [];
+    proposals.forEach(function(p) {
+      if (emitted[p.id]) return;
+      const partnerId = p.supersedes_proposal_id || null;
+      if (!partnerId) {
+        out.push({ kind: 'Unlinked', proposal: p });
+        emitted[p.id] = true;
+        return;
+      }
+      if (partnerId === p.id) {
+        // Self-reference defended.
+        out.push({ kind: 'Unlinked', proposal: p });
+        emitted[p.id] = true;
+        return;
+      }
+      const partner = byId[partnerId];
+      if (!partner) {
+        // Dangling reference — partner not in input.
+        out.push({ kind: 'Unlinked', proposal: p });
+        emitted[p.id] = true;
+        return;
+      }
+      if (partner.supersedes_proposal_id !== p.id) {
+        // Asymmetric link.
+        out.push({ kind: 'Unlinked', proposal: p });
+        emitted[p.id] = true;
+        return;
+      }
+      // Mutual reference confirmed. Determine RemoveList vs
+      // AppendList from the op `kind` discriminant.
+      const pKind = (p.proposed_op && p.proposed_op.kind) || '';
+      const partnerKind =
+        (partner.proposed_op && partner.proposed_op.kind) || '';
+      let removeSide = null;
+      let appendSide = null;
+      if (pKind === 'RemoveList' && partnerKind === 'AppendList') {
+        removeSide = p;
+        appendSide = partner;
+      } else if (pKind === 'AppendList' && partnerKind === 'RemoveList') {
+        removeSide = partner;
+        appendSide = p;
+      } else {
+        // Same-op pair or non-list op — defend by
+        // emitting as Unlinked.
+        out.push({ kind: 'Unlinked', proposal: p });
+        emitted[p.id] = true;
+        return;
+      }
+      out.push({
+        kind: 'Linked',
+        removeSide: removeSide,
+        appendSide: appendSide,
+      });
+      emitted[removeSide.id] = true;
+      emitted[appendSide.id] = true;
+    });
+    return out;
+  }
+
+  // ---- Phase 94 — linked-pair card renderer. ----
+  // Two halves stacked inside one outer card with a "linked
+  // supersession" banner header. The Pending state gets a
+  // single primary "Approve both" button that fires two
+  // sequential ResolvePersonaProposal calls (RemoveList
+  // first, then AppendList) + a ⋮ split menu for partial
+  // actions (Phase 92 guarantees each half is independently
+  // Revert-able).
+  function renderLinkedPairCard(removeSide, appendSide) {
+    const card = document.createElement('div');
+    card.className = 'proposal-card linked-supersession';
+
+    const header = document.createElement('div');
+    header.className = 'linked-supersession-header';
+    header.textContent =
+      '↔ linked supersession (Phase 92) — review as one decision';
+    card.appendChild(header);
+
+    // Inner card body — both halves stacked. We reuse
+    // renderProposalCard but strip its action area (we'll
+    // render shared actions below).
+    const halves = document.createElement('div');
+    halves.className = 'linked-supersession-halves';
+    halves.appendChild(renderProposalCardBody(removeSide));
+    const arrow = document.createElement('div');
+    arrow.className = 'linked-supersession-arrow';
+    arrow.textContent = '↓ supersedes ↓';
+    halves.appendChild(arrow);
+    halves.appendChild(renderProposalCardBody(appendSide));
+    card.appendChild(halves);
+
+    if (removeSide.status === 'Pending' &&
+        appendSide.status === 'Pending') {
+      card.appendChild(buildLinkedActions(removeSide, appendSide));
+    }
+    return card;
+  }
+
+  // The half-card body without action buttons — pulled out
+  // of renderProposalCard so the linked pair can stack two
+  // halves without each half growing its own button row.
+  function renderProposalCardBody(p) {
+    const inner = document.createElement('div');
+    inner.className = 'proposal-card-inner';
+
+    const head = document.createElement('div');
+    head.className = 'proposal-head';
+    const left = document.createElement('span');
+    left.innerHTML =
+      '<span class="proposal-category">' + escapeHtml(p.category) + '</span>' +
+      ' · ' + escapeHtml(p.id) +
+      ' · ses ' + escapeHtml(p.source_reflection_session_id);
+    const right = document.createElement('span');
+    right.className = 'proposal-status ' + p.status.toLowerCase();
+    right.textContent = p.status;
+    head.appendChild(left);
+    head.appendChild(right);
+    inner.appendChild(head);
+
+    const ts = document.createElement('div');
+    ts.className = 'row-meta';
+    ts.textContent = 'proposed ' + formatUnixMs(p.proposed_at_unix_ms);
+    if (p.resolved_at_unix_ms) {
+      ts.textContent +=
+        ' · resolved ' + formatUnixMs(p.resolved_at_unix_ms);
+    }
+    inner.appendChild(ts);
+
+    const proposedOp = document.createElement('div');
+    proposedOp.className = 'proposal-op';
+    proposedOp.textContent = JSON.stringify(p.proposed_op, null, 2);
+    inner.appendChild(proposedOp);
+
+    if (p.proposed_reason) {
+      const reason = document.createElement('div');
+      reason.className = 'proposal-reason';
+      reason.textContent = 'agent reason: ' + p.proposed_reason;
+      inner.appendChild(reason);
+    }
+    return inner;
+  }
+
+  function buildLinkedActions(removeSide, appendSide) {
+    const wrap = document.createElement('div');
+    const actions = document.createElement('div');
+    actions.className = 'proposal-actions';
+
+    const approveBoth = document.createElement('button');
+    approveBoth.textContent = 'Approve both';
+    approveBoth.className = 'primary';
+    approveBoth.addEventListener('click', function() {
+      // Phase 94 v1: two sequential ResolvePersonaProposal
+      // calls. Phase 92's `each half independently
+      // Revert-able` guarantee covers the half-approved
+      // failure mode without needing a transactional IPC.
+      resolveProposal(removeSide.id, { kind: 'Approve' });
+      resolveProposal(appendSide.id, { kind: 'Approve' });
+    });
+
+    const splitBtn = document.createElement('button');
+    splitBtn.textContent = '⋮ Split';
+    splitBtn.addEventListener('click', function() {
+      const menu = wrap.querySelector('.linked-split-menu');
+      menu.classList.toggle('show');
+    });
+
+    const rejectBoth = document.createElement('button');
+    rejectBoth.textContent = 'Reject both';
+    rejectBoth.addEventListener('click', function() {
+      const reason = prompt('Reject reason for both halves (optional):', '');
+      if (reason === null) return;
+      const trimmed = reason.trim();
+      const r = { kind: 'Reject',
+                  reason: trimmed === '' ? null : trimmed };
+      resolveProposal(removeSide.id, r);
+      resolveProposal(appendSide.id, r);
+    });
+
+    actions.appendChild(approveBoth);
+    actions.appendChild(splitBtn);
+    actions.appendChild(rejectBoth);
+    wrap.appendChild(actions);
+
+    // Split menu — partial-action options. Hidden until
+    // the operator clicks ⋮ Split.
+    const menu = document.createElement('div');
+    menu.className = 'linked-split-menu';
+    menu.style.display = 'none';
+    function row(label, onClick) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.addEventListener('click', onClick);
+      menu.appendChild(b);
+    }
+    row('Approve RemoveList only (' + removeSide.id + ')', function() {
+      resolveProposal(removeSide.id, { kind: 'Approve' });
+    });
+    row('Approve AppendList only (' + appendSide.id + ')', function() {
+      resolveProposal(appendSide.id, { kind: 'Approve' });
+    });
+    row('Reject RemoveList only', function() {
+      const reason = prompt('Reject reason (optional):', '');
+      if (reason === null) return;
+      const trimmed = reason.trim();
+      resolveProposal(removeSide.id, {
+        kind: 'Reject', reason: trimmed === '' ? null : trimmed });
+    });
+    row('Reject AppendList only', function() {
+      const reason = prompt('Reject reason (optional):', '');
+      if (reason === null) return;
+      const trimmed = reason.trim();
+      resolveProposal(appendSide.id, {
+        kind: 'Reject', reason: trimmed === '' ? null : trimmed });
+    });
+    // CSS .show toggle is what `splitBtn.click` flips, so
+    // mirror it onto inline display too.
+    const observer = new MutationObserver(function() {
+      menu.style.display =
+        menu.classList.contains('show') ? 'flex' : 'none';
+    });
+    observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
+    wrap.appendChild(menu);
+
+    return wrap;
   }
 
   function renderProposalCard(p) {
