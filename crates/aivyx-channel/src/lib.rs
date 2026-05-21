@@ -86,6 +86,7 @@ pub mod persona_proposal;
 pub mod proactive_detect;
 pub mod proactive_log;
 pub mod profile_prompt;
+pub mod proposal_grouping;
 pub mod reflection_scheduler;
 mod render;
 mod role_envelope;
