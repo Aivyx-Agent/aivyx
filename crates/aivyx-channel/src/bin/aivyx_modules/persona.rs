@@ -267,6 +267,15 @@ pub async fn run_persona_proposals_reject(
 
 /// Render a proposal list for `proposals list`. Pure function so
 /// unit tests can drive against fixtures without IPC.
+///
+/// Phase 94 — linked supersession pairs (mutually-referenced
+/// `supersedes_proposal_id`) render together with a
+/// `└─ supersedes:` / `└─ superseded by:` indicator under
+/// each half. Standalone proposals render exactly as
+/// pre-Phase-94. The Phase 92 guarantee that each half
+/// remains independently `Revert`-able is preserved — the
+/// CLI subcommands `approve` / `reject` still take a single
+/// proposal id.
 fn render_proposal_list(
     status: &str,
     proposals: &[PersonaProposalSummary],
@@ -283,17 +292,31 @@ fn render_proposal_list(
         ));
         return out;
     }
-    for p in proposals {
-        let op_str =
-            serde_json::to_string(&p.proposed_op).unwrap_or_else(|_| "{}".into());
-        out.push_str(&format!(
-            "[{status}] {id}  category={category}  proposed_at={ts}ms\n  op = {op}\n",
-            status = p.status,
-            id = p.id,
-            category = p.category,
-            ts = p.proposed_at_unix_ms,
-            op = op_str,
-        ));
+    for rendering in
+        aivyx_channel::proposal_grouping::group_supersession_pairs(proposals)
+    {
+        match rendering {
+            aivyx_channel::proposal_grouping::ProposalRendering::Linked {
+                remove_side,
+                append_side,
+            } => {
+                out.push_str(&render_one_proposal_row(remove_side));
+                out.push_str(&format!(
+                    "  └─ superseded by: {}\n",
+                    append_side.id,
+                ));
+                out.push_str(&render_one_proposal_row(append_side));
+                out.push_str(&format!(
+                    "  └─ supersedes: {}\n",
+                    remove_side.id,
+                ));
+            }
+            aivyx_channel::proposal_grouping::ProposalRendering::Unlinked(
+                p,
+            ) => {
+                out.push_str(&render_one_proposal_row(p));
+            }
+        }
     }
     if total_len as usize > proposals.len() {
         out.push_str(&format!(
@@ -303,6 +326,23 @@ fn render_proposal_list(
         ));
     }
     out
+}
+
+/// Render one proposal row in the standard pre-Phase-94
+/// shape. Pulled out so both the linked-pair and unlinked
+/// paths emit byte-identical row content; only the
+/// surrounding `└─` indicator differs.
+fn render_one_proposal_row(p: &PersonaProposalSummary) -> String {
+    let op_str =
+        serde_json::to_string(&p.proposed_op).unwrap_or_else(|_| "{}".into());
+    format!(
+        "[{status}] {id}  category={category}  proposed_at={ts}ms\n  op = {op}\n",
+        status = p.status,
+        id = p.id,
+        category = p.category,
+        ts = p.proposed_at_unix_ms,
+        op = op_str,
+    )
 }
 
 /// Render full proposal detail for `proposals show <id>`.
@@ -444,6 +484,7 @@ mod tests {
             applied_seq: None,
             rejected_reason: None,
             resolved_at_unix_ms: None,
+            supersedes_proposal_id: None,
         }
     }
 
@@ -464,6 +505,139 @@ mod tests {
         assert!(out.contains("proposed_at=1715000000000ms"));
         assert!(out.contains("\"kind\":\"AppendList\""));
         assert!(out.contains("prefer terse"));
+    }
+
+    /// Phase 94 — a linked supersession pair (mutually-
+    /// referenced `supersedes_proposal_id`) renders with the
+    /// `└─ supersedes:` and `└─ superseded by:` indicators
+    /// under each half. The RemoveList side comes first,
+    /// regardless of input order, and points at the
+    /// AppendList side.
+    #[test]
+    fn proposals_list_renders_linked_pair_with_indicator() {
+        let remove_side = PersonaProposalSummary {
+            id: "supersede-remove:consolidate-pair:auth+jwt".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-2".into(),
+            status: "Pending".into(),
+            category: "LearnedContext".into(),
+            proposed_op: serde_json::json!({
+                "kind": "RemoveList",
+                "value": "consolidate-pair:auth+jwt",
+            }),
+            proposed_reason: Some("superseded".into()),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: Some(
+                "consolidate-pair:auth+sessions".into(),
+            ),
+        };
+        let append_side = PersonaProposalSummary {
+            id: "consolidate-pair:auth+sessions".into(),
+            proposed_at_unix_ms: 1_715_000_000_001,
+            source_reflection_session_id: "ses-2".into(),
+            status: "Pending".into(),
+            category: "LearnedContext".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": "consolidate-pair:auth+sessions",
+            }),
+            proposed_reason: Some("supersedes auth+jwt".into()),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: Some(
+                "supersede-remove:consolidate-pair:auth+jwt".into(),
+            ),
+        };
+        // Input order: AppendList first; grouping helper
+        // should still emit RemoveList side first.
+        let out = render_proposal_list(
+            "pending",
+            &[append_side, remove_side],
+            2,
+        );
+        assert!(out.contains(
+            "[Pending] supersede-remove:consolidate-pair:auth+jwt"
+        ));
+        assert!(out.contains(
+            "└─ superseded by: consolidate-pair:auth+sessions"
+        ));
+        assert!(out.contains(
+            "[Pending] consolidate-pair:auth+sessions"
+        ));
+        assert!(out.contains(
+            "└─ supersedes: supersede-remove:consolidate-pair:auth+jwt"
+        ));
+        // The RemoveList row appears before the AppendList row.
+        let remove_pos = out
+            .find("supersede-remove:consolidate-pair:auth+jwt")
+            .unwrap();
+        let append_pos = out
+            .find("[Pending] consolidate-pair:auth+sessions")
+            .unwrap();
+        assert!(
+            remove_pos < append_pos,
+            "RemoveList row must render before AppendList row"
+        );
+    }
+
+    /// Phase 94 — an orphan-link proposal (its
+    /// `supersedes_proposal_id` points at a partner not in
+    /// the input list, e.g., the partner was rejected and
+    /// is filtered out by the status filter) degrades to
+    /// the standard unlinked row. No `└─` indicator is
+    /// emitted.
+    #[test]
+    fn proposals_list_orphan_link_degrades_to_unlinked() {
+        let orphan = PersonaProposalSummary {
+            id: "consolidate-pair:deploy+rollback".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-3".into(),
+            status: "Pending".into(),
+            category: "LearnedContext".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": "consolidate-pair:deploy+rollback",
+            }),
+            proposed_reason: Some("strengthened".into()),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: Some(
+                "supersede-remove:consolidate-pair:deploy+ship".into(),
+            ),
+        };
+        let out = render_proposal_list("pending", &[orphan], 1);
+        assert!(out.contains(
+            "[Pending] consolidate-pair:deploy+rollback"
+        ));
+        // Orphan: no link indicator since the partner is
+        // absent.
+        assert!(
+            !out.contains("└─ supersedes:"),
+            "orphan must not render a supersedes indicator"
+        );
+        assert!(
+            !out.contains("└─ superseded by:"),
+            "orphan must not render a superseded-by indicator"
+        );
+    }
+
+    /// Phase 94 — pre-Phase-94 regression: a plain unlinked
+    /// proposal (no `supersedes_proposal_id`) renders
+    /// byte-identical to before. The indicator never
+    /// appears on unlinked rows.
+    #[test]
+    fn proposals_list_unlinked_row_unchanged() {
+        let out = render_proposal_list(
+            "pending", &[pending_fixture()], 1,
+        );
+        assert!(!out.contains("└─"));
     }
 
     #[test]

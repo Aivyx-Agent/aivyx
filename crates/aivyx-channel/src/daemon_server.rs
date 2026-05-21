@@ -2614,6 +2614,11 @@ fn proposal_summary_from_view(
     let proposed_reason = view.proposed_op.reason.clone();
     let proposed_op = serde_json::to_value(&view.proposed_op.op)
         .unwrap_or(serde_json::Value::Null);
+    // Phase 92 → Phase 94 — lift the linkage onto the
+    // summary so the surface grouping helper doesn't need
+    // to re-parse `proposed_op` JSON.
+    let supersedes_proposal_id =
+        view.proposed_op.supersedes_proposal_id.clone();
     let (status, applied_op, applied_seq, rejected_reason, resolved_at_unix_ms) =
         match view.status {
             ProposalStatus::Pending => {
@@ -2666,6 +2671,7 @@ fn proposal_summary_from_view(
         applied_seq,
         rejected_reason,
         resolved_at_unix_ms,
+        supersedes_proposal_id,
     }
 }
 

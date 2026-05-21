@@ -25,6 +25,81 @@ use std::collections::{HashMap, HashSet};
 use crate::persona::PersonaDeltaOp;
 use crate::persona_proposal::PersonaProposal;
 
+/// Phase 94 — minimal accessor trait so the grouping helper
+/// can operate over both the typed `PersonaProposal` (used
+/// inside the daemon) and the wire `PersonaProposalSummary`
+/// (used by the CLI + Web UI). Both surfaces consume the
+/// same algorithm; the trait keeps the helper generic without
+/// forcing one shape on the other.
+///
+/// Each implementor exposes:
+///
+/// - `id()` — stable proposal id.
+/// - `supersedes_proposal_id()` — partner id, or `None`.
+/// - `op_kind()` — discriminant of the inner op,
+///   `OpKind::AppendList` / `OpKind::RemoveList` /
+///   `OpKind::Other` (for ops that aren't list mutations
+///   and thus can never participate in a supersession pair).
+pub trait GroupableProposal {
+    fn id(&self) -> &str;
+    fn supersedes_proposal_id(&self) -> Option<&str>;
+    fn op_kind(&self) -> OpKind;
+}
+
+/// Phase 94 — coarse discriminant of the op's role in
+/// supersession grouping. The Phase 92 supersession pair
+/// is always one `AppendList` + one `RemoveList`; any
+/// other combination is defended as `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    AppendList,
+    RemoveList,
+    Other,
+}
+
+impl GroupableProposal for PersonaProposal {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn supersedes_proposal_id(&self) -> Option<&str> {
+        self.proposed_op.supersedes_proposal_id.as_deref()
+    }
+    fn op_kind(&self) -> OpKind {
+        match self.proposed_op.op {
+            PersonaDeltaOp::AppendList { .. } => OpKind::AppendList,
+            PersonaDeltaOp::RemoveList { .. } => OpKind::RemoveList,
+            _ => OpKind::Other,
+        }
+    }
+}
+
+impl GroupableProposal for crate::daemon_ipc::PersonaProposalSummary {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn supersedes_proposal_id(&self) -> Option<&str> {
+        self.supersedes_proposal_id.as_deref()
+    }
+    fn op_kind(&self) -> OpKind {
+        // The summary's `proposed_op` is a JSON `Value`; we
+        // inspect the `kind` discriminant the serde tag
+        // emits for `PersonaDeltaOp` to determine list-op
+        // shape without re-deserializing.
+        let Some(kind) = self
+            .proposed_op
+            .get("kind")
+            .and_then(|v| v.as_str())
+        else {
+            return OpKind::Other;
+        };
+        match kind {
+            "AppendList" => OpKind::AppendList,
+            "RemoveList" => OpKind::RemoveList,
+            _ => OpKind::Other,
+        }
+    }
+}
+
 /// One row in the grouped rendering output.
 ///
 /// `Linked { remove_side, append_side }` is the Phase 92
@@ -44,12 +119,9 @@ use crate::persona_proposal::PersonaProposal;
 /// input (the partner was resolved/removed; the surviving
 /// half renders flat).
 #[derive(Debug)]
-pub enum ProposalRendering<'a> {
-    Linked {
-        remove_side: &'a PersonaProposal,
-        append_side: &'a PersonaProposal,
-    },
-    Unlinked(&'a PersonaProposal),
+pub enum ProposalRendering<'a, P: GroupableProposal> {
+    Linked { remove_side: &'a P, append_side: &'a P },
+    Unlinked(&'a P),
 }
 
 /// Group Phase 92 linked supersession proposals.
@@ -82,81 +154,71 @@ pub enum ProposalRendering<'a> {
 ///   both are `AppendList`, or both `RemoveList`, or
 ///   neither is a list op) → emit `Unlinked` for both.
 ///   The grouping invariant requires exactly one of each.
-pub fn group_supersession_pairs(
-    proposals: &[PersonaProposal],
-) -> Vec<ProposalRendering<'_>> {
-    let by_id: HashMap<&str, &PersonaProposal> = proposals
-        .iter()
-        .map(|p| (p.id.as_str(), p))
-        .collect();
+pub fn group_supersession_pairs<P: GroupableProposal>(
+    proposals: &[P],
+) -> Vec<ProposalRendering<'_, P>> {
+    let by_id: HashMap<&str, &P> =
+        proposals.iter().map(|p| (p.id(), p)).collect();
     let mut emitted: HashSet<&str> = HashSet::new();
-    let mut out: Vec<ProposalRendering<'_>> =
+    let mut out: Vec<ProposalRendering<'_, P>> =
         Vec::with_capacity(proposals.len());
 
     for p in proposals {
-        if emitted.contains(p.id.as_str()) {
+        if emitted.contains(p.id()) {
             continue;
         }
-        let Some(partner_id) =
-            p.proposed_op.supersedes_proposal_id.as_deref()
-        else {
+        let Some(partner_id) = p.supersedes_proposal_id() else {
             out.push(ProposalRendering::Unlinked(p));
-            emitted.insert(p.id.as_str());
+            emitted.insert(p.id());
             continue;
         };
-        if partner_id == p.id {
+        if partner_id == p.id() {
             // Self-reference defended.
             out.push(ProposalRendering::Unlinked(p));
-            emitted.insert(p.id.as_str());
+            emitted.insert(p.id());
             continue;
         }
         let Some(partner) = by_id.get(partner_id).copied() else {
             // Dangling reference — partner not in input.
             out.push(ProposalRendering::Unlinked(p));
-            emitted.insert(p.id.as_str());
+            emitted.insert(p.id());
             continue;
         };
-        let partner_back =
-            partner.proposed_op.supersedes_proposal_id.as_deref();
-        if partner_back != Some(p.id.as_str()) {
+        if partner.supersedes_proposal_id() != Some(p.id()) {
             // Asymmetric link — only one side points at the
             // other. The other side will be visited in its
             // own turn and also fall through to `Unlinked`.
             out.push(ProposalRendering::Unlinked(p));
-            emitted.insert(p.id.as_str());
+            emitted.insert(p.id());
             continue;
         }
         // Mutual reference confirmed. Determine RemoveList
         // vs AppendList; require exactly one of each.
-        let (remove_side, append_side) = match (
-            &p.proposed_op.op,
-            &partner.proposed_op.op,
-        ) {
-            (
-                PersonaDeltaOp::RemoveList { .. },
-                PersonaDeltaOp::AppendList { .. },
-            ) => (p, partner),
-            (
-                PersonaDeltaOp::AppendList { .. },
-                PersonaDeltaOp::RemoveList { .. },
-            ) => (partner, p),
-            _ => {
-                // Same-op pair (both AppendList, both
-                // RemoveList, or neither a list op) — the
-                // grouping invariant requires exactly one
-                // of each. Defend by emitting both as
-                // Unlinked.
-                out.push(ProposalRendering::Unlinked(p));
-                emitted.insert(p.id.as_str());
-                continue;
-            }
-        };
+        let (remove_side, append_side) =
+            match (p.op_kind(), partner.op_kind()) {
+                (OpKind::RemoveList, OpKind::AppendList) => {
+                    (p, partner)
+                }
+                (OpKind::AppendList, OpKind::RemoveList) => {
+                    (partner, p)
+                }
+                _ => {
+                    // Same-op pair (both AppendList, both
+                    // RemoveList, or neither a list op) —
+                    // the grouping invariant requires
+                    // exactly one of each. Defend by
+                    // emitting both as Unlinked.
+                    out.push(ProposalRendering::Unlinked(p));
+                    emitted.insert(p.id());
+                    continue;
+                }
+            };
         out.push(ProposalRendering::Linked {
             remove_side,
             append_side,
         });
-        emitted.insert(remove_side.id.as_str());
-        emitted.insert(append_side.id.as_str());
+        emitted.insert(remove_side.id());
+        emitted.insert(append_side.id());
     }
     out
 }

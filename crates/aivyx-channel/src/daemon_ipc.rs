@@ -617,6 +617,18 @@ pub struct PersonaProposalSummary {
     /// Superseded` proposals; `None` for `Pending`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at_unix_ms: Option<u64>,
+    /// Phase 92 — when this proposal is one half of a
+    /// linked supersession pair, the id of the other half.
+    /// `None` for proposals that are not part of a
+    /// supersession (the common case). Pulled up from the
+    /// inner `ProposedPersonaDelta` so the Phase 94
+    /// surface-side grouping helper can read it without
+    /// re-parsing the embedded `proposed_op` JSON.
+    /// `#[serde(default, skip_serializing_if =
+    /// "Option::is_none")]` preserves IPC wire-compat — the
+    /// established Phase 84 / 91 / 92 pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_proposal_id: Option<String>,
 }
 
 /// Folded effective Persona snapshot. Phase 60 — returned by
@@ -1824,6 +1836,7 @@ mod tests {
                         applied_seq: None,
                         rejected_reason: None,
                         resolved_at_unix_ms: None,
+                        supersedes_proposal_id: None,
                     }],
                     total_len: 1,
                 },
