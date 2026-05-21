@@ -1438,6 +1438,23 @@ pub struct EmbeddingConfig {
     /// single-token acknowledgments (`ok` / `yes` /
     /// `thanks`).
     pub recall_gate_min_chars: usize,
+    /// Phase 96 — when `true`, semantic memory search uses
+    /// a derived IVF-style ANN index alongside the existing
+    /// brute-force `rank_by_cosine`. The ANN narrows the
+    /// candidate set; the brute-force re-rank then orders
+    /// the final top-K exactly within that set (the hybrid
+    /// composition is what preserves the exact-cosine
+    /// guarantee). Default `false` — brute-force only, byte-
+    /// identical to pre-Phase-96.
+    pub ann_index: bool,
+    /// Phase 96 — number of new vector writes the
+    /// `RedbMemory` substrate accumulates after the last
+    /// ANN-index build before the index is marked stale.
+    /// The next `semantic_search_scored_ann` call rebuilds
+    /// the index before querying. Bounded `>= 1` when
+    /// `ann_index = true` (zero would force a rebuild every
+    /// recall and defeat the perf win); default `100`.
+    pub ann_rebuild_threshold: u32,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -1474,6 +1491,15 @@ pub const DEFAULT_RECALL_WINDOW_TURNS: usize = 1;
 /// short-circuits both auto-recall and adaptive Persona
 /// selection, both of which feed model output).
 pub const DEFAULT_RECALL_GATE_MIN_CHARS: usize = 0;
+
+/// Phase 96 — default ANN rebuild threshold (number of new
+/// vector writes that mark the index stale and trigger a
+/// rebuild on the next recall). `100` is conservative: most
+/// operators see fewer than 100 new memory writes per day,
+/// so the index rebuilds at most once per day under typical
+/// load. Tuneable per-operator via
+/// `[embedding].ann_rebuild_threshold`.
+pub const DEFAULT_ANN_REBUILD_THRESHOLD: u32 = 100;
 
 /// Phase 80 — which structural signal classes the proactive
 /// pass is allowed to surface. All default `true`: an operator
@@ -2452,6 +2478,15 @@ struct RawEmbedding {
     recall_window_turns: Option<usize>,
     #[serde(default)]
     recall_gate_min_chars: Option<usize>,
+    /// Phase 96 — opt-in ANN index. Absent → `false`
+    /// (brute-force only, pre-Phase-96 behaviour).
+    #[serde(default)]
+    ann_index: Option<bool>,
+    /// Phase 96 — write-count threshold before the ANN
+    /// index is rebuilt. Absent → 100. Validated `>= 1`
+    /// only when `ann_index = true`.
+    #[serde(default)]
+    ann_rebuild_threshold: Option<u32>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -4577,7 +4612,9 @@ fn build_embedding_config(
         || raw.rag_top_k.is_some()
         || raw.rag_min_similarity.is_some()
         || raw.recall_window_turns.is_some()
-        || raw.recall_gate_min_chars.is_some();
+        || raw.recall_gate_min_chars.is_some()
+        || raw.ann_index.is_some()
+        || raw.ann_rebuild_threshold.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4651,6 +4688,26 @@ fn build_embedding_config(
         .recall_gate_min_chars
         .unwrap_or(DEFAULT_RECALL_GATE_MIN_CHARS);
 
+    // Phase 96 — ANN index knobs. The threshold is validated
+    // only when the index is armed; the staged-config posture
+    // (knob set but `ann_index = false`) is honored unvalidated
+    // per the established pattern (Phase 85 / 87 / 91 / 92 /
+    // 95).
+    let ann_index = raw.ann_index.unwrap_or(false);
+    let ann_rebuild_threshold = raw
+        .ann_rebuild_threshold
+        .unwrap_or(DEFAULT_ANN_REBUILD_THRESHOLD);
+    if ann_index && ann_rebuild_threshold == 0 {
+        return Err(ConfigError::Invalid {
+            field: "embedding.ann_rebuild_threshold",
+            reason: "`ann_rebuild_threshold` must be >= 1 \
+                     when `ann_index = true` (zero would \
+                     force a rebuild every recall and defeat \
+                     the perf win)"
+                .into(),
+        });
+    }
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -4672,6 +4729,8 @@ fn build_embedding_config(
         rag_min_similarity,
         recall_window_turns,
         recall_gate_min_chars,
+        ann_index,
+        ann_rebuild_threshold,
     }))
 }
 

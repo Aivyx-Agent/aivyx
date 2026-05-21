@@ -5775,6 +5775,94 @@ fn embedding_recall_gate_min_chars_explicit_zero_honored() {
     drop(env);
 }
 
+/// Phase 96 — defaults pinned. With no ANN knobs set, the
+/// embedding section builds with `ann_index = false` and
+/// `ann_rebuild_threshold = 100`. Pre-Phase-96 behaviour
+/// is byte-identical for every operator.
+#[test]
+fn embedding_ann_index_defaults() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "embed-ann-defaults",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(!emb.ann_index);
+    assert_eq!(
+        emb.ann_rebuild_threshold,
+        crate::DEFAULT_ANN_REBUILD_THRESHOLD,
+    );
+    drop(env);
+}
+
+/// Phase 96 — explicit `ann_index = true` +
+/// `ann_rebuild_threshold = 50` round-trips through the
+/// loader.
+#[test]
+fn embedding_ann_index_explicit_values_win() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nann_index = true\n\
+         ann_rebuild_threshold = 50\n",
+        "embed-ann-explicit",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(emb.ann_index);
+    assert_eq!(emb.ann_rebuild_threshold, 50);
+    drop(env);
+}
+
+/// Phase 96 — staged config: `ann_rebuild_threshold = 25`
+/// set but `ann_index = false` (the default) is honored
+/// unvalidated. Mirrors the established staged-config
+/// posture (Phase 85 / 87 / 91 / 92 / 95).
+#[test]
+fn embedding_ann_index_staged_threshold_unvalidated() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nann_rebuild_threshold = 25\n",
+        "embed-ann-staged",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(!emb.ann_index);
+    assert_eq!(emb.ann_rebuild_threshold, 25);
+    drop(env);
+}
+
+/// Phase 96 — `ann_index = true` +
+/// `ann_rebuild_threshold = 0` is rejected. Zero would
+/// force a rebuild every recall and defeat the perf win.
+#[test]
+fn embedding_ann_index_zero_threshold_when_armed_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("embed-ann-zero");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[embedding]\nann_index = true\n\
+         ann_rebuild_threshold = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "embedding.ann_rebuild_threshold",
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 /// Env + TOML do not supply the embedding key, but the
 /// encrypted store has a `secret_keys::EMBEDDING_API_KEY` row.
 /// After hydration the key is populated with
