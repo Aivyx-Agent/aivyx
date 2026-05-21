@@ -88,6 +88,7 @@ pub mod proactive_log;
 pub mod profile_prompt;
 pub mod proposal_grouping;
 pub mod reflection_scheduler;
+pub mod token_budget;
 mod render;
 mod role_envelope;
 mod role_render;
