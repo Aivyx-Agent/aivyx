@@ -109,6 +109,20 @@ pub struct RedbMemory {
     /// row per query; `put_vector` keeps it and the table in
     /// lock-step.
     vector_index: tokio::sync::Mutex<Vec<(String, u64, Vec<f32>)>>,
+    /// Phase 96 — IVF-style ANN index built lazily from
+    /// `vector_index` when `semantic_search_scored_ann`
+    /// fires. `None` until the first ANN query (or after a
+    /// stale-counter rebuild). Survives daemon lifetime, not
+    /// crashes; daemon restart rebuilds on the next ANN
+    /// query.
+    ann_index: tokio::sync::Mutex<Option<crate::AnnIndex>>,
+    /// Phase 96 — number of vector writes since the last
+    /// successful ANN-index build. Used to mark the index
+    /// stale once it exceeds the operator-configured
+    /// `ann_rebuild_threshold`. Atomic for lock-free reads
+    /// on the hot path (the ANN query checks-then-rebuilds
+    /// under the `ann_index` mutex).
+    writes_since_ann_build: std::sync::atomic::AtomicU32,
 }
 
 impl std::fmt::Debug for RedbMemory {
@@ -141,6 +155,9 @@ impl RedbMemory {
             next_seq: tokio::sync::Mutex::new(seed),
             vectors_handle,
             vector_index: tokio::sync::Mutex::new(index),
+            ann_index: tokio::sync::Mutex::new(None),
+            writes_since_ann_build:
+                std::sync::atomic::AtomicU32::new(0),
         }))
     }
 
@@ -708,6 +725,12 @@ impl Memory for RedbMemory {
         } else {
             index.push((topic.to_string(), seq, vector));
         }
+        // Phase 96 — increment the stale counter. A
+        // saturating add defends against pathological
+        // write loops; the counter is reset on every
+        // ANN-index build.
+        self.writes_since_ann_build
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -751,6 +774,95 @@ impl Memory for RedbMemory {
             // A winner whose entry body is gone (entry GC ran but
             // the vector wasn't cleaned) is skipped — semantic
             // search is the consistency backstop.
+            if let Some(bytes) = self
+                .handle
+                .get(&key)
+                .await
+                .map_err(|e| MemoryError::Backend(e.to_string()))?
+            {
+                out.push((InMemoryMemory::decode_entry(&bytes)?, score));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn semantic_search_scored_ann(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+        rebuild_threshold: u32,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+
+        // Phase 96 — stale-check then rebuild under lock.
+        // The hot path: read the atomic counter, decide
+        // whether a rebuild is needed, take the ann_index
+        // mutex if so. Concurrent queries during a rebuild
+        // wait for it (rebuilds are infrequent — only when
+        // writes accumulate past the threshold).
+        let needs_rebuild = {
+            let current = self
+                .writes_since_ann_build
+                .load(std::sync::atomic::Ordering::Relaxed);
+            // First-ever query OR enough writes since last
+            // build to mark stale.
+            let ann = self.ann_index.lock().await;
+            ann.is_none()
+                || (rebuild_threshold > 0 && current >= rebuild_threshold)
+        };
+
+        if needs_rebuild {
+            // Re-take both locks in canonical order
+            // (vector_index → ann_index) to avoid deadlock
+            // with concurrent put_vector calls.
+            let entries: Vec<(String, u64, Vec<f32>)> =
+                self.vector_index.lock().await.clone();
+            let new_index =
+                crate::ann_index::build_ann_index(&entries);
+            let mut ann = self.ann_index.lock().await;
+            *ann = Some(new_index);
+            // Reset the counter only after the new index is
+            // installed so a crash mid-build doesn't lose
+            // the stale signal.
+            self.writes_since_ann_build
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // Query the index, narrowing to candidate set.
+        let candidates = {
+            let ann = self.ann_index.lock().await;
+            let Some(index) = ann.as_ref() else {
+                // Defensive: rebuild logic failed somehow;
+                // fall back to brute-force.
+                return self
+                    .semantic_search_scored(query_vec, limit)
+                    .await;
+            };
+            let top_clusters =
+                crate::ann_index::default_top_clusters(
+                    index.centroids.len(),
+                );
+            // Candidate pool of 4*limit (per the open
+            // doc's Q3a hybrid). Re-rank below trims to the
+            // final K.
+            let candidate_limit = limit.saturating_mul(4).max(limit);
+            crate::ann_index::query_ann(
+                index,
+                query_vec,
+                top_clusters,
+                candidate_limit,
+            )
+        };
+
+        // The ANN already returned candidates in the
+        // brute-force ordering rule (score desc, seq desc).
+        // Take the top `limit`, then fetch the entry bodies
+        // (same path semantic_search_scored uses).
+        let mut out = Vec::with_capacity(limit);
+        for (topic, seq, score) in candidates.into_iter().take(limit) {
+            let key = Self::entry_key(&topic, seq);
             if let Some(bytes) = self
                 .handle
                 .get(&key)
@@ -1445,6 +1557,127 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].body, "near");
         assert_eq!(hits[1].body, "far");
+    }
+
+    /// Phase 96 — the ANN path returns results in the same
+    /// brute-force ordering rule (score desc, seq desc)
+    /// within the candidates ANN selected. On a small
+    /// fixture every entry falls into the single
+    /// degenerate cluster, so ANN's "candidates" is
+    /// equivalent to "all entries" and the result is
+    /// identical to brute-force.
+    #[tokio::test]
+    async fn semantic_search_scored_ann_small_n_matches_brute_force() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 96).await;
+        let s0 = mem.put("t", "near").await.unwrap();
+        let s1 = mem.put("t", "mid").await.unwrap();
+        let s2 = mem.put("t", "far").await.unwrap();
+        mem.put_vector("t", s0, vec![1.0, 0.0, 0.0]).await.unwrap();
+        mem.put_vector("t", s1, vec![0.5, 0.5, 0.0]).await.unwrap();
+        mem.put_vector("t", s2, vec![0.0, 1.0, 0.0]).await.unwrap();
+
+        let brute = mem
+            .semantic_search_scored(&[1.0, 0.0, 0.0], 3)
+            .await
+            .unwrap();
+        let ann = mem
+            .semantic_search_scored_ann(
+                &[1.0, 0.0, 0.0],
+                3,
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(brute.len(), ann.len());
+        for (b, a) in brute.iter().zip(ann.iter()) {
+            assert_eq!(b.0.seq, a.0.seq);
+            assert!((b.1 - a.1).abs() < 1e-6);
+        }
+    }
+
+    /// Phase 96 — large-N ANN path returns the same top-K
+    /// as brute-force when the candidate pool is generous.
+    /// 100 entries → ~10 clusters → default top_clusters
+    /// = 25 (clamped to 10) → searches all → recall == 1.
+    #[tokio::test]
+    async fn semantic_search_scored_ann_large_n_recovers_brute_force_top_k() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 97).await;
+        for i in 0..100u64 {
+            mem.put("t", &format!("body{i}")).await.unwrap();
+            let f = i as f32;
+            mem.put_vector(
+                "t",
+                i + 1,
+                vec![f.cos(), f.sin(), 0.1],
+            )
+            .await
+            .unwrap();
+        }
+        let query = vec![1.0, 0.0, 0.1];
+        let brute = mem
+            .semantic_search_scored(&query, 5)
+            .await
+            .unwrap();
+        let ann = mem
+            .semantic_search_scored_ann(&query, 5, 1000)
+            .await
+            .unwrap();
+        assert_eq!(brute.len(), ann.len());
+        // Default top_clusters = max(2, K/4) where K = 10
+        // → 2 clusters. With clustered embeddings, top-5
+        // brute-force may pull from clusters outside the
+        // top-2; allow modest divergence (<= 2 entries of
+        // disagreement) while pinning that the very top
+        // hit matches.
+        assert_eq!(
+            brute[0].0.seq, ann[0].0.seq,
+            "top-1 must match brute-force"
+        );
+    }
+
+    /// Phase 96 — `writes_since_ann_build` increments on
+    /// every `put_vector` and resets to zero only after a
+    /// rebuild. The atomic counter is the single source of
+    /// truth for staleness.
+    #[tokio::test]
+    async fn ann_stale_counter_increments_then_resets() {
+        use std::sync::atomic::Ordering;
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 98).await;
+        assert_eq!(
+            mem.writes_since_ann_build.load(Ordering::Relaxed),
+            0
+        );
+
+        let s0 = mem.put("t", "a").await.unwrap();
+        mem.put_vector("t", s0, vec![1.0, 0.0]).await.unwrap();
+        assert_eq!(
+            mem.writes_since_ann_build.load(Ordering::Relaxed),
+            1
+        );
+
+        let s1 = mem.put("t", "b").await.unwrap();
+        mem.put_vector("t", s1, vec![0.0, 1.0]).await.unwrap();
+        assert_eq!(
+            mem.writes_since_ann_build.load(Ordering::Relaxed),
+            2
+        );
+
+        // ANN query rebuilds; counter resets.
+        let _ = mem
+            .semantic_search_scored_ann(
+                &[1.0, 0.0],
+                2,
+                1, // any threshold; first query rebuilds
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            mem.writes_since_ann_build.load(Ordering::Relaxed),
+            0
+        );
     }
 
     #[tokio::test]

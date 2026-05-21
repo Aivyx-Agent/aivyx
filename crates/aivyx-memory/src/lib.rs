@@ -423,6 +423,40 @@ pub trait Memory: Send + Sync {
         limit: usize,
     ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError>;
 
+    /// Phase 96 — semantic search via an IVF-style ANN index.
+    /// The default implementation delegates to
+    /// [`Self::semantic_search_scored`] (brute-force);
+    /// substrates that build an ANN index can override.
+    ///
+    /// The contract: when armed, the impl narrows candidates
+    /// via the ANN index (cosine vs centroids → top-N
+    /// clusters → brute-force within), then re-ranks the
+    /// candidate set via the existing brute-force ordering
+    /// rule. The final top-`limit` returned must be ordered
+    /// **identically** to [`Self::semantic_search_scored`]
+    /// *within the candidates returned by the ANN narrowing*.
+    /// The hybrid composition is the key invariant: ANN
+    /// scales, exact cosine within candidates guarantees
+    /// ordering correctness.
+    ///
+    /// `rebuild_threshold` is the number of new vector
+    /// writes the substrate must accumulate before the
+    /// next call rebuilds the index. `0` disables the
+    /// auto-rebuild check (the caller is responsible for
+    /// keeping the index warm); `1` rebuilds before every
+    /// query.
+    async fn semantic_search_scored_ann(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+        _rebuild_threshold: u32,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError> {
+        // Default impl: brute-force. Any impl that doesn't
+        // build an ANN index gets the right semantics for
+        // free, just without the perf win.
+        self.semantic_search_scored(query_vec, limit).await
+    }
+
     /// Phase 77 — refresh one entry's LRU heat as if it had just
     /// been read, because the recall-feedback loop found it
     /// *helpful*. Sets `last_read_at_secs` to now for `(topic,
