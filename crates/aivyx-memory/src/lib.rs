@@ -106,6 +106,16 @@ pub use crate::canonical::canonicalize_topic;
 pub mod canonicalizing;
 pub use crate::canonicalizing::CanonicalizingMemory;
 
+/// Phase 96 — IVF-style approximate-nearest-neighbor index
+/// over the vector store. Hand-rolled to preserve the
+/// project's zero-new-deps streak; scales `O(N) → O(√N)`
+/// at query time when paired with the existing brute-force
+/// re-rank.
+pub mod ann_index;
+pub use crate::ann_index::{
+    build_ann_index, query_ann, AnnIndex,
+};
+
 /// A single memory record.
 ///
 /// This is what `Memory::put` stores and what `Memory::get_recent`
