@@ -5874,6 +5874,48 @@ fn embedding_recall_token_budget_explicit_zero_honored() {
     drop(env);
 }
 
+/// Phase 98 — default `recall_hybrid = false` means
+/// hybrid fusion is disabled. Pre-Phase-98 behaviour
+/// byte-identical for every operator.
+#[test]
+fn embedding_recall_hybrid_default_is_false() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "embed-hybrid-default",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(!emb.recall_hybrid);
+    drop(env);
+}
+
+/// Phase 98 — explicit `recall_hybrid = true` round-trips.
+#[test]
+fn embedding_recall_hybrid_explicit_true_wins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_hybrid = true\n",
+        "embed-hybrid-true",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(emb.recall_hybrid);
+    drop(env);
+}
+
+/// Phase 98 — explicit `recall_hybrid = false` honored
+/// (operator can declare the default explicitly).
+#[test]
+fn embedding_recall_hybrid_explicit_false_honored() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[embedding]\nrecall_hybrid = false\n",
+        "embed-hybrid-false",
+    );
+    let emb = cfg.embedding.expect("section present");
+    assert!(!emb.recall_hybrid);
+    drop(env);
+}
+
 /// Phase 96 — `ann_index = true` +
 /// `ann_rebuild_threshold = 0` is rejected. Zero would
 /// force a rebuild every recall and defeat the perf win.

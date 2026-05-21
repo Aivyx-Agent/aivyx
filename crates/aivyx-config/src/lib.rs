@@ -1467,6 +1467,18 @@ pub struct EmbeddingConfig {
     /// with a small fudge factor; ±20% accuracy is
     /// adequate for budget enforcement.
     pub recall_token_budget: u32,
+    /// Phase 98 — hybrid keyword+semantic recall fusion.
+    /// With `false` (the default) auto-recall runs the
+    /// semantic ranker alone (byte-identical to
+    /// pre-Phase-98). With `true`, the semantic ranker
+    /// AND the existing `Memory::search` substring side
+    /// (Phase 74) both run on every recall, and their
+    /// rankings are fused via Reciprocal Rank Fusion (RRF)
+    /// before feeding the downstream pipeline (cluster
+    /// expansion, token budget, etc.). Closes the gap on
+    /// rare-term queries (acronyms, proper nouns, code
+    /// identifiers) that pure semantic search misses.
+    pub recall_hybrid: bool,
 }
 
 /// Default embeddings endpoint — the OpenAI public API. An
@@ -2507,6 +2519,11 @@ struct RawEmbedding {
     /// recall).
     #[serde(default)]
     recall_token_budget: Option<u32>,
+    /// Phase 98 — hybrid keyword+semantic recall fusion
+    /// opt-in. Absent → `false` (semantic-only, byte-
+    /// identical to pre-Phase-98).
+    #[serde(default)]
+    recall_hybrid: Option<bool>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -4635,7 +4652,8 @@ fn build_embedding_config(
         || raw.recall_gate_min_chars.is_some()
         || raw.ann_index.is_some()
         || raw.ann_rebuild_threshold.is_some()
-        || raw.recall_token_budget.is_some();
+        || raw.recall_token_budget.is_some()
+        || raw.recall_hybrid.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -4735,6 +4753,10 @@ fn build_embedding_config(
     let recall_token_budget =
         raw.recall_token_budget.unwrap_or(0);
 
+    // Phase 98 — hybrid recall fusion opt-in. Boolean;
+    // no bounds; default false.
+    let recall_hybrid = raw.recall_hybrid.unwrap_or(false);
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -4759,6 +4781,7 @@ fn build_embedding_config(
         ann_index,
         ann_rebuild_threshold,
         recall_token_budget,
+        recall_hybrid,
     }))
 }
 
