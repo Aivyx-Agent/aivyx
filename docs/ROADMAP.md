@@ -3176,25 +3176,26 @@ sequence loosely; Phase 100 is fixed as the opener.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
-The capability vocabulary in `aivyx-capability` was declared
-ahead of the tools that exercise it: `fs.delete`,
-`fs.metadata`, `shell.spawn`, `net.dns`, `audit.read`,
-`config.read` / `config.write`, `display.window_close`,
-`memory.gc`, and `mission.gate` are all scope bases with no
-first-party tool behind them. The agent can read and write a
-file but cannot delete one or stat it — an obvious, everyday
-gap. Phase 100 audits the full declared-scope-versus-tool-
-registry delta, then closes the concrete filesystem gaps: an
-`fs.delete` tool and an `fs.metadata` tool (size, type,
-mtime, permissions), and resolves directory listing —
-whether it folds into `fs.metadata` or earns a new `fs.list`
-scope. `fs.delete` is destructive and inherits `fs.write`'s
-exact treatment: path-glob scope attenuation, the sandbox-
-root capability shape, and the trust-tier registration gate.
-Every remaining declared-but-toolless scope is ruled either
-"tool now" or "deliberately reserved" and the verdict
-documented, so the gap audit never has to be redone. The
-Phase 99 `dev-verify.sh` pass gains probes for the new tools.
+**Active — see [PHASE_100.md](PHASE_100.md).** Chapter B's
+opener. `fs.delete` and `fs.metadata` are D4-original
+substrate scope bases (Phase 0, in Amendment A3's inventory)
+that have never had a first-party tool — the agent can read
+and write a file but cannot delete or stat one. Closing the
+gap is gated by P10: Amendment A5 locked the substrate tool
+list at exactly eight, so Phase 100 is an **amendment
+phase** — it files Amendment A6 extending P10 to ten tools
+(the A5 pattern that took the count seven → eight when Phase
+37 added `web.post`), then ships `fs.delete` and
+`fs.metadata` behind it. Directory listing folds into
+`fs.metadata` or earns a new `fs.list` scope (Q1). The other
+seven declared-but-toolless scopes (`shell.spawn`,
+`net.dns`, `audit.read`, `config.read`/`write`,
+`display.window_close`, `memory.gc`, `mission.gate`) are
+audited and each ruled "tool later" or "deliberately
+reserved." Honest streak call: PRODUCT.md breaks (A6 amends
+P10) and `aivyx-core/src/lib.rs` breaks (new tool
+re-exports); DESIGN.md holds if Q1 keeps listing inside
+`fs.metadata`.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
