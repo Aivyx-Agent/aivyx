@@ -143,11 +143,12 @@ impl FsReadTool {
 /// segments collapsed. **Does not touch the filesystem** — symlinks
 /// are not resolved here.
 ///
-/// Shared by [`FsReadTool`] and [`FsWriteTool`] (task 3) since both
-/// need the same purely-lexical TOCTOU-resistant path joining, but
-/// the canonical fence each tool runs afterwards differs (reads
-/// canonicalize the file itself; writes canonicalize the *parent
-/// directory* because the file may not exist yet).
+/// Shared by [`FsReadTool`], [`FsWriteTool`], and [`FsDeleteTool`]
+/// since all three need the same purely-lexical TOCTOU-resistant
+/// path joining, but the canonical fence each runs afterwards
+/// differs (reads canonicalize the file itself; writes and deletes
+/// canonicalize the *parent directory* because the final entry may
+/// not exist yet, or may be a symlink that must not be followed).
 ///
 /// Returns `None` if the lexical resolution escapes the sandbox
 /// root (e.g., more `..` segments than there are components below
@@ -816,6 +817,288 @@ impl Tool for FsWriteTool {
             output: json!({
                 "path": canonical_target.display().to_string(),
                 "bytes": content_bytes.len(),
+            }),
+            verified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FsDeleteTool — Phase 100 task 3 (Chapter B, Amendment A11)
+//
+// Deletes a file, symlink, or *empty* directory under the sandbox root.
+// Deletion is deliberately non-recursive: `remove_file` for files and
+// symlinks, `remove_dir` for directories — and `remove_dir` returns an
+// error on a non-empty directory rather than recursing. That error is
+// surfaced verbatim; it is never escalated to `remove_dir_all`. Per
+// PHASE_100.md Q3 the destructive blast radius is exactly one entry per
+// call.
+//
+// Shares `lexical_resolve` with `FsReadTool` / `FsWriteTool` and runs
+// the same parent-canonicalize fence `FsWriteTool` uses. The final path
+// component is deliberately *not* canonicalize-followed: a symlink must
+// be unlinked as the link, not as whatever it points at, so the entry
+// is classified with `symlink_metadata` and a symlink is removed with
+// `remove_file`.
+//
+// `fs.delete` is destructive. The registration-time trust gate that
+// keeps it off SemiTrusted channels lives in the binary (Phase 100
+// task 5), structurally parallel to `shell.exec`'s gate — the tool
+// itself carries no tier logic.
+// ---------------------------------------------------------------------------
+
+fn delete_deny_scope() -> Scope {
+    deny_scope_for("fs.delete")
+}
+
+fn delete_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to delete. Relative paths resolve \
+                               against the agent's sandbox root; absolute \
+                               paths must already be under it. Deletion is \
+                               non-recursive — a non-empty directory is \
+                               refused."
+            }
+        },
+        "required": ["path"]
+    })
+}
+
+/// Construction inputs for [`FsDeleteTool`]. Same split pattern as
+/// [`FsReadToolConfig`] / [`FsWriteToolConfig`]: fallible
+/// canonicalization at build time, infallible tool construction.
+pub struct FsDeleteToolConfig {
+    sandbox_root: PathBuf,
+}
+
+impl FsDeleteToolConfig {
+    pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
+        FsDeleteToolConfig {
+            sandbox_root: sandbox_root.into(),
+        }
+    }
+
+    /// Canonicalize the sandbox root and return a ready-to-register
+    /// [`FsDeleteTool`]. Fails at startup if the root doesn't exist or
+    /// isn't a directory — configuration errors must not surface at
+    /// tool-call time.
+    pub fn build(self) -> Result<FsDeleteTool, AivyxError> {
+        let canonical = std::fs::canonicalize(&self.sandbox_root).map_err(|e| {
+            AivyxError::Config(format!(
+                "fs.delete sandbox root {:?} cannot be canonicalized: {e}",
+                self.sandbox_root
+            ))
+        })?;
+        if !canonical.is_dir() {
+            return Err(AivyxError::Config(format!(
+                "fs.delete sandbox root {canonical:?} is not a directory"
+            )));
+        }
+        Ok(FsDeleteTool {
+            id: ToolId::new(),
+            sandbox_root: Arc::from(canonical),
+            schema: delete_input_schema_value(),
+        })
+    }
+}
+
+/// Reference filesystem delete tool. Agents holding
+/// `fs.delete:<sandbox_root>/**` can delete any file, symlink, or
+/// empty directory under the sandbox. Non-recursive: a non-empty
+/// directory is refused, never wiped.
+#[derive(Debug)]
+pub struct FsDeleteTool {
+    id: ToolId,
+    sandbox_root: Arc<Path>,
+    schema: Value,
+}
+
+impl FsDeleteTool {
+    pub fn sandbox_root(&self) -> &Path {
+        &self.sandbox_root
+    }
+}
+
+#[async_trait]
+impl Tool for FsDeleteTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "fs.delete"
+    }
+
+    fn description(&self) -> &str {
+        "Delete a file, symlink, or empty directory under the agent's \
+         sandbox root. Input is a JSON object with a `path` field \
+         (relative paths resolve against the sandbox root; absolute \
+         paths must already be under it). Deletion is non-recursive: a \
+         file or symlink is unlinked directly, an empty directory is \
+         removed, and a non-empty directory is refused. The sandbox \
+         root itself cannot be deleted."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        let Some(path_str) = input.get("path").and_then(|v| v.as_str()) else {
+            return delete_deny_scope();
+        };
+        match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(abs) => Scope::parse(&format!("fs.delete:{}", abs.display()))
+                .unwrap_or_else(delete_deny_scope),
+            None => delete_deny_scope(),
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: Value,
+        _ctx: &ToolContext<'_>,
+    ) -> ToolOutcome {
+        // ---- Validate input --------------------------------------
+        let path_str = match input.get("path").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a string `path` field".to_string(),
+                })
+            }
+        };
+
+        // ---- Lexical resolve (mirrors FsWriteTool::execute) ------
+        let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(p) => p,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(format!(
+                    "fs.delete: lexical resolve escaped sandbox after scope \
+                     gate admitted the call (path={path_str:?})"
+                )));
+            }
+        };
+
+        // Refuse to delete the sandbox root itself. Without this the
+        // call would fail later with a confusing "parent escapes
+        // sandbox" message (the root's parent is outside the sandbox);
+        // catching it here gives the agent an actionable error.
+        if lexical_abs.as_path() == &*self.sandbox_root {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "cannot delete the sandbox root itself".to_string(),
+            });
+        }
+
+        let lexical_parent = match lexical_abs.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "path {lexical_abs:?} has no parent directory"
+                    ),
+                });
+            }
+        };
+        let file_name = match lexical_abs.file_name() {
+            Some(n) => n.to_owned(),
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "path {lexical_abs:?} has no final component \
+                         (trailing slash?)"
+                    ),
+                });
+            }
+        };
+
+        // ---- Canonical fence on the parent -----------------------
+        //
+        // The parent directory must already exist — delete never
+        // creates directories. Canonicalizing it resolves any symlink
+        // in the parent chain; the result must still be under the
+        // sandbox root. The final component is *not* canonicalize-
+        // followed: a symlinked target is unlinked as the link.
+        let canonical_parent = match std::fs::canonicalize(&lexical_parent) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "cannot canonicalize parent {lexical_parent:?}: {e}"
+                    ),
+                });
+            }
+        };
+        if !canonical_parent.starts_with(&*self.sandbox_root) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "parent {canonical_parent:?} escapes sandbox root {:?} \
+                     after symlink resolution",
+                    self.sandbox_root
+                ),
+            });
+        }
+        let target = canonical_parent.join(&file_name);
+
+        // ---- Classify the entry without following a final symlink -
+        let meta = match std::fs::symlink_metadata(&target) {
+            Ok(m) => m,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("cannot delete {target:?}: {e}"),
+                });
+            }
+        };
+        let ft = meta.file_type();
+
+        // ---- Delete (non-recursive) ------------------------------
+        let (kind, result) = if ft.is_symlink() {
+            // `remove_file` unlinks the symlink itself, never its
+            // target — the safe behavior for an in-sandbox link that
+            // may point anywhere.
+            ("symlink", std::fs::remove_file(&target))
+        } else if ft.is_dir() {
+            // `remove_dir` removes an *empty* directory and errors on
+            // a non-empty one. That error is the non-recursive
+            // guarantee in action — surfaced, never escalated.
+            ("directory", std::fs::remove_dir(&target))
+        } else {
+            ("file", std::fs::remove_file(&target))
+        };
+        if let Err(e) = result {
+            let hint = if kind == "directory" {
+                " (directories must be empty — deletion is non-recursive)"
+            } else {
+                ""
+            };
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("cannot delete {kind} {target:?}: {e}{hint}"),
+            });
+        }
+
+        // ---- Verification: the entry must no longer exist --------
+        let verified = match std::fs::symlink_metadata(&target) {
+            Err(_) => Verification::Verified,
+            Ok(_) => Verification::Unverified,
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "path": target.display().to_string(),
+                "deleted": true,
+                "kind": kind,
             }),
             verified,
         }
@@ -1610,5 +1893,222 @@ mod tests {
             !effective.grants(&read_needed),
             "fs.write capability must not grant fs.read scope"
         );
+    }
+
+    // ---- FsDeleteTool ================================================
+
+    fn build_delete_tool(sandbox: &SandboxDir) -> FsDeleteTool {
+        FsDeleteToolConfig::new(sandbox.root.clone())
+            .build()
+            .expect("sandbox root must be canonicalizable for delete tests")
+    }
+
+    #[test]
+    fn delete_build_fails_if_root_does_not_exist() {
+        let err = FsDeleteToolConfig::new("/definitely/not/a/real/aivyx-delete-root")
+            .build()
+            .expect_err("nonexistent delete root must fail to build");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn delete_build_fails_if_root_is_a_file() {
+        let sandbox = SandboxDir::new();
+        let file = sandbox.write_file("not-a-dir", b"x");
+        let err = FsDeleteToolConfig::new(file)
+            .build()
+            .expect_err("file-as-root must fail");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn delete_tool_descriptor_fields_are_what_the_planner_expects() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        assert_eq!(tool.name(), "fs.delete");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["required"], json!(["path"]));
+        assert!(schema["properties"]["path"].is_object());
+    }
+
+    // ---- FsDeleteTool: required_scope (lexical layer) -------------
+
+    #[test]
+    fn delete_scope_for_relative_path_inside_sandbox() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert_eq!(scope.base(), "fs.delete");
+        let q = scope.qualifier().expect("qualifier");
+        assert!(q.ends_with("/notes/today.md"));
+        assert!(!q.contains("__deny__"));
+    }
+
+    #[test]
+    fn delete_scope_for_traversal_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "../../etc/passwd"}));
+        assert_eq!(scope.base(), "fs.delete");
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn delete_scope_for_missing_path_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"not_path": "x"}));
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn delete_scope_for_absolute_inside_sandbox_is_accepted() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let abs = tool.sandbox_root().join("notes/today.md");
+        let scope = tool.required_scope(&json!({"path": abs.display().to_string()}));
+        assert!(!scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    // ---- FsDeleteTool: execute (canonical fence + non-recursive) --
+
+    #[test]
+    fn delete_happy_path_removes_a_file() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("doomed.txt", b"bye");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "doomed.txt"}));
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert!(matches!(verified, Verification::Verified));
+                assert_eq!(output["deleted"], json!(true));
+                assert_eq!(output["kind"], json!("file"));
+                assert!(!sandbox.root.join("doomed.txt").exists());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_removes_an_empty_directory() {
+        let sandbox = SandboxDir::new();
+        fs::create_dir(sandbox.root.join("empty-dir")).expect("mkdir");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "empty-dir"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["kind"], json!("directory"));
+                assert!(!sandbox.root.join("empty-dir").exists());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_refuses_a_non_empty_directory() {
+        // The non-recursive guarantee: a directory with contents is
+        // refused, not wiped. `remove_dir`'s ENOTEMPTY surfaces as a
+        // tool Failed and the directory + its file both survive.
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("full-dir/keep.txt", b"still here");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "full-dir"}));
+        assert!(
+            matches!(outcome, ToolOutcome::Failed(AivyxError::Tool { .. })),
+            "non-empty directory delete must fail, got {outcome:?}"
+        );
+        assert!(
+            sandbox.root.join("full-dir/keep.txt").exists(),
+            "the directory and its contents must survive a refused delete"
+        );
+    }
+
+    #[test]
+    fn delete_nonexistent_path_fails() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "ghost.txt"}));
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+    }
+
+    #[test]
+    fn delete_missing_path_field_fails() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"nope": 1}));
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+    }
+
+    #[test]
+    fn delete_refuses_the_sandbox_root_itself() {
+        let sandbox = SandboxDir::new();
+        let tool = build_delete_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "."}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("sandbox root"), "got {detail:?}");
+            }
+            other => panic!("expected Tool failure, got {other:?}"),
+        }
+        assert!(sandbox.root.exists(), "sandbox root must survive");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_unlinks_a_symlink_not_its_target() {
+        // Deleting a symlink removes the link, leaving the pointed-at
+        // file intact — `remove_file` never follows the final link.
+        use std::os::unix::fs::symlink as unix_symlink;
+        let sandbox = SandboxDir::new();
+        let real = sandbox.write_file("real.txt", b"keep me");
+        unix_symlink(&real, sandbox.root.join("link")).expect("symlink");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "link"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["kind"], json!("symlink"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert!(
+            !sandbox.root.join("link").is_symlink(),
+            "the symlink must be gone"
+        );
+        assert!(real.exists(), "the symlink's target must survive");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_refuses_a_path_whose_parent_symlinks_out_of_sandbox() {
+        // A symlinked parent directory escaping the sandbox is caught
+        // by the canonical-parent fence — the canonicalized parent no
+        // longer starts with the sandbox root.
+        use std::os::unix::fs::symlink as unix_symlink;
+        let sandbox = SandboxDir::new();
+        let outside = sandbox._parent.join("outside");
+        fs::create_dir_all(&outside).expect("mkdir outside");
+        let victim = outside.join("victim.txt");
+        fs::write(&victim, b"do not delete me").expect("write victim");
+        unix_symlink(&outside, sandbox.root.join("escape")).expect("symlink");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "escape/victim.txt"}));
+        assert!(
+            matches!(outcome, ToolOutcome::Failed(AivyxError::Tool { .. })),
+            "delete through a sandbox-escaping symlink parent must fail, \
+             got {outcome:?}"
+        );
+        assert!(victim.exists(), "the out-of-sandbox victim must survive");
     }
 }
