@@ -3183,7 +3183,7 @@ that have never had a first-party tool — the agent can read
 and write a file but cannot delete or stat one. Closing the
 gap is gated by P10: Amendment A5 locked the substrate tool
 list at exactly eight, so Phase 100 is an **amendment
-phase** — it files Amendment A6 extending P10 to ten tools
+phase** — it files Amendment A11 extending P10 to ten tools
 (the A5 pattern that took the count seven → eight when Phase
 37 added `web.post`), then ships `fs.delete` and
 `fs.metadata` behind it. Directory listing folds into
@@ -3192,7 +3192,7 @@ eight declared-but-toolless scopes (`shell.spawn`,
 `net.dns`, `audit.read`, `config.read`, `config.write`,
 `display.window_close`, `memory.gc`, `mission.gate`) are
 audited and each ruled "tool later" or "deliberately
-reserved." Honest streak call: PRODUCT.md breaks (A6 amends
+reserved." Honest streak call: PRODUCT.md breaks (A11 amends
 P10) and `aivyx-core/src/lib.rs` breaks (new tool
 re-exports); DESIGN.md holds if Q1 keeps listing inside
 `fs.metadata`.

@@ -20,7 +20,7 @@ requires a `PRODUCT.md` amendment." `fs.delete` and
 filesystem operations, the same category as `fs.read` /
 `fs.write` — not agent self-management). So Phase 100 is, by
 the project's own rules, an **amendment phase**: it files
-**Amendment A6** extending P10's enumerated list from eight to
+**Amendment A11** extending P10's enumerated list from eight to
 ten, then ships the two tools behind it. This is not novel
 process — it is exactly the path Amendment A5 itself set when
 Phase 37 added `web.post` and P10 went from seven to eight.
@@ -51,7 +51,7 @@ keeping the amendment to a clean eight-to-ten count change.
   `fs.read` / `fs.write` use. Phase 100 ships tools for a
   vocabulary the contract already anticipated — it does not
   invent capability surface.
-- The amendment is small and precedented. A6 changes one
+- The amendment is small and precedented. A11 changes one
   word and extends one list, exactly as A5 did. The
   substrate-only *principle* is untouched; only the count
   moves.
@@ -78,7 +78,7 @@ keeping the amendment to a clean eight-to-ten count change.
   Prediction: streak **extends to forty-seven** (currently
   46), conditional on Q1(a).
 
-- **PRODUCT.md** — **Will break, by design.** Amendment A6
+- **PRODUCT.md** — **Will break, by design.** Amendment A11
   edits P10's enumerated tool list (eight → ten). That is a
   deliberate, precedented contract change — the only legal
   way to add a substrate tool. Hash at entry:
@@ -117,10 +117,10 @@ keeping the amendment to a clean eight-to-ten count change.
 `docs/PHASE_100.md` + `docs/ROADMAP.md` entry flip to
 `Active` + `docs/README.md` status row.
 
-### Task 2 — Amendment A6 + scope-vs-tool-registry audit
+### Task 2 — Amendment A11 + scope-vs-tool-registry audit
 
 - `docs/amendments/<date>-substrate-tool-count-ten.md` —
-  Amendment A6. Narrows P10: "eight" → "ten",
+  Amendment A11. Narrows P10: "eight" → "ten",
   `fs.delete` and `fs.metadata` added to the enumerated
   list. Same shape as A5. Updates `PRODUCT.md` P10 text
   and Delivery Status.
@@ -188,7 +188,7 @@ keeping the amendment to a clean eight-to-ten count change.
   amendment; P10 lands at exactly ten tools and the
   DESIGN.md streak holds at 47. A dedicated `fs.list`
   scope/tool is recorded as a deferral.
-- **Q2 — Amendment A6 shape:** (a) **A6 extends P10's
+- **Q2 — Amendment A11 shape:** (a) **A11 extends P10's
   enumerated list from eight to ten.** `fs.delete` and
   `fs.metadata` are added as substrate tools (operator-
   facing filesystem operations, not self-management).
@@ -214,6 +214,31 @@ keeping the amendment to a clean eight-to-ten count change.
   reserved" in the Task 2 audit table. Phase 100 ships no
   tool for them and removes no scope base — scope-base
   removal would be its own amendment.
+
+## Declared-but-toolless scope audit (Task 2)
+
+The full delta between `aivyx-capability`'s declared scope
+bases and the tool registry. `fs.delete` and `fs.metadata`
+get tools this phase (Tasks 3–4); every other toolless base
+is ruled below. Per Q4, Phase 100 ships no tool for and
+removes no base in this table — the verdict is recorded so
+the audit is not redone.
+
+| Scope base | Verdict | Reasoning |
+|---|---|---|
+| `shell.spawn` | Reserved | Fire-and-forget background-process spawning, distinct from `shell.exec`'s run-and-wait. No operator demand; `shell.exec` covers the current need. A later Chapter B phase could ship it if long-running-process orchestration becomes real. |
+| `net.dns` | Reserved | Raw DNS resolution. `net.fetch` / `net.post` cover networking at the HTTP layer where the agent actually operates; a standalone DNS-lookup tool has no current use case. |
+| `audit.read` | Candidate — future phase | The agent reading its own audit chain. `turn_history` (infrastructure) already surfaces recent turns; a dedicated `audit.read` tool fits the Chapter B tool-observability phase, not Phase 100. |
+| `config.read` | Reserved | The agent reading its own configuration. Operator config introspection is served by `--print-role`; exposing config to the agent is a sensitive surface withheld until a concrete need appears. |
+| `config.write` | Reserved | Agent self-modification of configuration. Role mutation already has a dedicated infrastructure path (`role.update`); a broad `config.write` tool is deliberately withheld — too large a self-modification surface to grant without a specific, gated use case. |
+| `display.window_close` | Reserved (likely dead) | Names a GUI/window-management capability Aivyx has no surface for — the agent reaches operators through channels, not a display server. Kept reserved (removal is its own amendment per Q4), flagged as the most likely dead base. |
+| `memory.gc` | Reserved | Memory garbage collection runs automatically via the per-topic write tripwire (`DEFAULT_MAX_PER_TOPIC`). An agent-invoked GC tool would duplicate machinery that already runs without agent involvement. |
+| `mission.gate` | Reserved | Mission gating is internal to the mission state machine (infrastructure); the operator-facing mission surface is already covered by `mission.create` / `list` / `status`. A standalone gate tool has no separate use case. |
+
+Outcome: only the two filesystem tools ship; the other
+eight bases stay reserved, keeping Amendment A11 a clean
+eight-to-ten change. `audit.read` is the one flagged as a
+likely future tool (the Chapter B observability phase).
 
 ## Deferrals
 
@@ -331,7 +356,7 @@ closes none — it is net-new Chapter B tool-surface work):
 
 - [x] `docs/PHASE_100.md` + ROADMAP entry flip + docs/README
   status row — Task 1 (this commit).
-- [ ] Amendment A6 extends P10 to ten tools; `PRODUCT.md`
+- [ ] Amendment A11 extends P10 to ten tools; `PRODUCT.md`
   updated; declared-but-toolless audit table recorded —
   Task 2.
 - [ ] `fs.delete` tool in `aivyx-core` with the full
@@ -347,7 +372,7 @@ closes none — it is net-new Chapter B tool-surface work):
 - [ ] DESIGN.md streak extends to forty-seven (holds —
   conditional on Q1(a)).
 - [ ] PRODUCT.md streak ends at thirty-nine and resets
-  (Amendment A6 — by design).
+  (Amendment A11 — by design).
 - [ ] Production-core `lib.rs` streak ends at forty-seven
   and resets (new tool re-exports).
 - [ ] Test count delta positive (predicted `+25`–`+40`).
