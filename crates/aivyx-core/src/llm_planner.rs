@@ -609,7 +609,11 @@ impl TurnPlanner for LlmPlanner {
         }
 
         // Loop so we can synthesize a recovery step if the LLM picks a
-        // tool name we don't recognize.
+        // tool name we don't recognize, or (Phase 101) emits a known
+        // tool with input that fails its schema. `repair_rounds`
+        // bounds the latter: after two `invalid_input` repair results
+        // the call dispatches as-is (PHASE_101.md Q3).
+        let mut repair_rounds = 0usize;
         loop {
             let terminal = match self.one_step(channel).await {
                 Ok(t) => t,
@@ -671,10 +675,47 @@ impl TurnPlanner for LlmPlanner {
                     // for execution; unknown ones get synthetic
                     // tool_result errors appended to history now.
                     let mut batch: Vec<ToolCallRequest> = Vec::new();
+                    // Phase 101 — tracks whether this round emitted an
+                    // `invalid_input` repair result, so the repair cap
+                    // advances only on a genuine validation failure.
+                    let mut had_invalid_input = false;
+                    // Once two repair rounds are spent, validation is
+                    // skipped: a known call dispatches as-is and the
+                    // tool's own `execute` validation is the floor
+                    // (PHASE_101.md Q3).
+                    let validate_enabled = repair_rounds < 2;
 
                     for call in calls {
                         match self.registry.find_by_name(&call.tool_name) {
                             Some(tool_id) => {
+                                // Phase 101 — validate the call input
+                                // against the tool's declared schema
+                                // before dispatch. On a mismatch the
+                                // call is not batched; the model gets a
+                                // structured `invalid_input` result and
+                                // is looped to repair the call.
+                                if validate_enabled {
+                                    if let Some(tool) = self.registry.get(tool_id) {
+                                        if let Err(summary) = validate_tool_input(
+                                            tool.input_schema(),
+                                            &call.input,
+                                        ) {
+                                            let schema = tool.input_schema().clone();
+                                            self.history.push(LlmMessage::ToolResult {
+                                                call_id: call.call_id,
+                                                content: json!({
+                                                    "error": "invalid_input",
+                                                    "message": summary,
+                                                    "expected_schema": schema,
+                                                })
+                                                .to_string(),
+                                                is_error: true,
+                                            });
+                                            had_invalid_input = true;
+                                            continue;
+                                        }
+                                    }
+                                }
                                 self.pending_call_ids.push_back(call.call_id);
                                 batch.push(ToolCallRequest {
                                     tool_id,
@@ -698,9 +739,16 @@ impl TurnPlanner for LlmPlanner {
                         }
                     }
 
+                    // Phase 101 — a round that emitted an `invalid_input`
+                    // result spends one of the two repair attempts.
+                    if had_invalid_input {
+                        repair_rounds += 1;
+                    }
+
                     if batch.is_empty() {
-                        // All tools unknown — loop to retry the LLM
-                        // with the error results in history.
+                        // Every call was unknown or failed validation —
+                        // loop to retry the LLM with the error results
+                        // in history.
                         continue;
                     }
 
@@ -806,6 +854,46 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
             });
             (envelope.to_string(), true)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-call input validation — Phase 101
+// ---------------------------------------------------------------------------
+
+/// Validate a tool call's `input` against the tool's declared
+/// `input_schema()` (JSON Schema). Returns `Ok(())` when the input
+/// satisfies the schema, or `Err(summary)` — a human-readable
+/// digest of the first few violations — which the planner turns
+/// into an `invalid_input` repair result.
+///
+/// **Fails open.** If the schema itself does not compile as valid
+/// JSON Schema, the input is treated as valid. Tool schemas are
+/// authored in-tree and a malformed one should never reach here;
+/// failing open guarantees a quirky future schema can never brick
+/// its own tool's dispatch — the worst case degrades to
+/// pre-Phase-101 behavior (the tool's own `execute` validation is
+/// still the floor).
+fn validate_tool_input(
+    schema: &serde_json::Value,
+    input: &serde_json::Value,
+) -> Result<(), String> {
+    let validator = match jsonschema::validator_for(schema) {
+        Ok(v) => v,
+        Err(_) => return Ok(()), // fail open — see doc comment
+    };
+    // Cap the digest at the first five violations: enough for the
+    // model to repair the call, short enough to keep the result
+    // message compact.
+    let violations: Vec<String> = validator
+        .iter_errors(input)
+        .take(5)
+        .map(|e| e.to_string())
+        .collect();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("; "))
     }
 }
 
@@ -1010,6 +1098,16 @@ mod tests {
                 id: ToolId::new(),
                 name,
                 schema: json!({"type": "object"}),
+            }
+        }
+
+        /// Phase 101 — a `FakeTool` carrying a real JSON Schema, for
+        /// the planner validate-before-dispatch tests.
+        fn with_schema(name: &'static str, schema: Value) -> Self {
+            FakeTool {
+                id: ToolId::new(),
+                name,
+                schema,
             }
         }
     }
@@ -2091,5 +2189,245 @@ mod tests {
             }
             other => panic!("expected User, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 101 — tool-call input validation & repair.
+    // -----------------------------------------------------------------------
+
+    fn req_path_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": { "path": { "type": "string" } },
+            "required": ["path"]
+        })
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_input() {
+        assert!(validate_tool_input(
+            &req_path_schema(),
+            &json!({"path": "notes.txt"}),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_missing_required_field() {
+        let err = validate_tool_input(&req_path_schema(), &json!({}))
+            .expect_err("missing required `path` must fail validation");
+        assert!(
+            err.contains("path"),
+            "the summary should name the missing field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_wrong_typed_field() {
+        let err = validate_tool_input(&req_path_schema(), &json!({"path": 123}))
+            .expect_err("a non-string `path` must fail validation");
+        assert!(!err.is_empty(), "the summary must not be empty");
+    }
+
+    #[test]
+    fn validate_tolerates_extra_unschemad_field() {
+        // Tool schemas do not set `additionalProperties: false`, so an
+        // extra field the model invented is tolerated, not rejected.
+        assert!(validate_tool_input(
+            &req_path_schema(),
+            &json!({"path": "x", "hallucinated": true}),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_fails_open_on_a_malformed_schema() {
+        // A value that is not itself a valid JSON Schema must never
+        // brick dispatch — `validate_tool_input` treats it as valid.
+        assert!(validate_tool_input(&json!(42), &json!({"anything": true})).is_ok());
+    }
+
+    #[tokio::test]
+    async fn well_formed_call_dispatches_without_a_repair_round() {
+        let tool = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        let tool_id = tool.id();
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "c1".to_string(),
+                    tool_name: "fs.read".to_string(),
+                    input: json!({"path": "ok.txt"}),
+                }],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"))
+            .await;
+        match planner.next_step(&[], &channel).await {
+            NextStep::ToolCall { tool_id: got, .. } => assert_eq!(got, tool_id),
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+        assert!(
+            !planner.history().iter().any(|m| matches!(
+                m,
+                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+            )),
+            "a well-formed call must not produce a repair result"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_call_is_repaired_then_dispatched() {
+        let tool = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        let tool_id = tool.id();
+        let script = vec![
+            // Round 1 — missing the required `path` field.
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({}),
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            // Round 2 — the model repairs the call.
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c2".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "fixed.txt"}),
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"))
+            .await;
+        match planner.next_step(&[], &channel).await {
+            NextStep::ToolCall { tool_id: got, input } => {
+                assert_eq!(got, tool_id);
+                assert_eq!(input, json!({"path": "fixed.txt"}));
+            }
+            other => panic!("expected the repaired ToolCall, got {other:?}"),
+        }
+        let repairs = planner
+            .history()
+            .iter()
+            .filter(|m| matches!(
+                m,
+                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+            ))
+            .count();
+        assert_eq!(repairs, 1, "exactly one repair round expected");
+    }
+
+    #[tokio::test]
+    async fn two_repair_rounds_then_dispatch_as_is() {
+        let tool = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        // Three rounds, all missing `path`. The third dispatches the
+        // still-invalid call as-is — the two-repair cap disabled
+        // validation (PHASE_101.md Q3).
+        let bad = || LlmStepEnd::ToolCalls {
+            calls: vec![ToolCallEnd {
+                call_id: "c".to_string(),
+                tool_name: "fs.read".to_string(),
+                input: json!({}),
+            }],
+            text_so_far: String::new(),
+            usage: zero_usage(),
+        };
+        let script = vec![
+            FakeStep { events: vec![], terminal: bad() },
+            FakeStep { events: vec![], terminal: bad() },
+            FakeStep { events: vec![], terminal: bad() },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        assert!(
+            matches!(step, NextStep::ToolCall { .. }),
+            "after the two-repair cap the call dispatches as-is, got {step:?}"
+        );
+        let repairs = planner
+            .history()
+            .iter()
+            .filter(|m| matches!(
+                m,
+                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+            ))
+            .count();
+        assert_eq!(repairs, 2, "repair attempts are capped at two");
+    }
+
+    #[tokio::test]
+    async fn mixed_batch_dispatches_valid_call_and_errors_invalid_one() {
+        let good = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        let bad_tool = Arc::new(FakeTool::with_schema("fs.write", req_path_schema()));
+        let good_id = good.id();
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![
+                    ToolCallEnd {
+                        call_id: "ok".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "ok.txt"}),
+                    },
+                    ToolCallEnd {
+                        call_id: "bad".to_string(),
+                        tool_name: "fs.write".to_string(),
+                        input: json!({}),
+                    },
+                ],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![good, bad_tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"))
+            .await;
+        // Only the valid call dispatches — the invalid one is errored,
+        // leaving a single-tool batch.
+        match planner.next_step(&[], &channel).await {
+            NextStep::ToolCall { tool_id: got, .. } => assert_eq!(got, good_id),
+            other => panic!("expected the valid ToolCall, got {other:?}"),
+        }
+        let repairs = planner
+            .history()
+            .iter()
+            .filter(|m| matches!(
+                m,
+                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+            ))
+            .count();
+        assert_eq!(repairs, 1, "the one invalid call produced one repair result");
     }
 }

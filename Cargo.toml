@@ -91,6 +91,19 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
 ] }
 
+# Phase 101 — JSON Schema validation for tool-call inputs. The
+# planner validates a known tool's call arguments against the
+# tool's `input_schema()` before dispatch.
+#
+# `default-features = false` is load-bearing: the crate's default
+# features (`reqwest`, `resolve-http`, `resolve-file`,
+# `tls-aws-lc-rs`) exist to resolve external `$ref`s over the
+# network — which the in-tree tool schemas never use, and which
+# would pull a second TLS stack (`aws-lc-rs`) against the
+# workspace's rustls-only policy. With defaults off we get the
+# synchronous in-memory validator and nothing else.
+jsonschema = { version = "0.46", default-features = false }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

@@ -75,8 +75,8 @@ exactly as today.
 
 - **Production-core `aivyx-core/src/lib.rs`** — **Will
   hold.** The validation helper and the repair loop live
-  in `llm_planner.rs` (and a new validation module); no
-  `lib.rs` re-export is required — the helper is an
+  in `llm_planner.rs` itself — kept in-file so `lib.rs`
+  gains no `mod` line and no re-export; the helper is an
   internal planner concern, not a public-API type. The
   `lib.rs` streak reset at Phase 100 (the `fs.*` tool
   re-exports), so this is a fresh streak. Hash at entry:
@@ -108,26 +108,30 @@ exactly as today.
 `docs/PHASE_101.md` + `docs/ROADMAP.md` entry flip to
 `Active` + `docs/README.md` status row.
 
-### Task 2 — `jsonschema` dependency + validation helper
+### Task 2 — `jsonschema` dependency + validation helper + repair loop
+
+Tasks 2 and 3 ship in one commit: the helper has no
+non-test caller until the planner integration, so splitting
+them would leave a dead-code helper mid-phase.
 
 - Add `jsonschema` to `[workspace.dependencies]` in the
-  root `Cargo.toml` and as a dependency of `aivyx-core`.
-- New `tool_input_validation` module in `aivyx-core`
-  exposing one pure helper:
-  `validate_tool_input(schema: &Value, input: &Value) ->
-  Result<(), ToolInputError>` — compiles the schema,
-  validates the input, and on failure returns a structured
-  error carrying a human-readable summary of the first few
-  violations.
+  root `Cargo.toml` (with `default-features = false` — no
+  `$ref`-resolution backends, no second TLS stack) and as
+  a dependency of `aivyx-core`.
+- A `validate_tool_input(schema, input) -> Result<(),
+  String>` helper, private to `llm_planner.rs` (kept
+  in-file so `lib.rs` gains no `mod` line): compiles the
+  schema, validates the input, and on failure returns a
+  human-readable digest of the first few violations.
 - A malformed *schema* (should never happen — tool schemas
   are authored in-tree) is treated as "valid": the helper
   fails open so a future tool with a quirky schema cannot
-  brick its own dispatch. The event is worth a defensive
-  comment, not a hard error.
+  brick its own dispatch.
 - Unit tests: well-formed input passes; missing required
   field fails with the field named; wrong-typed field
   fails; an extra unschema'd field is tolerated (tool
-  schemas do not set `additionalProperties: false`).
+  schemas do not set `additionalProperties: false`);
+  malformed schema fails open.
 
 ### Task 3 — Planner validate-before-dispatch + repair loop
 

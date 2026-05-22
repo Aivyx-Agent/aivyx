@@ -47,5 +47,12 @@ base64 = { workspace = true }
 # shell.rs can call killpg(). Zero new Cargo.lock entries.
 libc = { workspace = true }
 
+# Phase 101 — JSON Schema validation of tool-call inputs in the
+# planner's validate-before-dispatch step. `default-features =
+# false` per the root Cargo.toml comment (no `$ref` resolution
+# backends, no second TLS stack). First net-new workspace
+# dependency since Phase 27's `notify`.
+jsonschema = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
