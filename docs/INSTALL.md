@@ -68,6 +68,50 @@ for end users; it enforces `cargo clippy --workspace --all-targets
 -- -D warnings` on every commit and is recommended for
 contributors.
 
+## Running Aivyx locally for development (Phase 99)
+
+For a development loop — building from a clone and exercising the
+real agent on your own machine — two scripts under `scripts/`
+wrap the binary against a **fully local Ollama backend** (no API
+key, no network egress, no per-run cost).
+
+**Prerequisites:**
+- [Ollama](https://ollama.ai) installed and running (`ollama serve`)
+- A model pulled, e.g. `ollama pull llama3.1`
+
+**Interactive session** — `scripts/dev-run.sh` builds `aivyx` and
+drops you into a chat REPL:
+
+```sh
+./scripts/dev-run.sh                       # default model: llama3.1
+./scripts/dev-run.sh --model llama3.2      # pick another pulled model
+./scripts/dev-run.sh --reset               # wipe local state first
+./scripts/dev-run.sh -- --role coder       # args after -- go to the binary
+```
+
+**Scripted verification pass** — `scripts/dev-verify.sh` (also
+reachable as `dev-run.sh --verify`) runs a non-interactive battery
+over the store, audit chain, daemon lifecycle, and the memory/fs
+tool paths, printing a `PASS`/`WARN`/`FAIL` summary:
+
+```sh
+./scripts/dev-verify.sh --model llama3.1
+```
+
+Substrate checks (store, audit chain, daemon) are deterministic
+and a failure exits non-zero. Tool-path probes depend on the
+local model actually choosing to call a tool, so a miss there is
+reported as `WARN`, not `FAIL`.
+
+All state from both scripts lands under a gitignored `.dev-run/`
+directory — a sandbox FS root, an encrypted dev store, and a
+throwaway dev passphrase. It is disposable scratch state, never
+real data; delete it freely or pass `--reset` for a clean start.
+
+This local-run path is deliberately Ollama-only and leaves no
+CI or remote-build footprint: Phase 99 keeps builds local while
+repo infrastructure is still being decided.
+
 ## Shell installer (when published)
 
 This section documents the path that becomes primary once
