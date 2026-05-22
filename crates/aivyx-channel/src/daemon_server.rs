@@ -3768,4 +3768,107 @@ mod tests {
         assert_eq!(kind, "skipped_by_rate_limit");
         assert_eq!(detail, "10/3600s");
     }
+
+    // ---- Phase 102: fold_tool_stats ---------------------------------
+
+    fn completed_outcome() -> aivyx_core::ToolOutcomeSummary {
+        aivyx_core::ToolOutcomeSummary::Completed {
+            verified: aivyx_core::VerificationSummary::NotApplicable,
+        }
+    }
+
+    fn tc_entry(
+        seq: u64,
+        scope: &str,
+        outcome: aivyx_core::ToolOutcomeSummary,
+        duration_ms: u64,
+        appended_at: std::time::SystemTime,
+    ) -> aivyx_audit::SignedEntry {
+        aivyx_audit::SignedEntry {
+            seq,
+            appended_at,
+            event: aivyx_audit::AuditEvent::ToolCall {
+                turn_id: aivyx_core::TurnId::new(),
+                tool_id: aivyx_core::ToolId::new(),
+                scope_used: aivyx_capability::Scope::parse(scope).unwrap(),
+                input_hash: [0u8; 32],
+                outcome,
+                duration: std::time::Duration::from_millis(duration_ms),
+            },
+            mac: [0u8; 32],
+            prev_mac: [0u8; 32],
+        }
+    }
+
+    fn desc(name: &str, scope_base: &str) -> ToolDescriptor {
+        ToolDescriptor {
+            name: name.to_string(),
+            description: format!("{name} tool"),
+            scope_base: scope_base.to_string(),
+        }
+    }
+
+    #[test]
+    fn fold_empty_chain_lists_registered_tools_with_zero_stats() {
+        let descs = vec![desc("fs.read", "fs.read"), desc("fs.write", "fs.write")];
+        let rows = fold_tool_stats(&[], None, &descs);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.registered && r.calls == 0));
+    }
+
+    #[test]
+    fn fold_counts_calls_and_outcomes_by_scope_base() {
+        let now = std::time::SystemTime::now();
+        let entries = vec![
+            tc_entry(0, "fs.read:/x/**", completed_outcome(), 10, now),
+            tc_entry(1, "fs.read:/y/**", completed_outcome(), 20, now),
+            tc_entry(
+                2,
+                "fs.read:/z/**",
+                aivyx_core::ToolOutcomeSummary::Failed,
+                6,
+                now,
+            ),
+        ];
+        let descs = vec![desc("fs.read", "fs.read")];
+        let rows = fold_tool_stats(&entries, None, &descs);
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.calls, 3);
+        assert_eq!(r.scope_base, "fs.read");
+        assert_eq!(r.outcomes.get("completed"), Some(&2));
+        assert_eq!(r.outcomes.get("failed"), Some(&1));
+        assert_eq!(r.total_duration_ms, 36);
+    }
+
+    #[test]
+    fn fold_window_filter_excludes_entries_before_the_cutoff() {
+        let now = std::time::SystemTime::now();
+        let old = now - std::time::Duration::from_secs(7200);
+        let entries = vec![
+            tc_entry(0, "fs.read:/a/**", completed_outcome(), 5, old),
+            tc_entry(1, "fs.read:/b/**", completed_outcome(), 5, now),
+        ];
+        let descs = vec![desc("fs.read", "fs.read")];
+        // Cutoff one hour ago — the two-hour-old entry is excluded.
+        let cutoff = now - std::time::Duration::from_secs(3600);
+        let rows = fold_tool_stats(&entries, Some(cutoff), &descs);
+        assert_eq!(rows[0].calls, 1, "only the in-window call counts");
+    }
+
+    #[test]
+    fn fold_called_but_unregistered_base_gets_an_unregistered_row() {
+        let now = std::time::SystemTime::now();
+        let entries =
+            vec![tc_entry(0, "shell.exec:cwd:/x/**", completed_outcome(), 9, now)];
+        // No descriptor for shell.exec — only fs.read is registered.
+        let descs = vec![desc("fs.read", "fs.read")];
+        let rows = fold_tool_stats(&entries, None, &descs);
+        let shell = rows
+            .iter()
+            .find(|r| r.scope_base == "shell.exec")
+            .expect("a called base with no descriptor must still get a row");
+        assert!(!shell.registered);
+        assert_eq!(shell.calls, 1);
+    }
 }

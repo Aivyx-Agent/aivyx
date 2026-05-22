@@ -114,6 +114,8 @@ mod notify;
 mod persona;
 #[path = "aivyx_modules/profile.rs"]
 mod profile;
+#[path = "aivyx_modules/tools.rs"]
+mod tools;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -545,6 +547,17 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt
             .block_on(async move { learning::run_learning(window_secs).await });
+    }
+
+    // Phase 102 — `aivyx tools`: read-only tool-observability
+    // view. IPC-backed; same daemon-query shape as `learning`.
+    if let CliMode::Tools { window_secs } = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt
+            .block_on(async move { tools::run_tools(window_secs).await });
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1112,6 +1125,12 @@ enum CliMode {
     /// pane. `window_secs = None` → the daemon's default
     /// lookback.
     Learning { window_secs: Option<u64> },
+    /// `aivyx tools [--window <secs>]`: Phase 102 read-only
+    /// tool-observability view — every registered tool
+    /// annotated with audit-derived call/outcome stats.
+    /// IPC-backed. `window_secs = None` → the whole audit
+    /// chain.
+    Tools { window_secs: Option<u64> },
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1692,6 +1711,52 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 102 — `aivyx tools [--window <secs>]`. Same `--window`
+    // grammar as `aivyx learning`.
+    if !args.is_empty() && args[0] == "tools" {
+        let mut window_secs: Option<u64> = None;
+        let mut idx = 1;
+        while idx < args.len() {
+            match args[idx].as_str() {
+                "--window" => {
+                    let v = args.get(idx + 1).ok_or_else(|| {
+                        "`--window` requires a value (seconds)"
+                            .to_string()
+                    })?;
+                    let parsed: u64 = v.parse().map_err(|_| {
+                        format!(
+                            "`--window` expects a positive integer \
+                             (seconds), got `{v}`"
+                        )
+                    })?;
+                    if parsed == 0 {
+                        return Err(
+                            "`--window` must be >= 1".to_string()
+                        );
+                    }
+                    window_secs = Some(parsed);
+                    idx += 2;
+                }
+                other => {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx tools`: \
+                         `{other}`"
+                    ));
+                }
+            }
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Tools { window_secs },
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -4714,6 +4779,39 @@ mod tests {
         assert!(
             result.is_none(),
             "Telegram channel must NOT receive fs.delete"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 102 — `aivyx tools` subcommand parse tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn tools_subcommand_parses_with_no_window() {
+        let parsed = parse_cli_args_from(&argv(&["tools"]))
+            .expect("`tools` must parse");
+        assert!(matches!(parsed.mode, CliMode::Tools { window_secs: None }));
+    }
+
+    #[test]
+    fn tools_window_flag_parses() {
+        let parsed = parse_cli_args_from(&argv(&["tools", "--window", "3600"]))
+            .expect("`tools --window 3600` must parse");
+        assert!(matches!(
+            parsed.mode,
+            CliMode::Tools {
+                window_secs: Some(3600)
+            }
+        ));
+    }
+
+    #[test]
+    fn tools_window_zero_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["tools", "--window", "0"]))
+            .expect_err("`tools --window 0` must error");
+        assert!(
+            err.contains("--window"),
+            "error must mention the flag: {err}"
         );
     }
 

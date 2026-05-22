@@ -1079,6 +1079,27 @@ count when the knob is on, so the operator can confirm at
 a glance that the loop is in the augmented mode they
 expect.
 
+## Tool observability (Phase 102)
+
+`aivyx tools` is the read-only window onto the tool layer —
+the sibling of `aivyx learning`:
+
+```
+aivyx tools [--window <secs>]
+```
+
+It lists every registered tool and annotates each with
+audit-derived call statistics: total calls, the outcome
+breakdown (completed / failed / denied / …), and average
+call duration. `--window <secs>` scopes the stats to a
+recent slice; without it the whole audit chain is summed. A
+tool that has never been called still appears — a
+registered-but-unused tool is itself a signal — and a row
+marked `[unregistered]` is a capability base with call
+history but no currently registered tool. Like `aivyx
+memory` and `aivyx learning`, it is daemon-backed: it needs
+a running daemon (`aivyx daemon run`).
+
 ## Learning insights (Phase 78)
 
 The Phase 77 loop changes behaviour on its own. Phase 78 makes

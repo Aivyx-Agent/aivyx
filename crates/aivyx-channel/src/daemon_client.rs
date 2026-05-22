@@ -585,6 +585,30 @@ pub async fn get_learning_insights(
     }
 }
 
+/// Phase 102 — fetch per-tool observability stats from the daemon.
+/// Backs `aivyx tools [--window <secs>]`. `window_secs = None`
+/// scopes the answer to the whole audit chain.
+pub async fn get_tool_stats(
+    socket_path: &Path,
+    window_secs: Option<u64>,
+) -> Result<Vec<crate::daemon_ipc::ToolStat>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "t-stats",
+        QueryPayload::GetToolStats { window_secs },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ToolStats { tools } => Ok(tools),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ToolStats, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(
