@@ -42,8 +42,9 @@ pub use planner::{
     NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner, VecPlanner,
 };
 pub use tools::{
-    FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig, ShellExecTool,
-    ShellExecToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
+    FsReadToolConfig, FsWriteTool, FsWriteToolConfig, ShellExecTool, ShellExecToolConfig,
+    WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
 };
 
 use std::sync::Arc;

@@ -33,11 +33,13 @@
 //!   `claude-haiku-4-5-20251001`). Sent verbatim to the API.
 //! - `AIVYX_SYSTEM_PROMPT` — override the default system prompt.
 //! - `AIVYX_FS_ROOT` — directory under which the filesystem tools
-//!   (`fs.read`, `fs.write`) are allowed to operate. Defaults to
+//!   (`fs.read`, `fs.write`, `fs.metadata`, and — on Local channels
+//!   only — `fs.delete`) are allowed to operate. Defaults to
 //!   `$HOME/aivyx-sandbox`. Created at startup if it does not exist.
-//!   The binary's capability set grants `fs.read:<root>/**` and
-//!   `fs.write:<root>/**` so the LLM can exercise both tools without
-//!   further wiring.
+//!   The binary's capability set grants `fs.read:<root>/**`,
+//!   `fs.write:<root>/**`, and `fs.metadata:<root>/**` for every
+//!   channel, plus `fs.delete:<root>/**` on Local channels, so the
+//!   LLM can exercise the tools without further wiring.
 //! - `AIVYX_STORAGE_PATH` — path to the encrypted redb store (Phase 5
 //!   task 4). Defaults to `$XDG_DATA_HOME/aivyx/store.redb` or
 //!   `$HOME/.local/share/aivyx/store.redb` otherwise. The sidecar
@@ -137,8 +139,9 @@ use aivyx_channel::{
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
 use aivyx_core::{
-    Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsReadToolConfig,
-    FsWriteToolConfig, LlmPlanner, LlmPlannerConfig, ShellExecToolConfig, Tool, ToolRegistry,
+    Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
+    FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
+    ShellExecToolConfig, Tool, ToolRegistry,
     WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
 };
 use aivyx_crypto::Argon2Params;
@@ -179,12 +182,14 @@ const PROMPT: &str = "> ";
 /// or just be driven via env vars.
 const DEFAULT_TOML_PATH: &str = "aivyx.toml";
 
-/// Optional `(shell.exec tool, required capability scope)` pair
-/// returned by `build_shell_exec_for_channel`. Aliased to satisfy
-/// clippy's `type_complexity` lint and because the pair has a
-/// specific meaning — "the shell.exec the agent gets for this
-/// channel, plus the canonical cwd-root scope that lets it run".
-type ShellExecRegistration = Option<(Arc<dyn Tool>, Scope)>;
+/// Optional `(tool, required capability scope)` pair returned by a
+/// registration-time trust gate — `build_shell_exec_for_channel`
+/// (Phase 11) and `build_fs_delete_for_channel` (Phase 100). Aliased
+/// to satisfy clippy's `type_complexity` lint and because the pair
+/// has a specific meaning — "the gated tool the agent gets for this
+/// channel, plus the canonical scope that lets it run; `None` if the
+/// channel's trust tier does not receive the tool at all."
+type GatedToolRegistration = Option<(Arc<dyn Tool>, Scope)>;
 
 /// Phase 11 Task 3 — registration-time trust-tier gate for
 /// `shell.exec`.
@@ -208,7 +213,7 @@ type ShellExecRegistration = Option<(Arc<dyn Tool>, Scope)>;
 fn build_shell_exec_for_channel(
     channel_kind: ChannelKind,
     fs_root: &std::path::Path,
-) -> Result<ShellExecRegistration, String> {
+) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         ChannelKind::Local => {
             let shell = ShellExecToolConfig::new(fs_root.to_path_buf())
@@ -225,6 +230,45 @@ fn build_shell_exec_for_channel(
                 )
             })?;
             Ok(Some((Arc::new(shell) as Arc<dyn Tool>, scope)))
+        }
+        ChannelKind::Telegram => Ok(None),
+    }
+}
+
+/// Phase 100 task 5 — registration-time trust-tier gate for
+/// `fs.delete`.
+///
+/// `fs.delete` is destructive. Like `shell.exec` — and unlike the
+/// read-only `fs.read` / `fs.write` / `fs.metadata`, which every
+/// channel receives — it is registered for `Local` (Trusted)
+/// channels only. A `Telegram` (SemiTrusted) dispatch registry
+/// never contains `fs.delete`, so a SemiTrusted audit chain never
+/// mentions it, not even as a denial. See PHASE_100.md Q3.
+///
+/// Returns `Ok(Some((tool, scope)))` for `Local`, `Ok(None)` for
+/// `Telegram`. The scope is `fs.delete:<canonical_root>/**`,
+/// anchored to the canonicalized sandbox root so it lines up
+/// exactly with `FsDeleteTool::required_scope`.
+fn build_fs_delete_for_channel(
+    channel_kind: ChannelKind,
+    fs_root: &std::path::Path,
+) -> Result<GatedToolRegistration, String> {
+    match channel_kind {
+        ChannelKind::Local => {
+            let tool = FsDeleteToolConfig::new(fs_root.to_path_buf())
+                .build()
+                .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
+            let canonical_root = tool.sandbox_root().to_path_buf();
+            let scope = Scope::parse(&format!(
+                "fs.delete:{}/**",
+                canonical_root.display()
+            ))
+            .ok_or_else(|| {
+                format!(
+                    "canonical fs.delete sandbox scope not parseable from {canonical_root:?}"
+                )
+            })?;
+            Ok(Some((Arc::new(tool) as Arc<dyn Tool>, scope)))
         }
         ChannelKind::Telegram => Ok(None),
     }
@@ -2574,6 +2618,13 @@ async fn run_async(
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
         .build()
         .map_err(|e| format!("failed to build fs.write tool: {e}"))?;
+    // Phase 100 — fs.metadata is read-only; like fs.read / fs.write
+    // it is registered for every channel. Destructive fs.delete is
+    // built behind a Local-only trust gate further down
+    // (`build_fs_delete_for_channel`).
+    let fs_metadata = FsMetadataToolConfig::new(fs_root.clone())
+        .build()
+        .map_err(|e| format!("failed to build fs.metadata tool: {e}"))?;
 
     // Pull the canonicalized sandbox root back out of `fs_read` so the
     // capability scopes reference the exact same string the tools use
@@ -2587,6 +2638,10 @@ async fn run_async(
     let fs_write_scope = Scope::parse(&format!("fs.write:{root_display}/**")).ok_or_else(|| {
         format!("canonical fs.write sandbox scope not parseable from {canonical_root:?}")
     })?;
+    let fs_metadata_scope =
+        Scope::parse(&format!("fs.metadata:{root_display}/**")).ok_or_else(|| {
+            format!("canonical fs.metadata sandbox scope not parseable from {canonical_root:?}")
+        })?;
 
     // Build the Phase 6 memory tools. `RedbMemory::open` clones an
     // `Arc<dyn Storage>` handle so the binary's already-open store
@@ -2945,6 +3000,7 @@ async fn run_async(
     let mut tool_list: Vec<Arc<dyn Tool>> = vec![
         Arc::new(fs_read) as Arc<dyn Tool>,
         Arc::new(fs_write) as Arc<dyn Tool>,
+        Arc::new(fs_metadata) as Arc<dyn Tool>,
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,
@@ -2955,6 +3011,18 @@ async fn run_async(
         match build_shell_exec_for_channel(channel_kind, &fs_root)? {
             Some((shell, scope)) => {
                 tool_list.push(shell);
+                Some(scope)
+            }
+            None => None,
+        };
+    // Phase 100 — destructive `fs.delete` behind the same Local-only
+    // trust gate as `shell.exec` (PHASE_100.md Q3). Read-only
+    // `fs.metadata` is already in `tool_list` above (every channel);
+    // `fs.delete` is registered only when the gate returns it.
+    let fs_delete_scope: Option<Scope> =
+        match build_fs_delete_for_channel(channel_kind, &fs_root)? {
+            Some((fs_delete, scope)) => {
+                tool_list.push(fs_delete);
                 Some(scope)
             }
             None => None,
@@ -3372,10 +3440,14 @@ async fn run_async(
         Scope::parse("memory.gc").unwrap(),
         fs_read_scope,
         fs_write_scope,
+        fs_metadata_scope,
         Scope::parse("net.fetch").unwrap(),
         Scope::parse("net.post").unwrap(),
     ];
     if let Some(s) = shell_exec_scope {
+        backcompat_floor.push(s);
+    }
+    if let Some(s) = fs_delete_scope {
         backcompat_floor.push(s);
     }
     // Phase 36 — grant ollama model management scopes in the
@@ -4584,6 +4656,44 @@ mod tests {
             result.is_none(),
             "Telegram channel must NOT receive shell.exec; \
              this is the registration-time gate"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 100 task 5 — registration-time gate for `fs.delete`.
+    //
+    // Symmetric with the `shell.exec` gate tests above: destructive
+    // `fs.delete` is registered for `Local` (Trusted) only and is
+    // absent from a `Telegram` (SemiTrusted) dispatch registry.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn channel_local_receives_fs_delete() {
+        let scratch = Scratch::new();
+        let result = build_fs_delete_for_channel(ChannelKind::Local, &scratch.dir)
+            .expect("local branch must build fs.delete cleanly");
+        let (tool, scope) = result.expect("local must receive fs.delete");
+        assert_eq!(tool.name(), "fs.delete");
+        assert_eq!(scope.base(), "fs.delete");
+        let qualifier = scope.qualifier().expect("scope must be qualified");
+        assert!(
+            qualifier.ends_with("/**"),
+            "fs.delete scope must end with `/**`, got {qualifier}"
+        );
+    }
+
+    #[test]
+    fn channel_telegram_receives_no_fs_delete() {
+        // `fs.delete` is destructive — the SemiTrusted (Telegram)
+        // branch must return `None` so the tool is absent from the
+        // dispatch registry entirely, the same registration-time
+        // strictness `shell.exec` gets. PHASE_100.md Q3.
+        let scratch = Scratch::new();
+        let result = build_fs_delete_for_channel(ChannelKind::Telegram, &scratch.dir)
+            .expect("telegram branch must not error — it's a no-op");
+        assert!(
+            result.is_none(),
+            "Telegram channel must NOT receive fs.delete"
         );
     }
 

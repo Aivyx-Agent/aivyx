@@ -180,6 +180,35 @@ else
     warn "fs.write probe: sandbox file absent — local model likely skipped the tool call"
 fi
 
+# fs.delete (Phase 100) — pre-create a file, ask the agent to delete
+# it, verify it is gone. Side-effect-verifiable, like the fs.write
+# probe above.
+echo "scratch — delete me" > "$DEV_DIR/sandbox/delete-probe.txt"
+del_prompt='Call the fs.delete tool now to delete the file delete-probe.txt from your sandbox. After the tool call returns, reply DONE.'
+echo "dev-verify: running the fs.delete turn..."
+printf '%s\n' "$del_prompt" | aivyx_turn >/dev/null 2>&1
+if [[ ! -e "$DEV_DIR/sandbox/delete-probe.txt" ]]; then
+    pass "fs.delete tool path works (sandbox file removed)"
+else
+    warn "fs.delete probe: file still present — local model likely skipped the tool call"
+    rm -f "$DEV_DIR/sandbox/delete-probe.txt"
+fi
+
+# fs.metadata (Phase 100) — pre-create a directory with a uniquely
+# named file, ask the agent to list it, look for the marker in the
+# reply. fs.metadata is read-only with no side effect to check, so
+# the probe inspects the turn output instead.
+mkdir -p "$DEV_DIR/sandbox/metadir"
+: > "$DEV_DIR/sandbox/metadir/META-MARKER-5571.txt"
+meta_prompt='Call the fs.metadata tool on the directory metadir and then tell me, verbatim, the names of the files inside it.'
+echo "dev-verify: running the fs.metadata turn..."
+meta_out="$(printf '%s\n' "$meta_prompt" | aivyx_turn 2>&1)"
+if grep -q 'META-MARKER-5571' <<<"$meta_out"; then
+    pass "fs.metadata tool path works (directory listing returned the marker)"
+else
+    warn "fs.metadata probe: marker not echoed — local model likely skipped the tool call"
+fi
+
 # =====================================================================
 # DAEMON lifecycle + memory query. The `memory` subcommand is a
 # daemon client, so the daemon must be up to (a) substrate-check

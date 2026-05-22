@@ -361,9 +361,10 @@ pub async fn run_tool_as_subprocess<T: Tool + 'static>(
 ) -> Result<(), HarnessError>;
 ```
 
-Pass any `aivyx_core::Tool` impl — including the eight P10
-substrate tools (`fs.read`, `fs.write`, `memory.*`, `shell.exec`,
-`web.fetch`, `web.post`) — and you get a process binary that
+Pass any `aivyx_core::Tool` impl — including the ten P10
+substrate tools (`fs.read`, `fs.write`, `fs.delete`,
+`fs.metadata`, `memory.*`, `shell.exec`, `web.fetch`,
+`web.post`) — and you get a process binary that
 speaks the wire protocol byte-for-byte equivalently to a
 hand-written tool process.
 

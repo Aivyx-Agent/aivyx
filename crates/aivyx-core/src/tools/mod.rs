@@ -30,7 +30,10 @@ pub mod role_switch;
 pub mod shell;
 pub mod web_fetch;
 
-pub use fs::{FsReadTool, FsReadToolConfig, FsWriteTool, FsWriteToolConfig};
+pub use fs::{
+    FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
+    FsReadToolConfig, FsWriteTool, FsWriteToolConfig,
+};
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
 pub use web_fetch::{WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig};
