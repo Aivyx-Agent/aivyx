@@ -3188,8 +3188,8 @@ phase** — it files Amendment A6 extending P10 to ten tools
 37 added `web.post`), then ships `fs.delete` and
 `fs.metadata` behind it. Directory listing folds into
 `fs.metadata` or earns a new `fs.list` scope (Q1). The other
-seven declared-but-toolless scopes (`shell.spawn`,
-`net.dns`, `audit.read`, `config.read`/`write`,
+eight declared-but-toolless scopes (`shell.spawn`,
+`net.dns`, `audit.read`, `config.read`, `config.write`,
 `display.window_close`, `memory.gc`, `mission.gate`) are
 audited and each ruled "tool later" or "deliberately
 reserved." Honest streak call: PRODUCT.md breaks (A6 amends

@@ -31,14 +31,14 @@ delta — `shell.spawn`, `net.dns`, `audit.read`,
 `memory.gc`, `mission.gate` — and rules each one "tool now" or
 "deliberately reserved," recording the verdict so the audit
 never has to be redone. The expectation at entry is that all
-seven stay reserved and only the two filesystem tools ship,
+eight stay reserved and only the two filesystem tools ship,
 keeping the amendment to a clean eight-to-ten count change.
 
 ## Why this, why now
 
 - `fs.delete` / `fs.metadata` are the only declared-but-
   toolless scopes that name an *everyday* capability the
-  agent visibly lacks. The other seven gate
+  agent visibly lacks. The other eight gate
   self-management or rare operations; the filesystem pair
   is the real gap.
 - Chapter B (opened at the Phase 99 exit) is the tooling
@@ -145,8 +145,13 @@ keeping the amendment to a clean eight-to-ten count change.
 - The canonicalize-then-scope-gate sandbox-escape
   defence is non-negotiable and copied verbatim from
   `FsWriteTool`.
-- Trust treatment per Q3 (registration gate and/or
-  ceiling, recursive-delete policy).
+- Per Q3: a `shell.exec`-style registration-time trust
+  gate — `fs.delete` is registered for Local channels
+  only and is absent entirely from a SemiTrusted dispatch
+  registry. Deletion is non-recursive: `remove_file` for
+  files, `remove_dir` for empty directories only; a
+  non-empty directory is a clean tool error, never a
+  recursive wipe.
 - Full boundary test suite.
 
 ### Task 4 — `fs.metadata` tool
@@ -175,40 +180,40 @@ keeping the amendment to a clean eight-to-ten count change.
 - Exit: ROADMAP + PRODUCT_ROADMAP + docs/README,
   prediction-vs-reality, hash backfill.
 
-## Q-block — to resolve with operator sign-off pre-Task 2
+## Q-block resolutions (signed off pre-Task 2)
 
-- **Q1 — Directory listing.** (a) Fold into `fs.metadata`
-  — a `fs.metadata` call on a directory returns its
-  entries; no new scope base, no second amendment, P10
-  goes to exactly ten. (b) A separate `fs.list` tool with
-  a new `fs.list` scope base — requires a *second*
-  amendment extending D4's base inventory, breaks the
-  DESIGN.md streak, and makes P10 eleven. **Leaning (a)**
-  — one amendment, ten tools, DESIGN.md intact.
-- **Q2 — Amendment A6 shape.** Confirm A6 extends P10's
-  enumerated list from eight to ten with `fs.delete` and
-  `fs.metadata`, classified as substrate (operator-facing,
-  not self-management), leaving the substrate-only
-  principle and the rest of P10 untouched — the A5
-  pattern. **Leaning yes.**
-- **Q3 — `fs.delete` trust treatment.** `fs.delete` is
-  destructive. (a) Same trust posture as `fs.write`
-  (Trusted-tier scope, available wherever `fs.write` is).
-  (b) Stricter — a registration-time trust-tier gate like
-  `shell.exec` (Local channels only, absent entirely from
-  a SemiTrusted dispatch registry). And: is recursive
-  directory deletion (`remove_dir_all`) in scope, or
-  files-and-empty-dirs only? **Leaning (b) + files-and-
-  empty-dirs only** for the destructive-capability blast
-  radius.
-- **Q4 — The other seven toolless scopes.** Confirm Phase
-  100 only *documents* the verdict for `shell.spawn`,
-  `net.dns`, `audit.read`, `config.read`/`write`,
-  `display.window_close`, `memory.gc`, `mission.gate` —
-  ruling each "tool — future phase" or "deliberately
-  reserved" — and does **not** ship tools for or remove
-  any of them this phase. **Leaning yes** (documentation
-  only; removals would be their own amendment).
+- **Q1 — Directory listing:** (a) **Fold into
+  `fs.metadata`.** A `fs.metadata` call on a directory
+  returns its entries. No new scope base, no second
+  amendment; P10 lands at exactly ten tools and the
+  DESIGN.md streak holds at 47. A dedicated `fs.list`
+  scope/tool is recorded as a deferral.
+- **Q2 — Amendment A6 shape:** (a) **A6 extends P10's
+  enumerated list from eight to ten.** `fs.delete` and
+  `fs.metadata` are added as substrate tools (operator-
+  facing filesystem operations, not self-management).
+  The substrate-only principle and the rest of P10 are
+  untouched — only the count and the list move. The A5
+  pattern (Phase 37 / `web.post`, seven → eight) repeated.
+- **Q3 — `fs.delete` trust treatment:** (b) **Local-only
+  registration gate, non-recursive.** `fs.delete` gets a
+  registration-time trust-tier gate like `shell.exec`: it
+  is absent entirely from a SemiTrusted channel's
+  dispatch registry — a SemiTrusted audit chain never
+  sees `fs.delete` mentioned, not even as a denial.
+  Deletion is scoped to files and empty directories only
+  (`std::fs::remove_file` / `remove_dir`); recursive
+  `remove_dir_all` is out of scope and recorded as a
+  deferral. This matches the destructive-capability
+  blast-radius posture `shell.exec` already sets.
+- **Q4 — The other eight toolless scopes:** (a)
+  **Document the verdict only.** `shell.spawn`,
+  `net.dns`, `audit.read`, `config.read`, `config.write`,
+  `display.window_close`, `memory.gc`, and `mission.gate`
+  are each ruled "tool — future phase" or "deliberately
+  reserved" in the Task 2 audit table. Phase 100 ships no
+  tool for them and removes no scope base — scope-base
+  removal would be its own amendment.
 
 ## Deferrals
 
@@ -299,7 +304,7 @@ closes none — it is net-new Chapter B tool-surface work):
 
 **Likely Phase 100 deferrals:**
 
-- **Tools for the other seven toolless scopes.** Per Q4,
+- **Tools for the other eight toolless scopes.** Per Q4,
   Phase 100 documents `shell.spawn` / `net.dns` /
   `audit.read` / `config.read` / `config.write` /
   `display.window_close` / `memory.gc` / `mission.gate`
