@@ -3155,14 +3155,13 @@ no tool behind them.
 
 **Expected phases:**
 
-- **Phase 100 — Tool-Surface Gap Closure.** See below — the
-  one concrete, ready opener.
-- **Tool-calling reliability (future).** The Phase 99
-  `dev-verify` run caught the local model skipping an
-  `fs.write` call outright. A future phase sharpens tool
-  schemas and descriptions and adds malformed-call
-  repair/retry so models — local ones especially — invoke
-  tools more reliably.
+- **Phase 100 — Tool-Surface Gap Closure.** Shipped — see
+  below and [PHASE_100.md](PHASE_100.md).
+- **Phase 101 — Tool-Call Input Validation & Repair.**
+  Active — see below and [PHASE_101.md](PHASE_101.md). The
+  reliability item: the planner validates a known tool's
+  call input against the tool's schema before dispatch and
+  loops the model to repair a malformed call.
 - **Tool observability (future).** An `aivyx tools`
   introspection subcommand plus tool-call tracing: which
   tools are registered, their scopes, and per-tool
@@ -3171,8 +3170,8 @@ no tool behind them.
   tool-author CLI for the tool-process IPC + MCP paths, so
   third-party tool authoring is a smaller lift.
 
-The three future items are operator-feedback-gated and
-sequence loosely; Phase 100 is fixed as the opener.
+The two future items are operator-feedback-gated and
+sequence loosely.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
@@ -3197,6 +3196,27 @@ reserved." Streaks at exit: PRODUCT.md broke at 39
 (new tool re-exports); DESIGN.md held → 47 (Q1 kept
 directory listing inside `fs.metadata`). Workspace tests
 `+32` → 1778.
+
+## Phase 101 — Tool-Call Input Validation & Repair (Chapter B)
+
+**Active — see [PHASE_101.md](PHASE_101.md).** Chapter B's
+reliability item. Two `dev-verify` runs (Phases 99, 100)
+caught local models emitting tool calls with malformed
+arguments. The planner already loops the model to retry an
+**unknown tool name**; a *known* tool called with bad input
+is dispatched blind and fails ad-hoc inside the tool. Phase
+101 makes the two halves symmetric: a **validate-before-
+dispatch** step checks a known call's input against the
+tool's `input_schema()` (the JSON Schema every `Tool`
+already exposes), and on a mismatch appends a structured
+`invalid_input` result echoing the expected schema, looping
+the model to **repair** the call. A two-repair cap then
+dispatches as-is (the tool's own `execute` validation is the
+floor). Validation uses the `jsonschema` crate — the first
+net-new workspace dependency since Phase 27, a deliberate
+Q2 choice of spec-correct validation over a hand-rolled
+checker. Additive: a well-formed call leaves the planner
+byte-identical to pre-Phase-101.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
