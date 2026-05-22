@@ -287,3 +287,29 @@ as for `DaemonMessage` and `StreamEventPayload`: decode by tag,
 skip unknown variants gracefully. The Phase 48
 `examples/python-channel/` reference adapter demonstrates the
 pattern.
+
+## Phase 102 addendum — `GetToolStats` tool-observability query
+
+`QueryPayload::GetToolStats { window_secs: Option<u64> }` is a
+read-only query backing the `aivyx tools` CLI subcommand.
+`window_secs = None` scopes the answer to the whole audit
+chain; `Some(n)` to `ToolCall` events from the last `n`
+seconds.
+
+The daemon answers with `QueryResponsePayload::ToolStats {
+tools: Vec<ToolStat> }`. It joins two sources: the registered
+tool set, snapshotted from the `ToolRegistry` at daemon
+construction, and the audit chain, walked and folded over
+`AuditEvent::ToolCall` events keyed by `scope_used.base()` —
+the stable capability base (`fs.read`, `net.fetch`), not the
+per-process `tool_id`. Each `ToolStat` row carries `name`,
+`description`, `scope_base`, `registered` (false = a base with
+call history but no currently registered tool), `calls`, a
+per-outcome `outcomes` map (`completed` / `failed` / `denied`
+/ `not_in_role` / `requires_escalation`), and
+`total_duration_ms`. Rows are ordered by call count
+descending, then name ascending.
+
+The query returns `QueryError { code: "no_audit_log" }` on a
+daemon with no audit log configured — the same posture as the
+audit-entry queries.

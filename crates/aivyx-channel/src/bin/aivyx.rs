@@ -130,7 +130,7 @@ use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::Scope;
 use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
+use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig, ToolDescriptor};
 use aivyx_channel::daemon_client::DaemonSession;
 use aivyx_channel::{
     assemble_role_envelope, render_role_envelope, run_daemon_session_connected, run_session,
@@ -3408,6 +3408,25 @@ async fn run_async(
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
+    // Phase 102 — snapshot the registered tool set for the daemon's
+    // `GetToolStats` query, captured here before `tools` is moved
+    // into the planner factory. The scope base comes from
+    // `required_scope` (it differs from the tool name for the web
+    // tools — `web.fetch` keys on `net.fetch`). Cheap (~20 tools);
+    // only the daemon path consumes it, but capturing here keeps it
+    // ahead of every move of `tools`.
+    let tool_descriptors: Vec<ToolDescriptor> = tools
+        .iter_tools()
+        .map(|t| ToolDescriptor {
+            name: t.name().to_string(),
+            description: t.description().to_string(),
+            scope_base: t
+                .required_scope(&serde_json::json!({}))
+                .base()
+                .to_string(),
+        })
+        .collect();
+
     // ---- Capabilities -------------------------------------------------
     // Phase 13 Task 2 — capability assembly is now role-driven.
     // The hard-coded vector below is the **backcompat floor**
@@ -4082,6 +4101,7 @@ async fn run_async(
             agent,
             channel_factory,
             shutdown,
+            tool_descriptors,
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

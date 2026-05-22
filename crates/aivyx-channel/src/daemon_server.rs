@@ -329,6 +329,29 @@ pub struct DaemonConfig {
     /// structural fallback).
     pub recall_feedback_config:
         Option<aivyx_config::RecallFeedbackConfig>,
+    /// Phase 102 — a static snapshot of the registered tool set,
+    /// captured from the `ToolRegistry` at daemon construction.
+    /// The `GetToolStats` query joins it against the audit chain
+    /// so a registered-but-uncalled tool still appears. Empty for
+    /// test fixtures / a daemon built without a registry.
+    pub tool_descriptors: Vec<ToolDescriptor>,
+}
+
+/// Phase 102 — a registered tool's listing fields, snapshotted
+/// from the `ToolRegistry` at daemon construction for the
+/// `GetToolStats` query. Not a wire type — the daemon joins this
+/// with audit stats to produce the wire-format
+/// [`crate::daemon_ipc::ToolStat`].
+#[derive(Debug, Clone)]
+pub struct ToolDescriptor {
+    /// Tool name as the planner advertises it (e.g. `fs.read`).
+    pub name: String,
+    /// One-line tool description.
+    pub description: String,
+    /// Capability base the tool's audit `ToolCall` events key on
+    /// — `required_scope(..).base()`. Equals `name` for most
+    /// tools but not all (`web.fetch` keys on `net.fetch`).
+    pub scope_base: String,
 }
 
 /// Run the daemon server.
@@ -386,7 +409,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         recall_judgment_stat,
         recall_judge,
         recall_feedback_config,
+        tool_descriptors,
     } = config;
+    // Phase 102 — shared once into every per-connection
+    // `ConnectionContext` so `GetToolStats` can list the tool set.
+    let tool_descriptors: Arc<[ToolDescriptor]> = tool_descriptors.into();
     let socket_path = &socket_path;
     let _ = std::fs::remove_file(socket_path);
 
@@ -944,6 +971,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             recall_judgment_stat: recall_judgment_stat.clone(),
             recall_feedback_config: recall_feedback_config.clone(),
             cadence_stats: cadence_stats.clone(),
+            tool_descriptors: Arc::clone(&tool_descriptors),
         };
 
         let handle = tokio::spawn(async move {
@@ -1064,6 +1092,10 @@ struct ConnectionContext {
     /// skipped counts) the `GetLearningInsights` surface
     /// reads to render the cadence section.
     cadence_stats: crate::reflection_scheduler::SharedRecentReflectionStats,
+    /// Phase 102 — registered-tool snapshot for the `GetToolStats`
+    /// query. `Arc`-shared so each per-connection context is a
+    /// cheap pointer clone.
+    tool_descriptors: Arc<[ToolDescriptor]>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1094,6 +1126,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         recall_judgment_stat,
         recall_feedback_config,
         cadence_stats,
+        tool_descriptors,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1476,6 +1509,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_judgment_stat.as_ref(),
                                 recall_feedback_config.as_ref(),
                                 &cadence_stats,
+                                &tool_descriptors,
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -1734,6 +1768,7 @@ async fn run_single_connection_daemon(
         recall_judgment_stat: None,
         recall_feedback_config: None,
         cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
+        tool_descriptors: Arc::from(Vec::<ToolDescriptor>::new()),
     })
     .await
 }
@@ -1791,6 +1826,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_judgment_stat: None,
         recall_judge: None,
         recall_feedback_config: None,
+        tool_descriptors: Vec::new(),
     }).await
 }
 
@@ -1983,6 +2019,7 @@ async fn handle_query(
     >,
     recall_feedback_config: Option<&aivyx_config::RecallFeedbackConfig>,
     cadence_stats: &crate::reflection_scheduler::SharedRecentReflectionStats,
+    tool_descriptors: &[ToolDescriptor],
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -2084,6 +2121,32 @@ async fn handle_query(
                     ok: false,
                     entries_verified: 0,
                     error: Some(e.to_string()),
+                },
+            }
+        }
+        QueryPayload::GetToolStats { window_secs } => {
+            let Some(log) = audit_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_audit_log".into(),
+                    message: "daemon has no audit log configured".into(),
+                };
+            };
+            // `window_secs` → an absolute cutoff; `None` = whole
+            // chain. A clock that cannot subtract `secs` (absurdly
+            // large window) just yields `None` → whole chain.
+            let cutoff = window_secs.and_then(|secs| {
+                std::time::SystemTime::now()
+                    .checked_sub(std::time::Duration::from_secs(secs))
+            });
+            // The whole chain is loaded — an observability query,
+            // not a hot path, and the chain is bounded (Phase 53).
+            match log.entries_range(0, log.len()) {
+                Ok(rows) => QueryResponsePayload::ToolStats {
+                    tools: fold_tool_stats(&rows, cutoff, tool_descriptors),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "tool_stats_failed".into(),
+                    message: e.to_string(),
                 },
             }
         }
@@ -2929,6 +2992,96 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         event,
         mac_hex,
     }
+}
+
+/// Phase 102 — fold a slice of audit `SignedEntry`s into per-tool
+/// statistics for the `GetToolStats` query, joined against the
+/// registered tool set.
+///
+/// `ToolCall` events are keyed by `scope_used.base()` — the stable,
+/// human-meaningful capability base (`fs.read`, `net.fetch`),
+/// unlike the per-process `tool_id`. Entries appended before
+/// `cutoff` (when set) are skipped. Every registered tool yields a
+/// row (zero stats if never called); a base with call history but
+/// no currently registered tool yields a `registered: false` row.
+/// Rows are ordered by call count descending, then name ascending.
+fn fold_tool_stats(
+    entries: &[aivyx_audit::SignedEntry],
+    cutoff: Option<std::time::SystemTime>,
+    tool_descriptors: &[ToolDescriptor],
+) -> Vec<crate::daemon_ipc::ToolStat> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[derive(Default)]
+    struct Acc {
+        calls: u64,
+        outcomes: BTreeMap<String, u64>,
+        total_duration_ms: u64,
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+
+    for entry in entries {
+        if let Some(cut) = cutoff {
+            if entry.appended_at < cut {
+                continue;
+            }
+        }
+        let aivyx_audit::AuditEvent::ToolCall {
+            scope_used,
+            outcome,
+            duration,
+            ..
+        } = &entry.event
+        else {
+            continue;
+        };
+        let a = acc.entry(scope_used.base().to_string()).or_default();
+        a.calls += 1;
+        a.total_duration_ms += duration.as_millis() as u64;
+        let label = match outcome {
+            aivyx_core::ToolOutcomeSummary::Completed { .. } => "completed",
+            aivyx_core::ToolOutcomeSummary::Denied => "denied",
+            aivyx_core::ToolOutcomeSummary::NotInRole => "not_in_role",
+            aivyx_core::ToolOutcomeSummary::RequiresEscalation => {
+                "requires_escalation"
+            }
+            aivyx_core::ToolOutcomeSummary::Failed => "failed",
+        };
+        *a.outcomes.entry(label.to_string()).or_insert(0) += 1;
+    }
+
+    let mut tools: Vec<crate::daemon_ipc::ToolStat> = Vec::new();
+    let mut listed: BTreeSet<String> = BTreeSet::new();
+    for desc in tool_descriptors {
+        listed.insert(desc.scope_base.clone());
+        let a = acc.get(&desc.scope_base);
+        tools.push(crate::daemon_ipc::ToolStat {
+            name: desc.name.clone(),
+            description: desc.description.clone(),
+            scope_base: desc.scope_base.clone(),
+            registered: true,
+            calls: a.map_or(0, |x| x.calls),
+            outcomes: a.map(|x| x.outcomes.clone()).unwrap_or_default(),
+            total_duration_ms: a.map_or(0, |x| x.total_duration_ms),
+        });
+    }
+    // Bases with audit history but no currently registered tool.
+    for (base, a) in &acc {
+        if listed.contains(base) {
+            continue;
+        }
+        tools.push(crate::daemon_ipc::ToolStat {
+            name: base.clone(),
+            description: "(no registered tool)".to_string(),
+            scope_base: base.clone(),
+            registered: false,
+            calls: a.calls,
+            outcomes: a.outcomes.clone(),
+            total_duration_ms: a.total_duration_ms,
+        });
+    }
+    tools.sort_by(|x, y| y.calls.cmp(&x.calls).then_with(|| x.name.cmp(&y.name)));
+    tools
 }
 
 fn mission_state_label(state: mission::MissionState) -> &'static str {

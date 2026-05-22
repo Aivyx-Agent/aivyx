@@ -203,6 +203,15 @@ pub enum QueryPayload {
         #[serde(default)]
         window_secs: Option<u64>,
     },
+    /// Phase 102 — read-only tool-observability query. Returns the
+    /// daemon's registered tool set joined with audit-derived
+    /// call statistics. `window_secs = None` → the whole audit
+    /// chain; `Some(n)` → only `ToolCall` events from the last `n`
+    /// seconds. `#[serde(default)]` so older clients/frames decode.
+    GetToolStats {
+        #[serde(default)]
+        window_secs: Option<u64>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -426,6 +435,45 @@ pub enum QueryResponsePayload {
             crate::reflection_scheduler::RecentReflectionStat,
         )>,
     },
+    /// Phase 102 — response to [`QueryPayload::GetToolStats`]. One
+    /// [`ToolStat`] per tool, ordered by call count descending then
+    /// name ascending. An empty `Vec` is a valid "no tools, no
+    /// calls" answer, not an error.
+    ToolStats {
+        tools: Vec<ToolStat>,
+    },
+}
+
+/// Phase 102 — wire-format per-tool observability row for
+/// [`QueryResponsePayload::ToolStats`]. One row per tool: the
+/// registry-listing fields (`name`, `description`, `scope_base`,
+/// `registered`) joined with the audit-derived call statistics.
+/// The `aivyx tools` CLI renders one table row per `ToolStat`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStat {
+    /// Tool name as the planner advertises it (e.g. `fs.read`).
+    pub name: String,
+    /// One-line tool description.
+    pub description: String,
+    /// Capability base the tool's calls key on in the audit chain
+    /// (`AuditEvent::ToolCall`'s `scope_used.base()`).
+    pub scope_base: String,
+    /// `true` when the tool is in the daemon's live registry. A
+    /// `false` row is a base with audit history but no currently
+    /// registered tool (a channel/role change, or a removed tool).
+    pub registered: bool,
+    /// Total `AuditEvent::ToolCall` events for this base within
+    /// the requested window.
+    pub calls: u64,
+    /// Per-outcome counts, keyed by the stable outcome label
+    /// (`completed`, `failed`, `denied`, `not_in_role`,
+    /// `requires_escalation`). A key is absent when its count is
+    /// zero; the present values sum to `calls`.
+    pub outcomes: std::collections::BTreeMap<String, u64>,
+    /// Total wall-clock duration across all `calls`, in
+    /// milliseconds. The average is `total_duration_ms / calls`,
+    /// derived client-side.
+    pub total_duration_ms: u64,
 }
 
 /// Phase 74 — wire-format view of one memory entry. Flat shape
