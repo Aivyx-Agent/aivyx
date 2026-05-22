@@ -1818,8 +1818,10 @@ Grouped by commitment for traceability.
 - **P9 — Per-Role Full Capability Declaration** — Phase 13.
   `capability_scopes` parsed via `Scope::parse` at config load.
 
-- **P10 — Substrate-Only Core, Eight Tools Forever** — true by
-  contract. `web.post` added in Phase 37, A5 amendment Phase 38.
+- **P10 — Substrate-Only Core, Ten Tools Forever** — true by
+  contract. `web.post` added in Phase 37, A5 amendment Phase 38;
+  `fs.delete` + `fs.metadata` added in Phase 100, A11 amendment
+  the same phase.
 
 - **P11 — SDK Contract** — Phases 48 (channel half) + 49 (tool
   half). `docs/CHANNEL_SDK.md` + `docs/TOOL_SDK.md` v0 contracts.

@@ -350,32 +350,97 @@ closes none — it is net-new Chapter B tool-surface work):
 
 ## Prediction vs. reality
 
-*Filled at phase exit.*
+**Predictions held — all three streak calls correct.**
+
+- **DESIGN.md — held.** Q1 resolved (a): directory listing
+  folded into `fs.metadata`, so no new `fs.list` scope base
+  and no D4/A3 extension. `fs.delete` and `fs.metadata` are
+  D4-original bases; no new crate, so D8's workspace lock
+  held. `DESIGN.md` is byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **47 consecutive phases**
+  (was 46).
+- **PRODUCT.md — broke, as predicted.** Amendment A11
+  (commit `8efa23c`) extended P10's enumerated tool list
+  from eight to ten — the only legal way to add a substrate
+  tool, a deliberate and precedented contract change.
+  Streak **ended at 39** and resets; the next phase begins
+  a fresh PRODUCT.md streak.
+- **`aivyx-core/src/lib.rs` — broke, as predicted.** Task 5
+  (commit `bc6c107`) added the four `Fs{Delete,Metadata}Tool`
+  re-exports to the `pub use tools::{…}` block. Streak
+  **ended at 47** — the project record it set at Phase 99 —
+  and resets.
+
+**Test count — `+32`** (workspace `1746 → 1778`), inside
+the predicted `+25–40` band. Breakdown: `fs.delete`
+boundary suite `+15`, `fs.metadata` boundary suite `+15`,
+binary `fs.delete` registration-gate tests `+2`. Zero new
+workspace deps, as predicted. Zero clippy warnings.
+
+**Scope — all five tasks shipped as planned, with one
+correction.** The Phase 100 amendment is **A11**, not A6 —
+A6 is the Phase 40 parallel-tool-execution amendment. The
+mis-numbering (in the Task 1 doc and the `51f4bb0` /
+`937ebf8` commit messages) was caught and corrected during
+Task 2; the amendment file, `PRODUCT.md`, and this doc all
+read A11.
+
+**`fs.delete` / `fs.metadata` shipped exactly as scoped.**
+Both live in `aivyx-core/src/tools/fs.rs` beside
+`FsReadTool` / `FsWriteTool`, same `Config`-builder shape,
+same canonicalize-then-scope-gate sandbox-escape defence.
+`fs.delete` is non-recursive (`remove_file` / `remove_dir`,
+never `remove_dir_all`) and registered behind a
+`shell.exec`-style Local-only trust gate
+(`build_fs_delete_for_channel`); the `ShellExecRegistration`
+type alias was renamed `GatedToolRegistration` now that two
+gates share it. `fs.metadata` is read-only, registered for
+every channel, and absorbs directory listing per Q1(a).
+
+**Declared-but-toolless audit (Task 2).** All eight
+remaining toolless scopes ruled: `audit.read` flagged as a
+likely future Chapter B observability tool, the other seven
+deliberately reserved. No tool shipped for and no base
+removed from any of the eight.
+
+**dev-verify run.** `dev-verify.sh` against `qwen3.6:27b`
+reported **11 PASS, 3 WARN, 0 FAIL**. Every deterministic
+substrate check green. The three WARNs are the LLM-
+dependent `fs.write` / `fs.delete` / `fs.metadata` tool-
+path probes — the local model skipped those tool calls
+this run (it did call `memory.write`). The tools
+themselves are proven by the 30 `aivyx-core` unit tests
+and the 2 binary gate tests; the soft-WARN class exists
+precisely to absorb local-model tool-calling
+non-determinism.
 
 ## Exit criteria
 
 - [x] `docs/PHASE_100.md` + ROADMAP entry flip + docs/README
-  status row — Task 1 (this commit).
-- [ ] Amendment A11 extends P10 to ten tools; `PRODUCT.md`
+  status row — Task 1 (commit `51f4bb0`).
+- [x] Amendment A11 extends P10 to ten tools; `PRODUCT.md`
   updated; declared-but-toolless audit table recorded —
-  Task 2.
-- [ ] `fs.delete` tool in `aivyx-core` with the full
-  sandbox-escape defence + boundary suite — Task 3.
-- [ ] `fs.metadata` tool in `aivyx-core` with directory
-  listing per Q1 + boundary suite — Task 4.
-- [ ] Binary registration + `lib.rs` re-exports +
-  `dev-verify.sh` probes + docs — Task 5.
-- [ ] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed
-  at exit — Task 5.
-- [ ] All four Q-block questions resolved with operator
-  sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-seven (holds —
-  conditional on Q1(a)).
-- [ ] PRODUCT.md streak ends at thirty-nine and resets
+  Task 2 (commit `8efa23c`).
+- [x] `fs.delete` tool in `aivyx-core` with the full
+  sandbox-escape defence + boundary suite — Task 3 (commit
+  `c61aa66`).
+- [x] `fs.metadata` tool in `aivyx-core` with directory
+  listing per Q1 + boundary suite — Task 4 (commit
+  `8430572`).
+- [x] Binary registration + `lib.rs` re-exports +
+  `dev-verify.sh` probes + docs — Task 5 (commit `bc6c107`).
+- [x] ROADMAP + PRODUCT_ROADMAP + docs/README refreshed
+  at exit — this commit.
+- [x] All four Q-block questions resolved with operator
+  sign-off pre-Task 2 (commit `937ebf8`).
+- [x] DESIGN.md streak extends to forty-seven (held —
+  Q1(a) kept directory listing inside `fs.metadata`).
+- [x] PRODUCT.md streak ends at thirty-nine and resets
   (Amendment A11 — by design).
-- [ ] Production-core `lib.rs` streak ends at forty-seven
+- [x] Production-core `lib.rs` streak ends at forty-seven
   and resets (new tool re-exports).
-- [ ] Test count delta positive (predicted `+25`–`+40`).
-- [ ] Zero clippy warnings.
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta positive — `+32` (workspace
+  `1746 → 1778`), inside the predicted `+25`–`+40` band.
+- [x] Zero clippy warnings.
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

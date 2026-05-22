@@ -3176,7 +3176,7 @@ sequence loosely; Phase 100 is fixed as the opener.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
-**Active — see [PHASE_100.md](PHASE_100.md).** Chapter B's
+**Frozen — see [PHASE_100.md](PHASE_100.md).** Chapter B's
 opener. `fs.delete` and `fs.metadata` are D4-original
 substrate scope bases (Phase 0, in Amendment A3's inventory)
 that have never had a first-party tool — the agent can read
@@ -3192,10 +3192,11 @@ eight declared-but-toolless scopes (`shell.spawn`,
 `net.dns`, `audit.read`, `config.read`, `config.write`,
 `display.window_close`, `memory.gc`, `mission.gate`) are
 audited and each ruled "tool later" or "deliberately
-reserved." Honest streak call: PRODUCT.md breaks (A11 amends
-P10) and `aivyx-core/src/lib.rs` breaks (new tool
-re-exports); DESIGN.md holds if Q1 keeps listing inside
-`fs.metadata`.
+reserved." Streaks at exit: PRODUCT.md broke at 39
+(Amendment A11) and `aivyx-core/src/lib.rs` broke at 47
+(new tool re-exports); DESIGN.md held → 47 (Q1 kept
+directory listing inside `fs.metadata`). Workspace tests
+`+32` → 1778.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
