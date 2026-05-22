@@ -3112,6 +3112,29 @@ line for fused stats; shared embedding cache between
 rankers — see PHASE_98.md deferrals list) are
 operator-feedback-gated.
 
+## Phase 99 — Local Testing Setup (operator-requested)
+
+**Active — see [PHASE_99.md](PHASE_99.md).** The first
+operator-feedback infrastructure phase. Ninety-nine phases
+of substrate shipped with the test pyramid resting entirely
+on `cargo test`; what the project never had was a one-command
+way to build the `aivyx` binary and drive the real agent
+stack against a real LLM backend locally. Phase 99 builds
+that loop: a `scripts/dev-run.sh` launcher (interactive
+session against a fully local Ollama backend, all state under
+a gitignored `.dev-run/`) and a `scripts/dev-verify.sh`
+scripted verification pass (memory round trip, fs, daemon —
+the tool paths an interactive chat test cannot cover).
+Shell tooling only — no crate is touched, no workspace test
+added; all three contract streaks hold trivially. Opened
+under an explicit **local-build posture**: builds stay
+local while repo infrastructure (CI, remote runners,
+publication) is still being decided — that work belongs to
+the Distribution milestone, not here. Phase 99 is the
+prerequisite for the Channel Activation Milestone, which
+consumes this harness for operator verification across all
+channels.
+
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
 After Phase 49 closed the PRODUCT.md forward-commitment ledger,
