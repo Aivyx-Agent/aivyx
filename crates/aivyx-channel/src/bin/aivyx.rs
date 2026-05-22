@@ -116,6 +116,8 @@ mod persona;
 mod profile;
 #[path = "aivyx_modules/tools.rs"]
 mod tools;
+#[path = "aivyx_modules/tool_init.rs"]
+mod tool_init;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -558,6 +560,13 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt
             .block_on(async move { tools::run_tools(window_secs).await });
+    }
+
+    // Phase 103 — `aivyx tool init <path>`: scaffold a starter
+    // Rust tool-process project at the target path. Pure sync fs
+    // work, so it skips the tokio runtime the IPC subcommands need.
+    if let CliMode::Tool(ToolSubcommand::Init { path, force }) = mode {
+        return tool_init::run_tool_init(&path, force);
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1131,6 +1140,10 @@ enum CliMode {
     /// IPC-backed. `window_secs = None` → the whole audit
     /// chain.
     Tools { window_secs: Option<u64> },
+    /// `aivyx tool <subcommand>`: Phase 103 third-party-tool
+    /// authoring helpers. Currently only `init <path>` — a
+    /// scaffolder for a runnable Rust tool-process starter.
+    Tool(ToolSubcommand),
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1246,6 +1259,15 @@ enum ProfileSubcommand {
     /// `aivyx profile edit` — surgical `[profile]` section edit in
     /// `$EDITOR` per Q2(a) at sign-off (wired in Task 3).
     Edit,
+}
+
+/// Phase 103 — `aivyx tool` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum ToolSubcommand {
+    /// `aivyx tool init <path> [--force]` — scaffold a runnable
+    /// Rust tool-process starter at `path`. Refuses to write into
+    /// a non-empty directory unless `--force`.
+    Init { path: PathBuf, force: bool },
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -1765,6 +1787,57 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             provider: None,
             web_ui_port: None,
         });
+    }
+
+    // Phase 103 — `aivyx tool <subcommand>`. The first sub-
+    // subcommand is `init <path> [--force]`.
+    if !args.is_empty() && args[0] == "tool" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx tool` requires a subcommand. Supported: init"
+                .to_string()
+        })?;
+        match sub.as_str() {
+            "init" => {
+                let path_arg = args.get(2).ok_or_else(|| {
+                    "`aivyx tool init` requires a target path".to_string()
+                })?;
+                if path_arg.starts_with("--") {
+                    return Err(format!(
+                        "`aivyx tool init` requires a target path \
+                         (got flag `{path_arg}` where a path was expected)"
+                    ));
+                }
+                let path = PathBuf::from(path_arg);
+                let mut force = false;
+                for extra in &args[3..] {
+                    match extra.as_str() {
+                        "--force" => force = true,
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx tool init`: \
+                                 `{other}`"
+                            ));
+                        }
+                    }
+                }
+                return Ok(CliArgs {
+                    mode: CliMode::Tool(ToolSubcommand::Init { path, force }),
+                    channel: ChannelKind::Local,
+                    role: None,
+                    no_daemon: false,
+                    mcp_servers: vec![],
+                    mcp_sse_servers: vec![],
+                    provider: None,
+                    web_ui_port: None,
+                });
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx tool` subcommand: `{other}`. \
+                     Supported: init"
+                ));
+            }
+        }
     }
 
     // Check for `init` subcommand — interactive first-run wizard
@@ -4813,6 +4886,57 @@ mod tests {
             err.contains("--window"),
             "error must mention the flag: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 103 — `aivyx tool init` parse tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn tool_init_subcommand_parses() {
+        let parsed = parse_cli_args_from(&argv(&["tool", "init", "/tmp/x"]))
+            .expect("`tool init /tmp/x` must parse");
+        match parsed.mode {
+            CliMode::Tool(ToolSubcommand::Init { path, force }) => {
+                assert_eq!(path, PathBuf::from("/tmp/x"));
+                assert!(!force);
+            }
+            other => panic!("expected Tool(Init), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_init_force_flag_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["tool", "init", "/tmp/x", "--force"]))
+                .expect("`tool init ... --force` must parse");
+        match parsed.mode {
+            CliMode::Tool(ToolSubcommand::Init { force, .. }) => {
+                assert!(force);
+            }
+            other => panic!("expected Tool(Init), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_init_missing_path_is_error() {
+        let err = parse_cli_args_from(&argv(&["tool", "init"]))
+            .expect_err("`tool init` with no path must error");
+        assert!(err.contains("path"), "got: {err}");
+    }
+
+    #[test]
+    fn tool_with_no_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["tool"]))
+            .expect_err("`tool` alone must error");
+        assert!(err.contains("subcommand"), "got: {err}");
+    }
+
+    #[test]
+    fn tool_unknown_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["tool", "doesnotexist"]))
+            .expect_err("unknown `tool` subcommand must error");
+        assert!(err.contains("doesnotexist"), "got: {err}");
     }
 
     // -----------------------------------------------------------------

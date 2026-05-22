@@ -350,6 +350,42 @@ The following are **not** stable:
 
 ---
 
+## 8.4 Starting a new Rust tool — `aivyx tool init`
+
+> *Section added at Phase 103 exit.*
+
+The fastest path to a runnable Rust tool process is:
+
+```sh
+aivyx tool init my-aivyx-tool
+```
+
+This writes a starter project at `my-aivyx-tool/` —
+`Cargo.toml`, `src/main.rs` with the handshake +
+invocation main loop, `README.md`, and a `tests/conformance.rs`
+that round-trips a `ToolResult` through the framing this
+SDK defines. The author edits the body of `handle_invocation`
+(and optionally `descriptor()`) and has a buildable starting
+point; the protocol scaffolding is done.
+
+The generated `Cargo.toml` depends on the `aivyx-tool` crate
+this document defines — the wire types and length-prefixed
+framing are imported, not re-implemented. The crate is not
+yet on crates.io (the Distribution milestone is in progress),
+so the generated dep uses a `path` placeholder the operator
+fills in once.
+
+`aivyx tool init` complements the existing scaffolds:
+
+- `aivyx init` scaffolds an operator config (Phase 44).
+- `aivyx init --template <name>` scaffolds a named profile
+  (Phase 66).
+- `aivyx tool init <path>` scaffolds a third-party tool
+  project (Phase 103).
+
+For non-Rust tool authors, `examples/python-tool/` remains
+the canonical stdlib-Python reference.
+
 ## 8.5 First-party tools speak this protocol too
 
 > *Section added at Phase 50 exit.*

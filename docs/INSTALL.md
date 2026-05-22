@@ -192,6 +192,16 @@ After install:
    [`docs/TEMPLATES.md`](TEMPLATES.md) for the full template
    reference.
 
+   **Authoring your own tool process** (Phase 103): if you want
+   to ship a tool the substrate doesn't already include, run
+   `aivyx tool init <path>` to scaffold a runnable Rust
+   tool-process starter at `<path>` — `Cargo.toml`, a
+   `src/main.rs` with the handshake + invocation loop, a
+   `README.md`, and a conformance test. Edit the body of
+   `handle_invocation`, build, then point a `[[tool_process]]`
+   entry in `aivyx.toml` at the resulting binary. See
+   [`docs/TOOL_SDK.md`](TOOL_SDK.md) for the full protocol.
+
 2. **`aivyx`** — auto-spawns the daemon (foreground or
    background depending on flag), drops you into a REPL session,
    and serves the Web UI on `127.0.0.1:7843` if you enabled it.
