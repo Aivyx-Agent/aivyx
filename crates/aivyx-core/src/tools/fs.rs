@@ -1106,6 +1106,279 @@ impl Tool for FsDeleteTool {
 }
 
 // ---------------------------------------------------------------------------
+// FsMetadataTool — Phase 100 task 4 (Chapter B, Amendment A11)
+//
+// Read-only `stat` for a path under the sandbox root: size, kind,
+// modified time, and permissions. On a *directory*, the call also
+// returns the directory's entries — per PHASE_100.md Q1, directory
+// listing folds into `fs.metadata` rather than spawning a separate
+// `fs.list` tool and scope.
+//
+// Mirrors `FsReadTool`'s fence (it canonicalizes the path itself —
+// the target must exist — and a final symlink is followed, the same
+// way `fs.read` reads through a symlink to the file it names). No
+// trust gate: inspecting metadata is non-destructive.
+// ---------------------------------------------------------------------------
+
+/// Maximum number of directory entries returned by a single
+/// `fs.metadata` call on a directory. A directory with more entries
+/// returns the first `MAX_DIR_ENTRIES` (sorted by name) plus
+/// `"entries_truncated": true`. Same philosophy as [`MAX_READ_BYTES`]:
+/// an agent cannot drain a 100k-entry directory into one LLM turn.
+pub const MAX_DIR_ENTRIES: usize = 1024;
+
+fn metadata_deny_scope() -> Scope {
+    deny_scope_for("fs.metadata")
+}
+
+fn metadata_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to inspect. Relative paths resolve \
+                               against the agent's sandbox root; absolute \
+                               paths must already be under it. On a \
+                               directory, the call additionally returns the \
+                               directory's entries."
+            }
+        },
+        "required": ["path"]
+    })
+}
+
+/// Construction inputs for [`FsMetadataTool`]. Same split pattern as
+/// the other filesystem tools.
+pub struct FsMetadataToolConfig {
+    sandbox_root: PathBuf,
+}
+
+impl FsMetadataToolConfig {
+    pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
+        FsMetadataToolConfig {
+            sandbox_root: sandbox_root.into(),
+        }
+    }
+
+    /// Canonicalize the sandbox root and return a ready-to-register
+    /// [`FsMetadataTool`]. Fails at startup if the root doesn't exist
+    /// or isn't a directory.
+    pub fn build(self) -> Result<FsMetadataTool, AivyxError> {
+        let canonical = std::fs::canonicalize(&self.sandbox_root).map_err(|e| {
+            AivyxError::Config(format!(
+                "fs.metadata sandbox root {:?} cannot be canonicalized: {e}",
+                self.sandbox_root
+            ))
+        })?;
+        if !canonical.is_dir() {
+            return Err(AivyxError::Config(format!(
+                "fs.metadata sandbox root {canonical:?} is not a directory"
+            )));
+        }
+        Ok(FsMetadataTool {
+            id: ToolId::new(),
+            sandbox_root: Arc::from(canonical),
+            schema: metadata_input_schema_value(),
+        })
+    }
+}
+
+/// Reference filesystem metadata tool. Agents holding
+/// `fs.metadata:<sandbox_root>/**` can stat any path under the
+/// sandbox and list any directory. Read-only.
+#[derive(Debug)]
+pub struct FsMetadataTool {
+    id: ToolId,
+    sandbox_root: Arc<Path>,
+    schema: Value,
+}
+
+impl FsMetadataTool {
+    pub fn sandbox_root(&self) -> &Path {
+        &self.sandbox_root
+    }
+}
+
+#[async_trait]
+impl Tool for FsMetadataTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "fs.metadata"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect a file or directory under the agent's sandbox root: \
+         size, kind, last-modified time, and permissions. Input is a \
+         JSON object with a `path` field (relative paths resolve \
+         against the sandbox root; absolute paths must already be \
+         under it). On a directory, the call also returns the \
+         directory's entries (up to 1024, sorted). Read-only — \
+         nothing is modified."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        let Some(path_str) = input.get("path").and_then(|v| v.as_str()) else {
+            return metadata_deny_scope();
+        };
+        match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(abs) => Scope::parse(&format!("fs.metadata:{}", abs.display()))
+                .unwrap_or_else(metadata_deny_scope),
+            None => metadata_deny_scope(),
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: Value,
+        _ctx: &ToolContext<'_>,
+    ) -> ToolOutcome {
+        // ---- Validate input --------------------------------------
+        let path_str = match input.get("path").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a string `path` field".to_string(),
+                })
+            }
+        };
+
+        // ---- Lexical resolve (mirrors FsReadTool::execute) -------
+        let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
+            Some(p) => p,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Internal(format!(
+                    "fs.metadata: lexical resolve escaped sandbox after scope \
+                     gate admitted the call (path={path_str:?})"
+                )));
+            }
+        };
+
+        // ---- Canonical fence -------------------------------------
+        //
+        // The path must exist (you cannot stat what is not there).
+        // Canonicalizing resolves every symlink; the result must
+        // still live under the canonicalized sandbox root.
+        let canonical = match std::fs::canonicalize(&lexical_abs) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("cannot canonicalize {lexical_abs:?}: {e}"),
+                });
+            }
+        };
+        if !canonical.starts_with(&*self.sandbox_root) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "path {canonical:?} escapes sandbox root {:?} after \
+                     symlink resolution",
+                    self.sandbox_root
+                ),
+            });
+        }
+
+        // ---- Stat ------------------------------------------------
+        let md = match std::fs::metadata(&canonical) {
+            Ok(m) => m,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("cannot stat {canonical:?}: {e}"),
+                });
+            }
+        };
+
+        let modified_unix_secs: Option<u64> = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let readonly = md.permissions().readonly();
+        #[cfg(unix)]
+        let unix_mode: Option<u32> = {
+            use std::os::unix::fs::PermissionsExt;
+            Some(md.permissions().mode())
+        };
+        #[cfg(not(unix))]
+        let unix_mode: Option<u32> = None;
+
+        // ---- Directory: also list entries ------------------------
+        if md.is_dir() {
+            let mut entries: Vec<(String, &'static str)> = Vec::new();
+            match std::fs::read_dir(&canonical) {
+                Ok(rd) => {
+                    for entry in rd.flatten() {
+                        let name =
+                            entry.file_name().to_string_lossy().into_owned();
+                        let kind = match entry.file_type() {
+                            Ok(ft) if ft.is_dir() => "directory",
+                            Ok(ft) if ft.is_file() => "file",
+                            Ok(ft) if ft.is_symlink() => "symlink",
+                            _ => "other",
+                        };
+                        entries.push((name, kind));
+                    }
+                }
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "cannot read directory {canonical:?}: {e}"
+                        ),
+                    });
+                }
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let entries_truncated = entries.len() > MAX_DIR_ENTRIES;
+            entries.truncate(MAX_DIR_ENTRIES);
+            let entries_json: Vec<Value> = entries
+                .into_iter()
+                .map(|(name, kind)| json!({"name": name, "kind": kind}))
+                .collect();
+
+            return ToolOutcome::Completed {
+                output: json!({
+                    "path": canonical.display().to_string(),
+                    "kind": "directory",
+                    "size_bytes": md.len(),
+                    "modified_unix_secs": modified_unix_secs,
+                    "readonly": readonly,
+                    "unix_mode": unix_mode,
+                    "entries": entries_json,
+                    "entries_truncated": entries_truncated,
+                }),
+                // A stat is a pure query — no effect to verify.
+                verified: Verification::NotApplicable,
+            };
+        }
+
+        // ---- File (or other non-directory) -----------------------
+        let kind = if md.is_file() { "file" } else { "other" };
+        ToolOutcome::Completed {
+            output: json!({
+                "path": canonical.display().to_string(),
+                "kind": kind,
+                "size_bytes": md.len(),
+                "modified_unix_secs": modified_unix_secs,
+                "readonly": readonly,
+                "unix_mode": unix_mode,
+            }),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2110,5 +2383,237 @@ mod tests {
              got {outcome:?}"
         );
         assert!(victim.exists(), "the out-of-sandbox victim must survive");
+    }
+
+    // ---- FsMetadataTool ==============================================
+
+    fn build_metadata_tool(sandbox: &SandboxDir) -> FsMetadataTool {
+        FsMetadataToolConfig::new(sandbox.root.clone())
+            .build()
+            .expect("sandbox root must be canonicalizable for metadata tests")
+    }
+
+    #[test]
+    fn metadata_build_fails_if_root_does_not_exist() {
+        let err = FsMetadataToolConfig::new("/definitely/not/a/real/aivyx-meta-root")
+            .build()
+            .expect_err("nonexistent metadata root must fail to build");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn metadata_build_fails_if_root_is_a_file() {
+        let sandbox = SandboxDir::new();
+        let file = sandbox.write_file("not-a-dir", b"x");
+        let err = FsMetadataToolConfig::new(file)
+            .build()
+            .expect_err("file-as-root must fail");
+        assert!(matches!(err, AivyxError::Config(_)));
+    }
+
+    #[test]
+    fn metadata_tool_descriptor_fields_are_what_the_planner_expects() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        assert_eq!(tool.name(), "fs.metadata");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["required"], json!(["path"]));
+        assert!(schema["properties"]["path"].is_object());
+    }
+
+    // ---- FsMetadataTool: required_scope (lexical layer) -----------
+
+    #[test]
+    fn metadata_scope_for_relative_path_inside_sandbox() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "notes/today.md"}));
+        assert_eq!(scope.base(), "fs.metadata");
+        assert!(!scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn metadata_scope_for_traversal_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"path": "../../etc/passwd"}));
+        assert_eq!(scope.base(), "fs.metadata");
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    #[test]
+    fn metadata_scope_for_missing_path_is_deny_scope() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        let scope = tool.required_scope(&json!({"x": 1}));
+        assert!(scope.qualifier().unwrap().contains("__deny__"));
+    }
+
+    // ---- FsMetadataTool: execute (stat + directory listing) -------
+
+    #[test]
+    fn metadata_on_a_file_reports_size_and_kind() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("hi.txt", b"hello!!"); // 7 bytes
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "hi.txt"}));
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert!(matches!(verified, Verification::NotApplicable));
+                assert_eq!(output["kind"], json!("file"));
+                assert_eq!(output["size_bytes"], json!(7));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_on_a_directory_lists_its_entries() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("proj/a.txt", b"a");
+        sandbox.write_file("proj/b.txt", b"b");
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "proj"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["kind"], json!("directory"));
+                let names: Vec<&str> = output["entries"]
+                    .as_array()
+                    .expect("entries array")
+                    .iter()
+                    .map(|e| e["name"].as_str().unwrap())
+                    .collect();
+                assert_eq!(names, vec!["a.txt", "b.txt"]);
+                assert_eq!(output["entries_truncated"], json!(false));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_directory_entries_are_sorted_by_name() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("d/charlie", b"c");
+        sandbox.write_file("d/alpha", b"a");
+        sandbox.write_file("d/bravo", b"b");
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "d"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                let names: Vec<&str> = output["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| e["name"].as_str().unwrap())
+                    .collect();
+                assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_directory_entry_kinds_distinguish_file_and_dir() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("mix/file.txt", b"f");
+        fs::create_dir(sandbox.root.join("mix/subdir")).expect("mkdir subdir");
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "mix"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                let entries = output["entries"].as_array().unwrap();
+                let kind_of = |n: &str| -> String {
+                    entries
+                        .iter()
+                        .find(|e| e["name"] == json!(n))
+                        .map(|e| e["kind"].as_str().unwrap().to_string())
+                        .unwrap_or_default()
+                };
+                assert_eq!(kind_of("file.txt"), "file");
+                assert_eq!(kind_of("subdir"), "directory");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_nonexistent_path_fails() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "ghost"}));
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+    }
+
+    #[test]
+    fn metadata_missing_path_field_fails() {
+        let sandbox = SandboxDir::new();
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"nope": 1}));
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+    }
+
+    #[test]
+    fn metadata_is_read_only_and_reports_a_modified_time() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("stamp.txt", b"x");
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "stamp.txt"}));
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert!(matches!(verified, Verification::NotApplicable));
+                assert!(
+                    output["modified_unix_secs"].is_u64(),
+                    "a just-written file must report a modified time"
+                );
+                assert!(output["readonly"].is_boolean());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_reports_unix_mode() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("perm.txt", b"x");
+        let tool = build_metadata_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "perm.txt"}));
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert!(
+                    output["unix_mode"].is_u64(),
+                    "unix_mode must be a number on unix"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_through_an_escaping_symlink_is_refused() {
+        // `fs.metadata` canonicalizes the path itself (it follows the
+        // final symlink, like `fs.read`). A symlink resolving outside
+        // the sandbox is caught by the canonical fence.
+        use std::os::unix::fs::symlink as unix_symlink;
+        let sandbox = SandboxDir::new();
+        let outside = sandbox._parent.join("meta-outside");
+        fs::create_dir_all(&outside).expect("mkdir outside");
+        fs::write(outside.join("secret.txt"), b"top secret").expect("write");
+        unix_symlink(&outside, sandbox.root.join("peek")).expect("symlink");
+        let tool = build_metadata_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": "peek/secret.txt"}));
+        assert!(
+            matches!(outcome, ToolOutcome::Failed(AivyxError::Tool { .. })),
+            "stat through a sandbox-escaping symlink must fail, got {outcome:?}"
+        );
     }
 }
