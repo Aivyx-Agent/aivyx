@@ -3167,11 +3167,19 @@ no tool behind them.
   read-only subcommand that lists every registered tool
   and annotates each with audit-derived call/outcome
   stats, with a `--window` filter.
-- **External tool ergonomics (future).** Scaffolding and a
-  tool-author CLI for the tool-process IPC + MCP paths, so
-  third-party tool authoring is a smaller lift.
+- **Phase 103 — External Tool Ergonomics (`aivyx tool init`).**
+  Active — see below and [PHASE_103.md](PHASE_103.md). The
+  closing Chapter B item: an `aivyx tool init <path>`
+  subcommand that scaffolds a runnable Rust tool-process
+  starter (Cargo.toml, src/main.rs handshake + invocation
+  loop, README, conformance test, `[[tool_process]]`
+  snippet) so a third-party tool author edits one function
+  body rather than copying `examples/python-tool/` and
+  porting it to Rust by hand.
 
-The one remaining future item is operator-feedback-gated.
+With Phase 103 active there are no further pre-named
+Chapter B phases; subsequent tool-layer work is
+operator-feedback-gated as elsewhere.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
@@ -3241,6 +3249,26 @@ protocol handshake. All `aivyx-channel`; `aivyx-core`
 untouched. Streaks at exit: all three held — DESIGN.md → 49,
 PRODUCT.md → 2, `aivyx-core/src/lib.rs` → 2. Zero new deps;
 workspace tests `+12` → 1799.
+
+## Phase 103 — External Tool Ergonomics (`aivyx tool init`) (Chapter B)
+
+**Active — see [PHASE_103.md](PHASE_103.md).** Chapter B's
+closing item. Three Chapter B phases shipped the *operator's*
+tool experience (Phase 100 surface, Phase 101 reliability,
+Phase 102 observability); Phase 103 closes the chapter on the
+*third-party tool author's* experience. `aivyx tool init
+<path>` writes a runnable Rust tool-process project: a
+`Cargo.toml` depending on the existing `aivyx-tool` crate
+(which already re-exports the wire types and framing — no new
+SDK helper to add), a `src/main.rs` with the handshake +
+invocation main loop and a handler stub the author replaces,
+a README, a conformance test, and a `[[tool_process]]`
+snippet to paste into `aivyx.toml`. Rust over Python at
+operator choice (Q2): the existing `examples/python-tool/`
+already covers stdlib-Python, and the missing scaffold is for
+authors who want the `wire.rs` enums' type-safety and the
+`cargo` toolchain. Additive — a new CLI subcommand, no
+daemon IPC, no existing path altered.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
