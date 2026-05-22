@@ -304,31 +304,90 @@ closes none — it is net-new Chapter B observability work):
 
 ## Prediction vs. reality
 
-*Filled at phase exit.*
+**Predictions held — all three streak calls correct.**
+
+- **DESIGN.md — held.** `GetToolStats` / `ToolStats` are an
+  additive, backward-compatible extension of the daemon IPC
+  protocol; the Phase 41 protocol handshake absorbs the new
+  variant. No locked technical-contract decision changed.
+  `DESIGN.md` is byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **49 consecutive phases**
+  (was 48).
+- **PRODUCT.md — held.** A read-only observability
+  subcommand changes no product-shape decision. Byte-
+  identical at exit (hash still `9f0a515c…ba61d3`). Streak:
+  **2 consecutive phases** (was 1).
+- **`aivyx-core/src/lib.rs` — held.** Every line of Phase
+  102 is `aivyx-channel` (IPC types, daemon handler, CLI
+  subcommand, renderer) plus docs; `aivyx-core` is
+  untouched. Byte-identical at exit (hash still
+  `ab3f9730…c6210d`). Streak: **2 consecutive phases**
+  (was 1).
+
+**New workspace deps — zero, as predicted.** The audit-
+chain walk, the IPC frame, and the table rendering all use
+crates already in the tree.
+
+**Test count — `+12`** (workspace `1787 → 1799`), the
+**bottom of the predicted `+12–20` band**. Breakdown:
+`fold_tool_stats` unit suite `+4` (empty chain, count /
+outcome fold by scope base, window filter, called-but-
+unregistered base); `render_tool_stats` renderer suite
+`+5` (empty, window header, called / uncalled rows,
+unregistered marker); CLI parse suite `+3`. A standalone
+IPC round-trip test was deliberately not added: the
+`GetToolStats` / `ToolStats` wire shape is serde-derived
+and is exercised end-to-end by the daemon handler the
+`fold_tool_stats` tests drive — an isolated encode/decode
+assertion would have been a derive tautology.
+
+**Scope — all five tasks shipped as planned.** Tasks 2 and
+3 merged into one commit (the IPC enum additions do not
+compile without the handler arm — a non-exhaustive
+`match`). The registry-listing half required the plumbing
+flagged at open: a `ToolDescriptor` snapshot captured from
+the `ToolRegistry` at binary startup and threaded
+`DaemonConfig` → `ConnectionContext` → `handle_query` (whose
+signature reaches 26 parameters — consistent with the
+project's existing `handle_query` shape, not new debt).
+
+**`aivyx tools` view.** `fold_tool_stats` keys `ToolCall`
+events on `scope_used.base()`, joins them against the
+descriptor snapshot, and the renderer prints one stanza per
+tool: name, base, call count, average duration, and the
+outcome breakdown. A registered-but-uncalled tool renders
+with zero stats; a called-but-unregistered base renders
+with an `[unregistered]` marker. `--window` scopes the
+audit-chain walk to a recent slice.
 
 ## Exit criteria
 
 - [x] `docs/PHASE_102.md` + ROADMAP entry flip + docs/README
-  status row — Task 1 (this commit).
-- [ ] `QueryPayload::GetToolStats` + `QueryResponsePayload::
+  status row — Task 1 (commit `b9e9fdd`).
+- [x] `QueryPayload::GetToolStats` + `QueryResponsePayload::
   ToolStats` + the `ToolStat` struct; `DAEMON_IPC.md`
-  addendum — Task 2.
-- [ ] Daemon `GetToolStats` handler — descriptor list
+  addendum — Tasks 2–3 (commit `b62741c`).
+- [x] Daemon `GetToolStats` handler — descriptor list
   threaded to `handle_query`, audit-walk fold keyed by
   scope base with the window filter, joined to the
-  registry listing — Task 3.
-- [ ] `aivyx tools [--window <secs>]` CLI subcommand +
-  the `aivyx_modules/tools.rs` renderer — Task 4.
-- [ ] Stat-aggregation, IPC round-trip, and CLI-parse
-  tests — Task 5.
-- [ ] `docs/INSTALL.md` `aivyx tools` entry — Task 5.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 5.
-- [ ] All three Q-block questions resolved with operator
+  registry listing — Tasks 2–3 (commit `b62741c`).
+- [x] `aivyx tools [--window <secs>]` CLI subcommand +
+  the `aivyx_modules/tools.rs` renderer — Task 4 (commit
+  `d70adcf`).
+- [x] Stat-aggregation, renderer, and CLI-parse tests —
+  Task 4 (commit `d70adcf`).
+- [x] `docs/INSTALL.md` `aivyx tools` entry — Task 4
+  (commit `d70adcf`).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-nine.
-- [ ] PRODUCT.md streak extends to two.
-- [ ] Production-core `lib.rs` streak extends to two.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive (predicted `+12`–`+20`).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+- [x] DESIGN.md streak extends to forty-nine.
+- [x] PRODUCT.md streak extends to two.
+- [x] Production-core `lib.rs` streak extends to two.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+12` (workspace
+  `1787 → 1799`), the bottom of the predicted `+12`–`+20`
+  band.
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

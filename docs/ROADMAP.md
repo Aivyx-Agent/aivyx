@@ -3163,7 +3163,7 @@ no tool behind them.
   call input against the tool's schema before dispatch and
   loops the model to repair a malformed call.
 - **Phase 102 — Tool Observability (`aivyx tools`).**
-  Active — see below and [PHASE_102.md](PHASE_102.md). A
+  Shipped — see below and [PHASE_102.md](PHASE_102.md). A
   read-only subcommand that lists every registered tool
   and annotates each with audit-derived call/outcome
   stats, with a `--window` filter.
@@ -3223,7 +3223,7 @@ Workspace tests `+9` → 1787.
 
 ## Phase 102 — Tool Observability (`aivyx tools`) (Chapter B)
 
-**Active — see [PHASE_102.md](PHASE_102.md).** Chapter B's
+**Frozen — see [PHASE_102.md](PHASE_102.md).** Chapter B's
 observability item. Phase 100 widened the tool surface and
 Phase 101 made tool calls more reliable; neither gave the
 operator a way to *see* the tool layer. Phase 102 adds
@@ -3238,7 +3238,9 @@ the chain, keyed by the stable `scope_used.base()`. A new
 daemon IPC `GetToolStats` query carries it; the variant is
 additive and backward-compatible under the Phase 41
 protocol handshake. All `aivyx-channel`; `aivyx-core`
-untouched.
+untouched. Streaks at exit: all three held — DESIGN.md → 49,
+PRODUCT.md → 2, `aivyx-core/src/lib.rs` → 2. Zero new deps;
+workspace tests `+12` → 1799.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
