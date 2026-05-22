@@ -303,33 +303,96 @@ infrastructure):
   any of it into the workspace `cargo test` suite (so
   it gates a future CI) is deferred to whenever CI
   lands.
+- **`--config` flag vs. stale example comment.**
+  `examples/aivyx-ollama.toml` documents an `aivyx
+  --config <path>` invocation, but the binary parses no
+  `--config` flag — the TOML path is hard-coded to
+  `./aivyx.toml` relative to CWD. Either add the flag or
+  fix the example comment; a small, self-contained
+  follow-up.
 
 ## Prediction vs. reality
 
-*Filled at phase exit.*
+**Predictions held — all three streaks correct.**
+
+- **DESIGN.md — held.** Phase 99 shipped shell tooling
+  and one `.gitignore` line; no `.rs` file and no
+  locked technical-contract decision was touched.
+  `DESIGN.md` is byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **46 consecutive phases**
+  (was 45).
+- **PRODUCT.md — held.** No product-shape decision
+  changed; the launcher is developer tooling below the
+  product surface. Byte-identical at exit (hash still
+  `cd60c4f9…1088e`). Streak: **39 consecutive phases**
+  (was 38).
+- **`aivyx-core/src/lib.rs` — held, by design.** Phase
+  99 added no Rust whatsoever. Byte-identical at exit
+  (hash still `69fb9af1…0c844`). Streak: **47
+  consecutive phases** — new project record, beating
+  Phase 98's 46.
+
+**Test count — zero delta, as predicted.** The
+workspace stays at 1746. Phase 99 added no `cargo test`
+tests: its verification artifact, `dev-verify.sh`, is a
+shell-level operator harness that drives the real
+binary against a real Ollama instance — a different
+layer from the workspace unit/integration suite. Phase
+54 set the precedent for a zero-test-delta phase.
+
+**Scope — every planned surface shipped.** The
+`dev-run.sh` interactive launcher (Ollama preflight,
+local build, `.dev-run/`-pinned state); the
+`dev-verify.sh` scripted pass (deterministic substrate
+checks + soft LLM-dependent tool probes); the
+`dev-run.sh --verify` delegation; the `docs/INSTALL.md`
+"Running Aivyx locally" section. Zero clippy warnings
+(no Rust touched); zero new workspace deps.
+
+**Verification-run result.** `dev-verify.sh` against
+`qwen3.6:27b` reported **11 PASS, 1 WARN, 0 FAIL**. The
+single WARN was the `fs.write` probe — the local model
+skipped that tool call (it called `memory.write`
+successfully the same run), exactly the local-model
+non-determinism the soft-WARN class exists to absorb.
+One real defect was found and fixed mid-Task-3: `aivyx
+memory list` is a daemon client, so the harness was
+reordered to start the daemon before querying it.
+
+**Implementation note — the `--config` flag.**
+`examples/aivyx-ollama.toml` documents an `aivyx
+--config <path>` invocation that the binary does not
+actually parse — the TOML path is hard-coded to
+`./aivyx.toml` relative to CWD. Phase 99 worked around
+it by exporting `AIVYX_PROVIDER` / `AIVYX_MODEL` /
+`AIVYX_OPENAI_BASE_URL` and pinning CWD to `.dev-run/`.
+Reconciling the stale example comment with the binary
+is logged below as a deferral.
 
 ## Exit criteria
 
 - [x] `docs/PHASE_99.md` + ROADMAP entry + docs/README
-  status row — Task 1 (this commit).
-- [ ] `scripts/dev-run.sh` local dev launcher against
+  status row — Task 1 (commit `933a13d`).
+- [x] `scripts/dev-run.sh` local dev launcher against
   the Ollama backend; `.gitignore` covers `.dev-run/` —
-  Task 2.
-- [ ] `scripts/dev-verify.sh` scripted verification
+  Task 2 (commit `07942f6`).
+- [x] `scripts/dev-verify.sh` scripted verification
   pass (audit chain, daemon lifecycle, memory/fs tool
-  probes); `dev-run.sh --verify` delegates — Task 3.
-- [ ] `docs/INSTALL.md` "Running Aivyx locally" section
-  — Task 4.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 4.
-- [ ] All four Q-block questions resolved with operator
+  probes); `dev-run.sh --verify` delegates — Task 3
+  (commit `e3019d5`).
+- [x] `docs/INSTALL.md` "Running Aivyx locally" section
+  — Task 4 (commit `6340d7e`).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-six.
-- [ ] PRODUCT.md streak extends to thirty-nine.
-- [ ] Production-core streak extends to forty-seven
+- [x] DESIGN.md streak extends to forty-six.
+- [x] PRODUCT.md streak extends to thirty-nine.
+- [x] Production-core streak extends to forty-seven
   (new record) — `lib.rs` byte-identical.
-- [ ] Test count delta: zero, by design (the
+- [x] Test count delta: zero, by design (the
   verification artifact is a shell harness, not a
   `cargo test` test).
-- [ ] Zero clippy warnings (no Rust touched).
-- [ ] Zero new workspace deps.
-- [ ] Prediction-vs-reality block filled.
+- [x] Zero clippy warnings (no Rust touched).
+- [x] Zero new workspace deps.
+- [x] Prediction-vs-reality block filled.

@@ -3114,26 +3114,87 @@ operator-feedback-gated.
 
 ## Phase 99 — Local Testing Setup (operator-requested)
 
-**Active — see [PHASE_99.md](PHASE_99.md).** The first
+**Frozen — see [PHASE_99.md](PHASE_99.md).** The first
 operator-feedback infrastructure phase. Ninety-nine phases
 of substrate shipped with the test pyramid resting entirely
 on `cargo test`; what the project never had was a one-command
 way to build the `aivyx` binary and drive the real agent
-stack against a real LLM backend locally. Phase 99 builds
+stack against a real LLM backend locally. Phase 99 built
 that loop: a `scripts/dev-run.sh` launcher (interactive
 session against a fully local Ollama backend, all state under
 a gitignored `.dev-run/`) and a `scripts/dev-verify.sh`
-scripted verification pass (memory round trip, fs, daemon —
-the tool paths an interactive chat test cannot cover).
-Shell tooling only — no crate is touched, no workspace test
-added; all three contract streaks hold trivially. Opened
-under an explicit **local-build posture**: builds stay
-local while repo infrastructure (CI, remote runners,
-publication) is still being decided — that work belongs to
-the Distribution milestone, not here. Phase 99 is the
-prerequisite for the Channel Activation Milestone, which
-consumes this harness for operator verification across all
-channels.
+scripted verification pass (audit chain, daemon lifecycle,
+memory/fs tool probes — the tool paths an interactive chat
+test cannot cover). Shell tooling only — no crate touched,
+no workspace test added (`cargo test` stays at 1746); all
+three contract streaks held byte-identical: DESIGN.md → 46,
+PRODUCT.md → 39, `aivyx-core/src/lib.rs` → 47 (new project
+record, beats Phase 98's 46). Opened under an explicit
+**local-build posture**: builds stay local while repo
+infrastructure (CI, remote runners, publication) is still
+being decided — that work belongs to the Distribution
+milestone, not here. Phase 99 is the prerequisite for the
+Channel Activation Milestone, which consumes this harness
+for operator verification across all channels.
+
+## Chapter B — Tooling (Phases 100+)
+
+Phase 99 established the local operator loop; the
+`dev-verify.sh` pass it shipped immediately surfaced the
+agent's **tool surface** as the next area worth focused
+work — both the breadth of what the agent can do and the
+reliability with which it does it. Chapter B is the tooling
+arc. It expands the first-party tool surface, then hardens
+the substrate around it: how reliably models invoke tools,
+how the operator observes tool usage, and how third parties
+author new tools. Each item lands as its own focused phase
+in the small-scope, Q-block-signed-off rhythm Chapter A
+established. The chapter opens with the most concrete gap —
+capability scopes declared in `aivyx-capability` that have
+no tool behind them.
+
+**Expected phases:**
+
+- **Phase 100 — Tool-Surface Gap Closure.** See below — the
+  one concrete, ready opener.
+- **Tool-calling reliability (future).** The Phase 99
+  `dev-verify` run caught the local model skipping an
+  `fs.write` call outright. A future phase sharpens tool
+  schemas and descriptions and adds malformed-call
+  repair/retry so models — local ones especially — invoke
+  tools more reliably.
+- **Tool observability (future).** An `aivyx tools`
+  introspection subcommand plus tool-call tracing: which
+  tools are registered, their scopes, and per-tool
+  call/failure counts.
+- **External tool ergonomics (future).** Scaffolding and a
+  tool-author CLI for the tool-process IPC + MCP paths, so
+  third-party tool authoring is a smaller lift.
+
+The three future items are operator-feedback-gated and
+sequence loosely; Phase 100 is fixed as the opener.
+
+## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
+
+The capability vocabulary in `aivyx-capability` was declared
+ahead of the tools that exercise it: `fs.delete`,
+`fs.metadata`, `shell.spawn`, `net.dns`, `audit.read`,
+`config.read` / `config.write`, `display.window_close`,
+`memory.gc`, and `mission.gate` are all scope bases with no
+first-party tool behind them. The agent can read and write a
+file but cannot delete one or stat it — an obvious, everyday
+gap. Phase 100 audits the full declared-scope-versus-tool-
+registry delta, then closes the concrete filesystem gaps: an
+`fs.delete` tool and an `fs.metadata` tool (size, type,
+mtime, permissions), and resolves directory listing —
+whether it folds into `fs.metadata` or earns a new `fs.list`
+scope. `fs.delete` is destructive and inherits `fs.write`'s
+exact treatment: path-glob scope attenuation, the sandbox-
+root capability shape, and the trust-tier registration gate.
+Every remaining declared-but-toolless scope is ruled either
+"tool now" or "deliberately reserved" and the verdict
+documented, so the gap audit never has to be redone. The
+Phase 99 `dev-verify.sh` pass gains probes for the new tools.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
