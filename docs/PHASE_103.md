@@ -295,27 +295,78 @@ closes none — it is net-new Chapter B ergonomics work):
 
 ## Prediction vs. reality
 
-*Filled at phase exit.*
+**Predictions held — all three streak calls correct.**
+
+- **DESIGN.md — held — and crosses a project milestone.**
+  `aivyx tool init` is operator-side scaffolding; it
+  touches no locked technical-contract decision and adds
+  no daemon IPC variant. `DESIGN.md` is byte-identical at
+  exit (hash still `89dc8903…a94bce`). Streak: **50
+  consecutive phases** — half a hundred.
+- **PRODUCT.md — held.** A tool-author scaffolding helper
+  is third-party-tool ergonomics; P10's enumerated ten-tool
+  list, P11 (SDK contract), and P12 (tool-process IPC) are
+  unchanged. Byte-identical at exit (hash still
+  `9f0a515c…ba61d3`). Streak: **3 consecutive phases**
+  (was 2).
+- **`aivyx-core/src/lib.rs` — held.** Every line of Phase
+  103 is `aivyx-channel`'s binary (a `CliMode::Tool`
+  variant, a parse block, an `aivyx_modules/tool_init.rs`
+  module that writes files from embedded template
+  strings); `aivyx-core` is untouched. Byte-identical at
+  exit (hash still `ab3f9730…c6210d`). Streak: **3
+  consecutive phases** (was 2).
+
+**New workspace deps — zero, as predicted.**
+
+**Test count — `+9`** (workspace `1799 → 1808`), inside
+the predicted `+5–10` band at the upper edge. Breakdown:
+four scaffolder-module tests (empty target, non-empty
+refusal, `--force` override, target-as-file refusal) plus
+five CLI parse tests.
+
+**Scope — all three tasks shipped as planned.** Tasks 2
+and 3 merged into one commit — the scaffolder, its tests,
+and the doc notes that point at it travel together.
+
+**End-to-end verified.** `aivyx tool init <path>` was
+driven against a `tempfile` directory, the
+`REPLACE_WITH_PATH_TO_AIVYX` placeholder substituted with
+the workspace's absolute path, then `cargo check` and
+`cargo test` run against the generated project — both
+succeeded. The embedded `main.rs` and `tests/conformance.rs`
+therefore compile against the real `aivyx-tool` crate, not
+a stale snapshot of its API.
+
+**Chapter B complete.** With Phase 103 exited, all four
+expected Chapter B phases have shipped: 100 (Tool-Surface
+Gap Closure), 101 (Tool-Call Input Validation & Repair),
+102 (Tool Observability), 103 (External Tool Ergonomics).
+Subsequent tool-layer work is operator-feedback-gated, in
+the project's established post-Chapter posture.
 
 ## Exit criteria
 
 - [x] `docs/PHASE_103.md` + ROADMAP entry flip + docs/README
-  status row — Task 1 (this commit).
-- [ ] `aivyx tool init <path>` subcommand + the
+  status row — Task 1 (commit `3d579d5`).
+- [x] `aivyx tool init <path>` subcommand + the
   `aivyx_modules/tool_init.rs` scaffold module + embedded
   Cargo.toml / main.rs / README.md / conformance test
-  templates — Task 2.
-- [ ] Scaffold-fidelity test (`cargo check` against the
-  generated project) + CLI parse tests — Task 3.
-- [ ] `docs/TOOL_SDK.md` "Start a new Rust tool" note +
-  `docs/INSTALL.md` mention — Task 3.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 3.
-- [ ] All three Q-block questions resolved with operator
+  templates — Tasks 2–3 (commit `84bf41f`).
+- [x] Scaffold-fidelity check + CLI parse tests — Tasks 2–3
+  (commit `84bf41f`). End-to-end verified ad-hoc: `cargo
+  check` and `cargo test` both succeed on the generated
+  project once the path placeholder is substituted.
+- [x] `docs/TOOL_SDK.md` "Starting a new Rust tool" note +
+  `docs/INSTALL.md` mention — Tasks 2–3 (commit `84bf41f`).
+- [x] ROADMAP + docs/README refreshed at exit — this commit.
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to fifty (milestone).
-- [ ] PRODUCT.md streak extends to three.
-- [ ] Production-core `lib.rs` streak extends to three.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive (predicted `+5`–`+10`).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+- [x] DESIGN.md streak extends to fifty (milestone).
+- [x] PRODUCT.md streak extends to three.
+- [x] Production-core `lib.rs` streak extends to three.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+9` (workspace
+  `1799 → 1808`), inside the predicted `+5`–`+10` band.
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

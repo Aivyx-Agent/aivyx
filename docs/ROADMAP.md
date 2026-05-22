@@ -3168,7 +3168,7 @@ no tool behind them.
   and annotates each with audit-derived call/outcome
   stats, with a `--window` filter.
 - **Phase 103 — External Tool Ergonomics (`aivyx tool init`).**
-  Active — see below and [PHASE_103.md](PHASE_103.md). The
+  Shipped — see below and [PHASE_103.md](PHASE_103.md). The
   closing Chapter B item: an `aivyx tool init <path>`
   subcommand that scaffolds a runnable Rust tool-process
   starter (Cargo.toml, src/main.rs handshake + invocation
@@ -3177,9 +3177,10 @@ no tool behind them.
   body rather than copying `examples/python-tool/` and
   porting it to Rust by hand.
 
-With Phase 103 active there are no further pre-named
-Chapter B phases; subsequent tool-layer work is
-operator-feedback-gated as elsewhere.
+**Chapter B is complete.** All four expected phases shipped
+(100, 101, 102, 103); subsequent tool-layer work is
+operator-feedback-gated, in the project's established
+post-Chapter posture.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
@@ -3252,7 +3253,7 @@ workspace tests `+12` → 1799.
 
 ## Phase 103 — External Tool Ergonomics (`aivyx tool init`) (Chapter B)
 
-**Active — see [PHASE_103.md](PHASE_103.md).** Chapter B's
+**Frozen — see [PHASE_103.md](PHASE_103.md).** Chapter B's
 closing item. Three Chapter B phases shipped the *operator's*
 tool experience (Phase 100 surface, Phase 101 reliability,
 Phase 102 observability); Phase 103 closes the chapter on the
@@ -3268,7 +3269,19 @@ operator choice (Q2): the existing `examples/python-tool/`
 already covers stdlib-Python, and the missing scaffold is for
 authors who want the `wire.rs` enums' type-safety and the
 `cargo` toolchain. Additive — a new CLI subcommand, no
-daemon IPC, no existing path altered.
+daemon IPC, no existing path altered. Streaks at exit: all
+three held — DESIGN.md → 50 (project milestone, fifty
+consecutive phases), PRODUCT.md → 3, `aivyx-core/src/lib.rs`
+→ 3. Zero new deps; workspace tests `+9` → 1808.
+
+**Chapter B closes here.** Phase 100 widened the tool surface
+(`fs.delete`, `fs.metadata`, A11 amending P10 to ten tools);
+Phase 101 added planner validate-before-dispatch + repair so
+malformed tool calls round-trip back to the model for fixing;
+Phase 102 added `aivyx tools`, the read-only observability
+view; Phase 103 added `aivyx tool init`, the scaffolder for
+third-party tool authors. All four expected items shipped;
+no further pre-named Chapter B phases remain.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
