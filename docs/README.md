@@ -156,7 +156,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 96 | Frozen  | [PHASE_96.md](PHASE_96.md) | `c56cf30`  |
 | Phase 97 | Frozen  | [PHASE_97.md](PHASE_97.md) | `cafbf13`  |
 | Phase 98 | Frozen  | [PHASE_98.md](PHASE_98.md) | `59936fc`  |
-| Phase 99 | Frozen  | [PHASE_99.md](PHASE_99.md) | —          |
+| Phase 99 | Frozen  | [PHASE_99.md](PHASE_99.md) | `a648bbb`  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
