@@ -3162,16 +3162,16 @@ no tool behind them.
   reliability item: the planner validates a known tool's
   call input against the tool's schema before dispatch and
   loops the model to repair a malformed call.
-- **Tool observability (future).** An `aivyx tools`
-  introspection subcommand plus tool-call tracing: which
-  tools are registered, their scopes, and per-tool
-  call/failure counts.
+- **Phase 102 — Tool Observability (`aivyx tools`).**
+  Active — see below and [PHASE_102.md](PHASE_102.md). A
+  read-only subcommand that lists every registered tool
+  and annotates each with audit-derived call/outcome
+  stats, with a `--window` filter.
 - **External tool ergonomics (future).** Scaffolding and a
   tool-author CLI for the tool-process IPC + MCP paths, so
   third-party tool authoring is a smaller lift.
 
-The two future items are operator-feedback-gated and
-sequence loosely.
+The one remaining future item is operator-feedback-gated.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
@@ -3220,6 +3220,25 @@ byte-identical to pre-Phase-101. Streaks at exit: all three
 held — DESIGN.md → 48, PRODUCT.md and `aivyx-core/src/lib.rs`
 each re-establish to 1 after their Phase 100 breaks.
 Workspace tests `+9` → 1787.
+
+## Phase 102 — Tool Observability (`aivyx tools`) (Chapter B)
+
+**Active — see [PHASE_102.md](PHASE_102.md).** Chapter B's
+observability item. Phase 100 widened the tool surface and
+Phase 101 made tool calls more reliable; neither gave the
+operator a way to *see* the tool layer. Phase 102 adds
+`aivyx tools` — a read-only subcommand, sibling of `aivyx
+memory` / `aivyx learning`, that lists every registered
+tool (name, description, capability base) and annotates
+each with audit-derived call statistics: total calls, the
+outcome breakdown (completed / failed / denied / …), and
+timing, with a `--window <secs>` filter. The data already
+exists — every tool call is an `AuditEvent::ToolCall` in
+the chain, keyed by the stable `scope_used.base()`. A new
+daemon IPC `GetToolStats` query carries it; the variant is
+additive and backward-compatible under the Phase 41
+protocol handshake. All `aivyx-channel`; `aivyx-core`
+untouched.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 
