@@ -17,5 +17,9 @@ Thumbs.db
 .env
 *.local
 
+# Phase 99 — disposable local-run state from scripts/dev-run.sh
+# (sandbox FS root + encrypted dev store; never real data)
+/.dev-run/
+
 # Local-only audit / scratch docs (not part of frozen phase journals)
 /docs/walkthrough.md
