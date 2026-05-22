@@ -313,31 +313,97 @@ closes none — it is net-new Chapter B reliability work):
 
 ## Prediction vs. reality
 
-*Filled at phase exit.*
+**Predictions held — all three streak calls correct.**
+
+- **DESIGN.md — held.** Validate-before-dispatch is
+  additive planner behavior; no locked technical-contract
+  decision changed, and `jsonschema` is an external crate,
+  not a workspace crate, so D8 held. `DESIGN.md` is
+  byte-identical at exit (hash still `89dc8903…a94bce`).
+  Streak: **48 consecutive phases** (was 47).
+- **PRODUCT.md — held.** Reliability is a quality
+  improvement on an existing surface; no commitment text
+  moved. Byte-identical at exit (hash still
+  `9f0a515c…ba61d3`). Streak **re-establishes to one** (it
+  reset at Phase 100's Amendment A11).
+- **`aivyx-core/src/lib.rs` — held.** The helper and the
+  repair loop live inside `llm_planner.rs`; no new module
+  file, so `lib.rs` gained no `mod` line. Byte-identical
+  at exit (hash still `ab3f9730…c6210d`). Streak
+  **re-establishes to one** (it reset at Phase 100's
+  `fs.*` re-exports).
+
+**New workspace deps — one, `jsonschema` 0.46, as
+predicted.** `default-features = false` kept its
+`$ref`-resolution backends and second TLS stack out of the
+tree; it still pulls a transitive set (`num`, `fraction`,
+`fancy-regex`, `referencing`, `regex-automata`) that is the
+real cost of spec-correct validation — the deliberate Q2
+trade.
+
+**Test count — `+9`** (workspace `1778 → 1787`), **under
+the predicted `+12–22` band by three.** The estimate was
+high: the helper boundary suite landed at five tests and
+the planner repair-loop suite at four, more compact than
+the forecast. Coverage is complete for the surface shipped
+(every violation class; well-formed, repair-then-dispatch,
+two-repair cap, mixed batch) — the miss is a calibration
+error in the prediction, not a coverage gap.
+
+**Scope — shipped as planned; Tasks 2 and 3 merged into one
+commit.** The `validate_tool_input` helper has no non-test
+caller until the planner integration, so committing it
+alone would have left a dead-code helper mid-phase; the doc
+was updated at Task 2 to record the merge. The helper lives
+in `llm_planner.rs` rather than a new module file — the
+in-file placement is what keeps `lib.rs` byte-identical.
+
+**`invalid_input` repair result.** A known tool called with
+schema-violating input now yields `{"error":
+"invalid_input", "message": "<digest>", "expected_schema":
+<schema>}` — the same shape family as the pre-existing
+`unknown_tool` error — and the model is looped to repair
+the call. `repair_rounds` caps the loop at two; the third
+round dispatches as-is, the tool's own `execute` validation
+the floor. A well-formed call leaves the planner
+byte-identical to pre-Phase-101.
+
+**`docs/TOOL_SDK.md`.** The tool-process contract already
+*stated* that input is validated against `input_schema()`
+before a tool sees it; Phase 101 makes that planner-
+enforced for every registered tool (first-party and
+tool-process alike). The doc note was enhanced — not newly
+added — to describe the `invalid_input` repair behavior and
+why a precise schema improves reliability.
 
 ## Exit criteria
 
 - [x] `docs/PHASE_101.md` + ROADMAP entry flip + docs/README
-  status row — Task 1 (this commit).
-- [ ] `jsonschema` workspace dependency + the
-  `tool_input_validation` helper with its boundary suite —
-  Task 2.
-- [ ] Planner validate-before-dispatch + `invalid_input`
-  repair result + two-repair cap — Task 3.
-- [ ] Planner repair-loop tests (repair-then-success,
+  status row — Task 1 (commit `78ddf26`).
+- [x] `jsonschema` workspace dependency + the
+  `validate_tool_input` helper with its boundary suite —
+  Tasks 2–3 (commit `2b4976f`).
+- [x] Planner validate-before-dispatch + `invalid_input`
+  repair result + two-repair cap — Tasks 2–3 (commit
+  `2b4976f`).
+- [x] Planner repair-loop tests (repair-then-dispatch,
   two-repair cap, well-formed unchanged, mixed batch) —
-  Task 3.
-- [ ] `docs/TOOL_SDK.md` schema-is-load-bearing note —
-  Task 4.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 4.
-- [ ] All three Q-block questions resolved with operator
+  Tasks 2–3 (commit `2b4976f`).
+- [x] `docs/TOOL_SDK.md` schema-is-load-bearing note —
+  Task 4 (this commit).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2.
-- [ ] DESIGN.md streak extends to forty-eight.
-- [ ] PRODUCT.md streak re-establishes to one.
-- [ ] Production-core `lib.rs` streak re-establishes to
+- [x] DESIGN.md streak extends to forty-eight.
+- [x] PRODUCT.md streak re-establishes to one.
+- [x] Production-core `lib.rs` streak re-establishes to
   one.
-- [ ] Exactly one new workspace dependency (`jsonschema`),
+- [x] Exactly one new workspace dependency (`jsonschema`),
   as predicted.
-- [ ] Test count delta positive (predicted `+12`–`+22`).
-- [ ] Zero clippy warnings.
-- [ ] Prediction-vs-reality block filled.
+- [x] Test count delta positive — `+9` (workspace
+  `1778 → 1787`), under the predicted `+12`–`+22` band by
+  three (a prediction calibration miss, not a coverage
+  gap).
+- [x] Zero clippy warnings.
+- [x] Prediction-vs-reality block filled.

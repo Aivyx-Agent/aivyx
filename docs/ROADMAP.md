@@ -3158,7 +3158,7 @@ no tool behind them.
 - **Phase 100 — Tool-Surface Gap Closure.** Shipped — see
   below and [PHASE_100.md](PHASE_100.md).
 - **Phase 101 — Tool-Call Input Validation & Repair.**
-  Active — see below and [PHASE_101.md](PHASE_101.md). The
+  Shipped — see below and [PHASE_101.md](PHASE_101.md). The
   reliability item: the planner validates a known tool's
   call input against the tool's schema before dispatch and
   loops the model to repair a malformed call.
@@ -3199,7 +3199,7 @@ directory listing inside `fs.metadata`). Workspace tests
 
 ## Phase 101 — Tool-Call Input Validation & Repair (Chapter B)
 
-**Active — see [PHASE_101.md](PHASE_101.md).** Chapter B's
+**Frozen — see [PHASE_101.md](PHASE_101.md).** Chapter B's
 reliability item. Two `dev-verify` runs (Phases 99, 100)
 caught local models emitting tool calls with malformed
 arguments. The planner already loops the model to retry an
@@ -3216,7 +3216,10 @@ floor). Validation uses the `jsonschema` crate — the first
 net-new workspace dependency since Phase 27, a deliberate
 Q2 choice of spec-correct validation over a hand-rolled
 checker. Additive: a well-formed call leaves the planner
-byte-identical to pre-Phase-101.
+byte-identical to pre-Phase-101. Streaks at exit: all three
+held — DESIGN.md → 48, PRODUCT.md and `aivyx-core/src/lib.rs`
+each re-establish to 1 after their Phase 100 breaks.
+Workspace tests `+9` → 1787.
 
 ## Chapter A — Foundation Closeout (Phases 50–54) [COMPLETE]
 

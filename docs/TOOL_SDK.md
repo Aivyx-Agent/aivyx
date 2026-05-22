@@ -173,9 +173,15 @@ All frames are length-prefixed JSON per
 - `name` must be a non-empty identifier; unique within the tool
   process.
 - `description` is shown to the LLM. Keep it action-oriented.
-- `input_schema` is JSON Schema. The daemon validates input
-  against it before calling your tool; invalid input never
-  reaches the process.
+- `input_schema` is JSON Schema, and it is load-bearing. The
+  planner validates a call's input against it before dispatch
+  (Phase 101): invalid input never reaches your tool — instead
+  the model is handed a structured `invalid_input` result that
+  echoes this schema and is looped to repair the call. A
+  precise schema (accurate `type`s, a complete `required`
+  list) therefore directly improves tool-call reliability; a
+  vague one lets malformed calls through to your tool's own
+  validation.
 - `required_scope` is the capability scope the daemon checks
   against the active role's envelope before dispatching. New
   scope bases must be declared in `aivyx-capability`'s

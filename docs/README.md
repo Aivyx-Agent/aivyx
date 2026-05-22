@@ -158,7 +158,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 98 | Frozen  | [PHASE_98.md](PHASE_98.md) | `59936fc`  |
 | Phase 99 | Frozen  | [PHASE_99.md](PHASE_99.md) | `a648bbb`  |
 | Phase 100 | Frozen | [PHASE_100.md](PHASE_100.md) | `08e2f28`  |
-| Phase 101 | Active | [PHASE_101.md](PHASE_101.md) | —          |
+| Phase 101 | Frozen | [PHASE_101.md](PHASE_101.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
