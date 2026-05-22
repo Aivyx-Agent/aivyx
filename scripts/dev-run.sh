@@ -36,6 +36,9 @@
 #   --ollama-url <url>  Ollama base URL          (default: http://localhost:11434)
 #   --release           Build with --release     (default: debug)
 #   --reset             Wipe .dev-run/ first for a clean store/sandbox
+#   --verify            Run the scripted verification pass instead of
+#                       an interactive session (delegates to
+#                       scripts/dev-verify.sh)
 #   -h, --help          Show this help and exit
 #
 # Anything after `--` is forwarded verbatim to the binary, e.g.:
@@ -59,9 +62,10 @@ OLLAMA_URL="${AIVYX_OLLAMA_URL:-http://localhost:11434}"
 PASSPHRASE="${AIVYX_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
 BUILD_PROFILE="debug"
 DO_RESET=0
+DO_VERIFY=0
 PASSTHROUGH=()
 
-usage() { sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # --- argument parsing ------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -70,11 +74,21 @@ while [[ $# -gt 0 ]]; do
         --ollama-url) OLLAMA_URL="${2:?--ollama-url requires a value}"; shift 2 ;;
         --release)    BUILD_PROFILE="release"; shift ;;
         --reset)      DO_RESET=1; shift ;;
+        --verify)     DO_VERIFY=1; shift ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; PASSTHROUGH+=("$@"); break ;;
         *)            PASSTHROUGH+=("$1"); shift ;;
     esac
 done
+
+# --- verification mode: hand off to the scripted pass ---------------
+# `--verify` is a thin alias so the verification battery is reachable
+# from the same entry point as the interactive launcher. dev-verify.sh
+# owns its own preflight, build, and clean-baseline handling.
+if [[ $DO_VERIFY -eq 1 ]]; then
+    exec "$REPO_ROOT/scripts/dev-verify.sh" \
+        --model "$MODEL" --ollama-url "$OLLAMA_URL"
+fi
 
 # --- preflight: Ollama reachable ------------------------------------
 echo "dev-run: checking Ollama at $OLLAMA_URL"
