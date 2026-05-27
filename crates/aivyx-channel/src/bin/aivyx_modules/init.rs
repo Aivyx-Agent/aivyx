@@ -9,9 +9,32 @@ use std::path::Path;
 use std::time::Duration;
 
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
+use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
 
 /// Default config file name (matches `aivyx-config` convention).
 const CONFIG_FILE: &str = "aivyx.toml";
+
+/// Default Anthropic model id presented to the operator on the
+/// model-name prompt. Phase 104 refresh: was
+/// `"claude-sonnet-4-20250514"` (Phase 44, ~1 year stale at
+/// Phase 104 entry); current Sonnet generation is
+/// `claude-sonnet-4-6`.
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
+
+/// Default OpenAI model id presented to the operator on the
+/// model-name prompt. Phase 104 refresh: was `"gpt-4o"` (Phase
+/// 25); current flagship is `gpt-4.1`.
+const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
+
+/// Phase 104 — printed when `list_ollama_models` returns an
+/// empty list. Replaces the Phase 44 hint `"Run \`ollama pull
+/// <model>\` first."` (which named no concrete model) with a
+/// single copy-pasteable command per Q4(a). `llama3.2:3b` is
+/// small enough to download in seconds yet capable enough to
+/// drive a real conversation — the right tier for a fresh-
+/// laptop first turn.
+const OLLAMA_EMPTY_HINT: &str =
+    "No local models found.\nTry: ollama pull llama3.2:3b";
 
 /// Connect timeout for Ollama detection — short so the wizard
 /// doesn't hang when Ollama isn't running.
@@ -151,6 +174,152 @@ fn prompt_choice(
 /// with injected readers.
 fn prompt_secret(prompt: &str) -> Result<String, String> {
     rpassword::prompt_password(prompt).map_err(|e| format!("failed to read secret: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 104 — verify-before-write
+// ---------------------------------------------------------------------------
+
+/// Hard cap on verify retries before the wizard falls through to
+/// a final `Write anyway?` gate. Per Q2(a): verify is a
+/// guardrail, not a lock.
+const VERIFY_MAX_ATTEMPTS: u32 = 3;
+
+/// Collect a `(model, api_key)` pair for a cloud provider with
+/// `GET /v1/models` verify-before-write per Q1(a). On verify
+/// failure, re-prompts the implicated field — auth → key, model-
+/// not-found → model, network/other → both with a "Write anyway?"
+/// escape hatch (Q2(a)).
+///
+/// Returns `Ok((model, Some(key)))` on success, including the
+/// last-resort write-anyway acceptance path. Returns `Err` only
+/// when the operator declines write-anyway after exhausting
+/// retries — in that case the wizard exits without writing.
+///
+/// `key_prompt_label` is the secret-prompt label (e.g. `"Anthropic
+/// API key: "`); `default_model` is the fallback when neither the
+/// operator nor the template supplies one; `template_model` lets
+/// a Phase 66 template override the default.
+async fn collect_and_verify_cloud(
+    provider: VerifyProvider,
+    key_prompt_label: &str,
+    default_model: &str,
+    template_model: Option<&str>,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<(String, Option<String>), String> {
+    let resolved_default = template_model.unwrap_or(default_model);
+
+    // Initial collection — same prompt order as pre-Phase-104.
+    let mut model = prompt_line(
+        &format!("Model [{resolved_default}]: "),
+        reader,
+        writer,
+    )?;
+    if model.is_empty() {
+        model = resolved_default.into();
+    }
+    let mut key = prompt_secret(key_prompt_label)?;
+    if key.is_empty() {
+        return Err("API key cannot be empty".into());
+    }
+
+    for attempt in 1..=VERIFY_MAX_ATTEMPTS {
+        writeln!(writer, "Verifying provider…")
+            .map_err(|e| format!("write error: {e}"))?;
+        writer.flush().map_err(|e| format!("flush error: {e}"))?;
+
+        match verify_provider_credentials(provider, &key, &model).await {
+            Ok(()) => {
+                writeln!(writer, "Verified ok.")
+                    .map_err(|e| format!("write error: {e}"))?;
+                return Ok((model, Some(key)));
+            }
+            Err(VerifyError::Auth(msg)) => {
+                writeln!(writer, "Authentication failed: {msg}")
+                    .map_err(|e| format!("write error: {e}"))?;
+                if attempt == VERIFY_MAX_ATTEMPTS {
+                    break;
+                }
+                writeln!(
+                    writer,
+                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: re-enter the API key.",
+                )
+                .map_err(|e| format!("write error: {e}"))?;
+                key = prompt_secret(key_prompt_label)?;
+                if key.is_empty() {
+                    return Err("API key cannot be empty".into());
+                }
+            }
+            Err(VerifyError::ModelNotFound { available, .. }) => {
+                writeln!(
+                    writer,
+                    "Model `{model}` is not available for this account.\n\
+                     Available: {available}",
+                )
+                .map_err(|e| format!("write error: {e}"))?;
+                if attempt == VERIFY_MAX_ATTEMPTS {
+                    break;
+                }
+                writeln!(
+                    writer,
+                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: enter a model name.",
+                )
+                .map_err(|e| format!("write error: {e}"))?;
+                let m = prompt_line("Model: ", reader, writer)?;
+                if !m.is_empty() {
+                    model = m;
+                }
+            }
+            Err(VerifyError::Network(msg)) | Err(VerifyError::Other(msg)) => {
+                writeln!(writer, "Verify failed: {msg}")
+                    .map_err(|e| format!("write error: {e}"))?;
+                // Ambiguous failure — offer immediate write-anyway
+                // before consuming another retry. Operator typing
+                // `y` short-circuits the loop.
+                if prompt_yes_no(
+                    "Write the config without verification?",
+                    false,
+                    reader,
+                    writer,
+                )? {
+                    return Ok((model, Some(key)));
+                }
+                if attempt == VERIFY_MAX_ATTEMPTS {
+                    break;
+                }
+                writeln!(
+                    writer,
+                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: re-enter key and model.",
+                )
+                .map_err(|e| format!("write error: {e}"))?;
+                key = prompt_secret(key_prompt_label)?;
+                if key.is_empty() {
+                    return Err("API key cannot be empty".into());
+                }
+                let m = prompt_line(
+                    &format!("Model [{model}]: "),
+                    reader,
+                    writer,
+                )?;
+                if !m.is_empty() {
+                    model = m;
+                }
+            }
+        }
+    }
+
+    // Exhausted retries — last-resort write-anyway gate.
+    writeln!(
+        writer,
+        "Verification failed after {VERIFY_MAX_ATTEMPTS} attempts.",
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    if prompt_yes_no("Write the config anyway?", false, reader, writer)? {
+        Ok((model, Some(key)))
+    } else {
+        Err("provider verification failed; aivyx.toml not written".into())
+    }
 }
 
 /// Ask a yes/no question. `default` is the answer when the user
@@ -618,7 +787,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         Provider::Ollama => {
             let models = list_ollama_models(base_url).await.unwrap_or_default();
             let model = if models.is_empty() {
-                eprintln!("No local models found. Run `ollama pull <model>` first.");
+                eprintln!("{OLLAMA_EMPTY_HINT}");
                 let m = prompt_line("Model name: ", &mut reader, &mut writer)?;
                 if m.is_empty() {
                     return Err("model name cannot be empty".into());
@@ -634,46 +803,30 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             (model, None)
         }
         Provider::Anthropic => {
-            // Phase 66 — template-supplied model becomes the default
-            // when the operator picked the matching provider.
-            let default_model = template_defaults
-                .model
-                .as_deref()
-                .unwrap_or("claude-sonnet-4-20250514");
-            let model = prompt_line(
-                &format!("Model [{default_model}]: "),
+            // Phase 104 — collect model + key, then verify against
+            // GET /v1/models before falling through to the rest of
+            // the wizard. The template_defaults.model is forwarded
+            // as a Phase 66 prompt-default override.
+            collect_and_verify_cloud(
+                VerifyProvider::Anthropic,
+                "Anthropic API key: ",
+                DEFAULT_ANTHROPIC_MODEL,
+                template_defaults.model.as_deref(),
                 &mut reader,
                 &mut writer,
-            )?;
-            let model = if model.is_empty() {
-                default_model.into()
-            } else {
-                model
-            };
-            let key = prompt_secret("Anthropic API key: ")?;
-            if key.is_empty() {
-                return Err("API key cannot be empty".into());
-            }
-            (model, Some(key))
+            )
+            .await?
         }
         Provider::OpenAi => {
-            let default_model =
-                template_defaults.model.as_deref().unwrap_or("gpt-4o");
-            let model = prompt_line(
-                &format!("Model [{default_model}]: "),
+            collect_and_verify_cloud(
+                VerifyProvider::OpenAi,
+                "OpenAI API key: ",
+                DEFAULT_OPENAI_MODEL,
+                template_defaults.model.as_deref(),
                 &mut reader,
                 &mut writer,
-            )?;
-            let model = if model.is_empty() {
-                default_model.into()
-            } else {
-                model
-            };
-            let key = prompt_secret("OpenAI API key: ")?;
-            if key.is_empty() {
-                return Err("API key cannot be empty".into());
-            }
-            (model, Some(key))
+            )
+            .await?
         }
     };
 
@@ -990,7 +1143,7 @@ mod tests {
     fn render_toml_anthropic() {
         let cfg = init_config_no_profile(
             Provider::Anthropic,
-            "claude-sonnet-4-20250514",
+            DEFAULT_ANTHROPIC_MODEL,
             Some("sk-ant-test123"),
             "store.redb",
             ".",
@@ -1001,13 +1154,16 @@ mod tests {
         assert!(toml.contains("[anthropic]"));
         assert!(toml.contains("api_key = \"sk-ant-test123\""));
         assert!(!toml.contains("[openai]"));
+        // Phase 104 — pin the refreshed default model so a future
+        // stale-default regression fails this test loudly.
+        assert!(toml.contains("model = \"claude-sonnet-4-6\""));
     }
 
     #[test]
     fn render_toml_openai() {
         let cfg = init_config_no_profile(
             Provider::OpenAi,
-            "gpt-4o",
+            DEFAULT_OPENAI_MODEL,
             Some("sk-openai-xyz"),
             "store.redb",
             ".",
@@ -1018,6 +1174,32 @@ mod tests {
         assert!(toml.contains("[openai]"));
         assert!(toml.contains("api_key = \"sk-openai-xyz\""));
         assert!(!toml.contains("[anthropic]"));
+        // Phase 104 — pin the refreshed default model.
+        assert!(toml.contains("model = \"gpt-4.1\""));
+    }
+
+    /// Phase 104 — pin the refreshed default model constants so a
+    /// future stale-default regression fails loudly at the constant
+    /// rather than at one of the `render_toml_*` integration tests.
+    #[test]
+    fn default_models_are_current() {
+        assert_eq!(DEFAULT_ANTHROPIC_MODEL, "claude-sonnet-4-6");
+        assert_eq!(DEFAULT_OPENAI_MODEL, "gpt-4.1");
+    }
+
+    /// Phase 104 — pin the empty-Ollama-models hint string so the
+    /// `ollama pull llama3.2:3b` suggestion can't silently
+    /// regress to a hint-with-no-model-name future.
+    #[test]
+    fn ollama_empty_hint_includes_concrete_pull_command() {
+        assert!(
+            OLLAMA_EMPTY_HINT.contains("ollama pull llama3.2:3b"),
+            "Ollama empty-list hint should name a concrete model: {OLLAMA_EMPTY_HINT:?}",
+        );
+        assert!(
+            OLLAMA_EMPTY_HINT.contains("No local models found"),
+            "hint should still name the condition: {OLLAMA_EMPTY_HINT:?}",
+        );
     }
 
     #[test]
@@ -1124,7 +1306,7 @@ mod tests {
             profile_communication_style: Some("terse, conclusion-first".into()),
             ..init_config_no_profile(
                 Provider::Anthropic,
-                "claude-sonnet-4-20250514",
+                DEFAULT_ANTHROPIC_MODEL,
                 Some("sk-ant-x"),
                 "store.redb",
                 ".",

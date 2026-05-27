@@ -182,6 +182,19 @@ After install:
    name, primary use case, communication style) seed your
    operator identity layer.
 
+   **Phase 104 — verify-before-write.** When the operator picks
+   Anthropic or OpenAI, the wizard hits the provider's
+   `GET /v1/models` with the supplied key before writing
+   `aivyx.toml` and confirms the chosen model is in the
+   returned list. A wrong key or typo'd model is caught here
+   and re-prompts the implicated field; a broken config never
+   lands on disk. After three failed attempts the wizard
+   offers a `Write anyway?` escape hatch — verify is a
+   guardrail, not a lock. The Ollama path is already
+   verified-by-existence through the wizard's `/api/tags`
+   listing (an empty list prints a `Try: ollama pull
+   llama3.2:3b` starter suggestion).
+
    **Faster path with a starter template** (Phase 66):
    `aivyx init --list-templates` to discover available starters
    (`coder`, `researcher`, `personal`), then

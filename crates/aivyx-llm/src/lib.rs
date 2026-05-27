@@ -65,6 +65,13 @@ pub mod openai;
 #[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
 pub mod embedding;
 
+/// Phase 104 — `aivyx init` provider credential verification.
+/// Issues `GET /v1/models` against Anthropic / OpenAI to confirm
+/// `(api_key, model)` is valid before the wizard writes
+/// `aivyx.toml`. See [`verify::verify_provider_credentials`].
+#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
+pub mod verify;
+
 // ---------------------------------------------------------------------------
 // Conversation messages
 // ---------------------------------------------------------------------------
