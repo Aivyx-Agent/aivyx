@@ -96,6 +96,8 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
+#[path = "aivyx_modules/audit_export.rs"]
+mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
 mod identity;
 #[path = "aivyx_modules/init.rs"]
@@ -595,6 +597,19 @@ fn run() -> Result<(), String> {
         CliMode::PrintRole(name) => Some(name.clone()),
         _ => None,
     };
+    // Phase 105 — `aivyx audit export` carries the same
+    // cold-start posture as `--verify-only`: no session, no
+    // sandbox, no API key required. The dispatch lands after
+    // storage open below; the params are extracted here so the
+    // load-options + sandbox-mkdir guards downstream can branch
+    // off the same flag without rebuilding the match.
+    let audit_export_params: Option<(Option<u64>, Option<usize>)> = match &mode {
+        CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+            Some((*from, *limit))
+        }
+        _ => None,
+    };
+    let audit_export_mode = audit_export_params.is_some();
 
     // ---- Config -------------------------------------------------------
     // Phase 9 Task 3 — the whole "read ten env vars by hand" block that
@@ -619,7 +634,11 @@ fn run() -> Result<(), String> {
     let print_role_mode = print_role.is_some();
     let load_opts = LoadOptions {
         toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
-        require_api_key: !verify_only && !print_role_mode,
+        // Phase 105 — `aivyx audit export` shares `--verify-only`'s
+        // posture: cold-start storage open via passphrase, no
+        // session opened, no provider call made. No API key
+        // required, regardless of `--channel`.
+        require_api_key: !verify_only && !print_role_mode && !audit_export_mode,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
         // Phase 11 Task 4 — `--role <name>` is now the highest-
         // priority source. `parse_cli_args` turns the flag into
@@ -665,7 +684,9 @@ fn run() -> Result<(), String> {
     // AGENTS.md-equivalent hygiene rules in this repo try to avoid.
     //
     // Verify-only mode skips this — no session, no tools, no sandbox.
-    if !verify_only {
+    // Phase 105 — audit-export shares the same skip: no fs sandbox
+    // is touched by a read-only chain dump.
+    if !verify_only && !audit_export_mode {
         let root = &config.fs_root.value;
         std::fs::create_dir_all(root)
             .map_err(|e| format!("failed to create fs sandbox root {root:?}: {e}"))?;
@@ -778,6 +799,16 @@ fn run() -> Result<(), String> {
 
         if verify_only {
             return run_verify_only(storage, audit_chain_key).await;
+        }
+
+        // Phase 105 — `aivyx audit export`. Shares the cold-start
+        // storage open path with `--verify-only` (passphrase
+        // required, no session, no daemon needed). Emits the chain
+        // as JSONL on stdout; both `--from <seq>` and `--limit <N>`
+        // are forwarded straight to
+        // `PersistentAuditLog::entries_range`.
+        if let Some((from, limit)) = audit_export_params {
+            return run_audit_export(storage, audit_chain_key, from, limit).await;
         }
 
         // Phase 9 Task 3 — Phase 2 of the two-phase config load.
@@ -1144,6 +1175,11 @@ enum CliMode {
     /// authoring helpers. Currently only `init <path>` — a
     /// scaffolder for a runnable Rust tool-process starter.
     Tool(ToolSubcommand),
+    /// `aivyx audit <subcommand>`: Phase 105 read-only audit
+    /// chain access. Currently only `export` — emit the
+    /// chain as JSONL on stdout. Offline-only (cold-start
+    /// storage open via the operator's passphrase) per Q3a.
+    Audit(AuditSubcommand),
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1268,6 +1304,22 @@ enum ToolSubcommand {
     /// Rust tool-process starter at `path`. Refuses to write into
     /// a non-empty directory unless `--force`.
     Init { path: PathBuf, force: bool },
+}
+
+/// Phase 105 — `aivyx audit` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum AuditSubcommand {
+    /// `aivyx audit export [--from <seq>] [--limit <N>]` — emit
+    /// the audit chain as JSONL on stdout. Read-only,
+    /// offline-only (cold-start storage open via the operator's
+    /// passphrase). Both flags map directly onto
+    /// `PersistentAuditLog::entries_range(from, limit)`; missing
+    /// `--from` means seq 0, missing `--limit` means no upper
+    /// bound.
+    Export {
+        from: Option<u64>,
+        limit: Option<usize>,
+    },
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -1835,6 +1887,89 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 return Err(format!(
                     "unrecognized `aivyx tool` subcommand: `{other}`. \
                      Supported: init"
+                ));
+            }
+        }
+    }
+
+    // Phase 105 — `aivyx audit <subcommand>`. The first sub-
+    // subcommand is `export [--from <seq>] [--limit <N>]`. Both
+    // flags are optional and map onto the existing
+    // `PersistentAuditLog::entries_range(from, limit)` reader;
+    // missing `--from` means seq 0, missing `--limit` means no
+    // upper bound.
+    if !args.is_empty() && args[0] == "audit" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx audit` requires a subcommand. Supported: export"
+                .to_string()
+        })?;
+        match sub.as_str() {
+            "export" => {
+                let mut from: Option<u64> = None;
+                let mut limit: Option<usize> = None;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--from" => {
+                            let val = args.get(i + 1).ok_or_else(|| {
+                                "`--from` requires a sequence number"
+                                    .to_string()
+                            })?;
+                            let parsed: u64 = val.parse().map_err(|e| {
+                                format!(
+                                    "invalid `--from` value `{val}`: \
+                                     expected a non-negative integer ({e})"
+                                )
+                            })?;
+                            from = Some(parsed);
+                            i += 2;
+                        }
+                        "--limit" => {
+                            let val = args.get(i + 1).ok_or_else(|| {
+                                "`--limit` requires an integer".to_string()
+                            })?;
+                            let parsed: usize = val.parse().map_err(|e| {
+                                format!(
+                                    "invalid `--limit` value `{val}`: \
+                                     expected a positive integer ({e})"
+                                )
+                            })?;
+                            if parsed == 0 {
+                                return Err(
+                                    "`--limit 0` would emit nothing — \
+                                     omit `--limit` for an unbounded export"
+                                        .to_string(),
+                                );
+                            }
+                            limit = Some(parsed);
+                            i += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx audit export`: \
+                                 `{other}`"
+                            ));
+                        }
+                    }
+                }
+                return Ok(CliArgs {
+                    mode: CliMode::Audit(AuditSubcommand::Export {
+                        from,
+                        limit,
+                    }),
+                    channel: ChannelKind::Local,
+                    role: None,
+                    no_daemon: false,
+                    mcp_servers: vec![],
+                    mcp_sse_servers: vec![],
+                    provider: None,
+                    web_ui_port: None,
+                });
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx audit` subcommand: `{other}`. \
+                     Supported: export"
                 ));
             }
         }
@@ -2419,6 +2554,41 @@ async fn run_verify_only(
         "audit: verified {} events (head_seq={})",
         report.entries_verified, head_seq_display,
     );
+    Ok(())
+}
+
+/// Phase 105 — drive the JSONL audit-chain emitter against
+/// stdout. Mirrors [`run_verify_only`]'s no-session,
+/// cold-start posture: opens the chain via the supplied
+/// storage + audit key, streams entries, exits. Errors land in
+/// `main`'s outer `match` and map to `ExitCode::FAILURE`.
+async fn run_audit_export(
+    storage: Arc<dyn Storage>,
+    audit_chain_key: [u8; 32],
+    from: Option<u64>,
+    limit: Option<usize>,
+) -> Result<(), String> {
+    // `BufWriter` here keeps stdout-flushing cost out of the
+    // per-line loop; the inner `export_chain` calls `flush`
+    // once at the end. `stdout().lock()` is the recommended
+    // pattern for high-throughput writes against the global
+    // handle.
+    let stdout = io::stdout();
+    let mut writer = std::io::BufWriter::new(stdout.lock());
+    let emitted = audit_export::export_chain(
+        storage,
+        audit_chain_key,
+        from,
+        limit,
+        &mut writer,
+    )
+    .await?;
+    // Drop the writer before printing the summary so its
+    // buffered bytes hit stdout in chain-emission order. The
+    // summary itself goes to stderr — the JSONL stream is what
+    // a pipe consumer wants on stdout.
+    drop(writer);
+    eprintln!("audit: exported {emitted} entries");
     Ok(())
 }
 
@@ -4936,6 +5106,111 @@ mod tests {
     fn tool_unknown_subcommand_is_error() {
         let err = parse_cli_args_from(&argv(&["tool", "doesnotexist"]))
             .expect_err("unknown `tool` subcommand must error");
+        assert!(err.contains("doesnotexist"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 105 — `aivyx audit export` parse tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn audit_export_bare_parses() {
+        let parsed = parse_cli_args_from(&argv(&["audit", "export"]))
+            .expect("`audit export` must parse");
+        assert!(matches!(
+            parsed.mode,
+            CliMode::Audit(AuditSubcommand::Export {
+                from: None,
+                limit: None
+            })
+        ));
+    }
+
+    #[test]
+    fn audit_export_from_flag_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["audit", "export", "--from", "42"]))
+                .expect("`audit export --from 42` must parse");
+        match parsed.mode {
+            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+                assert_eq!(from, Some(42));
+                assert_eq!(limit, None);
+            }
+            other => panic!("expected Audit(Export), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_export_limit_flag_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["audit", "export", "--limit", "100"]))
+                .expect("`audit export --limit 100` must parse");
+        match parsed.mode {
+            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+                assert_eq!(from, None);
+                assert_eq!(limit, Some(100));
+            }
+            other => panic!("expected Audit(Export), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_export_both_flags_parse_in_either_order() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "audit", "export", "--from", "7", "--limit", "13",
+        ]))
+        .expect("`audit export --from 7 --limit 13` must parse");
+        match parsed.mode {
+            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+                assert_eq!(from, Some(7));
+                assert_eq!(limit, Some(13));
+            }
+            other => panic!("expected Audit(Export), got {other:?}"),
+        }
+
+        let parsed = parse_cli_args_from(&argv(&[
+            "audit", "export", "--limit", "13", "--from", "7",
+        ]))
+        .expect("flag order must not matter");
+        assert!(matches!(
+            parsed.mode,
+            CliMode::Audit(AuditSubcommand::Export {
+                from: Some(7),
+                limit: Some(13),
+            })
+        ));
+    }
+
+    #[test]
+    fn audit_export_invalid_from_is_error() {
+        let err = parse_cli_args_from(&argv(&[
+            "audit", "export", "--from", "notanumber",
+        ]))
+        .expect_err("non-integer `--from` must error at parse time");
+        assert!(err.contains("--from"), "got: {err}");
+    }
+
+    #[test]
+    fn audit_export_zero_limit_is_error() {
+        // `--limit 0` would emit zero entries — almost certainly
+        // operator error. Reject with a hint to omit the flag.
+        let err =
+            parse_cli_args_from(&argv(&["audit", "export", "--limit", "0"]))
+                .expect_err("`--limit 0` must error");
+        assert!(err.contains("--limit"), "got: {err}");
+    }
+
+    #[test]
+    fn audit_with_no_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["audit"]))
+            .expect_err("`audit` alone must error");
+        assert!(err.contains("subcommand"), "got: {err}");
+    }
+
+    #[test]
+    fn audit_unknown_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["audit", "doesnotexist"]))
+            .expect_err("unknown `audit` subcommand must error");
         assert!(err.contains("doesnotexist"), "got: {err}");
     }
 

@@ -226,6 +226,17 @@ After install:
 4. **`aivyx --verify-only`** at any time runs the offline
    HMAC audit-chain verification pass.
 
+5. **`aivyx audit export`** (Phase 105) dumps the audit chain
+   as JSONL on stdout. `--from <seq>` and `--limit <N>` slice
+   the output via the same `entries_range` reader the Web UI
+   Audit tab uses. Each line carries the full `SignedEntry`
+   projection (seq, appended_at_ms, prev_mac, mac, event) so
+   the export is re-verifiable downstream given a separately-
+   supplied genesis seed. Offline-only — requires the
+   operator's passphrase, cannot be triggered remotely over
+   the daemon socket. See [`docs/AUDIT_EXPORT.md`](AUDIT_EXPORT.md)
+   for the full reference + worked `jq` examples.
+
 For deployment guidance (threat model, what Aivyx defends
 against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
