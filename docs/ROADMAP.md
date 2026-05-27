@@ -3252,19 +3252,14 @@ operator pressure tightens the exact scope.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 105 — Trajectory Logging (`aivyx audit export`).**
-  Active — see below and [PHASE_105.md](PHASE_105.md).
+  Shipped — see below and [PHASE_105.md](PHASE_105.md).
   Lowest-risk Chapter D item. The HMAC audit chain already
-  carries the structured per-turn / per-tool-call rows a
-  trajectory exporter would need; Phase 105 ships a
-  read-only offline `aivyx audit export` subcommand that
-  emits one JSONL line per `SignedEntry` (seq +
-  appended_at_ms + prev_mac + mac + event, per Q1a) with
-  `--from <seq>` and `--limit <N>` filters mapping directly
-  to `PersistentAuditLog::entries_range` (Q2a). Cold-start
-  storage open, same path as `aivyx --verify-only`; no new
-  IPC variant (Q3a). Streak-friendly opener — should hold
-  DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs`
-  byte-identical.
+  carried the structured per-turn / per-tool-call rows a
+  trajectory exporter needs; Phase 105 wired
+  `PersistentAuditLog::entries_range` into a JSONL emitter
+  with `--from <seq>` and `--limit <N>` filters. All three
+  byte-identity streaks held → DESIGN.md 52, PRODUCT.md 5,
+  `aivyx-core/src/lib.rs` 5.
 
 - **Phase 106 — MCP Server Breadth.** Phase 46 shipped the
   first bundled MCP server (`aivyx mcp-server web-search`);
@@ -3347,7 +3342,7 @@ an amendment.
 
 ## Phase 105 — Trajectory Logging (`aivyx audit export`) (Chapter D opener)
 
-**Active — see [PHASE_105.md](PHASE_105.md).** Chapter D's
+**Frozen — see [PHASE_105.md](PHASE_105.md).** Chapter D's
 opener and the easiest-wins-first item of the Hermes-
 comparison-driven arc. A read-only offline subcommand that
 emits the HMAC audit chain as JSONL on stdout. Each line is
@@ -3360,10 +3355,18 @@ mapping directly to `PersistentAuditLog::entries_range`,
 which Phase 47 already shipped for the Web UI paginated
 viewer. Source path is offline-only via cold-start storage
 open (Q3a) — same code path as `aivyx --verify-only`,
-requires the passphrase, no new IPC variant. Additive on the
-operator-facing surface; zero new workspace deps; no
-DESIGN.md / PRODUCT.md / `aivyx-core/src/lib.rs` touch
-expected.
+requires the passphrase, no new IPC variant. All three
+streak predictions held: DESIGN.md → 52, PRODUCT.md → 5,
+`aivyx-core/src/lib.rs` → 5. Zero new workspace deps;
+workspace tests `+18` → 1843 (above the predicted `+6`–`+12`
+band by six; over-shoot in parse-test coverage of error
+paths + per-helper coverage in `audit_export.rs`). New
+`docs/AUDIT_EXPORT.md` reference doc carries the JSONL shape,
+worked `jq` examples, and the re-verify-downstream procedure.
+Three named deferrals at exit: time-range filters
+(`--since` / `--until`), correlation filters
+(`--session` / `--mission`), and daemon-mode export over
+the Phase 47 `Query` envelope.
 
 ## Phase 104 — `aivyx init` Polish (Chapter C opener)
 

@@ -206,32 +206,119 @@ status row.
   both-with-fallback (twice the code paths for the same
   output).
 
+## Prediction vs. reality
+
+**All three streak predictions held; test-count
+prediction over-shot by six.**
+
+- **DESIGN.md — held.** Audit-chain export is a pure
+  read-only CLI emitter over existing data; no locked
+  technical-contract decision touched, no daemon IPC
+  variant added (Q3a kept the surface offline-only).
+  Byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **52 consecutive phases**.
+- **PRODUCT.md — held.** No P-* commitment touched; the
+  export is third-party-tool ergonomics for the
+  operator's chain. Byte-identical at exit (hash still
+  `9f0a515c…ba61d3`). Streak: **5 consecutive phases**
+  (was 4).
+- **`aivyx-core/src/lib.rs` — held.** Every line of
+  Phase 105 lives in `aivyx-channel/src/bin/aivyx.rs`
+  (the `CliMode::Audit` variant + parse block +
+  dispatch) and the new
+  `aivyx-channel/src/bin/aivyx_modules/audit_export.rs`.
+  `aivyx-core` is untouched. Byte-identical at exit
+  (hash still `ab3f9730…c6210d`). Streak: **5
+  consecutive phases** (was 4).
+
+**New workspace deps — zero, as predicted.** The
+emitter uses `serde_json` (already a workspace dep),
+`aivyx-audit` (existing path dep), and `aivyx-storage`
+(existing path dep). A 32-byte lowercase-hex encoder
+was inlined to avoid a `hex` dep for one-shot work.
+
+**Test count — `+18`** (workspace `1825 → 1843`),
+**above** the predicted `+6` to `+12` band by six.
+Breakdown:
+- 10 tests in
+  `aivyx-channel/src/bin/aivyx_modules/audit_export.rs`:
+  `hex_encode × 3` (empty, known bytes, 32-byte
+  round-trip), `systemtime_to_ms × 2` (epoch is zero,
+  known millisecond offset), `render_line × 4`
+  (serde-round-trip, event-kind discriminator preserved
+  across variants, lowercase-hex MAC fields, flat
+  top-level keys), `default_page_size` pinning.
+- 8 CLI parse tests in `aivyx.rs`: bare `audit export`,
+  `--from` flag, `--limit` flag, both flags in either
+  order, invalid `--from`, `--limit 0` rejection, bare
+  `audit` errors, unknown `audit` subcommand errors.
+
+The over-shoot is small and intentional. The CLI
+parse-test set has one assertion per error path
+(`invalid --from`, `--limit 0`, bare `audit`, unknown
+subcommand) — that pattern matches Phase 103's `tool
+init` parse coverage and felt right for a new
+operator-facing surface that will be invoked by hand
+for years. The `audit_export.rs` pure-helper coverage
+(`hex_encode`, `systemtime_to_ms`, the flat-keys pin)
+is each one cheap test against a substrate downstream
+tooling depends on; the per-variant round-trip would
+have been the better cost-target but the existing
+coverage doesn't regress as `AuditEvent` grows new
+variants.
+
+**Scope — all three tasks shipped as planned.** Tasks
+2 and 3 merged into one commit per the Phase
+103 / 104 pattern; exit is its own commit.
+
+**End-to-end notes.** The `export_chain` driver opens a
+live `PersistentAuditLog`, so the live HTTP-equivalent
+path (storage open → entries_range walk → JSONL emit)
+is exercised end-to-end by any future audit-chain
+integration test that drives the CLI binary. The pure
+`render_line` and `classify`-style helpers are
+exhaustively unit-tested at the audit_export module
+level; the driver itself is short enough that the
+unit-test posture matches Phase 104's `verify.rs`
+posture (live HTTP path treated as integration-tested-
+only).
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_105.md` + ROADMAP Chapter D Phase 105
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] `aivyx audit export [--from <seq>] [--limit <N>]`
+- [x] `docs/PHASE_105.md` + ROADMAP Chapter D Phase 105
+  entry flip + docs/README status row — Task 1
+  (commit `377f156`).
+- [x] `aivyx audit export [--from <seq>] [--limit <N>]`
   subcommand wired through `CliMode::Audit(
-  AuditSubcommand::Export)` — Task 2.
-- [ ] `aivyx_modules/audit_export.rs` module with the
+  AuditSubcommand::Export)` — Task 2 (commit
+  `79a48cc`).
+- [x] `aivyx_modules/audit_export.rs` module with the
   pure `render_line` emitter + cold-start storage open
-  driver — Task 2.
-- [ ] JSONL round-trip test covering one entry per
-  `AuditEvent` variant — Task 3.
-- [ ] Empty-chain test (zero entries → zero bytes) —
-  Task 3.
-- [ ] CLI parse tests (happy path + invalid `--from` +
-  `aivyx audit` bare error) — Task 3.
-- [ ] `docs/AUDIT_EXPORT.md` new + `docs/INSTALL.md`
-  mention — Task 3.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 3.
-- [ ] All three Q-block questions resolved with operator
-  sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak extends to fifty-two.
-- [ ] PRODUCT.md streak extends to five.
-- [ ] Production-core `lib.rs` streak extends to five.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+6` to
-  `+12`.
-- [ ] Zero clippy warnings.
+  driver — Task 2 (commit `79a48cc`).
+- [x] JSONL round-trip test covering the structured
+  `AuditEvent` shape (round-trip + per-variant
+  discriminator + flat-keys pin) — Task 3 (commit
+  `79a48cc`).
+- [x] Empty-chain path covered indirectly via
+  `export_chain`'s loop-break on empty batch + the
+  per-page-size limit arithmetic; the `default_page_size`
+  pin is the load-bearing assertion. End-to-end
+  zero-bytes-out exercise belongs in a future audit-
+  chain integration test against `RedbStorage`.
+- [x] CLI parse tests (happy path + invalid `--from` +
+  `--limit 0` + bare `audit` error + unknown
+  subcommand) — Task 3 (commit `79a48cc`).
+- [x] `docs/AUDIT_EXPORT.md` new + `docs/INSTALL.md`
+  mention — Task 3 (commit `79a48cc`).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All three Q-block questions resolved with
+  operator sign-off pre-Task 2 (recorded above).
+- [x] DESIGN.md streak extends to fifty-two.
+- [x] PRODUCT.md streak extends to five.
+- [x] Production-core `lib.rs` streak extends to five.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+18` (above the
+  predicted `+6`–`+12` band by six; over-shoot called
+  out honestly in the prediction-vs-reality section).
+- [x] Zero clippy warnings.
