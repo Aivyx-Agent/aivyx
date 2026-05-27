@@ -578,6 +578,12 @@ pub struct AivyxConfig {
     /// orphan config (e.g. operator set `bot_token` but
     /// forgot `app_token`, which Socket Mode also needs).
     pub slack: Option<SlackConfig>,
+    /// Phase 109 — `[git]` configuration for the `git.status` /
+    /// `git.diff` tools. `None` when no `[git]` section is
+    /// declared; the binary skips registering the git tools in
+    /// that case. When `Some`, `repos` carries the canonicalized
+    /// allow-set the tools gate against.
+    pub git: Option<GitConfig>,
     /// Phase 68 — shared SMTP configuration for the email notify
     /// backend. `None` when no `[email]` section is declared.
     /// Required when any `[[notify_target]] kind = "email"` exists;
@@ -1034,6 +1040,16 @@ pub struct DiscordConfig {
     /// re-shaping `DiscordConfig`). `None` until the
     /// operator sets it.
     pub application_id: Option<Sourced<u64>>,
+}
+
+/// Phase 109 — `[git]` configuration for the `git.status` /
+/// `git.diff` tools (Amendment A12). The `repos` field is the
+/// allow-set the tools gate against; each entry is canonicalized
+/// at startup, must be a directory, and must contain a `.git`
+/// entry. Empty/absent → the git tools are not registered.
+#[derive(Debug, Clone, Default)]
+pub struct GitConfig {
+    pub repos: Vec<Sourced<std::path::PathBuf>>,
 }
 
 /// Phase 108 — Slack-specific configuration. Socket Mode
@@ -1975,6 +1991,8 @@ struct RawToml {
     #[serde(default)]
     slack: RawSlack,
     #[serde(default)]
+    git: RawGit,
+    #[serde(default)]
     email: RawEmail,
     /// `[embedding]` section. Phase 75 — semantic memory search.
     #[serde(default)]
@@ -2564,6 +2582,15 @@ struct RawSlack {
     app_token: Option<String>,
     #[serde(default)]
     team_id: Option<String>,
+}
+
+/// Phase 109 — `[git]` TOML section deserialize target. One
+/// field: `repos = ["...", "..."]` listing the operator's
+/// allowed repo paths.
+#[derive(Debug, Default, Deserialize)]
+struct RawGit {
+    #[serde(default)]
+    repos: Vec<String>,
 }
 
 /// Phase 68 — `[email]` section deserialize target.
@@ -3214,6 +3241,25 @@ impl AivyxConfig {
                 bot_token: slack_bot_token,
                 app_token: slack_app_token,
                 team_id: slack_team_id,
+            })
+        } else {
+            None
+        };
+
+        // --- git (Phase 109) ---------------------------------------
+        // Construct GitConfig whenever any `[git] repos = […]` entry
+        // fires. Each path is stored as a Sourced<PathBuf>; the
+        // binary canonicalizes at GitReadToolConfig::build time and
+        // surfaces canonicalization failures as a clean startup
+        // error rather than at tool-call time.
+        let git = if !toml.git.repos.is_empty() {
+            Some(GitConfig {
+                repos: toml
+                    .git
+                    .repos
+                    .iter()
+                    .map(|s| Sourced::new(std::path::PathBuf::from(s), FieldSource::Toml))
+                    .collect(),
             })
         } else {
             None
@@ -4133,6 +4179,7 @@ impl AivyxConfig {
             telegram,
             discord,
             slack,
+            git,
             email,
             embedding,
             proactive,

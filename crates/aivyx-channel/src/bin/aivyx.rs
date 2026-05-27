@@ -2778,6 +2778,10 @@ async fn run_async(
         // the bot + app tokens through to
         // `run_slack_session`.
         slack,
+        // Phase 109 — `[git]` config consumed at the tool-
+        // registration site below. `None` means no git tools
+        // get registered (zero-config posture).
+        git: config_git,
         // Phase 68 — shared SMTP config consumed by
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
@@ -3484,6 +3488,58 @@ async fn run_async(
     tool_list.push(Arc::clone(&web_fetch_tool) as Arc<dyn Tool>);
     let web_post_tool: Arc<WebPostTool> = build_web_post_for_channel(channel_kind)?;
     tool_list.push(Arc::clone(&web_post_tool) as Arc<dyn Tool>);
+
+    // Phase 109 — `net.dns` registers unconditionally (no
+    // config required; uses the existing `net.dns` scope base
+    // from Phase 0). All three channel kinds get it — like
+    // `web.fetch`, network reads are inside the SemiTrusted
+    // ceiling so Telegram / Discord / Slack get it too.
+    tool_list.push(Arc::new(aivyx_core::NetDnsTool::new()) as Arc<dyn Tool>);
+
+    // Phase 109 — `git.status` + `git.diff` register only
+    // when `[git]` config supplies an allow-set. Operators
+    // who don't configure git repos don't pay any cost; agents
+    // see no git tools in their dispatch surface.
+    //
+    // Like `fs.delete`, git tools are operator-scoped (the
+    // allow-set is the operator's repos), not role-scoped.
+    // Both register for all channel kinds — the SemiTrusted
+    // adapters get the same read-only inspection access the
+    // Local CLI gets.
+    // Phase 109 — `git_read_scope` is the operator-held capability
+    // representative for the first configured repo. Future
+    // role-allowlist plumbing can consume it; today it just
+    // documents that the Local CLI's capability set transitively
+    // grants access to all configured repos through the role's
+    // own `git.read:**` or per-repo grant declarations in
+    // `aivyx.toml`. Underscore-prefixed to acknowledge the
+    // landing-site is intentional but the consumer is
+    // role-config-driven.
+    let _git_read_scope: Option<Scope> = if let Some(gc) = config_git {
+        let repos: Vec<std::path::PathBuf> =
+            gc.repos.into_iter().map(|s| s.value).collect();
+        let (git_status, git_diff) =
+            aivyx_core::GitReadToolConfig::new(repos).build().map_err(|e| {
+                format!("failed to build git.read tool pair: {e}")
+            })?;
+        // The canonical allow-set is the same for both tools;
+        // construct one scope per canonical path so the
+        // operator-held capability set includes them all.
+        let canonical_repos: Vec<std::path::PathBuf> =
+            git_status.repos().to_vec();
+        tool_list.push(Arc::new(git_status) as Arc<dyn Tool>);
+        tool_list.push(Arc::new(git_diff) as Arc<dyn Tool>);
+        // Build a representative scope for the first repo so
+        // the Local CLI's operator-held grants include
+        // `git.read:<first_repo>/**`. Role-scoped grants in
+        // `aivyx.toml` can name per-repo scopes for finer
+        // control.
+        canonical_repos.first().and_then(|p| {
+            Scope::parse(&format!("git.read:{}", p.display()))
+        })
+    } else {
+        None
+    };
 
     // Phase 14 Task 3 — `role.switch` sub-agent primitive. The
     // tool is created here with an empty `child_factory` slot

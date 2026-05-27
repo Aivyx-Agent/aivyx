@@ -237,6 +237,34 @@ After install:
    the daemon socket. See [`docs/AUDIT_EXPORT.md`](AUDIT_EXPORT.md)
    for the full reference + worked `jq` examples.
 
+**Phase 109 — Three new substrate tools (Amendment A12).**
+P10's substrate tool count grew from ten to thirteen with
+`git.status`, `git.diff`, and `net.dns`. The git tools are
+read-only inspection of operator-configured repos; they share
+a `git.read` capability scope qualified by repo path and shell
+out to the system `git` binary (no Rust deps). To enable, add
+a `[git]` section to `aivyx.toml` listing the allowed repo
+paths:
+
+```toml
+[git]
+repos = [
+    "/home/me/projects/aivyx",
+    "/home/me/projects/some-other-repo",
+]
+```
+
+Each path is canonicalized at startup and must be a directory
+containing a `.git/` entry — config errors surface at startup,
+not at tool-call time. Without `[git]`, the git tools simply
+don't register (zero-config posture; agents see no git tools
+in their dispatch surface).
+
+`net.dns` is unconditionally registered (no config required;
+uses the existing `net.dns` scope base from Phase 0). Takes a
+plain hostname (no scheme, no port, no slash) and returns the
+resolved IP addresses.
+
 6. **`aivyx mcp recipes`** (Phase 106) lists Aivyx's curated
    catalog of MCP servers worth enabling — `filesystem`,
    `github`, `gitlab`, `sqlite`, `postgres`, `time`, `fetch`,
