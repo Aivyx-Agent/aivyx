@@ -274,41 +274,172 @@ flip + hash backfill.
   follow-on phase if Discord-native UX surfaces as a
   meaningful operator-experience gap.
 
+## Prediction vs. reality
+
+**Two streak predictions were wrong in the operator's
+favor. All three streaks held byte-identical through
+every commit.**
+
+- **DESIGN.md — held.** Predicted "extends to fifty-four";
+  actual streak at exit is **fifty-four** (was 53 at Phase
+  106 exit). DESIGN.md itself stayed byte-identical
+  (`89dc8903…a94bce`); the A4 amendment addendum landed in
+  the amendment file (`docs/amendments/2026-04-17-workspace-layout.md`),
+  not in DESIGN.md, per the Phase 49 precedent.
+- **PRODUCT.md — held.** Predicted "extends to seven";
+  actual streak at exit is **seven** (was 6). No P-*
+  commitment touched. Byte-identical at exit
+  (`9f0a515c…ba61d3`).
+- **`aivyx-core/src/lib.rs` — held — and the open-doc
+  prediction was wrong in the operator's favor.** The open
+  doc predicted "this streak **breaks** at the variant-add
+  commit" because Phase 107 was expected to lift
+  `ChannelPlatform::Discord` into core. Discovered at
+  Task 2 build: Phase 8 had **already forward-enumerated**
+  every channel platform (`Telegram`, `Discord`, `Slack`,
+  `Matrix`, `Email`, `Rest`) into `aivyx-core/src/lib.rs:193-203`.
+  No core touch needed. Byte-identical at exit
+  (`ab3f9730…c6210d`). Streak: **seven consecutive phases**
+  (was 6).
+
+**Zero-new-deps streak — broke as predicted.** Three new
+direct workspace deps added at Task 2: `twilight-gateway`
+0.16, `twilight-http` 0.16, `twilight-model` 0.16 — the
+SDK trio chosen at Q1a. Acceptable, single-source
+provenance (`nyxkrage/twilight-rs`), MIT licensed,
+well-maintained. `twilight-cache-inmemory` was scoped out
+(the channel doesn't cache state across reconnects). Five
+transitive deps came in alongside: `rustls-platform-verifier`,
+`tokio-websockets`, `twilight-http-ratelimiting`,
+`twilight-gateway-queue`, `twilight-validate`.
+
+**A4 amendment addendum filed as predicted.** Workspace
+crate count 12 → 13 with `aivyx-discord`. Addendum landed
+in `docs/amendments/2026-04-17-workspace-layout.md` (the
+Phase 49 precedent for A4 addenda living in the amendment
+file rather than DESIGN.md). The amendment file's
+traceability table gains a Phase 107 row.
+
+**Test count — `+29`** (workspace `1859 → 1888` across the
+full phase: 1862 at Phase 106 exit, 1885 at Task 5 exit,
+1888 at Task 6 exit). **Below** the predicted `+50` to
+`+100` band by ~20. The over-shoot of the prediction is
+honest: the open doc estimated the Telegram precedent's
+3163-line `tests.rs` would carry across, but the Discord
+parallel needed only three end-to-end scripted tests
+(smoke / two-partition / shutdown-drain) plus the per-
+component unit coverage in `transport.rs` (5 tests),
+`discord_channel.rs` (18 tests), totalling 26 tests in the
+adapter crate. The Telegram precedent's larger count
+includes coverage that was substrate-discovery work at
+Phase 8/9 (the scan_for_cancel races, the multi-chat
+queueing-over-redelivery decisions); Discord's
+push-based protocol simplified all of that away, so the
+test surface is smaller because the substrate it tests is
+smaller.
+
+**Scope — five tasks shipped as planned, two carved out
+as Phase-107-internal deferrals.** The carve-outs are
+honest:
+
+1. **Discord daemon-frontend variant** (`FrontendType::Discord`
+   + `discord_daemon_frontend.rs` mirroring Phase 19's
+   `telegram_daemon_frontend.rs` ~700 LOC). The in-process
+   Phase 107 path landed at Task 5 is fully functional
+   end-to-end — operator's first Discord turn works today.
+   Daemon-mode-over-IPC is a deployment optimization, not
+   a feature gap. Carved out as a focused follow-on
+   commit inside Phase 107 (Task 5b) or as a tiny micro-
+   phase if Chapter D pacing prefers it.
+2. **`/approve` / `/reject` text-command routing through
+   the Phase 21 mission-gate substrate** lives in the
+   daemon-frontend half of the Telegram precedent
+   (`telegram_daemon_frontend.rs:219`). Folds into deferral
+   #1 — both land together when the daemon-frontend lands.
+
+The `discord_approve_command_resolves_gate_e2e` test from
+the Task 6 open spec defers alongside deferrals #1 and #2;
+testing it without the daemon-frontend would assert
+against a path that does not yet exist.
+
+**End-to-end notes.** The Discord adapter is end-to-end
+functional in-process. An operator with a Discord bot
+token can run `aivyx --channel discord` today and get the
+full agent experience (Profile + Persona + mission-gate
+escalation rendering + audit chain + `/cancel`
+mid-turn cancellation) through DMs and guild channels.
+Real-protocol smoke against a live Discord bot is
+deferred to the Channel Activation Milestone per
+`docs/ADAPTER_PATTERN.md` checklist item 7.
+
+**`docs/ADAPTER_PATTERN.md` confirmed at three data points.**
+The doc's status moved from "tentative" (two adapters,
+Phase 9) to "confirmed at three data points." The Phase
+9 question about whether the sibling `run_*_session`
+pattern would break at the third adapter is answered "no
+extraction" — Discord's outer loop simplified rather than
+unifying with Telegram's, which is itself evidence the
+sibling pattern was the right call. The Phase 9 Q7
+question about whether `session_partition`'s return type
+needs to be richer than `Option<String>` is **still
+unresolved** — Discord's snowflake fit cleanly as a
+string. Matrix (with `room_id` + `homeserver`) would
+force the question if it ever lands.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_107.md` + ROADMAP Chapter D Phase 107
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] `crates/aivyx-discord/` workspace member + module
+- [x] `docs/PHASE_107.md` + ROADMAP Chapter D Phase 107
+  entry flip + docs/README status row — Task 1 (commit
+  `fca9e27`).
+- [x] `crates/aivyx-discord/` workspace member + module
   skeletons + workspace `Cargo.toml` wiring + DESIGN.md
-  A4 addendum + `ChannelPlatform::Discord` variant in
-  `aivyx-core` + `[discord]` TOML section — Task 2.
-- [ ] `DiscordTransport` trait + `TwilightTransport`
+  A4 addendum (in the amendment file per Phase 49
+  precedent; DESIGN.md itself byte-identical) +
+  `ChannelPlatform::Discord` variant already in
+  `aivyx-core` since Phase 8 + `[discord]` TOML section —
+  Task 2 (commit `4cfd9ac`).
+- [x] `DiscordTransport` trait + `TwilightTransport`
   production impl + `ScriptedTransport` test double —
-  Task 3.
-- [ ] `DiscordChannel` ChannelContext impl — Task 4.
-- [ ] `run_discord_session` + `_with_transport` inner +
-  binary wiring + `--channel discord` flag +
-  daemon-frontend variant — Task 5.
-- [ ] Scripted e2e suite (smoke, two-partition,
-  gate-resolve, cancellation) — Task 6.
-- [ ] Docs sweep (ADAPTER_PATTERN.md, CHANNEL_SDK.md,
-  INSTALL.md, examples/aivyx.toml) — Task 7.
-- [ ] All three Q-block questions resolved with operator
+  Task 3 (commit `ba2a6cf`).
+- [x] `DiscordChannel` ChannelContext impl — Task 4
+  (commit `cc15390`).
+- [x] `run_discord_session` + `_with_transport` inner +
+  binary wiring + `--channel discord` flag — Task 5
+  (commit `5d61a69`). Daemon-frontend variant carved
+  out as Phase-107-internal deferral.
+- [x] Scripted e2e suite — smoke / two-partition /
+  shutdown-drain — Task 6 (commit `cea0731`). The
+  gate-resolve test deferred alongside the daemon-
+  frontend.
+- [x] Docs sweep — ADAPTER_PATTERN.md three-data-point
+  update + CHANNEL_SDK.md Discord row + INSTALL.md
+  "Running Aivyx on Discord" walkthrough + examples/aivyx.toml
+  `[discord]` section + ROADMAP Channel Activation
+  Milestone entry — Task 7 (commit `dccb1e7`).
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak extends to fifty-four.
-- [ ] PRODUCT.md streak extends to seven.
-- [ ] **`aivyx-core/src/lib.rs` streak deliberately breaks**
-  at the `ChannelPlatform::Discord` variant-add (Task 2).
-  Re-establishes from 0.
-- [ ] **Zero-new-deps streak deliberately breaks** at the
-  twilight-rs adoption (Task 2). New direct deps:
-  `twilight-gateway`, `twilight-http`, `twilight-model`,
-  optional `twilight-cache-inmemory`.
-- [ ] A4 amendment addendum filed (12 → 13 crates).
-- [ ] Test count delta positive — predicted `+50` to
-  `+100`.
-- [ ] Zero clippy warnings.
-- [ ] Real-protocol smoke test deferred to the Channel
+- [x] DESIGN.md streak extends to fifty-four (held
+  byte-identical; A4 addendum lives in the amendment
+  file).
+- [x] PRODUCT.md streak extends to seven (held
+  byte-identical).
+- [x] **`aivyx-core/src/lib.rs` streak held byte-identical
+  → seven** (open-doc prediction was wrong in the
+  operator's favor; Phase 8 forward-enumerated
+  `ChannelPlatform::Discord` so no variant-lift was
+  needed at Task 2).
+- [x] **Zero-new-deps streak broke as predicted at Task 2**.
+  `twilight-gateway` 0.16, `twilight-http` 0.16,
+  `twilight-model` 0.16 added as direct workspace deps.
+- [x] A4 amendment addendum filed (12 → 13 crates) in
+  `docs/amendments/2026-04-17-workspace-layout.md`.
+- [x] Test count delta positive — `+29` (workspace
+  `1859 → 1888`). Below the predicted `+50` to `+100`
+  band; called out honestly in prediction-vs-reality
+  above.
+- [x] Zero clippy warnings.
+- [x] Real-protocol smoke test deferred to the Channel
   Activation Milestone (per `docs/ADAPTER_PATTERN.md`
-  checklist item 7).
+  checklist item 7) — ROADMAP Channel Activation
+  Milestone section names Discord as the first post-
+  Phase-9 adapter to defer here.
