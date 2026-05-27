@@ -3344,23 +3344,25 @@ operator pressure tightens the exact scope.
   `+15`–`+25` band at the upper edge).
 
 - **Phase 110 — Skills Auto-Creation (Reflection Staging).**
-  Extend the existing reflection layer (Phase 29
-  propose / apply, Phase 30 role-mutation, Phase 60
-  Persona revert) with a skills primitive: drafts the
-  agent produces after complex tasks, staged as
-  Persona-style deltas the operator approves in batch via
-  the existing mission-gate surface. Stays inside
-  PRODUCT.md P8's "outcome-driven audited reflection"
-  envelope — the agent doesn't apply skills autonomously;
-  it proposes, the operator approves via gate, the chain
-  records both halves. Mid-ground between Hermes's
-  autonomous skill creation and Aivyx's current
-  per-action reflection propose / apply. The substrate-
-  design question (new capability scope? extend
-  `reflection.propose`'s schema? new
-  `KeyDomain::Skills`?) is the Q-block at open; expect
-  DESIGN.md and PRODUCT.md amendment risk on this one —
-  the highest of the Chapter D set.
+  Active — see below and [PHASE_110.md](PHASE_110.md). The
+  last Chapter D item — closes the sixth and final
+  Hermes-comparison gap. Q-block resolved: skills live as
+  an 11th `LearnedSkill` PersonaDeltaCategory variant
+  reusing the entire Phase 59/60/70 Persona substrate
+  (Q1a); new `skills.propose` capability scope base
+  sibling to `persona.propose` for per-category
+  granularity (Q2b — operator picked over Q2a "extend
+  persona.propose" recommendation); both system-prompt
+  rendering AND callable `skills.list` / `skills.invoke`
+  tool surface for activation (Q3c — operator picked over
+  Q3a "render-only" recommendation); foundation scope
+  with the agent-side auto-proposer heuristic deferred
+  to a follow-on phase (Q4a). DESIGN.md break predicted
+  at the new scope base; `aivyx-core/src/lib.rs` break
+  predicted at the two new tool re-exports; PRODUCT.md
+  predicted to hold (P8 envelope unchanged; the
+  LearnedSkill extension is inside the existing
+  outcome-driven-audited-reflection commitment).
 
 Chapter D ends when each item has shipped or been
 explicitly retired. The post-110 ledger picks up Chapter
@@ -3369,6 +3371,38 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
+
+**Active — see [PHASE_110.md](PHASE_110.md).** The sixth and
+final Chapter D item — the substrate-design-heavy piece the
+ROADMAP flagged with "highest amendment risk." Extends the
+existing reflection layer (Phase 29 propose / apply, Phase
+30 role-mutation, Phase 59 Persona propose, Phase 60 Persona
+revert, Phase 70 proposal review surface) with a **skills
+primitive**: procedural patterns the agent drafts after
+complex turns, staged as Persona-style deltas the operator
+approves via the existing persona-proposal surface, then
+rendered into the agent's system prompt alongside Persona
+content on every subsequent turn. Mid-ground between
+Hermes's autonomous skill creation and Aivyx's current
+per-action reflection propose / apply; stays inside P8's
+"outcome-driven audited reflection" envelope. Q1a chose
+**11th PersonaDeltaCategory variant `LearnedSkill`** reusing
+the entire Persona substrate. Q2b chose **new
+`skills.propose` scope base** for per-category granularity
+(operator pick over the Q2a "extend persona.propose"
+recommendation). Q3c chose **both render-in-prompt AND
+callable `skills.list` / `skills.invoke` tool surface**
+(operator pick over the Q3a "render-only" recommendation).
+Q4a kept **foundation scope** — propose + approve + render
++ tool-surface; agent-side auto-proposer heuristic
+deferred. DESIGN.md break predicted at the new scope base;
+`aivyx-core/src/lib.rs` break predicted at the two new
+tool re-exports; PRODUCT.md predicted to hold (P8 envelope
+unchanged). All three streaks already reset at Phase
+109's triple-break, so Phase 110 lands its predicted breaks
+without compounding break-on-break framing.
 
 ## Phase 109 — Tool Breadth + Amendment A12 (Chapter D)
 
