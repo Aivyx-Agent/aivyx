@@ -38,6 +38,8 @@ The reference implementation in this repo includes:
 
 - `crates/aivyx-channel/src/local.rs` — Rust, CLI REPL (in-tree)
 - `crates/aivyx-telegram/` — Rust, Telegram Bot API (in-tree)
+- `crates/aivyx-discord/` — Rust, Discord Gateway + REST via
+  twilight-rs (in-tree, Phase 107)
 - `crates/aivyx-channel/src/web_ui.rs` — Rust, WebSocket bridge
   for browsers (in-tree)
 - `examples/python-channel/` — Python, CLI REPL (out-of-tree
@@ -70,6 +72,7 @@ into the `FrontendType` you declare in your `StartSession` frame:
 |---|---|---|---|
 | `Local` | `Trusted` | CLI on the operator's keyboard, browser on 127.0.0.1 | Near-total. `shell.exec`, `fs.delete` allowed with extra audit. |
 | `Telegram` | `SemiTrusted` | Authenticated DM from allowlisted user | No `shell.exec`, no `fs.delete`, qualifiers required on `fs.*` and `net.post`. |
+| `Discord` | `SemiTrusted` | DM or guild channel to a bot the operator authenticated | Same ceiling as `Telegram` — registration-time gates on `shell.exec` / `fs.delete` are symmetric. |
 | `Web` | `Trusted` | Localhost-only browser session | Same as `Local`. |
 
 The trust tier is **read from your adapter type, not set by it**.

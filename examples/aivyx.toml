@@ -1459,3 +1459,28 @@ parent_role = "researcher"
 # each half stays independently Revert-able). The grouping
 # is pure client-side rendering — no new config keys are
 # needed.
+
+# ----------------------------------------------------------------
+# Discord channel (Phase 107)
+# ----------------------------------------------------------------
+#
+# `aivyx --channel discord` runs the bot account configured below
+# against Discord's Gateway. SemiTrusted tier (same ceiling as
+# Telegram); DMs and any guild text channels you've added the bot
+# to get distinct memory partitions keyed on Discord's channel_id
+# snowflake.
+#
+# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx on
+# Discord" — Discord Developer Portal account → bot account → save
+# token → enable MESSAGE CONTENT INTENT → invite to server or DM
+# from the portal account.
+#
+# Uncomment + fill `token` to enable:
+#
+# [discord]
+# token = "your_bot_token_here"
+# # application_id is reserved for slash-command registration
+# # (Phase 107 Q3a kept slash commands out of scope; the field is
+# # plumbed so a later phase can register without re-shaping the
+# # config).
+# # application_id = 1234567890

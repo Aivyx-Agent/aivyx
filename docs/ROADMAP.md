@@ -63,7 +63,12 @@ count) that per-phase tests structurally can't.
    its own scripted-transport unit test suite (like Phase 8
    `aivyx-telegram`'s `run_telegram_session_two_chats_persistent
    _e2e`) and **defers** its real-protocol verification to this
-   milestone.
+   milestone. **Discord (Phase 107)** is the first to defer here:
+   real-bot setup at the Discord Developer Portal, `--channel
+   discord` launch, two-message DM round trip across a process
+   restart, the same `--verify-only` forensic walk Telegram
+   uses. Slack (Phase 108) and any later adapter join the
+   queue the same way.
 3. **Cross-channel regression sweep:** one local turn + one
    Telegram turn + one-of-each-other-adapter turn against the
    **same** persistent audit chain, then `aivyx --verify-only`

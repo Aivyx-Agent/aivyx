@@ -3,10 +3,10 @@
 This doc covers the full install matrix. For the abbreviated
 "Five-minute setup" path, see the [root README](../README.md).
 
-Aivyx ships a single binary, `aivyx`, plus three optional channel
-adapters baked into it (CLI, Telegram, Web UI). There are no
-hosted dependencies — your binary talks directly to your LLM
-provider (Anthropic / OpenAI-compatible / Ollama) and stores
+Aivyx ships a single binary, `aivyx`, plus four optional channel
+adapters baked into it (CLI, Telegram, Discord, Web UI). There
+are no hosted dependencies — your binary talks directly to your
+LLM provider (Anthropic / OpenAI-compatible / Ollama) and stores
 everything locally in an encrypted redb file.
 
 ## Current install state
@@ -254,6 +254,58 @@ For deployment guidance (threat model, what Aivyx defends
 against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
+
+## Running Aivyx on Discord (Phase 107)
+
+The Discord adapter mirrors the Telegram pattern: one bot
+account, configured per-operator, sees DMs and any guild
+channels you've added the bot to. Same `SemiTrusted` tier
+ceiling, same `/cancel` mid-turn handling, same Profile +
+Persona + mission-gate behavior.
+
+1. **Create a bot account** at
+   [https://discord.com/developers/applications](https://discord.com/developers/applications).
+   Bot → "Add Bot" → save the **token** (you'll only see it
+   once; copy it somewhere safe).
+2. **Enable required intents** under Bot → "Privileged Gateway
+   Intents":
+   - `MESSAGE CONTENT INTENT` — required (the bot needs to
+     read message text). Discord gates this behind a developer-
+     portal toggle; for a private bot in < 100 servers, just
+     flip it on.
+3. **Invite the bot** to a server (OAuth2 → URL Generator →
+   scopes `bot` + permissions `Send Messages`, `Read Message
+   History`). Or just DM the bot from the developer-portal
+   account.
+4. **Configure aivyx** — set the token via env or TOML:
+
+   ```sh
+   export AIVYX_DISCORD_TOKEN='your_bot_token_here'
+   aivyx --channel discord
+   ```
+
+   …or in `aivyx.toml`:
+
+   ```toml
+   [discord]
+   token = "your_bot_token_here"
+   # application_id = 12345...  # Reserved for slash commands; not used in v1.
+   ```
+
+5. **Talk to the bot** — open a DM, type a message, watch the
+   agent reply. Each Discord channel id gets its own memory
+   partition (the same multi-tenant story Telegram's
+   `chat_id`-keyed partitions provide), so DMs and guild
+   channels stay isolated.
+
+**Mission-gate `/approve` / `/reject` text-command routing**
+is the Phase-107-internal deferral that lands alongside the
+Discord daemon-frontend (the in-process Phase 107 path
+covers the agent layer end-to-end; the daemon-mode
+gate-resolve path lands in a focused follow-on). Until
+then, escalated turns surface their `⏸ escalation:` footer
+in the bot reply; resolving them requires the Telegram or
+CLI surface.
 
 ## Moving Aivyx to a new machine
 

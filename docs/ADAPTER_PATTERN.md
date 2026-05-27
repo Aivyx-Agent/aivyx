@@ -3,8 +3,12 @@
 This document is the **future-proof checklist** for adding a new
 channel adapter to Aivyx. It was written at Phase 9 exit with exactly
 two adapters in the tree (`LocalChannel` in `aivyx-channel` and
-`TelegramChannel` in `aivyx-telegram`). Every claim below points at a
-concrete line in one of those two adapters so a future contributor can
+`TelegramChannel` in `aivyx-telegram`). Phase 107 added the third
+data point (`DiscordChannel` in `aivyx-discord`) and the rules below
+held — see the **Three-data-point update** subsection at the bottom
+for what the Discord adapter confirmed and the one Discord-specific
+simplification worth noting. Every claim below points at a concrete
+line in one of those three adapters so a future contributor can
 copy shapes rather than re-derive them.
 
 **There are two ways to adapt a channel:**
@@ -18,16 +22,15 @@ The in-tree sections below focus on Rust `ChannelContext` impls.
 The out-of-tree section explains where the rules differ when your
 adapter speaks the daemon's IPC protocol from another process.
 
-Status: **tentative**. Two data points is not a pattern in the
-software-architecture sense — it's a hypothesis waiting for a third
-adapter to either confirm or break. Phase 9's explicit choice (Q1 =
-Fork B) was to write the pattern down rather than stress-test it with
-a third adapter *now*, on the bet that the next phase (or the first
-phase that ships a third adapter) can confirm-or-refute with data. If
-your third-adapter work breaks one of the rules below, the right move
-is to update this document in the same commit, not to work around the
-rule — the Phase 6 Q5 convention ("honesty over streak preservation")
-applies.
+Status: **confirmed at three data points** (was tentative at two —
+Phase 9). Phase 107's `aivyx-discord` adapter is the third data
+point this document was waiting for. Every rule below survived
+the third-adapter sanity check; the one Discord-specific deviation
+is documented in the **Three-data-point update** subsection at the
+bottom. The Phase 6 Q5 convention ("honesty over streak preservation")
+still applies: if a future fourth adapter (Slack — Phase 108) breaks
+a rule below, the right move is to update this document in the
+same commit, not to work around the rule.
 
 ## The trait surface
 
@@ -528,3 +531,94 @@ or distribution form:
 
 If any of those properties weakened between phases, you'd see an
 amendment in `docs/amendments/` and an explicit migration note.
+
+---
+
+## Three-data-point update (Phase 107)
+
+Phase 107 added `aivyx-discord` — the third in-tree adapter
+this document was waiting on. Every Phase 9-era rule above
+survived the third-adapter sanity check at full parity:
+
+- **Trait surface** — `DiscordChannel` implements the same
+  eight `ChannelContext` methods. No new variant or trait
+  method needed. The Phase 8 forward-enumeration of
+  `ChannelPlatform` (`Discord`, `Slack`, `Matrix`, `Email`,
+  `Rest`) meant `ChannelPlatform::Discord` was already in
+  `aivyx-core` — no core touch.
+- **Tier-ceiling contract** — `TrustTier::SemiTrusted`,
+  matching Telegram. The two `build_*_for_channel` registration-
+  time gates (`shell.exec`, `fs.delete`) extended their
+  `Telegram` arms to `Telegram | Discord` symmetrically.
+- **Sibling `run_*_session` pattern** — `run_discord_session`
+  is its own driver. The "extract shared abstraction?"
+  question Phase 9 left open is **answered "no"** at three
+  data points: Discord's outer loop has neither
+  `get_updates`-cursor nor `scan_for_cancel`, simplifying
+  the multiplexer further. Two adapters disagreed on shape;
+  three adapters confirm the disagreement is real and the
+  sibling pattern is the right call.
+- **Private `XxxTransport` trait seam** — `DiscordTransport`
+  with two methods (`next_message`, `send_message`). Same
+  shape as `TelegramTransport`. Production wraps
+  `twilight-gateway` + `twilight-http`; tests use
+  `ScriptedTransport`.
+- **`session_partition` and multi-tenant story** —
+  `Some(channel_id.to_string())`. Same shape as Telegram's
+  `chat_id`-string partitioning. The PHASE_9 Q7 question
+  about whether the partition type needs to be richer than
+  `Option<String>` is **still unresolved** — Discord's
+  snowflake fit cleanly into a string, but a future adapter
+  with structured identity (Matrix: `room_id` +
+  `homeserver`) may force the richer type.
+
+### One Discord-specific simplification
+
+Discord's Gateway protocol simplifies the session-driver
+shape compared to Telegram. The Phase 8/9 multi-chat shape
+has three pieces:
+
+- An outer multiplexer that polls `get_updates`.
+- A `scan_for_cancel` probe that races `agent.turn` for
+  in-band `/cancel` detection.
+- Per-chat inner mailbox tasks.
+
+Discord's Gateway is a **continuous push-based event
+stream**, and `twilight-gateway::Shard::next_event` is the
+entire "wait for input" surface. That collapses the three
+pieces into two — the outer multiplexer's `next_message`
+loop is itself the `scan_for_cancel` equivalent (a
+`/cancel` arrives through the same channel as everything
+else; the inner task's biased select against
+`mailbox.recv()` is the cancel detector). The single-chat
+helper from Telegram's Phase 8 era (`run_telegram_session_with_transport`)
+has no Discord equivalent — there's no degenerate
+"one chat" mode when one Gateway pumps multi-channel from
+one shard.
+
+**Implication:** future adapters with push-based protocols
+(`twilight`-like SDKs, raw WebSocket gateways, gRPC server-
+side streaming) follow the Discord two-piece shape;
+future adapters with pull-based protocols (REST long-poll,
+HTTP webhooks driven by external schedulers) follow the
+Telegram three-piece shape. The two are not a single
+abstraction — they are sibling implementations.
+
+### What deferred to Phase 108 (Slack) for the four-data-point check
+
+- **Discord daemon-frontend variant** (`FrontendType::Discord`
+  + `discord_daemon_frontend.rs` mirroring Phase 19's
+  `telegram_daemon_frontend.rs`) deferred internally
+  inside Phase 107. The in-process path Task 5 landed is
+  fully functional; daemon-mode-over-IPC is the
+  deployment-optimization half.
+- **`/approve` / `/reject` gate-resolve text-command
+  parsing** lives in the daemon-frontend half (Telegram's
+  `telegram_daemon_frontend.rs:219`). Folds into the
+  daemon-frontend deferral above.
+
+Phase 108 (Slack adapter, same `aivyx-telegram`-pattern
+template) is the four-data-point confirmation. If the
+Slack adapter shape forces any rule change above, this
+document gets the four-data-point update at Phase 108
+exit.
