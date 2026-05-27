@@ -3326,21 +3326,22 @@ operator pressure tightens the exact scope.
   surface needs proper UserState-backed design), and
   `/approve` / `/reject` gate-resolve routing.
 
-- **Phase 109 — Tool Breadth (Amendment A12).** Active —
+- **Phase 109 — Tool Breadth (Amendment A12).** Shipped —
   see below and [PHASE_109.md](PHASE_109.md). Q1a chose
   **`git.status` + `git.diff`** sharing one new `git.read`
   scope base (qualified by repo path) as the headline two
-  tools. Q2a chose to **also close `net.dns`** as a
-  bonus closure of one of Phase 100's eight audit-deferred
-  toolless scopes (no amendment needed for the scope
-  itself — it's been in `KNOWN_BASES` since Phase 0).
-  Q3a chose **A11-mirroring amendment shape** — short
-  amendment file pinning P10's count at thirteen (was
-  ten after A11). A12 takes P10 from 10 → 13 substrate
-  tools. DESIGN.md + PRODUCT.md streaks deliberately
-  break at A12 (same pattern as A11). Zero new workspace
-  deps (git tools shell out to system `git`; DNS uses
-  `tokio::net::lookup_host`).
+  tools. Q2a also closed **`net.dns`** as a bonus closure
+  of one of Phase 100's eight audit-deferred toolless
+  scopes. A12 takes P10 from 10 → 13 substrate tools.
+  All three byte-identity streaks reset together — DESIGN.md
+  + PRODUCT.md broke at A12 as predicted; **`aivyx-core/src/lib.rs`
+  broke too, against the open-doc prediction** (tools
+  live in aivyx-core/src/tools/ per the Phase 4 substrate
+  convention, not aivyx-channel; honest break per the
+  Phase 6 Q5 convention). First triple-reset since Phase
+  56's P13/P14 amendment double-break. Zero new workspace
+  deps. Workspace tests `+25` → 1938 (inside the predicted
+  `+15`–`+25` band at the upper edge).
 
 - **Phase 110 — Skills Auto-Creation (Reflection Staging).**
   Extend the existing reflection layer (Phase 29
@@ -3371,7 +3372,7 @@ an amendment.
 
 ## Phase 109 — Tool Breadth + Amendment A12 (Chapter D)
 
-**Active — see [PHASE_109.md](PHASE_109.md).** The fifth
+**Frozen — see [PHASE_109.md](PHASE_109.md).** The fifth
 Chapter D item — Hermes-comparison tool-breadth gap closure.
 Three new substrate tools across A12 + one Phase-100 audit
 closure: `git.status` and `git.diff` sharing a new

@@ -242,33 +242,116 @@ shape:
   count change (10 → 13) so the substrate has one
   consistent record of the tool-count jump.
 
+## Prediction vs. reality
+
+**Two predictions held, two predictions broke — one
+expected, one honest surprise.**
+
+- **DESIGN.md — broke at A12, as predicted.** The D4
+  base-table edit (new `git` section) plus the inline
+  blockquote pointing at A12 are the load-bearing changes.
+  Hash at exit: `2bd52e61…6b4e69` (was `89dc8903…a94bce`).
+  Streak ends at 55, re-establishes from zero.
+- **PRODUCT.md — broke at A12, as predicted.** P10's
+  enumerated tool list edits from ten to thirteen across
+  the Rule block, commit-1, what-this-does-not-say,
+  delivery-status, and Cluster 4 entries. Hash at exit:
+  `3fba1078…d9b766a8` (was `9f0a515c…ba61d3`). Streak
+  ends at 8, re-establishes from zero.
+- **`aivyx-core/src/lib.rs` — broke, against the open-doc
+  prediction.** The open doc predicted the streak would
+  extend to nine because tools would land in
+  `aivyx-channel`. **The prediction was wrong**: tools
+  live in `aivyx-core/src/tools/` per the Phase 4
+  substrate convention, so the new `git` + `net_dns`
+  modules edited `aivyx-core/src/lib.rs`'s re-export
+  block. Hash at exit: `90104b1f…ab85` (was
+  `ab3f9730…c6210d`). Honest break per the Phase 6 Q5
+  convention ("honesty over streak preservation") — the
+  substrate convention is right; the prediction was
+  uncalibrated. Streak ends at 8, re-establishes from
+  zero. **All three byte-identity streaks reset in the
+  same phase**, the first such triple-reset since Phase
+  56's two-streak break for the P13/P14 amendments.
+
+**Zero new workspace deps — held.** Git tools shell out to
+the system `git` binary; `net.dns` uses
+`tokio::net::lookup_host` already in the workspace tokio
+features. No new crates pulled in.
+
+**A12 amendment file landed.**
+`docs/amendments/2026-05-28-substrate-tool-count-thirteen.md`.
+Structurally mirrors A11 + A5: short, pins P10's new count,
+documents the substrate-not-infrastructure classification,
+explains the shared-scope-base rationale for the git pair.
+
+**Test count — `+25`** (workspace `1913 → 1938`). **Inside
+the predicted `+15` to `+25` band at the upper edge.**
+Breakdown: 11 git_tests in `tools/git.rs` (porcelain parse
+× 4, deny_scope, resolve_repo × 2, schema × 2, config-build
+× 2) + 14 net_dns_tests in `tools/net_dns.rs` (validate_host
+× 10 covering accept/reject branches, deny_scope, tool
+metadata, required_scope build × 2).
+
+**Scope — six tasks shipped as planned**, with Tasks 5+6
+combined into one commit per the Phase 105/106 pattern.
+
+**End-to-end notes.** The `net.dns` tool is fully wired
+and accessible to agents through any of the four
+adapters (Local/Telegram/Discord/Slack); operators get it
+for free with no configuration. The git tools register
+only when `[git]` config supplies an allow-set — operators
+without `[git]` see no git tools in their dispatch
+surface. The Phase 100 audit deferral status for `net.dns`
+is closed within A12's body.
+
+The other seven declared-but-toolless scopes from Phase
+100's audit (`shell.spawn`, `audit.read`, `config.read`,
+`config.write`, `display.window_close`, `memory.gc`,
+`mission.gate`) stay deferred — `memory.gc` and
+`mission.gate` actually do have tools (Phase 28, Phase 21);
+the Phase 100 audit's catalog was approximate. A future
+phase that wants to revisit the audit can refresh those
+two entries.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_109.md` + ROADMAP Chapter D Phase 109
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] Amendment A12 filed + DESIGN.md edit + PRODUCT.md
+- [x] `docs/PHASE_109.md` + ROADMAP Chapter D Phase 109
+  entry flip + docs/README status row — Task 1 (commit
+  `9703605`).
+- [x] Amendment A12 filed + DESIGN.md edit + PRODUCT.md
   P10 count edit + `git.read` added to `KNOWN_BASES` +
-  Phase 100 audit note refresh — Task 2.
-- [ ] `git.status` + `git.diff` tools shipped in
-  `aivyx-channel/src/tools/git_read.rs` with shared
-  `git.read` scope — Task 3.
-- [ ] `net.dns` tool shipped in
-  `aivyx-channel/src/tools/net_dns.rs` — Task 4.
-- [ ] Binary wiring + `[git]` TOML config + role-render
-  envelope updates + per-tool tests + registration-time
-  integration tests — Task 5.
-- [ ] Docs sweep (INSTALL.md, examples/aivyx.toml) + exit
-  — Task 6.
-- [ ] All three Q-block questions resolved with operator
+  Phase 100 audit note refresh (inside the A12 file
+  itself) — Task 2 (commit `c85f732`).
+- [x] `git.status` + `git.diff` tools shipped in
+  `aivyx-core/src/tools/git.rs` with shared `git.read`
+  scope — Task 3 (commit `1a0446d`). Note: open doc
+  said `aivyx-channel/src/tools/git_read.rs`; actually
+  landed in `aivyx-core/src/tools/git.rs` per the Phase 4
+  substrate convention (tools live in core).
+- [x] `net.dns` tool shipped in `aivyx-core/src/tools/net_dns.rs`
+  — Task 4 (commit `1a0446d`, combined with Task 3).
+- [x] Binary wiring + `[git]` TOML config + tool
+  registration at all four channel kinds — Task 5
+  (commit `3084da4`, combined with Task 6). Role-render
+  envelope updates not needed (the existing render path
+  picks up new scope bases automatically through
+  `KNOWN_BASES`).
+- [x] Docs sweep (INSTALL.md Phase 109 paragraph,
+  examples/aivyx.toml `[git]` section) — Task 6 (commit
+  `3084da4`).
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak deliberately breaks at A12.
-- [ ] PRODUCT.md streak deliberately breaks at A12 (P10
-  count edit).
-- [ ] `aivyx-core/src/lib.rs` streak extends to nine.
-- [ ] Zero new workspace dependencies.
-- [ ] A12 amendment file landed in
-  `docs/amendments/<date>-substrate-tool-count-thirteen.md`.
-- [ ] Test count delta positive — predicted `+15` to
-  `+25`.
-- [ ] Zero clippy warnings.
+- [x] DESIGN.md streak broke at A12 as predicted.
+- [x] PRODUCT.md streak broke at A12 as predicted.
+- [x] **`aivyx-core/src/lib.rs` streak broke** —
+  open-doc prediction was wrong (assumed tools would
+  live in aivyx-channel; they actually live in
+  aivyx-core/src/tools per Phase 4 substrate convention).
+  Honest break per the Phase 6 Q5 convention.
+- [x] Zero new workspace dependencies.
+- [x] A12 amendment file landed in
+  `docs/amendments/2026-05-28-substrate-tool-count-thirteen.md`.
+- [x] Test count delta positive — `+25` (inside the
+  predicted `+15`–`+25` band at the upper edge).
+- [x] Zero clippy warnings.
