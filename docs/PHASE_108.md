@@ -248,38 +248,155 @@ than Phase 107's eight. Six sub-tasks:
   only.** Threads, Block Kit, attachments, slash commands,
   mention-parsing all stay named deferrals.
 
+## Prediction vs. reality
+
+**All three streak predictions held — the Phase 107 surprise
+pattern repeated exactly. The four-data-point check on
+`ADAPTER_PATTERN.md` was the real Phase 108 contribution, and
+it passed.**
+
+- **DESIGN.md — held.** Foundation-scope adapter touched no
+  locked technical-contract decision. Byte-identical at exit
+  (`89dc8903…a94bce`). Streak: **fifty-five** consecutive
+  phases.
+- **PRODUCT.md — held.** No P-* commitment touched; P5
+  (Multi-Channel) was already delivered, Phase 108 widened
+  the channel set inside that envelope. Byte-identical at
+  exit (`9f0a515c…ba61d3`). Streak: **eight** (was 7).
+- **`aivyx-core/src/lib.rs` — held.** Same Phase 107 surprise
+  pattern: `ChannelPlatform::Slack` was already
+  forward-enumerated in Phase 8 (alongside `Discord`,
+  `Matrix`, `Email`, `Rest`) so no variant-lift was needed.
+  Byte-identical at exit (`ab3f9730…c6210d`). Streak:
+  **eight** (was 7).
+
+**Zero-new-deps streak — broke as predicted.** One new direct
+workspace dep at Task 2: `slack-morphism` 2.22.0. Single-
+source-provenance from the slack-morphism org, MIT-licensed,
+well-maintained. Pulled in nine transitive deps (axum,
+tokio-tungstenite 0.29 alongside twilight's
+tokio-websockets, signal-hook-tokio, futures-locks,
+jsonschema, etc.); workspace builds clean against all of
+them.
+
+**A4 amendment addendum filed as predicted.** Workspace
+crate count 13 → 14 with `aivyx-slack`. Addendum landed in
+`docs/amendments/2026-04-17-workspace-layout.md`; DESIGN.md
+itself stays byte-identical (Phase 49 / 107 precedent for
+addenda-in-amendment-file).
+
+**Test count — `+25`** (workspace `1888 → 1913`). **Inside**
+the predicted `+20` to `+30` band cleanly. Breakdown:
+- 7 transport tests in `aivyx-slack/src/transport.rs`
+  (partition_key joins / empty team_id handling /
+  ScriptedTransport queue behavior / TransportError
+  Display).
+- 15 channel tests in `aivyx-slack/src/slack_channel.rs`
+  (identity surface × 5 + partition-distinct-across-teams
+  + append_event rendering × 4 + finalize end-to-end × 3 +
+  cancellation rotation + compile-pin).
+- 3 scripted e2e tests in `aivyx-slack/src/tests.rs`
+  (smoke / two-partitions-with-cross-team-collision /
+  shutdown-drain).
+
+**Scope — six tasks shipped as planned, with two
+Phase-108-internal deferrals carved out honestly:**
+
+1. **Production `SlackMorphismTransport` wiring** — at Task
+   3 the slack-morphism callback API turned out to require
+   `fn`-pointer-shaped callbacks (cannot capture mpsc
+   senders directly; state passes through
+   `SlackClientEventsUserState`). The right design is to
+   route the sender through a UserState-backed wrapper;
+   that's meaningful slack-morphism-specific API discovery
+   that doesn't belong on the critical path of Task 3.
+   Scoped to a compile-only stub that returns a clean
+   "not yet wired" error; pinned the public surface
+   (`connect`, `next_message`, `send_message`) so the
+   follow-on is a fill-in not a refactor.
+2. **`/approve` / `/reject` text-command gate-resolve
+   routing** — same Slack-side daemon-frontend gap as the
+   Phase 107 Discord deferral.
+
+Both deferrals **bundle with the Phase 107 daemon-frontend
+follow-on**. The Channel Activation Milestone is the
+natural place for the real-network smoke pass that lands
+both adapters' live wiring together.
+
+**Four-data-point check on `docs/ADAPTER_PATTERN.md`.** The
+load-bearing Phase 108 contribution. The doc's status moved
+from "confirmed at three" (Phase 107) to **"confirmed at
+four data points."** Every Phase 9 rule survived; the
+sibling `run_*_session` pattern is now answered "no
+extraction" at four data points (Slack's outer loop has the
+same push-based shape Discord's does, but protocol details
+make any shared abstraction the wrong size). The Phase 9
+Q7 question about a richer partition return type is **still
+unresolved but now deliberately punted to the next adapter
+that genuinely forces it** — Slack's
+`(team_id, channel_id)` was the most plausible
+four-data-point forcing function and it didn't (the
+colon-joined string fit `Option<String>` cleanly). Matrix
+(`room_id + homeserver + per-server routing`) remains the
+natural test case if it ever lands.
+
+**End-to-end notes.** The in-process Slack adapter is
+end-to-end functional at the channel + session layer
+through scripted tests. The live `--channel slack` path
+runs through to `transport.next_message()` and surfaces a
+clean stub error — the Phase-108-internal Socket Mode
+wiring deferral is named honestly in INSTALL.md so
+operators who try it today understand the state.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_108.md` + ROADMAP Chapter D Phase 108
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] `crates/aivyx-slack/` workspace member + module
+- [x] `docs/PHASE_108.md` + ROADMAP Chapter D Phase 108
+  entry flip + docs/README status row — Task 1 (commit
+  `ab71df8`).
+- [x] `crates/aivyx-slack/` workspace member + module
   skeletons + workspace `Cargo.toml` wiring + DESIGN.md
-  A4 addendum + `ChannelKind::Slack` variant +
-  `[slack]` TOML section — Task 2.
-- [ ] `SlackTransport` trait + `SlackMorphismTransport`
-  production impl + `ScriptedTransport` test double —
-  Task 3.
-- [ ] `SlackChannel` ChannelContext impl — Task 4.
-- [ ] `run_slack_session` + binary wiring +
-  `--channel slack` flag — Task 5.
-- [ ] Scripted e2e suite + docs sweep — Task 6.
-- [ ] All four Q-block questions resolved with operator
+  A4 addendum (in the amendment file per Phase 49 / 107
+  precedent; DESIGN.md itself byte-identical) +
+  `ChannelKind::Slack` variant +
+  `[slack]` TOML section — Task 2 (commit `dae42a8`).
+- [x] `SlackTransport` trait + `SlackMorphismTransport`
+  production impl (stub, with Phase-108-internal deferral
+  named honestly) + `ScriptedTransport` test double —
+  Task 3 (commit `48feef8`).
+- [x] `SlackChannel` ChannelContext impl + Q3a
+  `(team_id, channel_id)` partition shape — Task 4
+  (commit `41fd9c0`).
+- [x] `run_slack_session` + binary wiring + `--channel
+  slack` flag — Task 5 (commit `426d6a9`).
+- [x] Scripted e2e suite + docs sweep
+  (ADAPTER_PATTERN.md four-data-point promotion,
+  CHANNEL_SDK row, INSTALL walkthrough, examples/aivyx.toml,
+  ROADMAP Channel Activation entry) — Task 6 (commit
+  `426d6a9`).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak extends to fifty-five.
-- [ ] PRODUCT.md streak extends to eight.
-- [ ] `aivyx-core/src/lib.rs` streak extends to eight (the
-  `ChannelPlatform::Slack` variant already exists from
-  Phase 8 — same Phase 107 surprise pattern).
-- [ ] Zero-new-deps streak deliberately breaks at the
-  slack-morphism adoption.
-- [ ] A4 amendment addendum filed (13 → 14 crates).
-- [ ] Test count delta positive — predicted `+20` to
-  `+30`.
-- [ ] Zero clippy warnings.
-- [ ] Real-protocol smoke test deferred to the Channel
+- [x] DESIGN.md streak extends to fifty-five (held
+  byte-identical; A4 addendum in amendment file).
+- [x] PRODUCT.md streak extends to eight (held
+  byte-identical).
+- [x] `aivyx-core/src/lib.rs` streak extends to eight
+  (held byte-identical — Phase 107 surprise pattern
+  repeated; `ChannelPlatform::Slack` was already
+  forward-enumerated in Phase 8).
+- [x] **Zero-new-deps streak broke as predicted at Task 2**
+  — slack-morphism 2.22.0 adopted.
+- [x] A4 amendment addendum filed (13 → 14 crates) in
+  `docs/amendments/2026-04-17-workspace-layout.md`.
+- [x] Test count delta positive — `+25` (workspace
+  `1888 → 1913`). Inside the predicted `+20`–`+30` band.
+- [x] Zero clippy warnings.
+- [x] Real-protocol smoke test deferred to the Channel
   Activation Milestone (per `docs/ADAPTER_PATTERN.md`
-  checklist item 7).
-- [ ] Daemon-frontend variant carved out as
-  Phase-108-internal deferral that bundles with the
-  Phase 107 daemon-frontend follow-on.
+  checklist item 7) — ROADMAP Channel Activation
+  Milestone section names Slack as the second post-Phase-9
+  adapter to defer.
+- [x] **Two Phase-108-internal deferrals** carved out at
+  Tasks 3 and 5 and bundled with the Phase 107
+  daemon-frontend follow-on: production
+  `SlackMorphismTransport` callback-state-passing wiring,
+  and `/approve` / `/reject` gate-resolve routing.

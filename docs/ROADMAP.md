@@ -3308,19 +3308,23 @@ operator pressure tightens the exact scope.
   — both land alongside in a focused follow-on.
 
 - **Phase 108 — Slack Channel Adapter (`aivyx-slack`).**
-  Active — see below and [PHASE_108.md](PHASE_108.md). Fourth
-  in-tree channel adapter and the four-data-point
-  confirmation for the adapter pattern Phase 107 promoted
-  from tentative to confirmed-at-three. slack-morphism SDK
-  (Q1a — same thin-protocol-wrapper posture as twilight-rs
-  for Discord). Socket Mode only (Q2a — matches Discord's
-  Gateway shape; preserves local-daemon posture). Partition
-  key `format!("{team_id}:{channel_id}")` per Q3a —
-  confirms `Option<String>` at four data points, punts the
-  Phase 9 Q7 richer-type question to a future Matrix-shaped
-  adapter. Foundation scope (Q4a — DMs + channel messages
-  only; threads, Block Kit, attachments, slash commands
-  deferred).
+  Shipped — see below and [PHASE_108.md](PHASE_108.md).
+  Fourth in-tree channel adapter, four-data-point
+  confirmation for `docs/ADAPTER_PATTERN.md` (was
+  confirmed-at-three at Phase 107). slack-morphism 2.22 SDK,
+  Socket Mode only, `(team_id, channel_id)` colon-joined
+  partition key. **All three byte-identity streak
+  predictions held** — `ChannelPlatform::Slack` was
+  already in `aivyx-core` since Phase 8 (same Phase 107
+  surprise pattern). Zero-new-deps broke as predicted at
+  the slack-morphism adoption. Workspace tests `+25` →
+  1913 (inside the predicted `+20`–`+30` band). Two
+  Phase-108-internal deferrals bundled with the Phase 107
+  daemon-frontend follow-on: production
+  `SlackMorphismTransport` callback-state-passing wiring
+  (slack-morphism's `SlackClientEventsUserState` API
+  surface needs proper UserState-backed design), and
+  `/approve` / `/reject` gate-resolve routing.
 
 - **Phase 109 — Tool Breadth (Amendment A12).** Extend the
   P10 substrate tool list (currently ten after Phase 100's
@@ -3368,7 +3372,7 @@ an amendment.
 
 ## Phase 108 — Slack Channel Adapter (`aivyx-slack`) (Chapter D)
 
-**Active — see [PHASE_108.md](PHASE_108.md).** The fourth
+**Frozen — see [PHASE_108.md](PHASE_108.md).** The fourth
 Chapter D item and the four-data-point confirmation for the
 adapter pattern Phase 9 wrote down (then Phase 107 promoted
 to confirmed-at-three). Adds a new workspace crate
