@@ -205,32 +205,119 @@ status row.
   produces an unsandboxed config until the operator
   follows the link).
 
+## Prediction vs. reality
+
+**All three streak predictions held; test-count
+prediction over-shot by seven.**
+
+- **DESIGN.md — held.** Recipes-only scope (Q1a) plus a
+  CLI subcommand that emits embedded strings (Q2a) keeps
+  every locked technical-contract decision untouched.
+  Byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **53 consecutive phases**.
+- **PRODUCT.md — held.** No P-* commitment touched; MCP
+  recipes are operator ergonomics on top of P11 + the
+  existing Phase 24 / 32 / 55 MCP substrate.
+  Byte-identical at exit (hash still
+  `9f0a515c…ba61d3`). Streak: **6 consecutive phases**
+  (was 5).
+- **`aivyx-core/src/lib.rs` — held.** Every line of
+  Phase 106 lives in `aivyx-channel`'s binary
+  (`CliMode::Mcp` variant + parse block + dispatch via
+  `run_mcp_recipes`) and the new
+  `aivyx-channel/src/bin/aivyx_modules/mcp_recipes.rs`.
+  `aivyx-core` is untouched. Byte-identical at exit
+  (hash still `ab3f9730…c6210d`). Streak: **6
+  consecutive phases** (was 5).
+
+**New workspace deps — zero, as predicted.** The recipes
+module compiles to a flat `&'static [Recipe]` byte slab;
+the listing and lookup paths use only `std`. `serde_json`
+turned out not to be needed — the recipe snippets are
+plain `&'static str` literals, not JSON.
+
+**Test count — `+19`** (workspace `1843 → 1862`),
+**above** the predicted `+8` to `+12` band by seven.
+Breakdown:
+- 12 tests in `mcp_recipes.rs`: registry-shape coverage
+  (`registry_is_non_empty`, `every_recipe_has_a_unique_name`,
+  `every_recipe_has_a_non_empty_name` /
+  `_description` / `_toml_snippet`,
+  `every_recipe_snippet_includes_an_mcp_server_block`,
+  `every_recipe_snippet_includes_a_sandbox_block`),
+  `render_recipe × 3` (known returns snippet ending in
+  newline, unknown errors with candidate list, `Display`
+  formats the candidate list), `render_listing × 3`
+  (includes every name, points at canonical doc, pads
+  names for column alignment).
+- 6 CLI parse tests in `aivyx.rs`: bare `mcp recipes`,
+  named form, `--flag`-in-name-position rejection,
+  trailing-extra-arg rejection, bare `mcp` errors,
+  unknown subcommand errors.
+
+The over-shoot is in the per-recipe shape coverage. The
+Q3a sandbox-by-default contract — every recipe ships an
+`[mcp_server.sandbox]` block alongside the
+`[[mcp_server]]` block — is the load-bearing property of
+this phase; pinning it as `every_recipe_snippet_includes_*`
+twin tests makes a future recipe addition that forgets
+either half trip loudly at `cargo test`. The single
+combined test would have been the cheaper write but the
+twin form names the contract more clearly.
+
+**Scope — all three tasks shipped as planned.** Tasks 2
+and 3 merged into one commit per the Phase
+103 / 104 / 105 pattern; exit is its own commit.
+
+**End-to-end notes.** The CLI was driven against a real
+`cargo run` after wiring: `aivyx mcp recipes` produced
+a column-aligned listing of all 12 recipes; `aivyx mcp
+recipes filesystem` printed the worked snippet ready to
+paste into `aivyx.toml`. The listing's pointer to
+`docs/MCP_RECIPES.md` is the catalog's canonical
+reference, and the doc-side `every_recipe_has_a_*`
+property has its module-side counterpart as the seven
+shape tests; the doc / module sync contract is named in
+both files' closing notes.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_106.md` + ROADMAP Chapter D Phase 106
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] `aivyx mcp recipes [<name>]` subcommand wired through
-  `CliMode::Mcp(McpSubcommand::Recipes)` — Task 2.
-- [ ] `aivyx_modules/mcp_recipes.rs` module with embedded
-  recipe registry + `list_recipes` + `render_recipe`
-  pure helpers — Task 2.
-- [ ] Recipes-registry shape tests (non-empty, unique
-  names, non-empty snippets) — Task 3.
-- [ ] `render_recipe` lookup tests (known + unknown with
-  candidate list) — Task 3.
-- [ ] CLI parse tests (`mcp recipes`, `mcp recipes <name>`,
-  bare `mcp` error, unknown subcommand error) — Task 3.
-- [ ] `docs/MCP_RECIPES.md` (new) with 10–12 worked
-  recipes, each with sandbox block + env-var notes +
-  capability scope notes — Task 3.
-- [ ] `docs/INSTALL.md` mention — Task 3.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 3.
-- [ ] All three Q-block questions resolved with operator
+- [x] `docs/PHASE_106.md` + ROADMAP Chapter D Phase 106
+  entry flip + docs/README status row — Task 1 (commit
+  `336a924`).
+- [x] `aivyx mcp recipes [<name>]` subcommand wired
+  through `CliMode::Mcp(McpSubcommand::Recipes)` —
+  Task 2 (commit `65529ca`).
+- [x] `aivyx_modules/mcp_recipes.rs` module with
+  embedded recipe registry + `render_recipe` +
+  `render_listing` pure helpers — Task 2 (commit
+  `65529ca`). `list_recipes()` accessor was scoped out
+  per the project's "fields added only when a concrete
+  caller needs them" convention; `RECIPES` itself is
+  `pub const` for any future caller.
+- [x] Recipes-registry shape tests (non-empty + unique
+  names + non-empty fields + every-snippet-has-both-
+  blocks) — Task 3 (commit `65529ca`).
+- [x] `render_recipe` lookup tests (known + unknown with
+  candidate list + `Display` formatting) — Task 3
+  (commit `65529ca`).
+- [x] CLI parse tests (bare, named, flag-in-name-position
+  rejection, trailing-extra rejection, bare `mcp`,
+  unknown subcommand) — Task 3 (commit `65529ca`).
+- [x] `docs/MCP_RECIPES.md` (new) with 12 worked recipes,
+  each with sandbox block + env-var notes + capability-
+  scope notes — Task 3 (commit `65529ca`).
+- [x] `docs/INSTALL.md` mention — Task 3 (commit
+  `65529ca`).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak extends to fifty-three.
-- [ ] PRODUCT.md streak extends to six.
-- [ ] Production-core `lib.rs` streak extends to six.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+8` to `+12`.
-- [ ] Zero clippy warnings.
+- [x] DESIGN.md streak extends to fifty-three.
+- [x] PRODUCT.md streak extends to six.
+- [x] Production-core `lib.rs` streak extends to six.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+19` (above the
+  predicted `+8`–`+12` band by seven; over-shoot called
+  out honestly in the prediction-vs-reality section).
+- [x] Zero clippy warnings.
