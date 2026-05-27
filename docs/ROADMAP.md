@@ -3326,22 +3326,21 @@ operator pressure tightens the exact scope.
   surface needs proper UserState-backed design), and
   `/approve` / `/reject` gate-resolve routing.
 
-- **Phase 109 — Tool Breadth (Amendment A12).** Extend the
-  P10 substrate tool list (currently ten after Phase 100's
-  A11) with the next round of operator-visible tools.
-  Amendment A12 files the count revision; the Q-block at
-  open pins the exact list. Candidates from the
-  post-Phase-104 review: `clipboard.read` /
-  `clipboard.write`, `process.list`, `git.status` /
-  `git.diff`, `image.describe` (via vision-capable
-  provider). The eight declared-but-toolless scopes from
-  Phase 100's audit (`shell.spawn`, `net.dns`,
-  `audit.read`, `config.read`, `config.write`,
-  `display.window_close`, `memory.gc`, `mission.gate`) are
-  a separate question and may pick up tools here. The
-  Phase 37 → A5 (seven → eight) and Phase 100 → A11
-  (eight → ten) sequence is the template; PRODUCT.md
-  streak break expected at the A12 commit.
+- **Phase 109 — Tool Breadth (Amendment A12).** Active —
+  see below and [PHASE_109.md](PHASE_109.md). Q1a chose
+  **`git.status` + `git.diff`** sharing one new `git.read`
+  scope base (qualified by repo path) as the headline two
+  tools. Q2a chose to **also close `net.dns`** as a
+  bonus closure of one of Phase 100's eight audit-deferred
+  toolless scopes (no amendment needed for the scope
+  itself — it's been in `KNOWN_BASES` since Phase 0).
+  Q3a chose **A11-mirroring amendment shape** — short
+  amendment file pinning P10's count at thirteen (was
+  ten after A11). A12 takes P10 from 10 → 13 substrate
+  tools. DESIGN.md + PRODUCT.md streaks deliberately
+  break at A12 (same pattern as A11). Zero new workspace
+  deps (git tools shell out to system `git`; DNS uses
+  `tokio::net::lookup_host`).
 
 - **Phase 110 — Skills Auto-Creation (Reflection Staging).**
   Extend the existing reflection layer (Phase 29
@@ -3369,6 +3368,29 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 109 — Tool Breadth + Amendment A12 (Chapter D)
+
+**Active — see [PHASE_109.md](PHASE_109.md).** The fifth
+Chapter D item — Hermes-comparison tool-breadth gap closure.
+Three new substrate tools across A12 + one Phase-100 audit
+closure: `git.status` and `git.diff` sharing a new
+`git.read` capability scope (qualified by repo path; shells
+out to system `git` binary; no Rust deps), plus `net.dns`
+closing one of Phase 100's eight declared-but-toolless
+scopes (`tokio::net::lookup_host`; uses the existing
+`net.dns` scope base from Phase 0; no amendment needed for
+the scope itself). A12 takes P10's substrate tool count
+from 10 → 13. Q3a chose **mirror A11 exactly** — short
+amendment file structurally identical to A11 (which itself
+mirrored A5 from Phase 37). DESIGN.md and PRODUCT.md
+streaks deliberately break at A12 (same pattern as the
+A11 / A5 amendment commits); `aivyx-core/src/lib.rs`
+streak extends (tools land in `aivyx-channel`, not core).
+Zero new workspace deps. The other seven Phase-100-audited
+toolless scopes (`shell.spawn`, `audit.read`,
+`config.read`, `config.write`, etc.) stay deferred per
+Phase 100's audit conclusions.
 
 ## Phase 108 — Slack Channel Adapter (`aivyx-slack`) (Chapter D)
 
