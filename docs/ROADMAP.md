@@ -3300,14 +3300,19 @@ operator pressure tightens the exact scope.
   — both land alongside in a focused follow-on.
 
 - **Phase 108 — Slack Channel Adapter (`aivyx-slack`).**
-  Same shape as Phase 107 against Slack's Events API.
-  Slack's protocol differences (thread-vs-channel context,
-  socket-mode vs. HTTP webhook) get their own integration
-  tests. Both 107 and 108 land as separate crates so the
-  workspace can choose at compile time which adapters to
-  bundle, mirroring the existing
-  `provider-anthropic` / `provider-openai` feature-flag
-  pattern.
+  Active — see below and [PHASE_108.md](PHASE_108.md). Fourth
+  in-tree channel adapter and the four-data-point
+  confirmation for the adapter pattern Phase 107 promoted
+  from tentative to confirmed-at-three. slack-morphism SDK
+  (Q1a — same thin-protocol-wrapper posture as twilight-rs
+  for Discord). Socket Mode only (Q2a — matches Discord's
+  Gateway shape; preserves local-daemon posture). Partition
+  key `format!("{team_id}:{channel_id}")` per Q3a —
+  confirms `Option<String>` at four data points, punts the
+  Phase 9 Q7 richer-type question to a future Matrix-shaped
+  adapter. Foundation scope (Q4a — DMs + channel messages
+  only; threads, Block Kit, attachments, slash commands
+  deferred).
 
 - **Phase 109 — Tool Breadth (Amendment A12).** Extend the
   P10 substrate tool list (currently ten after Phase 100's
@@ -3352,6 +3357,41 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 108 — Slack Channel Adapter (`aivyx-slack`) (Chapter D)
+
+**Active — see [PHASE_108.md](PHASE_108.md).** The fourth
+Chapter D item and the four-data-point confirmation for the
+adapter pattern Phase 9 wrote down (then Phase 107 promoted
+to confirmed-at-three). Adds a new workspace crate
+(`aivyx-slack`) at foundation scope — DMs + channel
+messages only; threads, Block Kit, attachments, slash
+commands all stay named deferrals. The headline outcome: an
+operator with a Slack workspace runs `aivyx --channel slack`
+with a bot token + an app-level Socket Mode token, talks to
+the bot from any DM or invited channel, and gets the same
+agent experience they already get on Discord and Telegram.
+Q1a chose **slack-morphism** as the SDK (thin protocol
+wrapper, matches Phase 107's twilight-rs decision). Q2a
+chose **Socket Mode only** (WebSocket initiated outbound
+from aivyx, no public endpoint — matches Discord's Gateway
+shape and the substrate's local-daemon posture). Q3a chose
+`format!("{team_id}:{channel_id}")` as the partition key —
+**confirms three-data-point `Option<String>` partition
+shape at four data points**, explicitly punts the Phase 9
+Q7 richer-type question to a future Matrix-shaped adapter
+where `room_id + homeserver` makes the structured type
+genuinely necessary. Q4a chose **foundation scope** over
+full Phase-107-style parity — Slack's protocol surface is
+simpler than Discord's so foundation is genuinely the right
+call here. One streak break predicted: zero-new-deps
+(slack-morphism adoption); two surprises expected to repeat
+the Phase 107 pattern (DESIGN.md held byte-identical via
+A4-addendum-in-amendment-file pattern; `aivyx-core/src/lib.rs`
+held byte-identical because `ChannelPlatform::Slack` was
+already forward-enumerated in Phase 8). Daemon-frontend
+variant carved out as Phase-108-internal deferral that
+bundles with the Phase 107 daemon-frontend follow-on.
 
 ## Phase 107 — Discord Channel Adapter (`aivyx-discord`) (Chapter D)
 
