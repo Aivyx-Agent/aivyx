@@ -3261,17 +3261,23 @@ operator pressure tightens the exact scope.
   byte-identity streaks held → DESIGN.md 52, PRODUCT.md 5,
   `aivyx-core/src/lib.rs` 5.
 
-- **Phase 106 — MCP Server Breadth.** Phase 46 shipped the
-  first bundled MCP server (`aivyx mcp-server web-search`);
-  Phase 106 extends the pattern. Two halves: one or two
-  new bundled servers (Q-block at open picks from
-  candidates — calendar / email read-only, git-repo intel,
-  local-script runner, image describe) plus a curated
-  `templates/mcp-recipes.md` (or similar) that the wizard
-  can offer during `aivyx init` ("which MCP servers do you
-  want enabled?"). Every new bundled server inherits Phase
-  55's sandbox layer and Phase 32's SSE transport. Builds
-  on existing substrate; no DESIGN.md amendment expected.
+- **Phase 106 — MCP Server Breadth (Curated Recipes).**
+  Active — see below and [PHASE_106.md](PHASE_106.md). Q1a
+  at sign-off chose **recipes-only** scope: zero new
+  bundled-server code paths. Ships a curated
+  `docs/MCP_RECIPES.md` cataloguing ~10–12 well-supported
+  MCP servers (the official
+  `@modelcontextprotocol/server-*` family, mostly) with
+  paste-able `[[mcp_server]]` blocks, an inline
+  `[mcp_server.sandbox]` per recipe per Q3a (Phase 55
+  posture as substrate default), required env vars, and
+  capability-scope notes for the resulting
+  `mcp.call:<server>:<tool>` qualifiers. Plus a new
+  `aivyx mcp recipes [<name>]` CLI subcommand per Q2a —
+  bare form lists recipes, named form prints the worked
+  snippet. Mirrors Phase 103's `aivyx tool init` pattern.
+  New bundled-server code stays a deferral pending operator
+  pressure.
 
 - **Phase 107 — Discord Channel Adapter (`aivyx-discord`).**
   New workspace crate following the `aivyx-telegram`
@@ -3339,6 +3345,29 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 106 — MCP Server Breadth (Curated Recipes) (Chapter D)
+
+**Active — see [PHASE_106.md](PHASE_106.md).** The second
+Chapter D item. Phase 46 shipped the first bundled MCP server
+(`aivyx mcp-server web-search`); Phase 24 / 32 shipped the
+external `[[mcp_server]]` TOML surface for plugging in any
+MCP-compatible binary; Phase 55 shipped the sandbox layer
+that wraps each spawn. What's missing is the **catalog** — an
+operator's discovery story for "which MCP servers should I
+actually enable, and what do their blocks look like with the
+right sandbox config?" Phase 106 ships that catalog as
+`docs/MCP_RECIPES.md` (~10–12 worked recipes from the
+official `@modelcontextprotocol/server-*` family) plus a new
+`aivyx mcp recipes [<name>]` CLI subcommand for in-shell
+discovery. Q1a chose recipes-only scope (no new bundled-
+server code paths in Phase 106); Q2a chose the doc + CLI
+surface (mirrors Phase 103's `aivyx tool init`); Q3a chose
+inline `[mcp_server.sandbox]` per recipe so a copy-paste
+produces a sandboxed config out of the gate (Phase 55
+substrate-default posture). Additive on the operator-facing
+surface; zero new workspace deps; no DESIGN.md / PRODUCT.md /
+`aivyx-core/src/lib.rs` touch expected.
 
 ## Phase 105 — Trajectory Logging (`aivyx audit export`) (Chapter D opener)
 
