@@ -75,6 +75,18 @@ pub enum PersonaDeltaCategory {
     /// List — operator-significant events the assistant references
     /// for continuity.
     RelationshipMilestones,
+    /// Phase 110 — Skills Auto-Creation. List of procedural patterns
+    /// the agent drafts after complex turns and the operator
+    /// approves. Each list entry's `value` is JSON-serialized
+    /// [`LearnedSkill`] payload ({name, trigger, procedure}).
+    /// Stays inside PRODUCT.md P8's outcome-driven audited
+    /// reflection envelope; the agent never applies these
+    /// autonomously, the operator approves through the same
+    /// persona-proposal surface as every other delta. Q1(a) at
+    /// Phase 110 sign-off — chosen over a new KeyDomain::Skills
+    /// to reuse the entire Phase 59/60/70 substrate (chain log,
+    /// proposal flow, revert primitive, operator review surface).
+    LearnedSkill,
 }
 
 impl PersonaDeltaCategory {
@@ -498,6 +510,14 @@ pub struct EffectivePersona {
     pub communication_adaptations: Vec<String>,
     pub character_traits: Vec<String>,
     pub relationship_milestones: Vec<String>,
+    /// Phase 110 — approved skill payloads, JSON-serialized
+    /// [`LearnedSkill`] objects (one per list entry). The
+    /// `assemble_session_prompt` renderer parses these back
+    /// into structured form at render time so the agent sees
+    /// `name: trigger` bullets in the `## Learned skills`
+    /// section without dragging the full procedure text
+    /// through every system prompt.
+    pub learned_skills: Vec<String>,
 }
 
 /// Shared runtime handle on the effective Persona state. The
@@ -552,6 +572,62 @@ impl EffectivePersona {
             || !self.communication_adaptations.is_empty()
             || !self.character_traits.is_empty()
             || !self.relationship_milestones.is_empty()
+            || !self.learned_skills.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LearnedSkill — Phase 110 schema for the procedural-pattern payload that
+// rides inside `PersonaDeltaCategory::LearnedSkill + AppendList { value }`.
+// ---------------------------------------------------------------------------
+
+/// One operator-approved procedural pattern. The agent drafts
+/// these after complex turns through `reflection.propose` with a
+/// `LearnedSkill` delta; the operator approves through the
+/// existing persona-proposal surface; the rendered system prompt
+/// surfaces approved skills as `name: trigger` bullets in a
+/// `## Learned skills` section (Phase 110 Task 5). The full
+/// `procedure` text is available through the `skills.invoke`
+/// tool (Phase 110 Task 4) on demand.
+///
+/// Stored inside `PersonaDeltaOp::AppendList { value }` as a
+/// JSON-serialized string. The serialization stays inside the
+/// existing list-category infrastructure rather than growing a
+/// fourth `PersonaDeltaOp` variant; a future phase that wants
+/// richer skill shapes can extend this struct without churning
+/// the chain format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearnedSkill {
+    /// Short stable identifier — operator-facing in skill
+    /// listings and `skills.invoke` lookups. Convention: kebab-
+    /// case, dot-namespaced if useful (`code.review-checklist`).
+    pub name: String,
+    /// When this skill applies — the trigger description the
+    /// agent reads on every turn to decide whether to follow
+    /// the procedure. Short (one or two sentences).
+    pub trigger: String,
+    /// The skill's text — instructions, a tool sequence, an
+    /// example, or any combination. Full text; the renderer
+    /// elides this from the system prompt and reserves it for
+    /// `skills.invoke` to avoid bloating every turn's prompt
+    /// with every skill's full body.
+    pub procedure: String,
+}
+
+impl LearnedSkill {
+    /// Serialize for storage in `PersonaDeltaOp::AppendList`'s
+    /// `value: String`.
+    pub fn to_json_value(&self) -> String {
+        serde_json::to_string(self).expect(
+            "LearnedSkill serialization is infallible — all fields are owned Strings",
+        )
+    }
+
+    /// Parse from a list-category entry. Returns `None` for
+    /// malformed entries; the renderer skips malformed entries
+    /// rather than failing the whole render.
+    pub fn from_json_value(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
     }
 }
 
@@ -716,6 +792,7 @@ fn field_for_list_category(
         PersonaDeltaCategory::CommunicationAdaptations => &mut state.communication_adaptations,
         PersonaDeltaCategory::CharacterTraits => &mut state.character_traits,
         PersonaDeltaCategory::RelationshipMilestones => &mut state.relationship_milestones,
+        PersonaDeltaCategory::LearnedSkill => &mut state.learned_skills,
         // Scalar categories never reach here under validated deltas;
         // returning a scratch field would mask the impossible case.
         // Use a static no-op buffer so the surrounding match arm is

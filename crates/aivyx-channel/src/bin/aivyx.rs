@@ -3496,6 +3496,39 @@ async fn run_async(
     // ceiling so Telegram / Discord / Slack get it too.
     tool_list.push(Arc::new(aivyx_core::NetDnsTool::new()) as Arc<dyn Tool>);
 
+    // Phase 110 — Skills Auto-Creation tools. skills.list +
+    // skills.invoke register unconditionally; both read the
+    // approved skill set from the SharedEffectivePersona via a
+    // closure that takes the read lock per call. The closure is
+    // shared between the two tools but each tool holds its own
+    // clone — the closure is cheap (only the lock + clone of
+    // the Vec<String>).
+    //
+    // The skills tools live in CEILING_TRUSTED only (Phase 110
+    // Task 3 sign-off). SemiTrusted roles do not get skills.*
+    // by default; operators who want SemiTrusted skill access
+    // grant individual bases through role capability_scopes.
+    // Registration here is unconditional; the tier-ceiling
+    // intersection at agent construction time enforces the
+    // SemiTrusted exclusion.
+    let skills_reader: aivyx_core::SkillReader = {
+        let shared = shared_persona.clone();
+        Arc::new(move || {
+            shared
+                .read()
+                .map(|p| p.learned_skills.clone())
+                .unwrap_or_default()
+        })
+    };
+    tool_list.push(
+        Arc::new(aivyx_core::SkillsListTool::new(skills_reader.clone()))
+            as Arc<dyn Tool>,
+    );
+    tool_list.push(
+        Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader))
+            as Arc<dyn Tool>,
+    );
+
     // Phase 109 — `git.status` + `git.diff` register only
     // when `[git]` config supplies an allow-set. Operators
     // who don't configure git repos don't pay any cost; agents

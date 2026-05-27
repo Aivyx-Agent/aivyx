@@ -237,6 +237,24 @@ After install:
    the daemon socket. See [`docs/AUDIT_EXPORT.md`](AUDIT_EXPORT.md)
    for the full reference + worked `jq` examples.
 
+**Phase 110 — Skills Auto-Creation (Reflection Staging).**
+Skills are procedural patterns the agent drafts after complex
+turns and the operator approves through the existing
+persona-proposal surface (`aivyx persona proposals`). Approved
+skills land in the Persona chain as `LearnedSkill` deltas,
+render into the agent's system prompt as a `## Learned skills`
+section (one bullet per skill: `name: trigger`), and are
+callable through `skills.list` (enumerate `{name, trigger}`)
+and `skills.invoke` (read the full procedure body on demand).
+Three new capability scopes — `skills.propose`, `skills.list`,
+`skills.invoke` — all in `CEILING_TRUSTED`. Roles that should
+draft + use skills declare these in their `capability_scopes`
+alongside `persona.propose`. The agent-side auto-proposer
+heuristic (fire reflection-cron-style after complex turns)
+deferred to a follow-on phase; today the agent proposes
+skills only when explicitly invoked through `reflection.propose`
+with a `LearnedSkill` delta in the `persona_deltas` array.
+
 **Phase 109 — Three new substrate tools (Amendment A12).**
 P10's substrate tool count grew from ten to thirteen with
 `git.status`, `git.diff`, and `net.dns`. The git tools are

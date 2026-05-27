@@ -76,9 +76,18 @@ pub fn assemble_session_prompt(
     role_system_prompt: &str,
 ) -> String {
     let profile_active = profile.is_operator_declared();
-    let persona_active = persona.map(|p| p.is_non_empty()).unwrap_or(false);
+    // Phase 110 — skills get their own `## Learned skills`
+    // section between Persona and active role per Q3c sign-off.
+    // The Persona section renders only when *non-skill* fields
+    // are non-empty (so a Persona that only has skill deltas
+    // doesn't produce an empty Persona block). Skills render
+    // independently when learned_skills is non-empty.
+    let persona_active = persona.map(persona_has_non_skill_content).unwrap_or(false);
+    let skills_active = persona
+        .map(|p| !p.learned_skills.is_empty())
+        .unwrap_or(false);
 
-    if !profile_active && !persona_active {
+    if !profile_active && !persona_active && !skills_active {
         return role_system_prompt.to_string();
     }
 
@@ -92,9 +101,51 @@ pub fn assemble_session_prompt(
         out.push_str(&render_persona_section(persona.unwrap()));
         out.push_str("\n\n");
     }
+    if skills_active {
+        // Same Some-guarantee — `skills_active` requires Some.
+        out.push_str(&render_skills_section(persona.unwrap()));
+        out.push_str("\n\n");
+    }
     out.push_str(&format!(
         "## Active role: {role_name}\n\n{role_system_prompt}"
     ));
+    out
+}
+
+/// Phase 110 — `true` iff the persona has any non-skill
+/// content. Used by [`assemble_session_prompt`] to decide
+/// whether the `## How I have learned to communicate`
+/// section renders. A Persona whose only deltas are
+/// `LearnedSkill` produces an empty Persona block — the
+/// skills section renders separately under its own label.
+fn persona_has_non_skill_content(p: &EffectivePersona) -> bool {
+    p.assistant_name.is_some()
+        || p.operator_profile.is_some()
+        || p.communication_style.is_some()
+        || !p.primary_use_cases.is_empty()
+        || !p.behavioral_preferences.is_empty()
+        || !p.behavioral_constraints.is_empty()
+        || !p.learned_context.is_empty()
+        || !p.communication_adaptations.is_empty()
+        || !p.character_traits.is_empty()
+        || !p.relationship_milestones.is_empty()
+}
+
+/// Phase 110 — render the `## Learned skills` section. Each
+/// approved skill becomes one bullet of `name: trigger`. The
+/// full procedure body is elided (reserved for `skills.invoke`)
+/// to avoid bloating every system prompt with every skill's
+/// body text. Malformed entries are silently skipped (the
+/// `LearnedSkill::from_json_value` failure path); the render
+/// is best-effort by design — a malformed chain entry should
+/// not take down a turn.
+fn render_skills_section(persona: &EffectivePersona) -> String {
+    let mut out = String::from("## Learned skills\n\n");
+    for raw in &persona.learned_skills {
+        if let Some(skill) = crate::persona::LearnedSkill::from_json_value(raw) {
+            out.push_str(&format!("- {}: {}\n", skill.name, skill.trigger));
+        }
+    }
     out
 }
 
@@ -152,6 +203,12 @@ pub fn reduce_persona(
         ),
         character_traits: filter(&full.character_traits),
         relationship_milestones: filter(&full.relationship_milestones),
+        // Phase 110 — LearnedSkill entries pass through the filter
+        // alongside other reducible list categories. The renderer
+        // at assemble_session_prompt elides body text from the
+        // system prompt; the filter still applies for consistency
+        // with other list categories.
+        learned_skills: filter(&full.learned_skills),
     }
 }
 
@@ -439,6 +496,7 @@ mod tests {
             ],
             character_traits: vec![],
             relationship_milestones: vec![],
+            learned_skills: Vec::new(),
         }
     }
 
@@ -540,6 +598,7 @@ mod tests {
             ],
             character_traits: vec!["dry wit".to_string()],
             relationship_milestones: vec!["shipped v1".to_string()],
+            learned_skills: Vec::new(),
         }
     }
 

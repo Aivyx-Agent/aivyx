@@ -142,6 +142,22 @@ const KNOWN_BASES: &[&str] = &[
     // mismatches are rejected at the per-tool gate. Gate-side
     // approval still goes through P2's mission machinery.
     "persona.propose",
+    // Phase 110 — Skills Auto-Creation. `skills.propose` is the
+    // sibling capability gate to `persona.propose` for proposals
+    // whose `persona_deltas` array contains any
+    // `PersonaDeltaCategory::LearnedSkill` entry. The dispatch
+    // in `reflection.propose` checks `persona.propose` for
+    // non-Skill categories and `skills.propose` for Skill
+    // categories; mixed proposals require both. Q2(b) at Phase
+    // 110 sign-off — operator picked per-category granularity
+    // over the Q2(a) "extend persona.propose" recommendation.
+    "skills.propose",
+    // Phase 110 — `skills.list` and `skills.invoke` substrate
+    // tools. Read-only enumeration (skills.list) and on-demand
+    // procedure rendering (skills.invoke) of the operator-
+    // approved skill set.
+    "skills.list",
+    "skills.invoke",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
     // ollama model management (Phase 36 — local LLM story completion)
@@ -659,6 +675,18 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "reflection.propose",
         "reflection.apply",
         "persona.propose",
+        // Phase 110 — Skills Auto-Creation. Trusted tier gets
+        // skills.* because skill proposal + listing + invocation
+        // are inside the same reflection-layer envelope as
+        // persona.propose / role.update. SemiTrusted does not
+        // get these — proposing or rendering skills from a
+        // remote adapter would cross trust boundaries the same
+        // way notify.send does. Operators who want SemiTrusted
+        // skill access can grant individual bases via role
+        // capability_scopes.
+        "skills.propose",
+        "skills.list",
+        "skills.invoke",
         "role.update",
         "ollama.list",
         "ollama.show",

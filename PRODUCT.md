@@ -1380,13 +1380,27 @@ take effect on the next turn without daemon restart.
   TOML config, strict attenuation along every dimension,
   validated at config-load time.
 
-- **P8 — Outcome-Driven Audited Reflection.** Phases 28–30.
-  Audit introspection via `turn.history` (Phase 28),
-  reflection loop via `reflection.propose`/`.apply`
-  (Phase 29), runtime role mutation via `role.update` +
-  planner factory integration (Phase 30). Full
-  observe→propose→approve→apply cycle operational for
-  both memory writes and runtime role-config changes.
+- **P8 — Outcome-Driven Audited Reflection.** Phases 28–30,
+  extended at Phase 110. Audit introspection via
+  `turn.history` (Phase 28), reflection loop via
+  `reflection.propose`/`.apply` (Phase 29), runtime role
+  mutation via `role.update` + planner factory integration
+  (Phase 30). Phase 110 added the Skills Auto-Creation
+  primitive: `LearnedSkill` as the 11th
+  `PersonaDeltaCategory` variant (Q1a), new
+  `skills.propose` capability scope sibling to
+  `persona.propose` (Q2b), `skills.list` + `skills.invoke`
+  substrate tools, and a `## Learned skills` section in
+  the assembled system prompt (Q3c). Stays inside P8's
+  envelope — the agent proposes through the existing
+  persona-proposal surface, the operator approves through
+  the Phase 70 review flow, the chain records both
+  halves. No P8 amendment needed; the commitment text
+  defines the propose-approve-apply shape and the
+  skills extension fits inside that shape unchanged.
+  Full observe→propose→approve→apply cycle now operational
+  for memory writes, runtime role-config changes, Persona
+  identity refinement, AND learned skills.
 
 - **P9 — Per-Role Full Capability Declaration.** Phase 13.
   `capability_scopes` parsed via `Scope::parse` at config-load

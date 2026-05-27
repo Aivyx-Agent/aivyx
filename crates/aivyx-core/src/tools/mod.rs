@@ -30,6 +30,7 @@ pub mod git;
 pub mod net_dns;
 pub mod role_switch;
 pub mod shell;
+pub mod skills;
 pub mod web_fetch;
 
 pub use fs::{
@@ -40,4 +41,5 @@ pub use git::{GitDiffTool, GitReadToolConfig, GitStatusTool};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
+pub use skills::{SkillReader, SkillsInvokeTool, SkillsListTool};
 pub use web_fetch::{WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig};

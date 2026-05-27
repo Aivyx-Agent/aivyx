@@ -339,7 +339,8 @@ mod tests {
                     "learned_context": [],
                     "communication_adaptations": [],
                     "character_traits": [],
-                    "relationship_milestones": []
+                    "relationship_milestones": [],
+                    "learned_skills": []
                 }
             }
         }"#;

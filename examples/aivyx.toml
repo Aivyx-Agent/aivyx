@@ -1539,3 +1539,38 @@ parent_role = "researcher"
 #     "/home/me/projects/aivyx",
 #     "/home/me/projects/some-other-repo",
 # ]
+
+# ----------------------------------------------------------------
+# Skills Auto-Creation — Phase 110 (Reflection Staging)
+# ----------------------------------------------------------------
+#
+# Skills are procedural patterns the agent drafts after complex
+# turns and the operator approves through the existing persona-
+# proposal surface. They live as `PersonaDeltaCategory::LearnedSkill`
+# entries inside the Persona chain alongside other identity
+# deltas; approved skills render into the agent's system prompt
+# as a `## Learned skills` section and are callable through the
+# `skills.list` + `skills.invoke` substrate tools.
+#
+# Roles that should propose skills need `skills.propose` in their
+# capability_scopes. Roles that should only *use* approved skills
+# (read them through the prompt, invoke their procedure bodies on
+# demand) need `skills.list` and `skills.invoke`. The
+# `CEILING_TRUSTED` ceiling includes all three by default; remote
+# SemiTrusted adapters (Telegram / Discord / Slack) do not get
+# skills.* unless the role explicitly grants them.
+#
+# To enable a role to draft + use skills, declare the scopes
+# alongside the existing reflection.* + persona.propose grants:
+#
+# [[role]]
+# name = "researcher-with-skills"
+# parents = ["researcher"]
+# capability_scopes = [
+#     "reflection.propose",
+#     "reflection.apply",
+#     "persona.propose",
+#     "skills.propose",     # Phase 110 — propose new skills
+#     "skills.list",        # Phase 110 — enumerate approved skills
+#     "skills.invoke",      # Phase 110 — read full procedure on demand
+# ]

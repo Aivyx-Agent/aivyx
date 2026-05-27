@@ -44,8 +44,9 @@ pub use planner::{
 pub use tools::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitDiffTool, GitReadToolConfig,
-    GitStatusTool, NetDnsTool, ShellExecTool, ShellExecToolConfig, WebFetchTool,
-    WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    GitStatusTool, NetDnsTool, ShellExecTool, ShellExecToolConfig, SkillReader,
+    SkillsInvokeTool, SkillsListTool, WebFetchTool, WebFetchToolConfig, WebPostTool,
+    WebPostToolConfig,
 };
 
 use std::sync::Arc;

@@ -552,6 +552,37 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 > separate `git.status` / `git.diff` bases, mirroring the
 > read-invariant grouping).
 
+**`skills` — learned procedural pattern surface** *(added in Phase 110)*
+
+| Scope | Qualifier | Description |
+|---|---|---|
+| `skills.propose` | — | Propose a `LearnedSkill` delta through `reflection.propose` |
+| `skills.list` | — | Enumerate operator-approved skills |
+| `skills.invoke` | — | Render the full procedure body of one approved skill |
+
+> **Phase 110 — Skills Auto-Creation (Reflection Staging).**
+> Three new scope bases gate the skills primitive:
+> `skills.propose` is the sibling capability to
+> `persona.propose` for proposals whose `persona_deltas` array
+> contains any `PersonaDeltaCategory::LearnedSkill` entry
+> (Q2b at Phase 110 sign-off — operator picked per-category
+> granularity over extending `persona.propose`).
+> `skills.list` and `skills.invoke` gate the two substrate
+> tools that let agents read the approved skill set
+> (enumeration vs. on-demand procedure-body render). All three
+> bases live in `CEILING_TRUSTED` only; SemiTrusted remote
+> adapters do not get skills.* by default. **No amendment
+> filed** — Phase 110 stays inside PRODUCT.md P8's
+> outcome-driven-audited-reflection envelope; the
+> propose-approve-apply shape P8 commits to is unchanged, and
+> the LearnedSkill extension is a new category inside that
+> shape rather than a new commitment. P10's substrate tool
+> count was last set to thirteen at A12 (Phase 109); skills.*
+> tools are **infrastructure tools** per P10's
+> substrate/infrastructure/third-party taxonomy (the agent
+> uses them to manage itself's identity layer) so they are
+> not counted against P10's substrate-tool cap.
+
 **`llm` — language model**
 
 | Scope | Qualifier | Description |

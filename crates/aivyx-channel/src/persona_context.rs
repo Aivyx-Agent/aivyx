@@ -446,6 +446,7 @@ mod tests {
             communication_adaptations: vec![],
             character_traits: vec![],
             relationship_milestones: vec![],
+            learned_skills: Vec::new(),
         }
     }
 
