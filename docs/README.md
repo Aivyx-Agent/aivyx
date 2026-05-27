@@ -168,6 +168,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 108 | Frozen | [PHASE_108.md](PHASE_108.md) | `19b029d`  |
 | Phase 109 | Frozen | [PHASE_109.md](PHASE_109.md) | `2e8eff3`  |
 | Phase 110 | Frozen | [PHASE_110.md](PHASE_110.md) | `d1f19f1`  |
+| Phase 111 | Active | [PHASE_111.md](PHASE_111.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

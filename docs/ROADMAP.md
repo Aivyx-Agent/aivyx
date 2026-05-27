@@ -3371,6 +3371,37 @@ ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
 
+## Phase 111 — Adapter Production Wiring (operator-requested follow-on)
+
+**Active — see [PHASE_111.md](PHASE_111.md).** Standalone
+phase past Chapter D's close (no chapter framing, matching
+the Phase 99 precedent for operator-requested follow-on
+work). Lands the two Phase-107/108-internal carve-outs that
+bundled for follow-on work at the Channel Activation
+Milestone:
+- **Discord daemon-frontend** (Phase 107 Task 5 carve-out)
+  mirroring Phase 19's Telegram-over-daemon pattern.
+- **Slack Socket Mode live wiring** (Phase 108 Task 3
+  carve-out) replacing the stub `SlackMorphismTransport`
+  with the real implementation via `SlackClientEventsUserState`
+  callback-state-passing.
+
+After Phase 111, both adapters are production-ready
+end-to-end at the in-process AND daemon-mode levels. The
+**Channel Activation Milestone** then runs as the
+operator-verification pass it was always meant to be — no
+code, just real-bot smoke tests across every adapter (per
+the ROADMAP's milestone-vs-phase distinction). Q1a chose
+to ship both adapters together (one phase, multi-session);
+Q2a chose to mirror Phase 19 exactly for the Discord
+daemon-frontend (two-data-point pattern confirmation);
+Q3a chose scripted-only tests (real-bot is the milestone's
+job). All three streaks predicted to extend (substrate
+work touches no contract; tools live in aivyx-channel /
+aivyx-slack, not aivyx-core; `FrontendType` enum addition
+lives in aivyx-channel's daemon_ipc.rs). Zero new
+workspace deps.
+
 ## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
 
 **Frozen — see [PHASE_110.md](PHASE_110.md).** The sixth and
