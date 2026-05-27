@@ -45,6 +45,15 @@ const KNOWN_BASES: &[&str] = &[
     // shell
     "shell.exec",
     "shell.spawn",
+    // git — Amendment A12 (Phase 109). Read-only git repo
+    // inspection. Qualifier is the canonical repo path; the
+    // tools (`git.status` + `git.diff`) check it against
+    // the operator's configured `[git] repos` list. One base
+    // shared by both read tools by design (read-invariant
+    // grouping; see A12 amendment doc for the rationale).
+    // A future destructive git tool would warrant a separate
+    // `git.write` base.
+    "git.read",
     // llm
     "llm.call",
     "llm.embed",

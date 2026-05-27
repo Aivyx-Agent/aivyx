@@ -666,33 +666,41 @@ future implementation from compromising it for ergonomics.
 
 ---
 
-## Product Commitment 10 — Substrate-Only Core, Ten Tools Forever (LOCKED 2026-04-15, amended 2026-04-20, 2026-05-22)
+## Product Commitment 10 — Substrate-Only Core, Thirteen Tools Forever (LOCKED 2026-04-15, amended 2026-04-20, 2026-05-22, 2026-05-28)
 
 ### The Rule
 
-> **Aivyx core ships exactly ten first-party tools forever:
+> **Aivyx core ships exactly thirteen first-party tools forever:
 > `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`,
 > `memory.read`, `memory.write`, `memory.forget`,
-> `shell.exec`, `web.fetch`, `web.post`.
+> `shell.exec`, `web.fetch`, `web.post`,
+> `git.status`, `git.diff`, `net.dns`.
 > Adding to or removing from this list requires a
 > `PRODUCT.md` amendment.**
 >
 > *See amendments
 > [`2026-04-20-substrate-tool-count.md`](docs/amendments/2026-04-20-substrate-tool-count.md)
 > — `web.post` added in Phase 37, amendment filed in Phase 38;
-> and
 > [`2026-05-22-substrate-tool-count-ten.md`](docs/amendments/2026-05-22-substrate-tool-count-ten.md)
 > — `fs.delete` + `fs.metadata` added and amendment filed in
-> Phase 100.*
+> Phase 100;
+> and [`2026-05-28-substrate-tool-count-thirteen.md`](docs/amendments/2026-05-28-substrate-tool-count-thirteen.md)
+> — `git.status` + `git.diff` (one new `git.read` scope base
+> shared between the two) + `net.dns` (existing scope base
+> since Phase 0) added and amendment filed in Phase 109.*
 
 ### What this commits us to
 
 1. **The substrate is the operator-discoverable surface.** An
    operator who runs Aivyx for the first time finds these
-   ten tools available (subject to role allowlists and trust
-   tiers). Every richer capability — git, browser, LSP, code
+   thirteen tools available (subject to role allowlists and
+   trust tiers). Every richer capability — browser, LSP, code
    search, email, calendar, anything domain-specific — is a
-   third-party tool the operator installs explicitly.
+   third-party tool the operator installs explicitly. Git's
+   read primitives (`git.status`, `git.diff`) were added to
+   substrate at A12 (Phase 109) on the rationale that code-
+   read inspection is operator-bootstrap-essential, the same
+   way `fs.read` is.
 
 2. **The substrate is closed-set.** The contract pins the
    exact list, not "approximately ten" or "the current set
@@ -741,10 +749,11 @@ substrate and therefore **not** counted against the cap:
 ### Why the cap is at exactly the current count
 
 Phase 37 stabilized the substrate set; Amendment A11 (Phase
-100) brought it to ten tools that together cover the minimum
-viable agent surface. Pinning the cap at the current count
-is a way of saying: **the foundation is done growing the
-substrate.** Future product phases focus on the daemon
+100) brought it to ten tools; Amendment A12 (Phase 109)
+brought it to thirteen with the `git.status` + `git.diff`
+read pair and `net.dns`. Pinning the cap at the current
+count is a way of saying: **the foundation is done growing
+the substrate.** Future product phases focus on the daemon
 (**P4**), the role-config migration (**P9**), the
 reflection layer (**P8**), missions (**P2**), and the
 SDK contracts (**P11**, **P12**) — not on cramming more
@@ -752,7 +761,7 @@ tools into core.
 
 ### What this commitment deliberately does not say
 
-- **It does not say the existing ten tools are frozen in
+- **It does not say the existing thirteen tools are frozen in
   shape.** A future phase may extend `web.fetch` to support
   HEAD, may extend `shell.exec` to support a process-group
   kill API, may extend `memory.read` to support new query
@@ -873,7 +882,7 @@ tools into core.
    the SDK from **P11**.
 
 4. **First-party tools special-case in-process for speed.**
-   The ten substrate tools from **P10** ship in-process
+   The thirteen substrate tools from **P10** ship in-process
    in the daemon for latency reasons. They speak the same
    protocol third-party tools speak — the protocol is the
    contract — but they bypass the IPC hop. This means a
@@ -1305,8 +1314,9 @@ because the foundation already supports them:
 - **P7 — Single-inheritance role tree.** Phase 11's role
   primitive is the substrate; **P9**'s migration adds the
   inheritance layer.
-- **P10 — Substrate-only core.** True at ten tools
-  (Amendment A5, Phase 38; Amendment A11, Phase 100).
+- **P10 — Substrate-only core.** True at thirteen tools
+  (Amendment A5, Phase 38; Amendment A11, Phase 100;
+  Amendment A12, Phase 109).
 
 ---
 
@@ -1314,11 +1324,11 @@ because the foundation already supports them:
 
 A traceability surface mapping each product commitment to its
 implementation state after 59 phases. The commitment text
-above carries seven amendments: A5 (P10 seven→eight, Phase 38),
+above carries eight amendments: A5 (P10 seven→eight, Phase 38),
 A6 (parallel tool execution, Phase 40), A7 (protocol
 negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
 (P13 — Profile, Phase 56), A10 (P14 — Persona, Phase 56), A11
-(P10 eight→ten, Phase 100).
+(P10 eight→ten, Phase 100), A12 (P10 ten→thirteen, Phase 109).
 This section records what shipped, what partially shipped,
 and what remains forward.
 
@@ -1383,15 +1393,18 @@ take effect on the next turn without daemon restart.
   time. Four-role worked example in `examples/aivyx.toml`.
   `--print-role` debug flag for operator introspection.
 
-- **P10 — Substrate-Only Core, Ten Tools Forever.** Always
-  true. The ten substrate tools (`fs.read`, `fs.write`,
-  `fs.delete`, `fs.metadata`, `memory.read`, `memory.write`,
-  `memory.forget`, `shell.exec`, `web.fetch`, `web.post`) are
-  the closed set. `web.post` added in Phase 37, amendment A5
+- **P10 — Substrate-Only Core, Thirteen Tools Forever.**
+  Always true. The thirteen substrate tools (`fs.read`,
+  `fs.write`, `fs.delete`, `fs.metadata`, `memory.read`,
+  `memory.write`, `memory.forget`, `shell.exec`, `web.fetch`,
+  `web.post`, `git.status`, `git.diff`, `net.dns`) are the
+  closed set. `web.post` added in Phase 37, amendment A5
   filed in Phase 38; `fs.delete` + `fs.metadata` added in
-  Phase 100, amendment A11 filed the same phase.
-  Infrastructure tools and third-party MCP tools are separate
-  categories.
+  Phase 100, amendment A11 filed the same phase; `git.status`
+  + `git.diff` (sharing new `git.read` scope) + `net.dns`
+  (existing scope since Phase 0) added in Phase 109,
+  amendment A12 filed the same phase. Infrastructure tools
+  and third-party MCP tools are separate categories.
 
 - **P5 — Open First-Party Channel Surface.** Phase 48.
   `docs/CHANNEL_SDK.md` is the v0 third-party contract;

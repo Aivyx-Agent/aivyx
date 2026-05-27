@@ -536,6 +536,22 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 | `shell.exec` | command allowlist | Run a command, capture output |
 | `shell.spawn` | command allowlist | Spawn long-lived subprocess |
 
+**`git` — version control read** *(added in Amendment A12, Phase 109)*
+
+| Scope | Qualifier | Description |
+|---|---|---|
+| `git.read` | repo path glob | Read repo state — `git.status` and `git.diff` share this base |
+
+> **Amendment (2026-05-28):** `git.read` joins the substrate
+> base table as the qualifier-by-repo-path gate for the
+> `git.status` + `git.diff` tools added in Phase 109. See
+> amendment
+> [`docs/amendments/2026-05-28-substrate-tool-count-thirteen.md`](docs/amendments/2026-05-28-substrate-tool-count-thirteen.md)
+> for the P10 count update from ten to thirteen and the
+> shared-scope-base rationale (one `git.read` rather than
+> separate `git.status` / `git.diff` bases, mirroring the
+> read-invariant grouping).
+
 **`llm` — language model**
 
 | Scope | Qualifier | Description |
