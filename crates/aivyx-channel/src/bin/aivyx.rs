@@ -239,7 +239,12 @@ fn build_shell_exec_for_channel(
             })?;
             Ok(Some((Arc::new(shell) as Arc<dyn Tool>, scope)))
         }
-        ChannelKind::Telegram => Ok(None),
+        // Phase 107 — Discord shares the SemiTrusted tier
+        // posture with Telegram; neither receives `shell.exec`
+        // at registration time. Symmetric behavior keeps the
+        // SemiTrusted audit chain free of shell.exec mentions
+        // across both adapters.
+        ChannelKind::Telegram | ChannelKind::Discord => Ok(None),
     }
 }
 
@@ -278,7 +283,12 @@ fn build_fs_delete_for_channel(
             })?;
             Ok(Some((Arc::new(tool) as Arc<dyn Tool>, scope)))
         }
-        ChannelKind::Telegram => Ok(None),
+        // Phase 107 — Discord shares the SemiTrusted tier
+        // posture with Telegram for destructive tool gating.
+        // A SemiTrusted dispatch registry never contains
+        // `fs.delete`, whether the channel is Telegram or
+        // Discord.
+        ChannelKind::Telegram | ChannelKind::Discord => Ok(None),
     }
 }
 
@@ -650,6 +660,11 @@ fn run() -> Result<(), String> {
         // required, regardless of `--channel`.
         require_api_key: !verify_only && !print_role_mode && !audit_export_mode,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
+        // Phase 107 — mirrors the Telegram check for the
+        // Discord adapter. `--print-role` does not open a
+        // Discord connection regardless of `--channel`, so
+        // the print path relaxes this just like Telegram.
+        require_discord_token: matches!(channel_kind, ChannelKind::Discord) && !print_role_mode,
         // Phase 11 Task 4 — `--role <name>` is now the highest-
         // priority source. `parse_cli_args` turns the flag into
         // `role_override`, which `aivyx-config`'s resolver honors
@@ -2743,6 +2758,11 @@ async fn run_async(
         memory_max_per_topic,
         passphrase: _,
         telegram,
+        // Phase 107 Task 2 — `discord` config landed in the
+        // AivyxConfig surface; Task 5 will wire it into the
+        // Discord session-driver dispatch. Until then the
+        // field is destructured-but-unused.
+        discord: _,
         // Phase 68 — shared SMTP config consumed by
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
@@ -4936,6 +4956,20 @@ async fn run_async(
             .await
             .map(|_report| ())
         }
+
+        // Phase 107 Task 2 — `ChannelKind::Discord` is recognized
+        // at parse time (Task 5 wires the `--channel discord`
+        // flag through this same dispatch) but the session
+        // driver lands at Task 5. Until then, surface a clean
+        // error so an operator running today's binary against
+        // the discord arm gets a precise message rather than a
+        // missing-match panic.
+        ChannelKind::Discord => Err(
+            "Discord channel adapter is wired through Task 2 (skeleton + config) \
+             but the session driver lands at Phase 107 Task 5. Use `--channel local` \
+             or `--channel telegram` for now."
+                .to_string(),
+        ),
     }
 }
 
@@ -5701,6 +5735,7 @@ mod tests {
             toml_path: Some(example_path),
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: Some("default".to_string()),
         };
         AivyxConfig::load_from_env_and_toml(&opts).expect("examples/aivyx.toml must load cleanly")

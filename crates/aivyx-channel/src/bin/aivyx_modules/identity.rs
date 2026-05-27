@@ -165,6 +165,7 @@ fn load_profile_for_export() -> Result<aivyx_config::Profile, String> {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let config = AivyxConfig::load_from_env_and_toml(&opts).map_err(|e| {

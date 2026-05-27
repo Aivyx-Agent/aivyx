@@ -11,6 +11,7 @@ members = [
     "crates/aivyx-memory",
     "crates/aivyx-channel",
     "crates/aivyx-telegram",
+    "crates/aivyx-discord",
     "crates/aivyx-mcp",
     "crates/aivyx-tool",
 ]

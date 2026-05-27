@@ -271,6 +271,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         toml_path: Some(Path::new(PROFILE_TOML_PATH).to_path_buf()),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)

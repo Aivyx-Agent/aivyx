@@ -1,0 +1,60 @@
+[package]
+name = "aivyx-discord"
+description = "Discord ChannelContext adapter — Phase 107's third concrete channel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+# Phase 107 — mirrors aivyx-telegram's `aivyx-llm` dep. We do not
+# depend on aivyx-channel for the same reason the Telegram crate
+# doesn't: the binary in that crate calls into
+# `aivyx_discord::run_discord_session`, which would create a cycle
+# `aivyx-discord → aivyx-channel → aivyx-discord`. The session
+# driver defines its own `DiscordSessionConfig` mirroring
+# `aivyx_channel::SessionConfig` minus the local-only fields.
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Phase 107 task 2 — twilight-rs is the thin protocol wrapper for
+# Discord, mirroring the Phase 8 decision to use `frankenstein`
+# (over `teloxide`) for Telegram. Three direct crates:
+# - `twilight-gateway` owns the WebSocket state machine: identify,
+#   heartbeat, sequence tracking, resume. We consume it via the
+#   `Shard::next_event` stream.
+# - `twilight-http` is the REST client. We use it for
+#   `Client::create_message(channel_id).content(text)` — the
+#   single Discord REST verb the channel actually issues.
+# - `twilight-model` carries the typed events
+#   (`Event::MessageCreate`, etc.) the gateway yields.
+#
+# Versioned with `~` so a 0.x minor bump can land via Cargo.lock
+# without the manifest churning. The 0.16 line is the current
+# stable major-series at Phase 107 entry.
+twilight-gateway = { version = "0.16", default-features = false, features = ["rustls-platform-verifier", "rustls-ring", "twilight-http"] }
+twilight-http = { version = "0.16", default-features = false, features = ["rustls-platform-verifier", "rustls-ring"] }
+twilight-model = "0.16"
+
+[dev-dependencies]
+# Mirrors aivyx-telegram dev-deps: scripted tests need a tokio
+# runtime, in-memory storage primitives, a real persistent audit
+# chain (mock audits don't catch the bugs persistent audits do —
+# noted in docs/ADAPTER_PATTERN.md), and the memory crate so the
+# two-partition test exercises the same multi-tenant story the
+# Telegram precedent pins.
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+aivyx-memory = { path = "../aivyx-memory" }
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-crypto = { path = "../aivyx-crypto" }

@@ -74,6 +74,7 @@ fn load_example_config() -> AivyxConfig {
         toml_path: Some(example_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: Some("default".to_string()),
     };
     AivyxConfig::load_from_env_and_toml(&opts)

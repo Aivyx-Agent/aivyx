@@ -330,6 +330,7 @@ passphrase = "toml-passphrase"
         toml_path: Some(toml_path.clone()),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -383,6 +384,7 @@ chat_id = 1
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -546,6 +548,7 @@ fn malformed_toml_is_typed_parse_error() {
         toml_path: Some(toml_path.clone()),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("should fail");
@@ -567,6 +570,7 @@ fn missing_toml_file_is_not_an_error() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts)
@@ -588,6 +592,7 @@ fn validate_errors_when_required_api_key_missing() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = cfg.validate(&opts).expect_err("should require api key");
@@ -609,6 +614,7 @@ fn validate_errors_when_required_telegram_token_missing() {
         toml_path: None,
         require_api_key: false,
         require_telegram_token: true,
+        require_discord_token: false,
         role_override: None,
     };
     let err = cfg.validate(&opts).expect_err("should require token");
@@ -630,6 +636,7 @@ fn validate_succeeds_when_everything_required_is_set() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: true,
+        require_discord_token: false,
         role_override: None,
     };
     cfg.validate(&opts).expect("should validate cleanly");
@@ -697,6 +704,7 @@ async fn encrypted_store_hydrates_missing_api_key() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     cfg.validate(&opts).expect("api key present after hydration");
@@ -828,6 +836,7 @@ memory_topic_prefix = "researcher/"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -903,6 +912,7 @@ system_prompt = "no allowlist key at all"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -940,6 +950,7 @@ tool_allowlist = []
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -980,6 +991,7 @@ system_prompt = "second"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         // Override wins even though the env var says "first".
         role_override: Some("second".to_string()),
     };
@@ -1015,6 +1027,7 @@ system_prompt = "secondary"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1047,6 +1060,7 @@ system_prompt = "real"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1089,6 +1103,7 @@ system_prompt = "from the explicit role"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load with conflict");
@@ -1140,6 +1155,7 @@ system_prompt = "brand new role, no legacy baggage"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1175,6 +1191,7 @@ name = "bare"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1272,6 +1289,7 @@ system_prompt = "You are a pair-programmer."
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1321,6 +1339,7 @@ capability_scopes = ["fs.read", "shell.exec:git", "memory.write"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1363,6 +1382,7 @@ capability_scopes = ["fs.read", "this.is.not.a.real.base"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1419,6 +1439,7 @@ trust_ceiling = "{tier_str}"
             toml_path: Some(toml_path),
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: None,
         };
         let cfg = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1447,6 +1468,7 @@ trust_ceiling = "Goat"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1488,6 +1510,7 @@ parent_role = "no-such-role"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1533,6 +1556,7 @@ parent_role = "selfish"
             toml_path: Some(toml_path),
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: None,
         };
         let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1575,6 +1599,7 @@ parent_role = "a"
             toml_path: Some(toml_path),
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: None,
         };
         let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1626,6 +1651,7 @@ capability_scopes = ["fs.read", "shell.exec"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1693,6 +1719,7 @@ capability_scopes = ["net.fetch"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1747,6 +1774,7 @@ capability_scopes = ["fs.read:/etc/**"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts)
@@ -1790,6 +1818,7 @@ system_prompt = "coder prompt"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1851,6 +1880,7 @@ command = "/usr/bin/my-server"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1892,6 +1922,7 @@ api_key = "sk-test"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1927,6 +1958,7 @@ command = "npx"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -1970,6 +2002,7 @@ transport = "sse"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2013,6 +2046,7 @@ wordcount = "memory.read:topic:wc/**"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2060,6 +2094,7 @@ enabled = false
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2095,6 +2130,7 @@ args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-p
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2133,6 +2169,7 @@ wrapper = "   "
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2164,6 +2201,7 @@ command = "python3"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2196,6 +2234,7 @@ command = "   "
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2235,6 +2274,7 @@ args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-p
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2273,6 +2313,7 @@ wrapper = "   "
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2310,6 +2351,7 @@ wrapper = "bwrap"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2344,6 +2386,7 @@ command = "/usr/local/bin/mcp"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2376,6 +2419,7 @@ transport = "stdio"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -2443,6 +2487,7 @@ base_url = "http://localhost:11434/v1"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2475,6 +2520,7 @@ api_key = "sk-toml-loses"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2490,6 +2536,7 @@ fn validate_requires_openai_key_when_provider_is_openai() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2507,6 +2554,7 @@ fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2524,6 +2572,7 @@ fn ollama_provider_from_env() {
         toml_path: None,
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2551,6 +2600,7 @@ model = "llama3.1"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2567,6 +2617,7 @@ fn ollama_validate_does_not_require_api_key() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2584,6 +2635,7 @@ fn ollama_accepts_optional_api_key() {
         toml_path: None,
         require_api_key: true,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2627,6 +2679,7 @@ web_ui = true
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2651,6 +2704,7 @@ web_ui_port = 9999
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2675,6 +2729,7 @@ web_ui = false
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2692,6 +2747,7 @@ fn daemon_web_ui_absent_means_none() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2723,6 +2779,7 @@ bundled = true
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2751,6 +2808,7 @@ args = ["-y", "@modelcontextprotocol/server-github"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2791,6 +2849,7 @@ behavioral_constraints = [
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2847,6 +2906,7 @@ model = "claude-haiku-4-5-20251001"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2882,6 +2942,7 @@ primary_use_cases = ["personal-finance analysis"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2942,6 +3003,7 @@ enabled = false
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -2985,6 +3047,7 @@ api_key = "sk-test"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3013,6 +3076,7 @@ kind = "telegram"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3051,6 +3115,7 @@ kind = "webhook"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3080,6 +3145,7 @@ url = "ftp://example.com/notify"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3118,6 +3184,7 @@ chat_id = "x"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3162,6 +3229,7 @@ url = "https://example.com/x"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3201,6 +3269,7 @@ url = "https://example.com/x"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3245,6 +3314,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3281,6 +3351,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3329,6 +3400,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3380,6 +3452,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3422,6 +3495,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3461,6 +3535,7 @@ notify_target = "ops"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3501,6 +3576,7 @@ notify_target = "alerts"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3532,6 +3608,7 @@ prompt = "Do the thing"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3581,6 +3658,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3622,6 +3700,7 @@ to = "alice@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3661,6 +3740,7 @@ to = "alice@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3701,6 +3781,7 @@ from = "a@b.c"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3738,6 +3819,7 @@ from = "a@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3771,6 +3853,7 @@ from = "a@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3801,6 +3884,7 @@ from = "a@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3831,6 +3915,7 @@ from = "notanemail"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3866,6 +3951,7 @@ to = "no-at-sign"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3897,6 +3983,7 @@ from = "a@example.com"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -3935,6 +4022,7 @@ kind = "web-ui"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -3970,6 +4058,7 @@ kind = "carrier-pigeon"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4007,6 +4096,7 @@ cron = "0 0 23 * * *"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4087,6 +4177,7 @@ fn reflection_schedule_skip_when_idle_with_zero_threshold_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -4125,6 +4216,7 @@ enabled = false
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4153,6 +4245,7 @@ cron = ""
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4188,6 +4281,7 @@ lookback_window_secs = 30
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4224,6 +4318,7 @@ lookback_window_secs = 999999999
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4261,6 +4356,7 @@ cron = "0 0 1 * * *"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4300,6 +4396,7 @@ cron = "0 0 1 * * *"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4336,6 +4433,7 @@ role_override = "ghost-role"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4386,6 +4484,7 @@ notify_target = "phone"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4437,6 +4536,7 @@ notify_targets = ["phone", "desktop"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4482,6 +4582,7 @@ notify_targets = ["phone"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4529,6 +4630,7 @@ prompt = "morning summary"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4580,6 +4682,7 @@ notify_targets = ["desktop"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4622,6 +4725,7 @@ default = true
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4678,6 +4782,7 @@ notify_when = "{input}"
             toml_path: Some(toml_path),
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: None,
         };
         let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4720,6 +4825,7 @@ notify_when = "if_blue_moon"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4767,6 +4873,7 @@ notify_targets = ["phone", "ghost"]
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4806,6 +4913,7 @@ url = "https://example.com/x"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4840,6 +4948,7 @@ retry_count = 100
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4878,6 +4987,7 @@ retry_backoff_ms_start = 50
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4916,6 +5026,7 @@ retry_backoff_ms_start = 200
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -4948,6 +5059,7 @@ rate_limit_max = 10
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -4984,6 +5096,7 @@ rate_limit_window_secs = 3600
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5021,6 +5134,7 @@ rate_limit_window_secs = 60
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5057,6 +5171,7 @@ rate_limit_window_secs = 3600
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5091,6 +5206,7 @@ retention = "forever"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5125,6 +5241,7 @@ retention_days = 30
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5165,6 +5282,7 @@ retention_days = 30
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5197,6 +5315,7 @@ retention = "forever"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5230,6 +5349,7 @@ retention = "until-summer"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5264,6 +5384,7 @@ retention_days = 0
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5296,6 +5417,7 @@ topic_glob = "notes/*"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5331,6 +5453,7 @@ retention_days = 30
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5365,6 +5488,7 @@ retention = "forever"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
@@ -5415,6 +5539,7 @@ api_key = "sk-emb-toml"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5464,6 +5589,7 @@ dimensions = 768
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5497,6 +5623,7 @@ api_key = "sk-emb-toml-loses"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5525,6 +5652,7 @@ base_url = "   "
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5557,6 +5685,7 @@ dimensions = 0
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5591,6 +5720,7 @@ rag_min_similarity = 0.55
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
@@ -5617,6 +5747,7 @@ rag_top_k = 0
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5649,6 +5780,7 @@ rag_min_similarity = 1.5
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5682,6 +5814,7 @@ recall_window_turns = 5
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5712,6 +5845,7 @@ recall_window_turns = 0
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5934,6 +6068,7 @@ fn embedding_ann_index_zero_threshold_when_armed_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -5987,6 +6122,7 @@ model = "text-embedding-3-small"
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let mut cfg =
@@ -6048,6 +6184,7 @@ fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts).expect("load")
@@ -6128,6 +6265,7 @@ fn proactive_enabled_requires_target() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6157,6 +6295,7 @@ fn proactive_enabled_zero_cap_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6188,6 +6327,7 @@ fn proactive_enabled_all_signals_off_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6300,6 +6440,7 @@ fn persona_lifecycle_helpfulness_decay_knobs() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     match AivyxConfig::load_from_env_and_toml(&opts)
@@ -6325,6 +6466,7 @@ fn persona_lifecycle_helpfulness_decay_knobs() {
         toml_path: Some(toml2),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     match AivyxConfig::load_from_env_and_toml(&opts2)
@@ -6382,6 +6524,7 @@ fn persona_lifecycle_pair_affinity_decay_knob() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     match AivyxConfig::load_from_env_and_toml(&opts)
@@ -6407,6 +6550,7 @@ fn persona_lifecycle_pair_affinity_decay_knob() {
         toml_path: Some(toml2),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     match AivyxConfig::load_from_env_and_toml(&opts2)
@@ -6471,6 +6615,7 @@ fn persona_lifecycle_enabled_bad_similarity_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6503,6 +6648,7 @@ fn persona_lifecycle_enabled_zero_min_facets_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6532,6 +6678,7 @@ fn persona_lifecycle_enabled_all_signals_off_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6614,6 +6761,7 @@ fn recall_cluster_enabled_zero_siblings_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6643,6 +6791,7 @@ fn recall_cluster_enabled_nonpositive_affinity_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6742,6 +6891,7 @@ fn persona_consolidation_enabled_nonpositive_affinity_is_invalid()
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6774,6 +6924,7 @@ fn persona_consolidation_enabled_zero_samples_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6806,6 +6957,7 @@ fn persona_consolidation_enabled_zero_cap_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)
@@ -6996,6 +7148,7 @@ fn recall_judgment_enabled_zero_cap_is_invalid() {
         toml_path: Some(toml_path),
         require_api_key: false,
         require_telegram_token: false,
+        require_discord_token: false,
         role_override: None,
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts)

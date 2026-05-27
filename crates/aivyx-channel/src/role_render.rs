@@ -77,6 +77,12 @@ use crate::assemble_role_envelope;
 pub enum ChannelKind {
     Local,
     Telegram,
+    /// Phase 107 — Discord adapter. Same `SemiTrusted` tier
+    /// posture as `Telegram` for registration-time tool
+    /// gating (`shell.exec` / `fs.delete` are not registered
+    /// for Discord; `web.fetch` is) and the same
+    /// non-`Local` rendering for role-envelope display.
+    Discord,
 }
 
 /// Construct the display-time backcompat floor for the given
@@ -189,6 +195,7 @@ pub fn render_role_envelope(
         match channel_kind {
             ChannelKind::Local => "local",
             ChannelKind::Telegram => "telegram",
+            ChannelKind::Discord => "discord",
         }
     )
     .unwrap();

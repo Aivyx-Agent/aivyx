@@ -413,6 +413,12 @@ pub struct LoadOptions {
     /// `telegram.token` is still `None`. Set to `true` by
     /// `--channel telegram`, `false` otherwise.
     pub require_telegram_token: bool,
+    /// Phase 107 — symmetric to `require_telegram_token` for
+    /// the Discord adapter. If `true`,
+    /// [`AivyxConfig::validate`] errors out when
+    /// `discord.token` is still `None`. Set to `true` by
+    /// `--channel discord`, `false` otherwise.
+    pub require_discord_token: bool,
     /// Caller-supplied override for which role should be activated at
     /// load time. Highest priority in the active-role resolution
     /// chain:
@@ -443,6 +449,7 @@ impl LoadOptions {
             toml_path: None,
             require_api_key: false,
             require_telegram_token: false,
+            require_discord_token: false,
             role_override: None,
         }
     }
@@ -550,6 +557,12 @@ pub struct AivyxConfig {
     /// any Telegram fields are set, so the startup banner can warn
     /// about orphan config.
     pub telegram: Option<TelegramConfig>,
+    /// Phase 107 — Discord channel config. `None` when the
+    /// caller did not enable Discord loading (i.e.
+    /// `--channel local|telegram` or `--channel` was not
+    /// passed). Filled in whenever any Discord field is set
+    /// so the startup banner can warn about orphan config.
+    pub discord: Option<DiscordConfig>,
     /// Phase 68 — shared SMTP configuration for the email notify
     /// backend. `None` when no `[email]` section is declared.
     /// Required when any `[[notify_target]] kind = "email"` exists;
@@ -983,6 +996,29 @@ pub struct TelegramConfig {
     /// Optional chat_id filter. `None` = accept all chats (Phase 9
     /// multi-chat mode). `Some` = single-chat compat mode.
     pub chat_filter: Option<Sourced<i64>>,
+}
+
+/// Phase 107 — Discord-specific configuration. Loaded from the
+/// `[discord]` TOML section and the `AIVYX_DISCORD_TOKEN` env
+/// var; mirrors `TelegramConfig`'s shape so the binary's
+/// channel-dispatch code reads symmetrically.
+#[derive(Debug, Clone)]
+pub struct DiscordConfig {
+    /// Bot token (Bot API token from the Discord developer
+    /// portal; lands in the `Authorization: Bot <token>`
+    /// header for REST and in the `Identify` payload for
+    /// Gateway). `Option` for the same reason as Telegram:
+    /// the binary may have a non-Discord run in flight where
+    /// the token isn't supplied, and validation happens at
+    /// validate-time, not load-time.
+    pub token: Option<SourcedSecret>,
+    /// Optional application_id. Reserved for future
+    /// slash-command registration (Q3a kept slash commands
+    /// out of Phase 107 scope; this field is plumbed so a
+    /// later phase can register slash commands without
+    /// re-shaping `DiscordConfig`). `None` until the
+    /// operator sets it.
+    pub application_id: Option<Sourced<u64>>,
 }
 
 /// Transport kind for an MCP server connection.
@@ -1889,6 +1925,8 @@ struct RawToml {
     #[serde(default)]
     telegram: RawTelegram,
     #[serde(default)]
+    discord: RawDiscord,
+    #[serde(default)]
     email: RawEmail,
     /// `[embedding]` section. Phase 75 — semantic memory search.
     #[serde(default)]
@@ -2456,6 +2494,17 @@ struct RawTelegram {
     chat_id: Option<i64>,
 }
 
+/// Phase 107 — `[discord]` TOML section deserialize target.
+/// Mirrors `RawTelegram` shape so the loader code reads
+/// symmetrically across both channel adapters.
+#[derive(Debug, Default, Deserialize)]
+struct RawDiscord {
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    application_id: Option<u64>,
+}
+
 /// Phase 68 — `[email]` section deserialize target.
 ///
 /// All fields are optional at the TOML layer; the loader
@@ -2653,6 +2702,9 @@ pub mod secret_keys {
     pub const EMBEDDING_API_KEY: &[u8] = b"embedding_api_key";
     /// Storage key for the Telegram bot token. Value: UTF-8 string.
     pub const TELEGRAM_TOKEN: &[u8] = b"telegram_token";
+    /// Phase 107 — storage key for the Discord bot token.
+    /// Value: UTF-8 string. Symmetric to `TELEGRAM_TOKEN`.
+    pub const DISCORD_TOKEN: &[u8] = b"discord_token";
     /// Storage key for the Aivyx master-key passphrase. Value: UTF-8 string.
     ///
     /// Storing the passphrase inside a store that is itself encrypted
@@ -2679,6 +2731,11 @@ const ENV_MEMORY_TTL_SECS: &str = "AIVYX_MEMORY_TTL_SECS";
 const ENV_PASSPHRASE: &str = "AIVYX_PASSPHRASE";
 const ENV_TELEGRAM_TOKEN: &str = "AIVYX_TELEGRAM_TOKEN";
 const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
+
+/// Phase 107 — Discord bot token + optional application id.
+/// Same `AIVYX_*` prefix convention every other secret uses.
+const ENV_DISCORD_TOKEN: &str = "AIVYX_DISCORD_TOKEN";
+const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_DISCORD_APPLICATION_ID";
 /// Env-var override for the active role name, second-priority in the
 /// active-role resolution chain (below [`LoadOptions::role_override`]
 /// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
@@ -2999,6 +3056,45 @@ impl AivyxConfig {
             Some(TelegramConfig {
                 token: telegram_token,
                 chat_filter: telegram_chat_filter,
+            })
+        } else {
+            None
+        };
+
+        // --- discord (Phase 107) -----------------------------------
+        // Same shape as telegram: constructed whenever any
+        // discord source fires. Token is an inner Option so
+        // "only application_id set" surfaces as a
+        // ConfigError::Missing at validate time.
+        let discord_token = env_secret(ENV_DISCORD_TOKEN)
+            .map(|s| SourcedSecret::new(s, FieldSource::Env))
+            .or_else(|| {
+                toml.discord
+                    .token
+                    .as_ref()
+                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+            });
+
+        let discord_application_id = match env_string(ENV_DISCORD_APPLICATION_ID) {
+            Some(s) => {
+                let parsed = s.parse::<u64>().map_err(|e| ConfigError::Invalid {
+                    field: "discord.application_id",
+                    reason: format!(
+                        "{ENV_DISCORD_APPLICATION_ID}={s:?} is not a valid u64: {e}"
+                    ),
+                })?;
+                Some(Sourced::new(parsed, FieldSource::Env))
+            }
+            None => toml
+                .discord
+                .application_id
+                .map(|n| Sourced::new(n, FieldSource::Toml)),
+        };
+
+        let discord = if discord_token.is_some() || discord_application_id.is_some() {
+            Some(DiscordConfig {
+                token: discord_token,
+                application_id: discord_application_id,
             })
         } else {
             None
@@ -3916,6 +4012,7 @@ impl AivyxConfig {
             memory_canonicalize_topics,
             passphrase,
             telegram,
+            discord,
             email,
             embedding,
             proactive,
@@ -4025,6 +4122,29 @@ impl AivyxConfig {
             }
         }
 
+        // Phase 107 — Discord token store fall-through.
+        // Mirrors the Telegram block exactly.
+        if let Some(dc) = self.discord.as_mut() {
+            if dc.token.is_none() {
+                if let Some(bytes) = secrets
+                    .get(secret_keys::DISCORD_TOKEN)
+                    .await
+                    .map_err(|e| ConfigError::StoreRead {
+                        field: "discord.token",
+                        reason: e.to_string(),
+                    })?
+                {
+                    let s = String::from_utf8(bytes).map_err(|_| ConfigError::NonUtf8Secret {
+                        field: "discord.token",
+                    })?;
+                    dc.token = Some(SourcedSecret::new(
+                        SecretString::from(s),
+                        FieldSource::EncryptedStore,
+                    ));
+                }
+            }
+        }
+
         // Phase 75 — embedding API key store fall-through. Only
         // touched if the `[embedding]` section materialized an
         // `EmbeddingConfig`; we never fabricate one just because
@@ -4094,6 +4214,17 @@ impl AivyxConfig {
                 None => {
                     return Err(ConfigError::Missing {
                         field: "telegram.token",
+                    });
+                }
+            }
+        }
+        // Phase 107 — mirrors the Telegram check.
+        if opts.require_discord_token {
+            match self.discord.as_ref().and_then(|d| d.token.as_ref()) {
+                Some(_) => {}
+                None => {
+                    return Err(ConfigError::Missing {
+                        field: "discord.token",
                     });
                 }
             }
