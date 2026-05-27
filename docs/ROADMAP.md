@@ -3208,12 +3208,142 @@ touches: the `aivyx init` wizard itself.
   model on the empty-Ollama path, and added a verify-
   before-write step against `GET /v1/models` so a broken
   config never lands on disk.
-- **Phase 105+ items** name themselves at each exit based
-  on what the prior phase uncovered. Candidate threads
-  surfaced at Chapter C open: docs landing rewrite, the
-  held Phase 61 `v0.1.0` publication once the hosting
-  decision lands, and any operator-feedback follow-ons
-  from Phase 104's verify-before-write rollout.
+- **Phase 105+ candidates** at chapter open were docs
+  landing rewrite, the held Phase 61 `v0.1.0` publication
+  once the hosting decision lands, and operator-feedback
+  follow-ons from Phase 104. The post-Phase-104 review
+  surfaced a separate axis — a comparison pass against
+  the Hermes Agent (Nous Research) named five concrete
+  out-of-the-box surface gaps (channel breadth, tool
+  breadth, MCP server breadth, skills auto-creation,
+  trajectory logging) that warranted their own arc.
+  Those five land as **Chapter D — Substrate Breadth**
+  below. Chapter C's onboarding remit (docs landing,
+  `v0.1.0` publication) stays paused, not retired —
+  whichever thread surfaces first opens the next
+  Chapter C phase.
+
+**Chapter C status — open with one phase shipped.**
+Phase 104 closed the wizard-side first-touch paper-cuts;
+the docs-landing and `v0.1.0`-publication threads named
+at chapter open are paused. **Chapter D — Substrate
+Breadth** takes the immediate post-Phase-104 sequence.
+
+## Chapter D — Substrate Breadth (Phases 105–110+)
+
+Phase 104 closed with a comparison pass between Aivyx and
+the **Hermes Agent** (Nous Research, MIT, Python — the
+closest public reference for a personal-AI-agent
+substrate). The comparison found the Aivyx substrate sound
+but its *out-of-the-box surface* narrower than the
+reference along five axes: a smaller channel-adapter set
+(Local / Telegram / Web UI vs. Hermes's six), a smaller
+first-party tool count (ten vs. forty-plus), a single
+bundled MCP server (the Phase 46 `web-search` vs. an
+opt-in matrix), no agent-drafted skill substrate, and no
+trajectory-export path for the audit chain even though
+every event is already structured for it. Chapter D is the
+arc that closes those gaps. The five items land
+easy-wins-first so the substrate-design items (Amendment
+A12 for the tool count, reflection extension for skills)
+arrive after the lighter items build momentum and real
+operator pressure tightens the exact scope.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 105 — Trajectory Logging (`aivyx audit export`).**
+  Lowest-risk Chapter D item. The HMAC audit chain already
+  carries the structured per-turn / per-tool-call rows a
+  trajectory exporter would need; Phase 105 ships a
+  read-only `aivyx audit export` subcommand that emits the
+  chain in a research-friendly format (JSONL line per
+  event, optional date-range filter, optional
+  per-session / per-mission filter). No new code paths —
+  just a new reader over existing data. Closes the
+  Phase-104 comparison gap on trajectory logging without
+  compromising the chain's HMAC integrity (export is
+  read-only; the chain itself stays append-only).
+  Streak-friendly opener — should hold DESIGN.md,
+  PRODUCT.md, and `aivyx-core/src/lib.rs` byte-identical.
+
+- **Phase 106 — MCP Server Breadth.** Phase 46 shipped the
+  first bundled MCP server (`aivyx mcp-server web-search`);
+  Phase 106 extends the pattern. Two halves: one or two
+  new bundled servers (Q-block at open picks from
+  candidates — calendar / email read-only, git-repo intel,
+  local-script runner, image describe) plus a curated
+  `templates/mcp-recipes.md` (or similar) that the wizard
+  can offer during `aivyx init` ("which MCP servers do you
+  want enabled?"). Every new bundled server inherits Phase
+  55's sandbox layer and Phase 32's SSE transport. Builds
+  on existing substrate; no DESIGN.md amendment expected.
+
+- **Phase 107 — Discord Channel Adapter (`aivyx-discord`).**
+  New workspace crate following the `aivyx-telegram`
+  precedent — Phase 8 in-tree adapter + Phase 19
+  daemon-frontend pattern + Phase 48 Channel SDK contract.
+  Implements `ChannelContext` against the Discord Bot API;
+  inherits Persona, Profile, mission gates, and
+  `/approve` / `/reject` text commands from the existing
+  channel surface. Real-protocol smoke test deferred to
+  the **Channel Activation Milestone** (per the existing
+  scheduling convention for new adapters). A4 amendment
+  addendum bumps the workspace crate count (12 → 13 after
+  Phase 107, 13 → 14 after Phase 108).
+
+- **Phase 108 — Slack Channel Adapter (`aivyx-slack`).**
+  Same shape as Phase 107 against Slack's Events API.
+  Slack's protocol differences (thread-vs-channel context,
+  socket-mode vs. HTTP webhook) get their own integration
+  tests. Both 107 and 108 land as separate crates so the
+  workspace can choose at compile time which adapters to
+  bundle, mirroring the existing
+  `provider-anthropic` / `provider-openai` feature-flag
+  pattern.
+
+- **Phase 109 — Tool Breadth (Amendment A12).** Extend the
+  P10 substrate tool list (currently ten after Phase 100's
+  A11) with the next round of operator-visible tools.
+  Amendment A12 files the count revision; the Q-block at
+  open pins the exact list. Candidates from the
+  post-Phase-104 review: `clipboard.read` /
+  `clipboard.write`, `process.list`, `git.status` /
+  `git.diff`, `image.describe` (via vision-capable
+  provider). The eight declared-but-toolless scopes from
+  Phase 100's audit (`shell.spawn`, `net.dns`,
+  `audit.read`, `config.read`, `config.write`,
+  `display.window_close`, `memory.gc`, `mission.gate`) are
+  a separate question and may pick up tools here. The
+  Phase 37 → A5 (seven → eight) and Phase 100 → A11
+  (eight → ten) sequence is the template; PRODUCT.md
+  streak break expected at the A12 commit.
+
+- **Phase 110 — Skills Auto-Creation (Reflection Staging).**
+  Extend the existing reflection layer (Phase 29
+  propose / apply, Phase 30 role-mutation, Phase 60
+  Persona revert) with a skills primitive: drafts the
+  agent produces after complex tasks, staged as
+  Persona-style deltas the operator approves in batch via
+  the existing mission-gate surface. Stays inside
+  PRODUCT.md P8's "outcome-driven audited reflection"
+  envelope — the agent doesn't apply skills autonomously;
+  it proposes, the operator approves via gate, the chain
+  records both halves. Mid-ground between Hermes's
+  autonomous skill creation and Aivyx's current
+  per-action reflection propose / apply. The substrate-
+  design question (new capability scope? extend
+  `reflection.propose`'s schema? new
+  `KeyDomain::Skills`?) is the Q-block at open; expect
+  DESIGN.md and PRODUCT.md amendment risk on this one —
+  the highest of the Chapter D set.
+
+Chapter D ends when each item has shipped or been
+explicitly retired. The post-110 ledger picks up Chapter
+C's paused threads (docs landing, `v0.1.0` publication)
+or opens against operator feedback as it arises. Phase
+ordering inside Chapter D is "easy wins first" by design;
+inversion at any phase exit costs one ROADMAP commit, not
+an amendment.
 
 ## Phase 104 — `aivyx init` Polish (Chapter C opener)
 
