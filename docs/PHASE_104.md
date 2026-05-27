@@ -210,27 +210,107 @@ opener section + Phase 104 entry marked `Active`) +
   keeping the current behavior (one of the three papercuts
   Phase 104 exists to close).
 
+## Prediction vs. reality
+
+**All three streak predictions held; test-count
+prediction over-shot.**
+
+- **DESIGN.md — held.** Init wizard polish is purely
+  operator-side; no locked technical-contract decision
+  touched, no daemon IPC variant added, no capability
+  scope amended. Byte-identical at exit (hash still
+  `89dc8903…a94bce`). Streak: **51 consecutive phases** —
+  one past the Phase 103 half-hundred milestone.
+- **PRODUCT.md — held.** No P-* commitment touched; the
+  change lives entirely below the commitment line.
+  Byte-identical at exit (hash still `9f0a515c…ba61d3`).
+  Streak: **4 consecutive phases** (was 3).
+- **`aivyx-core/src/lib.rs` — held.** Every line of Phase
+  104 lives in `aivyx-channel/src/bin/aivyx_modules/init.rs`
+  and the new `aivyx-llm/src/verify.rs` module; `aivyx-core`
+  is untouched. Byte-identical at exit (hash still
+  `ab3f9730…c6210d`). Streak: **4 consecutive phases**
+  (was 3).
+
+**New workspace deps — zero, as predicted.** `reqwest`
+was already a direct dep of `aivyx-channel` and a
+feature-gated dep of `aivyx-llm` (the verify helper is
+gated on `any(provider-anthropic, provider-openai)`,
+matching the existing module convention).
+
+**Test count — `+17`** (workspace `1808 → 1825`),
+**outside** the predicted `+8` to `+12` band by 5.
+Breakdown:
+- 15 tests in `aivyx-llm/src/verify.rs`:
+  `parse_models_response × 5` (success, missing-id
+  entries, empty data, missing `data` field, invalid
+  JSON); `classify_response × 7` (200 ok, 401 → Auth,
+  403 → Auth, 500 → Other, model-not-in-list,
+  200-unparseable, long-body truncation);
+  `summarize_models × 3` (empty list, within cap,
+  truncate with overflow count).
+- 2 tests in `aivyx-channel/.../init.rs`:
+  `default_models_are_current` pins the refreshed
+  constants; `ollama_empty_hint_includes_concrete_pull_command`
+  pins the empty-models hint string.
+
+The over-shoot is in the verify module's
+parse-and-classify coverage. The classifier is the
+piece that distinguishes auth vs. model-not-found in
+the wizard's retry loop, and a faulty classifier would
+silently route the operator to the wrong re-prompt
+(re-asking for the model when the key was the problem,
+or vice-versa). Exhaustive branch coverage on a
+security-adjacent guardrail felt right; the prediction
+was simply too tight.
+
+**Scope — all three tasks shipped as planned.** Tasks 2
+and 3 merged into one commit per the Phase 103 pattern;
+exit is its own commit.
+
+**End-to-end notes.** The wizard's verify path was not
+driven against the live Anthropic / OpenAI endpoints
+during phase work (would require operator-supplied
+credentials and live network). It was verified by unit
+tests against the extracted `classify_response` pure
+function covering every error branch. The live HTTP
+layer in `verify_provider_credentials` is treated as
+integration-tested-only — the same posture
+`detect_ollama` and `list_ollama_models` have held
+since Phase 44.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_104.md` + ROADMAP Chapter C section +
-  Phase 104 entry + docs/README status row — Task 1 (this
-  commit).
-- [ ] Refreshed Anthropic + OpenAI default model strings in
-  `init.rs` + matching test updates — Task 2.
-- [ ] Ollama empty-models hint line updated to include a
-  concrete `ollama pull llama3.2:3b` suggestion — Task 2.
-- [ ] `verify_provider_credentials` helper in `aivyx-llm`
-  (or wherever the seam ends up) + wizard wiring with
-  three-retry cap + `Write anyway?` fallthrough — Task 2.
-- [ ] Verify-path tests against a mock HTTP server (200
-  success, 401, model-not-in-list) — Task 3.
-- [ ] `docs/INSTALL.md` mention — Task 3.
-- [ ] ROADMAP + docs/README refreshed at exit — Task 3.
-- [ ] All four Q-block questions resolved with operator
+- [x] `docs/PHASE_104.md` + ROADMAP Chapter C section +
+  Phase 104 entry + docs/README status row — Task 1
+  (commit `f30dc80`).
+- [x] Refreshed Anthropic + OpenAI default model strings
+  in `init.rs` + matching test updates — Task 2 (commit
+  `7855329`).
+- [x] Ollama empty-models hint line updated to include a
+  concrete `ollama pull llama3.2:3b` suggestion — Task 2
+  (commit `7855329`).
+- [x] `verify_provider_credentials` helper in `aivyx-llm`
+  + wizard wiring with three-retry cap + `Write anyway?`
+  fallthrough — Task 2 (commit `7855329`).
+- [x] Verify-path tests covering 200-ok / 401 /
+  model-not-in-list / 500 / unparseable / long-body
+  truncation — Task 3 (commit `7855329`). Tested at the
+  pure `classify_response` seam rather than against a
+  mock HTTP server (avoids a new dev-dep on `wiremock`
+  and matches the wizard's existing
+  `detect_ollama` / `parse_model_names` test posture).
+- [x] `docs/INSTALL.md` mention — Task 3 (commit
+  `7855329`).
+- [x] ROADMAP + docs/README refreshed at exit — this
+  commit.
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak extends to fifty-one.
-- [ ] PRODUCT.md streak extends to four.
-- [ ] Production-core `lib.rs` streak extends to four.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+8` to `+12`.
-- [ ] Zero clippy warnings.
+- [x] DESIGN.md streak extends to fifty-one.
+- [x] PRODUCT.md streak extends to four.
+- [x] Production-core `lib.rs` streak extends to four.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+17` (above the
+  predicted `+8`–`+12` band; over-shoot called out
+  honestly in the prediction-vs-reality section).
+- [x] Zero clippy warnings.

@@ -3202,11 +3202,11 @@ touches: the `aivyx init` wizard itself.
 
 **Expected phases (subject to revision at each exit):**
 
-- **Phase 104 — `aivyx init` Polish.** Active — see below
-  and [PHASE_104.md](PHASE_104.md). Refresh stale provider
-  defaults, recommend a starter model on the empty-Ollama
-  path, and verify provider+key+model against
-  `GET /v1/models` before writing `aivyx.toml` so a broken
+- **Phase 104 — `aivyx init` Polish.** Shipped — see
+  below and [PHASE_104.md](PHASE_104.md). Refreshed
+  stale provider defaults, named a concrete starter
+  model on the empty-Ollama path, and added a verify-
+  before-write step against `GET /v1/models` so a broken
   config never lands on disk.
 - **Phase 105+ items** name themselves at each exit based
   on what the prior phase uncovered. Candidate threads
@@ -3217,27 +3217,34 @@ touches: the `aivyx init` wizard itself.
 
 ## Phase 104 — `aivyx init` Polish (Chapter C opener)
 
-**Active — see [PHASE_104.md](PHASE_104.md).** Chapter C's
+**Frozen — see [PHASE_104.md](PHASE_104.md).** Chapter C's
 opener. After 60-plus phases of substrate work, the init
-wizard's first-touch UX has accumulated three concrete
+wizard's first-touch UX had accumulated three concrete
 paper-cuts: stale Anthropic/OpenAI default model strings
-(`claude-sonnet-4-20250514` is about a year out of date;
-`gpt-4o` is no longer the current flagship), no-models
-guidance on the Ollama path that says `Run "ollama pull
-<model>" first.` with no concrete recommendation, and a
-write-then-find-out-later validation gap where a typo'd key
-or non-existent model only surfaces on first turn (after
-the operator has already committed to a passphrase and
-opened the daemon). Phase 104 closes all three: refreshes
-the defaults to current generation (`claude-sonnet-4-6` /
-`gpt-4.1` per Q3), adds a single hardcoded `Try: ollama
-pull llama3.2:3b` suggestion on the empty-models path per
-Q4, and adds a `verify-before-write` step that hits
-`GET /v1/models` with the supplied key, confirms the chosen
-model is in the returned list, and re-prompts on failure
-with a three-retry cap (Q1/Q2). Additive on the operator-
-facing surface; zero new workspace deps; no DESIGN.md /
-PRODUCT.md / lib.rs touch expected.
+(`claude-sonnet-4-20250514` was a year out of date; `gpt-4o`
+was no longer the current flagship), no-models guidance on
+the Ollama path that said `Run "ollama pull <model>" first.`
+with no concrete recommendation, and a write-then-find-out-
+later validation gap where a typo'd key or non-existent
+model only surfaced on first turn (after the operator had
+already committed to a passphrase and opened the daemon).
+Phase 104 closed all three: refreshed the defaults to
+current generation (`claude-sonnet-4-6` / `gpt-4.1` per Q3a),
+added a single hardcoded `Try: ollama pull llama3.2:3b`
+suggestion on the empty-models path per Q4a, and added a
+`verify-before-write` step that hits `GET /v1/models` with
+the supplied key, confirms the chosen model is in the
+returned list, and re-prompts on failure with a three-retry
+cap and a `Write anyway?` escape hatch (Q1a/Q2a). Additive
+on the operator-facing surface; new `aivyx-llm::verify`
+module gated on existing provider features. All three
+streak predictions held: DESIGN.md → 51 (one past the
+Phase 103 half-hundred milestone), PRODUCT.md → 4,
+`aivyx-core/src/lib.rs` → 4. Zero new workspace deps;
+workspace tests `+17` → 1825 (above the predicted `+8`–`+12`
+band; over-shoot in `verify.rs`'s exhaustive parse+classify
+coverage for the auth-vs-model-not-found classifier the
+wizard's retry loop branches on).
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
