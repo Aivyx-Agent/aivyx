@@ -3180,7 +3180,64 @@ no tool behind them.
 **Chapter B is complete.** All four expected phases shipped
 (100, 101, 102, 103); subsequent tool-layer work is
 operator-feedback-gated, in the project's established
-post-Chapter posture.
+post-Chapter posture. The next chapter — **Chapter C —
+Operator Onboarding** — opens at Phase 104.
+
+## Chapter C — Operator Onboarding (Phases 104+)
+
+Chapter B closed the tool layer in good shape; the next axis
+of work is the *fresh operator's* experience. From the
+moment they decide to try Aivyx to the moment their first
+turn returns a useful answer, every step is operator-
+visible and every paper-cut compounds. Chapter C is the
+arc that closes those paper-cuts: init wizard polish,
+provider-default refresh, default-model recommendations,
+docs landing, and — when the held public-hosting decision
+resolves — the Phase 61 `v0.1.0` publication that turns
+"build from source" into "install the binary." Each item
+lands as its own focused phase in the small-scope,
+Q-block-signed-off rhythm Chapters A and B established.
+The chapter opens with the first thing every new operator
+touches: the `aivyx init` wizard itself.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 104 — `aivyx init` Polish.** Active — see below
+  and [PHASE_104.md](PHASE_104.md). Refresh stale provider
+  defaults, recommend a starter model on the empty-Ollama
+  path, and verify provider+key+model against
+  `GET /v1/models` before writing `aivyx.toml` so a broken
+  config never lands on disk.
+- **Phase 105+ items** name themselves at each exit based
+  on what the prior phase uncovered. Candidate threads
+  surfaced at Chapter C open: docs landing rewrite, the
+  held Phase 61 `v0.1.0` publication once the hosting
+  decision lands, and any operator-feedback follow-ons
+  from Phase 104's verify-before-write rollout.
+
+## Phase 104 — `aivyx init` Polish (Chapter C opener)
+
+**Active — see [PHASE_104.md](PHASE_104.md).** Chapter C's
+opener. After 60-plus phases of substrate work, the init
+wizard's first-touch UX has accumulated three concrete
+paper-cuts: stale Anthropic/OpenAI default model strings
+(`claude-sonnet-4-20250514` is about a year out of date;
+`gpt-4o` is no longer the current flagship), no-models
+guidance on the Ollama path that says `Run "ollama pull
+<model>" first.` with no concrete recommendation, and a
+write-then-find-out-later validation gap where a typo'd key
+or non-existent model only surfaces on first turn (after
+the operator has already committed to a passphrase and
+opened the daemon). Phase 104 closes all three: refreshes
+the defaults to current generation (`claude-sonnet-4-6` /
+`gpt-4.1` per Q3), adds a single hardcoded `Try: ollama
+pull llama3.2:3b` suggestion on the empty-models path per
+Q4, and adds a `verify-before-write` step that hits
+`GET /v1/models` with the supplied key, confirms the chosen
+model is in the returned list, and re-prompts on failure
+with a three-retry cap (Q1/Q2). Additive on the operator-
+facing surface; zero new workspace deps; no DESIGN.md /
+PRODUCT.md / lib.rs touch expected.
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
