@@ -100,6 +100,8 @@
 mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
 mod identity;
+#[path = "aivyx_modules/mcp_recipes.rs"]
+mod mcp_recipes;
 #[path = "aivyx_modules/init.rs"]
 mod init;
 #[path = "aivyx_modules/init_templates.rs"]
@@ -569,6 +571,14 @@ fn run() -> Result<(), String> {
     // work, so it skips the tokio runtime the IPC subcommands need.
     if let CliMode::Tool(ToolSubcommand::Init { path, force }) = mode {
         return tool_init::run_tool_init(&path, force);
+    }
+
+    // Phase 106 — `aivyx mcp recipes [<name>]`: print the
+    // curated MCP recipes catalog (or one recipe's worked
+    // snippet). Pure stdout emission — no storage, no daemon,
+    // no tokio runtime.
+    if let CliMode::Mcp(McpSubcommand::Recipes { name }) = mode {
+        return run_mcp_recipes(name.as_deref());
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1180,6 +1190,14 @@ enum CliMode {
     /// chain as JSONL on stdout. Offline-only (cold-start
     /// storage open via the operator's passphrase) per Q3a.
     Audit(AuditSubcommand),
+    /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
+    /// catalog. Currently only `recipes [<name>]` — list or
+    /// print MCP server recipes. Distinct from the
+    /// pre-existing `aivyx mcp-server <name>` (Phase 46),
+    /// which *runs* a bundled MCP server; `aivyx mcp
+    /// recipes` is the *catalog* of recipes for the operator
+    /// to copy into `aivyx.toml`.
+    Mcp(McpSubcommand),
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -1304,6 +1322,19 @@ enum ToolSubcommand {
     /// Rust tool-process starter at `path`. Refuses to write into
     /// a non-empty directory unless `--force`.
     Init { path: PathBuf, force: bool },
+}
+
+/// Phase 106 — `aivyx mcp` subcommand variants. Distinct
+/// from the Phase 46 `aivyx mcp-server <name>` runner — that
+/// one *starts* a bundled MCP server on stdio; this one
+/// catalogs the curated recipes operators paste into
+/// `aivyx.toml`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum McpSubcommand {
+    /// `aivyx mcp recipes [<name>]` — bare form lists every
+    /// recipe with a one-line description; named form prints
+    /// the worked snippet for `<name>`.
+    Recipes { name: Option<String> },
 }
 
 /// Phase 105 — `aivyx audit` subcommand variants.
@@ -1975,6 +2006,58 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
     }
 
+    // Phase 106 — `aivyx mcp <subcommand>`. Distinct from the
+    // Phase 46 `aivyx mcp-server <name>` runner ("mcp-server"
+    // is one token, "mcp recipes" is two); the namespacing
+    // matches the project pattern of one subcommand tree per
+    // operator-facing surface.
+    if !args.is_empty() && args[0] == "mcp" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx mcp` requires a subcommand. Supported: recipes"
+                .to_string()
+        })?;
+        match sub.as_str() {
+            "recipes" => {
+                // Optional positional name. Anything starting
+                // with `--` is rejected loudly so a future
+                // flag isn't silently consumed as a recipe
+                // name.
+                let name = match args.get(2) {
+                    Some(n) if n.starts_with("--") => {
+                        return Err(format!(
+                            "unrecognized argument to `aivyx mcp recipes`: \
+                             `{n}` (no flags are defined yet)"
+                        ));
+                    }
+                    Some(n) => Some(n.clone()),
+                    None => None,
+                };
+                if let Some(extra) = args.get(3) {
+                    return Err(format!(
+                        "unrecognized extra argument to \
+                         `aivyx mcp recipes`: `{extra}`"
+                    ));
+                }
+                return Ok(CliArgs {
+                    mode: CliMode::Mcp(McpSubcommand::Recipes { name }),
+                    channel: ChannelKind::Local,
+                    role: None,
+                    no_daemon: false,
+                    mcp_servers: vec![],
+                    mcp_sse_servers: vec![],
+                    provider: None,
+                    web_ui_port: None,
+                });
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx mcp` subcommand: `{other}`. \
+                     Supported: recipes"
+                ));
+            }
+        }
+    }
+
     // Check for `init` subcommand — interactive first-run wizard
     // (Phase 44, extended at Phase 66 with starter templates).
     //
@@ -2555,6 +2638,26 @@ async fn run_verify_only(
         report.entries_verified, head_seq_display,
     );
     Ok(())
+}
+
+/// Phase 106 — print the curated MCP recipes catalog or a
+/// single recipe's worked snippet. Pure stdout emission — no
+/// storage, no daemon, no tokio runtime. Lookup failures
+/// surface as `Err(String)` so `main`'s outer `match` maps
+/// them to `ExitCode::FAILURE` with the candidate list on
+/// stderr.
+fn run_mcp_recipes(name: Option<&str>) -> Result<(), String> {
+    match name {
+        Some(n) => {
+            let snippet = mcp_recipes::render_recipe(n).map_err(|e| e.to_string())?;
+            print!("{snippet}");
+            Ok(())
+        }
+        None => {
+            print!("{}", mcp_recipes::render_listing());
+            Ok(())
+        }
+    }
 }
 
 /// Phase 105 — drive the JSONL audit-chain emitter against
@@ -5211,6 +5314,65 @@ mod tests {
     fn audit_unknown_subcommand_is_error() {
         let err = parse_cli_args_from(&argv(&["audit", "doesnotexist"]))
             .expect_err("unknown `audit` subcommand must error");
+        assert!(err.contains("doesnotexist"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 106 — `aivyx mcp recipes` parse tests.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn mcp_recipes_bare_parses() {
+        let parsed = parse_cli_args_from(&argv(&["mcp", "recipes"]))
+            .expect("`mcp recipes` must parse");
+        assert!(matches!(
+            parsed.mode,
+            CliMode::Mcp(McpSubcommand::Recipes { name: None })
+        ));
+    }
+
+    #[test]
+    fn mcp_recipes_with_name_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem"]))
+                .expect("`mcp recipes filesystem` must parse");
+        match parsed.mode {
+            CliMode::Mcp(McpSubcommand::Recipes { name }) => {
+                assert_eq!(name.as_deref(), Some("filesystem"));
+            }
+            other => panic!("expected Mcp(Recipes), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_recipes_flag_in_name_position_is_error() {
+        // A `--foo`-shaped token where a recipe name belongs
+        // is rejected at parse time so a future flag is not
+        // silently consumed as a recipe name.
+        let err = parse_cli_args_from(&argv(&["mcp", "recipes", "--force"]))
+            .expect_err("flag in name position must error");
+        assert!(err.contains("--force"), "got: {err}");
+    }
+
+    #[test]
+    fn mcp_recipes_extra_argument_is_error() {
+        let err =
+            parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem", "junk"]))
+                .expect_err("trailing extra arg must error");
+        assert!(err.contains("junk"), "got: {err}");
+    }
+
+    #[test]
+    fn mcp_with_no_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["mcp"]))
+            .expect_err("`mcp` alone must error");
+        assert!(err.contains("subcommand"), "got: {err}");
+    }
+
+    #[test]
+    fn mcp_unknown_subcommand_is_error() {
+        let err = parse_cli_args_from(&argv(&["mcp", "doesnotexist"]))
+            .expect_err("unknown `mcp` subcommand must error");
         assert!(err.contains("doesnotexist"), "got: {err}");
     }
 

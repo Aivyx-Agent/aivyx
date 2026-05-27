@@ -237,6 +237,19 @@ After install:
    the daemon socket. See [`docs/AUDIT_EXPORT.md`](AUDIT_EXPORT.md)
    for the full reference + worked `jq` examples.
 
+6. **`aivyx mcp recipes`** (Phase 106) lists Aivyx's curated
+   catalog of MCP servers worth enabling — `filesystem`,
+   `github`, `gitlab`, `sqlite`, `postgres`, `time`, `fetch`,
+   `brave-search`, `slack`, `memory`, `puppeteer`,
+   `everything`. Bare form prints the list; `aivyx mcp
+   recipes <name>` prints a paste-able `[[mcp_server]]` block
+   plus an inline `[mcp_server.sandbox]` block so a
+   copy-paste produces a sandboxed config (Phase 55 substrate
+   posture). The canonical reference lives in
+   [`docs/MCP_RECIPES.md`](MCP_RECIPES.md). Distinct from
+   `aivyx mcp-server <name>` (Phase 46) which *runs* a
+   bundled server — recipes is the catalog of external ones.
+
 For deployment guidance (threat model, what Aivyx defends
 against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
