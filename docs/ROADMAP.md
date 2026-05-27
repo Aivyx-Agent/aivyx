@@ -3252,19 +3252,19 @@ operator pressure tightens the exact scope.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 105 — Trajectory Logging (`aivyx audit export`).**
+  Active — see below and [PHASE_105.md](PHASE_105.md).
   Lowest-risk Chapter D item. The HMAC audit chain already
   carries the structured per-turn / per-tool-call rows a
   trajectory exporter would need; Phase 105 ships a
-  read-only `aivyx audit export` subcommand that emits the
-  chain in a research-friendly format (JSONL line per
-  event, optional date-range filter, optional
-  per-session / per-mission filter). No new code paths —
-  just a new reader over existing data. Closes the
-  Phase-104 comparison gap on trajectory logging without
-  compromising the chain's HMAC integrity (export is
-  read-only; the chain itself stays append-only).
-  Streak-friendly opener — should hold DESIGN.md,
-  PRODUCT.md, and `aivyx-core/src/lib.rs` byte-identical.
+  read-only offline `aivyx audit export` subcommand that
+  emits one JSONL line per `SignedEntry` (seq +
+  appended_at_ms + prev_mac + mac + event, per Q1a) with
+  `--from <seq>` and `--limit <N>` filters mapping directly
+  to `PersistentAuditLog::entries_range` (Q2a). Cold-start
+  storage open, same path as `aivyx --verify-only`; no new
+  IPC variant (Q3a). Streak-friendly opener — should hold
+  DESIGN.md, PRODUCT.md, and `aivyx-core/src/lib.rs`
+  byte-identical.
 
 - **Phase 106 — MCP Server Breadth.** Phase 46 shipped the
   first bundled MCP server (`aivyx mcp-server web-search`);
@@ -3344,6 +3344,26 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 105 — Trajectory Logging (`aivyx audit export`) (Chapter D opener)
+
+**Active — see [PHASE_105.md](PHASE_105.md).** Chapter D's
+opener and the easiest-wins-first item of the Hermes-
+comparison-driven arc. A read-only offline subcommand that
+emits the HMAC audit chain as JSONL on stdout. Each line is
+the full `SignedEntry` projection (`seq +
+appended_at_ms + prev_mac + mac + event` — Q1a), enough that
+downstream tooling can re-verify the HMAC against a
+separately-supplied genesis seed. Filters in v1 are
+sequence-based only (`--from <seq>` + `--limit <N>` — Q2a)
+mapping directly to `PersistentAuditLog::entries_range`,
+which Phase 47 already shipped for the Web UI paginated
+viewer. Source path is offline-only via cold-start storage
+open (Q3a) — same code path as `aivyx --verify-only`,
+requires the passphrase, no new IPC variant. Additive on the
+operator-facing surface; zero new workspace deps; no
+DESIGN.md / PRODUCT.md / `aivyx-core/src/lib.rs` touch
+expected.
 
 ## Phase 104 — `aivyx init` Polish (Chapter C opener)
 
