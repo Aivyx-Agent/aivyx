@@ -251,35 +251,218 @@ Six sub-tasks plus exit + backfill, comparable to Phase
   auto-proposer heuristic deferred to a follow-on
   phase.
 
+## Prediction vs. reality
+
+**Three predicted streak breaks; PRODUCT.md broke against
+the prediction (honest surprise — the P8 delivery-status
+refresh changed byte identity even though the commitment
+text itself stayed inside the envelope).**
+
+- **DESIGN.md — broke as predicted** (2bd52e61 →
+  c2be6d51). D4's base table gained a `skills` section
+  with the three new scope bases (skills.propose,
+  skills.list, skills.invoke). A Phase 110 blockquote
+  documents the no-amendment-needed rationale (skills.*
+  tools are infrastructure per P10's
+  substrate/infrastructure/third-party taxonomy). Streak
+  ends at 1.
+- **PRODUCT.md — broke against the prediction**
+  (3fba1078 → 6e840cef). The open doc said PRODUCT.md
+  would hold because P8's commitment text is unchanged
+  (the LearnedSkill extension fits inside the existing
+  outcome-driven-audited-reflection envelope). The
+  delivery-status entry needed the Phase 110 extension
+  acknowledged for traceability, and that edit changed
+  byte identity. The prediction's spirit — no amendment
+  to P8's commitment shape — is honored; the commitment
+  text itself is unchanged. The streak break is on the
+  delivery-status refresh, not on an amendment. Honest
+  break per the Phase 6 Q5 convention. Streak ends at 1.
+- **`aivyx-core/src/lib.rs` — broke as predicted**
+  (90104b1f → ab0e425d). The `SkillReader`,
+  `SkillsListTool`, `SkillsInvokeTool` re-exports + the
+  matching `pub use` block in `tools/mod.rs` are the
+  load-bearing edits. Streak ends at 1.
+
+**Zero new workspace deps — held.** Pure substrate work
+plus tool surface; no external crates pulled in.
+
+**A3 amendment addendum — not filed**, deferred to a
+future docs-sweep phase. `KNOWN_BASES` grows by three
+(skills.propose, skills.list, skills.invoke) on top of
+Phase 109's `git.read`; A3's last refresh at Phase 54
+catalogued 43 bases, and the post-Phase-54 additions are
+worth batching into one A3 addendum when a focused docs
+phase opens for that.
+
+**Test count — `+12`** (workspace `1938 → 1950`). **Below
+the predicted `+25` to `+40` band by about half** —
+honest surprise. The skills tools test exhaustively (12
+tests in `tools/skills.rs` cover both happy and error
+paths for both tools), but the Persona-extension and
+prompt-rendering work was covered by the existing
+profile_prompt / persona test surface plus the integration
+tests that were already in place — no new test files
+needed beyond `skills.rs`. The prediction was uncalibrated
+against the test-surface-already-exists reality of
+extending well-tested substrate.
+
+**Second consecutive triple-streak-reset.** Phase 109 was
+the first since Phase 56; Phase 110 makes it back-to-back.
+The substrate-design-heavy tail of Chapter D necessarily
+touches both contract docs and the core re-export surface.
+Phases 105–108 all held both streaks; Phases 109–110 both
+broke them. The honest framing is that Chapter D's
+**lighter half** (read-only export, MCP recipes, channel
+adapters) held the streaks, and the **heavier half**
+(tool surface growth + skills substrate) broke them. Both
+halves shipped honest work.
+
+**Scope — six tasks shipped as planned**, with Tasks 2-6
+combined into one commit per the Phase 105/106/108
+multi-task-batch pattern.
+
+**End-to-end notes.** The skills substrate is fully wired
+through to the agent today. An operator with
+`reflection.propose` + `skills.propose` + appropriate
+review tooling can:
+1. Have an agent draft a `LearnedSkill` proposal through
+   `reflection.propose` with a `persona_deltas` array
+   containing a `LearnedSkill` category delta.
+2. Review the proposal through the Phase 70 surface
+   (`aivyx persona proposals list/show/approve/reject`).
+3. See the approved skill appear in the agent's system
+   prompt as `## Learned skills` on the next turn.
+4. Have the agent invoke `skills.list` to enumerate
+   approved skills or `skills.invoke` to read a specific
+   skill's full procedure body.
+
+The agent-side auto-proposer heuristic (fire reflection-
+cron-style after complex turns and draft skill proposals
+automatically) **stays a deliberate Phase-110-internal
+deferral** for a focused follow-on phase. Phase 71
+(reflection cadence) is the precedent for cron-fired
+reflection, but the "what counts as a complex turn worth
+a proposal" design question needs its own pass.
+
+---
+
+## Chapter D — Substrate Breadth (Phases 105–110) [COMPLETE]
+
+Phase 110 closes Chapter D. The six-phase arc was opened
+at Phase 105 in response to the Phase 104 Hermes Agent
+comparison, which named five out-of-the-box-surface gaps
+relative to the closest public reference for a personal-AI-
+agent substrate. Chapter D extended that to a six-phase
+arc by adding Phase 105 as a low-risk opener.
+
+| Phase | Status | Headline |
+|---|---|---|
+| 105 | ✓ shipped | Trajectory Logging — `aivyx audit export` JSONL emitter |
+| 106 | ✓ shipped | MCP Server Breadth — `aivyx mcp recipes` + 12-recipe catalog |
+| 107 | ✓ shipped | Discord Channel Adapter — `aivyx-discord` crate, twilight-rs SDK |
+| 108 | ✓ shipped | Slack Channel Adapter — `aivyx-slack` crate, slack-morphism SDK |
+| 109 | ✓ shipped | Tool Breadth + Amendment A12 — `git.status` + `git.diff` + `net.dns` |
+| 110 | ✓ shipped | Skills Auto-Creation — `LearnedSkill` PersonaDeltaCategory + skills.* tools |
+
+**Chapter D retrospective.** Six phases, all shipped.
+Three amendments landed (A12 for the substrate tool count;
+A4 addenda for `aivyx-discord` and `aivyx-slack` crate
+counts; the workspace-layout file traceability table now
+carries Phase 107/108 rows). The
+`docs/ADAPTER_PATTERN.md` moved from "tentative at two
+data points" (Phase 9) to "confirmed at three" (Phase 107
+exit) to "confirmed at four" (Phase 108 exit) — the doc's
+load-bearing claim that the channel-adapter pattern is
+reusable across protocols is now backed by four in-tree
+adapters (Local + Telegram + Discord + Slack).
+
+The chapter closed with **two Phase-107/108-internal
+deferrals bundled together** for a focused follow-on:
+the Discord daemon-frontend variant (Phase 19 Telegram-over-
+daemon parallel) and the live Socket Mode wiring for
+`SlackMorphismTransport` (callback-state-passing via
+`SlackClientEventsUserState`). Both land at the **Channel
+Activation Milestone** alongside real-bot smoke testing
+across every channel adapter.
+
+Chapter D also closed with **one Phase-110-internal
+deferral**: the agent-side auto-proposer heuristic for
+skills. The propose-approve-render-invoke substrate is
+complete; the "agent automatically drafts skill proposals
+after complex turns" heuristic needs its own design pass
+that names what counts as a complex turn.
+
+Workspace tests across the chapter: **1843 → 1950
+(+107)**. Six phases of net-positive test surface. Zero
+clippy warnings throughout.
+
+Streak journey across the chapter:
+- DESIGN.md: 53 (Phase 105 entry) → ended Phase 109 at 55,
+  re-established to 1 at Phase 109 break, broke again at
+  Phase 110.
+- PRODUCT.md: 6 (Phase 105 entry) → ended Phase 109 at 8,
+  re-established to 1 at Phase 109 break, broke again at
+  Phase 110 (delivery-status refresh).
+- `aivyx-core/src/lib.rs`: 6 (Phase 105 entry) → ended
+  Phase 109 at 8 (broke at the tools re-exports, not at
+  the predicted-but-non-existent location), re-established
+  to 1 at Phase 109 break, broke again at Phase 110.
+
+Two phases (109, 110) reset all three streaks; four phases
+(105, 106, 107, 108) held them. The honest pattern:
+substrate-design phases break streaks, adapter / docs /
+reader-only phases hold them.
+
+After Phase 110: **Hermes-comparison channel-breadth gap
+closed** (5 in-tree adapters: Local + Telegram + Web UI +
+Discord + Slack vs. Hermes's 6 — WhatsApp + Signal remain
+candidates for a future Reach-style follow-on);
+**tool-breadth gap closed** (13 substrate tools post-A12);
+**skills-auto-creation gap closed** (LearnedSkill substrate
++ skills.* tool surface). The Hermes-comparison axis is
+done; the next named work picks itself based on operator
+feedback or as amendment-introduced commitments.
+
 ## Exit criteria
 
-- [ ] `docs/PHASE_110.md` + ROADMAP Chapter D Phase 110
-  entry flip + docs/README status row — Task 1 (this
-  commit).
-- [ ] `LearnedSkill` PersonaDeltaCategory variant +
-  schema + proposal-flow validation — Task 2.
-- [ ] `skills.propose` scope base added to `KNOWN_BASES`
-  + dispatch-time required-scope upgrade for proposals
-  containing `LearnedSkill` deltas — Task 3.
-- [ ] `skills.list` + `skills.invoke` tools shipped in
-  `aivyx-core/src/tools/skills.rs` — Task 4.
-- [ ] `assemble_session_prompt` extended with the
-  `## Learned skills` section — Task 5.
-- [ ] Binary wiring + PRODUCT.md P8 delivery-status
-  refresh + INSTALL.md + examples/aivyx.toml — Task 6.
-- [ ] All four Q-block questions resolved with operator
+- [x] `docs/PHASE_110.md` + ROADMAP Chapter D Phase 110
+  entry flip + docs/README status row — Task 1 (commit
+  `36cef97`).
+- [x] `LearnedSkill` PersonaDeltaCategory variant +
+  schema + LearnedSkill struct + EffectivePersona
+  field — Task 2 (commit `933c4cf`).
+- [x] `skills.propose` + `skills.list` + `skills.invoke`
+  scope bases added to `KNOWN_BASES`; CEILING_TRUSTED
+  includes all three — Task 3 (commit `933c4cf`).
+- [x] `skills.list` + `skills.invoke` tools shipped in
+  `aivyx-core/src/tools/skills.rs` with SkillReader
+  closure abstraction — Task 4 (commit `933c4cf`).
+- [x] `assemble_session_prompt` extended with the
+  `## Learned skills` section between Persona and
+  active role — Task 5 (commit `933c4cf`).
+- [x] Binary wiring (SkillReader closure threading the
+  shared_persona read-lock) + PRODUCT.md P8
+  delivery-status refresh + DESIGN.md D4 `skills` section
+  + INSTALL.md + examples/aivyx.toml — Task 6 (commit
+  `933c4cf`).
+- [x] All four Q-block questions resolved with operator
   sign-off pre-Task 2 (recorded above).
-- [ ] DESIGN.md streak break predicted at the
-  `skills.propose` base-table addition.
-- [ ] PRODUCT.md streak predicted to hold (P8 envelope
-  unchanged; Delivery-Status note is the only edit
-  needed).
-- [ ] `aivyx-core/src/lib.rs` streak break predicted at
-  the `skills.list` / `skills.invoke` re-exports.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+25` to
-  `+40`.
-- [ ] Zero clippy warnings.
-- [ ] **Chapter D complete** — exit doc carries the
-  Chapter D retrospective alongside Phase 110's own
-  results.
+- [x] DESIGN.md streak broke as predicted at the
+  `skills` D4 section addition.
+- [x] PRODUCT.md streak **broke against the prediction**
+  — the P8 delivery-status refresh edit changed byte
+  identity even though the commitment text itself
+  stayed inside the envelope. Honest break per the
+  Phase 6 Q5 convention.
+- [x] `aivyx-core/src/lib.rs` streak broke as predicted
+  at the skills.list / skills.invoke + SkillReader
+  re-exports.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+12` (below the
+  predicted `+25`–`+40` band; the prediction was
+  uncalibrated against the test-surface-already-exists
+  reality of extending well-tested substrate).
+- [x] Zero clippy warnings.
+- [x] **Chapter D complete** — retrospective recorded
+  above.

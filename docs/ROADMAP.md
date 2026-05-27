@@ -3344,25 +3344,24 @@ operator pressure tightens the exact scope.
   `+15`–`+25` band at the upper edge).
 
 - **Phase 110 — Skills Auto-Creation (Reflection Staging).**
-  Active — see below and [PHASE_110.md](PHASE_110.md). The
+  Shipped — see below and [PHASE_110.md](PHASE_110.md). The
   last Chapter D item — closes the sixth and final
-  Hermes-comparison gap. Q-block resolved: skills live as
-  an 11th `LearnedSkill` PersonaDeltaCategory variant
-  reusing the entire Phase 59/60/70 Persona substrate
-  (Q1a); new `skills.propose` capability scope base
-  sibling to `persona.propose` for per-category
-  granularity (Q2b — operator picked over Q2a "extend
-  persona.propose" recommendation); both system-prompt
-  rendering AND callable `skills.list` / `skills.invoke`
-  tool surface for activation (Q3c — operator picked over
-  Q3a "render-only" recommendation); foundation scope
-  with the agent-side auto-proposer heuristic deferred
-  to a follow-on phase (Q4a). DESIGN.md break predicted
-  at the new scope base; `aivyx-core/src/lib.rs` break
-  predicted at the two new tool re-exports; PRODUCT.md
-  predicted to hold (P8 envelope unchanged; the
-  LearnedSkill extension is inside the existing
-  outcome-driven-audited-reflection commitment).
+  Hermes-comparison gap. LearnedSkill as the 11th
+  PersonaDeltaCategory variant reusing the entire Phase
+  59/60/70 Persona substrate; three new scope bases
+  (skills.propose, skills.list, skills.invoke) in
+  CEILING_TRUSTED; two substrate tools (skills.list +
+  skills.invoke) gated by their own bases; `## Learned
+  skills` system-prompt section between Persona and active
+  role. **Second consecutive triple-streak-reset** —
+  DESIGN.md broke at the new D4 skills section; PRODUCT.md
+  broke against the prediction (P8 delivery-status refresh);
+  `aivyx-core/src/lib.rs` broke at the new tool re-exports.
+  Workspace tests +12 → 1950 (below the predicted +25-+40
+  band; substrate-extension work was largely covered by the
+  existing profile_prompt / persona test surface). Zero new
+  workspace deps. Agent-side auto-proposer heuristic deferred
+  to a follow-on phase.
 
 Chapter D ends when each item has shipped or been
 explicitly retired. The post-110 ledger picks up Chapter
@@ -3374,7 +3373,7 @@ an amendment.
 
 ## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
 
-**Active — see [PHASE_110.md](PHASE_110.md).** The sixth and
+**Frozen — see [PHASE_110.md](PHASE_110.md).** The sixth and
 final Chapter D item — the substrate-design-heavy piece the
 ROADMAP flagged with "highest amendment risk." Extends the
 existing reflection layer (Phase 29 propose / apply, Phase
