@@ -3276,17 +3276,18 @@ operator pressure tightens the exact scope.
   server code stays a deferral pending operator pressure.
 
 - **Phase 107 — Discord Channel Adapter (`aivyx-discord`).**
-  New workspace crate following the `aivyx-telegram`
-  precedent — Phase 8 in-tree adapter + Phase 19
-  daemon-frontend pattern + Phase 48 Channel SDK contract.
-  Implements `ChannelContext` against the Discord Bot API;
-  inherits Persona, Profile, mission gates, and
-  `/approve` / `/reject` text commands from the existing
-  channel surface. Real-protocol smoke test deferred to
-  the **Channel Activation Milestone** (per the existing
-  scheduling convention for new adapters). A4 amendment
-  addendum bumps the workspace crate count (12 → 13 after
-  Phase 107, 13 → 14 after Phase 108).
+  Active — see below and [PHASE_107.md](PHASE_107.md). Full
+  parity with `aivyx-telegram` (Q2c at sign-off — operator
+  chose the larger scope over foundation-only). twilight-rs
+  SDK (Q1a). Text commands for `/approve` / `/reject`
+  matching the Telegram precedent (Q3a). Multi-session
+  phase structured into six sub-tasks (skeleton + A4
+  addendum + lib.rs variant; transport trait; channel
+  context; session driver + binary wiring; scripted tests;
+  docs sweep). Deliberate breaks predicted: zero-new-deps
+  streak (twilight-rs adoption) and `aivyx-core/src/lib.rs`
+  streak (`ChannelPlatform::Discord` variant lift); A4
+  amendment addendum 12 → 13 crates.
 
 - **Phase 108 — Slack Channel Adapter (`aivyx-slack`).**
   Same shape as Phase 107 against Slack's Events API.
@@ -3341,6 +3342,31 @@ or opens against operator feedback as it arises. Phase
 ordering inside Chapter D is "easy wins first" by design;
 inversion at any phase exit costs one ROADMAP commit, not
 an amendment.
+
+## Phase 107 — Discord Channel Adapter (`aivyx-discord`) (Chapter D)
+
+**Active — see [PHASE_107.md](PHASE_107.md).** The third
+Chapter D item and the first to genuinely grow the substrate.
+Phases 105 and 106 were lower-risk reader / docs work; Phase
+107 adds a new workspace crate at full parity with the
+Phase 8/9 `aivyx-telegram` adapter — a `ChannelContext` impl,
+a private transport trait + scripted double, a
+`run_discord_session` sibling of `run_session` /
+`run_telegram_session`, and binary wiring through
+`ChannelKind::Discord`. Q1a chose **twilight-rs** as the SDK
+(thin protocol wrapper matching the Phase 8 frankenstein-vs-
+teloxide decision; ~4 new direct workspace deps). Q2c chose
+**full parity** scope over foundation-only — operator's
+explicit pick over the recommended easy-wins option;
+realistically multi-session. Q3a chose **text commands** for
+`/approve` / `/reject` matching Telegram (zero new substrate;
+slash-command registration remains a named deferral). Two
+streaks predicted to break deliberately: zero-new-deps
+(twilight adoption) and `aivyx-core/src/lib.rs` (a
+`ChannelPlatform::Discord` enum variant lift). A4 amendment
+addendum 12 → 13 crates. Real-protocol smoke test deferred
+to the Channel Activation Milestone per the
+`docs/ADAPTER_PATTERN.md` checklist.
 
 ## Phase 106 — MCP Server Breadth (Curated Recipes) (Chapter D)
 
