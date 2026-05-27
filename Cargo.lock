@@ -76,6 +76,7 @@ dependencies = [
  "aivyx-config",
  "aivyx-core",
  "aivyx-crypto",
+ "aivyx-discord",
  "aivyx-llm",
  "aivyx-mcp",
  "aivyx-memory",

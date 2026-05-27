@@ -77,6 +77,12 @@ aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider
 # bottom of the binary-only block so the task-provenance comment
 # history stays readable.
 aivyx-telegram = { path = "../aivyx-telegram" }
+# Phase 107 — Discord channel adapter. Same binary-only-import
+# pattern as `aivyx-telegram`: the `aivyx` binary calls
+# `aivyx_discord::run_discord_session` for the
+# `--channel discord` path and the daemon's
+# `discord_daemon_frontend` consumes the IPC types directly.
+aivyx-discord = { path = "../aivyx-discord" }
 aivyx-mcp = { path = "../aivyx-mcp" }
 # Phase 49 — Tool Process IPC Foundation (PRODUCT.md P12). The
 # binary spawns one ToolProcessBridge per `[[tool_process]]` entry

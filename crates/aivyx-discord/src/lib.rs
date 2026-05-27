@@ -22,3 +22,12 @@ pub mod transport;
 
 #[cfg(test)]
 mod tests;
+
+// Phase 107 Task 5 — public surface the `aivyx` binary
+// consumes from the `--channel discord` dispatch arm.
+// Mirrors `aivyx-telegram`'s flat re-export list at the
+// crate root.
+pub use session::{
+    run_discord_session, DiscordMultiSessionReport, DiscordSessionConfig,
+    DiscordSessionReport,
+};

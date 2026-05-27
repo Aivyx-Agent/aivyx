@@ -2410,14 +2410,18 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local` or `telegram`".to_string()
+                    "`--channel` requires a value: `local`, `telegram`, or `discord`"
+                        .to_string()
                 })?;
                 channel = match value.as_str() {
                     "local" => ChannelKind::Local,
                     "telegram" => ChannelKind::Telegram,
+                    // Phase 107 — Discord adapter parse arm.
+                    "discord" => ChannelKind::Discord,
                     other => {
                         return Err(format!(
-                            "unrecognized channel `{other}`. Supported: local, telegram"
+                            "unrecognized channel `{other}`. \
+                             Supported: local, telegram, discord"
                         ));
                     }
                 };
@@ -2523,7 +2527,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram|discord>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
                 ));
             }
         }
@@ -2758,11 +2762,10 @@ async fn run_async(
         memory_max_per_topic,
         passphrase: _,
         telegram,
-        // Phase 107 Task 2 — `discord` config landed in the
-        // AivyxConfig surface; Task 5 will wire it into the
-        // Discord session-driver dispatch. Until then the
-        // field is destructured-but-unused.
-        discord: _,
+        // Phase 107 — `discord` config consumed by the
+        // `ChannelKind::Discord` dispatch arm below; carries
+        // the bot token through to `run_discord_session`.
+        discord,
         // Phase 68 — shared SMTP config consumed by
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
@@ -4957,19 +4960,70 @@ async fn run_async(
             .map(|_report| ())
         }
 
-        // Phase 107 Task 2 — `ChannelKind::Discord` is recognized
-        // at parse time (Task 5 wires the `--channel discord`
-        // flag through this same dispatch) but the session
-        // driver lands at Task 5. Until then, surface a clean
-        // error so an operator running today's binary against
-        // the discord arm gets a precise message rather than a
-        // missing-match panic.
-        ChannelKind::Discord => Err(
-            "Discord channel adapter is wired through Task 2 (skeleton + config) \
-             but the session driver lands at Phase 107 Task 5. Use `--channel local` \
-             or `--channel telegram` for now."
-                .to_string(),
-        ),
+        // Phase 107 Task 5 — Discord adapter dispatch. Mirrors
+        // the Telegram arm above but skips the chat_filter +
+        // long-poll-cursor machinery: Discord's Gateway is a
+        // continuous event stream and the inner multiplexer
+        // routes per `channel_id` straight from
+        // `MessageCreate` events.
+        ChannelKind::Discord => {
+            let dc = discord
+                .expect("discord config validated for ChannelKind::Discord");
+            let token_secret = dc
+                .token
+                .expect("discord.token validated non-None before run_async")
+                .value;
+
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!(
+                    "\naivyx: shutting down discord bot after current event drains."
+                );
+                shutdown_for_signal.cancel();
+            });
+
+            use secrecy::ExposeSecret;
+            let token_str = token_secret.expose_secret();
+
+            // Phase 107 — startup banner. Discord's bot does
+            // not need a chat-filter (intents already gate
+            // which channels the bot can see at the protocol
+            // level), so the banner is simpler than Telegram's.
+            eprintln!(
+                "aivyx {} — discord bot live\n\
+                 fs sandbox: {}\n\
+                 memory: live (recall persists across restarts)\n\
+                 audit: persistent ({} events verified from disk)",
+                env!("CARGO_PKG_VERSION"),
+                canonical_root.display(),
+                verified_event_count,
+            );
+
+            let discord_config = aivyx_discord::DiscordSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                tool_allowlist,
+                memory_topic_prefix,
+            };
+            aivyx_discord::run_discord_session(
+                "aivyx-discord",
+                token_str,
+                discord_config,
+                provider,
+                audit,
+                shutdown,
+            )
+            .await
+            .map(|_report| ())
+        }
     }
 }
 
