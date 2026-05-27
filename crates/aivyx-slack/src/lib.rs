@@ -21,3 +21,10 @@ pub mod transport;
 
 #[cfg(test)]
 mod tests;
+
+// Phase 108 Task 5 — public surface the `aivyx` binary
+// consumes from the `--channel slack` dispatch arm. Mirrors
+// `aivyx-discord` / `aivyx-telegram` re-export shape.
+pub use session::{
+    run_slack_session, SlackMultiSessionReport, SlackSessionConfig, SlackSessionReport,
+};

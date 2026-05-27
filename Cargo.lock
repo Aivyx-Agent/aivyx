@@ -80,6 +80,7 @@ dependencies = [
  "aivyx-llm",
  "aivyx-mcp",
  "aivyx-memory",
+ "aivyx-slack",
  "aivyx-storage",
  "aivyx-telegram",
  "aivyx-tool",

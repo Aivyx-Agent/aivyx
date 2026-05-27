@@ -3,11 +3,11 @@
 This doc covers the full install matrix. For the abbreviated
 "Five-minute setup" path, see the [root README](../README.md).
 
-Aivyx ships a single binary, `aivyx`, plus four optional channel
-adapters baked into it (CLI, Telegram, Discord, Web UI). There
-are no hosted dependencies — your binary talks directly to your
-LLM provider (Anthropic / OpenAI-compatible / Ollama) and stores
-everything locally in an encrypted redb file.
+Aivyx ships a single binary, `aivyx`, plus five optional channel
+adapters baked into it (CLI, Telegram, Discord, Slack, Web UI).
+There are no hosted dependencies — your binary talks directly to
+your LLM provider (Anthropic / OpenAI-compatible / Ollama) and
+stores everything locally in an encrypted redb file.
 
 ## Current install state
 
@@ -306,6 +306,68 @@ gate-resolve path lands in a focused follow-on). Until
 then, escalated turns surface their `⏸ escalation:` footer
 in the bot reply; resolving them requires the Telegram or
 CLI surface.
+
+## Running Aivyx on Slack (Phase 108)
+
+The Slack adapter follows the same shape as Discord and
+Telegram: one Slack app, one Socket Mode WebSocket from
+aivyx to Slack, the bot sees DMs and channels it's been
+invited to. SemiTrusted tier; per-`(team_id, channel_id)`
+memory partitioning so a Slack bot installed in two
+workspaces partitions cleanly even when channel ids
+collide.
+
+1. **Create a Slack app** at
+   [https://api.slack.com/apps](https://api.slack.com/apps).
+   "From scratch" → name your app → pick the workspace.
+2. **Enable Socket Mode** under app settings → Socket Mode
+   → toggle on. This will prompt you to create an
+   **app-level token** with `connections:write` scope.
+   Save the resulting `xapp-...` token.
+3. **Configure bot scopes** under OAuth & Permissions →
+   add `chat:write`, `channels:history`, `groups:history`,
+   `im:history`, `mpim:history`, and `app_mentions:read`.
+4. **Subscribe to events** under Event Subscriptions →
+   bot events → `message.channels`, `message.im`,
+   `message.mpim`, `message.groups`. Subscribe to the events
+   relevant for where you want the bot to listen.
+5. **Install to workspace** under Install App → save the
+   resulting `xoxb-...` bot token.
+6. **Invite the bot** to any channel you want it to listen
+   in. DMs work out of the box.
+7. **Configure aivyx** — set both tokens via env or TOML:
+
+   ```sh
+   export AIVYX_SLACK_BOT_TOKEN='xoxb-...'
+   export AIVYX_SLACK_APP_TOKEN='xapp-...'
+   aivyx --channel slack
+   ```
+
+   …or in `aivyx.toml`:
+
+   ```toml
+   [slack]
+   bot_token = "xoxb-..."
+   app_token = "xapp-..."
+   # team_id = "T0123456789"  # optional: constrain to one workspace
+   ```
+
+8. **Talk to the bot** — open a DM with the bot or mention
+   it in an invited channel. Each `(team_id, channel_id)`
+   gets its own memory partition (multi-workspace bots
+   partition cleanly even on colliding channel ids).
+
+**Current state — Phase 108 ships the in-process adapter at
+the channel + session layer. The live Socket Mode
+production transport is a Phase-108-internal deferral
+bundled with the Phase 107 Discord daemon-frontend
+follow-on.** Operators who want to run a live Slack bot
+today will see a "production transport not yet wired" error
+when the adapter tries to open the Socket Mode connection.
+The trait + scripted-double + ChannelContext substrate are
+fully tested; live-bot smoke testing waits for the Channel
+Activation Milestone where the daemon-frontend +
+SlackMorphismTransport callback wiring both land.
 
 ## Moving Aivyx to a new machine
 

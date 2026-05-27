@@ -83,6 +83,14 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 # `--channel discord` path and the daemon's
 # `discord_daemon_frontend` consumes the IPC types directly.
 aivyx-discord = { path = "../aivyx-discord" }
+# Phase 108 — Slack channel adapter. Same binary-only-import
+# pattern as `aivyx-telegram` and `aivyx-discord`. The
+# production transport is currently stubbed (Phase-108-internal
+# deferral bundled with the Phase 107 daemon-frontend
+# follow-on) so `--channel slack` runs end-to-end at the
+# session-driver layer but the live Socket Mode wiring lands
+# alongside the Discord daemon-frontend.
+aivyx-slack = { path = "../aivyx-slack" }
 aivyx-mcp = { path = "../aivyx-mcp" }
 # Phase 49 — Tool Process IPC Foundation (PRODUCT.md P12). The
 # binary spawns one ToolProcessBridge per `[[tool_process]]` entry

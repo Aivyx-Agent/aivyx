@@ -2773,11 +2773,11 @@ async fn run_async(
         // `ChannelKind::Discord` dispatch arm below; carries
         // the bot token through to `run_discord_session`.
         discord,
-        // Phase 108 Task 2 — `slack` config landed in the
-        // AivyxConfig surface; Task 5 will wire it into the
-        // Slack session-driver dispatch. Until then the
-        // field is destructured-but-unused.
-        slack: _,
+        // Phase 108 — `slack` config consumed by the
+        // `ChannelKind::Slack` dispatch arm below; carries
+        // the bot + app tokens through to
+        // `run_slack_session`.
+        slack,
         // Phase 68 — shared SMTP config consumed by
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
@@ -5037,19 +5037,81 @@ async fn run_async(
             .map(|_report| ())
         }
 
-        // Phase 108 Task 2 — `ChannelKind::Slack` is recognized
-        // at parse time (Task 5 wires the `--channel slack`
-        // flag through to `run_slack_session`) but the session
-        // driver lands at Task 5. Until then, surface a clean
-        // error so an operator running today's binary against
-        // the slack arm gets a precise message rather than a
-        // missing-match panic.
-        ChannelKind::Slack => Err(
-            "Slack channel adapter is wired through Task 2 (skeleton + config) \
-             but the session driver lands at Phase 108 Task 5. Use `--channel local`, \
-             `--channel telegram`, or `--channel discord` for now."
-                .to_string(),
-        ),
+        // Phase 108 Task 5 — Slack adapter dispatch. Mirrors
+        // the Discord arm above. Socket Mode requires two
+        // tokens (bot for REST, app for the WebSocket); both
+        // validated non-None by `require_slack_tokens` in
+        // load-options upstream.
+        //
+        // The production SlackMorphismTransport is currently
+        // a compile-only stub (Phase 108 Task 3 carved out
+        // the live Socket Mode wiring as an internal deferral
+        // bundled with the Phase 107 daemon-frontend
+        // follow-on). An operator who runs `--channel slack`
+        // today reaches the session driver but
+        // `transport.next_message()` returns a clean
+        // "production transport not yet wired" error rather
+        // than panicking. The scripted-test layer fully
+        // exercises the channel + session substrate.
+        ChannelKind::Slack => {
+            let sc = slack.expect("slack config validated for ChannelKind::Slack");
+            let bot_token_secret = sc
+                .bot_token
+                .expect("slack.bot_token validated non-None before run_async")
+                .value;
+            let app_token_secret = sc
+                .app_token
+                .expect("slack.app_token validated non-None before run_async")
+                .value;
+
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!(
+                    "\naivyx: shutting down slack bot after current event drains."
+                );
+                shutdown_for_signal.cancel();
+            });
+
+            use secrecy::ExposeSecret;
+            let bot_token_str = bot_token_secret.expose_secret();
+            let app_token_str = app_token_secret.expose_secret();
+
+            eprintln!(
+                "aivyx {} — slack bot live\n\
+                 fs sandbox: {}\n\
+                 memory: live (recall persists across restarts)\n\
+                 audit: persistent ({} events verified from disk)",
+                env!("CARGO_PKG_VERSION"),
+                canonical_root.display(),
+                verified_event_count,
+            );
+
+            let slack_config = aivyx_slack::SlackSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                tool_allowlist,
+                memory_topic_prefix,
+            };
+            aivyx_slack::run_slack_session(
+                "aivyx-slack",
+                bot_token_str,
+                app_token_str,
+                slack_config,
+                provider,
+                audit,
+                shutdown,
+            )
+            .await
+            .map(|_report| ())
+        }
     }
 }
 

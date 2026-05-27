@@ -4,12 +4,14 @@ This document is the **future-proof checklist** for adding a new
 channel adapter to Aivyx. It was written at Phase 9 exit with exactly
 two adapters in the tree (`LocalChannel` in `aivyx-channel` and
 `TelegramChannel` in `aivyx-telegram`). Phase 107 added the third
-data point (`DiscordChannel` in `aivyx-discord`) and the rules below
-held — see the **Three-data-point update** subsection at the bottom
-for what the Discord adapter confirmed and the one Discord-specific
-simplification worth noting. Every claim below points at a concrete
-line in one of those three adapters so a future contributor can
-copy shapes rather than re-derive them.
+data point (`DiscordChannel` in `aivyx-discord`); Phase 108 added
+the fourth (`SlackChannel` in `aivyx-slack`). All Phase 9 rules
+held across four data points; the **Three-data-point update** and
+**Four-data-point update** subsections at the bottom document what
+the third and fourth adapters confirmed plus the one open question
+each adapter either resolved or punted forward. Every claim below
+points at a concrete line in one of those four adapters so a future
+contributor can copy shapes rather than re-derive them.
 
 **There are two ways to adapt a channel:**
 
@@ -22,15 +24,22 @@ The in-tree sections below focus on Rust `ChannelContext` impls.
 The out-of-tree section explains where the rules differ when your
 adapter speaks the daemon's IPC protocol from another process.
 
-Status: **confirmed at three data points** (was tentative at two —
-Phase 9). Phase 107's `aivyx-discord` adapter is the third data
-point this document was waiting for. Every rule below survived
-the third-adapter sanity check; the one Discord-specific deviation
-is documented in the **Three-data-point update** subsection at the
-bottom. The Phase 6 Q5 convention ("honesty over streak preservation")
-still applies: if a future fourth adapter (Slack — Phase 108) breaks
-a rule below, the right move is to update this document in the
-same commit, not to work around the rule.
+Status: **confirmed at four data points** (was tentative at two —
+Phase 9; promoted to confirmed-at-three at Phase 107). Phase 108's
+`aivyx-slack` adapter is the fourth data point. Every Phase 9 rule
+survived the four-adapter sanity check. The Discord and Slack
+adapters between them resolved one Phase 9 open question (the
+sibling `run_*_session` extraction is **answered "no extraction"**
+at four data points) and **punted another** (the Phase 9 Q7
+richer-than-`Option<String>` partition return type — Slack fit
+cleanly as a colon-joined `(team_id, channel_id)` string, so the
+question still waits for a Matrix-shaped adapter where
+`room_id + homeserver` actually forces it). See the
+**Four-data-point update** subsection at the bottom for the
+detail. The Phase 6 Q5 convention ("honesty over streak
+preservation") still applies: if a future fifth adapter breaks a
+rule below, the right move is to update this document in the same
+commit, not to work around the rule.
 
 ## The trait surface
 
@@ -622,3 +631,110 @@ template) is the four-data-point confirmation. If the
 Slack adapter shape forces any rule change above, this
 document gets the four-data-point update at Phase 108
 exit.
+
+---
+
+## Four-data-point update (Phase 108)
+
+Phase 108 added `aivyx-slack` — the fourth in-tree adapter
+this document was waiting on. Every Phase 9 rule (and every
+Phase 107 update) survived the four-adapter sanity check at
+foundation scope:
+
+- **Trait surface** — `SlackChannel` implements the same
+  eight `ChannelContext` methods. `ChannelPlatform::Slack`
+  was already in `aivyx-core` since Phase 8's
+  forward-enumeration; same surprise as Discord at Phase
+  107 (no core touch needed).
+- **Tier-ceiling contract** — `TrustTier::SemiTrusted`,
+  matching Telegram + Discord. The two
+  `build_*_for_channel` registration-time gates extended
+  their arms from `Telegram | Discord` to
+  `Telegram | Discord | Slack` — three remote adapters,
+  one symmetric posture on destructive tools.
+- **Sibling `run_*_session` pattern** — `run_slack_session`
+  is its own driver. The "extract shared abstraction?"
+  question Phase 9 left open is **answered "no extraction"
+  at four data points.** Slack's outer loop has the same
+  push-based shape Discord's does (Socket Mode's
+  WebSocket is structurally identical to Discord's
+  Gateway for the purposes of this trait) so the two
+  protocols' implementations are very similar — but the
+  protocol-specific details (`twilight-gateway` vs.
+  `slack-morphism` callback shape, `u64` vs. `String` IDs,
+  intents vs. scope OAuth, single channel id vs.
+  `(team_id, channel_id)` pair) make any shared
+  abstraction the wrong size. Four data points confirm
+  the sibling pattern is permanent.
+- **Private `XxxTransport` trait seam** — `SlackTransport`
+  with two methods (`next_message`, `send_message`). Same
+  shape as `TelegramTransport` + `DiscordTransport`.
+  Production wraps `slack-morphism` Socket Mode + REST
+  (with a Phase-108-internal deferral on the
+  callback-state-passing wiring that's bundled with the
+  Phase 107 daemon-frontend follow-on); tests use
+  `ScriptedTransport`.
+- **`session_partition` and multi-tenant story** — Slack's
+  `format!("{team_id}:{channel_id}")` per Phase 108 Q3a.
+  This is the most-structured identity any in-tree adapter
+  carries, and it fit cleanly into `Option<String>`. The
+  partition key is a colon-joined string that downstream
+  consumers can `split_once(':')` if they ever need the
+  components back. The Phase 9 Q7 question about whether
+  the partition type needs to be richer than
+  `Option<String>` is **still unresolved** — but now
+  *deliberately* punted to the next adapter shape that
+  forces it. Slack's `(team_id, channel_id)` was the most
+  plausible four-data-point forcing function and it
+  didn't. Matrix (`room_id` + `homeserver` + per-server
+  routing details) remains the natural test case.
+
+### The Q3a stringification pattern
+
+Slack's `(team_id, channel_id)` partition key is the
+load-bearing piece of Phase 108. The
+`SlackChannel::session_partition()` method returns
+`Some(format!("{team_id}:{channel_id}"))`, and the outer
+multiplexer in `crates/aivyx-slack/src/session.rs` keys its
+per-partition mailbox `HashMap<String, _>` on the same
+string. The
+`two_channels_with_same_channel_id_but_different_team_id_partition_distinctly`
+test pins the property: a Slack bot installed in two
+workspaces that happen to allocate the same `channel_id`
+partitions cleanly into two distinct buckets.
+
+If a fifth adapter wants structured identity with three or
+more components (e.g., Matrix `(homeserver, room_id,
+event_id)`), the right move is one of:
+
+1. Continue the Slack pattern: `format!("{a}:{b}:{c}")`
+   and accept that parsing back is `split(':')`-shaped.
+2. Lift the partition return type to
+   `Option<SessionPartition>` where `SessionPartition` is
+   a typed enum or struct in `aivyx-core` — the Phase 9
+   Q7 substrate change, which would deliberately break the
+   `aivyx-core/src/lib.rs` streak.
+
+Option 1 has worked across four data points; option 2 is
+substrate-design work that should happen when an operator
+need (or test surface) demands it, not speculatively.
+
+### What deferred from Phase 108
+
+Two Phase-108-internal deferrals bundle with the Phase 107
+daemon-frontend follow-on:
+
+- **Production `SlackMorphismTransport` wiring** — the
+  callback-state-passing via `SlackClientEventsUserState`
+  needs proper UserState-backed design. The trait + the
+  scripted-double are in tree; the production transport
+  is a compile-only stub that returns a clean
+  "not-yet-wired" error.
+- **`/approve` / `/reject` text-command gate-resolve
+  routing** — same Slack-side daemon-frontend gap as the
+  Phase 107 Discord deferral.
+
+Both deferrals land alongside the Phase 107 daemon-
+frontend when an operator wants live-bot smoke testing —
+the Channel Activation Milestone is the natural pass for
+that work.

@@ -1484,3 +1484,36 @@ parent_role = "researcher"
 # # plumbed so a later phase can register without re-shaping the
 # # config).
 # # application_id = 1234567890
+
+# ----------------------------------------------------------------
+# Slack channel (Phase 108)
+# ----------------------------------------------------------------
+#
+# `aivyx --channel slack` runs the bot account configured below
+# against Slack's Socket Mode WebSocket. SemiTrusted tier (same
+# ceiling as Telegram and Discord); each (team_id, channel_id)
+# pair gets a distinct memory partition keyed on the Q3a
+# stringification — so a Slack bot installed in two workspaces
+# partitions cleanly even when channel ids collide.
+#
+# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx on
+# Slack" — Slack app creation → Socket Mode enablement → bot
+# scopes → install to workspace → save xoxb-* + xapp-* tokens.
+#
+# Current state: Phase 108 ships the in-process channel layer.
+# The live SlackMorphismTransport wiring is a Phase-108-internal
+# deferral bundled with the Phase 107 Discord daemon-frontend
+# follow-on; an operator who runs --channel slack today gets a
+# "production transport not yet wired" error when the adapter
+# tries to open Socket Mode. Live-bot smoke testing waits for
+# the Channel Activation Milestone.
+#
+# Uncomment + fill the tokens to enable:
+#
+# [slack]
+# bot_token = "xoxb-..."
+# app_token = "xapp-..."
+# # team_id is optional. When set, the bot only handles events
+# # from this one workspace; when None, any workspace the bot
+# # is installed in is accepted.
+# # team_id = "T0123456789"

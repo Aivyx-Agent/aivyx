@@ -67,8 +67,16 @@ count) that per-phase tests structurally can't.
    real-bot setup at the Discord Developer Portal, `--channel
    discord` launch, two-message DM round trip across a process
    restart, the same `--verify-only` forensic walk Telegram
-   uses. Slack (Phase 108) and any later adapter join the
-   queue the same way.
+   uses. **Slack (Phase 108)** joins next — same shape with
+   `xoxb-*` + `xapp-*` token setup at api.slack.com, Socket
+   Mode connection establishment, two-message DM round trip
+   across restart. Slack also brings two Phase-108-internal
+   wirings that complete at the same milestone: the
+   `SlackMorphismTransport` callback-state-passing via
+   `SlackClientEventsUserState` (which can only be validated
+   against live bot traffic), and the daemon-frontend
+   `/approve` / `/reject` text-command gate-resolve routing
+   bundled with the Phase 107 Discord deferral.
 3. **Cross-channel regression sweep:** one local turn + one
    Telegram turn + one-of-each-other-adapter turn against the
    **same** persistent audit chain, then `aivyx --verify-only`
