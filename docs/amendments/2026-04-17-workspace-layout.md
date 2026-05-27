@@ -28,6 +28,20 @@ serves as the platform's integration hub.
 > forward-looking enumeration, so the lib.rs streak held
 > byte-identical across the Task 2 crate-skeleton landing.
 > See the traceability row for Phase 107 below.
+>
+> **Phase 108 addendum (2026-05-27):** crate count bumped
+> from 13 to 14 with the addition of `aivyx-slack`. Fourth
+> channel adapter and the four-data-point confirmation for
+> the adapter pattern Phase 107 promoted to confirmed-at-
+> three. Same private-2-method-transport-trait shape;
+> scripted-double testing; multi-channel multiplexer +
+> per-channel mailbox structure mirroring `aivyx-discord`.
+> `ChannelPlatform::Slack` lived in `aivyx-core` since
+> Phase 8's forward-enumeration (same Phase 107 surprise
+> pattern), so the lib.rs streak holds again. `session_partition()`
+> stringifies `(team_id, channel_id)` per Q3a, confirming
+> the `Option<String>` return type at four data points.
+> See the traceability row for Phase 108 below.
 
 ---
 
@@ -67,6 +81,7 @@ serves as the platform's integration hub.
     ├── aivyx-channel/    platform integration hub (see module map below)
     ├── aivyx-telegram/   Telegram transport: ReqwestTransport, scripted mock
     ├── aivyx-discord/    Discord transport: twilight-rs wrapper, scripted mock (Phase 107)
+    ├── aivyx-slack/      Slack transport: slack-morphism Socket Mode wrapper, scripted mock (Phase 108)
     ├── aivyx-mcp/        MCP client adapter: McpServerBridge, McpToolProxy
     └── aivyx-tool/       Tool process IPC: ToolProcessBridge, ToolProxy (Phase 49)
 ```
@@ -142,3 +157,4 @@ preserves the production-core streak by keeping
 | Phase 24 | `[[mcp_server]]` config entries, daemon-side MCP bridge lifecycle |
 | Phase 49 | +`aivyx-tool` crate (**12 crates**), `[[tool_process]]` config, `ToolProcessBridge` for third-party out-of-process tool IPC — delivers PRODUCT.md P12 |
 | Phase 107 | +`aivyx-discord` crate (**13 crates**), `[discord]` TOML config (token + application_id), `ChannelKind::Discord`, twilight-rs SDK adoption — third channel adapter per Hermes-comparison-driven Chapter D |
+| Phase 108 | +`aivyx-slack` crate (**14 crates**), `[slack]` TOML config (bot_token + app_token + team_id), `ChannelKind::Slack`, slack-morphism SDK adoption with Socket Mode — fourth channel adapter and the four-data-point confirmation for ADAPTER_PATTERN.md |

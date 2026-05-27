@@ -419,6 +419,14 @@ pub struct LoadOptions {
     /// `discord.token` is still `None`. Set to `true` by
     /// `--channel discord`, `false` otherwise.
     pub require_discord_token: bool,
+    /// Phase 108 — symmetric to `require_telegram_token` /
+    /// `require_discord_token` for the Slack adapter. If
+    /// `true`, [`AivyxConfig::validate`] errors out when
+    /// either `slack.bot_token` or `slack.app_token` is
+    /// still `None` (Socket Mode requires both — bot for
+    /// REST, app for the WebSocket). Set to `true` by
+    /// `--channel slack`, `false` otherwise.
+    pub require_slack_tokens: bool,
     /// Caller-supplied override for which role should be activated at
     /// load time. Highest priority in the active-role resolution
     /// chain:
@@ -450,6 +458,7 @@ impl LoadOptions {
             require_api_key: false,
             require_telegram_token: false,
             require_discord_token: false,
+            require_slack_tokens: false,
             role_override: None,
         }
     }
@@ -563,6 +572,12 @@ pub struct AivyxConfig {
     /// passed). Filled in whenever any Discord field is set
     /// so the startup banner can warn about orphan config.
     pub discord: Option<DiscordConfig>,
+    /// Phase 108 — Slack channel config. `None` when no
+    /// Slack field is set. Filled in whenever any Slack
+    /// field is set so the startup banner can warn about
+    /// orphan config (e.g. operator set `bot_token` but
+    /// forgot `app_token`, which Socket Mode also needs).
+    pub slack: Option<SlackConfig>,
     /// Phase 68 — shared SMTP configuration for the email notify
     /// backend. `None` when no `[email]` section is declared.
     /// Required when any `[[notify_target]] kind = "email"` exists;
@@ -1019,6 +1034,37 @@ pub struct DiscordConfig {
     /// re-shaping `DiscordConfig`). `None` until the
     /// operator sets it.
     pub application_id: Option<Sourced<u64>>,
+}
+
+/// Phase 108 — Slack-specific configuration. Socket Mode
+/// requires two tokens: a bot token (`xoxb-...`) for REST
+/// calls, and an app-level token (`xapp-...`) for the
+/// outbound WebSocket connection. Both `Option` so validation
+/// at validate-time can surface a clean `ConfigError::Missing`
+/// for whichever is unset.
+#[derive(Debug, Clone)]
+pub struct SlackConfig {
+    /// Bot token (`xoxb-...`) — Slack OAuth's bot-user
+    /// access token. Used for REST `chat.postMessage` and
+    /// any other Web API calls. `Option` for the same
+    /// reason as Telegram / Discord.
+    pub bot_token: Option<SourcedSecret>,
+    /// App-level token (`xapp-...`) — the Socket Mode
+    /// token that lets the bot open an outbound WebSocket
+    /// to Slack instead of accepting inbound Events API
+    /// webhooks. Phase 108 Q2a chose Socket Mode only;
+    /// without this token the bot has no way to receive
+    /// messages.
+    pub app_token: Option<SourcedSecret>,
+    /// Optional `team_id` constraint (`T0123456789`). When
+    /// set, the bot only handles messages from this one
+    /// workspace; when `None`, any workspace the bot is
+    /// installed in is accepted. Q3a's partition-key
+    /// stringification handles the multi-workspace case
+    /// regardless — this knob is for operators who want
+    /// a defensive "this bot is only allowed in workspace X"
+    /// constraint.
+    pub team_id: Option<Sourced<String>>,
 }
 
 /// Transport kind for an MCP server connection.
@@ -1927,6 +1973,8 @@ struct RawToml {
     #[serde(default)]
     discord: RawDiscord,
     #[serde(default)]
+    slack: RawSlack,
+    #[serde(default)]
     email: RawEmail,
     /// `[embedding]` section. Phase 75 — semantic memory search.
     #[serde(default)]
@@ -2505,6 +2553,19 @@ struct RawDiscord {
     application_id: Option<u64>,
 }
 
+/// Phase 108 — `[slack]` TOML section deserialize target.
+/// Three optional fields: bot token, app token (Socket Mode),
+/// optional team_id constraint.
+#[derive(Debug, Default, Deserialize)]
+struct RawSlack {
+    #[serde(default)]
+    bot_token: Option<String>,
+    #[serde(default)]
+    app_token: Option<String>,
+    #[serde(default)]
+    team_id: Option<String>,
+}
+
 /// Phase 68 — `[email]` section deserialize target.
 ///
 /// All fields are optional at the TOML layer; the loader
@@ -2705,6 +2766,13 @@ pub mod secret_keys {
     /// Phase 107 — storage key for the Discord bot token.
     /// Value: UTF-8 string. Symmetric to `TELEGRAM_TOKEN`.
     pub const DISCORD_TOKEN: &[u8] = b"discord_token";
+    /// Phase 108 — storage key for the Slack bot token
+    /// (`xoxb-...`). Used for REST calls.
+    pub const SLACK_BOT_TOKEN: &[u8] = b"slack_bot_token";
+    /// Phase 108 — storage key for the Slack app-level
+    /// Socket Mode token (`xapp-...`). Used for the
+    /// outbound WebSocket connection.
+    pub const SLACK_APP_TOKEN: &[u8] = b"slack_app_token";
     /// Storage key for the Aivyx master-key passphrase. Value: UTF-8 string.
     ///
     /// Storing the passphrase inside a store that is itself encrypted
@@ -2736,6 +2804,13 @@ const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
 /// Same `AIVYX_*` prefix convention every other secret uses.
 const ENV_DISCORD_TOKEN: &str = "AIVYX_DISCORD_TOKEN";
 const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_DISCORD_APPLICATION_ID";
+
+/// Phase 108 — Slack tokens. Two distinct tokens because
+/// Socket Mode requires both: bot for REST, app for the
+/// outbound WebSocket. Optional `team_id` constraint.
+const ENV_SLACK_BOT_TOKEN: &str = "AIVYX_SLACK_BOT_TOKEN";
+const ENV_SLACK_APP_TOKEN: &str = "AIVYX_SLACK_APP_TOKEN";
+const ENV_SLACK_TEAM_ID: &str = "AIVYX_SLACK_TEAM_ID";
 /// Env-var override for the active role name, second-priority in the
 /// active-role resolution chain (below [`LoadOptions::role_override`]
 /// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
@@ -3095,6 +3170,50 @@ impl AivyxConfig {
             Some(DiscordConfig {
                 token: discord_token,
                 application_id: discord_application_id,
+            })
+        } else {
+            None
+        };
+
+        // --- slack (Phase 108) -------------------------------------
+        // Same shape as Telegram + Discord: SlackConfig is
+        // constructed whenever any Slack source fires. Both
+        // bot_token and app_token are inner Option so an operator
+        // who set only one surfaces as a ConfigError::Missing at
+        // validate time, not load time.
+        let slack_bot_token = env_secret(ENV_SLACK_BOT_TOKEN)
+            .map(|s| SourcedSecret::new(s, FieldSource::Env))
+            .or_else(|| {
+                toml.slack
+                    .bot_token
+                    .as_ref()
+                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+            });
+        let slack_app_token = env_secret(ENV_SLACK_APP_TOKEN)
+            .map(|s| SourcedSecret::new(s, FieldSource::Env))
+            .or_else(|| {
+                toml.slack
+                    .app_token
+                    .as_ref()
+                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+            });
+        let slack_team_id = match env_string(ENV_SLACK_TEAM_ID) {
+            Some(s) => Some(Sourced::new(s, FieldSource::Env)),
+            None => toml
+                .slack
+                .team_id
+                .clone()
+                .map(|s| Sourced::new(s, FieldSource::Toml)),
+        };
+
+        let slack = if slack_bot_token.is_some()
+            || slack_app_token.is_some()
+            || slack_team_id.is_some()
+        {
+            Some(SlackConfig {
+                bot_token: slack_bot_token,
+                app_token: slack_app_token,
+                team_id: slack_team_id,
             })
         } else {
             None
@@ -4013,6 +4132,7 @@ impl AivyxConfig {
             passphrase,
             telegram,
             discord,
+            slack,
             email,
             embedding,
             proactive,
@@ -4145,6 +4265,47 @@ impl AivyxConfig {
             }
         }
 
+        // Phase 108 — Slack bot + app token store fall-through.
+        // Two distinct secret keys; both treated the same way.
+        if let Some(sc) = self.slack.as_mut() {
+            if sc.bot_token.is_none() {
+                if let Some(bytes) = secrets
+                    .get(secret_keys::SLACK_BOT_TOKEN)
+                    .await
+                    .map_err(|e| ConfigError::StoreRead {
+                        field: "slack.bot_token",
+                        reason: e.to_string(),
+                    })?
+                {
+                    let s = String::from_utf8(bytes).map_err(|_| ConfigError::NonUtf8Secret {
+                        field: "slack.bot_token",
+                    })?;
+                    sc.bot_token = Some(SourcedSecret::new(
+                        SecretString::from(s),
+                        FieldSource::EncryptedStore,
+                    ));
+                }
+            }
+            if sc.app_token.is_none() {
+                if let Some(bytes) = secrets
+                    .get(secret_keys::SLACK_APP_TOKEN)
+                    .await
+                    .map_err(|e| ConfigError::StoreRead {
+                        field: "slack.app_token",
+                        reason: e.to_string(),
+                    })?
+                {
+                    let s = String::from_utf8(bytes).map_err(|_| ConfigError::NonUtf8Secret {
+                        field: "slack.app_token",
+                    })?;
+                    sc.app_token = Some(SourcedSecret::new(
+                        SecretString::from(s),
+                        FieldSource::EncryptedStore,
+                    ));
+                }
+            }
+        }
+
         // Phase 75 — embedding API key store fall-through. Only
         // touched if the `[embedding]` section materialized an
         // `EmbeddingConfig`; we never fabricate one just because
@@ -4225,6 +4386,27 @@ impl AivyxConfig {
                 None => {
                     return Err(ConfigError::Missing {
                         field: "discord.token",
+                    });
+                }
+            }
+        }
+        // Phase 108 — Socket Mode needs *both* tokens. Either
+        // missing is a clean Missing error so the operator sees
+        // exactly which one to set.
+        if opts.require_slack_tokens {
+            match self.slack.as_ref().and_then(|s| s.bot_token.as_ref()) {
+                Some(_) => {}
+                None => {
+                    return Err(ConfigError::Missing {
+                        field: "slack.bot_token",
+                    });
+                }
+            }
+            match self.slack.as_ref().and_then(|s| s.app_token.as_ref()) {
+                Some(_) => {}
+                None => {
+                    return Err(ConfigError::Missing {
+                        field: "slack.app_token",
                     });
                 }
             }

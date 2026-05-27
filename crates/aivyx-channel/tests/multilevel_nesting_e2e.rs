@@ -52,6 +52,7 @@ fn load_example_config() -> AivyxConfig {
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
+        require_slack_tokens: false,
         role_override: Some("default".to_string()),
     };
     AivyxConfig::load_from_env_and_toml(&opts)

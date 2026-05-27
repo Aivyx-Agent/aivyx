@@ -272,6 +272,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
+        require_slack_tokens: false,
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)

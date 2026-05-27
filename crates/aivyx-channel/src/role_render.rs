@@ -83,6 +83,12 @@ pub enum ChannelKind {
     /// for Discord; `web.fetch` is) and the same
     /// non-`Local` rendering for role-envelope display.
     Discord,
+    /// Phase 108 — Slack adapter. Same `SemiTrusted` tier
+    /// posture as `Telegram` and `Discord` — the three
+    /// remote-channel adapters share registration-time gates
+    /// on destructive tools (`shell.exec`, `fs.delete`)
+    /// symmetrically.
+    Slack,
 }
 
 /// Construct the display-time backcompat floor for the given
@@ -196,6 +202,7 @@ pub fn render_role_envelope(
             ChannelKind::Local => "local",
             ChannelKind::Telegram => "telegram",
             ChannelKind::Discord => "discord",
+            ChannelKind::Slack => "slack",
         }
     )
     .unwrap();

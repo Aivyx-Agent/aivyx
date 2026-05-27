@@ -1,0 +1,58 @@
+[package]
+name = "aivyx-slack"
+description = "Slack ChannelContext adapter — Phase 108's fourth concrete channel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+# Phase 108 — mirrors aivyx-discord and aivyx-telegram's pattern.
+# Do NOT depend on aivyx-channel: the aivyx binary in that crate
+# calls into aivyx_slack::run_slack_session, which would cycle
+# aivyx-slack → aivyx-channel → aivyx-slack. The session driver
+# defines its own SlackSessionConfig mirroring
+# DiscordSessionConfig minus the Discord-specific fields.
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Phase 108 task 2 — slack-morphism is the maintained Rust SDK
+# for Slack. Same posture as the Phase 8 frankenstein adoption
+# (Telegram) and the Phase 107 twilight-rs adoption (Discord) —
+# pick a thin protocol wrapper that exposes raw API methods, not
+# a framework that owns its own event loop. Q1a sign-off.
+#
+# Features:
+# - `hyper`: pulls in the HTTP client backend slack-morphism uses
+#   for REST. Required for any production use of the SDK.
+# - `socket-mode`: enables the Socket Mode WebSocket client per
+#   Q2a sign-off. Without this feature the SDK builds REST-only.
+#
+# The 2.x line is the current stable major-series at Phase 108
+# entry. Pinned with `~` so a patch bump can land via Cargo.lock
+# without the manifest churning.
+slack-morphism = { version = "2", default-features = false, features = ["hyper", "axum"] }
+
+# slack-morphism's Socket Mode client needs a SlackApiToken handle
+# constructed from the operator's bot + app tokens; the wrapper
+# helpers want rsb_derive's builder pattern. Both transitive via
+# slack-morphism but listed explicitly so the dep is visible in
+# operator-side audits.
+rsb_derive = "0.5"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+aivyx-memory = { path = "../aivyx-memory" }
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-crypto = { path = "../aivyx-crypto" }

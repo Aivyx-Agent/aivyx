@@ -239,12 +239,13 @@ fn build_shell_exec_for_channel(
             })?;
             Ok(Some((Arc::new(shell) as Arc<dyn Tool>, scope)))
         }
-        // Phase 107 — Discord shares the SemiTrusted tier
-        // posture with Telegram; neither receives `shell.exec`
-        // at registration time. Symmetric behavior keeps the
+        // Phase 107 + Phase 108 — Discord and Slack share the
+        // SemiTrusted tier posture with Telegram. None of the
+        // three remote adapters receives `shell.exec` at
+        // registration time. Symmetric behavior keeps the
         // SemiTrusted audit chain free of shell.exec mentions
-        // across both adapters.
-        ChannelKind::Telegram | ChannelKind::Discord => Ok(None),
+        // across every remote adapter.
+        ChannelKind::Telegram | ChannelKind::Discord | ChannelKind::Slack => Ok(None),
     }
 }
 
@@ -283,12 +284,12 @@ fn build_fs_delete_for_channel(
             })?;
             Ok(Some((Arc::new(tool) as Arc<dyn Tool>, scope)))
         }
-        // Phase 107 — Discord shares the SemiTrusted tier
-        // posture with Telegram for destructive tool gating.
-        // A SemiTrusted dispatch registry never contains
-        // `fs.delete`, whether the channel is Telegram or
-        // Discord.
-        ChannelKind::Telegram | ChannelKind::Discord => Ok(None),
+        // Phase 107 + Phase 108 — Discord and Slack share the
+        // SemiTrusted tier posture with Telegram for
+        // destructive tool gating. A SemiTrusted dispatch
+        // registry never contains `fs.delete` regardless of
+        // which remote adapter is wired.
+        ChannelKind::Telegram | ChannelKind::Discord | ChannelKind::Slack => Ok(None),
     }
 }
 
@@ -665,6 +666,10 @@ fn run() -> Result<(), String> {
         // Discord connection regardless of `--channel`, so
         // the print path relaxes this just like Telegram.
         require_discord_token: matches!(channel_kind, ChannelKind::Discord) && !print_role_mode,
+        // Phase 108 — same shape for the Slack adapter. Socket
+        // Mode needs both bot_token + app_token; validate
+        // surfaces whichever is missing as a `Missing` error.
+        require_slack_tokens: matches!(channel_kind, ChannelKind::Slack) && !print_role_mode,
         // Phase 11 Task 4 — `--role <name>` is now the highest-
         // priority source. `parse_cli_args` turns the flag into
         // `role_override`, which `aivyx-config`'s resolver honors
@@ -2410,7 +2415,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local`, `telegram`, or `discord`"
+                    "`--channel` requires a value: `local`, `telegram`, `discord`, or `slack`"
                         .to_string()
                 })?;
                 channel = match value.as_str() {
@@ -2418,10 +2423,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     "telegram" => ChannelKind::Telegram,
                     // Phase 107 — Discord adapter parse arm.
                     "discord" => ChannelKind::Discord,
+                    // Phase 108 — Slack adapter parse arm.
+                    "slack" => ChannelKind::Slack,
                     other => {
                         return Err(format!(
                             "unrecognized channel `{other}`. \
-                             Supported: local, telegram, discord"
+                             Supported: local, telegram, discord, slack"
                         ));
                     }
                 };
@@ -2527,7 +2534,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|telegram|discord>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
+                     Supported: --verify-only, --channel <local|telegram|discord|slack>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
                 ));
             }
         }
@@ -2766,6 +2773,11 @@ async fn run_async(
         // `ChannelKind::Discord` dispatch arm below; carries
         // the bot token through to `run_discord_session`.
         discord,
+        // Phase 108 Task 2 — `slack` config landed in the
+        // AivyxConfig surface; Task 5 will wire it into the
+        // Slack session-driver dispatch. Until then the
+        // field is destructured-but-unused.
+        slack: _,
         // Phase 68 — shared SMTP config consumed by
         // `build_notify_dispatcher` when any
         // `[[notify_target]] kind = "email"` exists.
@@ -5024,6 +5036,20 @@ async fn run_async(
             .await
             .map(|_report| ())
         }
+
+        // Phase 108 Task 2 — `ChannelKind::Slack` is recognized
+        // at parse time (Task 5 wires the `--channel slack`
+        // flag through to `run_slack_session`) but the session
+        // driver lands at Task 5. Until then, surface a clean
+        // error so an operator running today's binary against
+        // the slack arm gets a precise message rather than a
+        // missing-match panic.
+        ChannelKind::Slack => Err(
+            "Slack channel adapter is wired through Task 2 (skeleton + config) \
+             but the session driver lands at Phase 108 Task 5. Use `--channel local`, \
+             `--channel telegram`, or `--channel discord` for now."
+                .to_string(),
+        ),
     }
 }
 
@@ -5790,6 +5816,7 @@ mod tests {
             require_api_key: false,
             require_telegram_token: false,
             require_discord_token: false,
+            require_slack_tokens: false,
             role_override: Some("default".to_string()),
         };
         AivyxConfig::load_from_env_and_toml(&opts).expect("examples/aivyx.toml must load cleanly")
