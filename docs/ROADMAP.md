@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 115 — Self-Correction Loop on Failed Turns (Chapter E #2)
 
-**Active — see [PHASE_115.md](PHASE_115.md).** Second
+**Frozen — see [PHASE_115.md](PHASE_115.md).** Second
 phase of Chapter E. Closes the symmetric negative-
 feedback half of Phase 114's auto-proposer. The agent
 observes failed turns (Failed / Cancelled / TimedOut /
@@ -3468,15 +3468,39 @@ Q3a sign-off (extend Phase 114 substrate).
   knob; new `source` field on audit-event with
   serde-skip-if-none for backward compatibility.
 
-Streak predictions: all three HOLD (DESIGN.md → 6,
-PRODUCT.md → 6, `aivyx-core/src/lib.rs` → 4). Zero new
-workspace deps. Test count `+20` to `+35`.
+**Streak outcomes** — all three predictions held; fourth
+all-hold result in a row (Phase 112-115). Longest
+streak-hold run in project history; substrate is
+genuinely mature.
+- DESIGN.md: HELD as predicted (no D-section touch).
+  Streak → 6.
+- PRODUCT.md: HELD as predicted (P8 envelope).
+  Streak → 6.
+- `aivyx-core/src/lib.rs`: HELD as predicted (extensions
+  inside the existing `skill_proposer` boundary).
+  Streak → 4.
+
+Test count: 2105 → 2129 (**+24**), inside the predicted
+`+20` to `+35` band. Zero new workspace deps. Zero
+clippy warnings.
+
+Backward-compatible audit chain: `AuditEvent::
+SkillAutoProposal` gained a `source` field with
+`#[serde(default, skip_serializing_if = "Option::is_none")]`;
+pre-Phase-115 entries verify byte-identically. Phase 92's
+`supersedes_proposal_id` pattern.
+
+One Phase-115-internal deferral named: operator-resolve
+escalation (`/reject`) integration would require hooking
+the persona-proposal-resolve site separately from the
+turn-finalize hook — held unless operator pressure
+surfaces.
 
 After Phase 115, the agent self-learns AND self-corrects
 across the same 11-category PersonaDelta surface. Chapter
 E's remaining named axes (tool/skill selection learning;
 outcome-driven Profile/Role refinement) ship operator-
-pressure-shaped after Phase 115.
+pressure-shaped at the next phase exit.
 
 ## Phase 114 — Persona Auto-Proposer Generalization (Chapter E opener)
 

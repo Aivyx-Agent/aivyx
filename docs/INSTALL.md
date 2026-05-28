@@ -409,7 +409,7 @@ production-ready in-process AND daemon-mode after Phase
 Channel Activation Milestone's job (operator-driven
 verification pass, separate from the phase sequence).
 
-## Persona auto-proposer (Phases 112-114)
+## Persona auto-proposer (Phases 112-115)
 
 The Persona auto-proposer is the optional self-learning
 loop that drafts reusable Persona refinements from complex
@@ -491,6 +491,36 @@ resolves through `aivyx persona proposals approve`.
   carry the `category` field so operators can filter by
   category downstream.
 
+**Self-correction loop (Phase 115).** The auto-proposer
+also fires from FAILED turns (not just completed turns)
+when `from_failed_turns = true`. The agent observes a
+failure and proposes a Persona refinement that would
+prevent recurrence — typically a BehavioralConstraint
+("never X") or LearnedContext ("remember Y").
+
+```toml
+[persona.auto_propose]
+enabled = true
+from_failed_turns = true        # default false; opt in
+
+[persona.auto_propose.failure_outcomes]
+# Default: failed=true, timed_out=true, cancelled=false,
+# escalated=false. Tune per failure-type.
+# failed = true
+# timed_out = true
+# cancelled = false
+# escalated = false
+```
+
+Per-failure-outcome enables let the operator be
+conservative on operator-driven cancellations / agent
+escalations (where the agent did the right thing under
+D1's Tier-2 rules) while still learning from clear
+failures. The `--event-type SkillAutoProposal` filter
+includes a `source` field that distinguishes
+`CompletedTurn` from `FailedTurn { failure_kind }` for
+forensic separation.
+
 **Escape hatches:**
 - The auto-proposer never blocks a turn — failure-isolated
   background spawn. The user's reply is sent first; the
@@ -503,6 +533,8 @@ resolves through `aivyx persona proposals approve`.
   specific axes (e.g. keep `learned_skill` on but
   `behavioral_preferences` off) without disabling the
   whole loop.
+- Per-failure-outcome flags let the operator scope which
+  failure types fire self-correction (Phase 115).
 - The whole feature can be disabled by setting top-level
   `enabled = false` (or removing the section). The auto-
   proposer bypass costs zero — no LLM call, no chain

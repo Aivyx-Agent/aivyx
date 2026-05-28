@@ -249,31 +249,114 @@ Chapter E phase shape:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_115.md` + ROADMAP Phase 115 entry +
-  docs/README status row — Task 1 (this commit).
-- [ ] Failure-outcome heuristic + per-variant enable
-  config — Task 2.
-- [ ] `JudgeRequest.proposal_source` field +
-  failure-context prompt block — Task 3.
-- [ ] Daemon post-finalize hook fires on non-Completed
-  outcomes when configured — Task 4.
-- [ ] `AuditEvent::SkillAutoProposal.source` backward-
-  compat extension — Task 5.
-- [ ] TOML config `from_failed_turns` + failure-outcomes
-  sub-section — Task 6.
-- [ ] Scripted e2e covering Failed + TimedOut +
-  Cancelled paths — Task 7.
-- [ ] All three Q-block questions resolved with
+- [x] `docs/PHASE_115.md` + ROADMAP Phase 115 entry +
+  docs/README status row — Task 1 (`258262f`).
+- [x] Failure-outcome heuristic + per-variant enable
+  config — Task 2 (`9ee8834`).
+- [x] `JudgeRequest.source` field + failure-context
+  prompt block — Task 3 (`6a98289`).
+- [x] Daemon post-finalize hook fires on non-Completed
+  outcomes when configured — Task 4 (`d83e7f0`).
+- [x] `AuditEvent::SkillAutoProposal.source` backward-
+  compat extension — Task 5 (`c1ec4cd`).
+- [x] TOML config `from_failed_turns` + failure-outcomes
+  sub-section — Task 6 (`6e0f5d1`).
+- [x] Scripted e2e covering Failed + TimedOut + Phase
+  113-alias paths — Task 7.
+- [x] All three Q-block questions resolved with
   operator sign-off pre-Task 2 (Q1c, Q2a, Q3a
   recorded above).
-- [ ] DESIGN.md streak extends to six.
-- [ ] PRODUCT.md streak extends to six.
-- [ ] `aivyx-core/src/lib.rs` streak extends to four.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+20` to
-  `+35`.
-- [ ] Zero clippy warnings.
-- [ ] **The self-correction loop closes alongside the
+- [x] DESIGN.md streak extends to six — **HELD as
+  predicted**. `c2be6d51…` unchanged.
+- [x] PRODUCT.md streak extends to six — **HELD as
+  predicted**. `6e840cef…` unchanged.
+- [x] `aivyx-core/src/lib.rs` streak extends to four —
+  **HELD as predicted**. `deab80d8…` unchanged.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+24` (2105 → 2129),
+  inside the `+20 to +35` predicted range.
+- [x] Zero clippy warnings.
+- [x] **The self-correction loop closes alongside the
   self-learning loop.** Chapter E's negative-feedback
   half ships next to the positive-feedback half from
-  Phase 114.
+  Phase 114; the same pipeline handles both via the
+  `ProposalSource` discriminator.
+
+## Prediction vs reality
+
+**Three streak predictions; all three held — fourth
+all-hold result in a row.** Phases 112, 113, 114, and 115
+each saw every prediction hit. This is the longest streak-
+hold run in project history. Substrate is genuinely
+mature: Chapter E's pipeline extensions are all reuse,
+not new substrate cost.
+
+- **DESIGN.md** — Held as predicted. `c2be6d51…`
+  unchanged. The failure-feedback path slots into the
+  existing D4/D5 envelope; no new section needed.
+  Streak: 5 → 6.
+- **PRODUCT.md** — Held as predicted. `6e840cef…`
+  unchanged. P8 (Outcome-Driven Audited Reflection)
+  covers failure-driven reflection identically to
+  completion-driven; broadening the trigger doesn't
+  touch the contract. Streak: 5 → 6.
+- **`aivyx-core/src/lib.rs`** — Held as predicted.
+  `deab80d8…` unchanged. The `skill_proposer` module's
+  internal extensions (FailureKind enum, ProposalSource
+  enum, judge prompt branching) all live inside the
+  existing `pub mod skill_proposer` boundary. Streak:
+  3 → 4.
+
+**Test count `+24` is inside the `+20 to +35` band.**
+Breakdown:
+- `aivyx-core/src/skill_proposer/heuristic.rs` — +7
+  tests (FailureKind labels, FailureHeuristicConfig
+  per-variant + defaults + all-enabled/disabled + serde
+  round-trip).
+- `aivyx-core/src/skill_proposer/judge.rs` — +6 tests
+  (ProposalSource default + label; system prompt
+  mentions both source modes; user prompt branches per
+  source variant).
+- `aivyx-audit` — +4 tests (source-field round-trip;
+  source=None absent-field serialization; pre-Phase-115
+  decoder compat; ProposalSourceSummary tagged-enum
+  shape).
+- `aivyx-config` — +4 tests (failure defaults;
+  from_failed_turns explicit; per-outcome override;
+  failure_outcomes sub-section arms section alone).
+- `aivyx-channel/tests/skill_auto_proposer_e2e.rs` —
+  +3 tests (failed_turn → BehavioralConstraints auto-
+  accept; timed_out + judge-decline → drop;
+  Phase-113-alias does-not-fire-failure-path pin).
+
+**Q-block resolved exactly as signed off.** Q1c (broadest
+failure scope) was the operator's non-Recommended pick;
+the implementation cost roughly the same as the narrower
+options because the per-failure-outcome enable defaults
+keep the noise from Cancelled and Escalated turns off by
+default.
+
+## Phase-115-internal deferral named at sign-off
+
+- **Operator-resolve escalation (/reject) integration.**
+  Phase 115 fires the failure pipeline on
+  `TurnOutcome::Escalated` at finalize time (when the
+  agent escalates), not on the later
+  `operator-/reject` resolution. Capturing the
+  `/reject` half would require hooking the persona-
+  proposal-resolve site separately from the turn-
+  finalize hook — deferred unless operator pressure
+  surfaces in real use.
+
+## Chapter E direction after Phase 115
+
+After Phase 115, two named Chapter E axes remain (subject
+to operator-pressure-shaped reordering at each phase
+exit):
+- Tool/skill selection learning from outcomes.
+- Outcome-driven Profile/Role refinement proposals.
+
+The post-Phase-115 ledger has one named deferral (the
+escalation /reject hook above). The next Chapter E phase
+opens against whichever axis surfaces real-use value
+first.
