@@ -3409,6 +3409,52 @@ no code, just real-bot smoke tests across every adapter.
   `aivyx-slack` for callback signature legibility but it
   was already transitive.
 
+## Phase 113 — Operator-Surface Polish (deferral cleanup)
+
+**Active — see [PHASE_113.md](PHASE_113.md).** Standalone
+phase past Chapter D's close, mirroring the Phase 20
+(Daemon Management + Deferral Cleanup) precedent: batch
+five small named operator-surface deferrals into one
+focused phase rather than carrying them across more
+substrate work.
+
+Closes the accumulated operator-surface deferrals from
+Chapter D and Phase 112:
+- Phase 112 TOML `[skills.auto_propose]` config loader
+  in `aivyx-config`.
+- Phase 112 daemon auto-construction of
+  `SkillAutoProposerContext` from the loaded TOML (makes
+  the auto-proposer actually enable-able via config
+  rather than only via source-edit).
+- Phase 112 operator-inspection flags: `aivyx persona
+  list --auto-only` / `--manual-only` filter the persona
+  chain by `pd-auto-*` `delta_id` prefix; `aivyx audit
+  export --event-type SkillAutoProposal` filter
+  on the existing audit-export JSONL emitter.
+- Phase 110-deferred A3 amendment addendum: `KNOWN_BASES`
+  inventory catches up from 43 (Phase 54 refresh) to ~47
+  (add `git.read` from Phase 109 + `skills.propose` +
+  `skills.list` + `skills.invoke` from Phase 110).
+- Phase 112 INSTALL.md paragraph covering the
+  `[skills.auto_propose]` config + revert escape hatch.
+
+**Q-block at sign-off:** Q1a — **bundle A3 into Phase
+113** (operator-picked Recommended). DESIGN.md streak
+breaks at the A-amendment edit; clean "all operator-
+surface deferrals in one phase" framing.
+
+Streak predictions: DESIGN.md break (A3 addendum; resets
+3 → 1); PRODUCT.md extends to four (no contract touch);
+`aivyx-core/src/lib.rs` extends to two (no aivyx-core
+touch). Zero new workspace deps. Test count `+15` to
+`+25`.
+
+After Phase 113, every named Chapter D + Phase 112
+operator-surface deferral is closed; the Channel
+Activation Milestone is fully ready to run (substrate
+production-wired in Phase 111, auto-proposer
+operator-configurable in Phase 113).
+
 ## Phase 112 — Skill Auto-Proposer (Phase 110's named follow-on)
 
 **Frozen — see [PHASE_112.md](PHASE_112.md).** Shipped the
