@@ -36,6 +36,15 @@ use crate::tool_relevance_ledger::{
 pub struct RelevancePromptRefiner {
     ledger: Arc<PersistentToolRelevanceLedger>,
     config: ToolRelevanceConfig,
+    /// Phase 117 Task 5 — optional inner refiner to chain.
+    /// When `Some`, this refiner runs FIRST: whatever it
+    /// returns (Some or None) determines the base prompt for
+    /// the relevance composition. With Phase 79's
+    /// PersonaContextRefiner in this slot, the operator gets
+    /// adaptive Persona reduction + relevance section
+    /// augmentation from a single
+    /// `LlmPlannerConfig.system_prompt_refiner` install.
+    inner: Option<Arc<dyn SystemPromptRefiner>>,
 }
 
 impl RelevancePromptRefiner {
@@ -43,7 +52,23 @@ impl RelevancePromptRefiner {
         ledger: Arc<PersistentToolRelevanceLedger>,
         config: ToolRelevanceConfig,
     ) -> Self {
-        RelevancePromptRefiner { ledger, config }
+        RelevancePromptRefiner {
+            ledger,
+            config,
+            inner: None,
+        }
+    }
+
+    /// Phase 117 Task 5 — chain an inner refiner. The inner
+    /// refiner runs first per turn; its output (or, if it
+    /// returns None, the original base_prompt) becomes the
+    /// base for the relevance composition.
+    pub fn with_inner_refiner(
+        mut self,
+        inner: Arc<dyn SystemPromptRefiner>,
+    ) -> Self {
+        self.inner = Some(inner);
+        self
     }
 }
 
@@ -52,16 +77,42 @@ impl SystemPromptRefiner for RelevancePromptRefiner {
     async fn refine(
         &self,
         user_message: &str,
-        _session_id: SessionId,
+        session_id: SessionId,
         base_prompt: &str,
     ) -> Option<String> {
+        // Phase 117 Task 5 — run the inner refiner first if
+        // chained. The inner's output (or `base_prompt` on
+        // None) becomes the foundation for the relevance
+        // composition.
+        let inner_owned: String;
+        let effective_base: &str = if let Some(inner) = &self.inner {
+            match inner.refine(user_message, session_id, base_prompt).await {
+                Some(refined) => {
+                    inner_owned = refined;
+                    &inner_owned
+                }
+                None => base_prompt,
+            }
+        } else {
+            base_prompt
+        };
+
         // Build the deterministic ledger key from the user
         // input + the human-readable display form.
         let max_kw = self.config.max_keywords as usize;
         let keyword_key =
             aivyx_core::relevance::keyword_key(user_message, max_kw);
         if keyword_key.is_empty() {
-            return None;
+            // No relevance signal; if the inner refiner
+            // returned something, propagate that; otherwise
+            // None.
+            return if self.inner.is_some()
+                && effective_base != base_prompt
+            {
+                Some(effective_base.to_string())
+            } else {
+                None
+            };
         }
         // Display form replaces `|` separators with `, `.
         let keyword_key_display = keyword_key.replace('|', ", ");
@@ -76,16 +127,24 @@ impl SystemPromptRefiner for RelevancePromptRefiner {
         .await;
 
         if section.trim().is_empty() {
-            return None;
+            // No relevance signal; propagate inner refinement
+            // if present.
+            return if self.inner.is_some()
+                && effective_base != base_prompt
+            {
+                Some(effective_base.to_string())
+            } else {
+                None
+            };
         }
 
-        // Compose: base prompt + relevance addendum. If the
-        // base ends without a trailing newline, normalize so
-        // the two blocks stay visually separated.
+        // Compose: effective base + relevance addendum. The
+        // effective base is the inner refiner's output when
+        // chained, else the original base_prompt.
         let mut composed = String::with_capacity(
-            base_prompt.len() + section.len() + 2,
+            effective_base.len() + section.len() + 2,
         );
-        composed.push_str(base_prompt.trim_end());
+        composed.push_str(effective_base.trim_end());
         if !composed.is_empty() {
             composed.push_str("\n\n");
         }
@@ -242,6 +301,129 @@ mod tests {
         assert!(result.contains("## Tools recently used for similar tasks"));
         // No leading double-newline when base is empty.
         assert!(!result.starts_with("\n\n"));
+    }
+
+    // ----- Phase 117 Task 5 — chained inner refiner -----
+
+    struct ConstRefiner(Option<String>);
+
+    #[async_trait]
+    impl SystemPromptRefiner for ConstRefiner {
+        async fn refine(
+            &self,
+            _user_message: &str,
+            _session_id: SessionId,
+            _base_prompt: &str,
+        ) -> Option<String> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn chained_inner_runs_first_and_relevance_composes_on_top() {
+        let (_dir, ledger) = scratch_refiner().await;
+        for _ in 0..2 {
+            ledger
+                .record_outcome(
+                    "deployment",
+                    RelevanceSurfaceKind::Tool,
+                    "shell.exec",
+                    true,
+                    100,
+                )
+                .await
+                .unwrap();
+        }
+        let inner = Arc::new(ConstRefiner(Some(
+            "## Inner-refined base\n\nbody".into(),
+        )));
+        let refiner = RelevancePromptRefiner::new(
+            Arc::clone(&ledger),
+            default_config(),
+        )
+        .with_inner_refiner(inner);
+        let result = refiner
+            .refine("deployment", SessionId::new(), "original-base")
+            .await
+            .expect("Some(...)");
+        // Inner refinement wins as the base; relevance
+        // section composes on top.
+        assert!(result.contains("## Inner-refined base"));
+        assert!(result.contains("body"));
+        assert!(result.contains("## Tools recently used for similar tasks"));
+        assert!(result.contains("shell.exec: 2 successes"));
+        // Original base prompt is NOT in the output (inner
+        // replaced it).
+        assert!(!result.contains("original-base"));
+    }
+
+    #[tokio::test]
+    async fn chained_inner_none_falls_back_to_base_for_composition() {
+        let (_dir, ledger) = scratch_refiner().await;
+        for _ in 0..2 {
+            ledger
+                .record_outcome(
+                    "deployment",
+                    RelevanceSurfaceKind::Tool,
+                    "shell.exec",
+                    true,
+                    100,
+                )
+                .await
+                .unwrap();
+        }
+        let inner = Arc::new(ConstRefiner(None));
+        let refiner = RelevancePromptRefiner::new(
+            Arc::clone(&ledger),
+            default_config(),
+        )
+        .with_inner_refiner(inner);
+        let result = refiner
+            .refine("deployment", SessionId::new(), "original-base")
+            .await
+            .expect("Some(...)");
+        // Inner returned None → original base preserved.
+        assert!(result.contains("original-base"));
+        // Relevance section still composes.
+        assert!(result.contains("shell.exec: 2 successes"));
+    }
+
+    #[tokio::test]
+    async fn chained_inner_some_with_no_relevance_signal_returns_inner() {
+        let (_dir, ledger) = scratch_refiner().await;
+        // Empty ledger → no relevance signal.
+        let inner = Arc::new(ConstRefiner(Some(
+            "## Inner-only".into(),
+        )));
+        let refiner = RelevancePromptRefiner::new(
+            Arc::clone(&ledger),
+            default_config(),
+        )
+        .with_inner_refiner(inner);
+        let result = refiner
+            .refine("deployment", SessionId::new(), "original-base")
+            .await
+            .expect("Some(...)");
+        // Inner's output propagates even though relevance
+        // section was empty.
+        assert!(result.contains("## Inner-only"));
+        assert!(!result.contains("Tools recently used"));
+    }
+
+    #[tokio::test]
+    async fn chained_inner_none_with_no_relevance_signal_returns_none() {
+        let (_dir, ledger) = scratch_refiner().await;
+        let inner = Arc::new(ConstRefiner(None));
+        let refiner = RelevancePromptRefiner::new(
+            Arc::clone(&ledger),
+            default_config(),
+        )
+        .with_inner_refiner(inner);
+        let result = refiner
+            .refine("deployment", SessionId::new(), "base")
+            .await;
+        // Both stages produce no refinement → None overall.
+        assert!(result.is_none());
     }
 
     #[tokio::test]

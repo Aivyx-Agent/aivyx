@@ -3519,6 +3519,47 @@ async fn run_async(
         None => None,
     };
 
+    // Phase 117 Task 5 — when the operator has
+    // `[tool_relevance] enabled = true`, construct a
+    // `RelevancePromptRefiner` and install it as the
+    // planner's `system_prompt_refiner`. If the Phase 79
+    // PersonaContextRefiner is ALSO armed, chain the
+    // Persona refiner as the inner so the operator gets
+    // both adaptive Persona reduction AND the relevance
+    // section augmentation from a single refiner slot.
+    let system_prompt_refiner: Option<
+        Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
+    > = match &config_tool_relevance {
+        Some(tr) if tr.enabled => {
+            // The ledger handle has already been constructed
+            // for DaemonConfig.tool_relevance_ledger below;
+            // re-derive it here from the storage domain to
+            // hand into the refiner. (Construction is cheap;
+            // sharing the Arc via `tool_relevance_ledger` is
+            // an option but the bin flow constructs both at
+            // the same site, so re-derivation keeps the
+            // dataflow legible.)
+            let ledger = Arc::new(
+                aivyx_channel::tool_relevance_ledger::PersistentToolRelevanceLedger::new(
+                    storage.domain(KeyDomain::ToolRelevanceLedger),
+                ),
+            );
+            let mut r = aivyx_channel::relevance_prompt_refiner::RelevancePromptRefiner::new(
+                ledger,
+                tr.clone(),
+            );
+            if let Some(inner) = &persona_refiner {
+                r = r.with_inner_refiner(Arc::clone(inner));
+            }
+            Some(Arc::new(r)
+                as Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>)
+        }
+        // No [tool_relevance] (or disabled): fall back to
+        // the Phase 79 persona refiner if armed; otherwise
+        // None.
+        _ => persona_refiner.clone(),
+    };
+
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
     // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
     // resolution into `aivyx-config`; the cap arrives pre-parsed
@@ -4227,7 +4268,10 @@ async fn run_async(
     // has (or none, identically, when `[embedding]` is off).
     let recall_context_for_factory = recall_context.clone();
     // Phase 79 — sub-agents get the adaptive Soul too.
-    let persona_refiner_for_factory = persona_refiner.clone();
+    // Phase 117 — `system_prompt_refiner` is now the
+    // combined (potentially Phase 117 + Phase 79) refiner;
+    // sub-agents inherit the same composition.
+    let persona_refiner_for_factory = system_prompt_refiner.clone();
 
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
@@ -5129,8 +5173,11 @@ async fn run_async(
                 // Phase 76 — automatic recall (Q1a). `None` when
                 // `[embedding]` is unconfigured → no auto-recall.
                 context_provider: recall_context.clone(),
-                // Phase 79 — adaptive Persona (local-CLI path).
-                system_prompt_refiner: persona_refiner.clone(),
+                // Phase 79 — adaptive Persona; Phase 117 —
+                // tool/skill relevance section. Both ride on
+                // the same refiner slot through the combined
+                // `system_prompt_refiner` constructed above.
+                system_prompt_refiner: system_prompt_refiner.clone(),
             };
 
             let stdin = io::stdin();
