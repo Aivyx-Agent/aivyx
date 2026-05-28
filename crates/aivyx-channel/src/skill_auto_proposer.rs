@@ -130,6 +130,36 @@ impl Default for SkillAutoProposeConfig {
     }
 }
 
+/// Phase 113 Task 3 — Convert the TOML-loaded
+/// `aivyx_config::SkillAutoProposeConfig` into the runtime
+/// `aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig`.
+/// Maps field-for-field; the two structs intentionally mirror
+/// each other so the binary's only job is to call `.into()`.
+impl From<aivyx_config::SkillAutoProposeConfig> for SkillAutoProposeConfig {
+    fn from(c: aivyx_config::SkillAutoProposeConfig) -> Self {
+        let mode = match c.heuristic.mode {
+            aivyx_config::SkillsAutoProposeMatchMode::Any =>
+                aivyx_core::skill_proposer::MatchMode::Any,
+            aivyx_config::SkillsAutoProposeMatchMode::All =>
+                aivyx_core::skill_proposer::MatchMode::All,
+        };
+        SkillAutoProposeConfig {
+            enabled: c.enabled,
+            heuristic: HeuristicConfig {
+                tool_call_count_min: c.heuristic.tool_call_count_min,
+                distinct_tool_id_min: c.heuristic.distinct_tool_id_min,
+                duration_ms_min: c.heuristic.duration_ms_min,
+                require_gate_resolve: c.heuristic.require_gate_resolve,
+                mode,
+            },
+            judge_model: c.judge_model,
+            judge_max_tokens: c.judge_max_tokens,
+            auto_accept_confidence_threshold: c.auto_accept_confidence_threshold,
+            fuzzy_match_threshold: c.fuzzy_match_threshold,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Outcome
 // ---------------------------------------------------------------------------
@@ -1647,6 +1677,58 @@ mod tests {
             }
             _ => panic!("expected DuplicateOfExistingFuzzy"),
         }
+    }
+
+    // ----- Phase 113 Task 3 — From<aivyx_config::SkillAutoProposeConfig> -----
+
+    #[test]
+    fn from_aivyx_config_maps_every_field() {
+        let config_side = aivyx_config::SkillAutoProposeConfig {
+            enabled: true,
+            heuristic: aivyx_config::SkillsAutoProposeHeuristic {
+                tool_call_count_min: 5,
+                distinct_tool_id_min: 4,
+                duration_ms_min: 9000,
+                require_gate_resolve: true,
+                mode: aivyx_config::SkillsAutoProposeMatchMode::All,
+            },
+            judge_model: "claude-opus-4-7".into(),
+            judge_max_tokens: 1200,
+            auto_accept_confidence_threshold: 0.91,
+            fuzzy_match_threshold: 0.65,
+        };
+        let runtime: SkillAutoProposeConfig = config_side.into();
+        assert!(runtime.enabled);
+        assert_eq!(runtime.judge_model, "claude-opus-4-7");
+        assert_eq!(runtime.judge_max_tokens, 1200);
+        assert!((runtime.auto_accept_confidence_threshold - 0.91).abs() < 1e-6);
+        assert!((runtime.fuzzy_match_threshold - 0.65).abs() < 1e-6);
+        assert_eq!(runtime.heuristic.tool_call_count_min, 5);
+        assert_eq!(runtime.heuristic.distinct_tool_id_min, 4);
+        assert_eq!(runtime.heuristic.duration_ms_min, 9000);
+        assert!(runtime.heuristic.require_gate_resolve);
+        assert_eq!(runtime.heuristic.mode, MatchMode::All);
+    }
+
+    #[test]
+    fn from_aivyx_config_maps_any_mode() {
+        let config_side = aivyx_config::SkillAutoProposeConfig {
+            enabled: false,
+            heuristic: aivyx_config::SkillsAutoProposeHeuristic {
+                tool_call_count_min: 1,
+                distinct_tool_id_min: 1,
+                duration_ms_min: 1,
+                require_gate_resolve: false,
+                mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
+            },
+            judge_model: "x".into(),
+            judge_max_tokens: 1,
+            auto_accept_confidence_threshold: 0.0,
+            fuzzy_match_threshold: 0.0,
+        };
+        let runtime: SkillAutoProposeConfig = config_side.into();
+        assert!(!runtime.enabled);
+        assert_eq!(runtime.heuristic.mode, MatchMode::Any);
     }
 
     #[test]

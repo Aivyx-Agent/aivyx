@@ -2816,10 +2816,10 @@ async fn run_async(
         // GetLearningInsights surface).
         recall_feedback: config_recall_feedback,
         // Phase 113 — `[skills.auto_propose]` loaded config.
-        // Task 3 (next commit) will branch on this to construct
-        // a `SkillAutoProposerContext` and plumb it through
+        // Task 3 branches on this below to construct a
+        // `SkillAutoProposerContext` and plumb it through
         // DaemonConfig.
-        skill_auto_propose: _config_skill_auto_propose,
+        skill_auto_propose: config_skill_auto_propose,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -4650,17 +4650,37 @@ async fn run_async(
             }
         }
 
+        // Phase 113 Task 3 — Construct the Skill Auto-Proposer
+        // context from the loaded `[skills.auto_propose]` TOML
+        // section. `None` when the operator hasn't configured
+        // the section, in which case the daemon wires
+        // `DaemonConfig::skill_auto_proposer = None` and the
+        // Phase 112 substrate is bypassed. With the section
+        // present, the auto-proposer reuses the same LLM
+        // provider the planner uses for tool calls — keeping
+        // the configured-provider invariant the operator
+        // declared in their `[provider]` config.
+        let skill_auto_proposer_ctx = config_skill_auto_propose.map(|cfg| {
+            let runtime_cfg: aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig
+                = cfg.into();
+            Arc::new(
+                aivyx_channel::skill_auto_proposer::SkillAutoProposerContext {
+                    config: runtime_cfg,
+                    llm_provider: Arc::clone(&provider),
+                },
+            )
+        });
+
         let result = run_daemon(DaemonConfig {
             socket_path,
             agent,
             channel_factory,
             shutdown,
             tool_descriptors,
-            // Phase 112 — Skill Auto-Proposer is off by default until
-            // operator-side TOML config promotion lands (named
-            // Phase-112-internal deferral). `None` is the documented
-            // disabled state.
-            skill_auto_proposer: None,
+            // Phase 113 Task 3 — wired from the loaded TOML
+            // `[skills.auto_propose]` section. `None` when the
+            // section is absent (operator hasn't opted in).
+            skill_auto_proposer: skill_auto_proposer_ctx,
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the
