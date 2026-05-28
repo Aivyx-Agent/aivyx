@@ -3409,6 +3409,54 @@ no code, just real-bot smoke tests across every adapter.
   `aivyx-slack` for callback signature legibility but it
   was already transitive.
 
+## Phase 112 — Skill Auto-Proposer (Phase 110's named follow-on)
+
+**Active — see [PHASE_112.md](PHASE_112.md).** Standalone
+phase past Chapter D's close (matching the Phase 111
+precedent for closing Chapter-D-internal deferrals as
+follow-on phases). Closes the last named Chapter D
+deferral: Phase 110's *"agent-side auto-proposer heuristic
+(fire reflection-cron-style after complex turns, draft
+skill proposals automatically)."*
+
+After Phase 112, the agent self-learns at the skill layer:
+complex turns trigger an LLM-judged proposal, high-
+confidence proposals auto-accept into the LearnedSkill
+chain, and the next turn's system prompt already carries
+the new skill. The propose-approve-render-invoke substrate
+shipped at Phase 110 becomes a propose-judge-accept-
+render-invoke loop where "judge" replaces the operator's
+manual approval for the steady-state high-confidence
+case.
+
+**Q-block (three of four non-Recommended; operator picked
+the more autonomous shape):**
+- Q1b — heuristic + LLM-judge (Recommended).
+- Q2b — **inline at turn boundary** (non-Recommended;
+  picked over cron-fired). Background-task spawned
+  post-`finalize` keeps critical-path latency at zero.
+- Q3b — **threshold-gated auto-accept** (non-Recommended;
+  picked over always-staged). Operator-configurable TOML
+  threshold defaulting `0.85`.
+- Q4b — **title fuzzy-match + LLM semantic check** (non-
+  Recommended; picked over title-only). LLM check
+  piggybacks on the Q1b judge call.
+
+This is the **project-vision critical path** — the
+operator's stated vision is "Self-Learning, Self-Improving
+AI Personal Assistant," and Phase 112 turns the Phase 110
+operator-driven framework into actual self-learning. All
+five adapters inherit the auto-proposer for free (it
+hooks the turn-finalize event, not any specific adapter).
+Zero new workspace deps; LLM substrate already in place
+(Phase 25 multi-provider, Phase 87 phrasing, Phase 91
+judgment, Phase 92 supersession).
+
+DESIGN.md streak predicted to break (D4 skills section
+extended); PRODUCT.md predicted to extend to three (P8
+envelope); `aivyx-core/src/lib.rs` predicted to break
+(new `skill_proposer` module).
+
 ## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
 
 **Frozen — see [PHASE_110.md](PHASE_110.md).** The sixth and
