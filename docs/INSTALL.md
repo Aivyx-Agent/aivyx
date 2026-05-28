@@ -344,14 +344,10 @@ Persona + mission-gate behavior.
    `chat_id`-keyed partitions provide), so DMs and guild
    channels stay isolated.
 
-**Mission-gate `/approve` / `/reject` text-command routing**
-is the Phase-107-internal deferral that lands alongside the
-Discord daemon-frontend (the in-process Phase 107 path
-covers the agent layer end-to-end; the daemon-mode
-gate-resolve path lands in a focused follow-on). Until
-then, escalated turns surface their `⏸ escalation:` footer
-in the bot reply; resolving them requires the Telegram or
-CLI surface.
+**Daemon-mode `/approve` / `/reject` text-command routing**
+landed at Phase 111 (Adapter Production Wiring) alongside
+the Discord daemon-frontend. In-process and daemon-mode
+both resolve gates through the bot reply on Phase 111+.
 
 ## Running Aivyx on Slack (Phase 108)
 
@@ -403,17 +399,71 @@ collide.
    gets its own memory partition (multi-workspace bots
    partition cleanly even on colliding channel ids).
 
-**Current state — Phase 108 ships the in-process adapter at
-the channel + session layer. The live Socket Mode
-production transport is a Phase-108-internal deferral
-bundled with the Phase 107 Discord daemon-frontend
-follow-on.** Operators who want to run a live Slack bot
-today will see a "production transport not yet wired" error
-when the adapter tries to open the Socket Mode connection.
-The trait + scripted-double + ChannelContext substrate are
-fully tested; live-bot smoke testing waits for the Channel
-Activation Milestone where the daemon-frontend +
-SlackMorphismTransport callback wiring both land.
+**Production state — Phase 111 closed the Socket Mode
+live-wiring carve-out.** The `SlackMorphismTransport` Phase
+108 stub is replaced with the production
+`SlackClientEventsUserState` callback wiring; all five
+adapters (Local + Telegram + Web UI + Discord + Slack) are
+production-ready in-process AND daemon-mode after Phase
+111. Live-bot smoke testing across the matrix is the
+Channel Activation Milestone's job (operator-driven
+verification pass, separate from the phase sequence).
+
+## Skill auto-proposer (Phase 112 + 113)
+
+The skill auto-proposer is the optional self-learning loop
+that drafts reusable procedures from complex turns. Phase
+112 shipped the substrate; Phase 113 made it
+operator-configurable through TOML. Off by default; enable
+the section to opt in:
+
+```toml
+[skills.auto_propose]
+enabled = true
+# Defaults are tuned for "fires on multi-tool work, skips
+# chit-chat" — the operator only needs to set `enabled = true`
+# to opt in.
+# judge_model = "claude-haiku-4-5"
+# judge_max_tokens = 800
+# auto_accept_confidence_threshold = 0.85
+# fuzzy_match_threshold = 0.80
+
+[skills.auto_propose.heuristic]
+# tool_call_count_min = 3
+# distinct_tool_id_min = 2
+# duration_ms_min = 5000
+# require_gate_resolve = false
+# mode = "any"             # "any" or "all"
+```
+
+After the section is configured, every `TurnOutcome::
+Completed` fires a background-task auto-proposer pipeline:
+a cheap heuristic gate filters candidates; the LLM judge
+confirms (and runs a piggybacked semantic dedup against
+existing skills); high-confidence non-dup proposals
+auto-accept into the LearnedSkill chain; below-threshold
+verdicts stage as Pending proposals the operator resolves
+through `aivyx persona proposals approve`.
+
+**Inspection flags** (Phase 113):
+- `aivyx persona list --auto-only` shows only entries the
+  auto-proposer wrote (delta_id prefix `pd-auto-`).
+- `aivyx persona list --manual-only` shows the complement.
+- `aivyx audit export --event-type SkillAutoProposal`
+  emits only the auto-proposer's audit-event variants
+  for forensic walks (`jq`-able JSONL).
+
+**Escape hatches:**
+- The auto-proposer never blocks a turn — failure-isolated
+  background spawn. The user's reply is sent first; the
+  pipeline runs after.
+- Auto-accepted skills are revertible through the existing
+  Phase 60 surface: `aivyx persona revert <delta_id>`. The
+  revert is itself an audit-chained chain append, so the
+  forensic trail stays intact.
+- The whole feature can be disabled by setting `enabled =
+  false` (or removing the section). The auto-proposer
+  bypass costs zero — no LLM call, no chain write.
 
 ## Moving Aivyx to a new machine
 
