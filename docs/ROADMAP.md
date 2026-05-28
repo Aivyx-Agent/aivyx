@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 116 — Tool/Skill Selection Learning from Outcomes (Chapter E #3)
 
-**Active — see [PHASE_116.md](PHASE_116.md).** Third phase
+**Frozen — see [PHASE_116.md](PHASE_116.md).** Third phase
 of Chapter E. The agent's tool/skill selection has been
 pure LLM intuition since Phase 0; Phase 116 builds a
 relevance ledger that tracks per-tool/per-skill success/
@@ -3464,19 +3464,36 @@ just better informed.
 - Q3a — **Tools AND skills together** (Recommended).
   Symmetric coverage.
 
-Streak predictions: all three BREAK (DESIGN.md → 1,
-PRODUCT.md → 1, `aivyx-core/src/lib.rs` → 1). Breaks the
-four-phase all-hold run from Phases 112-115; honest
-acknowledgement that the substrate catches up with reality
-where a genuinely new substrate piece lands (the
-ToolRelevanceLedger KeyDomain + `## Tools recently used
-for similar tasks` system-prompt section).
+**Streak outcomes — two positive surprises:**
+- DESIGN.md: HELD byte-identical against predicted break.
+  Streak → 7. The ledger lives in aivyx-channel like every
+  other learning ledger (Phase 78 / 82 / 83); none of
+  those broke D, and this one didn't either.
+- PRODUCT.md: HELD byte-identical against predicted break.
+  Streak → 7. P8 envelope absorbed "outcome-tracked
+  selection hint" cleanly without amendment.
+- `aivyx-core/src/lib.rs`: BROKE as predicted at the new
+  `pub mod relevance` line. Streak resets 4 → 1.
 
-Test count `+40` to `+70`. Zero new workspace deps.
+Test count: 2129 → 2174 (**+45**), inside the predicted
+`+40 to +70` band. Zero new workspace deps. Zero clippy
+warnings.
 
-After Phase 116, the last named Chapter E axis (outcome-
-driven Profile/Role refinement) is the only Chapter E
-direction remaining.
+**Two Phase-116-internal deferrals named:**
+- Live-prompt augmentation pipe. Renderer is ready;
+  integration awaits a per-turn prompt-reassembly
+  substrate change (the planner today builds the system
+  prompt once at session-construction).
+- Per-skill outcome tracking. Skills currently record as
+  `skills.invoke` itself; per-skill granularity needs a
+  side-channel capture path that bypasses audit
+  input-hash protection.
+
+After Phase 116, one named Chapter E axis remains
+(outcome-driven Profile/Role refinement). The next
+Chapter E phase opens against that axis OR closes the
+Phase-116-internal deferrals — operator-pressure-shaped at
+the next phase exit.
 
 ## Phase 115 — Self-Correction Loop on Failed Turns (Chapter E #2)
 

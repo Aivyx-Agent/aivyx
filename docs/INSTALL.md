@@ -540,6 +540,80 @@ forensic separation.
   proposer bypass costs zero — no LLM call, no chain
   write.
 
+## Tool/skill relevance hints (Phase 116)
+
+The Phase 116 relevance ledger tracks per-tool and
+per-skill success/failure outcomes per keyword-extracted
+turn pattern. After this phase, the agent's tool/skill
+selection — historically pure LLM intuition — can be
+augmented by observed historical outcomes the operator
+can inspect and tune.
+
+Off by default; enable the section to opt in:
+
+```toml
+[tool_relevance]
+enabled = true
+# Defaults are tuned for cheap-deterministic operation:
+# zero LLM cost per turn, bounded prompt-section size.
+# max_keywords = 5         # top-K longest non-stopword tokens
+# min_outcomes_to_show = 2 # don't show one-data-point rows
+# top_k_per_section = 5    # max rows per Tools / Skills subsection
+```
+
+After the section is configured, the daemon's post-finalize
+hook records each turn's tool outcomes against the user
+input's keyword key (Q1a: lowercased, stopword-filtered,
+length-ordered top-K tokens, lex-sorted, pipe-joined for
+storage). On the next turn with a matching keyword key,
+the substrate is ready to render a `## Tools recently used
+for similar tasks` section augmenting the LLM's picks.
+
+**Section format** (when the renderer is hooked into the
+live prompt path):
+
+```
+## Tools recently used for similar tasks
+
+Based on keywords: code, rust
+
+Tools:
+- memory.read: 5 successes, 0 failures
+- web.fetch: 3 successes, 1 failure
+
+Skills:
+- research-topic: 2 invocations (2 successes, 0 failures)
+```
+
+**Phase-116-internal deferral named honestly:** the
+live-prompt augmentation requires a per-turn prompt-
+reassembly substrate change (today's planner builds the
+system prompt once at session-construction time). Phase
+116 ships the substrate (record + render + storage + TOML
+config); the integration into live turns awaits a future
+substrate change.
+
+**Skills tracking (Q3a deferral):** skill names are
+hashed in the audit chain (`skills.invoke` input is
+input-hashed for secrets-safety per D4), so per-skill
+tracking requires a side-channel capture path that's
+also deferred. The ledger schema's `Skill` variant of
+`RelevanceSurfaceKind` is in place so a follow-on can
+ship per-skill tracking without a schema migration.
+
+**Escape hatches:**
+- The recording hook never blocks a turn — detached
+  `tokio::spawn` after finalize. Audit-walk failures log
+  WARN and don't affect the turn.
+- Operator can inspect the encrypted ledger via a future
+  `aivyx tool-relevance dump` CLI (deferred — until the
+  live-prompt path lands, the prompt section IS the
+  inspection surface).
+- Disabling the section (or setting `enabled = false`)
+  bypasses the substrate entirely. The Phase 116 ledger
+  domain stays present in storage but no rows are
+  written or read.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your
