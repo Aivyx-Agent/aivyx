@@ -300,16 +300,49 @@ pub enum SkillAutoProposalOutcomeSummary {
 
 /// Phase 112 — Bitmap-style record of which heuristic signals
 /// (Q1b stage 1) crossed their thresholds during candidate
-/// gating. All four fields are booleans, but we use a struct
+/// gating. All fields are booleans, but we use a struct
 /// rather than a `Vec<String>` so the audit chain stays
 /// schema-stable and forensic queries can be exact-match
 /// rather than substring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Phase 118 — extended with two operator-staged refinement
+/// signals for the Profile/Role auto-proposer paths. Both are
+/// `#[serde(default)]` so old chain entries (Phase 112-117)
+/// round-trip unchanged: absent field decodes as `false`,
+/// matching the pre-Phase-118 behavior where these signals
+/// did not exist. Phase 92 `supersedes_proposal_id`
+/// wire-compat precedent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeuristicSignalsMatched {
     pub tool_call_count: bool,
     pub distinct_tool_id_count: bool,
     pub duration: bool,
     pub gate_resolve: bool,
+    /// Phase 118 — `true` when the current turn's keyword_key
+    /// (Phase 116) has been observed in the relevance ledger
+    /// with a prior cumulative outcome count at or above the
+    /// `profile_pattern_recurrence_min` threshold. Signals
+    /// that the operator's request shape repeats — the
+    /// Profile/Role auto-proposer treats this as a candidate
+    /// for a `ProfileHint` proposal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub profile_pattern_repeated: bool,
+    /// Phase 118 — `true` when the recent session window
+    /// (turns visible in the audit log) contains
+    /// `ScopeDenied` events at or above the
+    /// `role_shape_scope_denied_min` threshold. Signals
+    /// that the current role's tool_allowlist /
+    /// system_prompt envelope doesn't fit the operator's
+    /// request shape — the Profile/Role auto-proposer
+    /// treats this as a candidate for a
+    /// `RoleDefinitionSuggestion` proposal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub role_shape_recurring: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Phase 67 — auto-notify outcome discriminator.
@@ -1317,12 +1350,11 @@ mod tests {
     // ---- Phase 112 — SkillAutoProposal variant ----
 
     fn no_signals() -> HeuristicSignalsMatched {
-        HeuristicSignalsMatched {
-            tool_call_count: false,
-            distinct_tool_id_count: false,
-            duration: false,
-            gate_resolve: false,
-        }
+        // Phase 118 — `Default` derive lets us write the
+        // all-false fixture in one line. The two new Phase 118
+        // bool fields default to `false` (matching the
+        // pre-Phase-118 baseline).
+        HeuristicSignalsMatched::default()
     }
 
     fn all_signals() -> HeuristicSignalsMatched {
@@ -1331,6 +1363,8 @@ mod tests {
             distinct_tool_id_count: true,
             duration: true,
             gate_resolve: true,
+            profile_pattern_repeated: true,
+            role_shape_recurring: true,
         }
     }
 
@@ -1378,6 +1412,7 @@ mod tests {
                     distinct_tool_id_count: true,
                     duration: false,
                     gate_resolve: false,
+                    ..HeuristicSignalsMatched::default()
                 },
                 category: None,
                 source: None,
@@ -1618,6 +1653,92 @@ mod tests {
             }
             _ => panic!("expected SkillAutoProposal"),
         }
+    }
+
+    // ----- Phase 118 — HeuristicSignalsMatched wire-compat -----
+
+    #[test]
+    fn pre_phase_118_heuristic_signals_decode_with_new_fields_false() {
+        // Phase 112-117 chain entries have a 4-field
+        // heuristic_signals_matched block. Decoding into the
+        // Phase 118 struct must succeed with the two new
+        // fields false (the `#[serde(default)]` attribute
+        // supplies false for absent bools).
+        let pre_118 = serde_json::json!({
+            "tool_call_count": true,
+            "distinct_tool_id_count": false,
+            "duration": true,
+            "gate_resolve": false,
+        });
+        let decoded: HeuristicSignalsMatched =
+            serde_json::from_value(pre_118).expect("decode");
+        assert!(decoded.tool_call_count);
+        assert!(!decoded.distinct_tool_id_count);
+        assert!(decoded.duration);
+        assert!(!decoded.gate_resolve);
+        // Phase 118 fields default to false.
+        assert!(!decoded.profile_pattern_repeated);
+        assert!(!decoded.role_shape_recurring);
+    }
+
+    #[test]
+    fn phase_118_heuristic_signals_round_trip_via_json() {
+        let original = HeuristicSignalsMatched {
+            tool_call_count: true,
+            distinct_tool_id_count: true,
+            duration: false,
+            gate_resolve: false,
+            profile_pattern_repeated: true,
+            role_shape_recurring: true,
+        };
+        let json = serde_json::to_value(original).unwrap();
+        let parsed: HeuristicSignalsMatched =
+            serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn phase_118_heuristic_signals_skip_serialize_when_false() {
+        // `#[serde(default, skip_serializing_if = "is_false")]`
+        // keeps the wire form byte-identical to pre-Phase-118
+        // chain entries when the new signals are both false.
+        // Critical for HMAC-chain backward compatibility: a
+        // mid-chain Phase 118 read of a Phase 117-written
+        // entry must canonicalize identically.
+        let all_false_pre_118_shape = HeuristicSignalsMatched {
+            tool_call_count: true,
+            distinct_tool_id_count: false,
+            duration: false,
+            gate_resolve: false,
+            profile_pattern_repeated: false,
+            role_shape_recurring: false,
+        };
+        let json = serde_json::to_value(all_false_pre_118_shape).unwrap();
+        let obj = json.as_object().expect("object");
+        // The two Phase 118 fields are NOT in the wire form.
+        assert!(!obj.contains_key("profile_pattern_repeated"));
+        assert!(!obj.contains_key("role_shape_recurring"));
+        // The pre-Phase-118 four fields ARE present.
+        assert!(obj.contains_key("tool_call_count"));
+        assert!(obj.contains_key("distinct_tool_id_count"));
+        assert!(obj.contains_key("duration"));
+        assert!(obj.contains_key("gate_resolve"));
+    }
+
+    #[test]
+    fn phase_118_heuristic_signals_emit_field_when_true() {
+        // The skip_serializing_if only fires for false. When
+        // either Phase 118 signal is true, the field appears
+        // in the wire form so audit forensics can answer
+        // "which signal crossed?" by reading the raw JSON.
+        let only_profile = HeuristicSignalsMatched {
+            profile_pattern_repeated: true,
+            ..HeuristicSignalsMatched::default()
+        };
+        let json = serde_json::to_value(only_profile).unwrap();
+        let obj = json.as_object().expect("object");
+        assert!(obj.contains_key("profile_pattern_repeated"));
+        assert!(!obj.contains_key("role_shape_recurring"));
     }
 
     #[test]

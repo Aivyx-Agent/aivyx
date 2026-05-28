@@ -134,6 +134,7 @@ fn fire_threshold_signals() -> TurnSignals {
         distinct_tool_id_count: 3,
         duration: std::time::Duration::from_millis(8_000),
         had_successful_gate_resolve: false,
+        ..TurnSignals::default()
     }
 }
 
@@ -400,6 +401,7 @@ async fn heuristic_gate_short_circuits_skip_writes_audit_only() {
         distinct_tool_id_count: 1,
         duration: std::time::Duration::from_millis(800),
         had_successful_gate_resolve: false,
+        ..aivyx_channel::skill_auto_proposer::TurnSignals::default()
     };
 
     let session_id = SessionId::new();
@@ -898,6 +900,7 @@ async fn failed_turn_auto_accepts_behavioral_constraint() {
         distinct_tool_id_count: 0,
         duration: std::time::Duration::from_millis(0),
         had_successful_gate_resolve: false,
+        ..aivyx_channel::skill_auto_proposer::TurnSignals::default()
     };
 
     run_auto_propose_pipeline_with_source(
@@ -990,6 +993,7 @@ async fn timed_out_with_judge_decline_drops_without_chain_write() {
         distinct_tool_id_count: 0,
         duration: std::time::Duration::from_millis(0),
         had_successful_gate_resolve: false,
+        ..aivyx_channel::skill_auto_proposer::TurnSignals::default()
     };
 
     run_auto_propose_pipeline_with_source(
@@ -1094,6 +1098,7 @@ async fn config_phase_113_alias_does_not_fire_failure_path() {
         distinct_tool_id_count: 0,
         duration: std::time::Duration::from_millis(0),
         had_successful_gate_resolve: false,
+        ..aivyx_channel::skill_auto_proposer::TurnSignals::default()
     };
 
     // Calling with FailedTurn directly: pipeline fires

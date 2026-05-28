@@ -45,7 +45,15 @@ use serde::{Deserialize, Serialize};
 /// All fields are post-turn observations (the turn has already
 /// finalized when these are read). The heuristic never has to
 /// reason about partial state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Phase 118 — extended with two operator-staged refinement
+/// signals (`keyword_key_prior_total_count`,
+/// `recent_scope_denied_count`) that feed the Profile/Role
+/// auto-proposer paths. Both fields default to zero when the
+/// caller hasn't sourced them (test-fixture builds that
+/// pre-date Phase 118 still compile with `..Default::default()`
+/// since `TurnSignals` derives `Default` from Phase 118 onward).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TurnSignals {
     /// Total tool calls made during the turn.
     /// Source: `TurnOutcome::Completed { tool_calls_made, .. }`
@@ -75,6 +83,35 @@ pub struct TurnSignals {
     /// Source: walk of audit entries for
     /// `ApprovalGate` followed by `gate_resolved=true`.
     pub had_successful_gate_resolve: bool,
+
+    /// Phase 118 — cumulative outcome count for the current
+    /// turn's keyword_key (Phase 116) in the relevance
+    /// ledger. Sum of `success_count + failure_count` across
+    /// every `OutcomeRow` under the keyword_key BEFORE this
+    /// turn's own outcomes are recorded. Zero when the
+    /// keyword_key has never been seen, or when the caller
+    /// has no relevance ledger to query.
+    ///
+    /// The heuristic compares this against
+    /// `profile_pattern_recurrence_min` to decide whether the
+    /// operator's request shape has repeated enough times to
+    /// be worth proposing a `ProfileHint`.
+    pub keyword_key_prior_total_count: u32,
+
+    /// Phase 118 — count of `ScopeDenied` audit events the
+    /// caller observed in the recent session window. The
+    /// window definition is caller-chosen (the daemon's
+    /// audit-walk window is the natural default); the
+    /// heuristic only cares about the count vs threshold.
+    /// Zero when the caller has no audit-log access or
+    /// when no scope-denials occurred.
+    ///
+    /// The heuristic compares this against
+    /// `role_shape_scope_denied_min` to decide whether the
+    /// current role's tool_allowlist / system_prompt
+    /// envelope is misfit for the operator's request shape
+    /// (worth proposing a `RoleDefinitionSuggestion` over).
+    pub recent_scope_denied_count: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +144,11 @@ pub enum MatchMode {
 /// `default_config_does_not_fire_on_chit_chat_turns` and
 /// `default_config_fires_on_multi_tool_research_turns` for
 /// the actual cases that calibrated the numbers.
+///
+/// Phase 118 — extended with two thresholds for the new
+/// Profile/Role signals. Both are `#[serde(default)]` so
+/// existing TOML files (pre-Phase-118) parse unchanged: the
+/// absent fields receive the Phase 118 defaults below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeuristicConfig {
     /// Minimum tool calls required (inclusive). Default `3`.
@@ -130,6 +172,39 @@ pub struct HeuristicConfig {
 
     /// How to combine the signals. Default `MatchMode::Any`.
     pub mode: MatchMode,
+
+    /// Phase 118 — minimum cumulative outcome count under the
+    /// current keyword_key for the
+    /// `profile_pattern_repeated` signal to cross. Default
+    /// `5`: the keyword_key has seen five+ prior
+    /// (tool/skill) outcomes, suggesting the operator's
+    /// request shape repeats.
+    ///
+    /// `#[serde(default)]` so pre-Phase-118 TOML parses; the
+    /// `default_profile_pattern_recurrence_min` function
+    /// supplies the default.
+    #[serde(default = "default_profile_pattern_recurrence_min")]
+    pub profile_pattern_recurrence_min: u32,
+
+    /// Phase 118 — minimum count of recent `ScopeDenied`
+    /// audit events (caller-defined window) for the
+    /// `role_shape_recurring` signal to cross. Default `2`:
+    /// two or more scope-denials in the window signal that
+    /// the current role's envelope misfits the operator's
+    /// request shape.
+    ///
+    /// `#[serde(default)]` for the same wire-compat reason
+    /// as `profile_pattern_recurrence_min`.
+    #[serde(default = "default_role_shape_scope_denied_min")]
+    pub role_shape_scope_denied_min: u32,
+}
+
+fn default_profile_pattern_recurrence_min() -> u32 {
+    5
+}
+
+fn default_role_shape_scope_denied_min() -> u32 {
+    2
 }
 
 impl Default for HeuristicConfig {
@@ -140,6 +215,10 @@ impl Default for HeuristicConfig {
             duration_ms_min: 5000,
             require_gate_resolve: false,
             mode: MatchMode::Any,
+            profile_pattern_recurrence_min:
+                default_profile_pattern_recurrence_min(),
+            role_shape_scope_denied_min:
+                default_role_shape_scope_denied_min(),
         }
     }
 }
@@ -246,7 +325,20 @@ pub fn is_failure_candidate(
 ///
 /// Pure function; no side effects. Read the unit tests below
 /// for the calibration cases.
+///
+/// Phase 118 — the two new operator-staged refinement
+/// signals (`profile_pattern_repeated`,
+/// `role_shape_recurring`) are treated as passive bonus
+/// crossings under `MatchMode::Any` (each is a candidate path
+/// on its own) and as "satisfied" (always true) under
+/// `MatchMode::All` so they don't block the existing All
+/// semantics — exact mirror of the gate-resolve handling.
 pub fn is_candidate(signals: &TurnSignals, config: &HeuristicConfig) -> bool {
+    let profile_signal_crossed =
+        signals.keyword_key_prior_total_count >= config.profile_pattern_recurrence_min;
+    let role_signal_crossed =
+        signals.recent_scope_denied_count >= config.role_shape_scope_denied_min;
+
     let crossings = [
         signals.tool_calls_made >= config.tool_call_count_min,
         signals.distinct_tool_id_count >= config.distinct_tool_id_min,
@@ -269,6 +361,21 @@ pub fn is_candidate(signals: &TurnSignals, config: &HeuristicConfig) -> bool {
                 MatchMode::All => true,
             }
         },
+        // Phase 118 — profile_pattern_repeated. Passive bonus
+        // signal: a crossing under Any-mode (the recurring
+        // request shape alone is candidate-worthy); "satisfied"
+        // under All-mode so existing four-signal All
+        // calibrations don't break against the new axis.
+        match config.mode {
+            MatchMode::Any => profile_signal_crossed,
+            MatchMode::All => true,
+        },
+        // Phase 118 — role_shape_recurring. Same treatment as
+        // profile_pattern_repeated.
+        match config.mode {
+            MatchMode::Any => role_signal_crossed,
+            MatchMode::All => true,
+        },
     ];
 
     match config.mode {
@@ -286,12 +393,11 @@ mod tests {
     use super::*;
 
     fn empty_signals() -> TurnSignals {
-        TurnSignals {
-            tool_calls_made: 0,
-            distinct_tool_id_count: 0,
-            duration: Duration::from_millis(0),
-            had_successful_gate_resolve: false,
-        }
+        // Phase 118 — derive(Default) on TurnSignals lets the
+        // empty fixture stay one line. The pre-Phase-118
+        // fields zero exactly as the old explicit struct
+        // literal did.
+        TurnSignals::default()
     }
 
     // ----- Default config calibration -----
@@ -304,6 +410,7 @@ mod tests {
             distinct_tool_id_count: 0,
             duration: Duration::from_millis(800),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         assert!(!is_candidate(&signals, &config));
@@ -317,6 +424,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(1200),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         assert!(!is_candidate(&signals, &config));
@@ -332,6 +440,7 @@ mod tests {
             distinct_tool_id_count: 3,
             duration: Duration::from_millis(8200),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         assert!(is_candidate(&signals, &config));
@@ -348,6 +457,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(2000),
             had_successful_gate_resolve: true,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         assert!(is_candidate(&signals, &config));
@@ -362,6 +472,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(500),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &HeuristicConfig::default()));
     }
@@ -373,6 +484,7 @@ mod tests {
             distinct_tool_id_count: 2, // crosses default min=2
             duration: Duration::from_millis(500),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &HeuristicConfig::default()));
     }
@@ -384,6 +496,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(5000), // crosses default min=5000
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &HeuristicConfig::default()));
     }
@@ -395,6 +508,7 @@ mod tests {
             distinct_tool_id_count: 0,
             duration: Duration::from_millis(0),
             had_successful_gate_resolve: true,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &HeuristicConfig::default()));
     }
@@ -415,6 +529,7 @@ mod tests {
             distinct_tool_id_count: 2,
             duration: Duration::from_millis(5000),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &config));
     }
@@ -431,6 +546,7 @@ mod tests {
             distinct_tool_id_count: 5,
             duration: Duration::from_millis(30_000),
             had_successful_gate_resolve: false, // the missing axis
+            ..TurnSignals::default()
         };
         assert!(!is_candidate(&signals, &config));
     }
@@ -447,6 +563,7 @@ mod tests {
             distinct_tool_id_count: 2,
             duration: Duration::from_millis(5000),
             had_successful_gate_resolve: true,
+            ..TurnSignals::default()
         };
         assert!(is_candidate(&signals, &config));
     }
@@ -462,6 +579,7 @@ mod tests {
             distinct_tool_id_count: 2,
             duration: Duration::from_millis(5000),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig {
             mode: MatchMode::All,
@@ -477,6 +595,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(4999),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig {
             mode: MatchMode::All,
@@ -514,6 +633,8 @@ mod tests {
             duration_ms_min: 12_000,
             require_gate_resolve: true,
             mode: MatchMode::All,
+            profile_pattern_recurrence_min: 10,
+            role_shape_scope_denied_min: 4,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: HeuristicConfig =
@@ -624,5 +745,125 @@ mod tests {
         let back: FailureHeuristicConfig =
             serde_json::from_str(&s).unwrap();
         assert_eq!(back, original);
+    }
+
+    // ----- Phase 118 — Profile/Role signals -----
+
+    #[test]
+    fn phase_118_defaults_match_documented_values() {
+        // Pin the calibration numbers from the open doc. Both
+        // thresholds are operator-tunable; the defaults
+        // reflect "fires when the operator's request shape
+        // genuinely repeats" (5 prior outcomes) and "fires
+        // when the role's envelope clearly misfits" (2
+        // scope-denials).
+        let c = HeuristicConfig::default();
+        assert_eq!(c.profile_pattern_recurrence_min, 5);
+        assert_eq!(c.role_shape_scope_denied_min, 2);
+    }
+
+    #[test]
+    fn any_mode_fires_on_profile_pattern_repeated_alone() {
+        // No tool calls, no duration, no gate — but the
+        // keyword_key has prior outcomes crossing the
+        // recurrence threshold. Phase 118 candidate path
+        // for ProfileHint proposals.
+        let signals = TurnSignals {
+            keyword_key_prior_total_count: 5,
+            ..TurnSignals::default()
+        };
+        assert!(is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn any_mode_fires_on_role_shape_recurring_alone() {
+        // No tool calls, no duration, no gate, no prior
+        // keyword_key recurrence — but recent scope-denials
+        // crossed the role-shape threshold. Phase 118
+        // candidate path for RoleDefinitionSuggestion.
+        let signals = TurnSignals {
+            recent_scope_denied_count: 2,
+            ..TurnSignals::default()
+        };
+        assert!(is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn profile_pattern_signal_does_not_fire_below_threshold() {
+        let signals = TurnSignals {
+            keyword_key_prior_total_count: 4, // one short of default 5
+            ..TurnSignals::default()
+        };
+        assert!(!is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn role_shape_signal_does_not_fire_below_threshold() {
+        let signals = TurnSignals {
+            recent_scope_denied_count: 1, // one short of default 2
+            ..TurnSignals::default()
+        };
+        assert!(!is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn phase_118_signals_are_satisfied_under_all_mode_without_blocking() {
+        // All-mode requires every signal to cross. The Phase
+        // 118 signals are passive bonuses: under All-mode
+        // they're treated as "satisfied" so they don't
+        // block the existing 4-signal All calibrations.
+        // This test mirrors `all_mode_requires_every_signal_to_cross`
+        // but with the Phase 118 signals at zero.
+        let config = HeuristicConfig {
+            mode: MatchMode::All,
+            ..HeuristicConfig::default()
+        };
+        let signals = TurnSignals {
+            tool_calls_made: 3,
+            distinct_tool_id_count: 2,
+            duration: Duration::from_millis(5000),
+            had_successful_gate_resolve: false,
+            keyword_key_prior_total_count: 0,
+            recent_scope_denied_count: 0,
+        };
+        assert!(is_candidate(&signals, &config));
+    }
+
+    #[test]
+    fn phase_118_threshold_recurrence_is_inclusive() {
+        let signals = TurnSignals {
+            keyword_key_prior_total_count: 5, // exactly at default 5
+            ..TurnSignals::default()
+        };
+        assert!(is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn phase_118_threshold_scope_denied_is_inclusive() {
+        let signals = TurnSignals {
+            recent_scope_denied_count: 2, // exactly at default 2
+            ..TurnSignals::default()
+        };
+        assert!(is_candidate(&signals, &HeuristicConfig::default()));
+    }
+
+    #[test]
+    fn pre_phase_118_toml_decodes_with_default_thresholds() {
+        // Operator's pre-Phase-118 TOML has no
+        // profile_pattern_recurrence_min /
+        // role_shape_scope_denied_min fields. The
+        // #[serde(default)] attribute on the new fields must
+        // supply the Phase 118 defaults without error.
+        let pre_118 = r#"{
+            "tool_call_count_min": 3,
+            "distinct_tool_id_min": 2,
+            "duration_ms_min": 5000,
+            "require_gate_resolve": false,
+            "mode": "any"
+        }"#;
+        let config: HeuristicConfig =
+            serde_json::from_str(pre_118).expect("pre-118 TOML parses");
+        assert_eq!(config.profile_pattern_recurrence_min, 5);
+        assert_eq!(config.role_shape_scope_denied_min, 2);
     }
 }

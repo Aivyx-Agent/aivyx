@@ -419,12 +419,7 @@ mod tests {
             proposed_skill_name: None,
             judge_latency_ms: None,
             heuristic_signals_matched:
-                aivyx_audit::HeuristicSignalsMatched {
-                    tool_call_count: false,
-                    distinct_tool_id_count: false,
-                    duration: false,
-                    gate_resolve: false,
-                },
+                aivyx_audit::HeuristicSignalsMatched::default(),
             category: None,
             source: None,
         };

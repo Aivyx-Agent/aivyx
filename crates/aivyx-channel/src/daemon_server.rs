@@ -1437,6 +1437,13 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 (*tool_calls_made as u32).min(4),
                                             duration: *duration,
                                             had_successful_gate_resolve: false,
+                                            // Phase 118 — Task 3 ships the
+                                            // type substrate; the actual
+                                            // ledger/audit-walk sourcing
+                                            // for these signals is wired in
+                                            // Task 6. Default-zero until
+                                            // then.
+                                            ..sap::TurnSignals::default()
                                         },
                                         ProposalSource::CompletedTurn,
                                     )),
@@ -1471,14 +1478,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 // signals are degenerate; the
                                                 // failure heuristic + judge
                                                 // are the real gates.
-                                                let signals = sap::TurnSignals {
-                                                    tool_calls_made: 0,
-                                                    distinct_tool_id_count: 0,
-                                                    duration:
-                                                        std::time::Duration::from_millis(0),
-                                                    had_successful_gate_resolve:
-                                                        false,
-                                                };
+                                                // Phase 118 — degenerate
+                                                // signals for the failure
+                                                // path; the new Profile/Role
+                                                // signals default to zero.
+                                                let signals = sap::TurnSignals::default();
                                                 let summary = match other {
                                                     TurnOutcome::Failed(e) =>
                                                         format!("planner/agent error: {e}"),

@@ -277,6 +277,11 @@ fn convert_heuristic(
             aivyx_config::SkillsAutoProposeMatchMode::All =>
                 aivyx_core::skill_proposer::MatchMode::All,
         },
+        // Phase 118 — Task 3 ships the heuristic substrate;
+        // the TOML wiring of these two Phase 118 thresholds
+        // is Task 6's job. Until then the runtime falls back
+        // to the `HeuristicConfig::Default` values.
+        ..HeuristicConfig::default()
     }
 }
 
@@ -621,6 +626,14 @@ pub fn signals_matched(
         duration: signals.duration.as_millis() as u64
             >= config.duration_ms_min,
         gate_resolve: signals.had_successful_gate_resolve,
+        // Phase 118 — Profile/Role auto-proposer signals.
+        // Reported truthfully regardless of MatchMode (audit
+        // forensics care about WHICH signals crossed, not
+        // which crossings the combined gate consumed).
+        profile_pattern_repeated: signals.keyword_key_prior_total_count
+            >= config.profile_pattern_recurrence_min,
+        role_shape_recurring: signals.recent_scope_denied_count
+            >= config.role_shape_scope_denied_min,
     }
 }
 
@@ -1508,6 +1521,7 @@ mod tests {
             distinct_tool_id_count: 3,
             duration: Duration::from_millis(8_000),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         }
     }
 
@@ -1517,6 +1531,7 @@ mod tests {
             distinct_tool_id_count: 1,
             duration: Duration::from_millis(800),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         }
     }
 
@@ -2318,6 +2333,7 @@ mod tests {
             distinct_tool_id_count: 1, // below min=2
             duration: Duration::from_millis(10_000),
             had_successful_gate_resolve: true,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         let m = signals_matched(&signals, &config);
@@ -2334,6 +2350,7 @@ mod tests {
             distinct_tool_id_count: 0,
             duration: Duration::from_millis(0),
             had_successful_gate_resolve: false,
+            ..TurnSignals::default()
         };
         let config = HeuristicConfig::default();
         let m = signals_matched(&signals, &config);
@@ -2341,6 +2358,51 @@ mod tests {
         assert!(!m.distinct_tool_id_count);
         assert!(!m.duration);
         assert!(!m.gate_resolve);
+        assert!(!m.profile_pattern_repeated);
+        assert!(!m.role_shape_recurring);
+    }
+
+    #[test]
+    fn signals_matched_reports_profile_pattern_repeated_when_threshold_crossed() {
+        // Phase 118 — `profile_pattern_repeated` fires only
+        // when keyword_key_prior_total_count crosses the
+        // configured threshold. Reports truthfully regardless
+        // of whether the combined gate also fires.
+        let signals = TurnSignals {
+            keyword_key_prior_total_count: 8,
+            ..TurnSignals::default()
+        };
+        let config = HeuristicConfig::default(); // default min=5
+        let m = signals_matched(&signals, &config);
+        assert!(m.profile_pattern_repeated);
+        assert!(!m.role_shape_recurring);
+        // The legacy axes stay false.
+        assert!(!m.tool_call_count);
+    }
+
+    #[test]
+    fn signals_matched_reports_role_shape_recurring_when_threshold_crossed() {
+        let signals = TurnSignals {
+            recent_scope_denied_count: 3,
+            ..TurnSignals::default()
+        };
+        let config = HeuristicConfig::default(); // default min=2
+        let m = signals_matched(&signals, &config);
+        assert!(m.role_shape_recurring);
+        assert!(!m.profile_pattern_repeated);
+    }
+
+    #[test]
+    fn signals_matched_phase_118_signals_below_threshold_report_false() {
+        let signals = TurnSignals {
+            keyword_key_prior_total_count: 4, // one short
+            recent_scope_denied_count: 1,     // one short
+            ..TurnSignals::default()
+        };
+        let config = HeuristicConfig::default();
+        let m = signals_matched(&signals, &config);
+        assert!(!m.profile_pattern_repeated);
+        assert!(!m.role_shape_recurring);
     }
 
     #[test]
