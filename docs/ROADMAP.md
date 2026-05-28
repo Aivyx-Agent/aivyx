@@ -3444,6 +3444,40 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 116 — Tool/Skill Selection Learning from Outcomes (Chapter E #3)
+
+**Active — see [PHASE_116.md](PHASE_116.md).** Third phase
+of Chapter E. The agent's tool/skill selection has been
+pure LLM intuition since Phase 0; Phase 116 builds a
+relevance ledger that tracks per-tool/per-skill success/
+failure outcomes per keyword-extracted turn pattern, and
+surfaces accumulated signal in the next turn's system
+prompt as a passive augmentation. The LLM still picks;
+just better informed.
+
+**Q-block (all three Recommended) — conservative shape:**
+- Q1a — **Keyword-set from user input** (Recommended).
+  Cheap deterministic; zero LLM cost per turn. Phase 95
+  precedent for cheap-deterministic-signal substrate.
+- Q2a — **System-prompt section** (Recommended). Passive
+  augmentation; no tool-call substrate change.
+- Q3a — **Tools AND skills together** (Recommended).
+  Symmetric coverage.
+
+Streak predictions: all three BREAK (DESIGN.md → 1,
+PRODUCT.md → 1, `aivyx-core/src/lib.rs` → 1). Breaks the
+four-phase all-hold run from Phases 112-115; honest
+acknowledgement that the substrate catches up with reality
+where a genuinely new substrate piece lands (the
+ToolRelevanceLedger KeyDomain + `## Tools recently used
+for similar tasks` system-prompt section).
+
+Test count `+40` to `+70`. Zero new workspace deps.
+
+After Phase 116, the last named Chapter E axis (outcome-
+driven Profile/Role refinement) is the only Chapter E
+direction remaining.
+
 ## Phase 115 — Self-Correction Loop on Failed Turns (Chapter E #2)
 
 **Frozen — see [PHASE_115.md](PHASE_115.md).** Second
