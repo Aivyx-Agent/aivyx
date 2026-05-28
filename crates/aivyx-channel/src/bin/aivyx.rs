@@ -2815,6 +2815,11 @@ async fn run_async(
         // (both the reflection-cron actuator + the
         // GetLearningInsights surface).
         recall_feedback: config_recall_feedback,
+        // Phase 113 — `[skills.auto_propose]` loaded config.
+        // Task 3 (next commit) will branch on this to construct
+        // a `SkillAutoProposerContext` and plumb it through
+        // DaemonConfig.
+        skill_auto_propose: _config_skill_auto_propose,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by

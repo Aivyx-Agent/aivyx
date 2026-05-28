@@ -638,6 +638,13 @@ pub struct AivyxConfig {
     /// fall back to the structural proxy (augment, not
     /// replace).
     pub recall_feedback: Option<RecallFeedbackConfig>,
+    /// Phase 113 — `[skills.auto_propose]` section. `None`
+    /// when absent: the Phase 112 auto-proposer is bypassed
+    /// (the daemon wires `DaemonConfig::skill_auto_proposer
+    /// = None`). `Some` arms the post-finalize auto-propose
+    /// pipeline; it still no-ops unless
+    /// `SkillAutoProposeConfig::enabled = true`.
+    pub skill_auto_propose: Option<SkillAutoProposeConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -1961,6 +1968,78 @@ pub struct RecallFeedbackConfig {
     pub use_judgment_signal: bool,
 }
 
+/// Phase 113 — `[skills.auto_propose]` runtime config.
+///
+/// Mirrors `aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig`
+/// field-for-field; `aivyx-channel` defines a `From`
+/// conversion that maps this loaded struct into its runtime
+/// type. Two structs (one config-side, one runtime-side)
+/// follow the pattern used by every other config section —
+/// the runtime crate doesn't deserialize TOML directly, and
+/// `aivyx-config` doesn't take a dep edge on the runtime
+/// substrate.
+///
+/// `None` (no `[skills.auto_propose]` section) → the Phase
+/// 112 auto-proposer is **disabled**: the daemon wires
+/// `DaemonConfig::skill_auto_proposer = None` and the
+/// substrate is bypassed entirely. `Some` with `enabled =
+/// false` is equivalent to `None` for runtime behaviour but
+/// records the operator's explicit choice in the loaded
+/// config.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillAutoProposeConfig {
+    /// Master switch. Default `true` per Q3b — the operator
+    /// who put `[skills.auto_propose]` in their TOML opted
+    /// into the feature explicitly; default `enabled = true`
+    /// means the section's mere presence enables it.
+    pub enabled: bool,
+    /// Q1b first-stage heuristic thresholds.
+    pub heuristic: SkillsAutoProposeHeuristic,
+    /// Provider-specific model identifier for the LLM-judge
+    /// call. Default `"claude-haiku-4-5"`.
+    pub judge_model: String,
+    /// Max tokens the judge may emit. Default `800`.
+    pub judge_max_tokens: u32,
+    /// Q3b auto-accept threshold (0.0–1.0). Default `0.85`.
+    pub auto_accept_confidence_threshold: f32,
+    /// Q4b fuzzy-title pre-filter cutoff (0.0–1.0). Default
+    /// `0.80`.
+    pub fuzzy_match_threshold: f32,
+}
+
+/// Phase 113 — heuristic-stage thresholds (config-side).
+/// Field-for-field mirror of `aivyx_core::skill_proposer::
+/// heuristic::HeuristicConfig`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillsAutoProposeHeuristic {
+    pub tool_call_count_min: u32,
+    pub distinct_tool_id_min: u32,
+    pub duration_ms_min: u64,
+    pub require_gate_resolve: bool,
+    /// `"any"` or `"all"`. Q-block leaves the default at
+    /// `"any"` per Phase 112's recommended posture.
+    pub mode: SkillsAutoProposeMatchMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillsAutoProposeMatchMode {
+    Any,
+    All,
+}
+
+/// Default values used by [`build_skill_auto_propose_config`]
+/// to backfill any field the operator omits from the TOML.
+/// Match Phase 112's `SkillAutoProposeConfig::default()`
+/// values byte-for-byte.
+pub const DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL: &str =
+    "claude-haiku-4-5";
+pub const DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS: u32 = 800;
+pub const DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD: f32 = 0.85;
+pub const DEFAULT_SKILLS_AUTO_PROPOSE_FUZZY_THRESHOLD: f32 = 0.80;
+pub const DEFAULT_SKILLS_HEURISTIC_TOOL_CALL_MIN: u32 = 3;
+pub const DEFAULT_SKILLS_HEURISTIC_DISTINCT_TOOL_ID_MIN: u32 = 2;
+pub const DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN: u64 = 5000;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -2020,6 +2099,11 @@ struct RawToml {
     /// switch from structural proxy to LLM judgment signal.
     #[serde(default)]
     recall_feedback: RawRecallFeedback,
+    /// `[skills.*]` section namespace. Phase 113 — the
+    /// `[skills.auto_propose]` sub-section configures the
+    /// Phase 112 skill auto-proposer.
+    #[serde(default)]
+    skills: RawSkills,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2767,6 +2851,63 @@ struct RawRecallFeedback {
     use_judgment_signal: Option<bool>,
 }
 
+/// Phase 113 — `[skills.auto_propose]` deserialize target.
+/// Absent section → all-`None` via `Default` → the loader
+/// maps to `skill_auto_propose: None` (off; the daemon
+/// wires `DaemonConfig::skill_auto_proposer = None`).
+///
+/// TOML shape:
+/// ```toml
+/// [skills.auto_propose]
+/// enabled = true
+/// judge_model = "claude-haiku-4-5"
+/// judge_max_tokens = 800
+/// auto_accept_confidence_threshold = 0.85
+/// fuzzy_match_threshold = 0.80
+///
+/// [skills.auto_propose.heuristic]
+/// tool_call_count_min = 3
+/// distinct_tool_id_min = 2
+/// duration_ms_min = 5000
+/// require_gate_resolve = false
+/// mode = "any"
+/// ```
+#[derive(Debug, Default, Deserialize)]
+struct RawSkills {
+    #[serde(default)]
+    auto_propose: RawSkillsAutoPropose,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawSkillsAutoPropose {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    heuristic: RawSkillsAutoProposeHeuristic,
+    #[serde(default)]
+    judge_model: Option<String>,
+    #[serde(default)]
+    judge_max_tokens: Option<u32>,
+    #[serde(default)]
+    auto_accept_confidence_threshold: Option<f32>,
+    #[serde(default)]
+    fuzzy_match_threshold: Option<f32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawSkillsAutoProposeHeuristic {
+    #[serde(default)]
+    tool_call_count_min: Option<u32>,
+    #[serde(default)]
+    distinct_tool_id_min: Option<u32>,
+    #[serde(default)]
+    duration_ms_min: Option<u64>,
+    #[serde(default)]
+    require_gate_resolve: Option<bool>,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -3294,6 +3435,8 @@ impl AivyxConfig {
             build_recall_judgment_config(&toml.recall_judgment)?;
         let recall_feedback =
             build_recall_feedback_config(&toml.recall_feedback)?;
+        let skill_auto_propose =
+            build_skill_auto_propose_config(&toml.skills.auto_propose)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -4188,6 +4331,7 @@ impl AivyxConfig {
             persona_consolidation,
             recall_judgment,
             recall_feedback,
+            skill_auto_propose,
             roles,
             active_role,
             profile,
@@ -5527,6 +5671,114 @@ fn build_recall_feedback_config(
         raw.use_judgment_signal.unwrap_or(false);
 
     Ok(Some(RecallFeedbackConfig { use_judgment_signal }))
+}
+
+/// Phase 113 — `[skills.auto_propose]` → optional runtime config.
+/// Absent `[skills.auto_propose]` section → `None`; partial
+/// section (any key set) → fill defaults per the
+/// `DEFAULT_SKILLS_AUTO_PROPOSE_*` constants. Validates
+/// numeric ranges and the `mode` discriminator.
+fn build_skill_auto_propose_config(
+    raw: &RawSkillsAutoPropose,
+) -> Result<Option<SkillAutoProposeConfig>, ConfigError> {
+    // "Section absent" = every Option<_> is None AND every
+    // nested heuristic Option<_> is None.
+    let heur = &raw.heuristic;
+    let heuristic_any_set = heur.tool_call_count_min.is_some()
+        || heur.distinct_tool_id_min.is_some()
+        || heur.duration_ms_min.is_some()
+        || heur.require_gate_resolve.is_some()
+        || heur.mode.is_some();
+    let top_any_set = raw.enabled.is_some()
+        || raw.judge_model.is_some()
+        || raw.judge_max_tokens.is_some()
+        || raw.auto_accept_confidence_threshold.is_some()
+        || raw.fuzzy_match_threshold.is_some();
+    if !top_any_set && !heuristic_any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(true);
+    let judge_model = raw
+        .judge_model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL.to_string());
+    if judge_model.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "skills.auto_propose.judge_model",
+            reason: "`judge_model` must be non-empty".into(),
+        });
+    }
+    let judge_max_tokens = raw
+        .judge_max_tokens
+        .unwrap_or(DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS);
+    if judge_max_tokens == 0 {
+        return Err(ConfigError::Invalid {
+            field: "skills.auto_propose.judge_max_tokens",
+            reason: "`judge_max_tokens` must be >= 1".into(),
+        });
+    }
+    let auto_accept_confidence_threshold = raw
+        .auto_accept_confidence_threshold
+        .unwrap_or(DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD);
+    if !(0.0..=1.0).contains(&auto_accept_confidence_threshold) {
+        return Err(ConfigError::Invalid {
+            field: "skills.auto_propose.auto_accept_confidence_threshold",
+            reason: "must be in [0.0, 1.0]".into(),
+        });
+    }
+    let fuzzy_match_threshold = raw
+        .fuzzy_match_threshold
+        .unwrap_or(DEFAULT_SKILLS_AUTO_PROPOSE_FUZZY_THRESHOLD);
+    if !(0.0..=1.0).contains(&fuzzy_match_threshold) {
+        return Err(ConfigError::Invalid {
+            field: "skills.auto_propose.fuzzy_match_threshold",
+            reason: "must be in [0.0, 1.0]".into(),
+        });
+    }
+
+    // Heuristic sub-section
+    let tool_call_count_min = heur
+        .tool_call_count_min
+        .unwrap_or(DEFAULT_SKILLS_HEURISTIC_TOOL_CALL_MIN);
+    let distinct_tool_id_min = heur
+        .distinct_tool_id_min
+        .unwrap_or(DEFAULT_SKILLS_HEURISTIC_DISTINCT_TOOL_ID_MIN);
+    let duration_ms_min = heur
+        .duration_ms_min
+        .unwrap_or(DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN);
+    let require_gate_resolve =
+        heur.require_gate_resolve.unwrap_or(false);
+    let mode = match heur
+        .mode
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("any") | None => SkillsAutoProposeMatchMode::Any,
+        Some("all") => SkillsAutoProposeMatchMode::All,
+        Some(other) => {
+            return Err(ConfigError::Invalid {
+                field: "skills.auto_propose.heuristic.mode",
+                reason: format!("expected \"any\" or \"all\", got \"{other}\""),
+            });
+        }
+    };
+
+    Ok(Some(SkillAutoProposeConfig {
+        enabled,
+        heuristic: SkillsAutoProposeHeuristic {
+            tool_call_count_min,
+            distinct_tool_id_min,
+            duration_ms_min,
+            require_gate_resolve,
+            mode,
+        },
+        judge_model,
+        judge_max_tokens,
+        auto_accept_confidence_threshold,
+        fuzzy_match_threshold,
+    }))
 }
 
 ///

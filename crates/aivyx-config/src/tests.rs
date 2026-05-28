@@ -7398,3 +7398,291 @@ fn recall_feedback_explicit_false_honored() {
     assert!(!rf.use_judgment_signal);
     drop(env);
 }
+
+// ---- Phase 113 — [skills.auto_propose] -------------------------
+
+/// No `[skills.auto_propose]` section → `skill_auto_propose:
+/// None` (the daemon wires `DaemonConfig::skill_auto_proposer
+/// = None`; auto-proposer is disabled).
+#[test]
+fn skills_auto_propose_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.skill_auto_propose.is_none());
+    drop(env);
+}
+
+/// `[skills.auto_propose]` with only `enabled = true` → all
+/// other fields filled from the `DEFAULT_SKILLS_AUTO_PROPOSE_*`
+/// constants. Defaults match Phase 112's runtime
+/// `SkillAutoProposeConfig::default()`.
+#[test]
+fn skills_auto_propose_minimal_section_uses_defaults() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose]\nenabled = true\n",
+        "sap-minimal",
+    );
+    let sap = cfg.skill_auto_propose.expect("section present");
+    assert!(sap.enabled);
+    assert_eq!(
+        sap.judge_model,
+        crate::DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL
+    );
+    assert_eq!(
+        sap.judge_max_tokens,
+        crate::DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS
+    );
+    assert!(
+        (sap.auto_accept_confidence_threshold - 0.85).abs() < 1e-6
+    );
+    assert!(
+        (sap.fuzzy_match_threshold - 0.80).abs() < 1e-6
+    );
+    assert_eq!(sap.heuristic.tool_call_count_min, 3);
+    assert_eq!(sap.heuristic.distinct_tool_id_min, 2);
+    assert_eq!(sap.heuristic.duration_ms_min, 5000);
+    assert!(!sap.heuristic.require_gate_resolve);
+    assert_eq!(
+        sap.heuristic.mode,
+        crate::SkillsAutoProposeMatchMode::Any
+    );
+    drop(env);
+}
+
+/// Full section → every field parsed; nothing comes from
+/// defaults.
+#[test]
+fn skills_auto_propose_full_section_parses_every_field() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose]\n\
+         enabled = true\n\
+         judge_model = \"claude-opus-4-7\"\n\
+         judge_max_tokens = 1200\n\
+         auto_accept_confidence_threshold = 0.92\n\
+         fuzzy_match_threshold = 0.70\n\
+         \n[skills.auto_propose.heuristic]\n\
+         tool_call_count_min = 5\n\
+         distinct_tool_id_min = 3\n\
+         duration_ms_min = 12000\n\
+         require_gate_resolve = true\n\
+         mode = \"all\"\n",
+        "sap-full",
+    );
+    let sap = cfg.skill_auto_propose.expect("section present");
+    assert!(sap.enabled);
+    assert_eq!(sap.judge_model, "claude-opus-4-7");
+    assert_eq!(sap.judge_max_tokens, 1200);
+    assert!(
+        (sap.auto_accept_confidence_threshold - 0.92).abs() < 1e-6
+    );
+    assert!((sap.fuzzy_match_threshold - 0.70).abs() < 1e-6);
+    assert_eq!(sap.heuristic.tool_call_count_min, 5);
+    assert_eq!(sap.heuristic.distinct_tool_id_min, 3);
+    assert_eq!(sap.heuristic.duration_ms_min, 12000);
+    assert!(sap.heuristic.require_gate_resolve);
+    assert_eq!(
+        sap.heuristic.mode,
+        crate::SkillsAutoProposeMatchMode::All
+    );
+    drop(env);
+}
+
+/// Empty `judge_model` → `Invalid` with the field name
+/// pointing at `skills.auto_propose.judge_model`.
+#[test]
+fn skills_auto_propose_empty_judge_model_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("sap-empty-model");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[skills.auto_propose]\nenabled = true\njudge_model = \"\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "skills.auto_propose.judge_model");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// `judge_max_tokens = 0` → `Invalid`.
+#[test]
+fn skills_auto_propose_zero_max_tokens_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("sap-zero-max");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[skills.auto_propose]\nenabled = true\njudge_max_tokens = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "skills.auto_propose.judge_max_tokens");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// `auto_accept_confidence_threshold` out of `[0.0, 1.0]` →
+/// `Invalid`. Tests the upper-bound failure case (above 1.0).
+#[test]
+fn skills_auto_propose_threshold_above_one_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("sap-thresh-high");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[skills.auto_propose]\nenabled = true\n\
+         auto_accept_confidence_threshold = 1.5\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "skills.auto_propose.auto_accept_confidence_threshold"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Negative `fuzzy_match_threshold` → `Invalid` (lower-bound
+/// failure case).
+#[test]
+fn skills_auto_propose_fuzzy_below_zero_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("sap-fuzzy-neg");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[skills.auto_propose]\nenabled = true\n\
+         fuzzy_match_threshold = -0.1\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "skills.auto_propose.fuzzy_match_threshold");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Unknown `mode` value → `Invalid` (Phase-91 precedent for
+/// string-discriminator validation).
+#[test]
+fn skills_auto_propose_unknown_mode_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("sap-bad-mode");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[skills.auto_propose]\nenabled = true\n\
+         \n[skills.auto_propose.heuristic]\nmode = \"maybe\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "skills.auto_propose.heuristic.mode");
+            assert!(reason.contains("any") && reason.contains("all"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// `mode` is case-insensitive (the deserialize target lowercases
+/// before matching). Phase 112's runtime MatchMode also
+/// deserializes lowercase; staying consistent here means the
+/// operator's TOML matches the serialized JSON we'd round-trip
+/// in tests.
+#[test]
+fn skills_auto_propose_mode_is_case_insensitive() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose]\nenabled = true\n\
+         \n[skills.auto_propose.heuristic]\nmode = \"ALL\"\n",
+        "sap-case",
+    );
+    let sap = cfg.skill_auto_propose.expect("section present");
+    assert_eq!(
+        sap.heuristic.mode,
+        crate::SkillsAutoProposeMatchMode::All
+    );
+    drop(env);
+}
+
+/// Heuristic-only sub-section (no top-level
+/// `[skills.auto_propose]` keys, just the nested heuristic)
+/// still arms the section. The defaults fill the top-level.
+#[test]
+fn skills_auto_propose_heuristic_only_arms_section() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose.heuristic]\ntool_call_count_min = 7\n",
+        "sap-heur-only",
+    );
+    let sap = cfg
+        .skill_auto_propose
+        .expect("nested-only still arms the section");
+    assert!(sap.enabled); // default
+    assert_eq!(sap.heuristic.tool_call_count_min, 7);
+    drop(env);
+}
