@@ -44,7 +44,7 @@ use std::sync::Arc;
 
 use aivyx_core::skill_proposer::{
     self, ExistingSkillSnapshot, HeuristicConfig, JudgeError, JudgeRequest,
-    JudgeResponse, TurnSignals,
+    JudgeResponse, SkillDraft, TurnSignals,
 };
 use aivyx_core::CancellationToken;
 use aivyx_llm::LlmProvider;
@@ -164,6 +164,186 @@ impl SkillProposerOutcome {
             SkillProposerOutcome::JudgeError(_) => "judge-error",
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task 5 — Decision routing
+// ---------------------------------------------------------------------------
+
+/// The terminal decision the auto-proposer reaches after the
+/// LLM judge has returned a [`JudgeResponse`]. One of four
+/// outcomes:
+///
+/// - `AutoAccept`: confidence >= threshold, no LLM-judged dup,
+///   no fuzzy-title-clash → land in the LearnedSkill chain
+///   directly as an approved entry tagged `auto_accepted: true`.
+/// - `Staged`: worth-proposing but below confidence
+///   threshold → land in the proposal chain as Pending so the
+///   operator can review through `aivyx persona proposals
+///   approve` (the same surface manual proposals use).
+/// - `DroppedJudgeDup`: the judge declared this candidate a
+///   semantic duplicate of an existing skill → nothing
+///   written, just logged for audit (Q4b LLM semantic check).
+/// - `DroppedFuzzyDup`: the cheap title fuzzy-match pre-
+///   filter caught this candidate before the judge even fired
+///   → nothing written; cost-efficient dedup (Q4b fuzzy-
+///   match pre-filter).
+/// - `DroppedNotWorthProposing`: the judge said
+///   `is_worth_proposing = false` without naming a dup →
+///   nothing written.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillRoutingDecision {
+    AutoAccept { draft: SkillDraft, confidence: f32 },
+    Staged { draft: SkillDraft, confidence: f32 },
+    DroppedJudgeDup { duplicate_of: String },
+    DroppedFuzzyDup { matched_existing_name: String },
+    DroppedNotWorthProposing,
+}
+
+impl SkillRoutingDecision {
+    /// Short stable label for the audit log (Task 6) and
+    /// operator forensics.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SkillRoutingDecision::AutoAccept { .. } => "auto-accept",
+            SkillRoutingDecision::Staged { .. } => "staged",
+            SkillRoutingDecision::DroppedJudgeDup { .. } => "dup-dropped-llm",
+            SkillRoutingDecision::DroppedFuzzyDup { .. } => "dup-dropped-fuzzy",
+            SkillRoutingDecision::DroppedNotWorthProposing => "not-worth-proposing",
+        }
+    }
+}
+
+/// Apply the threshold-gated routing rules (Q3b) on top of the
+/// judge's verdict, with the Q4b fuzzy-match pre-filter
+/// running first (cheap dedup catches obvious title-dups
+/// before any further work).
+///
+/// **The pre-filter runs against `verdict.proposed_skill`'s
+/// title, not the original turn summary.** The judge has
+/// already drafted a candidate skill at this point; we check
+/// if its title fuzzy-matches an existing skill *as a final
+/// safety net* (the judge may have missed an obvious dup the
+/// fuzzy-match would catch).
+///
+/// The function is pure — same inputs → same decision. Caller
+/// is responsible for actually writing the chain entries on
+/// `AutoAccept` and `Staged` outcomes; this just decides which
+/// path is right.
+pub fn decide_routing(
+    verdict: &JudgeResponse,
+    existing_skills: &[ExistingSkillSnapshot],
+    config: &SkillAutoProposeConfig,
+) -> SkillRoutingDecision {
+    // Step 1 — Judge said dup, drop immediately. The judge's
+    // semantic check beats the fuzzy-match: if the judge saw
+    // a dup, we trust it.
+    if let Some(name) = &verdict.is_duplicate_of {
+        return SkillRoutingDecision::DroppedJudgeDup {
+            duplicate_of: name.clone(),
+        };
+    }
+
+    // Step 2 — Judge said not worth proposing (and not a
+    // dup), drop.
+    if !verdict.is_worth_proposing {
+        return SkillRoutingDecision::DroppedNotWorthProposing;
+    }
+
+    // Step 3 — Judge said yes but the draft is missing (LLM
+    // misbehaved). Treat as not-worth-proposing rather than
+    // ship a broken proposal.
+    let Some(draft) = verdict.proposed_skill.clone() else {
+        return SkillRoutingDecision::DroppedNotWorthProposing;
+    };
+
+    // Step 4 — Fuzzy-title-match pre-filter (final safety
+    // net). The original Q4b design positioned this BEFORE
+    // the judge call; we keep the principle but apply it
+    // after the judge for one extra safety pass. The cost
+    // saving still applies on most real-world traffic: most
+    // turns never reach the judge (heuristic gates them).
+    if let Some(matched) = fuzzy_match_against_existing(
+        &draft.name,
+        existing_skills,
+        config.fuzzy_match_threshold,
+    ) {
+        return SkillRoutingDecision::DroppedFuzzyDup {
+            matched_existing_name: matched,
+        };
+    }
+
+    // Step 5 — Threshold gate (Q3b).
+    if verdict.confidence >= config.auto_accept_confidence_threshold {
+        SkillRoutingDecision::AutoAccept {
+            draft,
+            confidence: verdict.confidence,
+        }
+    } else {
+        SkillRoutingDecision::Staged {
+            draft,
+            confidence: verdict.confidence,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 5 — Fuzzy title-match pre-filter (Q4b cheap dedup)
+// ---------------------------------------------------------------------------
+
+/// Compute a normalized title similarity in `[0.0, 1.0]`
+/// between two skill names. The algorithm:
+///
+/// 1. Lowercase both inputs.
+/// 2. Replace any non-alphanumeric character with `-`.
+/// 3. Compute the Jaccard similarity of the resulting token
+///    sets (split on `-`).
+///
+/// This is deliberately cheap (`O(n + m)` set construction
+/// followed by an intersection scan) so it can fire on every
+/// candidate without measurable cost. It catches the obvious
+/// cases the Q4b pre-filter is designed for:
+/// `memory.gc` vs `memory_gc`; `research-topic` vs
+/// `topic-research`; `aivyx-mcp-recipes` vs
+/// `mcp-recipes-aivyx`. It does NOT catch deep semantic
+/// dups — those land on the LLM-judge call's
+/// `is_duplicate_of` path.
+pub fn title_similarity(a: &str, b: &str) -> f32 {
+    fn tokens(s: &str) -> std::collections::HashSet<String> {
+        s.to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .split('-')
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect()
+    }
+    let ta = tokens(a);
+    let tb = tokens(b);
+    if ta.is_empty() && tb.is_empty() {
+        return 1.0;
+    }
+    let intersection = ta.intersection(&tb).count();
+    let union = ta.union(&tb).count();
+    if union == 0 {
+        return 0.0;
+    }
+    intersection as f32 / union as f32
+}
+
+/// Return the name of the first existing skill whose title
+/// similarity against `candidate_title` meets or exceeds
+/// `threshold`. Used as the Q4b cheap dedup pre-filter.
+pub fn fuzzy_match_against_existing(
+    candidate_title: &str,
+    existing: &[ExistingSkillSnapshot],
+    threshold: f32,
+) -> Option<String> {
+    existing
+        .iter()
+        .find(|s| title_similarity(candidate_title, &s.name) >= threshold)
+        .map(|s| s.name.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -592,5 +772,240 @@ mod tests {
         let s = serde_json::to_string(&original).unwrap();
         let back: SkillAutoProposeConfig = serde_json::from_str(&s).unwrap();
         assert_eq!(back, original);
+    }
+
+    // ----- Task 5 — Decision routing -----
+
+    fn worth_proposing_verdict(confidence: f32) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            proposed_skill: Some(SkillDraft {
+                name: "research-topic".into(),
+                trigger: "user asks to research X".into(),
+                procedure: "1. fs.read\n2. web.fetch".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    fn existing_skills_fixture() -> Vec<ExistingSkillSnapshot> {
+        vec![
+            ExistingSkillSnapshot {
+                name: "summarize-pdf".into(),
+                trigger: "user shares a PDF".into(),
+                procedure_summary: "fs.read PDF, extract sections".into(),
+            },
+            ExistingSkillSnapshot {
+                name: "deploy-to-staging".into(),
+                trigger: "user requests staging deploy".into(),
+                procedure_summary: "git.status, shell.exec deploy script".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn routing_auto_accepts_at_threshold() {
+        let verdict = worth_proposing_verdict(0.85);
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &[], &config);
+        match &d {
+            SkillRoutingDecision::AutoAccept { confidence, draft } => {
+                assert!((confidence - 0.85).abs() < 1e-6);
+                assert_eq!(draft.name, "research-topic");
+            }
+            _ => panic!("expected AutoAccept; got {:?}", d),
+        }
+        assert_eq!(d.label(), "auto-accept");
+    }
+
+    #[test]
+    fn routing_auto_accepts_above_threshold() {
+        let verdict = worth_proposing_verdict(0.95);
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::AutoAccept { .. }));
+    }
+
+    #[test]
+    fn routing_stages_below_threshold() {
+        let verdict = worth_proposing_verdict(0.84);
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &[], &config);
+        match &d {
+            SkillRoutingDecision::Staged { confidence, draft } => {
+                assert!((confidence - 0.84).abs() < 1e-6);
+                assert_eq!(draft.name, "research-topic");
+            }
+            _ => panic!("expected Staged; got {:?}", d),
+        }
+        assert_eq!(d.label(), "staged");
+    }
+
+    #[test]
+    fn routing_drops_when_judge_declares_duplicate() {
+        let mut verdict = worth_proposing_verdict(0.99);
+        verdict.is_worth_proposing = false;
+        verdict.is_duplicate_of = Some("summarize-pdf".into());
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        match &d {
+            SkillRoutingDecision::DroppedJudgeDup { duplicate_of } => {
+                assert_eq!(duplicate_of, "summarize-pdf");
+            }
+            _ => panic!("expected DroppedJudgeDup; got {:?}", d),
+        }
+        assert_eq!(d.label(), "dup-dropped-llm");
+    }
+
+    #[test]
+    fn routing_drops_when_not_worth_proposing() {
+        let verdict = JudgeResponse {
+            is_worth_proposing: false,
+            confidence: 0.5,
+            proposed_skill: None,
+            is_duplicate_of: None,
+            reasoning: Some("one-off chat".into()),
+        };
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::DroppedNotWorthProposing));
+        assert_eq!(d.label(), "not-worth-proposing");
+    }
+
+    #[test]
+    fn routing_drops_when_judge_says_worth_but_omits_draft() {
+        // LLM misbehavior — treat as not-worth-proposing.
+        let verdict = JudgeResponse {
+            is_worth_proposing: true,
+            confidence: 0.9,
+            proposed_skill: None,
+            is_duplicate_of: None,
+            reasoning: None,
+        };
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::DroppedNotWorthProposing));
+    }
+
+    #[test]
+    fn routing_fuzzy_match_drops_obvious_title_dup() {
+        // Existing: "summarize-pdf"; candidate: "summarize-pdf" → identical
+        // title → fuzzy match fires.
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.proposed_skill.as_mut().unwrap().name = "summarize-pdf".into();
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        match &d {
+            SkillRoutingDecision::DroppedFuzzyDup {
+                matched_existing_name,
+            } => {
+                assert_eq!(matched_existing_name, "summarize-pdf");
+            }
+            _ => panic!("expected DroppedFuzzyDup; got {:?}", d),
+        }
+        assert_eq!(d.label(), "dup-dropped-fuzzy");
+    }
+
+    #[test]
+    fn routing_fuzzy_match_drops_underscored_vs_dotted_variant() {
+        // Existing: "summarize-pdf"; candidate: "summarize_pdf" — same
+        // tokens after normalization.
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.proposed_skill.as_mut().unwrap().name = "summarize_pdf".into();
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        assert!(matches!(d, SkillRoutingDecision::DroppedFuzzyDup { .. }));
+    }
+
+    #[test]
+    fn routing_fuzzy_match_drops_reordered_tokens() {
+        // Existing: "deploy-to-staging"; candidate: "staging-to-deploy" —
+        // same token set after normalization → Jaccard 1.0.
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.proposed_skill.as_mut().unwrap().name = "staging-to-deploy".into();
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        assert!(matches!(d, SkillRoutingDecision::DroppedFuzzyDup { .. }));
+    }
+
+    #[test]
+    fn routing_does_not_fuzzy_drop_distinct_titles() {
+        let verdict = worth_proposing_verdict(0.95);
+        // "research-topic" has zero tokens in common with the two
+        // existing skill names.
+        let config = SkillAutoProposeConfig::default();
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        assert!(matches!(d, SkillRoutingDecision::AutoAccept { .. }));
+    }
+
+    #[test]
+    fn routing_respects_higher_fuzzy_threshold() {
+        // With a high threshold (0.99), a partial overlap shouldn't
+        // count as a dup. Existing "summarize-pdf"; candidate
+        // "summarize-doc" — overlap is {summarize} of {summarize, pdf,
+        // doc} → 1/3 → below 0.99.
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.proposed_skill.as_mut().unwrap().name = "summarize-doc".into();
+        let config = SkillAutoProposeConfig {
+            fuzzy_match_threshold: 0.99,
+            ..SkillAutoProposeConfig::default()
+        };
+        let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
+        assert!(matches!(d, SkillRoutingDecision::AutoAccept { .. }));
+    }
+
+    // ----- Task 5 — Title similarity primitive -----
+
+    #[test]
+    fn title_similarity_identical_titles_are_one() {
+        assert_eq!(title_similarity("research-topic", "research-topic"), 1.0);
+    }
+
+    #[test]
+    fn title_similarity_normalizes_separators() {
+        assert_eq!(title_similarity("memory.gc", "memory_gc"), 1.0);
+        assert_eq!(title_similarity("memory.gc", "memory-gc"), 1.0);
+    }
+
+    #[test]
+    fn title_similarity_is_case_insensitive() {
+        assert_eq!(title_similarity("Memory.GC", "memory.gc"), 1.0);
+    }
+
+    #[test]
+    fn title_similarity_jaccard_for_partial_overlap() {
+        // "summarize-pdf" vs "summarize-doc" — tokens {summarize, pdf}
+        // vs {summarize, doc} → intersection {summarize}, union
+        // {summarize, pdf, doc} → 1/3 ≈ 0.333.
+        let sim = title_similarity("summarize-pdf", "summarize-doc");
+        assert!((sim - 1.0 / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn title_similarity_disjoint_tokens_are_zero() {
+        assert_eq!(title_similarity("alpha", "beta"), 0.0);
+    }
+
+    #[test]
+    fn title_similarity_empty_inputs() {
+        assert_eq!(title_similarity("", ""), 1.0);
+        assert_eq!(title_similarity("alpha", ""), 0.0);
+        assert_eq!(title_similarity("", "alpha"), 0.0);
+    }
+
+    #[test]
+    fn fuzzy_match_returns_first_match_above_threshold() {
+        let existing = existing_skills_fixture();
+        let m = fuzzy_match_against_existing("summarize-pdf", &existing, 0.80);
+        assert_eq!(m.as_deref(), Some("summarize-pdf"));
+    }
+
+    #[test]
+    fn fuzzy_match_returns_none_when_no_existing_match() {
+        let existing = existing_skills_fixture();
+        let m = fuzzy_match_against_existing("totally-novel-skill", &existing, 0.80);
+        assert!(m.is_none());
     }
 }
