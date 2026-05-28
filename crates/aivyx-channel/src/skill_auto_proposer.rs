@@ -347,6 +347,132 @@ pub fn fuzzy_match_against_existing(
 }
 
 // ---------------------------------------------------------------------------
+// Task 6 — Audit-event construction helpers
+// ---------------------------------------------------------------------------
+
+/// Compute which heuristic signals (Q1b stage 1) crossed
+/// their thresholds for a given `TurnSignals` + `HeuristicConfig`
+/// pair. The boolean record is what the audit event carries.
+///
+/// **Always reports the actual signal crossings**, regardless
+/// of the `MatchMode`. Forensic queries care about "which
+/// signals crossed?", not "did the combined gate fire?" —
+/// the gate-firing question is implicit in the outcome
+/// summary itself (HeuristicGated vs. anything past the
+/// judge).
+pub fn signals_matched(
+    signals: &TurnSignals,
+    config: &HeuristicConfig,
+) -> aivyx_audit::HeuristicSignalsMatched {
+    aivyx_audit::HeuristicSignalsMatched {
+        tool_call_count: signals.tool_calls_made >= config.tool_call_count_min,
+        distinct_tool_id_count: signals.distinct_tool_id_count
+            >= config.distinct_tool_id_min,
+        duration: signals.duration.as_millis() as u64
+            >= config.duration_ms_min,
+        gate_resolve: signals.had_successful_gate_resolve,
+    }
+}
+
+/// Convert a `SkillProposerOutcome` (+ the routing decision
+/// for Verdict outcomes) into the audit-chain summary enum.
+/// The Verdict→AutoAccepted/Staged/Dup/NotWorth path requires
+/// the routing decision; the other proposer outcomes map 1-1.
+///
+/// Returns the outcome variant + the (proposed_skill_name,
+/// confidence_thousandths) pair that the audit event needs.
+/// `judge_latency_ms` is provided by the caller (it's measured
+/// at the call site, not here).
+pub fn audit_outcome_from(
+    proposer_outcome: &SkillProposerOutcome,
+    routing: Option<&SkillRoutingDecision>,
+) -> (
+    aivyx_audit::SkillAutoProposalOutcomeSummary,
+    Option<String>,
+    Option<u32>,
+) {
+    use aivyx_audit::SkillAutoProposalOutcomeSummary as S;
+
+    match proposer_outcome {
+        SkillProposerOutcome::Disabled => (S::Disabled, None, None),
+        SkillProposerOutcome::HeuristicGated => (S::HeuristicGated, None, None),
+        SkillProposerOutcome::JudgeError(msg) => (
+            S::JudgeError {
+                error_message: msg.clone(),
+            },
+            None,
+            None,
+        ),
+        SkillProposerOutcome::Verdict(verdict) => {
+            // Use the routing decision if provided; otherwise
+            // fall back to deriving from the verdict alone.
+            // (The caller should always supply the routing.)
+            let routing_owned;
+            let routing = match routing {
+                Some(r) => r,
+                None => {
+                    // Build a default routing decision from the
+                    // verdict using empty config defaults. This
+                    // shouldn't fire in production paths — Task 7
+                    // always passes a routing — but it keeps the
+                    // function total.
+                    routing_owned = decide_routing(
+                        verdict,
+                        &[],
+                        &SkillAutoProposeConfig::default(),
+                    );
+                    &routing_owned
+                }
+            };
+            let confidence_thousandths =
+                Some((verdict.confidence * 1000.0).round() as u32);
+            match routing {
+                SkillRoutingDecision::AutoAccept { draft, .. } => (
+                    S::AutoAccepted,
+                    Some(draft.name.clone()),
+                    confidence_thousandths,
+                ),
+                SkillRoutingDecision::Staged { draft, .. } => (
+                    S::Staged,
+                    Some(draft.name.clone()),
+                    confidence_thousandths,
+                ),
+                SkillRoutingDecision::DroppedJudgeDup { duplicate_of } => (
+                    S::DuplicateOfExistingLlm {
+                        duplicate_of: duplicate_of.clone(),
+                    },
+                    verdict
+                        .proposed_skill
+                        .as_ref()
+                        .map(|d| d.name.clone()),
+                    confidence_thousandths,
+                ),
+                SkillRoutingDecision::DroppedFuzzyDup {
+                    matched_existing_name,
+                } => (
+                    S::DuplicateOfExistingFuzzy {
+                        matched_existing_name: matched_existing_name.clone(),
+                    },
+                    verdict
+                        .proposed_skill
+                        .as_ref()
+                        .map(|d| d.name.clone()),
+                    confidence_thousandths,
+                ),
+                SkillRoutingDecision::DroppedNotWorthProposing => (
+                    S::NotWorthProposing,
+                    verdict
+                        .proposed_skill
+                        .as_ref()
+                        .map(|d| d.name.clone()),
+                    confidence_thousandths,
+                ),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1007,5 +1133,194 @@ mod tests {
         let existing = existing_skills_fixture();
         let m = fuzzy_match_against_existing("totally-novel-skill", &existing, 0.80);
         assert!(m.is_none());
+    }
+
+    // ----- Task 6 — Audit-event construction helpers -----
+
+    #[test]
+    fn signals_matched_reports_each_axis_independently() {
+        let signals = TurnSignals {
+            tool_calls_made: 3,
+            distinct_tool_id_count: 1, // below min=2
+            duration: Duration::from_millis(10_000),
+            had_successful_gate_resolve: true,
+        };
+        let config = HeuristicConfig::default();
+        let m = signals_matched(&signals, &config);
+        assert!(m.tool_call_count);
+        assert!(!m.distinct_tool_id_count);
+        assert!(m.duration);
+        assert!(m.gate_resolve);
+    }
+
+    #[test]
+    fn signals_matched_reports_all_below_threshold_as_all_false() {
+        let signals = TurnSignals {
+            tool_calls_made: 0,
+            distinct_tool_id_count: 0,
+            duration: Duration::from_millis(0),
+            had_successful_gate_resolve: false,
+        };
+        let config = HeuristicConfig::default();
+        let m = signals_matched(&signals, &config);
+        assert!(!m.tool_call_count);
+        assert!(!m.distinct_tool_id_count);
+        assert!(!m.duration);
+        assert!(!m.gate_resolve);
+    }
+
+    #[test]
+    fn audit_outcome_disabled_maps_cleanly() {
+        let (outcome, name, conf) =
+            audit_outcome_from(&SkillProposerOutcome::Disabled, None);
+        assert!(matches!(
+            outcome,
+            aivyx_audit::SkillAutoProposalOutcomeSummary::Disabled
+        ));
+        assert!(name.is_none());
+        assert!(conf.is_none());
+    }
+
+    #[test]
+    fn audit_outcome_heuristic_gated_maps_cleanly() {
+        let (outcome, name, conf) =
+            audit_outcome_from(&SkillProposerOutcome::HeuristicGated, None);
+        assert!(matches!(
+            outcome,
+            aivyx_audit::SkillAutoProposalOutcomeSummary::HeuristicGated
+        ));
+        assert!(name.is_none());
+        assert!(conf.is_none());
+    }
+
+    #[test]
+    fn audit_outcome_judge_error_carries_message() {
+        let (outcome, name, conf) = audit_outcome_from(
+            &SkillProposerOutcome::JudgeError("provider: HTTP 429".into()),
+            None,
+        );
+        match outcome {
+            aivyx_audit::SkillAutoProposalOutcomeSummary::JudgeError {
+                error_message,
+            } => {
+                assert_eq!(error_message, "provider: HTTP 429");
+            }
+            _ => panic!("expected JudgeError"),
+        }
+        assert!(name.is_none());
+        assert!(conf.is_none());
+    }
+
+    #[test]
+    fn audit_outcome_auto_accept_carries_name_and_confidence() {
+        let verdict = worth_proposing_verdict(0.91);
+        let routing = decide_routing(
+            &verdict,
+            &[],
+            &SkillAutoProposeConfig::default(),
+        );
+        let (outcome, name, conf) = audit_outcome_from(
+            &SkillProposerOutcome::Verdict(verdict.clone()),
+            Some(&routing),
+        );
+        assert!(matches!(
+            outcome,
+            aivyx_audit::SkillAutoProposalOutcomeSummary::AutoAccepted
+        ));
+        assert_eq!(name.as_deref(), Some("research-topic"));
+        assert_eq!(conf, Some(910));
+    }
+
+    #[test]
+    fn audit_outcome_staged_carries_name_and_confidence() {
+        let verdict = worth_proposing_verdict(0.72);
+        let routing = decide_routing(
+            &verdict,
+            &[],
+            &SkillAutoProposeConfig::default(),
+        );
+        let (outcome, name, conf) = audit_outcome_from(
+            &SkillProposerOutcome::Verdict(verdict.clone()),
+            Some(&routing),
+        );
+        assert!(matches!(
+            outcome,
+            aivyx_audit::SkillAutoProposalOutcomeSummary::Staged
+        ));
+        assert_eq!(name.as_deref(), Some("research-topic"));
+        assert_eq!(conf, Some(720));
+    }
+
+    #[test]
+    fn audit_outcome_dup_llm_carries_dup_name() {
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.is_worth_proposing = false;
+        verdict.is_duplicate_of = Some("summarize-pdf".into());
+        let routing = decide_routing(
+            &verdict,
+            &existing_skills_fixture(),
+            &SkillAutoProposeConfig::default(),
+        );
+        let (outcome, _name, _conf) = audit_outcome_from(
+            &SkillProposerOutcome::Verdict(verdict),
+            Some(&routing),
+        );
+        match outcome {
+            aivyx_audit::SkillAutoProposalOutcomeSummary::DuplicateOfExistingLlm {
+                duplicate_of,
+            } => {
+                assert_eq!(duplicate_of, "summarize-pdf");
+            }
+            _ => panic!("expected DuplicateOfExistingLlm"),
+        }
+    }
+
+    #[test]
+    fn audit_outcome_dup_fuzzy_carries_matched_name() {
+        let mut verdict = worth_proposing_verdict(0.95);
+        verdict.proposed_skill.as_mut().unwrap().name = "summarize-pdf".into();
+        let routing = decide_routing(
+            &verdict,
+            &existing_skills_fixture(),
+            &SkillAutoProposeConfig::default(),
+        );
+        let (outcome, _name, _conf) = audit_outcome_from(
+            &SkillProposerOutcome::Verdict(verdict),
+            Some(&routing),
+        );
+        match outcome {
+            aivyx_audit::SkillAutoProposalOutcomeSummary::DuplicateOfExistingFuzzy {
+                matched_existing_name,
+            } => {
+                assert_eq!(matched_existing_name, "summarize-pdf");
+            }
+            _ => panic!("expected DuplicateOfExistingFuzzy"),
+        }
+    }
+
+    #[test]
+    fn audit_outcome_not_worth_proposing_maps_cleanly() {
+        let verdict = JudgeResponse {
+            is_worth_proposing: false,
+            confidence: 0.30,
+            proposed_skill: None,
+            is_duplicate_of: None,
+            reasoning: None,
+        };
+        let routing = decide_routing(
+            &verdict,
+            &[],
+            &SkillAutoProposeConfig::default(),
+        );
+        let (outcome, name, conf) = audit_outcome_from(
+            &SkillProposerOutcome::Verdict(verdict),
+            Some(&routing),
+        );
+        assert!(matches!(
+            outcome,
+            aivyx_audit::SkillAutoProposalOutcomeSummary::NotWorthProposing
+        ));
+        assert!(name.is_none());
+        assert_eq!(conf, Some(300));
     }
 }

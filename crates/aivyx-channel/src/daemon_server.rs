@@ -2974,6 +2974,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
         aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
+        aivyx_audit::AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
     }
     .to_string();
 

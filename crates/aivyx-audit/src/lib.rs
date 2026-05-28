@@ -157,6 +157,100 @@ pub enum AuditEvent {
         /// dispatcher was called, included for operator readability.
         dispatched_at_unix_ms: u64,
     },
+
+    /// Phase 112 Task 6 — Skill Auto-Proposer fire record.
+    ///
+    /// Emitted once per turn where the auto-proposer ran past
+    /// the heuristic gate. The outcome carries which terminal
+    /// routing decision the proposer reached (or which failure
+    /// mode it hit). Pair with the surrounding `TurnEnded`
+    /// event via session_id to reconstruct what the agent
+    /// learned (or didn't) from that turn.
+    ///
+    /// Confidence is stored as `confidence_thousandths` (a u32
+    /// in `0..=1000`) rather than `f32` so the variant can stay
+    /// `Eq` like the rest of `AuditEvent`. Read as `f32` via
+    /// `confidence_thousandths as f32 / 1000.0`.
+    SkillAutoProposal {
+        /// The session whose turn fired the proposer. Matches
+        /// the surrounding `TurnStarted` / `TurnEnded`.
+        session_id: SessionId,
+        /// Terminal routing outcome — what the proposer decided
+        /// to do (or what error it hit).
+        outcome: SkillAutoProposalOutcomeSummary,
+        /// Judge confidence × 1000. Stored as integer to keep
+        /// `AuditEvent: Eq` per the chain's invariant. None
+        /// for outcomes that didn't reach the judge call
+        /// (heuristic-gated, disabled, fuzzy-dropped pre-judge
+        /// — note: Phase 112 runs fuzzy post-judge, so fuzzy
+        /// dups DO have a confidence).
+        confidence_thousandths: Option<u32>,
+        /// kebab-case slug of the proposed skill. None for
+        /// outcomes that didn't produce a draft.
+        proposed_skill_name: Option<String>,
+        /// Wall-clock duration of the judge call (Q1b stage 2).
+        /// None for outcomes that didn't reach the judge.
+        judge_latency_ms: Option<u64>,
+        /// Which heuristic signals (Q1b stage 1) crossed
+        /// during the candidate-gate evaluation. Lets forensic
+        /// walks answer "what kind of turns are firing the
+        /// proposer the most?" by tallying signal patterns.
+        heuristic_signals_matched: HeuristicSignalsMatched,
+    },
+}
+
+/// Phase 112 — Skill Auto-Proposer outcome discriminator.
+/// Mirrors `aivyx_channel::skill_auto_proposer::SkillProposerOutcome`
+/// fused with the routing-decision label space (Task 5's
+/// `SkillRoutingDecision::label()`). Lives here in `aivyx-audit`
+/// so the chain shape stays independent of `aivyx-channel`'s
+/// orchestration layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum SkillAutoProposalOutcomeSummary {
+    /// Master switch was off; the proposer was bypassed.
+    Disabled,
+    /// Heuristic gate rejected the turn — no LLM call fired.
+    HeuristicGated,
+    /// Judge fired and judged the candidate worth proposing,
+    /// confidence reached the auto-accept threshold, no dup
+    /// detected on either the LLM-semantic or the fuzzy-title
+    /// pre-filter. Landed in the LearnedSkill chain as an
+    /// approved entry.
+    AutoAccepted,
+    /// Judge fired and judged the candidate worth proposing,
+    /// but confidence was below the auto-accept threshold.
+    /// Landed in the proposal chain as Pending — the
+    /// operator will resolve via `aivyx persona proposals`.
+    Staged,
+    /// Judge declared the candidate a semantic duplicate of an
+    /// existing skill. Nothing written.
+    DuplicateOfExistingLlm { duplicate_of: String },
+    /// Title fuzzy-match against existing skills caught a
+    /// paraphrase / token-reorder the judge missed. Nothing
+    /// written.
+    DuplicateOfExistingFuzzy { matched_existing_name: String },
+    /// Judge said `is_worth_proposing == false` (and not a
+    /// dup). Nothing written.
+    NotWorthProposing,
+    /// Judge call failed (provider error, parse failure, or
+    /// confidence out of range). Carries the error message
+    /// for operator forensics.
+    JudgeError { error_message: String },
+}
+
+/// Phase 112 — Bitmap-style record of which heuristic signals
+/// (Q1b stage 1) crossed their thresholds during candidate
+/// gating. All four fields are booleans, but we use a struct
+/// rather than a `Vec<String>` so the audit chain stays
+/// schema-stable and forensic queries can be exact-match
+/// rather than substring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeuristicSignalsMatched {
+    pub tool_call_count: bool,
+    pub distinct_tool_id_count: bool,
+    pub duration: bool,
+    pub gate_resolve: bool,
 }
 
 /// Phase 67 — auto-notify outcome discriminator.
@@ -1109,6 +1203,157 @@ mod tests {
         )
         .expect("Webhook variant parses");
         assert_eq!(webhook, TriggerKindSummary::Webhook);
+    }
+
+    // ---- Phase 112 — SkillAutoProposal variant ----
+
+    fn no_signals() -> HeuristicSignalsMatched {
+        HeuristicSignalsMatched {
+            tool_call_count: false,
+            distinct_tool_id_count: false,
+            duration: false,
+            gate_resolve: false,
+        }
+    }
+
+    fn all_signals() -> HeuristicSignalsMatched {
+        HeuristicSignalsMatched {
+            tool_call_count: true,
+            distinct_tool_id_count: true,
+            duration: true,
+            gate_resolve: true,
+        }
+    }
+
+    #[test]
+    fn skill_auto_proposal_round_trips_for_every_outcome() {
+        let cases = vec![
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::Disabled,
+                confidence_thousandths: None,
+                proposed_skill_name: None,
+                judge_latency_ms: None,
+                heuristic_signals_matched: no_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::HeuristicGated,
+                confidence_thousandths: None,
+                proposed_skill_name: None,
+                judge_latency_ms: None,
+                heuristic_signals_matched: no_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::AutoAccepted,
+                confidence_thousandths: Some(910),
+                proposed_skill_name: Some("research-topic".into()),
+                judge_latency_ms: Some(1450),
+                heuristic_signals_matched: all_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::Staged,
+                confidence_thousandths: Some(720),
+                proposed_skill_name: Some("research-topic".into()),
+                judge_latency_ms: Some(1320),
+                heuristic_signals_matched: HeuristicSignalsMatched {
+                    tool_call_count: true,
+                    distinct_tool_id_count: true,
+                    duration: false,
+                    gate_resolve: false,
+                },
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome:
+                    SkillAutoProposalOutcomeSummary::DuplicateOfExistingLlm {
+                        duplicate_of: "summarize-pdf".into(),
+                    },
+                confidence_thousandths: Some(960),
+                proposed_skill_name: None,
+                judge_latency_ms: Some(1100),
+                heuristic_signals_matched: all_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome:
+                    SkillAutoProposalOutcomeSummary::DuplicateOfExistingFuzzy {
+                        matched_existing_name: "summarize-doc".into(),
+                    },
+                confidence_thousandths: Some(880),
+                proposed_skill_name: Some("summarize-pdf".into()),
+                judge_latency_ms: Some(1200),
+                heuristic_signals_matched: all_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::NotWorthProposing,
+                confidence_thousandths: Some(300),
+                proposed_skill_name: None,
+                judge_latency_ms: Some(900),
+                heuristic_signals_matched: all_signals(),
+            },
+            AuditEvent::SkillAutoProposal {
+                session_id: SessionId::new(),
+                outcome: SkillAutoProposalOutcomeSummary::JudgeError {
+                    error_message: "provider: HTTP 429".into(),
+                },
+                confidence_thousandths: None,
+                proposed_skill_name: None,
+                judge_latency_ms: Some(420),
+                heuristic_signals_matched: all_signals(),
+            },
+        ];
+
+        for ev in cases {
+            let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
+            let back: AuditEvent =
+                serde_json::from_slice(&bytes).expect("round trip");
+            assert_eq!(ev, back);
+        }
+    }
+
+    #[test]
+    fn skill_auto_proposal_outcome_summary_serializes_with_kind_tag() {
+        let auto = SkillAutoProposalOutcomeSummary::AutoAccepted;
+        let json = serde_json::to_value(&auto).unwrap();
+        assert_eq!(json["kind"], "AutoAccepted");
+
+        let dup = SkillAutoProposalOutcomeSummary::DuplicateOfExistingFuzzy {
+            matched_existing_name: "x".into(),
+        };
+        let json = serde_json::to_value(&dup).unwrap();
+        assert_eq!(json["kind"], "DuplicateOfExistingFuzzy");
+        assert_eq!(json["matched_existing_name"], "x");
+
+        let err = SkillAutoProposalOutcomeSummary::JudgeError {
+            error_message: "boom".into(),
+        };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "JudgeError");
+        assert_eq!(json["error_message"], "boom");
+    }
+
+    #[test]
+    fn skill_auto_proposal_can_be_hmac_chained() {
+        // Same proof-of-life test the other variants have: an
+        // entry of the new variant lands in the HmacChainLog
+        // without breaking the chain verification.
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::SkillAutoProposal {
+            session_id: SessionId::new(),
+            outcome: SkillAutoProposalOutcomeSummary::AutoAccepted,
+            confidence_thousandths: Some(910),
+            proposed_skill_name: Some("research-topic".into()),
+            judge_latency_ms: Some(1450),
+            heuristic_signals_matched: all_signals(),
+        })
+        .unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
     }
 
     // ---- NullAuditLog ----
