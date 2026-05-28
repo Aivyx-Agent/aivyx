@@ -3444,6 +3444,40 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 115 — Self-Correction Loop on Failed Turns (Chapter E #2)
+
+**Active — see [PHASE_115.md](PHASE_115.md).** Second
+phase of Chapter E. Closes the symmetric negative-
+feedback half of Phase 114's auto-proposer. The agent
+observes failed turns (Failed / Cancelled / TimedOut /
+Escalated) and proposes targeted Persona refinements to
+prevent recurrence. Same pipeline, broader trigger —
+Q3a sign-off (extend Phase 114 substrate).
+
+**Q-block (one non-Recommended, two Recommended):**
+- Q1c — **All non-Completed outcomes** (non-
+  Recommended). Maximum-signal posture; per-failure-
+  type enable flags + judge confidence threshold +
+  per-category enables gate noise.
+- Q2a — **Let judge pick from full surface**
+  (Recommended). Same polymorphic surface as Phase 114;
+  per-category enables apply uniformly to failure-
+  driven proposals.
+- Q3a — **Extend Phase 114 substrate** (Recommended).
+  Same orchestration; new `from_failed_turns` config
+  knob; new `source` field on audit-event with
+  serde-skip-if-none for backward compatibility.
+
+Streak predictions: all three HOLD (DESIGN.md → 6,
+PRODUCT.md → 6, `aivyx-core/src/lib.rs` → 4). Zero new
+workspace deps. Test count `+20` to `+35`.
+
+After Phase 115, the agent self-learns AND self-corrects
+across the same 11-category PersonaDelta surface. Chapter
+E's remaining named axes (tool/skill selection learning;
+outcome-driven Profile/Role refinement) ship operator-
+pressure-shaped after Phase 115.
+
 ## Phase 114 — Persona Auto-Proposer Generalization (Chapter E opener)
 
 **Frozen — see [PHASE_114.md](PHASE_114.md).** First
