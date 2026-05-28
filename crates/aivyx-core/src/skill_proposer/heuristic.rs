@@ -145,6 +145,98 @@ impl Default for HeuristicConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 115 — Failure-outcome heuristic
+// ---------------------------------------------------------------------------
+
+/// Phase 115 — the kind of failure that triggered the
+/// auto-proposer's negative-feedback path. Mirrors the
+/// `TurnOutcome` failure variants but is its own enum so
+/// `aivyx-core::skill_proposer` stays independent of the
+/// `TurnOutcome` shape (which lives elsewhere in
+/// `aivyx-core`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// `TurnOutcome::Failed(error)` — a system/planner
+    /// failure carried an `AivyxError`.
+    Failed,
+    /// `TurnOutcome::Cancelled` — the operator cancelled
+    /// the turn mid-flight. Default-disabled because most
+    /// cancellations are operator-driven (the operator
+    /// changed their mind) rather than learnable signal.
+    Cancelled,
+    /// `TurnOutcome::TimedOut` — the agent exceeded its
+    /// per-turn budget. Strong signal that the
+    /// agent-Persona pair didn't recognize the task was
+    /// too large for one turn; default-enabled.
+    TimedOut,
+    /// `TurnOutcome::Escalated` — the agent escalated to
+    /// the operator. Default-disabled because escalation
+    /// is the agent doing the right thing under D1's
+    /// Tier-2 rules; the operator's `/approve` / `/reject`
+    /// resolves the gate separately.
+    Escalated,
+}
+
+impl FailureKind {
+    /// Short stable label for the failure kind — used in
+    /// audit events and operator-facing diagnostics.
+    pub fn label(&self) -> &'static str {
+        match self {
+            FailureKind::Failed => "failed",
+            FailureKind::Cancelled => "cancelled",
+            FailureKind::TimedOut => "timed_out",
+            FailureKind::Escalated => "escalated",
+        }
+    }
+}
+
+/// Phase 115 — per-failure-outcome enable flags. The
+/// operator can tune which failure types fire the auto-
+/// correction pipeline through the
+/// `[persona.auto_propose.failure_outcomes]` TOML
+/// sub-section that Phase 115 Task 6 wires in.
+///
+/// Defaults are operator-conservative: `Failed` and
+/// `TimedOut` are on (clear failure signal); `Cancelled`
+/// and `Escalated` are off (operator-driven; not
+/// learnable without further classification).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureHeuristicConfig {
+    pub failed: bool,
+    pub cancelled: bool,
+    pub timed_out: bool,
+    pub escalated: bool,
+}
+
+impl Default for FailureHeuristicConfig {
+    fn default() -> Self {
+        FailureHeuristicConfig {
+            failed: true,
+            cancelled: false,
+            timed_out: true,
+            escalated: false,
+        }
+    }
+}
+
+/// Phase 115 — is this failure worth firing the auto-
+/// correction LLM-judge call from? Pure function; same
+/// shape as `is_candidate` but for the negative-feedback
+/// path.
+pub fn is_failure_candidate(
+    kind: FailureKind,
+    config: &FailureHeuristicConfig,
+) -> bool {
+    match kind {
+        FailureKind::Failed => config.failed,
+        FailureKind::Cancelled => config.cancelled,
+        FailureKind::TimedOut => config.timed_out,
+        FailureKind::Escalated => config.escalated,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The function itself
 // ---------------------------------------------------------------------------
 
@@ -435,5 +527,102 @@ mod tests {
         assert_eq!(s, "\"any\"");
         let s = serde_json::to_string(&MatchMode::All).unwrap();
         assert_eq!(s, "\"all\"");
+    }
+
+    // ----- Phase 115 — Failure-outcome heuristic -----
+
+    #[test]
+    fn failure_heuristic_default_fires_on_failed_and_timed_out() {
+        let cfg = FailureHeuristicConfig::default();
+        assert!(is_failure_candidate(FailureKind::Failed, &cfg));
+        assert!(is_failure_candidate(FailureKind::TimedOut, &cfg));
+        // Default-disabled kinds.
+        assert!(!is_failure_candidate(FailureKind::Cancelled, &cfg));
+        assert!(!is_failure_candidate(FailureKind::Escalated, &cfg));
+    }
+
+    #[test]
+    fn failure_heuristic_explicit_enable_overrides_defaults() {
+        let cfg = FailureHeuristicConfig {
+            failed: false,
+            cancelled: true,
+            timed_out: false,
+            escalated: true,
+        };
+        assert!(!is_failure_candidate(FailureKind::Failed, &cfg));
+        assert!(is_failure_candidate(FailureKind::Cancelled, &cfg));
+        assert!(!is_failure_candidate(FailureKind::TimedOut, &cfg));
+        assert!(is_failure_candidate(FailureKind::Escalated, &cfg));
+    }
+
+    #[test]
+    fn failure_heuristic_all_disabled_fires_on_nothing() {
+        let cfg = FailureHeuristicConfig {
+            failed: false,
+            cancelled: false,
+            timed_out: false,
+            escalated: false,
+        };
+        for kind in [
+            FailureKind::Failed,
+            FailureKind::Cancelled,
+            FailureKind::TimedOut,
+            FailureKind::Escalated,
+        ] {
+            assert!(!is_failure_candidate(kind, &cfg));
+        }
+    }
+
+    #[test]
+    fn failure_heuristic_all_enabled_fires_on_everything() {
+        let cfg = FailureHeuristicConfig {
+            failed: true,
+            cancelled: true,
+            timed_out: true,
+            escalated: true,
+        };
+        for kind in [
+            FailureKind::Failed,
+            FailureKind::Cancelled,
+            FailureKind::TimedOut,
+            FailureKind::Escalated,
+        ] {
+            assert!(is_failure_candidate(kind, &cfg));
+        }
+    }
+
+    #[test]
+    fn failure_kind_label_is_stable_lowercase() {
+        assert_eq!(FailureKind::Failed.label(), "failed");
+        assert_eq!(FailureKind::Cancelled.label(), "cancelled");
+        assert_eq!(FailureKind::TimedOut.label(), "timed_out");
+        assert_eq!(FailureKind::Escalated.label(), "escalated");
+    }
+
+    #[test]
+    fn failure_kind_serializes_as_snake_case_string() {
+        // Operator-readable wire form matches the labels above.
+        let s = serde_json::to_string(&FailureKind::Failed).unwrap();
+        assert_eq!(s, "\"failed\"");
+        let s = serde_json::to_string(&FailureKind::TimedOut).unwrap();
+        assert_eq!(s, "\"timed_out\"");
+        let s = serde_json::to_string(&FailureKind::Cancelled).unwrap();
+        assert_eq!(s, "\"cancelled\"");
+        let s = serde_json::to_string(&FailureKind::Escalated).unwrap();
+        assert_eq!(s, "\"escalated\"");
+    }
+
+    #[test]
+    fn failure_heuristic_config_round_trips_through_serde_json() {
+        let original = FailureHeuristicConfig {
+            failed: true,
+            cancelled: true,
+            timed_out: false,
+            escalated: false,
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: FailureHeuristicConfig =
+            serde_json::from_str(&s).unwrap();
+        assert_eq!(back, original);
     }
 }

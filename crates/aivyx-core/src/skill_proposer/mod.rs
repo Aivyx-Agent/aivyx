@@ -29,7 +29,10 @@
 pub mod heuristic;
 pub mod judge;
 
-pub use heuristic::{HeuristicConfig, MatchMode, TurnSignals, is_candidate};
+pub use heuristic::{
+    FailureHeuristicConfig, FailureKind, HeuristicConfig, MatchMode, TurnSignals,
+    is_candidate, is_failure_candidate,
+};
 pub use judge::{
     ExistingPersonaSnapshot, ExistingSkillSnapshot, JudgeError, JudgeRequest,
     JudgeResponse, ProposedDraft, SkillDraft, judge, parse_judge_response,
