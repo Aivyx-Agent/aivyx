@@ -836,6 +836,7 @@ async fn two_concurrent_connections() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1146,6 +1147,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1254,6 +1256,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1683,6 +1686,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1965,6 +1969,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
         })
         .await
         .expect("daemon must complete");
@@ -2359,6 +2364,7 @@ async fn mission_queries_round_trip_over_ipc() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2657,6 +2663,7 @@ async fn audit_queries_round_trip_over_ipc() {
             recall_feedback_config: None,
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
+            tool_relevance_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");

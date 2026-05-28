@@ -180,6 +180,77 @@ impl PersistentToolRelevanceLedger {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 116 Task 4 — Outcome-recording helper
+// ---------------------------------------------------------------------------
+
+/// Phase 116 — record per-turn tool outcomes into the
+/// relevance ledger from a slice of post-turn audit entries.
+/// Pure-ish helper extracted from the daemon turn loop so it
+/// can be unit-tested without the full daemon.
+///
+/// Walks the entries, picks out `ToolCall` variants, and
+/// records one outcome per call using the call's
+/// `scope_used.base()` as the identifier (operator-readable;
+/// matches the `ToolDescriptor.scope_base` convention).
+///
+/// Skills tracking (Q3a's "tools AND skills together") is a
+/// Phase-116-Task-4-internal deferral: the audit chain hashes
+/// `skills.invoke`'s input so the skill name isn't recoverable
+/// at recording time without a separate capture path. The
+/// skills surface stays on the ledger schema (`Skill` variant
+/// of `RelevanceSurfaceKind`) so a follow-on can ship it
+/// without a schema migration.
+///
+/// Failure-isolated: any single record_outcome failure is
+/// swallowed (logged at WARN by the caller); a corrupt
+/// ledger row degrades only the relevance hint, never the
+/// turn itself.
+pub async fn record_turn_outcomes(
+    ledger: &PersistentToolRelevanceLedger,
+    keyword_key: &str,
+    audit_entries: &[aivyx_audit::SignedEntry],
+    now_unix_ms: u64,
+) {
+    if keyword_key.is_empty() {
+        // No usable keyword signal from the turn — nothing to
+        // index against. Skip the recording pass.
+        return;
+    }
+    for entry in audit_entries {
+        let aivyx_audit::AuditEvent::ToolCall {
+            scope_used,
+            outcome,
+            ..
+        } = &entry.event
+        else {
+            continue;
+        };
+        // Tool identifier = the scope base (e.g. "fs.read",
+        // "net.fetch"). Operator-readable, deterministic.
+        let identifier = scope_used.base().to_string();
+        let was_success = matches!(
+            outcome,
+            aivyx_core::ToolOutcomeSummary::Completed { .. }
+        );
+        if let Err(e) = ledger
+            .record_outcome(
+                keyword_key,
+                RelevanceSurfaceKind::Tool,
+                &identifier,
+                was_success,
+                now_unix_ms,
+            )
+            .await
+        {
+            eprintln!(
+                "aivyx tool-relevance: record_outcome failed for \
+                 ({keyword_key}, {identifier}): {e}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -445,6 +516,110 @@ mod tests {
         assert_eq!(s, "\"tool\"");
         let s = serde_json::to_string(&RelevanceSurfaceKind::Skill).unwrap();
         assert_eq!(s, "\"skill\"");
+    }
+
+    // ----- record_turn_outcomes (Task 4 wiring) -----
+
+    fn tool_call_entry(
+        seq: u64,
+        scope_str: &str,
+        was_success: bool,
+    ) -> aivyx_audit::SignedEntry {
+        use aivyx_audit::{AuditEvent, SignedEntry};
+        use aivyx_core::{ToolOutcomeSummary, VerificationSummary};
+        use aivyx_capability::Scope;
+        use std::time::{Duration, SystemTime};
+        let outcome = if was_success {
+            ToolOutcomeSummary::Completed {
+                verified: VerificationSummary::NotApplicable,
+            }
+        } else {
+            ToolOutcomeSummary::Failed
+        };
+        SignedEntry {
+            seq,
+            appended_at: SystemTime::now(),
+            event: AuditEvent::ToolCall {
+                turn_id: aivyx_core::TurnId::new(),
+                tool_id: aivyx_core::ToolId::new(),
+                scope_used: Scope::parse(scope_str).expect("valid scope"),
+                input_hash: [0u8; 32],
+                outcome,
+                duration: Duration::from_millis(10),
+            },
+            mac: [0u8; 32],
+            prev_mac: [0u8; 32],
+        }
+    }
+
+    fn turn_started_entry(seq: u64) -> aivyx_audit::SignedEntry {
+        use aivyx_audit::{
+            AuditEvent, SignedEntry, TrustTierSummary,
+        };
+        use aivyx_capability::CapabilitySet;
+        use aivyx_core::ChannelPlatform;
+        use std::time::SystemTime;
+        SignedEntry {
+            seq,
+            appended_at: SystemTime::now(),
+            event: AuditEvent::TurnStarted {
+                turn_id: aivyx_core::TurnId::new(),
+                session_id: aivyx_core::SessionId::new(),
+                channel: ChannelPlatform::Local,
+                trust_tier: TrustTierSummary::Trusted,
+                effective_capabilities: CapabilitySet::empty(),
+            },
+            mac: [0u8; 32],
+            prev_mac: [0u8; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn record_turn_outcomes_picks_tool_call_entries_only() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let entries = vec![
+            turn_started_entry(0),
+            tool_call_entry(1, "memory.read", true),
+            tool_call_entry(2, "llm.call", true),
+            tool_call_entry(3, "memory.read", false),
+        ];
+        record_turn_outcomes(&ledger, "code|rust", &entries, 1000).await;
+
+        let entry = ledger.lookup("code|rust").await.unwrap().unwrap();
+        assert_eq!(entry.outcomes.len(), 2); // memory.read, llm.call
+
+        let mem_read = entry
+            .outcomes
+            .iter()
+            .find(|r| r.identifier == "memory.read")
+            .expect("memory.read row");
+        assert_eq!(mem_read.success_count, 1);
+        assert_eq!(mem_read.failure_count, 1);
+
+        let llm_call = entry
+            .outcomes
+            .iter()
+            .find(|r| r.identifier == "llm.call")
+            .expect("llm.call row");
+        assert_eq!(llm_call.success_count, 1);
+        assert_eq!(llm_call.failure_count, 0);
+    }
+
+    #[tokio::test]
+    async fn record_turn_outcomes_skips_recording_for_empty_keyword_key() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let entries = vec![tool_call_entry(0, "memory.read", true)];
+        record_turn_outcomes(&ledger, "", &entries, 1000).await;
+        // Empty key → no ledger write → no entry under "".
+        assert!(ledger.lookup("").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn record_turn_outcomes_no_tool_calls_writes_nothing() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let entries = vec![turn_started_entry(0)];
+        record_turn_outcomes(&ledger, "key", &entries, 1000).await;
+        assert!(ledger.lookup("key").await.unwrap().is_none());
     }
 
     #[test]

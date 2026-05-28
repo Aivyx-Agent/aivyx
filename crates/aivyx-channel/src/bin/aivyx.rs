@@ -4800,6 +4800,13 @@ async fn run_async(
             // `[skills.auto_propose]` section. `None` when the
             // section is absent (operator hasn't opted in).
             skill_auto_proposer: skill_auto_proposer_ctx,
+            // Phase 116 — tool/skill relevance ledger handle.
+            // `None` until Task 6 wires the `[tool_relevance]`
+            // TOML config + constructs the handle from the
+            // operator's settings. Phase 114 behavior preserved
+            // by default; opting in is a one-line TOML edit
+            // once Task 6 lands.
+            tool_relevance_ledger: None,
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

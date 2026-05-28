@@ -347,6 +347,15 @@ pub struct DaemonConfig {
     /// proposer config are bundled here.
     pub skill_auto_proposer:
         Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
+
+    /// Phase 116 — Tool/skill relevance ledger handle.
+    /// `None` disables the feature; `Some(handle)` wires the
+    /// daemon's post-finalize hook to record per-turn tool
+    /// outcomes (Phase 116 Task 4) and the system-prompt
+    /// assembly to render the `## Tools recently used for
+    /// similar tasks` section (Phase 116 Task 5).
+    pub tool_relevance_ledger:
+        Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -423,6 +432,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         recall_feedback_config,
         tool_descriptors,
         skill_auto_proposer,
+        tool_relevance_ledger,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -986,6 +996,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             cadence_stats: cadence_stats.clone(),
             tool_descriptors: Arc::clone(&tool_descriptors),
             skill_auto_proposer: skill_auto_proposer.clone(),
+            tool_relevance_ledger: tool_relevance_ledger.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1114,6 +1125,10 @@ struct ConnectionContext {
     /// `None` disables the post-turn auto-proposer spawn.
     skill_auto_proposer:
         Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
+    /// Phase 116 — tool/skill relevance ledger handle.
+    /// `None` disables the recording hook + prompt section.
+    tool_relevance_ledger:
+        Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1146,6 +1161,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         cadence_stats,
         tool_descriptors,
         skill_auto_proposer,
+        tool_relevance_ledger,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1288,6 +1304,15 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 session_id: sid.clone(),
                             };
 
+                            // Phase 116 — capture the audit chain's
+                            // pre-turn length so the post-finalize hook
+                            // can read the turn's per-tool-call entries
+                            // (via `entries_range(pre_len, len -
+                            // pre_len)`) without locking.
+                            let audit_pre_turn_len = audit_log
+                                .as_ref()
+                                .map(|l| l.len());
+
                             let outcome = agent.turn(msg, &bridge).await;
 
                             // Turn completed — remove from in-flight.
@@ -1318,6 +1343,62 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     &user_text,
                                     final_message,
                                 );
+                            }
+
+                            // Phase 116 — tool-relevance ledger post-
+                            // finalize hook. Fires for every turn (any
+                            // TurnOutcome variant) when the ledger is
+                            // configured; walks the audit chain from
+                            // the pre-turn snapshot to the current head
+                            // and records each ToolCall's outcome
+                            // against the user input's keyword key.
+                            // Detached `tokio::spawn` so it never
+                            // blocks the next turn. Failure-isolated.
+                            if let (Some(ledger), Some(pre_len), Some(audit)) = (
+                                &tool_relevance_ledger,
+                                audit_pre_turn_len,
+                                &audit_log,
+                            ) {
+                                let keyword_key =
+                                    aivyx_core::relevance::keyword_key(
+                                        &user_text, 5,
+                                    );
+                                if !keyword_key.is_empty() {
+                                    let ledger_clone = Arc::clone(ledger);
+                                    let audit_clone = Arc::clone(audit);
+                                    tokio::spawn(async move {
+                                        let head = audit_clone.len();
+                                        let limit = head.saturating_sub(pre_len);
+                                        if limit == 0 {
+                                            return;
+                                        }
+                                        let entries = match audit_clone
+                                            .entries_range(pre_len as u64, limit)
+                                        {
+                                            Ok(e) => e,
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "aivyx tool-relevance: \
+                                                     audit walk failed ({e})"
+                                                );
+                                                return;
+                                            }
+                                        };
+                                        let now_ms = std::time::SystemTime::now()
+                                            .duration_since(
+                                                std::time::UNIX_EPOCH,
+                                            )
+                                            .map(|d| d.as_millis() as u64)
+                                            .unwrap_or(0);
+                                        crate::tool_relevance_ledger::record_turn_outcomes(
+                                            &ledger_clone,
+                                            &keyword_key,
+                                            &entries,
+                                            now_ms,
+                                        )
+                                        .await;
+                                    });
+                                }
                             }
 
                             // Phase 112 + 115 — auto-proposer post-finalize
@@ -1925,6 +2006,7 @@ async fn run_single_connection_daemon(
         cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
         tool_descriptors: Arc::from(Vec::<ToolDescriptor>::new()),
         skill_auto_proposer: None,
+        tool_relevance_ledger: None,
     })
     .await
 }
@@ -1984,6 +2066,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_feedback_config: None,
         tool_descriptors: Vec::new(),
         skill_auto_proposer: None,
+        tool_relevance_ledger: None,
     }).await
 }
 
