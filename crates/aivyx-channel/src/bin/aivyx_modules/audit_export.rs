@@ -142,6 +142,7 @@ pub async fn export_chain(
     audit_chain_key: [u8; 32],
     from: Option<u64>,
     limit: Option<usize>,
+    event_type_filter: Option<&str>,
     writer: &mut dyn IoWrite,
 ) -> Result<usize, String> {
     let log = PersistentAuditLog::open(storage, audit_chain_key)
@@ -169,16 +170,27 @@ pub async fn export_chain(
         }
 
         for entry in &batch {
+            // Phase 113 — optional `--event-type` filter. The
+            // entry walks through the existing render path
+            // (so cursor advancement stays unchanged); the
+            // write is skipped if the event-type label
+            // doesn't match. `emitted` reflects what made it
+            // to the writer, not what was scanned.
+            if let Some(want) = event_type_filter {
+                if event_type_label(&entry.event) != want {
+                    continue;
+                }
+            }
             let line = render_line(entry).map_err(|e| {
                 format!("failed to serialize entry seq={}: {e}", entry.seq)
             })?;
             writer
                 .write_all(line.as_bytes())
                 .map_err(|e| format!("write failure on stdout: {e}"))?;
+            emitted += 1;
         }
 
         cursor = batch.last().map(|e| e.seq + 1).unwrap_or(cursor);
-        emitted += batch.len();
 
         if let Some(cap) = remaining_cap {
             if emitted >= cap {
@@ -191,6 +203,25 @@ pub async fn export_chain(
         .flush()
         .map_err(|e| format!("flush failure on stdout: {e}"))?;
     Ok(emitted)
+}
+
+/// Phase 113 — return the stable string label for an
+/// `AuditEvent` variant, mirroring the labelling switch the
+/// daemon uses for the `event_type` field of the
+/// `GetAuditEvents` IPC view. Kept here next to the export
+/// path so the CLI's `--event-type` filter matches what the
+/// operator sees in the JSONL output's `kind` discriminator.
+pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
+    use aivyx_audit::AuditEvent;
+    match event {
+        AuditEvent::ToolCall { .. } => "ToolCall",
+        AuditEvent::ScopeDenied { .. } => "ScopeDenied",
+        AuditEvent::TurnStarted { .. } => "TurnStarted",
+        AuditEvent::TurnEnded { .. } => "TurnEnded",
+        AuditEvent::MemoryAccess { .. } => "MemoryAccess",
+        AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
+        AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -367,5 +398,33 @@ mod tests {
         // Pin the constant — page-size regression here would
         // change the chunk shape downstream tools observe.
         assert_eq!(DEFAULT_PAGE_SIZE, 1024);
+    }
+
+    // -- Phase 113 — event_type_label ------------------------------------
+
+    #[test]
+    fn event_type_label_returns_stable_strings_for_existing_variants() {
+        assert_eq!(event_type_label(&sample_turn_started()), "TurnStarted");
+        assert_eq!(event_type_label(&sample_memory_access()), "MemoryAccess");
+    }
+
+    #[test]
+    fn event_type_label_for_skill_auto_proposal_returns_kind_string() {
+        let sap = AuditEvent::SkillAutoProposal {
+            session_id: SessionId::new(),
+            outcome:
+                aivyx_audit::SkillAutoProposalOutcomeSummary::HeuristicGated,
+            confidence_thousandths: None,
+            proposed_skill_name: None,
+            judge_latency_ms: None,
+            heuristic_signals_matched:
+                aivyx_audit::HeuristicSignalsMatched {
+                    tool_call_count: false,
+                    distinct_tool_id_count: false,
+                    duration: false,
+                    gate_resolve: false,
+                },
+        };
+        assert_eq!(event_type_label(&sap), "SkillAutoProposal");
     }
 }

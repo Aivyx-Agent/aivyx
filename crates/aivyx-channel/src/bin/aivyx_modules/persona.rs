@@ -41,7 +41,25 @@ pub async fn run_persona_show() -> Result<(), String> {
 /// Entry point for `aivyx persona list`. Fetches every approved
 /// delta via paginated `ListPersonaDeltas` queries, then renders
 /// them in chain order with ids, timestamps, categories, and ops.
-pub async fn run_persona_list() -> Result<(), String> {
+/// Phase 113 — `aivyx persona list [--auto-only |
+/// --manual-only]` filter discriminator. Mirrors
+/// `PersonaListFilter` in the binary; defined here in the
+/// module so [`run_persona_list`]'s signature stays in this
+/// crate's CLI module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonaListPrefix {
+    All,
+    AutoOnly,
+    ManualOnly,
+}
+
+/// `pd-auto-` is the `delta_id` prefix Phase 112's
+/// `write_auto_accepted_skill` synthesizes for auto-accepted
+/// entries. The filter compares the `delta_id` against this
+/// prefix to partition the chain into auto vs manual.
+pub const AUTO_ACCEPTED_DELTA_ID_PREFIX: &str = "pd-auto-";
+
+pub async fn run_persona_list(filter: PersonaListPrefix) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
     let mut all: Vec<PersonaDeltaSummary> = Vec::new();
@@ -58,8 +76,33 @@ pub async fn run_persona_list() -> Result<(), String> {
         }
         from_seq += returned as u64;
     }
-    print!("{}", render_delta_list(&all));
+    let filtered = filter_delta_list(&all, filter);
+    print!("{}", render_delta_list(&filtered));
     Ok(())
+}
+
+/// Apply the Phase 113 list filter. `All` returns the input
+/// unchanged; `AutoOnly` keeps entries whose `delta_id`
+/// starts with [`AUTO_ACCEPTED_DELTA_ID_PREFIX`];
+/// `ManualOnly` keeps the complement. Pure function — kept
+/// public for unit tests.
+pub fn filter_delta_list(
+    deltas: &[PersonaDeltaSummary],
+    filter: PersonaListPrefix,
+) -> Vec<PersonaDeltaSummary> {
+    match filter {
+        PersonaListPrefix::All => deltas.to_vec(),
+        PersonaListPrefix::AutoOnly => deltas
+            .iter()
+            .filter(|d| d.delta_id.starts_with(AUTO_ACCEPTED_DELTA_ID_PREFIX))
+            .cloned()
+            .collect(),
+        PersonaListPrefix::ManualOnly => deltas
+            .iter()
+            .filter(|d| !d.delta_id.starts_with(AUTO_ACCEPTED_DELTA_ID_PREFIX))
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Entry point for `aivyx persona revert <delta_id>`. Sends a
@@ -689,5 +732,76 @@ mod tests {
         let out = render_proposal_detail(&p);
         assert!(out.contains("operator reject reason: too aggressive"));
         assert!(out.contains("resolved_at = 1715000060000ms"));
+    }
+}
+
+#[cfg(test)]
+mod phase_113_filter_tests {
+    use super::*;
+
+    fn delta_with_id(id: &str) -> PersonaDeltaSummary {
+        PersonaDeltaSummary {
+            seq: 0,
+            delta_id: id.into(),
+            proposed_at_unix_ms: 0,
+            approved_at_unix_ms: 0,
+            proposal_id: "p".into(),
+            category: "LearnedSkill".into(),
+            op: serde_json::json!({"kind": "AppendList", "value": "{}"}),
+            mac_hex: "".into(),
+        }
+    }
+
+    #[test]
+    fn filter_all_passes_everything_through() {
+        let input = vec![
+            delta_with_id("pd-manual-001"),
+            delta_with_id("pd-auto-abc"),
+            delta_with_id("pd-manual-002"),
+        ];
+        let out = filter_delta_list(&input, PersonaListPrefix::All);
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn filter_auto_only_keeps_pd_auto_prefix_entries() {
+        let input = vec![
+            delta_with_id("pd-manual-001"),
+            delta_with_id("pd-auto-abc"),
+            delta_with_id("pd-auto-def"),
+            delta_with_id("pd-manual-002"),
+        ];
+        let out = filter_delta_list(&input, PersonaListPrefix::AutoOnly);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|d| d.delta_id.starts_with("pd-auto-")));
+    }
+
+    #[test]
+    fn filter_manual_only_keeps_complement_of_pd_auto_prefix() {
+        let input = vec![
+            delta_with_id("pd-manual-001"),
+            delta_with_id("pd-auto-abc"),
+            delta_with_id("pd-approved-from-proposal"),
+        ];
+        let out = filter_delta_list(&input, PersonaListPrefix::ManualOnly);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|d| !d.delta_id.starts_with("pd-auto-")));
+    }
+
+    #[test]
+    fn filter_on_empty_input_is_empty_regardless_of_filter() {
+        let empty: Vec<PersonaDeltaSummary> = Vec::new();
+        assert!(filter_delta_list(&empty, PersonaListPrefix::All).is_empty());
+        assert!(filter_delta_list(&empty, PersonaListPrefix::AutoOnly).is_empty());
+        assert!(filter_delta_list(&empty, PersonaListPrefix::ManualOnly).is_empty());
+    }
+
+    #[test]
+    fn auto_accepted_prefix_constant_matches_phase_112_synthesizer() {
+        // The constant must match what `write_auto_accepted_skill`
+        // synthesizes in aivyx-channel/src/skill_auto_proposer.rs.
+        // If a future phase changes either side, this test surfaces
+        // the divergence.
+        assert_eq!(AUTO_ACCEPTED_DELTA_ID_PREFIX, "pd-auto-");
     }
 }

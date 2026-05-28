@@ -480,7 +480,18 @@ fn run() -> Result<(), String> {
         return rt.block_on(async move {
             match sub {
                 PersonaSubcommand::Show => persona::run_persona_show().await,
-                PersonaSubcommand::List => persona::run_persona_list().await,
+                PersonaSubcommand::List { filter } => {
+                    let prefix_filter = match filter {
+                        PersonaListFilter::All => persona::PersonaListPrefix::All,
+                        PersonaListFilter::AutoOnly => {
+                            persona::PersonaListPrefix::AutoOnly
+                        }
+                        PersonaListFilter::ManualOnly => {
+                            persona::PersonaListPrefix::ManualOnly
+                        }
+                    };
+                    persona::run_persona_list(prefix_filter).await
+                }
                 PersonaSubcommand::Revert { target_delta_id } => {
                     persona::run_persona_revert(&target_delta_id).await
                 }
@@ -624,12 +635,15 @@ fn run() -> Result<(), String> {
     // storage open below; the params are extracted here so the
     // load-options + sandbox-mkdir guards downstream can branch
     // off the same flag without rebuilding the match.
-    let audit_export_params: Option<(Option<u64>, Option<usize>)> = match &mode {
-        CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
-            Some((*from, *limit))
-        }
-        _ => None,
-    };
+    let audit_export_params: Option<(Option<u64>, Option<usize>, Option<String>)> =
+        match &mode {
+            CliMode::Audit(AuditSubcommand::Export {
+                from,
+                limit,
+                event_type,
+            }) => Some((*from, *limit, event_type.clone())),
+            _ => None,
+        };
     let audit_export_mode = audit_export_params.is_some();
 
     // ---- Config -------------------------------------------------------
@@ -837,8 +851,15 @@ fn run() -> Result<(), String> {
         // as JSONL on stdout; both `--from <seq>` and `--limit <N>`
         // are forwarded straight to
         // `PersistentAuditLog::entries_range`.
-        if let Some((from, limit)) = audit_export_params {
-            return run_audit_export(storage, audit_chain_key, from, limit).await;
+        if let Some((from, limit, event_type)) = audit_export_params {
+            return run_audit_export(
+                storage,
+                audit_chain_key,
+                from,
+                limit,
+                event_type,
+            )
+            .await;
         }
 
         // Phase 9 Task 3 — Phase 2 of the two-phase config load.
@@ -1286,14 +1307,31 @@ enum IdentitySubcommand {
     Import { path: PathBuf, force: bool },
 }
 
+/// Phase 113 — `aivyx persona list` filter discriminator.
+/// `All` = unfiltered (pre-Phase-113 behaviour); `AutoOnly` =
+/// only deltas whose `delta_id` starts with `pd-auto-` (the
+/// Phase 112 auto-accept synthesized prefix); `ManualOnly` =
+/// only deltas whose `delta_id` does NOT start with that
+/// prefix. Flags are mutually exclusive at the parse step.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PersonaListFilter {
+    All,
+    AutoOnly,
+    ManualOnly,
+}
+
 /// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum PersonaSubcommand {
     /// `aivyx persona show` — print the effective Persona snapshot.
     Show,
-    /// `aivyx persona list` — print every approved delta in chain
-    /// order with id, category, op, and approval timestamp.
-    List,
+    /// `aivyx persona list [--auto-only | --manual-only]` — print
+    /// every approved delta in chain order with id, category, op,
+    /// and approval timestamp. Phase 113 — the optional filter
+    /// scopes to auto-accepted vs operator-approved entries by
+    /// matching the `pd-auto-` `delta_id` prefix the Phase 112
+    /// auto-proposer synthesizes.
+    List { filter: PersonaListFilter },
     /// `aivyx persona revert <delta_id>` — operator-initiated
     /// revert. Daemon appends a `Revert` op delta and recomputes
     /// the shared runtime state so the next turn reflects the undo.
@@ -1360,16 +1398,21 @@ enum McpSubcommand {
 /// Phase 105 — `aivyx audit` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum AuditSubcommand {
-    /// `aivyx audit export [--from <seq>] [--limit <N>]` — emit
-    /// the audit chain as JSONL on stdout. Read-only,
-    /// offline-only (cold-start storage open via the operator's
-    /// passphrase). Both flags map directly onto
-    /// `PersistentAuditLog::entries_range(from, limit)`; missing
-    /// `--from` means seq 0, missing `--limit` means no upper
-    /// bound.
+    /// `aivyx audit export [--from <seq>] [--limit <N>]
+    /// [--event-type <kind>]` — emit the audit chain as JSONL
+    /// on stdout. Read-only, offline-only (cold-start storage
+    /// open via the operator's passphrase). `--from`/`--limit`
+    /// map directly onto `PersistentAuditLog::entries_range(
+    /// from, limit)`; missing `--from` means seq 0, missing
+    /// `--limit` means no upper bound. Phase 113 — `--event-
+    /// type <kind>` filters to a single `AuditEvent` variant
+    /// label (e.g. `SkillAutoProposal`, `ToolCall`,
+    /// `AutoNotifyDispatched`). `None` means "all events"
+    /// (pre-Phase-113 behaviour).
     Export {
         from: Option<u64>,
         limit: Option<usize>,
+        event_type: Option<String>,
     },
 }
 
@@ -1958,6 +2001,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "export" => {
                 let mut from: Option<u64> = None;
                 let mut limit: Option<usize> = None;
+                let mut event_type: Option<String> = None;
                 let mut i = 2;
                 while i < args.len() {
                     match args[i].as_str() {
@@ -1995,6 +2039,35 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             limit = Some(parsed);
                             i += 2;
                         }
+                        "--event-type" => {
+                            // Phase 113 — operator-side filter on the
+                            // `AuditEvent` variant label. Validated
+                            // against the known set so a typo errors
+                            // out before opening storage.
+                            let val = args.get(i + 1).ok_or_else(|| {
+                                "`--event-type` requires a variant name (e.g. \
+                                 SkillAutoProposal)"
+                                    .to_string()
+                            })?;
+                            const KNOWN: &[&str] = &[
+                                "ToolCall",
+                                "ScopeDenied",
+                                "TurnStarted",
+                                "TurnEnded",
+                                "MemoryAccess",
+                                "AutoNotifyDispatched",
+                                "SkillAutoProposal",
+                            ];
+                            if !KNOWN.contains(&val.as_str()) {
+                                return Err(format!(
+                                    "unrecognized `--event-type` value `{val}`. \
+                                     Supported: {}",
+                                    KNOWN.join(", ")
+                                ));
+                            }
+                            event_type = Some(val.clone());
+                            i += 2;
+                        }
                         other => {
                             return Err(format!(
                                 "unrecognized argument to `aivyx audit export`: \
@@ -2007,6 +2080,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     mode: CliMode::Audit(AuditSubcommand::Export {
                         from,
                         limit,
+                        event_type,
                     }),
                     channel: ChannelKind::Local,
                     role: None,
@@ -2158,14 +2232,38 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 PersonaSubcommand::Show
             }
             "list" => {
-                if args.len() > 2 {
-                    return Err(format!(
-                        "`aivyx persona list` does not accept additional arguments. \
-                         Got: `{}`",
-                        args[2..].join(" ")
-                    ));
+                // Phase 113 — `--auto-only` / `--manual-only` flags
+                // (mutually exclusive). Anything else past `list` is
+                // rejected.
+                let mut filter = PersonaListFilter::All;
+                let mut seen_auto = false;
+                let mut seen_manual = false;
+                for arg in &args[2..] {
+                    match arg.as_str() {
+                        "--auto-only" => {
+                            seen_auto = true;
+                            filter = PersonaListFilter::AutoOnly;
+                        }
+                        "--manual-only" => {
+                            seen_manual = true;
+                            filter = PersonaListFilter::ManualOnly;
+                        }
+                        other => {
+                            return Err(format!(
+                                "`aivyx persona list` unrecognized argument: `{other}`. \
+                                 Supported flags: --auto-only, --manual-only."
+                            ));
+                        }
+                    }
                 }
-                PersonaSubcommand::List
+                if seen_auto && seen_manual {
+                    return Err(
+                        "`aivyx persona list` --auto-only and --manual-only \
+                         are mutually exclusive."
+                            .into(),
+                    );
+                }
+                PersonaSubcommand::List { filter }
             }
             "revert" => {
                 let target = args.get(2).ok_or_else(|| {
@@ -2696,6 +2794,7 @@ async fn run_audit_export(
     audit_chain_key: [u8; 32],
     from: Option<u64>,
     limit: Option<usize>,
+    event_type: Option<String>,
 ) -> Result<(), String> {
     // `BufWriter` here keeps stdout-flushing cost out of the
     // per-line loop; the inner `export_chain` calls `flush`
@@ -2709,6 +2808,7 @@ async fn run_audit_export(
         audit_chain_key,
         from,
         limit,
+        event_type.as_deref(),
         &mut writer,
     )
     .await?;
@@ -5627,7 +5727,8 @@ mod tests {
             parsed.mode,
             CliMode::Audit(AuditSubcommand::Export {
                 from: None,
-                limit: None
+                limit: None,
+                event_type: None,
             })
         ));
     }
@@ -5638,7 +5739,7 @@ mod tests {
             parse_cli_args_from(&argv(&["audit", "export", "--from", "42"]))
                 .expect("`audit export --from 42` must parse");
         match parsed.mode {
-            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+            CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, Some(42));
                 assert_eq!(limit, None);
             }
@@ -5652,7 +5753,7 @@ mod tests {
             parse_cli_args_from(&argv(&["audit", "export", "--limit", "100"]))
                 .expect("`audit export --limit 100` must parse");
         match parsed.mode {
-            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+            CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, None);
                 assert_eq!(limit, Some(100));
             }
@@ -5667,7 +5768,7 @@ mod tests {
         ]))
         .expect("`audit export --from 7 --limit 13` must parse");
         match parsed.mode {
-            CliMode::Audit(AuditSubcommand::Export { from, limit }) => {
+            CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, Some(7));
                 assert_eq!(limit, Some(13));
             }
@@ -5683,6 +5784,7 @@ mod tests {
             CliMode::Audit(AuditSubcommand::Export {
                 from: Some(7),
                 limit: Some(13),
+                event_type: None,
             })
         ));
     }
@@ -6875,7 +6977,58 @@ mod tests {
     fn persona_list_parses_to_persona_list_mode() {
         let parsed = parse_cli_args_from(&argv(&["persona", "list"]))
             .expect("`persona list` must parse");
-        assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::List));
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::List {
+                filter: PersonaListFilter::All,
+            }),
+        );
+    }
+
+    #[test]
+    fn persona_list_auto_only_flag_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["persona", "list", "--auto-only"]))
+                .expect("`persona list --auto-only` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::List {
+                filter: PersonaListFilter::AutoOnly,
+            }),
+        );
+    }
+
+    #[test]
+    fn persona_list_manual_only_flag_parses() {
+        let parsed =
+            parse_cli_args_from(&argv(&["persona", "list", "--manual-only"]))
+                .expect("`persona list --manual-only` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Persona(PersonaSubcommand::List {
+                filter: PersonaListFilter::ManualOnly,
+            }),
+        );
+    }
+
+    #[test]
+    fn persona_list_both_filter_flags_is_an_error() {
+        let err = parse_cli_args_from(&argv(&[
+            "persona",
+            "list",
+            "--auto-only",
+            "--manual-only",
+        ]))
+        .expect_err("mutually-exclusive flags must error");
+        assert!(err.contains("mutually exclusive"), "{err}");
+    }
+
+    #[test]
+    fn persona_list_unknown_arg_is_an_error() {
+        let err =
+            parse_cli_args_from(&argv(&["persona", "list", "--what"]))
+                .expect_err("unknown flag must error");
+        assert!(err.contains("--what"), "{err}");
     }
 
     #[test]
