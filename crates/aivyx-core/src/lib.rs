@@ -33,6 +33,7 @@
 pub mod agent;
 pub mod llm_planner;
 pub mod planner;
+pub mod relevance;
 pub mod schema;
 pub mod skill_proposer;
 pub mod tools;
