@@ -1491,4 +1491,25 @@ mod tests {
             "Tier 2 ceiling must deny shell.exec regardless of agent caps"
         );
     }
+
+    /// Phase 113 — pin the `KNOWN_BASES` count against the A3
+    /// amendment file. If a future phase adds a base without
+    /// updating the amendment, this test fails and forces the
+    /// docs catch-up to ship in the same phase. The single
+    /// source of truth is still `KNOWN_BASES` in this file;
+    /// this test just keeps the operator-readable inventory
+    /// honest.
+    #[test]
+    fn known_bases_count_matches_phase_113_a3_addendum() {
+        // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
+        // — the Phase 113 addendum lists every entry. Any
+        // change here means updating the addendum's
+        // "Current full enumeration" section in the same PR.
+        assert_eq!(
+            KNOWN_BASES.len(),
+            49,
+            "If KNOWN_BASES grew, also update the A3 addendum's \
+             Phase 113 count + per-base list."
+        );
+    }
 }

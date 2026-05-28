@@ -195,3 +195,72 @@ The single source of truth is `KNOWN_BASES` in
 `aivyx-capability/src/lib.rs`. This addendum is the
 backwards-looking reconciliation; future amendments need not
 duplicate per-base provenance.
+
+---
+
+## Phase 113 addendum — current scope-base count (2026-05-28)
+
+> *Added at Phase 113 exit during the operator-surface-polish
+> deferral-cleanup phase. The Phase 54 addendum (above)
+> caught up to 43 bases; six more landed across the Persona,
+> Reach, and Chapter D work between Phase 56 and Phase 110.
+> This addendum brings the count current and pins the
+> auditor-readable provenance.*
+
+`aivyx-capability::KNOWN_BASES.len() = 49` as of Phase 113 exit.
+
+### What changed since the Phase 54 addendum
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 59 | `persona.propose` | Persona Foundation P14 — operator-side proposal-write gate distinct from `reflection.propose` |
+| Phase 62 | `notify.send` | Reach: Agent-Initiated Outbound Notifications |
+| Phase 109 | `git.read` | A12 — `git.status` + `git.diff` substrate tools (one base, two tools) |
+| Phase 110 | `skills.propose` | Skills Auto-Creation — distinct from `persona.propose` so a role granting Persona-edit rights doesn't implicitly grant skill-draft rights |
+| Phase 110 | `skills.list` | Read-only enumeration of approved skill set |
+| Phase 110 | `skills.invoke` | On-demand procedure rendering of one named skill |
+
+(Phase 113 itself ships no new bases — the deferral-cleanup
+phase touches only operator-surface flags + TOML loading + this
+addendum. The `[skills.auto_propose]` TOML config introduced in
+Phase 113 reuses the existing `persona.propose` and
+`skills.propose` bases for the auto-proposer's chain-write
+path; no new capability gate.)
+
+### Current full enumeration (49 bases)
+
+Substrate-facing operator scopes (16):
+- `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
+- `net.fetch`, `net.post`, `net.dns`
+- `shell.exec`, `shell.spawn`
+- `llm.call`, `llm.embed`
+- `memory.read`, `memory.write`, `memory.forget`, `memory.gc`
+- `git.read`
+
+Channel / audit / config (5):
+- `channel.send`, `channel.receive`, `audit.read`,
+  `config.read`, `config.write`
+
+Infrastructure (28):
+- Role primitive: `tool.allowlist`, `role.switch`, `role.update`
+- Mission: `mission.create`, `mission.gate`, `mission.list`,
+  `mission.status`
+- Scheduling: `schedule.create`, `schedule.list`,
+  `schedule.delete`, `schedule.update`
+- Triggers: `webhook.create`, `webhook.list`, `webhook.delete`,
+  `file_watch.create`, `file_watch.list`, `file_watch.delete`
+- MCP: `mcp.call`
+- Reflection: `reflection.propose`, `reflection.apply`
+- Persona / Skills: `persona.propose`, `skills.propose`,
+  `skills.list`, `skills.invoke`
+- Notify: `notify.send`
+- Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
+
+Total: 16 + 5 + 28 = 49.
+
+### Verification
+
+A unit test in `aivyx-capability/src/lib.rs` pins the
+count so this addendum and the runtime stay in sync; any
+future base added without an accompanying addendum bump
+surfaces as a test failure rather than silent drift.
