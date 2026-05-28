@@ -119,6 +119,22 @@ pub struct SkillAutoProposeConfig {
     /// when `[persona.auto_propose]` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_category: Option<PerCategoryConfigSet>,
+
+    /// Phase 115 — master switch for the negative-feedback
+    /// path. `false` (default) preserves Phase 114 behavior
+    /// (only Completed turns fire the auto-proposer); `true`
+    /// turns on the Phase 115 failed-turn path, gated
+    /// further by `failure_outcomes`.
+    #[serde(default)]
+    pub from_failed_turns: bool,
+
+    /// Phase 115 — per-failure-outcome enable flags. Only
+    /// consulted when `from_failed_turns == true`. Default
+    /// matches `FailureHeuristicConfig::default()`:
+    /// Failed=true, TimedOut=true, Cancelled=false,
+    /// Escalated=false.
+    #[serde(default)]
+    pub failure_outcomes: FailureHeuristicConfig,
 }
 
 impl Default for SkillAutoProposeConfig {
@@ -131,6 +147,8 @@ impl Default for SkillAutoProposeConfig {
             auto_accept_confidence_threshold: 0.85,
             fuzzy_match_threshold: 0.80,
             per_category: None,
+            from_failed_turns: false,
+            failure_outcomes: FailureHeuristicConfig::default(),
         }
     }
 }
@@ -200,6 +218,10 @@ impl From<aivyx_config::SkillAutoProposeConfig> for SkillAutoProposeConfig {
             auto_accept_confidence_threshold: c.auto_accept_confidence_threshold,
             fuzzy_match_threshold: c.fuzzy_match_threshold,
             per_category: None,
+            // Phase 115 — Phase 113 alias config has no
+            // failure-feedback fields; default to off.
+            from_failed_turns: false,
+            failure_outcomes: FailureHeuristicConfig::default(),
         }
     }
 }
@@ -228,6 +250,14 @@ impl From<aivyx_config::PersonaAutoProposeConfig> for SkillAutoProposeConfig {
                 aivyx_config::DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD,
             fuzzy_match_threshold: c.fuzzy_match_threshold,
             per_category: Some(convert_per_category_set(c.per_category)),
+            // Phase 115 — fields populated by Task 6's TOML
+            // wiring. Phase 114 callers that use this
+            // conversion default to off; Task 6 extends
+            // PersonaAutoProposeConfig to carry the
+            // failure-feedback knobs and updates this
+            // conversion to plumb them through.
+            from_failed_turns: false,
+            failure_outcomes: FailureHeuristicConfig::default(),
         }
     }
 }
@@ -1001,6 +1031,43 @@ pub async fn run_auto_propose_pipeline(
     turn_summary: String,
     cancellation: &CancellationToken,
 ) {
+    // Phase 114-compat: defaults to CompletedTurn source.
+    run_auto_propose_pipeline_with_source(
+        proposer_ctx,
+        audit_log,
+        persona_log,
+        persona_proposal_log,
+        shared_persona,
+        session_id,
+        signals,
+        turn_summary,
+        ProposalSource::CompletedTurn,
+        cancellation,
+    )
+    .await
+}
+
+/// Phase 115 — same as `run_auto_propose_pipeline` but takes
+/// an explicit `ProposalSource`. The daemon's broadened
+/// post-finalize hook uses this when firing the failure-
+/// feedback path; existing Phase 114 callers stay on the
+/// `_with_source = CompletedTurn` default through the
+/// backward-compat wrapper above.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_auto_propose_pipeline_with_source(
+    proposer_ctx: &SkillAutoProposerContext,
+    audit_log: Option<&Arc<aivyx_audit::PersistentAuditLog>>,
+    persona_log: Option<&Arc<crate::persona::PersistentPersonaLog>>,
+    persona_proposal_log: Option<
+        &Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+    >,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    session_id: aivyx_core::SessionId,
+    signals: TurnSignals,
+    turn_summary: String,
+    source: ProposalSource,
+    cancellation: &CancellationToken,
+) {
     let signals_record =
         signals_matched(&signals, &proposer_ctx.config.heuristic);
     // Phase 114 — full Persona snapshot. The auto-proposer
@@ -1010,12 +1077,13 @@ pub async fn run_auto_propose_pipeline(
 
     // Time the judge call so the audit event carries latency.
     let judge_started = std::time::Instant::now();
-    let proposer_outcome = auto_propose_for_turn(
+    let proposer_outcome = auto_propose_for_turn_with_source(
         Arc::clone(&proposer_ctx.llm_provider),
         &proposer_ctx.config,
         signals,
         turn_summary,
         existing_persona.clone(),
+        source,
         cancellation,
     )
     .await;

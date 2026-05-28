@@ -1320,66 +1320,140 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 );
                             }
 
-                            // Phase 112 — Skill Auto-Proposer post-finalize
+                            // Phase 112 + 115 — auto-proposer post-finalize
                             // hook. Q2b inline-at-turn-boundary firing; the
                             // pipeline runs in a detached `tokio::spawn` so
-                            // it never blocks the next turn. Only fires for
-                            // `TurnOutcome::Completed` — the non-terminal
-                            // outcomes (escalated / timed out / cancelled /
-                            // failed) aren't candidates for skill learning.
-                            if let (
-                                Some(proposer_ctx),
-                                TurnOutcome::Completed {
-                                    tool_calls_made,
-                                    duration,
-                                    ..
-                                },
-                            ) = (&skill_auto_proposer, &outcome)
-                            {
-                                let signals = crate::skill_auto_proposer::TurnSignals {
-                                    tool_calls_made: *tool_calls_made as u32,
-                                    // Distinct tool-id count: walk the just-completed
-                                    // turn's tool calls. The TurnOutcome surface
-                                    // doesn't carry per-call IDs; approximate with
-                                    // `tool_calls_made.min(K)` where K is a small
-                                    // ceiling so the signal still distinguishes
-                                    // "one tool 5 times" from "5 different tools" if
-                                    // the agent diversifies. A future phase that
-                                    // wants exact counts plumbs the audit-log walk.
-                                    distinct_tool_id_count: (*tool_calls_made as u32)
-                                        .min(4),
-                                    duration: *duration,
-                                    // Approval-gate-resolve presence walking the
-                                    // audit chain is also Phase-112-internal: skip
-                                    // for now (default false). The heuristic still
-                                    // fires on the other three signals.
-                                    had_successful_gate_resolve: false,
+                            // it never blocks the next turn.
+                            //
+                            // Phase 112-114: fires only on
+                            // `TurnOutcome::Completed` (positive-pattern path).
+                            // Phase 115: also fires on Failed / Cancelled /
+                            // TimedOut / Escalated when the operator has
+                            // `from_failed_turns = true` in their TOML and the
+                            // specific failure outcome is enabled in
+                            // `failure_outcomes`. The negative-feedback
+                            // (failure correction) path passes
+                            // `ProposalSource::FailedTurn { .. }` to the
+                            // pipeline.
+                            if let Some(proposer_ctx) = &skill_auto_proposer {
+                                use crate::skill_auto_proposer::{
+                                    self as sap, FailureKind, ProposalSource,
                                 };
-                                let summary =
-                                    crate::skill_auto_proposer::build_turn_summary(
-                                        &user_text, &outcome,
-                                    );
-                                let proposer_ctx = Arc::clone(proposer_ctx);
-                                let audit_clone = audit_log.clone();
-                                let persona_clone = persona_log.clone();
-                                let proposal_clone =
-                                    persona_proposal_log.clone();
-                                let shared_clone = shared_persona.clone();
-                                let cancel = shutdown.clone();
-                                tokio::spawn(async move {
-                                    crate::skill_auto_proposer::run_auto_propose_pipeline(
-                                        &proposer_ctx,
-                                        audit_clone.as_ref(),
-                                        persona_clone.as_ref(),
-                                        proposal_clone.as_ref(),
-                                        &shared_clone,
-                                        session,
-                                        signals,
-                                        summary,
-                                        &cancel,
-                                    )
-                                    .await;
-                                });
+
+                                // Classify the outcome into (signals, source).
+                                let dispatch: Option<(
+                                    sap::TurnSignals,
+                                    ProposalSource,
+                                )> = match &outcome {
+                                    TurnOutcome::Completed {
+                                        tool_calls_made,
+                                        duration,
+                                        ..
+                                    } => Some((
+                                        sap::TurnSignals {
+                                            tool_calls_made: *tool_calls_made as u32,
+                                            distinct_tool_id_count:
+                                                (*tool_calls_made as u32).min(4),
+                                            duration: *duration,
+                                            had_successful_gate_resolve: false,
+                                        },
+                                        ProposalSource::CompletedTurn,
+                                    )),
+                                    other => {
+                                        // Phase 115 — non-Completed outcomes
+                                        // gate on the operator's
+                                        // from_failed_turns + failure_outcomes
+                                        // config.
+                                        let cfg = &proposer_ctx.config;
+                                        if !cfg.from_failed_turns {
+                                            None
+                                        } else {
+                                            let kind = match other {
+                                                TurnOutcome::Failed(_) =>
+                                                    FailureKind::Failed,
+                                                TurnOutcome::Cancelled { .. } =>
+                                                    FailureKind::Cancelled,
+                                                TurnOutcome::TimedOut { .. } =>
+                                                    FailureKind::TimedOut,
+                                                TurnOutcome::Escalated { .. } =>
+                                                    FailureKind::Escalated,
+                                                TurnOutcome::Completed { .. } =>
+                                                    unreachable!(),
+                                            };
+                                            if !sap::is_failure_candidate(
+                                                kind,
+                                                &cfg.failure_outcomes,
+                                            ) {
+                                                None
+                                            } else {
+                                                // For failure paths the
+                                                // signals are degenerate; the
+                                                // failure heuristic + judge
+                                                // are the real gates.
+                                                let signals = sap::TurnSignals {
+                                                    tool_calls_made: 0,
+                                                    distinct_tool_id_count: 0,
+                                                    duration:
+                                                        std::time::Duration::from_millis(0),
+                                                    had_successful_gate_resolve:
+                                                        false,
+                                                };
+                                                let summary = match other {
+                                                    TurnOutcome::Failed(e) =>
+                                                        format!("planner/agent error: {e}"),
+                                                    TurnOutcome::Cancelled { .. } =>
+                                                        "operator cancelled mid-turn".into(),
+                                                    TurnOutcome::TimedOut {
+                                                        elapsed, ..
+                                                    } => format!(
+                                                        "exceeded turn budget after {}ms",
+                                                        elapsed.as_millis()
+                                                    ),
+                                                    TurnOutcome::Escalated {
+                                                        reason, ..
+                                                    } => format!(
+                                                        "agent escalated: {reason}"
+                                                    ),
+                                                    _ => unreachable!(),
+                                                };
+                                                Some((
+                                                    signals,
+                                                    ProposalSource::FailedTurn {
+                                                        kind,
+                                                        summary,
+                                                    },
+                                                ))
+                                            }
+                                        }
+                                    }
+                                };
+
+                                if let Some((signals, source)) = dispatch {
+                                    let summary =
+                                        sap::build_turn_summary(&user_text, &outcome);
+                                    let proposer_ctx = Arc::clone(proposer_ctx);
+                                    let audit_clone = audit_log.clone();
+                                    let persona_clone = persona_log.clone();
+                                    let proposal_clone =
+                                        persona_proposal_log.clone();
+                                    let shared_clone = shared_persona.clone();
+                                    let cancel = shutdown.clone();
+                                    tokio::spawn(async move {
+                                        sap::run_auto_propose_pipeline_with_source(
+                                            &proposer_ctx,
+                                            audit_clone.as_ref(),
+                                            persona_clone.as_ref(),
+                                            proposal_clone.as_ref(),
+                                            &shared_clone,
+                                            session,
+                                            signals,
+                                            summary,
+                                            source,
+                                            &cancel,
+                                        )
+                                        .await;
+                                    });
+                                }
                             }
 
                             writer = Arc::try_unwrap(bridge.writer)
