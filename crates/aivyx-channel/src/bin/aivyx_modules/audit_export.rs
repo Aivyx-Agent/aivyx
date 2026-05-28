@@ -221,6 +221,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
+        AuditEvent::SkillInvocation { .. } => "SkillInvocation",
     }
 }
 

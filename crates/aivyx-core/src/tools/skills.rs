@@ -198,7 +198,7 @@ impl Tool for SkillsInvokeTool {
         )
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let name = match input.get("name").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
@@ -223,6 +223,19 @@ impl Tool for SkillsInvokeTool {
                 let trigger = v.get("trigger").and_then(|t| t.as_str()).unwrap_or("");
                 let procedure =
                     v.get("procedure").and_then(|p| p.as_str()).unwrap_or("");
+                // Phase 117 — emit a dedicated SkillInvocation
+                // audit entry alongside the regular ToolCall the
+                // planner will write. The ToolCall's input_hash
+                // hides the skill name (D4 secrets-safety); the
+                // SkillInvocation carries it in cleartext so
+                // Phase 116's record_turn_outcomes can populate
+                // per-skill ledger rows (RelevanceSurfaceKind::
+                // Skill).
+                ctx.audit.on_event(crate::AuditTag::SkillInvocation {
+                    turn_id: ctx.turn_id,
+                    session_id: ctx.session_id,
+                    skill_name: name.clone(),
+                });
                 return ToolOutcome::Completed {
                     output: json!({
                         "name": name,

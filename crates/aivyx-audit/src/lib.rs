@@ -134,6 +134,25 @@ pub enum AuditEvent {
     /// `turn_id` correlation is a Phase 67 deferral
     /// (`TurnOutcome` doesn't carry `turn_id` today; lifting it
     /// touches 120 match sites).
+    /// Phase 117 — `skills.invoke` successful invocation.
+    /// Emitted alongside the regular `ToolCall` audit entry
+    /// for the same call so the skill name lands in cleartext
+    /// without exposing the rest of the tool input. Phase 116's
+    /// `record_turn_outcomes` reads this variant to populate
+    /// per-skill ledger rows; the operator-side `aivyx audit
+    /// export --event-type SkillInvocation` filter accepts the
+    /// label.
+    SkillInvocation {
+        /// The turn that fired the invocation. Pair with the
+        /// surrounding `TurnStarted` / `TurnEnded` via turn_id.
+        turn_id: TurnId,
+        /// The session whose turn fired it. Matches the
+        /// surrounding `TurnStarted`.
+        session_id: SessionId,
+        /// The skill's stable kebab-case identifier from
+        /// `LearnedSkill::name`.
+        skill_name: String,
+    },
     AutoNotifyDispatched {
         /// Session id minted by `TriggerDispatch::fire` for this
         /// trigger fire. Matches the `TurnStarted` /
@@ -791,6 +810,15 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 scope,
                 query_or_key,
             },
+            AuditTag::SkillInvocation {
+                turn_id,
+                session_id,
+                skill_name,
+            } => AuditEvent::SkillInvocation {
+                turn_id,
+                session_id,
+                skill_name,
+            },
         }
     }
 }
@@ -1243,6 +1271,47 @@ mod tests {
         )
         .expect("Webhook variant parses");
         assert_eq!(webhook, TriggerKindSummary::Webhook);
+    }
+
+    // ---- Phase 117 — SkillInvocation variant ----
+
+    #[test]
+    fn skill_invocation_round_trips_through_canonical_json() {
+        let ev = AuditEvent::SkillInvocation {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            skill_name: "research-multi-source".into(),
+        };
+        let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
+        let back: AuditEvent =
+            serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn skill_invocation_serializes_with_kind_tag() {
+        let ev = AuditEvent::SkillInvocation {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            skill_name: "x".into(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "SkillInvocation");
+        assert_eq!(json["skill_name"], "x");
+    }
+
+    #[test]
+    fn skill_invocation_can_be_hmac_chained() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::SkillInvocation {
+            turn_id: TurnId::new(),
+            session_id: SessionId::new(),
+            skill_name: "research-topic".into(),
+        })
+        .unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
     }
 
     // ---- Phase 112 — SkillAutoProposal variant ----

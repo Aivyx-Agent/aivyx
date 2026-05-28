@@ -2057,6 +2057,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 "MemoryAccess",
                                 "AutoNotifyDispatched",
                                 "SkillAutoProposal",
+                                "SkillInvocation",
                             ];
                             if !KNOWN.contains(&val.as_str()) {
                                 return Err(format!(

@@ -217,35 +217,63 @@ pub async fn record_turn_outcomes(
         return;
     }
     for entry in audit_entries {
-        let aivyx_audit::AuditEvent::ToolCall {
-            scope_used,
-            outcome,
-            ..
-        } = &entry.event
-        else {
-            continue;
-        };
-        // Tool identifier = the scope base (e.g. "fs.read",
-        // "net.fetch"). Operator-readable, deterministic.
-        let identifier = scope_used.base().to_string();
-        let was_success = matches!(
-            outcome,
-            aivyx_core::ToolOutcomeSummary::Completed { .. }
-        );
-        if let Err(e) = ledger
-            .record_outcome(
-                keyword_key,
-                RelevanceSurfaceKind::Tool,
-                &identifier,
-                was_success,
-                now_unix_ms,
-            )
-            .await
-        {
-            eprintln!(
-                "aivyx tool-relevance: record_outcome failed for \
-                 ({keyword_key}, {identifier}): {e}"
-            );
+        match &entry.event {
+            aivyx_audit::AuditEvent::ToolCall {
+                scope_used,
+                outcome,
+                ..
+            } => {
+                // Tool identifier = the scope base (e.g.
+                // "fs.read", "net.fetch"). Operator-readable,
+                // deterministic.
+                let identifier = scope_used.base().to_string();
+                let was_success = matches!(
+                    outcome,
+                    aivyx_core::ToolOutcomeSummary::Completed { .. }
+                );
+                if let Err(e) = ledger
+                    .record_outcome(
+                        keyword_key,
+                        RelevanceSurfaceKind::Tool,
+                        &identifier,
+                        was_success,
+                        now_unix_ms,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "aivyx tool-relevance: record_outcome failed for \
+                         tool ({keyword_key}, {identifier}): {e}"
+                    );
+                }
+            }
+            aivyx_audit::AuditEvent::SkillInvocation {
+                skill_name, ..
+            } => {
+                // Phase 117 — `skills.invoke` emits this entry
+                // alongside its regular ToolCall entry; the
+                // skill_name is the operator-readable identifier
+                // for the Skill subsection of the relevance
+                // section. Always recorded as success because
+                // `skills.invoke` only emits SkillInvocation
+                // on the Completed branch.
+                if let Err(e) = ledger
+                    .record_outcome(
+                        keyword_key,
+                        RelevanceSurfaceKind::Skill,
+                        skill_name,
+                        true,
+                        now_unix_ms,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "aivyx tool-relevance: record_outcome failed for \
+                         skill ({keyword_key}, {skill_name}): {e}"
+                    );
+                }
+            }
+            _ => continue,
         }
     }
 }
@@ -712,6 +740,63 @@ mod tests {
         record_turn_outcomes(&ledger, "", &entries, 1000).await;
         // Empty key → no ledger write → no entry under "".
         assert!(ledger.lookup("").await.unwrap().is_none());
+    }
+
+    fn skill_invocation_entry(
+        seq: u64,
+        skill_name: &str,
+    ) -> aivyx_audit::SignedEntry {
+        use aivyx_audit::{AuditEvent, SignedEntry};
+        use std::time::SystemTime;
+        SignedEntry {
+            seq,
+            appended_at: SystemTime::now(),
+            event: AuditEvent::SkillInvocation {
+                turn_id: aivyx_core::TurnId::new(),
+                session_id: aivyx_core::SessionId::new(),
+                skill_name: skill_name.to_string(),
+            },
+            mac: [0u8; 32],
+            prev_mac: [0u8; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn record_turn_outcomes_records_skill_invocations() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let entries = vec![
+            turn_started_entry(0),
+            tool_call_entry(1, "memory.read", true),
+            skill_invocation_entry(2, "research-topic"),
+            tool_call_entry(3, "llm.call", true),
+            skill_invocation_entry(4, "research-topic"),
+            skill_invocation_entry(5, "summarize-pdf"),
+        ];
+        record_turn_outcomes(&ledger, "code|research", &entries, 1000).await;
+
+        let entry = ledger.lookup("code|research").await.unwrap().unwrap();
+        // 2 tools + 2 skills = 4 rows.
+        assert_eq!(entry.outcomes.len(), 4);
+
+        let research = entry
+            .outcomes
+            .iter()
+            .find(|r| {
+                r.surface_kind == RelevanceSurfaceKind::Skill
+                    && r.identifier == "research-topic"
+            })
+            .expect("research-topic skill row");
+        assert_eq!(research.success_count, 2);
+
+        let summarize = entry
+            .outcomes
+            .iter()
+            .find(|r| {
+                r.surface_kind == RelevanceSurfaceKind::Skill
+                    && r.identifier == "summarize-pdf"
+            })
+            .expect("summarize-pdf skill row");
+        assert_eq!(summarize.success_count, 1);
     }
 
     #[tokio::test]

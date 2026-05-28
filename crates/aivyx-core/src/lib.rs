@@ -545,6 +545,20 @@ pub enum AuditTag {
         scope_requested: Scope,
         held_capabilities: CapabilitySet,
     },
+    /// Phase 117 — fires when `skills.invoke` runs successfully.
+    /// Distinct from the `ToolCall` entry the planner emits for
+    /// the same call so audit forensics can answer "which skill
+    /// was actually invoked" without unhashing the
+    /// `ToolCall.input_hash`. Phase 116's `record_turn_outcomes`
+    /// reads this variant to populate per-skill ledger rows
+    /// (RelevanceSurfaceKind::Skill) — the audit chain hashes
+    /// the skill name on the ToolCall entry, so the dedicated
+    /// SkillInvocation entry is the operator-readable surface.
+    SkillInvocation {
+        turn_id: TurnId,
+        session_id: SessionId,
+        skill_name: String,
+    },
     MemoryAccess {
         turn_id: TurnId,
         operation: MemoryOperation,
