@@ -34,6 +34,7 @@ pub mod agent;
 pub mod llm_planner;
 pub mod planner;
 pub mod schema;
+pub mod skill_proposer;
 pub mod tools;
 
 pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
