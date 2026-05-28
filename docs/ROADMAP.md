@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 114 — Persona Auto-Proposer Generalization (Chapter E opener)
 
-**Active — see [PHASE_114.md](PHASE_114.md).** First
+**Frozen — see [PHASE_114.md](PHASE_114.md).** First
 phase of Chapter E. Generalizes the Phase 112 skill auto-
 proposer from `LearnedSkill` to the full 11-category
 `PersonaDeltaCategory` surface. After Phase 114, the
@@ -3469,12 +3469,23 @@ Recommended):**
   for the other 10 categories. No new KNOWN_BASES entry;
   A3 stays at 49.
 
-Streak predictions: all three HOLD (DESIGN.md → 5,
-PRODUCT.md → 5, `aivyx-core/src/lib.rs` → 3). Zero new
-workspace deps. Test count `+30` to `+50`.
+**Streak outcomes** — all three predictions held;
+third all-hold result in a row (Phase 112 first, 113
+second, 114 third — substrate momentum at its highest
+point of the project).
+- DESIGN.md: HELD as predicted (no D-section touch).
+  Streak → 5.
+- PRODUCT.md: HELD as predicted (P8 envelope).
+  Streak → 5.
+- `aivyx-core/src/lib.rs`: HELD as predicted (no new
+  `pub mod`). Streak → 3.
+
+Test count: 2068 → 2105 (**+37**), inside the predicted
+`+30` to `+50` band. Zero new workspace deps. Zero
+clippy warnings.
 
 Backward-compatible audit chain: `AuditEvent::
-SkillAutoProposal` gains an optional `category` field
+SkillAutoProposal` gained an optional `category` field
 with `#[serde(default, skip_serializing_if =
 "Option::is_none")]`; existing chains verify
 byte-identically. Phase 92's `supersedes_proposal_id`

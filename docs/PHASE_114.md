@@ -288,32 +288,107 @@ Phase 112's substrate-heavy shape:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_114.md` + ROADMAP Chapter E + Phase
-  114 entry + docs/README status row — Task 1 (this
-  commit).
-- [ ] Judge prompt generalized to category-picking;
-  `JudgeResponse.category` field + `proposed_op`
-  generalization — Task 2.
-- [ ] Per-category `[persona.auto_propose.<category>]`
+- [x] `docs/PHASE_114.md` + ROADMAP Chapter E + Phase
+  114 entry + docs/README status row — Task 1 (`e28d3e8`).
+- [x] Judge prompt generalized to category-picking;
+  `JudgeResponse.category` field + `proposed_draft`
+  generalization — Task 2 (`2960391`).
+- [x] Per-category `[persona.auto_propose.<category>]`
   TOML config + alias compatibility with Phase 113's
-  `[skills.auto_propose]` — Task 3.
-- [ ] Chain-write dispatch by category — Task 4.
-- [ ] Audit-event backward-compatible extension with
-  `category: Option<String>` — Task 5.
-- [ ] Daemon wiring + operator-surface flag — Task 6.
-- [ ] Scripted e2e covering at least three category
+  `[skills.auto_propose]` — Task 3 (`8beb407`).
+- [x] Chain-write dispatch by category — Task 4
+  (`6206577`).
+- [x] Audit-event backward-compatible extension with
+  `category: Option<String>` — Task 5 (`8830b4e`).
+- [x] Daemon wiring + operator-surface flag — Task 6
+  (`b7f09e4`).
+- [x] Scripted e2e covering at least three category
   types (skill + list + scalar) — Task 7.
-- [ ] All three Q-block questions resolved with operator
+- [x] All three Q-block questions resolved with operator
   sign-off pre-Task 2 (Q1b, Q2a, Q3a recorded above).
-- [ ] DESIGN.md streak extends to five (no D-section
-  touch predicted).
-- [ ] PRODUCT.md streak extends to five (P8 envelope).
-- [ ] `aivyx-core/src/lib.rs` streak extends to three
-  (no new `pub mod`).
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+30` to
-  `+50`.
-- [ ] Zero clippy warnings.
-- [ ] **The self-learning loop generalizes from skill
+- [x] DESIGN.md streak extends to five — **HELD as
+  predicted**. `c2be6d51…` unchanged.
+- [x] PRODUCT.md streak extends to five — **HELD as
+  predicted**. `6e840cef…` unchanged.
+- [x] `aivyx-core/src/lib.rs` streak extends to three —
+  **HELD as predicted**. `deab80d8…` unchanged.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+37` (2068 → 2105),
+  inside the `+30 to +50` predicted range.
+- [x] Zero clippy warnings.
+- [x] **The self-learning loop generalizes from skill
   to full Persona surface.** Chapter E opens with the
-  most natural extension of Phase 112's substrate.
+  most natural extension of Phase 112's substrate;
+  every PersonaDeltaCategory variant is now reachable
+  by the auto-proposer per the operator's per-category
+  config.
+
+## Prediction vs reality
+
+**Three streak predictions; all three held — third
+all-hold result in a row.** Phase 112, 113, and 114
+each saw every prediction hit, the first three-streak-
+streak since Phase 56–58 (the original P13/P14 amendment
+sequence). Substrate momentum is at its highest point of
+the project.
+
+- **DESIGN.md** — Held as predicted. `c2be6d51…`
+  unchanged. The Phase 114 generalization slotted into
+  the existing D4 (Phase 110 skills section) + D5
+  (Phase 59-60 Persona section) envelopes; no D-section
+  edit needed. Streak: 4 → 5.
+- **PRODUCT.md** — Held as predicted. `6e840cef…`
+  unchanged. P8 (Outcome-Driven Audited Reflection)
+  covers inline-fired Persona reflection identically
+  to cron-fired; generalizing the categories the
+  auto-proposer can write into is inside P8's commit.
+  Streak: 4 → 5.
+- **`aivyx-core/src/lib.rs`** — Held as predicted.
+  `deab80d8…` unchanged. The `skill_proposer` module
+  was already `pub mod`-exposed at Phase 112; Phase 114
+  extended `judge.rs` (new types + helpers) without
+  touching `lib.rs` itself. Streak: 2 → 3.
+
+**Test count `+37` is inside the `+30 to +50` band.**
+Breakdown:
+- `aivyx-core/src/skill_proposer/judge.rs` — +8 tests
+  (the existing 21 grew to 29 covering category-picking,
+  ProposedDraft variants, ExistingPersonaSnapshot
+  round-trip, etc.).
+- `aivyx-config` — +7 tests (per-category section
+  parse, defaults, override, threshold-validation,
+  alias-coexistence, lookup-helper).
+- `aivyx-channel/src/skill_auto_proposer.rs` — +12 tests
+  (per-category routing branches; From-conversion
+  population; build_proposed_op dispatch table;
+  parse_persona_delta_category coverage).
+- `aivyx-audit` — +3 tests (Phase 114 backward-compat:
+  category-set round-trip, category-None serializes as
+  absent field, pre-Phase-114 decoder compat).
+- `aivyx-channel/tests/skill_auto_proposer_e2e.rs` —
+  +4 tests (list_category_auto_accepts,
+  scalar_category_disabled_by_default,
+  scalar_category_explicitly_enabled,
+  operator_profile_disabled).
+- Other: +3 from Task 2's prompt-shape extensions and
+  helper tests.
+
+**Q-block resolved exactly as signed off.** No mid-phase
+shifts. Q1b (per-category TOML) added the most substrate
+(new aivyx-config types + per-category routing +
+defaults table + alias compatibility) but the cost
+landed cleanly inside the predicted test-count band.
+
+## Chapter E direction after Phase 114
+
+Phase 114 is the first phase of Chapter E. The remaining
+Chapter E axes named at sign-off (operator-pressure-
+shaped, picked at each phase exit):
+- Tool/skill selection learning from outcomes.
+- Self-correction loop on failed turns.
+- Outcome-driven Profile/Role refinement proposals.
+
+The post-Phase-114 ledger has zero named deferrals; the
+next Chapter E phase opens against whichever axis the
+operator picks against observed value from Phase 114's
+auto-proposer in real use.

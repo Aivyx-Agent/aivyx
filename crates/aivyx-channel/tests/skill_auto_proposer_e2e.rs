@@ -440,3 +440,355 @@ async fn heuristic_gate_short_circuits_skip_writes_audit_only() {
         other => panic!("expected SkillAutoProposal; got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 114 — per-category e2e (list + scalar)
+// ---------------------------------------------------------------------------
+
+const LIST_APPEND_VERDICT_JSON: &str = r#"{
+    "is_worth_proposing": true,
+    "confidence": 0.91,
+    "category": "BehavioralPreferences",
+    "proposed_draft": {
+        "kind": "ListAppend",
+        "value": "prefer terse replies for command-style requests"
+    },
+    "is_duplicate_of": null,
+    "reasoning": "recurring pattern of brief command-style turns"
+}"#;
+
+const SCALAR_SET_VERDICT_JSON: &str = r#"{
+    "is_worth_proposing": true,
+    "confidence": 0.97,
+    "category": "AssistantName",
+    "proposed_draft": {
+        "kind": "ScalarSet",
+        "value": "Aivyx"
+    },
+    "is_duplicate_of": null,
+    "reasoning": "operator referred to the assistant by name across turns"
+}"#;
+
+const CATEGORY_DISABLED_VERDICT_JSON: &str = r#"{
+    "is_worth_proposing": true,
+    "confidence": 0.97,
+    "category": "OperatorProfile",
+    "proposed_draft": {
+        "kind": "ScalarSet",
+        "value": "Julian — primary repo aivyx; Rust workspace"
+    },
+    "is_duplicate_of": null,
+    "reasoning": "operator self-described early in the turn"
+}"#;
+
+/// Phase 114 — config with the Phase 114 per_category surface
+/// populated. Defaults match `PerCategoryConfigSet::defaults()`
+/// (scalars off, lists on). Override per-test for cases that
+/// need a specific category enabled.
+fn config_with_per_category(
+    overrides: impl FnOnce(
+        &mut aivyx_channel::skill_auto_proposer::PerCategoryConfigSet,
+    ),
+) -> aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig {
+    use aivyx_channel::skill_auto_proposer::{
+        PerCategoryConfig, PerCategoryConfigSet, SkillAutoProposeConfig,
+    };
+    let scalar = PerCategoryConfig {
+        enabled: false,
+        auto_accept_confidence_threshold: 0.99,
+    };
+    let list = PerCategoryConfig {
+        enabled: true,
+        auto_accept_confidence_threshold: 0.85,
+    };
+    let mut set = PerCategoryConfigSet {
+        assistant_name: scalar.clone(),
+        operator_profile: scalar.clone(),
+        communication_style: scalar,
+        primary_use_cases: list.clone(),
+        behavioral_preferences: list.clone(),
+        behavioral_constraints: list.clone(),
+        learned_context: list.clone(),
+        communication_adaptations: list.clone(),
+        character_traits: list.clone(),
+        relationship_milestones: list.clone(),
+        learned_skill: list,
+    };
+    overrides(&mut set);
+    SkillAutoProposeConfig {
+        per_category: Some(set),
+        ..SkillAutoProposeConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn list_category_auto_accepts_into_persona_chain() {
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|_| {}),
+        llm_provider: ScriptedProvider::new(vec![LIST_APPEND_VERDICT_JSON]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "user asked for terse replies several times".into(),
+        &cancel,
+    )
+    .await;
+
+    // Persona chain: one BehavioralPreferences AppendList entry.
+    assert_eq!(persona_log.len(), 1);
+    // Proposal chain: pending + approved.
+    assert_eq!(proposal_log.len(), 2);
+
+    // Audit event has the category populated.
+    let entries = audit_log.entries().expect("entries");
+    match &entries[0].event {
+        AuditEvent::SkillAutoProposal {
+            outcome, category, ..
+        } => {
+            assert!(matches!(
+                outcome,
+                aivyx_audit::SkillAutoProposalOutcomeSummary::AutoAccepted
+            ));
+            assert_eq!(category.as_deref(), Some("BehavioralPreferences"));
+        }
+        other => panic!("expected SkillAutoProposal; got {other:?}"),
+    }
+
+    // Shared persona reflects the new BehavioralPreferences entry.
+    let state = shared.read().unwrap();
+    assert_eq!(state.behavioral_preferences.len(), 1);
+    assert!(state.behavioral_preferences[0].contains("terse"));
+    assert!(state.learned_skills.is_empty()); // no skill side effect
+}
+
+#[tokio::test]
+async fn scalar_category_disabled_by_default_drops_without_chain_write() {
+    // AssistantName defaults to enabled=false. A verdict
+    // picking AssistantName must drop to the
+    // category-disabled outcome without any chain write.
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|_| {}),
+        llm_provider: ScriptedProvider::new(vec![SCALAR_SET_VERDICT_JSON]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "summary".into(),
+        &cancel,
+    )
+    .await;
+
+    assert_eq!(persona_log.len(), 0);
+    assert_eq!(proposal_log.len(), 0);
+    let entries = audit_log.entries().expect("entries");
+    let event = &entries[0].event;
+    match event {
+        AuditEvent::SkillAutoProposal {
+            outcome,
+            proposed_skill_name,
+            category,
+            ..
+        } => {
+            // The audit-event outcome reuses NotWorthProposing
+            // for category-disabled drops; the
+            // proposed_skill_name carries the diagnostic.
+            assert!(matches!(
+                outcome,
+                aivyx_audit::SkillAutoProposalOutcomeSummary::NotWorthProposing
+            ));
+            assert!(
+                proposed_skill_name
+                    .as_deref()
+                    .unwrap()
+                    .contains("category-disabled")
+            );
+            assert_eq!(category.as_deref(), Some("AssistantName"));
+        }
+        other => panic!("expected SkillAutoProposal; got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn scalar_category_explicitly_enabled_auto_accepts() {
+    // Operator opts AssistantName in; the verdict's
+    // confidence (0.97) is below the scalar default
+    // threshold (0.99). Lower the threshold to 0.95 so the
+    // verdict crosses.
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|pc| {
+            pc.assistant_name.enabled = true;
+            pc.assistant_name.auto_accept_confidence_threshold = 0.95;
+        }),
+        llm_provider: ScriptedProvider::new(vec![SCALAR_SET_VERDICT_JSON]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "operator called the assistant 'Aivyx' multiple times".into(),
+        &cancel,
+    )
+    .await;
+
+    // Persona chain: one AssistantName SetScalar entry.
+    assert_eq!(persona_log.len(), 1);
+    let state = shared.read().unwrap();
+    assert_eq!(state.assistant_name.as_deref(), Some("Aivyx"));
+}
+
+#[tokio::test]
+async fn operator_profile_disabled_drops_with_correct_audit_signal() {
+    // OperatorProfile is also a scalar-default-off. A verdict
+    // picking OperatorProfile drops; the audit-event
+    // carries the category for forensic visibility.
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|_| {}),
+        llm_provider: ScriptedProvider::new(vec![CATEGORY_DISABLED_VERDICT_JSON]),
+    });
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "summary".into(),
+        &cancel,
+    )
+    .await;
+    assert_eq!(persona_log.len(), 0);
+    let entries = audit_log.entries().expect("entries");
+    match &entries[0].event {
+        AuditEvent::SkillAutoProposal { category, .. } => {
+            assert_eq!(category.as_deref(), Some("OperatorProfile"));
+        }
+        other => panic!("expected SkillAutoProposal; got {other:?}"),
+    }
+}

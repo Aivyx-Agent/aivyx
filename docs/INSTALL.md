@@ -409,61 +409,104 @@ production-ready in-process AND daemon-mode after Phase
 Channel Activation Milestone's job (operator-driven
 verification pass, separate from the phase sequence).
 
-## Skill auto-proposer (Phase 112 + 113)
+## Persona auto-proposer (Phases 112-114)
 
-The skill auto-proposer is the optional self-learning loop
-that drafts reusable procedures from complex turns. Phase
-112 shipped the substrate; Phase 113 made it
-operator-configurable through TOML. Off by default; enable
-the section to opt in:
+The Persona auto-proposer is the optional self-learning
+loop that drafts reusable Persona refinements from complex
+turns. Phase 112 shipped the substrate (skills-only). Phase
+113 made it operator-configurable through TOML. Phase 114
+generalized it across the full 11-category PersonaDelta
+surface — the agent now self-learns at every Persona axis,
+not just at the skill layer.
+
+The Phase 113 `[skills.auto_propose]` section stays as an
+alias for `[persona.auto_propose.learned_skill]` —
+pre-Phase-114 configs continue to work byte-identically.
+New operators use the Phase 114 section:
 
 ```toml
-[skills.auto_propose]
+[persona.auto_propose]
 enabled = true
 # Defaults are tuned for "fires on multi-tool work, skips
-# chit-chat" — the operator only needs to set `enabled = true`
-# to opt in.
+# chit-chat." Operator only needs `enabled = true` to opt
+# into the loop.
 # judge_model = "claude-haiku-4-5"
 # judge_max_tokens = 800
-# auto_accept_confidence_threshold = 0.85
-# fuzzy_match_threshold = 0.80
+# fuzzy_match_threshold = 0.80  # LearnedSkill dedup only
 
-[skills.auto_propose.heuristic]
+[persona.auto_propose.heuristic]
 # tool_call_count_min = 3
 # distinct_tool_id_min = 2
 # duration_ms_min = 5000
 # require_gate_resolve = false
 # mode = "any"             # "any" or "all"
+
+# Per-category configuration. Defaults: scalars OFF (each set
+# replaces the previous value; high-stakes), lists ON (additive).
+# Operator opts in to the scalar categories explicitly.
+
+[persona.auto_propose.learned_skill]
+# enabled = true
+# auto_accept_confidence_threshold = 0.85
+
+[persona.auto_propose.behavioral_preferences]
+# enabled = true
+# auto_accept_confidence_threshold = 0.85
+
+# ... other list categories: behavioral_constraints,
+# learned_context, communication_adaptations, character_traits,
+# relationship_milestones, primary_use_cases ...
+
+[persona.auto_propose.assistant_name]
+# enabled = false                          # default OFF; high-stakes scalar
+# auto_accept_confidence_threshold = 0.99  # require near-certainty
+
+[persona.auto_propose.operator_profile]
+# enabled = false
+# auto_accept_confidence_threshold = 0.99
+
+[persona.auto_propose.communication_style]
+# enabled = false
+# auto_accept_confidence_threshold = 0.99
 ```
 
 After the section is configured, every `TurnOutcome::
 Completed` fires a background-task auto-proposer pipeline:
 a cheap heuristic gate filters candidates; the LLM judge
-confirms (and runs a piggybacked semantic dedup against
-existing skills); high-confidence non-dup proposals
-auto-accept into the LearnedSkill chain; below-threshold
-verdicts stage as Pending proposals the operator resolves
-through `aivyx persona proposals approve`.
+picks the right category and drafts the proposal in the
+shape that category expects (LearnedSkill, ListAppend, or
+ScalarSet); high-confidence non-dup proposals for enabled
+categories auto-accept into the Persona chain; below-
+threshold verdicts stage as Pending proposals the operator
+resolves through `aivyx persona proposals approve`.
 
-**Inspection flags** (Phase 113):
-- `aivyx persona list --auto-only` shows only entries the
-  auto-proposer wrote (delta_id prefix `pd-auto-`).
+**Inspection flags** (Phase 113, generalized in Phase 114):
+- `aivyx persona list --auto-only` shows ALL entries the
+  auto-proposer wrote across every category (delta_id
+  prefix `pd-auto-`).
 - `aivyx persona list --manual-only` shows the complement.
 - `aivyx audit export --event-type SkillAutoProposal`
-  emits only the auto-proposer's audit-event variants
-  for forensic walks (`jq`-able JSONL).
+  emits only the auto-proposer's audit-event variants for
+  forensic walks (`jq`-able JSONL). Phase 114 entries
+  carry the `category` field so operators can filter by
+  category downstream.
 
 **Escape hatches:**
 - The auto-proposer never blocks a turn — failure-isolated
   background spawn. The user's reply is sent first; the
   pipeline runs after.
-- Auto-accepted skills are revertible through the existing
-  Phase 60 surface: `aivyx persona revert <delta_id>`. The
-  revert is itself an audit-chained chain append, so the
-  forensic trail stays intact.
-- The whole feature can be disabled by setting `enabled =
-  false` (or removing the section). The auto-proposer
-  bypass costs zero — no LLM call, no chain write.
+- Auto-accepted Persona deltas are revertible through the
+  existing Phase 60 surface: `aivyx persona revert
+  <delta_id>`. The revert is itself an audit-chained chain
+  append, so the forensic trail stays intact.
+- Per-category enable flags let the operator opt out of
+  specific axes (e.g. keep `learned_skill` on but
+  `behavioral_preferences` off) without disabling the
+  whole loop.
+- The whole feature can be disabled by setting top-level
+  `enabled = false` (or removing the section). The auto-
+  proposer bypass costs zero — no LLM call, no chain
+  write.
 
 ## Moving Aivyx to a new machine
 
