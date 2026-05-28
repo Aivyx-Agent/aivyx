@@ -105,6 +105,7 @@ pub mod telegram_daemon_frontend;
 // Discord + Slack) daemon-frontends.
 pub mod discord_daemon_frontend;
 pub mod gate_command;
+pub mod skill_auto_proposer;
 pub mod slack_daemon_frontend;
 pub mod web_ui;
 
