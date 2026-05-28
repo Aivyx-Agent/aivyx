@@ -75,6 +75,34 @@ pub fn assemble_session_prompt(
     role_name: &str,
     role_system_prompt: &str,
 ) -> String {
+    // Phase 114-compat wrapper that forwards `None` for the
+    // Phase 116 relevance section. Existing callers that
+    // don't yet pass the relevance signal stay on this entry.
+    assemble_session_prompt_with_relevance(
+        profile,
+        persona,
+        role_name,
+        role_system_prompt,
+        None,
+    )
+}
+
+/// Phase 116 — same as [`assemble_session_prompt`] but takes
+/// an optional pre-rendered `## Tools recently used for
+/// similar tasks` section to slot between the Persona/Skills
+/// sections and the active role. Callers that have a
+/// [`tool_relevance_ledger`](crate::tool_relevance_ledger)
+/// handle render the section with
+/// [`tool_relevance_ledger::render_relevance_section`] and
+/// pass the result here; callers without the ledger keep
+/// using [`assemble_session_prompt`] directly.
+pub fn assemble_session_prompt_with_relevance(
+    profile: &Profile,
+    persona: Option<&EffectivePersona>,
+    role_name: &str,
+    role_system_prompt: &str,
+    relevance_section: Option<&str>,
+) -> String {
     let profile_active = profile.is_operator_declared();
     // Phase 110 — skills get their own `## Learned skills`
     // section between Persona and active role per Q3c sign-off.
@@ -86,8 +114,11 @@ pub fn assemble_session_prompt(
     let skills_active = persona
         .map(|p| !p.learned_skills.is_empty())
         .unwrap_or(false);
+    let relevance_active = relevance_section
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
 
-    if !profile_active && !persona_active && !skills_active {
+    if !profile_active && !persona_active && !skills_active && !relevance_active {
         return role_system_prompt.to_string();
     }
 
@@ -104,6 +135,12 @@ pub fn assemble_session_prompt(
     if skills_active {
         // Same Some-guarantee — `skills_active` requires Some.
         out.push_str(&render_skills_section(persona.unwrap()));
+        out.push_str("\n\n");
+    }
+    if relevance_active {
+        // Safe to unwrap — `relevance_active` requires Some
+        // AND non-empty.
+        out.push_str(relevance_section.unwrap().trim_end());
         out.push_str("\n\n");
     }
     out.push_str(&format!(
@@ -678,5 +715,93 @@ mod tests {
         assert!(via_wrapper.contains("oncall"));
         // ...while a rejected soft facet is gone.
         assert!(!via_wrapper.contains("dry wit"));
+    }
+
+    // ----- Phase 116 — relevance section integration -----
+
+    #[test]
+    fn assemble_with_none_relevance_matches_phase_114_output() {
+        // Backward-compatibility: passing None for the relevance
+        // section must produce byte-identical output to the
+        // existing assemble_session_prompt path.
+        let profile = Profile::default();
+        let without =
+            assemble_session_prompt(&profile, None, "default", "role-instructions");
+        let with_none = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "default",
+            "role-instructions",
+            None,
+        );
+        assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn assemble_with_relevance_slots_section_before_active_role() {
+        let profile = Profile::default();
+        let section = "## Tools recently used for similar tasks\n\
+                       \nBased on keywords: code, rust\n\
+                       \nTools:\n- memory.read: 3 successes, 0 failures\n";
+        let out = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "researcher",
+            "Be thorough.",
+            Some(section),
+        );
+        let relevance_pos = out
+            .find("## Tools recently used for similar tasks")
+            .expect("relevance section present");
+        let role_pos = out
+            .find("## Active role: researcher")
+            .expect("active role marker present");
+        assert!(
+            relevance_pos < role_pos,
+            "relevance section must come before active role: {out}"
+        );
+        assert!(out.contains("memory.read: 3 successes"));
+    }
+
+    #[test]
+    fn assemble_with_empty_relevance_string_falls_back_to_no_section() {
+        // An empty (or whitespace-only) Some(_) is treated as
+        // "no signal" — the section is suppressed.
+        let profile = Profile::default();
+        let out = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "default",
+            "role",
+            Some(""),
+        );
+        assert!(!out.contains("Tools recently used"));
+
+        let out_ws = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "default",
+            "role",
+            Some("   \n  "),
+        );
+        assert!(!out_ws.contains("Tools recently used"));
+    }
+
+    #[test]
+    fn assemble_with_relevance_only_still_returns_section() {
+        // Profile + Persona empty but relevance section present:
+        // the prompt should include the relevance section + role.
+        let profile = Profile::default();
+        let section = "## Tools recently used for similar tasks\n\
+                       Tools:\n- memory.read: 1 successes, 0 failures\n";
+        let out = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "default",
+            "role",
+            Some(section),
+        );
+        assert!(out.contains("Tools recently used"));
+        assert!(out.contains("## Active role: default"));
     }
 }

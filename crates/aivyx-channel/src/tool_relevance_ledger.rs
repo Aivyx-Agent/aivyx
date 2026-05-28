@@ -251,6 +251,106 @@ pub async fn record_turn_outcomes(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 116 Task 5 — System-prompt section rendering
+// ---------------------------------------------------------------------------
+
+/// Phase 116 — render the `## Tools recently used for
+/// similar tasks` system-prompt section for a given
+/// keyword_key. Returns the rendered section (with trailing
+/// newline) or the empty string when:
+///
+/// - the ledger has no entry for the key, OR
+/// - no row in the entry has total outcomes >=
+///   `min_outcomes_to_show`.
+///
+/// The section format mirrors the open doc's spec — keyword
+/// banner + Tools subsection + Skills subsection (only when
+/// non-empty). Within each subsection, rows are sorted by
+/// success count descending (ties broken by failure count
+/// ascending, then identifier ascending). Top-K rows per
+/// subsection.
+///
+/// `keyword_key_display` is the same key but rendered for
+/// human reading — typically `"code, rust"` (comma-joined)
+/// rather than `"code|rust"` (the storage key).
+pub async fn render_relevance_section(
+    ledger: &PersistentToolRelevanceLedger,
+    keyword_key: &str,
+    keyword_key_display: &str,
+    min_outcomes_to_show: u32,
+    top_k_per_subsection: usize,
+) -> String {
+    if keyword_key.is_empty() {
+        return String::new();
+    }
+    let Ok(Some(entry)) = ledger.lookup(keyword_key).await else {
+        return String::new();
+    };
+    let mut rows: Vec<&OutcomeRow> = entry
+        .outcomes
+        .iter()
+        .filter(|r| r.total() >= min_outcomes_to_show)
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    // Sort: successes desc, then failures asc, then identifier asc.
+    rows.sort_by(|a, b| {
+        b.success_count
+            .cmp(&a.success_count)
+            .then_with(|| a.failure_count.cmp(&b.failure_count))
+            .then_with(|| a.identifier.cmp(&b.identifier))
+    });
+
+    let tools: Vec<&OutcomeRow> = rows
+        .iter()
+        .filter(|r| r.surface_kind == RelevanceSurfaceKind::Tool)
+        .take(top_k_per_subsection)
+        .copied()
+        .collect();
+    let skills: Vec<&OutcomeRow> = rows
+        .iter()
+        .filter(|r| r.surface_kind == RelevanceSurfaceKind::Skill)
+        .take(top_k_per_subsection)
+        .copied()
+        .collect();
+
+    if tools.is_empty() && skills.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("## Tools recently used for similar tasks\n\n");
+    if !keyword_key_display.is_empty() {
+        out.push_str(&format!("Based on keywords: {keyword_key_display}\n\n"));
+    }
+    if !tools.is_empty() {
+        out.push_str("Tools:\n");
+        for r in tools {
+            out.push_str(&format!(
+                "- {}: {} successes, {} failures\n",
+                r.identifier, r.success_count, r.failure_count,
+            ));
+        }
+        if !skills.is_empty() {
+            out.push('\n');
+        }
+    }
+    if !skills.is_empty() {
+        out.push_str("Skills:\n");
+        for r in skills {
+            out.push_str(&format!(
+                "- {}: {} invocations ({} successes, {} failures)\n",
+                r.identifier,
+                r.total(),
+                r.success_count,
+                r.failure_count,
+            ));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -620,6 +720,138 @@ mod tests {
         let entries = vec![turn_started_entry(0)];
         record_turn_outcomes(&ledger, "key", &entries, 1000).await;
         assert!(ledger.lookup("key").await.unwrap().is_none());
+    }
+
+    // ----- render_relevance_section (Task 5) -----
+
+    #[tokio::test]
+    async fn render_section_returns_empty_when_key_unknown() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let s = render_relevance_section(
+            &ledger,
+            "never-seen-key",
+            "never seen",
+            1,
+            5,
+        )
+        .await;
+        assert!(s.is_empty());
+    }
+
+    #[tokio::test]
+    async fn render_section_returns_empty_when_empty_keyword_key() {
+        let (_dir, ledger) = scratch_ledger().await;
+        let s = render_relevance_section(&ledger, "", "", 1, 5).await;
+        assert!(s.is_empty());
+    }
+
+    #[tokio::test]
+    async fn render_section_filters_below_min_outcomes_threshold() {
+        let (_dir, ledger) = scratch_ledger().await;
+        // One successful call; min_outcomes_to_show = 2 → filtered out.
+        ledger
+            .record_outcome(
+                "k",
+                RelevanceSurfaceKind::Tool,
+                "memory.read",
+                true,
+                100,
+            )
+            .await
+            .unwrap();
+        let s =
+            render_relevance_section(&ledger, "k", "test", 2, 5).await;
+        assert!(s.is_empty(), "below-threshold should render empty: {s}");
+    }
+
+    #[tokio::test]
+    async fn render_section_includes_tools_and_skills_subsections() {
+        let (_dir, ledger) = scratch_ledger().await;
+        // Tool: memory.read 3x, all success.
+        for _ in 0..3 {
+            ledger
+                .record_outcome(
+                    "k",
+                    RelevanceSurfaceKind::Tool,
+                    "memory.read",
+                    true,
+                    100,
+                )
+                .await
+                .unwrap();
+        }
+        // Skill: research-topic 2 successes + 1 failure.
+        for ok in [true, true, false] {
+            ledger
+                .record_outcome(
+                    "k",
+                    RelevanceSurfaceKind::Skill,
+                    "research-topic",
+                    ok,
+                    200,
+                )
+                .await
+                .unwrap();
+        }
+        let s =
+            render_relevance_section(&ledger, "k", "code, rust", 2, 5).await;
+        assert!(s.contains("## Tools recently used for similar tasks"));
+        assert!(s.contains("Based on keywords: code, rust"));
+        assert!(s.contains("Tools:"));
+        assert!(s.contains("memory.read: 3 successes, 0 failures"));
+        assert!(s.contains("Skills:"));
+        assert!(s.contains("research-topic: 3 invocations (2 successes, 1 failures)"));
+    }
+
+    #[tokio::test]
+    async fn render_section_sorts_by_success_count_desc() {
+        let (_dir, ledger) = scratch_ledger().await;
+        // Three tools with different success counts.
+        for _ in 0..5 {
+            ledger
+                .record_outcome("k", RelevanceSurfaceKind::Tool, "a.tool", true, 0)
+                .await
+                .unwrap();
+        }
+        for _ in 0..2 {
+            ledger
+                .record_outcome("k", RelevanceSurfaceKind::Tool, "b.tool", true, 0)
+                .await
+                .unwrap();
+        }
+        for _ in 0..3 {
+            ledger
+                .record_outcome("k", RelevanceSurfaceKind::Tool, "c.tool", true, 0)
+                .await
+                .unwrap();
+        }
+        let s = render_relevance_section(&ledger, "k", "x", 1, 5).await;
+        let a_pos = s.find("a.tool").unwrap();
+        let b_pos = s.find("b.tool").unwrap();
+        let c_pos = s.find("c.tool").unwrap();
+        assert!(a_pos < c_pos, "a (5 successes) before c (3 successes)");
+        assert!(c_pos < b_pos, "c (3 successes) before b (2 successes)");
+    }
+
+    #[tokio::test]
+    async fn render_section_top_k_truncates() {
+        let (_dir, ledger) = scratch_ledger().await;
+        for i in 0..10 {
+            ledger
+                .record_outcome(
+                    "k",
+                    RelevanceSurfaceKind::Tool,
+                    &format!("tool.{i}"),
+                    true,
+                    0,
+                )
+                .await
+                .unwrap();
+        }
+        // top_k_per_subsection = 3 → only 3 rows in the Tools list.
+        let s = render_relevance_section(&ledger, "k", "x", 1, 3).await;
+        let line_count = s.lines().filter(|l| l.starts_with("- ")).count();
+        assert_eq!(line_count, 3, "expected top-3 tools, got: {s}");
     }
 
     #[test]
