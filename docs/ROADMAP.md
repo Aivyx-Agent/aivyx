@@ -3409,6 +3409,77 @@ no code, just real-bot smoke tests across every adapter.
   `aivyx-slack` for callback signature legibility but it
   was already transitive.
 
+## Chapter E — Self-Improvement Loop Deepening (Phases 114+)
+
+After Chapter D closed the Hermes-comparison gaps and
+Phase 111-113 cleared the operator-surface deferral
+ledger, Chapter E opens against the project-vision
+critical path: deepening the **self-improvement loop**
+beyond the skill-specific framework Phase 112 shipped.
+Phase 112's auto-proposer drafts new skills from complex
+turns; Chapter E generalizes the loop to the full
+self-improvement surface — every PersonaDeltaCategory,
+tool-selection learning, recall-quality self-tuning,
+self-correction on failed turns.
+
+Chapter ordering follows the "easy wins first" discipline
+established for Chapter D: the most natural extension of
+the freshly-warm Phase 112 substrate ships first. The
+operator picks subsequent direction at each phase exit
+based on observed value vs the next-axis options.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 114 — Persona Auto-Proposer Generalization.**
+  Active — see below and [PHASE_114.md](PHASE_114.md).
+  Extends the Phase 112 auto-proposer from `LearnedSkill`
+  to every PersonaDeltaCategory variant. Per-category
+  TOML config (operator-picked over uniform-single); same
+  four-signal heuristic gate; reuses existing scope bases
+  (no KNOWN_BASES growth).
+
+Subsequent Chapter E phases will be picked from the
+remaining self-improvement axes (tool/skill selection
+learning from outcomes; self-correction loop on failed
+turns; outcome-driven Profile/Role refinement) based on
+operator pressure and observed value from Phase 114.
+
+## Phase 114 — Persona Auto-Proposer Generalization (Chapter E opener)
+
+**Active — see [PHASE_114.md](PHASE_114.md).** First
+phase of Chapter E. Generalizes the Phase 112 skill auto-
+proposer from `LearnedSkill` to the full 11-category
+`PersonaDeltaCategory` surface. After Phase 114, the
+inline-at-turn-boundary auto-proposer can draft
+BehavioralPreferences, LearnedContext,
+CommunicationAdaptations, and the other 7 categories in
+addition to skills — every Persona axis self-learns end-
+to-end.
+
+**Q-block at sign-off (one Recommended, two non-
+Recommended):**
+- Q1b — **Per-category TOML config block** (non-
+  Recommended; operator picked over uniform-single).
+  More flexible; more substrate.
+- Q2a — **Reuse the four Phase 112 signals**
+  (Recommended). Same heuristic gate; judge handles
+  per-category specifics.
+- Q3a — **Reuse existing scope bases** (Recommended).
+  `skills.propose` for `LearnedSkill`; `persona.propose`
+  for the other 10 categories. No new KNOWN_BASES entry;
+  A3 stays at 49.
+
+Streak predictions: all three HOLD (DESIGN.md → 5,
+PRODUCT.md → 5, `aivyx-core/src/lib.rs` → 3). Zero new
+workspace deps. Test count `+30` to `+50`.
+
+Backward-compatible audit chain: `AuditEvent::
+SkillAutoProposal` gains an optional `category` field
+with `#[serde(default, skip_serializing_if =
+"Option::is_none")]`; existing chains verify
+byte-identically. Phase 92's `supersedes_proposal_id`
+precedent.
+
 ## Phase 113 — Operator-Surface Polish (deferral cleanup)
 
 **Frozen — see [PHASE_113.md](PHASE_113.md).** Standalone
