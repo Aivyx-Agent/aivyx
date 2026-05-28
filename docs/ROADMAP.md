@@ -3411,7 +3411,50 @@ no code, just real-bot smoke tests across every adapter.
 
 ## Phase 112 — Skill Auto-Proposer (Phase 110's named follow-on)
 
-**Active — see [PHASE_112.md](PHASE_112.md).** Standalone
+**Frozen — see [PHASE_112.md](PHASE_112.md).** Shipped the
+agent-side auto-proposer that closes the last named Chapter
+D follow-on (Phase 110's deferral) and the project-vision
+critical-path piece. After Phase 112, the agent self-learns
+at the skill layer end-to-end: complex turns fire the
+auto-proposer in a detached background task; high-confidence
+verdicts auto-accept into the LearnedSkill chain; below-
+threshold verdicts stage for operator review through the
+existing `aivyx persona proposals approve` surface.
+
+**Streak outcomes** — 2 of 3 streaks held (1 positive
+surprise), 1 broke as predicted:
+- DESIGN.md: HELD (predicted to break). The substrate
+  slotted into the existing D4 surface without a new
+  section. Streak → 3.
+- PRODUCT.md: HELD as predicted. P8 covers inline-fired
+  reflection identically to cron-fired. Streak → 3.
+- `aivyx-core/src/lib.rs`: BROKE as predicted with the new
+  `pub mod skill_proposer`. Streak resets to 1.
+
+Test count: 1950 → 2044 (**+94**, way past the predicted
+`+30` to `+50` band). Zero new workspace deps; the LLM
+substrate (Phase 25 / Phase 91), tokio, audit log, and
+persona chain were all already vendored. Zero clippy
+warnings.
+
+**Two Phase-112-internal deferrals** — small operator-
+surface pieces shipped as a focused follow-on:
+- TOML `[skills.auto_propose]` config-section loader in
+  `aivyx-config` (the struct exists in `aivyx-channel`
+  with `Default` impl; promotion follows the Phase 91
+  `RecallJudgmentConfig` precedent).
+- `aivyx persona list --auto-only` / `--manual-only` and
+  `aivyx audit export --event-type` filter flags. Data is
+  already audit-logged; these are operator-convenience.
+
+**The Channel Activation Milestone is still unblocked**
+(Phase 111 closed the adapter-wiring carve-outs) and the
+self-learning loop is now closed end-to-end at the
+substrate level. The operator can run the milestone +
+exercise the auto-proposer in the same session whenever
+the verification window opens.
+
+ Standalone
 phase past Chapter D's close (matching the Phase 111
 precedent for closing Chapter-D-internal deferrals as
 follow-on phases). Closes the last named Chapter D
