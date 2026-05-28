@@ -35,5 +35,6 @@ pub use heuristic::{
 };
 pub use judge::{
     ExistingPersonaSnapshot, ExistingSkillSnapshot, JudgeError, JudgeRequest,
-    JudgeResponse, ProposedDraft, SkillDraft, judge, parse_judge_response,
+    JudgeResponse, ProposalSource, ProposedDraft, SkillDraft, judge,
+    parse_judge_response,
 };

@@ -55,6 +55,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use super::heuristic::FailureKind;
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -114,6 +116,52 @@ impl ExistingPersonaSnapshot {
     }
 }
 
+/// Phase 115 — the source of a judge call. Distinguishes
+/// Phase 114's positive-pattern path (turn completed
+/// successfully; what pattern is worth saving?) from the
+/// Phase 115 negative-feedback path (turn failed; what
+/// refinement would prevent recurrence?). The system prompt
+/// stays unified; the user prompt fans out per source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProposalSource {
+    /// Phase 114 positive-pattern path: `TurnOutcome::
+    /// Completed`. The judge looks for reusable multi-step
+    /// patterns worth saving as Persona refinements.
+    CompletedTurn,
+    /// Phase 115 negative-feedback path: a non-Completed
+    /// `TurnOutcome`. The judge looks for refinements that
+    /// would prevent this kind of failure from recurring.
+    FailedTurn {
+        /// Which failure-outcome variant fired the pipeline.
+        kind: FailureKind,
+        /// Short narrative of what went wrong — error
+        /// message, cancellation context, timeout reason,
+        /// etc. Caller-formed; budget ~200 chars.
+        summary: String,
+    },
+}
+
+impl ProposalSource {
+    /// Short stable label for the source — used in audit
+    /// events to distinguish completion-source from
+    /// failure-source proposals.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProposalSource::CompletedTurn => "completed_turn",
+            ProposalSource::FailedTurn { .. } => "failed_turn",
+        }
+    }
+}
+
+impl Default for ProposalSource {
+    /// Backward-compatibility default: callers built before
+    /// Phase 115 that don't set the field get the Phase 114
+    /// behavior (CompletedTurn).
+    fn default() -> Self {
+        ProposalSource::CompletedTurn
+    }
+}
+
 /// Input to [`judge`]. Caller builds this from the
 /// just-finalized turn's signals + the current Persona
 /// snapshot.
@@ -145,6 +193,13 @@ pub struct JudgeRequest<'a> {
     /// enough for a full draft + reasoning, short enough to
     /// keep cost predictable.
     pub max_tokens: u32,
+
+    /// Phase 115 — what triggered this judge call. Phase 114
+    /// callers passed `ProposalSource::CompletedTurn` by
+    /// default; the negative-feedback path passes
+    /// `ProposalSource::FailedTurn { .. }` carrying the
+    /// failure context.
+    pub source: ProposalSource,
 }
 
 /// What the judge actually proposes when it decides a turn is
@@ -336,8 +391,19 @@ pub enum JudgeError {
 pub fn build_system_prompt() -> String {
     String::from(
         "You are a Persona-refinement judge for an AI personal \
-assistant. Your job is to look at one completed turn and decide \
-whether the pattern is worth proposing as a Persona refinement. \
+assistant. Your job is to look at one turn (completed OR \
+failed) and decide whether to propose a Persona refinement. \
+\n\nThere are two source modes: \n\
+- Completed turn (Phase 114 positive-pattern path): look for \
+  reusable multi-step patterns worth saving as Persona \
+  refinements.\n\
+- Failed turn (Phase 115 negative-feedback path): the agent \
+  failed, timed out, was cancelled, or escalated. Look for \
+  refinements that would prevent this kind of failure from \
+  recurring next time — typically BehavioralConstraints \
+  (\"never X\"), LearnedContext (\"remember Y\"), or \
+  CommunicationAdaptations (\"phrase Z this way\").\n\
+\n\
 The agent's Persona has eleven categories; you pick the right \
 one and draft the refinement in the shape that category expects. \
 \n\nThe eleven categories (and their expected draft shape):\n\
@@ -404,11 +470,34 @@ false.\n\
 /// Build the user prompt the judge sees for one candidate
 /// turn. Embeds the turn summary and the full Persona
 /// snapshot (for cross-category dedup and pattern-
-/// awareness).
+/// awareness). Phase 115 — also embeds the failure context
+/// when the source is `FailedTurn`.
 pub fn build_user_prompt(request: &JudgeRequest<'_>) -> String {
     let mut s = String::new();
-    s.push_str("## Completed turn\n\n");
-    s.push_str(request.turn_summary);
+    match &request.source {
+        ProposalSource::CompletedTurn => {
+            s.push_str("## Completed turn\n\n");
+            s.push_str(request.turn_summary);
+        }
+        ProposalSource::FailedTurn { kind, summary } => {
+            s.push_str("## Failed turn (correction context)\n\n");
+            s.push_str(&format!(
+                "**Failure kind:** `{}`\n\n**Failure summary:** {}\n\n",
+                kind.label(),
+                summary,
+            ));
+            s.push_str("**Turn narrative:**\n\n");
+            s.push_str(request.turn_summary);
+            s.push_str(
+                "\n\nYour job: pick a Persona refinement that would prevent \
+this kind of failure from recurring. Prefer BehavioralConstraints (\"never X\"), \
+LearnedContext (\"remember Y\"), or CommunicationAdaptations (\"phrase Z this \
+way\"). If the failure isn't actionable (e.g. transient network error, \
+operator changed their mind for unrelated reasons), set is_worth_proposing \
+to false.",
+            );
+        }
+    }
     s.push_str("\n\n## Current Persona state");
     let p = request.existing_persona;
     if p.is_empty() {
@@ -704,6 +793,7 @@ mod tests {
             existing_persona: &persona,
             model: "claude-haiku-4-5",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
         assert!(p.contains("User asked X"));
@@ -730,6 +820,7 @@ mod tests {
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
         assert!(p.contains("AssistantName"));
@@ -909,6 +1000,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
         let resp = judge(provider, req, &cancel).await.expect("ok");
@@ -933,6 +1025,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
         let resp = judge(provider, req, &cancel).await.expect("ok");
@@ -958,6 +1051,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
         let resp = judge(provider, req, &cancel).await.expect("ok");
@@ -978,6 +1072,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
         let resp = judge(provider, req, &cancel).await.expect("ok");
@@ -993,6 +1088,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
         let err = judge(provider, req, &cancel).await.unwrap_err();
@@ -1100,6 +1196,85 @@ that's my call."#;
 
         let scalar = ProposedDraft::ScalarSet { value: "v".into() };
         assert_eq!(scalar.kind_label(), "ScalarSet");
+    }
+
+    // ----- Phase 115 — Failure-source prompt + ProposalSource -----
+
+    #[test]
+    fn proposal_source_default_is_completed_turn() {
+        assert_eq!(ProposalSource::default(), ProposalSource::CompletedTurn);
+    }
+
+    #[test]
+    fn proposal_source_label_is_stable() {
+        assert_eq!(ProposalSource::CompletedTurn.label(), "completed_turn");
+        let failed = ProposalSource::FailedTurn {
+            kind: FailureKind::Failed,
+            summary: "boom".into(),
+        };
+        assert_eq!(failed.label(), "failed_turn");
+    }
+
+    #[test]
+    fn system_prompt_mentions_both_source_modes() {
+        let p = build_system_prompt();
+        assert!(p.contains("Completed turn"));
+        assert!(p.contains("Failed turn"));
+        assert!(p.contains("BehavioralConstraints"));
+        assert!(p.contains("recurring"));
+    }
+
+    #[test]
+    fn user_prompt_for_completed_source_does_not_mention_failure_context() {
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "user asked X; agent ran 3 tools",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+        };
+        let p = build_user_prompt(&req);
+        assert!(p.contains("Completed turn"));
+        assert!(!p.contains("Failed turn"));
+    }
+
+    #[test]
+    fn user_prompt_for_failed_source_embeds_failure_kind_and_summary() {
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "user asked for X; agent tried Y; planner errored",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::FailedTurn {
+                kind: FailureKind::Failed,
+                summary: "planner returned MaxStepsExceeded".into(),
+            },
+        };
+        let p = build_user_prompt(&req);
+        assert!(p.contains("Failed turn"));
+        assert!(p.contains("`failed`"));
+        assert!(p.contains("MaxStepsExceeded"));
+        assert!(p.contains("BehavioralConstraints"));
+    }
+
+    #[test]
+    fn user_prompt_for_timed_out_failure_carries_kind_label() {
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "agent was working on X when budget exhausted",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::FailedTurn {
+                kind: FailureKind::TimedOut,
+                summary: "exceeded 30 second budget at step 12".into(),
+            },
+        };
+        let p = build_user_prompt(&req);
+        assert!(p.contains("`timed_out`"));
+        assert!(p.contains("30 second budget"));
     }
 
     #[test]

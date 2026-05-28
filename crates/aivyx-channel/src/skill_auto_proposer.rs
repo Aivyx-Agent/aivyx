@@ -48,8 +48,10 @@ use std::sync::Arc;
 // directly. Phase 112 keeps the auto-proposer's caller-facing surface
 // homed in aivyx-channel.
 pub use aivyx_core::skill_proposer::{
-    ExistingPersonaSnapshot, ExistingSkillSnapshot, HeuristicConfig, JudgeError,
-    JudgeRequest, JudgeResponse, ProposedDraft, SkillDraft, TurnSignals,
+    ExistingPersonaSnapshot, ExistingSkillSnapshot, FailureHeuristicConfig,
+    FailureKind, HeuristicConfig, JudgeError, JudgeRequest, JudgeResponse,
+    ProposalSource, ProposedDraft, SkillDraft, TurnSignals,
+    is_failure_candidate,
 };
 use aivyx_core::skill_proposer;
 use aivyx_core::CancellationToken;
@@ -722,11 +724,52 @@ pub async fn auto_propose_for_turn(
     existing_persona: ExistingPersonaSnapshot,
     cancellation: &CancellationToken,
 ) -> SkillProposerOutcome {
+    // Phase 114-compat entry: defaults to CompletedTurn
+    // source. Phase 115 callers use
+    // `auto_propose_for_turn_with_source` to pass an
+    // explicit `ProposalSource::FailedTurn { .. }`.
+    auto_propose_for_turn_with_source(
+        provider,
+        config,
+        signals,
+        turn_summary,
+        existing_persona,
+        ProposalSource::CompletedTurn,
+        cancellation,
+    )
+    .await
+}
+
+/// Phase 115 — same as `auto_propose_for_turn` but takes an
+/// explicit `ProposalSource` so the failure-feedback path
+/// can pass `FailedTurn { .. }`. The Phase 114-compat
+/// wrapper above hard-codes `CompletedTurn` for existing
+/// callers.
+#[allow(clippy::too_many_arguments)]
+pub async fn auto_propose_for_turn_with_source(
+    provider: Arc<dyn LlmProvider>,
+    config: &SkillAutoProposeConfig,
+    signals: TurnSignals,
+    turn_summary: String,
+    existing_persona: ExistingPersonaSnapshot,
+    source: ProposalSource,
+    cancellation: &CancellationToken,
+) -> SkillProposerOutcome {
     if !config.enabled {
         return SkillProposerOutcome::Disabled;
     }
 
-    if !skill_proposer::is_candidate(&signals, &config.heuristic) {
+    // Heuristic gate: Phase 114 path uses TurnSignals + the
+    // four-signal gate; Phase 115 failed-turn path skips
+    // the signals gate (the daemon side already checked
+    // `is_failure_candidate`).
+    let pass_heuristic = match source {
+        ProposalSource::CompletedTurn => {
+            skill_proposer::is_candidate(&signals, &config.heuristic)
+        }
+        ProposalSource::FailedTurn { .. } => true,
+    };
+    if !pass_heuristic {
         return SkillProposerOutcome::HeuristicGated;
     }
 
@@ -735,6 +778,7 @@ pub async fn auto_propose_for_turn(
         existing_persona: &existing_persona,
         model: &config.judge_model,
         max_tokens: config.judge_max_tokens,
+        source,
     };
 
     match skill_proposer::judge(provider, request, cancellation).await {
