@@ -122,78 +122,265 @@ pub trait SlackTransport: Send + Sync {
 // Production impl — slack-morphism Socket Mode + REST
 // ---------------------------------------------------------------------------
 
-/// Production transport stub. **Scoped down at Task 3 to a
-/// compile-only target** because slack-morphism's Socket
-/// Mode callback API is `fn`-pointer-shaped (callbacks
-/// cannot capture mpsc senders directly; the SDK pushes
-/// state through `SlackClientEventsUserState`). The right
-/// API-discovery design is to route the mpsc sender through
-/// a `UserState`-backed wrapper; that's a meaningful chunk
-/// of slack-morphism-specific design work that does not
-/// belong on the critical path of Task 3.
+/// Production transport. **Live wiring closed the Phase 108
+/// Task 3 carve-out** at Phase 111 Task 4. The
+/// callback-state-passing design that the Phase 108 doc
+/// named (route the mpsc sender through
+/// `SlackClientEventsUserState`) lives in
+/// [`Self::connect`] below.
 ///
-/// The pattern matches the Phase 107 deferral structure:
+/// ## How the callback bridge works
 ///
-/// - Phase 107 Task 5 carved out the Discord daemon-frontend
-///   variant for a focused follow-on.
-/// - Phase 108 Task 3 carves out the `SlackMorphismTransport`
-///   production wiring for the same follow-on bundle.
+/// slack-morphism's Socket Mode callbacks are `fn`-pointer-
+/// shaped — they can't capture closures with state. The SDK
+/// solves this with a typed `UserState` registry: at
+/// listener construction, the caller registers state values
+/// keyed by their type; callbacks retrieve them via the
+/// `_states` parameter.
 ///
-/// Both deferrals land together when an operator wants
-/// live-bot smoke testing; the Channel Activation Milestone
-/// is the natural home for the real-network exercises that
-/// would catch any callback-state-passing bug.
+/// The Phase 111 live wiring constructs an mpsc channel,
+/// registers the sender as a typed user-state value
+/// (`SlackSenderState`), spawns the listener's background
+/// task, and exposes the receiver through `next_message`.
+/// The callback retrieves `SlackSenderState` from the
+/// registry on each event and pushes parsed
+/// `IncomingMessage`s into the channel.
 ///
-/// At Task 3 the stub serves three roles:
-/// 1. Keeps the slack-morphism dep a legitimate compile
-///    target so the workspace catches version-conflict and
-///    feature-flag mistakes.
-/// 2. Pins the public surface (`connect`, `next_message`,
-///    `send_message`) so the follow-on wiring is a fill-in,
-///    not a refactor.
-/// 3. Returns an explicit `TransportError::Platform` with a
-///    "production transport not yet wired" message so an
-///    operator who lands at the Slack dispatch arm before
-///    the follow-on ships gets a precise error instead of
-///    a panic.
+/// `next_message` blocks on `recv().await`; `send_message`
+/// uses the live `twilight_http`-equivalent
+/// `slack-morphism` Web API session.
 pub struct SlackMorphismTransport {
-    _bot_token: String,
-    _app_token: String,
+    /// REST client owned for `chat.postMessage` calls. `Arc`
+    /// so the Socket Mode background task and `send_message`
+    /// share one client.
+    client: std::sync::Arc<
+        slack_morphism::SlackClient<
+            slack_morphism::hyper_tokio::SlackClientHyperHttpsConnector,
+        >,
+    >,
+    /// Bot token used for REST calls (`chat.postMessage`,
+    /// any other Web API surfaces a future phase wires).
+    bot_token: slack_morphism::SlackApiToken,
+    /// Inbound message receiver. The Socket Mode callback
+    /// pushes parsed `IncomingMessage`s into this channel
+    /// via the `SlackSenderState` user-state; `next_message`
+    /// receives from it. `Mutex<...>` because
+    /// `Receiver::recv` takes `&mut self` and the trait
+    /// method takes `&self`; one consumer per transport
+    /// instance, so contention is trivial.
+    rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<IncomingMessage>>,
+}
+
+/// Wrapper type registered as a slack-morphism user-state
+/// value. Carries the mpsc sender the callback pushes into.
+/// A distinct newtype (not just `mpsc::Sender<_>` directly)
+/// makes the user-state retrieval `states.read::<SlackSenderState>()`
+/// unambiguous.
+#[derive(Clone)]
+struct SlackSenderState {
+    tx: tokio::sync::mpsc::Sender<IncomingMessage>,
 }
 
 impl SlackMorphismTransport {
-    /// Construct a production transport stub. Holds the
-    /// supplied tokens so a future wiring pass has them
-    /// ready, but does **not** open a Socket Mode
-    /// connection yet — `next_message` and `send_message`
-    /// return a deferral error.
+    /// Construct a production transport. Opens the Socket
+    /// Mode connection, spawns the SDK's listener background
+    /// task, and returns a handle ready to answer
+    /// `next_message` and `send_message`.
+    ///
+    /// `bot_token_raw` is the `xoxb-...` token used for REST
+    /// calls. `app_token_raw` is the `xapp-...` app-level
+    /// token used to authenticate the Socket Mode WebSocket
+    /// connection.
     pub async fn connect(
         bot_token_raw: &str,
         app_token_raw: &str,
     ) -> Result<Self, TransportError> {
+        use slack_morphism::prelude::*;
+
+        let connector = SlackClientHyperConnector::new().map_err(|e| {
+            TransportError::Platform(format!("hyper connector build: {e}"))
+        })?;
+        let client = std::sync::Arc::new(SlackClient::new(connector));
+
+        let bot_token: SlackApiToken =
+            SlackApiToken::new(SlackApiTokenValue(bot_token_raw.to_string()));
+        let app_token: SlackApiToken =
+            SlackApiToken::new(SlackApiTokenValue(app_token_raw.to_string()));
+
+        // mpsc adapter: callback pushes; next_message pops.
+        // Capacity matches aivyx-discord's outer multiplexer
+        // mailbox bound.
+        let (tx, rx) = tokio::sync::mpsc::channel::<IncomingMessage>(64);
+        let sender_state = SlackSenderState { tx };
+
+        // Build the Socket Mode listener environment with the
+        // mpsc sender registered as user state. The callback
+        // retrieves the sender via
+        // `states.read::<SlackSenderState>().await`.
+        let listener_environment = std::sync::Arc::new(
+            SlackClientEventsListenerEnvironment::new(client.clone())
+                .with_error_handler(|err, _client, _states| {
+                    eprintln!("aivyx-slack: socket-mode error: {err:?}");
+                    http::StatusCode::BAD_REQUEST
+                })
+                .with_user_state(sender_state),
+        );
+
+        let callbacks = SlackSocketModeListenerCallbacks::new()
+            .with_push_events(push_event_callback);
+
+        let socket_mode_listener = SlackClientSocketModeListener::new(
+            &SlackClientSocketModeConfig::new(),
+            listener_environment,
+            callbacks,
+        );
+
+        // Start the Socket Mode connection. This resolves
+        // once the connect handshake completes; the actual
+        // event loop runs in a background task spawned
+        // below.
+        socket_mode_listener
+            .listen_for(&app_token)
+            .await
+            .map_err(|e| {
+                TransportError::Platform(format!("socket-mode listen_for: {e}"))
+            })?;
+
+        tokio::spawn(async move {
+            socket_mode_listener.serve().await;
+        });
+
         Ok(SlackMorphismTransport {
-            _bot_token: bot_token_raw.to_string(),
-            _app_token: app_token_raw.to_string(),
+            client,
+            bot_token,
+            rx: tokio::sync::Mutex::new(rx),
         })
     }
+}
+
+/// `with_push_events` callback. Static `fn` pointer (no
+/// captures); state passes through the `_states` registry.
+/// Retrieves the [`SlackSenderState`] registered at listener
+/// construction, parses the `MessageCreate`-equivalent
+/// event, and pushes an [`IncomingMessage`] into the mpsc
+/// adapter.
+// slack-morphism's `with_push_events` takes a fn-pointer with
+// the exact signature below. The boxed-future return type is
+// the SDK's own — type_complexity here is unavoidable.
+#[allow(clippy::type_complexity)]
+fn push_event_callback(
+    event: slack_morphism::prelude::SlackPushEventCallback,
+    _client: std::sync::Arc<slack_morphism::hyper_tokio::SlackHyperClient>,
+    states: slack_morphism::prelude::SlackClientEventsUserState,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<
+                    (),
+                    Box<dyn std::error::Error + Send + Sync + 'static>,
+                >,
+            > + Send
+            + 'static,
+    >,
+> {
+    use slack_morphism::prelude::*;
+
+    Box::pin(async move {
+        // Only the Message event variant is interesting for
+        // the agent turn loop. Everything else (app mentions
+        // we already see as messages, presence updates, team
+        // joins, etc.) is drained silently.
+        let SlackEventCallbackBody::Message(msg_event) = event.event else {
+            return Ok(());
+        };
+
+        // Skip bot-authored messages so the agent doesn't
+        // reply to its own output.
+        if msg_event.sender.bot_id.is_some() {
+            return Ok(());
+        }
+
+        // Pull the five fields IncomingMessage carries. Slack's
+        // message envelope is richer than this — origin
+        // carries thread_ts, the content has blocks, etc. —
+        // but Phase 108's foundation scope (Q4a) deliberately
+        // narrowed to plain text + IDs.
+        let team_id = event.team_id.0;
+        let channel_id = match msg_event.origin.channel {
+            Some(c) => c.0,
+            None => return Ok(()),
+        };
+        let user_id = match msg_event.sender.user {
+            Some(u) => u.0,
+            None => return Ok(()),
+        };
+        let text = match msg_event.content.and_then(|c| c.text) {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+        if text.is_empty() {
+            return Ok(());
+        }
+        let message_ts = msg_event.origin.ts.0;
+
+        // Retrieve the sender from the user-state registry
+        // the listener was constructed with.
+        let states_read = states.read().await;
+        let sender_state = match states_read.get_user_state::<SlackSenderState>() {
+            Some(s) => s.clone(),
+            None => {
+                eprintln!(
+                    "aivyx-slack: SlackSenderState missing from user-state — \
+                     listener-environment construction must register it"
+                );
+                return Ok(());
+            }
+        };
+        drop(states_read);
+
+        // Push best-effort. If the receiver has been dropped
+        // (transport going down), silently discard rather
+        // than failing the callback — the SDK error handler
+        // logs at the listener layer.
+        let _ = sender_state
+            .tx
+            .send(IncomingMessage {
+                team_id,
+                channel_id,
+                user_id,
+                text,
+                message_ts,
+            })
+            .await;
+
+        Ok(())
+    })
 }
 
 #[async_trait]
 impl SlackTransport for SlackMorphismTransport {
     async fn next_message(&self) -> Result<IncomingMessage, TransportError> {
-        Err(TransportError::Platform(
-            "production SlackMorphismTransport not yet wired — \
-             callback-state-passing via SlackClientEventsUserState is the \
-             Phase-108-internal deferral bundled with the Phase 107 \
-             daemon-frontend follow-on. Use ScriptedTransport for tests."
-                .to_string(),
-        ))
+        let mut rx = self.rx.lock().await;
+        rx.recv().await.ok_or_else(|| {
+            TransportError::Platform(
+                "socket-mode sender dropped; SDK listener task exited".to_string(),
+            )
+        })
     }
 
-    async fn send_message(&self, _msg: OutgoingMessage) -> Result<(), TransportError> {
-        Err(TransportError::Platform(
-            "production SlackMorphismTransport not yet wired — see next_message".to_string(),
-        ))
+    async fn send_message(&self, msg: OutgoingMessage) -> Result<(), TransportError> {
+        use slack_morphism::prelude::*;
+
+        let session = self.client.open_session(&self.bot_token);
+        let request = SlackApiChatPostMessageRequest::new(
+            SlackChannelId(msg.channel_id),
+            SlackMessageContent::new().with_text(msg.text),
+        );
+        session
+            .chat_post_message(&request)
+            .await
+            .map_err(|e| TransportError::Platform(format!("chat.postMessage: {e}")))?;
+        Ok(())
     }
 }
 

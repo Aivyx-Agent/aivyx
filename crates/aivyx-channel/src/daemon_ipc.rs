@@ -62,6 +62,16 @@ pub enum FrontendType {
     Local,
     Telegram,
     Web,
+    /// Phase 111 — Discord adapter daemon-frontend. Mirrors the
+    /// Phase 19 Telegram-over-daemon pattern; the daemon-side
+    /// `discord_daemon_frontend.rs` builds an `IpcChannelBridge`
+    /// when a `FrontendType::Discord` connection arrives.
+    Discord,
+    /// Phase 111 — Slack adapter daemon-frontend. Same shape as
+    /// Discord; the daemon-side `slack_daemon_frontend.rs` builds
+    /// an `IpcChannelBridge` when a `FrontendType::Slack`
+    /// connection arrives.
+    Slack,
 }
 
 // ---------------------------------------------------------------------------

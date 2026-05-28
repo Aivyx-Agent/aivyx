@@ -95,6 +95,17 @@ mod role_envelope;
 mod role_render;
 mod session;
 pub mod telegram_daemon_frontend;
+// Phase 111 — Discord and Slack daemon-frontends mirroring
+// telegram_daemon_frontend.rs's Phase 19 pattern. Each adapter
+// crate (aivyx-discord, aivyx-slack) ships the in-process
+// channel + session driver; the daemon-frontend modules below
+// bridge the daemon IPC protocol to those crates' transport
+// surfaces. The `parse_gate_command` helper extracted to
+// `gate_command.rs` is shared between all three (Telegram +
+// Discord + Slack) daemon-frontends.
+pub mod discord_daemon_frontend;
+pub mod gate_command;
+pub mod slack_daemon_frontend;
 pub mod web_ui;
 
 pub use local::LocalChannel;

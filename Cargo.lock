@@ -245,6 +245,7 @@ dependencies = [
  "aivyx-memory",
  "aivyx-storage",
  "async-trait",
+ "http",
  "rsb_derive",
  "serde",
  "serde_json",

@@ -4529,6 +4529,20 @@ async fn run_async(
                 aivyx_channel::daemon_ipc::FrontendType::Web => {
                     Arc::new(aivyx_channel::web_ui::WebDaemonChannel::new())
                 }
+                // Phase 111 — Discord daemon-mode channel stub.
+                // Mirrors TelegramDaemonChannel; the
+                // discord_daemon_frontend.rs module wires the
+                // actual two-way bridge.
+                aivyx_channel::daemon_ipc::FrontendType::Discord => {
+                    Arc::new(aivyx_channel::discord_daemon_frontend::DiscordDaemonChannel::new())
+                }
+                // Phase 111 — Slack daemon-mode channel stub.
+                // Mirrors TelegramDaemonChannel and
+                // DiscordDaemonChannel; the slack_daemon_frontend.rs
+                // module wires the actual two-way bridge.
+                aivyx_channel::daemon_ipc::FrontendType::Slack => {
+                    Arc::new(aivyx_channel::slack_daemon_frontend::SlackDaemonChannel::new())
+                }
             }
         });
 
@@ -5090,12 +5104,51 @@ async fn run_async(
             use secrecy::ExposeSecret;
             let token_str = token_secret.expose_secret();
 
-            // Phase 107 — startup banner. Discord's bot does
-            // not need a chat-filter (intents already gate
-            // which channels the bot can see at the protocol
-            // level), so the banner is simpler than Telegram's.
+            // Phase 111 — daemon-first, in-process fallback —
+            // same pattern as Telegram's Phase 19 wiring. The
+            // Phase 107 Task 5 carve-out is now closed; the
+            // daemon-mode path goes through
+            // run_discord_daemon_multi_session.
+            if !no_daemon && let Ok(sp) = default_socket_path() {
+                let transport = std::sync::Arc::new(
+                    aivyx_discord::transport::TwilightTransport::new(token_str),
+                );
+
+                eprintln!(
+                    "aivyx {} (daemon) — discord bot live\n\
+                     daemon: {}\n\
+                     fs sandbox: {}\n\
+                     memory: live (recall persists across restarts)\n\
+                     audit: persistent ({} events verified from disk)",
+                    env!("CARGO_PKG_VERSION"),
+                    sp.display(),
+                    canonical_root.display(),
+                    verified_event_count,
+                );
+
+                match aivyx_channel::discord_daemon_frontend::run_discord_daemon_multi_session(
+                    transport,
+                    sp.clone(),
+                    Some(active_role_name.clone()),
+                    shutdown.clone(),
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx: daemon discord session failed ({e}), \
+                             falling back to in-process."
+                        );
+                    }
+                }
+            } else {
+                eprintln!("aivyx: no socket path available, using in-process mode.");
+            }
+
+            // In-process fallback (Phase 107 path).
             eprintln!(
-                "aivyx {} — discord bot live\n\
+                "aivyx {} — discord bot live (in-process)\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
                  audit: persistent ({} events verified from disk)",
@@ -5169,8 +5222,63 @@ async fn run_async(
             let bot_token_str = bot_token_secret.expose_secret();
             let app_token_str = app_token_secret.expose_secret();
 
+            // Phase 111 — daemon-first, in-process fallback —
+            // same pattern as Telegram + Discord. The Phase 108
+            // Task 3 SlackMorphismTransport carve-out is now
+            // closed too; the live Socket Mode wiring lands
+            // through Task 4 of Phase 111.
+            if !no_daemon && let Ok(sp) = default_socket_path() {
+                let transport_result =
+                    aivyx_slack::transport::SlackMorphismTransport::connect(
+                        bot_token_str,
+                        app_token_str,
+                    )
+                    .await;
+                match transport_result {
+                    Ok(transport) => {
+                        let transport = std::sync::Arc::new(transport);
+                        eprintln!(
+                            "aivyx {} (daemon) — slack bot live\n\
+                             daemon: {}\n\
+                             fs sandbox: {}\n\
+                             memory: live (recall persists across restarts)\n\
+                             audit: persistent ({} events verified from disk)",
+                            env!("CARGO_PKG_VERSION"),
+                            sp.display(),
+                            canonical_root.display(),
+                            verified_event_count,
+                        );
+                        match aivyx_channel::slack_daemon_frontend::run_slack_daemon_multi_session(
+                            transport,
+                            sp.clone(),
+                            Some(active_role_name.clone()),
+                            shutdown.clone(),
+                        )
+                        .await
+                        {
+                            Ok(()) => return Ok(()),
+                            Err(e) => {
+                                eprintln!(
+                                    "aivyx: daemon slack session failed ({e}), \
+                                     falling back to in-process."
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "aivyx: slack socket-mode connect failed ({e}), \
+                             falling back to in-process."
+                        );
+                    }
+                }
+            } else {
+                eprintln!("aivyx: no socket path available, using in-process mode.");
+            }
+
+            // In-process fallback (Phase 108 path).
             eprintln!(
-                "aivyx {} — slack bot live\n\
+                "aivyx {} — slack bot live (in-process)\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
                  audit: persistent ({} events verified from disk)",

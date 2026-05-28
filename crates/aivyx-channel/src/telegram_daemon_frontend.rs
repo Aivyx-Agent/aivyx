@@ -22,6 +22,7 @@ use aivyx_telegram::transport::{IncomingMessage, OutgoingMessage, ReqwestTranspo
 use crate::daemon_client::DaemonSession;
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
+use crate::gate_command;
 
 const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 
@@ -216,7 +217,7 @@ async fn run_telegram_daemon_chat_task(
             continue;
         }
 
-        if let Some(gate_cmd) = parse_gate_command(msg.text.trim()) {
+        if let Some(gate_cmd) = gate_command::parse(msg.text.trim()) {
             let result = session
                 .resolve_gate(gate_cmd.mission_id, gate_cmd.gate_id, gate_cmd.approved)
                 .await;
@@ -336,56 +337,15 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
     }
 }
 
-struct GateCommand {
-    mission_id: String,
-    gate_id: String,
-    approved: bool,
-}
-
-fn parse_gate_command(text: &str) -> Option<GateCommand> {
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let approved = match parts[0] {
-        "/approve" => true,
-        "/reject" => false,
-        _ => return None,
-    };
-    Some(GateCommand {
-        mission_id: parts[1].to_string(),
-        gate_id: parts[2].to_string(),
-        approved,
-    })
-}
+// `parse_gate_command` lived here through Phases 19–110. Phase 111
+// extracted it into `crate::gate_command` so the Discord and Slack
+// daemon-frontends could share the parser. Three-data-point
+// reuse — see Phase 111 PHASE_111.md Q-block, Q2a sign-off.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::daemon_ipc::StreamEventPayload;
-
-    #[test]
-    fn parse_approve_command() {
-        let cmd = parse_gate_command("/approve m-001 g-abc").unwrap();
-        assert!(cmd.approved);
-        assert_eq!(cmd.mission_id, "m-001");
-        assert_eq!(cmd.gate_id, "g-abc");
-    }
-
-    #[test]
-    fn parse_reject_command() {
-        let cmd = parse_gate_command("/reject m-002 g-xyz").unwrap();
-        assert!(!cmd.approved);
-        assert_eq!(cmd.mission_id, "m-002");
-        assert_eq!(cmd.gate_id, "g-xyz");
-    }
-
-    #[test]
-    fn parse_unknown_command_returns_none() {
-        assert!(parse_gate_command("/cancel").is_none());
-        assert!(parse_gate_command("/approve m-001").is_none());
-        assert!(parse_gate_command("hello world").is_none());
-    }
 
     #[test]
     fn approval_gate_renders_with_reply_hint() {

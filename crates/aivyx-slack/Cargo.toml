@@ -51,6 +51,12 @@ slack-morphism = { version = "2", default-features = false, features = ["hyper",
 # operator-side audits.
 rsb_derive = "0.5"
 
+# Phase 111 — slack-morphism's error_handler callback returns
+# `http::StatusCode`. The `http` crate is transitive via reqwest
+# / hyper already in the workspace; promoting to a direct dep
+# costs zero compile time but makes the signature use legible.
+http = "1"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 aivyx-memory = { path = "../aivyx-memory" }
