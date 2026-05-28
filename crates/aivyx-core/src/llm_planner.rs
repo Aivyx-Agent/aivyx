@@ -129,10 +129,20 @@ pub trait SystemPromptRefiner: Send + Sync {
     /// recall-window-relevance work) can locate the right
     /// recent-turns buffer. Mirrors `ContextProvider::recall`,
     /// which already carries `session_id`.
+    ///
+    /// Phase 117 — `base_prompt` is the planner's currently
+    /// configured base system prompt. Implementations that
+    /// produce a refined prompt from scratch (Phase 79's
+    /// adaptive Persona refiner) ignore this argument; ones
+    /// that EXTEND the base (Phase 117's relevance refiner)
+    /// can compose their output as `base_prompt +
+    /// addendum`. The default value behaviour for callers
+    /// that don't carry the base is the empty string.
     async fn refine(
         &self,
         user_message: &str,
         session_id: crate::SessionId,
+        base_prompt: &str,
     ) -> Option<String>;
 }
 
@@ -522,8 +532,19 @@ impl TurnPlanner for LlmPlanner {
         let refiner = self.config.system_prompt_refiner.clone();
         if let Some(refiner) = refiner {
             if has_query {
+                // Phase 117 — pass the planner's current base
+                // prompt so extending refiners (relevance
+                // section) can compose without rebuilding the
+                // base from scratch. Refiners that ignore the
+                // arg (Phase 79 adaptive Persona) behave
+                // identically to pre-Phase-117.
+                let base_prompt = self
+                    .config
+                    .system_prompt
+                    .clone()
+                    .unwrap_or_default();
                 if let Some(refined) = refiner
-                    .refine(&query_text, message.session_id)
+                    .refine(&query_text, message.session_id, &base_prompt)
                     .await
                 {
                     self.config.system_prompt = Some(refined);
@@ -1357,6 +1378,7 @@ mod tests {
             &self,
             user_message: &str,
             _session_id: crate::SessionId,
+            _base_prompt: &str,
         ) -> Option<String> {
             self.seen.lock().unwrap().push(user_message.to_string());
             self.refined.clone()

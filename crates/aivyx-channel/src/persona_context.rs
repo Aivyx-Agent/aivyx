@@ -238,6 +238,13 @@ impl SystemPromptRefiner for PersonaContextRefiner {
         &self,
         user_message: &str,
         session_id: aivyx_core::SessionId,
+        // Phase 117 — the planner's current base prompt. The
+        // Phase 79 PersonaContextRefiner builds the prompt
+        // from scratch (Profile + selected Persona + Role)
+        // and ignores this arg; only Phase 117's
+        // RelevancePromptRefiner uses it as a composition
+        // base.
+        _base_prompt: &str,
     ) -> Option<String> {
         // Phase 90 — heuristic recall gate. On a noise turn
         // short-circuit before any embed call; the planner
@@ -475,7 +482,7 @@ mod tests {
             ..EffectivePersona::default()
         };
         let out = refiner(p, false, 12)
-            .refine("anything", aivyx_core::SessionId::new())
+            .refine("anything", aivyx_core::SessionId::new(), "")
             .await;
         assert!(out.is_none());
     }
@@ -483,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn embed_failure_falls_back_to_none() {
         let out = refiner(big_persona(), true, 12)
-            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
             .await;
         assert!(out.is_none());
     }
@@ -491,7 +498,7 @@ mod tests {
     #[tokio::test]
     async fn selects_relevant_facets_and_keeps_core_and_constraints() {
         let out = refiner(big_persona(), false, 12)
-            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
             .await
             .expect("large persona + ok embed → Some");
 
@@ -511,7 +518,7 @@ mod tests {
         // No facet matches; large Soul still bounds to just the
         // always-on core + constraints (the adaptive point).
         let out = refiner(big_persona(), false, 12)
-            .refine("tell me a joke", aivyx_core::SessionId::new())
+            .refine("tell me a joke", aivyx_core::SessionId::new(), "")
             .await
             .expect("Some");
         assert!(!out.contains("deploy runbook lives in wiki"));
@@ -523,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn empty_persona_is_none() {
         let out = refiner(EffectivePersona::default(), false, 0)
-            .refine("hi", aivyx_core::SessionId::new())
+            .refine("hi", aivyx_core::SessionId::new(), "")
             .await;
         // threshold 0 but zero facets → still None (nothing to
         // select).
@@ -601,7 +608,7 @@ mod tests {
 
         let r = refiner_with_recorder(Arc::clone(&provider))
             .with_conversation_windows(windows.clone(), 3);
-        let _ = r.refine("how do I deploy", s).await;
+        let _ = r.refine("how do I deploy", s, "").await;
 
         let seen = provider.seen.lock().unwrap().clone();
         let query = seen
@@ -671,7 +678,7 @@ mod tests {
                 _ => unreachable!(),
             }
 
-            let _ = r.refine("bare message", s).await;
+            let _ = r.refine("bare message", s, "").await;
             let seen = provider.seen.lock().unwrap().clone();
             assert_eq!(
                 seen.first(),
@@ -698,7 +705,7 @@ mod tests {
         let r = refiner_with_recorder(Arc::clone(&provider))
             .with_recall_gate(4);
         let out =
-            r.refine("ok", aivyx_core::SessionId::new()).await;
+            r.refine("ok", aivyx_core::SessionId::new(), "").await;
         assert!(out.is_none(), "gated turn returns None");
         assert!(
             provider.seen.lock().unwrap().is_empty(),
@@ -721,6 +728,7 @@ mod tests {
             .refine(
                 "how do I deploy",
                 aivyx_core::SessionId::new(),
+                "",
             )
             .await;
         let seen = provider.seen.lock().unwrap().clone();
@@ -749,7 +757,7 @@ mod tests {
         // big_persona has 14 reducible facets → clears the
         // size_threshold → refine runs the embed batch.
         let _ = r
-            .refine("ok", aivyx_core::SessionId::new())
+            .refine("ok", aivyx_core::SessionId::new(), "")
             .await;
         let seen = provider.seen.lock().unwrap().clone();
         assert!(
@@ -771,7 +779,7 @@ mod tests {
     #[tokio::test]
     async fn refine_token_budget_zero_passes_through() {
         let out = refiner(big_persona(), false, 12)
-            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
             .await
             .expect("large persona + ok embed → Some");
         // Both deploy-relevant facets selected as before.
@@ -792,7 +800,7 @@ mod tests {
             .with_recall_token_budget(8);
 
         let out = refiner
-            .refine("how do I deploy", aivyx_core::SessionId::new())
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
             .await
             .expect("large persona + ok embed → Some");
 
