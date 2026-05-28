@@ -1075,6 +1075,10 @@ pub async fn run_auto_propose_pipeline_with_source(
     // just the skill list for fuzzy-match.
     let existing_persona = snapshot_existing_persona(shared_persona);
 
+    // Keep a copy of the source for the audit event below;
+    // the call into auto_propose_for_turn_with_source moves
+    // its `source` arg into the JudgeRequest.
+    let source_for_audit = source.clone();
     // Time the judge call so the audit event carries latency.
     let judge_started = std::time::Instant::now();
     let proposer_outcome = auto_propose_for_turn_with_source(
@@ -1163,6 +1167,19 @@ pub async fn run_auto_propose_pipeline_with_source(
             _ => None,
         },
     };
+    // Phase 115 — convert the runtime ProposalSource into the
+    // audit-event ProposalSourceSummary. None for the
+    // pre-Phase-115 backward-compat default; Some for explicit
+    // FailedTurn entries so audit-export filters can pick them
+    // out.
+    let source_summary = match &source_for_audit {
+        ProposalSource::CompletedTurn => None,
+        ProposalSource::FailedTurn { kind, .. } => {
+            Some(aivyx_audit::ProposalSourceSummary::FailedTurn {
+                failure_kind: kind.label().to_string(),
+            })
+        }
+    };
     if let Some(alog) = audit_log {
         let event = aivyx_audit::AuditEvent::SkillAutoProposal {
             session_id,
@@ -1172,6 +1189,7 @@ pub async fn run_auto_propose_pipeline_with_source(
             judge_latency_ms,
             heuristic_signals_matched: signals_record,
             category: category_label,
+            source: source_summary,
         };
         use aivyx_audit::AuditWriter as _;
         if let Err(e) = alog.append(event) {

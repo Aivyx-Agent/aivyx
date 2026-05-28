@@ -208,7 +208,35 @@ pub enum AuditEvent {
         /// compatible audit-chain extensions).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         category: Option<String>,
+        /// Phase 115 — what triggered this auto-proposer
+        /// fire: a Phase 114 positive-pattern (Completed
+        /// turn) or a Phase 115 negative-feedback path
+        /// (failed turn). `None` for pre-Phase-115 entries;
+        /// the absence of the field is semantically the
+        /// CompletedTurn default. Same wire-compat pattern
+        /// as the Phase 114 `category` field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<ProposalSourceSummary>,
     },
+}
+
+/// Phase 115 — discriminator for what triggered an auto-
+/// proposer fire. Mirrors
+/// `aivyx_core::skill_proposer::ProposalSource` but lives
+/// in `aivyx-audit` so the chain shape stays independent of
+/// `aivyx-core`'s skill-proposer evolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum ProposalSourceSummary {
+    /// Phase 114 positive-pattern path: `TurnOutcome::
+    /// Completed`. Default for entries that omit the source
+    /// field on read.
+    CompletedTurn,
+    /// Phase 115 negative-feedback path: a non-Completed
+    /// `TurnOutcome`. The `failure_kind` field carries the
+    /// specific variant (`"failed"` / `"cancelled"` /
+    /// `"timed_out"` / `"escalated"`).
+    FailedTurn { failure_kind: String },
 }
 
 /// Phase 112 — Skill Auto-Proposer outcome discriminator.
@@ -1248,6 +1276,7 @@ mod tests {
                 judge_latency_ms: None,
                 heuristic_signals_matched: no_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1257,6 +1286,7 @@ mod tests {
                 judge_latency_ms: None,
                 heuristic_signals_matched: no_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1266,6 +1296,7 @@ mod tests {
                 judge_latency_ms: Some(1450),
                 heuristic_signals_matched: all_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1280,6 +1311,7 @@ mod tests {
                     gate_resolve: false,
                 },
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1292,6 +1324,7 @@ mod tests {
                 judge_latency_ms: Some(1100),
                 heuristic_signals_matched: all_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1304,6 +1337,7 @@ mod tests {
                 judge_latency_ms: Some(1200),
                 heuristic_signals_matched: all_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1313,6 +1347,7 @@ mod tests {
                 judge_latency_ms: Some(900),
                 heuristic_signals_matched: all_signals(),
                 category: None,
+                source: None,
             },
             AuditEvent::SkillAutoProposal {
                 session_id: SessionId::new(),
@@ -1324,6 +1359,7 @@ mod tests {
                 judge_latency_ms: Some(420),
                 heuristic_signals_matched: all_signals(),
                 category: None,
+                source: None,
             },
         ];
 
@@ -1370,6 +1406,7 @@ mod tests {
             judge_latency_ms: Some(1450),
             heuristic_signals_matched: all_signals(),
             category: Some("BehavioralPreferences".into()),
+            source: None,
         };
         let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
         let back: AuditEvent =
@@ -1392,6 +1429,7 @@ mod tests {
             judge_latency_ms: Some(1450),
             heuristic_signals_matched: all_signals(),
             category: None,
+            source: None,
         };
         let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
         // The JSON output should NOT contain "category" when None.
@@ -1434,6 +1472,99 @@ mod tests {
         }
     }
 
+    // ---- Phase 115 — `source` field backward-compat ----
+
+    #[test]
+    fn skill_auto_proposal_with_failed_turn_source_round_trips() {
+        let ev = AuditEvent::SkillAutoProposal {
+            session_id: SessionId::new(),
+            outcome: SkillAutoProposalOutcomeSummary::AutoAccepted,
+            confidence_thousandths: Some(910),
+            proposed_skill_name: Some("never run rm -rf".into()),
+            judge_latency_ms: Some(1450),
+            heuristic_signals_matched: all_signals(),
+            category: Some("BehavioralConstraints".into()),
+            source: Some(ProposalSourceSummary::FailedTurn {
+                failure_kind: "failed".into(),
+            }),
+        };
+        let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
+        let back: AuditEvent =
+            serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn skill_auto_proposal_without_source_round_trips_byte_identically() {
+        // Phase 115 backward-compatibility: source=None
+        // serializes as ABSENT field, so a pre-Phase-115
+        // entry decoded into the new struct and re-encoded
+        // produces the same canonical bytes.
+        let ev = AuditEvent::SkillAutoProposal {
+            session_id: SessionId::new(),
+            outcome: SkillAutoProposalOutcomeSummary::AutoAccepted,
+            confidence_thousandths: Some(910),
+            proposed_skill_name: Some("research-topic".into()),
+            judge_latency_ms: Some(1450),
+            heuristic_signals_matched: all_signals(),
+            category: None,
+            source: None,
+        };
+        let bytes = serde_jcs::to_vec(&ev).expect("jcs serializes");
+        let s = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            !s.contains("\"source\""),
+            "source=None must serialize as absent field: {s}"
+        );
+        let back: AuditEvent =
+            serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn skill_auto_proposal_decodes_pre_phase_115_entry_with_no_source() {
+        // Simulates a Phase 112-114 chain entry: the JSON
+        // has no "source" field. Decoding into the Phase
+        // 115 struct must succeed with source=None.
+        let raw_pre_115 = serde_json::json!({
+            "kind": "SkillAutoProposal",
+            "session_id": SessionId::new(),
+            "outcome": {"kind": "AutoAccepted"},
+            "confidence_thousandths": 910u32,
+            "proposed_skill_name": "research-topic",
+            "judge_latency_ms": 1450u64,
+            "heuristic_signals_matched": {
+                "tool_call_count": true,
+                "distinct_tool_id_count": true,
+                "duration": true,
+                "gate_resolve": true,
+            },
+            "category": "LearnedSkill",
+        });
+        let decoded: AuditEvent =
+            serde_json::from_value(raw_pre_115).expect("decode");
+        match decoded {
+            AuditEvent::SkillAutoProposal { source, .. } => {
+                assert!(source.is_none());
+            }
+            _ => panic!("expected SkillAutoProposal"),
+        }
+    }
+
+    #[test]
+    fn proposal_source_summary_serializes_with_kind_tag() {
+        let completed = ProposalSourceSummary::CompletedTurn;
+        let json = serde_json::to_value(&completed).unwrap();
+        assert_eq!(json["kind"], "CompletedTurn");
+
+        let failed = ProposalSourceSummary::FailedTurn {
+            failure_kind: "timed_out".into(),
+        };
+        let json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json["kind"], "FailedTurn");
+        assert_eq!(json["failure_kind"], "timed_out");
+    }
+
     #[test]
     fn skill_auto_proposal_can_be_hmac_chained() {
         // Same proof-of-life test the other variants have: an
@@ -1449,6 +1580,7 @@ mod tests {
             judge_latency_ms: Some(1450),
             heuristic_signals_matched: all_signals(),
             category: None,
+            source: None,
         })
         .unwrap();
         log.verify().unwrap();
