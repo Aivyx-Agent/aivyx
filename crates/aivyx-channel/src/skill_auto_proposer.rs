@@ -42,10 +42,16 @@
 
 use std::sync::Arc;
 
-use aivyx_core::skill_proposer::{
-    self, ExistingSkillSnapshot, HeuristicConfig, JudgeError, JudgeRequest,
+// Re-export types the daemon turn-driver constructs at the post-finalize
+// hook (Task 7 wiring) so callers can use the path
+// `crate::skill_auto_proposer::TurnSignals` without depending on aivyx-core
+// directly. Phase 112 keeps the auto-proposer's caller-facing surface
+// homed in aivyx-channel.
+pub use aivyx_core::skill_proposer::{
+    ExistingSkillSnapshot, HeuristicConfig, JudgeError, JudgeRequest,
     JudgeResponse, SkillDraft, TurnSignals,
 };
+use aivyx_core::skill_proposer;
 use aivyx_core::CancellationToken;
 use aivyx_llm::LlmProvider;
 use serde::{Deserialize, Serialize};
@@ -569,6 +575,351 @@ pub fn spawn_auto_proposer_task(
         }
         outcome
     })
+}
+
+// ---------------------------------------------------------------------------
+// Task 7 — Unified pipeline (heuristic → judge → routing → chain writes →
+// audit event), suitable for spawn-from-daemon at the post-finalize hook.
+// ---------------------------------------------------------------------------
+
+/// Dependency bundle the daemon hands the auto-proposer at startup.
+/// Daemon-side wires `Some(...)` into `DaemonConfig::skill_auto_proposer`
+/// when the operator has the feature enabled.
+pub struct SkillAutoProposerContext {
+    pub config: SkillAutoProposeConfig,
+    pub llm_provider: Arc<dyn aivyx_llm::LlmProvider>,
+}
+
+impl std::fmt::Debug for SkillAutoProposerContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillAutoProposerContext")
+            .field("config", &self.config)
+            .field("llm_provider", &"<dyn LlmProvider>")
+            .finish()
+    }
+}
+
+/// Snapshot the approved-skills list from the current
+/// `SharedEffectivePersona` into the form the judge needs for
+/// the dedup check. Reads under the read lock and copies a
+/// short tuple per skill (name, trigger, procedure summary)
+/// so the judge call doesn't hold the lock.
+///
+/// Malformed `LearnedSkill` JSON entries are skipped (same
+/// posture the renderer takes — Phase 110 Q3c precedent).
+pub fn snapshot_existing_skills(
+    shared: &crate::persona::SharedEffectivePersona,
+) -> Vec<ExistingSkillSnapshot> {
+    let Ok(state) = shared.read() else {
+        return Vec::new();
+    };
+    state
+        .learned_skills
+        .iter()
+        .filter_map(|s| crate::persona::LearnedSkill::from_json_value(s))
+        .map(|sk| {
+            let summary: String = sk
+                .procedure
+                .chars()
+                .take(200)
+                .collect::<String>();
+            ExistingSkillSnapshot {
+                name: sk.name,
+                trigger: sk.trigger,
+                procedure_summary: summary,
+            }
+        })
+        .collect()
+}
+
+/// Compose a turn summary string from the user input and the
+/// agent's final reply (or an outcome-shaped placeholder for
+/// non-Completed terminals). Keep it short enough that the
+/// judge prompt stays operator-budget-shaped (~500 tokens
+/// budget; this contributes ~half).
+pub fn build_turn_summary(
+    user_text: &str,
+    outcome: &aivyx_core::TurnOutcome,
+) -> String {
+    use aivyx_core::TurnOutcome;
+    let mut s = String::new();
+    s.push_str("User said: ");
+    let user_excerpt: String = user_text.chars().take(400).collect();
+    s.push_str(&user_excerpt);
+    if user_text.chars().count() > 400 {
+        s.push_str(" […]");
+    }
+    s.push_str("\n\nAgent ");
+    match outcome {
+        TurnOutcome::Completed {
+            final_message,
+            tool_calls_made,
+            duration,
+        } => {
+            s.push_str(&format!(
+                "completed in {}ms with {} tool call(s).\nReply: ",
+                duration.as_millis(),
+                tool_calls_made
+            ));
+            let reply_excerpt: String =
+                final_message.chars().take(400).collect();
+            s.push_str(&reply_excerpt);
+            if final_message.chars().count() > 400 {
+                s.push_str(" […]");
+            }
+        }
+        TurnOutcome::Escalated { reason, .. } => {
+            s.push_str(&format!("escalated: {reason}"));
+        }
+        TurnOutcome::TimedOut { elapsed, .. } => {
+            s.push_str(&format!(
+                "timed out after {}ms",
+                elapsed.as_millis()
+            ));
+        }
+        TurnOutcome::Cancelled { .. } => {
+            s.push_str("was cancelled");
+        }
+        TurnOutcome::Failed(_) => {
+            s.push_str("failed");
+        }
+    }
+    s
+}
+
+/// Full auto-propose pipeline. Spawn this from the daemon's
+/// post-finalize hook. Runs heuristic gate → judge call →
+/// routing decision → chain writes (for AutoAccept/Staged) →
+/// audit-event emission, in order. Each step is failure-
+/// isolated; any error path collapses to a `JudgeError` audit
+/// event and returns cleanly.
+///
+/// The pipeline is **inline-at-turn-boundary** per Q2b but
+/// runs **after the user has already received the turn
+/// reply** so its latency cost is invisible. Critical-path
+/// independence is the caller's responsibility (`tokio::spawn`
+/// from after the finalize event has been forwarded).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_auto_propose_pipeline(
+    proposer_ctx: &SkillAutoProposerContext,
+    audit_log: Option<&Arc<aivyx_audit::PersistentAuditLog>>,
+    persona_log: Option<&Arc<crate::persona::PersistentPersonaLog>>,
+    persona_proposal_log: Option<
+        &Arc<crate::persona_proposal::PersistentPersonaProposalLog>,
+    >,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    session_id: aivyx_core::SessionId,
+    signals: TurnSignals,
+    turn_summary: String,
+    cancellation: &CancellationToken,
+) {
+    let signals_record =
+        signals_matched(&signals, &proposer_ctx.config.heuristic);
+    let existing = snapshot_existing_skills(shared_persona);
+
+    // Time the judge call so the audit event carries latency.
+    let judge_started = std::time::Instant::now();
+    let proposer_outcome = auto_propose_for_turn(
+        Arc::clone(&proposer_ctx.llm_provider),
+        &proposer_ctx.config,
+        signals,
+        turn_summary,
+        existing.clone(),
+        cancellation,
+    )
+    .await;
+    let judge_latency_ms = match &proposer_outcome {
+        // Only timing is meaningful when the judge actually
+        // fired. Disabled / HeuristicGated short-circuit before
+        // any LLM work — report None.
+        SkillProposerOutcome::Disabled
+        | SkillProposerOutcome::HeuristicGated => None,
+        _ => Some(judge_started.elapsed().as_millis() as u64),
+    };
+
+    // Compute the routing decision (and perform chain writes
+    // for AutoAccept/Staged outcomes).
+    let routing = match &proposer_outcome {
+        SkillProposerOutcome::Verdict(verdict) => Some(decide_routing(
+            verdict,
+            &existing,
+            &proposer_ctx.config,
+        )),
+        _ => None,
+    };
+
+    // Chain writes — best-effort. A failure here is logged but
+    // does NOT bubble up; the audit event below still captures
+    // the routing decision.
+    if let Some(decision) = &routing {
+        match decision {
+            SkillRoutingDecision::AutoAccept { draft, .. } => {
+                if let (Some(plog), Some(pp_log)) =
+                    (persona_log, persona_proposal_log)
+                {
+                    let _ = write_auto_accepted_skill(
+                        plog,
+                        pp_log,
+                        shared_persona,
+                        draft,
+                        &session_id,
+                    )
+                    .await;
+                }
+            }
+            SkillRoutingDecision::Staged { draft, .. } => {
+                if let Some(pp_log) = persona_proposal_log {
+                    let _ =
+                        write_staged_skill(pp_log, draft, &session_id).await;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Emit the audit event. Best-effort.
+    let (outcome_summary, proposed_skill_name, confidence_thousandths) =
+        audit_outcome_from(&proposer_outcome, routing.as_ref());
+    if let Some(alog) = audit_log {
+        let event = aivyx_audit::AuditEvent::SkillAutoProposal {
+            session_id,
+            outcome: outcome_summary,
+            confidence_thousandths,
+            proposed_skill_name,
+            judge_latency_ms,
+            heuristic_signals_matched: signals_record,
+        };
+        use aivyx_audit::AuditWriter as _;
+        if let Err(e) = alog.append(event) {
+            eprintln!(
+                "aivyx skill-auto-proposer: audit append failed ({e})"
+            );
+        }
+    }
+}
+
+/// Chain-write helper for the AutoAccept path. Writes a
+/// `Pending` proposal entry, then an approved `PersonaDelta`,
+/// then the `Approved` proposal-chain transition, then
+/// recomputes the shared persona state. Mirrors the operator-
+/// side `aivyx persona proposals approve` flow but synthesizes
+/// the proposal id locally (no operator interaction).
+async fn write_auto_accepted_skill(
+    persona_log: &Arc<crate::persona::PersistentPersonaLog>,
+    persona_proposal_log: &Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    draft: &SkillDraft,
+    session_id: &aivyx_core::SessionId,
+) -> Result<(), String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    // Build the LearnedSkill payload and the
+    // ProposedPersonaDelta wrapping it.
+    let learned = crate::persona::LearnedSkill {
+        name: draft.name.clone(),
+        trigger: draft.trigger.clone(),
+        procedure: draft.procedure.clone(),
+    };
+    let proposed_op = crate::persona::ProposedPersonaDelta {
+        category: crate::persona::PersonaDeltaCategory::LearnedSkill,
+        op: crate::persona::PersonaDeltaOp::AppendList {
+            value: learned.to_json_value(),
+        },
+        reason: Some(format!(
+            "auto-accepted by skill-auto-proposer (Phase 112) from session {}",
+            session_id.0
+        )),
+        supersedes_proposal_id: None,
+    };
+    let proposal_id = format!("auto-{}-{}", session_id.0, now_ms);
+
+    // Step 1 — pending proposal
+    persona_proposal_log
+        .append_pending(
+            proposal_id.clone(),
+            now_ms,
+            session_id.0.to_string(),
+            proposed_op.clone(),
+        )
+        .await
+        .map_err(|e| format!("pending append: {e}"))?;
+
+    // Step 2 — append the persona delta
+    let delta_id = format!("pd-auto-{proposal_id}");
+    let delta = crate::persona::PersonaDelta {
+        delta_id,
+        proposed_at_unix_ms: now_ms,
+        approved_at_unix_ms: now_ms,
+        proposal_id: proposal_id.clone(),
+        category: proposed_op.category,
+        op: proposed_op.op.clone(),
+    };
+    let applied_seq = persona_log
+        .append(delta)
+        .await
+        .map_err(|e| format!("persona append: {e}"))?;
+
+    // Step 3 — approved proposal transition
+    persona_proposal_log
+        .append_approved(proposal_id, now_ms, proposed_op, applied_seq)
+        .await
+        .map_err(|e| format!("approved append: {e}"))?;
+
+    // Step 4 — refresh shared effective persona
+    let entries_after = persona_log.entries();
+    if !crate::persona::recompute_shared_from_entries(
+        shared_persona,
+        &entries_after,
+    ) {
+        return Err("shared persona lock poisoned".into());
+    }
+    Ok(())
+}
+
+/// Chain-write helper for the Staged path. Writes a `Pending`
+/// proposal entry; the operator resolves it later through
+/// `aivyx persona proposals approve` or `reject`.
+async fn write_staged_skill(
+    persona_proposal_log: &Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    draft: &SkillDraft,
+    session_id: &aivyx_core::SessionId,
+) -> Result<(), String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let learned = crate::persona::LearnedSkill {
+        name: draft.name.clone(),
+        trigger: draft.trigger.clone(),
+        procedure: draft.procedure.clone(),
+    };
+    let proposed_op = crate::persona::ProposedPersonaDelta {
+        category: crate::persona::PersonaDeltaCategory::LearnedSkill,
+        op: crate::persona::PersonaDeltaOp::AppendList {
+            value: learned.to_json_value(),
+        },
+        reason: Some(format!(
+            "staged by skill-auto-proposer (Phase 112) from session {}",
+            session_id.0
+        )),
+        supersedes_proposal_id: None,
+    };
+    let proposal_id = format!("auto-{}-{}", session_id.0, now_ms);
+
+    persona_proposal_log
+        .append_pending(proposal_id, now_ms, session_id.0.to_string(), proposed_op)
+        .await
+        .map_err(|e| format!("pending append: {e}"))?;
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

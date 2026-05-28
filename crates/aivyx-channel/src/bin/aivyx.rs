@@ -4651,6 +4651,11 @@ async fn run_async(
             channel_factory,
             shutdown,
             tool_descriptors,
+            // Phase 112 — Skill Auto-Proposer is off by default until
+            // operator-side TOML config promotion lands (named
+            // Phase-112-internal deferral). `None` is the documented
+            // disabled state.
+            skill_auto_proposer: None,
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

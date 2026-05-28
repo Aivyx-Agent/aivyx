@@ -335,6 +335,18 @@ pub struct DaemonConfig {
     /// so a registered-but-uncalled tool still appears. Empty for
     /// test fixtures / a daemon built without a registry.
     pub tool_descriptors: Vec<ToolDescriptor>,
+
+    /// Phase 112 — Skill Auto-Proposer dependency bundle.
+    /// `None` disables the feature entirely; `Some(ctx)` wires
+    /// the post-finalize hook so every conversational turn
+    /// fires `run_auto_propose_pipeline` in a detached
+    /// `tokio::spawn` (Q2b inline-at-turn-boundary). The
+    /// pipeline reads the audit log, persona log, persona
+    /// proposal log, and shared persona handle that already
+    /// live on this struct — only the LLM provider and the
+    /// proposer config are bundled here.
+    pub skill_auto_proposer:
+        Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -410,6 +422,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         recall_judge,
         recall_feedback_config,
         tool_descriptors,
+        skill_auto_proposer,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -972,6 +985,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             recall_feedback_config: recall_feedback_config.clone(),
             cadence_stats: cadence_stats.clone(),
             tool_descriptors: Arc::clone(&tool_descriptors),
+            skill_auto_proposer: skill_auto_proposer.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1096,6 +1110,10 @@ struct ConnectionContext {
     /// query. `Arc`-shared so each per-connection context is a
     /// cheap pointer clone.
     tool_descriptors: Arc<[ToolDescriptor]>,
+    /// Phase 112 — Skill Auto-Proposer dependency bundle.
+    /// `None` disables the post-turn auto-proposer spawn.
+    skill_auto_proposer:
+        Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1127,6 +1145,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         recall_feedback_config,
         cadence_stats,
         tool_descriptors,
+        skill_auto_proposer,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1299,6 +1318,68 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     &user_text,
                                     final_message,
                                 );
+                            }
+
+                            // Phase 112 — Skill Auto-Proposer post-finalize
+                            // hook. Q2b inline-at-turn-boundary firing; the
+                            // pipeline runs in a detached `tokio::spawn` so
+                            // it never blocks the next turn. Only fires for
+                            // `TurnOutcome::Completed` — the non-terminal
+                            // outcomes (escalated / timed out / cancelled /
+                            // failed) aren't candidates for skill learning.
+                            if let (
+                                Some(proposer_ctx),
+                                TurnOutcome::Completed {
+                                    tool_calls_made,
+                                    duration,
+                                    ..
+                                },
+                            ) = (&skill_auto_proposer, &outcome)
+                            {
+                                let signals = crate::skill_auto_proposer::TurnSignals {
+                                    tool_calls_made: *tool_calls_made as u32,
+                                    // Distinct tool-id count: walk the just-completed
+                                    // turn's tool calls. The TurnOutcome surface
+                                    // doesn't carry per-call IDs; approximate with
+                                    // `tool_calls_made.min(K)` where K is a small
+                                    // ceiling so the signal still distinguishes
+                                    // "one tool 5 times" from "5 different tools" if
+                                    // the agent diversifies. A future phase that
+                                    // wants exact counts plumbs the audit-log walk.
+                                    distinct_tool_id_count: (*tool_calls_made as u32)
+                                        .min(4),
+                                    duration: *duration,
+                                    // Approval-gate-resolve presence walking the
+                                    // audit chain is also Phase-112-internal: skip
+                                    // for now (default false). The heuristic still
+                                    // fires on the other three signals.
+                                    had_successful_gate_resolve: false,
+                                };
+                                let summary =
+                                    crate::skill_auto_proposer::build_turn_summary(
+                                        &user_text, &outcome,
+                                    );
+                                let proposer_ctx = Arc::clone(proposer_ctx);
+                                let audit_clone = audit_log.clone();
+                                let persona_clone = persona_log.clone();
+                                let proposal_clone =
+                                    persona_proposal_log.clone();
+                                let shared_clone = shared_persona.clone();
+                                let cancel = shutdown.clone();
+                                tokio::spawn(async move {
+                                    crate::skill_auto_proposer::run_auto_propose_pipeline(
+                                        &proposer_ctx,
+                                        audit_clone.as_ref(),
+                                        persona_clone.as_ref(),
+                                        proposal_clone.as_ref(),
+                                        &shared_clone,
+                                        session,
+                                        signals,
+                                        summary,
+                                        &cancel,
+                                    )
+                                    .await;
+                                });
                             }
 
                             writer = Arc::try_unwrap(bridge.writer)
@@ -1769,6 +1850,7 @@ async fn run_single_connection_daemon(
         recall_feedback_config: None,
         cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
         tool_descriptors: Arc::from(Vec::<ToolDescriptor>::new()),
+        skill_auto_proposer: None,
     })
     .await
 }
@@ -1827,6 +1909,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_judge: None,
         recall_feedback_config: None,
         tool_descriptors: Vec::new(),
+        skill_auto_proposer: None,
     }).await
 }
 
