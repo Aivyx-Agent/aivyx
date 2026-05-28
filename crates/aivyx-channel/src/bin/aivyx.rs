@@ -2926,7 +2926,7 @@ async fn run_async(
         // Used by the bin's `SkillAutoProposerContext`
         // construction to populate the per-category config in
         // the runtime auto-proposer.
-        persona_auto_propose: _config_persona_auto_propose,
+        persona_auto_propose: config_persona_auto_propose,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -4758,21 +4758,33 @@ async fn run_async(
         }
 
         // Phase 113 Task 3 — Construct the Skill Auto-Proposer
-        // context from the loaded `[skills.auto_propose]` TOML
-        // section. `None` when the operator hasn't configured
-        // the section, in which case the daemon wires
+        // context from the loaded TOML config. `None` when the
+        // operator hasn't configured any auto-proposer section,
+        // in which case the daemon wires
         // `DaemonConfig::skill_auto_proposer = None` and the
-        // Phase 112 substrate is bypassed. With the section
+        // Phase 112 substrate is bypassed. With a section
         // present, the auto-proposer reuses the same LLM
         // provider the planner uses for tool calls — keeping
         // the configured-provider invariant the operator
         // declared in their `[provider]` config.
-        let skill_auto_proposer_ctx = config_skill_auto_propose.map(|cfg| {
-            let runtime_cfg: aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig
-                = cfg.into();
+        //
+        // Phase 114 — prefer the new `[persona.auto_propose]`
+        // section if the operator configured it; fall back to
+        // the Phase 113 `[skills.auto_propose]` alias
+        // otherwise. Both convert to the same runtime
+        // `SkillAutoProposeConfig`; the Phase 114 path
+        // populates `per_category` and the alias path leaves
+        // it `None` (Phase 113 single-config posture).
+        let runtime_cfg: Option<aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig> =
+            match (config_persona_auto_propose, config_skill_auto_propose) {
+                (Some(p), _) => Some(p.into()),
+                (None, Some(s)) => Some(s.into()),
+                (None, None) => None,
+            };
+        let skill_auto_proposer_ctx = runtime_cfg.map(|cfg| {
             Arc::new(
                 aivyx_channel::skill_auto_proposer::SkillAutoProposerContext {
-                    config: runtime_cfg,
+                    config: cfg,
                     llm_provider: Arc::clone(&provider),
                 },
             )
