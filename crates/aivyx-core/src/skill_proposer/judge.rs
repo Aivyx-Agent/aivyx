@@ -220,8 +220,9 @@ pub struct SkillDraft {
 /// Phase 114 — Polymorphic proposed-draft shape, varying by
 /// `PersonaDeltaCategory`. The `kind` discriminator is set
 /// by the LLM judge to one of `"LearnedSkill"`,
-/// `"ListAppend"`, or `"ScalarSet"`; serde-tagged so the
-/// JSON wire form is self-describing.
+/// `"ListAppend"`, `"ScalarSet"`, `"ProfileHint"`, or
+/// `"RoleDefinitionSuggestion"`; serde-tagged so the JSON
+/// wire form is self-describing.
 ///
 /// Category → variant mapping (the caller validates the
 /// pair):
@@ -232,6 +233,9 @@ pub struct SkillDraft {
 ///   `RelationshipMilestones` → [`ProposedDraft::ListAppend`]
 /// - `AssistantName`, `OperatorProfile`,
 ///   `CommunicationStyle` → [`ProposedDraft::ScalarSet`]
+/// - `ProfileHint` → [`ProposedDraft::ProfileHint`] (Phase 118)
+/// - `RoleDefinitionSuggestion` →
+///   [`ProposedDraft::RoleDefinitionSuggestion`] (Phase 118)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum ProposedDraft {
@@ -249,6 +253,33 @@ pub enum ProposedDraft {
     /// scalar categories (`AssistantName`, `OperatorProfile`,
     /// `CommunicationStyle`).
     ScalarSet { value: String },
+    /// Phase 118 — operator-staged Profile-config refinement
+    /// HINT. Carries the [`ProfileFieldHint`] payload inline
+    /// (`#[serde(flatten)]` not used — `kind` discriminates
+    /// and the rest of the variant's fields populate the
+    /// hint body). Used iff the judge picks `category =
+    /// "ProfileHint"`. Always-staged regardless of confidence
+    /// per Q2(a) at Phase 118 sign-off.
+    ProfileHint {
+        field: super::profile_proposer::ProfileField,
+        suggested_value: String,
+        rationale: String,
+    },
+    /// Phase 118 — operator-staged new-Role draft. Carries
+    /// the [`RoleDraft`] payload's fields inline (same
+    /// rationale as `ProfileHint`). Used iff the judge picks
+    /// `category = "RoleDefinitionSuggestion"`. Always-staged
+    /// regardless of confidence per Q2(a) at Phase 118 sign-off.
+    ///
+    /// [`ProfileFieldHint`]: super::profile_proposer::ProfileFieldHint
+    /// [`RoleDraft`]: super::profile_proposer::RoleDraft
+    RoleDefinitionSuggestion {
+        name: String,
+        parent: Option<String>,
+        system_prompt_addendum: String,
+        tool_allowlist_additions: Vec<String>,
+        rationale: String,
+    },
 }
 
 impl ProposedDraft {
@@ -277,15 +308,22 @@ impl ProposedDraft {
             ProposedDraft::LearnedSkill { .. } => "LearnedSkill",
             ProposedDraft::ListAppend { .. } => "ListAppend",
             ProposedDraft::ScalarSet { .. } => "ScalarSet",
+            ProposedDraft::ProfileHint { .. } => "ProfileHint",
+            ProposedDraft::RoleDefinitionSuggestion { .. } => {
+                "RoleDefinitionSuggestion"
+            }
         }
     }
 
     /// Operator-readable label for the proposed draft —
     /// `LearnedSkill` returns the kebab-case name, list/scalar
-    /// variants return a truncated value. Used as the
-    /// `proposed_skill_name` audit-event field (Phase 112's
-    /// name kept for chain backward compatibility, generalized
-    /// in semantics at Phase 114).
+    /// variants return a truncated value, Phase 118
+    /// `ProfileHint` returns `field=value` truncated, and
+    /// `RoleDefinitionSuggestion` returns the kebab-case
+    /// role name. Used as the `proposed_skill_name` audit-
+    /// event field (Phase 112's name kept for chain
+    /// backward compatibility, generalized in semantics at
+    /// Phase 114 + Phase 118).
     pub fn display_name(&self) -> String {
         match self {
             ProposedDraft::LearnedSkill { name, .. } => name.clone(),
@@ -298,6 +336,22 @@ impl ProposedDraft {
                 }
                 truncated
             }
+            ProposedDraft::ProfileHint {
+                field,
+                suggested_value,
+                ..
+            } => {
+                // "field=value" form so the operator can scan
+                // the audit log and see at a glance which
+                // declared Profile field the hint targets.
+                let combined = format!("{}={}", field.label(), suggested_value);
+                let mut truncated: String = combined.chars().take(80).collect();
+                if combined.chars().count() > 80 {
+                    truncated.push('…');
+                }
+                truncated
+            }
+            ProposedDraft::RoleDefinitionSuggestion { name, .. } => name.clone(),
         }
     }
 }
@@ -1196,6 +1250,23 @@ that's my call."#;
 
         let scalar = ProposedDraft::ScalarSet { value: "v".into() };
         assert_eq!(scalar.kind_label(), "ScalarSet");
+
+        // Phase 118 — new variants.
+        let hint = ProposedDraft::ProfileHint {
+            field: super::super::profile_proposer::ProfileField::CommunicationStyle,
+            suggested_value: "terse".into(),
+            rationale: "operator prefers brevity".into(),
+        };
+        assert_eq!(hint.kind_label(), "ProfileHint");
+
+        let role = ProposedDraft::RoleDefinitionSuggestion {
+            name: "research-deploy".into(),
+            parent: Some("research".into()),
+            system_prompt_addendum: "...".into(),
+            tool_allowlist_additions: vec!["git.commit".into()],
+            rationale: "recurring shape".into(),
+        };
+        assert_eq!(role.kind_label(), "RoleDefinitionSuggestion");
     }
 
     // ----- Phase 115 — Failure-source prompt + ProposalSource -----
@@ -1295,5 +1366,117 @@ that's my call."#;
         assert!(ProposedDraft::ScalarSet { value: "v".into() }
             .as_skill_draft()
             .is_none());
+
+        // Phase 118 — new variants also return None for the
+        // skill-draft backward-compat helper.
+        assert!(ProposedDraft::ProfileHint {
+            field: super::super::profile_proposer::ProfileField::OperatorProfile,
+            suggested_value: "v".into(),
+            rationale: "r".into(),
+        }
+        .as_skill_draft()
+        .is_none());
+        assert!(ProposedDraft::RoleDefinitionSuggestion {
+            name: "n".into(),
+            parent: None,
+            system_prompt_addendum: "p".into(),
+            tool_allowlist_additions: vec![],
+            rationale: "r".into(),
+        }
+        .as_skill_draft()
+        .is_none());
+    }
+
+    // ----- Phase 118 — ProfileHint + RoleDefinitionSuggestion parsing -----
+
+    #[test]
+    fn parses_profile_hint_response() {
+        let raw = r#"{"is_worth_proposing":true,"confidence":0.83,
+          "category":"ProfileHint",
+          "proposed_draft":{"kind":"ProfileHint",
+          "field":"CommunicationStyle",
+          "suggested_value":"terse and bullet-formatted",
+          "rationale":"operator consistently uses bullets"},
+          "is_duplicate_of":null}"#;
+        let r = parse_judge_response(raw).expect("parse");
+        assert!(r.is_worth_proposing);
+        assert_eq!(r.category.as_deref(), Some("ProfileHint"));
+        match r.proposed_draft.as_ref().unwrap() {
+            ProposedDraft::ProfileHint {
+                field,
+                suggested_value,
+                rationale,
+            } => {
+                assert_eq!(
+                    *field,
+                    super::super::profile_proposer::ProfileField::CommunicationStyle
+                );
+                assert!(suggested_value.contains("bullet-formatted"));
+                assert!(rationale.contains("bullets"));
+            }
+            other => panic!("expected ProfileHint, got {other:?}"),
+        }
+        // Backward-compat helper returns None.
+        assert!(r.proposed_skill().is_none());
+    }
+
+    #[test]
+    fn parses_role_definition_suggestion_response() {
+        let raw = r#"{"is_worth_proposing":true,"confidence":0.79,
+          "category":"RoleDefinitionSuggestion",
+          "proposed_draft":{"kind":"RoleDefinitionSuggestion",
+          "name":"research-deploy",
+          "parent":"research",
+          "system_prompt_addendum":"After research, summarize deploy diff.",
+          "tool_allowlist_additions":["git.commit","shell.deploy"],
+          "rationale":"operator's research-then-deploy shape repeats"},
+          "is_duplicate_of":null}"#;
+        let r = parse_judge_response(raw).expect("parse");
+        assert!(r.is_worth_proposing);
+        assert_eq!(r.category.as_deref(), Some("RoleDefinitionSuggestion"));
+        match r.proposed_draft.as_ref().unwrap() {
+            ProposedDraft::RoleDefinitionSuggestion {
+                name,
+                parent,
+                system_prompt_addendum,
+                tool_allowlist_additions,
+                rationale,
+            } => {
+                assert_eq!(name, "research-deploy");
+                assert_eq!(parent.as_deref(), Some("research"));
+                assert!(system_prompt_addendum.contains("summarize"));
+                assert_eq!(tool_allowlist_additions.len(), 2);
+                assert!(rationale.contains("repeats"));
+            }
+            other => panic!("expected RoleDefinitionSuggestion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_hint_display_name_carries_field_and_value() {
+        let hint = ProposedDraft::ProfileHint {
+            field: super::super::profile_proposer::ProfileField::CommunicationStyle,
+            suggested_value: "terse".into(),
+            rationale: "...".into(),
+        };
+        let name = hint.display_name();
+        // The "field=value" form lets the operator scan the
+        // audit log and see which declared Profile field the
+        // hint targets without unpacking the JSON.
+        assert!(name.contains("communication_style"));
+        assert!(name.contains("terse"));
+        assert!(name.contains("="));
+    }
+
+    #[test]
+    fn role_definition_suggestion_display_name_is_the_role_name() {
+        let role = ProposedDraft::RoleDefinitionSuggestion {
+            name: "research-deploy".into(),
+            parent: None,
+            system_prompt_addendum: "...".into(),
+            tool_allowlist_additions: vec![],
+            rationale: "...".into(),
+        };
+        assert_eq!(role.display_name(), "research-deploy");
     }
 }

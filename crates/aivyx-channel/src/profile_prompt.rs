@@ -246,6 +246,14 @@ pub fn reduce_persona(
         // system prompt; the filter still applies for consistency
         // with other list categories.
         learned_skills: filter(&full.learned_skills),
+        // Phase 118 — ProfileHint + RoleDefinitionSuggestion
+        // entries are operator-review artifacts; they sit in the
+        // Persona chain as approved-but-staged suggestions. The
+        // turn renderer elides them entirely. Pass through the
+        // filter for consistency with other list categories so
+        // the struct literal stays uniform.
+        profile_hints: filter(&full.profile_hints),
+        role_drafts: filter(&full.role_drafts),
     }
 }
 
@@ -534,6 +542,8 @@ mod tests {
             character_traits: vec![],
             relationship_milestones: vec![],
             learned_skills: Vec::new(),
+            profile_hints: Vec::new(),
+            role_drafts: Vec::new(),
         }
     }
 
@@ -636,6 +646,8 @@ mod tests {
             character_traits: vec!["dry wit".to_string()],
             relationship_milestones: vec!["shipped v1".to_string()],
             learned_skills: Vec::new(),
+            profile_hints: Vec::new(),
+            role_drafts: Vec::new(),
         }
     }
 

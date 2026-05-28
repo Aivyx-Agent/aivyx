@@ -943,7 +943,9 @@ pub async fn import_persona_chain(
     let req = FrontendMessage::ImportPersonaChain {
         id: "im-cli".into(),
         deltas,
-        effective_at_export,
+        // Phase 118 — boxed at the IPC boundary; see
+        // FrontendMessage::ImportPersonaChain field doc.
+        effective_at_export: Box::new(effective_at_export),
         force,
     };
     let frame = encode_frame(&req)?;

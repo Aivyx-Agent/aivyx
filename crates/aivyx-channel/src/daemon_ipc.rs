@@ -809,7 +809,15 @@ pub enum FrontendMessage {
         /// echoes this back in the response for the CLI to verify.
         /// Already validated against the deltas at parse time by
         /// the CLI, but carried to the daemon for completeness.
-        effective_at_export: crate::persona::EffectivePersona,
+        ///
+        /// Boxed at Phase 118 — the two new operator-staged
+        /// list fields on `EffectivePersona` (`profile_hints`,
+        /// `role_drafts`) pushed the struct past the
+        /// `clippy::large_enum_variant` threshold for this
+        /// variant. Boxing keeps the rest of the
+        /// `FrontendMessage` enum compact; the indirection is
+        /// invisible to the daemon-side handler.
+        effective_at_export: Box<crate::persona::EffectivePersona>,
         /// If `false` and the local chain is non-empty, refuse.
         /// If `true`, wipe and replace.
         force: bool,

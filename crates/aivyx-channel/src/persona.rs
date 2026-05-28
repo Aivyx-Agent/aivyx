@@ -87,6 +87,53 @@ pub enum PersonaDeltaCategory {
     /// to reuse the entire Phase 59/60/70 substrate (chain log,
     /// proposal flow, revert primitive, operator review surface).
     LearnedSkill,
+
+    /// Phase 118 — Outcome-driven Profile-config refinement
+    /// HINT. List of operator-staged suggestions to refine the
+    /// declared `[profile]` block in `aivyx.toml`. Each list
+    /// entry's `value` is a JSON-serialized
+    /// [`aivyx_core::skill_proposer::ProfileFieldHint`] payload
+    /// ({field, suggested_value, rationale}).
+    ///
+    /// Distinct from the six Profile-mirror categories above
+    /// (`AssistantName`, …, `BehavioralConstraints`): those are
+    /// Persona-chain refinements layered ON TOP of the operator-
+    /// declared Profile (P13 — Persona grows from Profile). A
+    /// `ProfileHint` is a NOTED suggestion that the operator-
+    /// declared Profile itself could be refined — the operator
+    /// reviews the hint and decides whether to edit `aivyx.toml`.
+    /// Phase 118 does **not** auto-mutate `aivyx.toml`; the
+    /// hint stays in the Persona chain as a record-of-suggestion.
+    ///
+    /// Q2(a) at Phase 118 sign-off — **always-staged for
+    /// operator approval**, no auto-accept regardless of judge
+    /// confidence. The P13 Profile-is-operator-owned contract
+    /// stays intact: the agent observes patterns and *suggests*;
+    /// the operator decides whether to amend.
+    ProfileHint,
+
+    /// Phase 118 — Outcome-driven new-Role suggestion. List of
+    /// operator-staged draft Role definitions the agent observes
+    /// would fit the operator's recurring task shapes better
+    /// than the existing Role configuration. Each list entry's
+    /// `value` is a JSON-serialized
+    /// [`aivyx_core::skill_proposer::RoleDraft`] payload
+    /// ({name, parent, system_prompt_addendum,
+    /// tool_allowlist_additions, rationale}).
+    ///
+    /// The first phase with an auto-proposer for Role drafts.
+    /// Roles in `aivyx-config` carry `system_prompt`,
+    /// `tool_allowlist`, parent-chain inheritance, etc. (P9 —
+    /// Per-Role Full Capability Declaration, Phase 13). Phase
+    /// 118 does **not** auto-mutate `aivyx.toml`; the draft
+    /// stays in the Persona chain for operator review +
+    /// optional copy into the role config.
+    ///
+    /// Q2(a) at Phase 118 sign-off — **always-staged for
+    /// operator approval**, no auto-accept regardless of judge
+    /// confidence. The P9 Role-config operator-curated boundary
+    /// stays intact.
+    RoleDefinitionSuggestion,
 }
 
 impl PersonaDeltaCategory {
@@ -518,6 +565,24 @@ pub struct EffectivePersona {
     /// section without dragging the full procedure text
     /// through every system prompt.
     pub learned_skills: Vec<String>,
+    /// Phase 118 — approved Profile-config hint payloads,
+    /// JSON-serialized
+    /// [`aivyx_core::skill_proposer::ProfileFieldHint`] objects
+    /// (one per list entry). These are operator-approved
+    /// observations that the declared `[profile]` block could
+    /// be refined; they do NOT auto-mutate `aivyx.toml`. The
+    /// operator reviews + optionally copies into the config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_hints: Vec<String>,
+    /// Phase 118 — approved Role-draft payloads, JSON-
+    /// serialized [`aivyx_core::skill_proposer::RoleDraft`]
+    /// objects (one per list entry). Operator-approved Role
+    /// definition drafts the agent has observed would fit
+    /// recurring task patterns. Do NOT auto-mutate
+    /// `aivyx.toml`; operator reviews + optionally copies
+    /// the rendered shape into the role config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_drafts: Vec<String>,
 }
 
 /// Shared runtime handle on the effective Persona state. The
@@ -573,6 +638,8 @@ impl EffectivePersona {
             || !self.character_traits.is_empty()
             || !self.relationship_milestones.is_empty()
             || !self.learned_skills.is_empty()
+            || !self.profile_hints.is_empty()
+            || !self.role_drafts.is_empty()
     }
 }
 
@@ -793,6 +860,8 @@ fn field_for_list_category(
         PersonaDeltaCategory::CharacterTraits => &mut state.character_traits,
         PersonaDeltaCategory::RelationshipMilestones => &mut state.relationship_milestones,
         PersonaDeltaCategory::LearnedSkill => &mut state.learned_skills,
+        PersonaDeltaCategory::ProfileHint => &mut state.profile_hints,
+        PersonaDeltaCategory::RoleDefinitionSuggestion => &mut state.role_drafts,
         // Scalar categories never reach here under validated deltas;
         // returning a scratch field would mask the impossible case.
         // Use a static no-op buffer so the surrounding match arm is
@@ -1632,5 +1701,105 @@ mod tests {
             1,
         );
         assert_ne!(a, b);
+    }
+
+    // ----- Phase 118 — ProfileHint + RoleDefinitionSuggestion categories -----
+
+    #[test]
+    fn profile_hint_and_role_suggestion_categories_are_list_shaped() {
+        // Both new Phase 118 categories are list-shaped: each
+        // approved entry appends a JSON-serialized payload.
+        // `is_scalar` returning `false` is what drives
+        // PersonaDelta::validate to accept AppendList /
+        // RemoveList ops on these categories.
+        assert!(!PersonaDeltaCategory::ProfileHint.is_scalar());
+        assert!(!PersonaDeltaCategory::RoleDefinitionSuggestion.is_scalar());
+    }
+
+    #[test]
+    fn profile_hint_append_list_validates() {
+        let d = list_delta(PersonaDeltaCategory::ProfileHint, "{\"field\":\"...\"}");
+        d.validate()
+            .expect("AppendList on list-shaped ProfileHint must validate");
+    }
+
+    #[test]
+    fn role_definition_suggestion_append_list_validates() {
+        let d = list_delta(
+            PersonaDeltaCategory::RoleDefinitionSuggestion,
+            "{\"name\":\"research-deploy\"}",
+        );
+        d.validate()
+            .expect("AppendList on list-shaped RoleDefinitionSuggestion must validate");
+    }
+
+    #[test]
+    fn profile_hint_set_scalar_rejected() {
+        // SetScalar on a list-shaped category must be
+        // rejected — same validation contract as
+        // BehavioralPreferences etc.
+        let d = scalar_delta(PersonaDeltaCategory::ProfileHint, Some("v"));
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn role_definition_suggestion_set_scalar_rejected() {
+        let d = scalar_delta(
+            PersonaDeltaCategory::RoleDefinitionSuggestion,
+            Some("v"),
+        );
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn profile_hint_folds_into_profile_hints_field() {
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::ProfileHint,
+                "{\"field\":\"CommunicationStyle\",\"suggested_value\":\"terse\",\"rationale\":\"x\"}",
+            ))
+            .expect("append");
+        let state = compute_effective_persona(&chain.entries());
+        assert_eq!(state.profile_hints.len(), 1);
+        assert!(state.profile_hints[0].contains("CommunicationStyle"));
+        // Untouched fields stay default — the new fold only
+        // routes into `profile_hints`.
+        assert!(state.role_drafts.is_empty());
+        assert!(state.behavioral_preferences.is_empty());
+    }
+
+    #[test]
+    fn role_definition_suggestion_folds_into_role_drafts_field() {
+        let chain = PersonaChainLog::new(test_key());
+        chain
+            .append(list_delta(
+                PersonaDeltaCategory::RoleDefinitionSuggestion,
+                "{\"name\":\"research-deploy\",\"parent\":null,\
+                  \"system_prompt_addendum\":\"...\",\
+                  \"tool_allowlist_additions\":[],\"rationale\":\"...\"}",
+            ))
+            .expect("append");
+        let state = compute_effective_persona(&chain.entries());
+        assert_eq!(state.role_drafts.len(), 1);
+        assert!(state.role_drafts[0].contains("research-deploy"));
+        assert!(state.profile_hints.is_empty());
+    }
+
+    #[test]
+    fn is_non_empty_fires_on_profile_hints_only() {
+        let mut p = EffectivePersona::default();
+        assert!(!p.is_non_empty());
+        p.profile_hints
+            .push("{\"field\":\"AssistantName\"}".to_string());
+        assert!(p.is_non_empty());
+    }
+
+    #[test]
+    fn is_non_empty_fires_on_role_drafts_only() {
+        let mut p = EffectivePersona::default();
+        assert!(!p.is_non_empty());
+        p.role_drafts.push("{\"name\":\"x\"}".to_string());
+        assert!(p.is_non_empty());
     }
 }

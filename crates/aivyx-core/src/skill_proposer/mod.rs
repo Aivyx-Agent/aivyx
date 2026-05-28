@@ -28,6 +28,7 @@
 
 pub mod heuristic;
 pub mod judge;
+pub mod profile_proposer;
 
 pub use heuristic::{
     FailureHeuristicConfig, FailureKind, HeuristicConfig, MatchMode, TurnSignals,
@@ -38,3 +39,4 @@ pub use judge::{
     JudgeResponse, ProposalSource, ProposedDraft, SkillDraft, judge,
     parse_judge_response,
 };
+pub use profile_proposer::{ProfileField, ProfileFieldHint, RoleDraft};

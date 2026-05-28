@@ -454,6 +454,10 @@ mod tests {
             character_traits: vec![],
             relationship_milestones: vec![],
             learned_skills: Vec::new(),
+            // Phase 118 — operator-staged refinement categories;
+            // empty in this Phase 79 reduction-test fixture.
+            profile_hints: Vec::new(),
+            role_drafts: Vec::new(),
         }
     }
 
