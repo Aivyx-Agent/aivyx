@@ -3444,6 +3444,39 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 118 — Outcome-Driven Profile/Role Refinement (Chapter E #4 — closer)
+
+**Active — see [PHASE_118.md](PHASE_118.md).** The last
+named Chapter E axis. Adds `ProfileHint` and
+`RoleDefinitionSuggestion` variants to
+`PersonaDeltaCategory`, extends the Phase 114 auto-
+proposer pipeline (heuristic + LLM-judge + routing) to
+fire for both, forces always-staged routing for the two
+new categories regardless of confidence, and surfaces
+approved drafts through the existing `aivyx persona
+proposals` CLI for operator copy into `aivyx.toml`.
+
+**Q-block (one non-Recommended):**
+- Q1c — **Both Profile attributes AND new Role
+  definitions** (non-Recommended; picked over the
+  Profile-attribute-only Recommended). Larger surface;
+  closes Chapter E #4 in one phase.
+- Q2a — Always-staged for operator approval
+  (Recommended). Preserves P13 (Profile-operator-owned)
+  and P9 (Role-config operator-curated).
+- Q3a — Extend Phase 114 auto-proposer with new
+  categories (Recommended). Maximum substrate reuse.
+
+**Streak predictions:** DESIGN.md HOLD → 9; PRODUCT.md
+HOLD → 9; `aivyx-core/src/lib.rs` HOLD → 2 (honest 60/40).
+
+Test count: predicted `+25 to +50`. Zero new workspace
+deps.
+
+After Phase 118, Chapter E closes. The next phase opens
+against the Channel Activation Milestone OR a new
+thematic Chapter F shaped by operator pressure.
+
 ## Phase 117 — Phase 116 Deferral Closeout (live-prompt pipe + per-skill tracking)
 
 **Frozen — see [PHASE_117.md](PHASE_117.md).** Standalone
