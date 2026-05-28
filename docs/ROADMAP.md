@@ -3411,7 +3411,7 @@ no code, just real-bot smoke tests across every adapter.
 
 ## Phase 113 — Operator-Surface Polish (deferral cleanup)
 
-**Active — see [PHASE_113.md](PHASE_113.md).** Standalone
+**Frozen — see [PHASE_113.md](PHASE_113.md).** Standalone
 phase past Chapter D's close, mirroring the Phase 20
 (Daemon Management + Deferral Cleanup) precedent: batch
 five small named operator-surface deferrals into one
@@ -3439,21 +3439,32 @@ Chapter D and Phase 112:
   `[skills.auto_propose]` config + revert escape hatch.
 
 **Q-block at sign-off:** Q1a — **bundle A3 into Phase
-113** (operator-picked Recommended). DESIGN.md streak
-breaks at the A-amendment edit; clean "all operator-
-surface deferrals in one phase" framing.
+113** (operator-picked Recommended).
 
-Streak predictions: DESIGN.md break (A3 addendum; resets
-3 → 1); PRODUCT.md extends to four (no contract touch);
-`aivyx-core/src/lib.rs` extends to two (no aivyx-core
-touch). Zero new workspace deps. Test count `+15` to
-`+25`.
+**Streak outcomes** — all three predictions held; first
+all-hold result since Phase 56 / Phase 108:
+- DESIGN.md: HELD against predicted break. The A3
+  addendum lives in `docs/amendments/`, not DESIGN.md
+  proper. Streak → 4.
+- PRODUCT.md: HELD as predicted (no contract touch).
+  Streak → 4.
+- `aivyx-core/src/lib.rs`: HELD as predicted (work
+  lives in `aivyx-config`, `aivyx-channel/bin`, docs
+  tree only). Streak → 2.
+
+Test count: 2044 → 2068 (**+24**), inside the predicted
+`+15` to `+25` band. Zero new workspace deps. Zero
+clippy warnings.
+
+KNOWN_BASES catch-up landed at +6 (43 → 49), not the
+open doc's ~+4 estimate. Phase 113 surfaced two
+post-Phase-54 entries the open doc missed:
+`persona.propose` (Phase 59) and `notify.send`
+(Phase 62). The A3 addendum traces all six.
 
 After Phase 113, every named Chapter D + Phase 112
 operator-surface deferral is closed; the Channel
-Activation Milestone is fully ready to run (substrate
-production-wired in Phase 111, auto-proposer
-operator-configurable in Phase 113).
+Activation Milestone is fully ready to run.
 
 ## Phase 112 — Skill Auto-Proposer (Phase 110's named follow-on)
 

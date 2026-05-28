@@ -207,31 +207,113 @@ README.md` status row.
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_113.md` + ROADMAP Phase 113 entry +
-  docs/README status row — Task 1 (this commit).
-- [ ] `[skills.auto_propose]` TOML loader in
-  `aivyx-config` + parse/validation tests — Task 2.
-- [ ] Binary auto-construction of
+- [x] `docs/PHASE_113.md` + ROADMAP Phase 113 entry +
+  docs/README status row — Task 1 (`e9a12e7`).
+- [x] `[skills.auto_propose]` TOML loader in
+  `aivyx-config` + parse/validation tests — Task 2
+  (`7a5a2ec`).
+- [x] Binary auto-construction of
   `SkillAutoProposerContext` from the loaded TOML —
-  Task 3.
-- [ ] `aivyx persona list --auto-only/--manual-only`
+  Task 3 (`e7503c4`).
+- [x] `aivyx persona list --auto-only/--manual-only`
   flags + `aivyx audit export --event-type
-  SkillAutoProposal` filter — Task 4.
-- [ ] A3 amendment addendum in DESIGN.md (`KNOWN_BASES`
-  43 → 47) — Task 5.
-- [ ] INSTALL.md Phase 112 paragraph — Task 6.
-- [ ] Q-block question Q1 resolved with operator sign-off
-  pre-Task 2 (recorded above: Q1a — bundle A3 into Phase
-  113).
-- [ ] DESIGN.md streak break predicted (A3 addendum;
-  resets 3 → 1).
-- [ ] PRODUCT.md streak extends to four.
-- [ ] `aivyx-core/src/lib.rs` streak extends to two.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta positive — predicted `+15` to
-  `+25`.
-- [ ] Zero clippy warnings.
-- [ ] **All five named operator-surface deferrals
-  closed.** The auto-proposer is configurable, the
-  inspection flags exist, the A3 inventory is current,
-  INSTALL.md reflects the post-Phase-112 surface.
+  SkillAutoProposal` filter — Task 4 (`65ee891`).
+- [x] A3 amendment addendum (`KNOWN_BASES` 43 → 49;
+  open doc said `~47` — Phase 113 surfaced two
+  additional post-Phase-54 entries the open doc missed:
+  `persona.propose` from Phase 59 and `notify.send`
+  from Phase 62) — Task 5 (`6183b58`).
+- [x] INSTALL.md Phase 112 paragraph + Phase 107/108
+  status refresh — Task 6 (`12e629c`).
+- [x] Q-block question Q1 resolved with operator sign-off
+  pre-Task 2 (Q1a — bundle A3 into Phase 113).
+- [x] DESIGN.md streak — **HELD byte-identical** against
+  the predicted break (Q1a's "A-amendment file edit"
+  expected a touch). The A3 amendment is its own file
+  under `docs/amendments/`; the addendum extends that
+  file, not DESIGN.md proper. Positive surprise; streak
+  extends 3 → 4.
+- [x] PRODUCT.md streak extends to four (predicted hold).
+- [x] `aivyx-core/src/lib.rs` streak extends to two
+  (predicted hold).
+- [x] Zero new workspace dependencies.
+- [x] Test count delta positive — `+24` (2044 → 2068).
+  Inside the predicted `+15` to `+25` band.
+- [x] Zero clippy warnings.
+- [x] **All five named operator-surface deferrals
+  closed.** The auto-proposer is configurable through
+  `[skills.auto_propose]`, the inspection flags exist
+  on `persona list` + `audit export`, the A3 inventory
+  is current at 49, INSTALL.md reflects the
+  post-Phase-112 surface, and the stale Phase 107/108
+  paragraphs are refreshed.
+
+## Prediction vs reality
+
+**Three streak predictions; all three held — first
+all-hold result since Phase 56 / Phase 108.** This is the
+second consecutive phase where DESIGN.md held against a
+prediction-to-break (Phase 112 was the first; Phase 113
+makes two-in-a-row).
+
+- **DESIGN.md** — **Held against the predicted break.**
+  `c2be6d51…` → `c2be6d51…`. The Q1a-driven A3 amendment
+  addendum lives in `docs/amendments/2026-04-17-
+  capability-taxonomy-growth.md`, which is structurally
+  outside DESIGN.md proper. The "DESIGN.md edits at A-
+  amendment touch" model the open doc carried turned out
+  to be wrong — every prior A-amendment also lives in its
+  own file, and earlier streak breaks attributed to "A-
+  amendment work" were really about D-section edits
+  inside DESIGN.md itself. Streak: 3 → 4.
+
+- **PRODUCT.md** — **Held as predicted.** `6e840cef…`
+  unchanged. Phase 113 is operator-surface polish entirely
+  inside the P8 (Outcome-Driven Audited Reflection) +
+  P10 (Substrate Tools) envelopes that shipped earlier.
+  Streak: 3 → 4.
+
+- **`aivyx-core/src/lib.rs`** — **Held as predicted.**
+  `deab80d8…` unchanged. All Phase 113 work lives in
+  `aivyx-config` (TOML loader), `aivyx-channel/src/bin/
+  aivyx.rs` (DaemonConfig auto-construction + CLI flags),
+  and the docs tree. No `aivyx-core` touch. Streak:
+  1 → 2.
+
+**Test count `+24` is inside the `+15` to `+25` band.**
+Breakdown: aivyx-config TOML parser (+10), aivyx-channel
+From conversion (+2), persona-list filter parse + filter
+fn (+9, of which the parse tests live in bin/aivyx.rs and
+the filter-fn tests live in aivyx_modules/persona.rs),
+audit-export filter (+2 event_type_label tests),
+aivyx-capability KNOWN_BASES count pin (+1).
+
+**The +6 base catchup vs the open doc's `~+4` is honest
+forensics:** the open doc estimated KNOWN_BASES had grown
+from 43 to ~47 since Phase 54. The actual count is 49.
+Two post-Phase-54 entries the open doc missed:
+`persona.propose` (Phase 59 — operator-side proposal write
+gate, distinct from `reflection.propose`) and
+`notify.send` (Phase 62 — Reach: agent-initiated outbound
+notifications). The A3 addendum names both for the
+auditor-readable trail.
+
+## All named operator-surface deferrals are now closed
+
+After Phase 113, the deferral ledger for operator-surface
+work has cleared:
+
+| Deferral | Origin | Closed in |
+|----------|--------|-----------|
+| TOML `[skills.auto_propose]` config loader | Phase 112 | **Phase 113** (Task 2) |
+| Daemon TOML→Context wiring | Phase 112 | **Phase 113** (Task 3) |
+| `persona list --auto-only/--manual-only` | Phase 112 | **Phase 113** (Task 4) |
+| `audit export --event-type` filter | Phase 112 | **Phase 113** (Task 4) |
+| A3 amendment addendum | Phase 110 | **Phase 113** (Task 5) |
+| INSTALL.md Phase 112 paragraph | Phase 112 | **Phase 113** (Task 6) |
+
+The Channel Activation Milestone (ROADMAP-defined,
+unblocked since Phase 111) is now operator-ready in full:
+substrate production-wired (Phase 111), auto-proposer
+operator-configurable (Phase 113), inspection flags
+present (Phase 113), INSTALL.md current (Phase 113).
