@@ -3444,6 +3444,41 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 117 — Phase 116 Deferral Closeout (live-prompt pipe + per-skill tracking)
+
+**Active — see [PHASE_117.md](PHASE_117.md).** Standalone
+phase that closes both Phase-116-internal deferrals
+together per Q1b sign-off. After Phase 117, the Phase 116
+relevance substrate reaches the LLM in live turns AND
+records per-skill outcomes accurately — the operator value
+Phase 116 aimed at lands in full.
+
+**Q-block (one non-Recommended):**
+- Q1b — **Bundle both deferrals together** (non-
+  Recommended; picked over the focused single-deferral
+  option). Larger scope; cleaner ledger + prompt surface
+  immediately.
+
+Phase 113's Operator-Surface Polish precedent: batching
+small named deferrals into one cleanup phase. Phase 117 is
+NOT a substrate-novelty phase; ships focused integration
+work taking the Phase 116 substrate and plumbing it into
+live use.
+
+Streak predictions: all three predicted HOLD (DESIGN.md
+→ 8, PRODUCT.md → 8, `aivyx-core/src/lib.rs` → 2). Zero
+new workspace deps. Test count `+30` to `+60`.
+
+Two substrate touches: new `DynamicSystemPromptBuilder`
+trait in aivyx-core (additive); new
+`AuditEvent::SkillInvocation` variant in aivyx-audit
+(Phase 67 `AutoNotifyDispatched` precedent for additive
+audit-event extensions).
+
+After Phase 117, the last named Chapter E axis (outcome-
+driven Profile/Role refinement) is the only Chapter E
+direction remaining.
+
 ## Phase 116 — Tool/Skill Selection Learning from Outcomes (Chapter E #3)
 
 **Frozen — see [PHASE_116.md](PHASE_116.md).** Third phase
