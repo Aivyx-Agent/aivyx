@@ -165,6 +165,16 @@ pub enum KeyDomain {
     /// only the cross-session pattern view, never memory,
     /// recall, the helpfulness ledger, or proactive dedup.
     CooccurrenceLedger,
+    /// Phase 116 — persistent tool/skill relevance ledger.
+    /// One row per keyword-set selector, holding per-tool and
+    /// per-skill success/failure counts accumulated over time.
+    /// The Phase 116 system-prompt assembly reads this ledger
+    /// and renders a `## Tools recently used for similar
+    /// tasks` section so the agent's selection is informed by
+    /// historical outcomes. Isolated so a corrupt row degrades
+    /// only the selection-hint signal, never memory, recall,
+    /// or any other learning ledger.
+    ToolRelevanceLedger,
 }
 
 impl KeyDomain {
@@ -192,6 +202,7 @@ impl KeyDomain {
             KeyDomain::ProactiveLog => b"proactive-log",
             KeyDomain::HelpfulnessLedger => b"helpfulness-ledger",
             KeyDomain::CooccurrenceLedger => b"cooccurrence-ledger",
+            KeyDomain::ToolRelevanceLedger => b"tool-relevance-ledger",
         }
     }
 
@@ -222,12 +233,15 @@ impl KeyDomain {
             KeyDomain::CooccurrenceLedger => {
                 "aivyx_cooccurrence_ledger_v1"
             }
+            KeyDomain::ToolRelevanceLedger => {
+                "aivyx_tool_relevance_ledger_v1"
+            }
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 16] = [
+    pub const ALL: [KeyDomain; 17] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -244,6 +258,7 @@ impl KeyDomain {
         KeyDomain::ProactiveLog,
         KeyDomain::HelpfulnessLedger,
         KeyDomain::CooccurrenceLedger,
+        KeyDomain::ToolRelevanceLedger,
     ];
 }
 
@@ -429,7 +444,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 16],
+    subkeys: [SubKey; 17],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -506,7 +521,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 16], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 17], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -530,6 +545,9 @@ impl RedbStorage {
             )?,
             master.derive_subkey(
                 KeyDomain::CooccurrenceLedger.as_bytes(),
+            )?,
+            master.derive_subkey(
+                KeyDomain::ToolRelevanceLedger.as_bytes(),
             )?,
         ])
     }
@@ -555,6 +573,7 @@ impl RedbStorage {
             KeyDomain::ProactiveLog => &self.subkeys[13],
             KeyDomain::HelpfulnessLedger => &self.subkeys[14],
             KeyDomain::CooccurrenceLedger => &self.subkeys[15],
+            KeyDomain::ToolRelevanceLedger => &self.subkeys[16],
         }
     }
 }
@@ -976,7 +995,8 @@ mod tests {
                 | KeyDomain::RecallEvents
                 | KeyDomain::ProactiveLog
                 | KeyDomain::HelpfulnessLedger
-                | KeyDomain::CooccurrenceLedger => {}
+                | KeyDomain::CooccurrenceLedger
+                | KeyDomain::ToolRelevanceLedger => {}
             }
         }
     }
