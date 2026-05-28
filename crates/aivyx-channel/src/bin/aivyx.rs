@@ -2916,10 +2916,17 @@ async fn run_async(
         // GetLearningInsights surface).
         recall_feedback: config_recall_feedback,
         // Phase 113 — `[skills.auto_propose]` loaded config.
-        // Task 3 branches on this below to construct a
-        // `SkillAutoProposerContext` and plumb it through
-        // DaemonConfig.
+        // Phase 114 — preserved as the alias path. The bin's
+        // construction (below) prefers `config_persona_auto_propose`
+        // if present, otherwise falls back to this Phase 113
+        // single-config shape.
         skill_auto_propose: config_skill_auto_propose,
+        // Phase 114 — `[persona.auto_propose]` loaded config.
+        // When `Some`, takes precedence over the Phase 113 alias.
+        // Used by the bin's `SkillAutoProposerContext`
+        // construction to populate the per-category config in
+        // the runtime auto-proposer.
+        persona_auto_propose: _config_persona_auto_propose,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by

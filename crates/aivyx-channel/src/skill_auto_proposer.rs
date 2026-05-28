@@ -92,29 +92,31 @@ pub struct SkillAutoProposeConfig {
     /// enough to keep cost bounded.
     pub judge_max_tokens: u32,
 
-    /// Confidence threshold for the Task 5 auto-accept path
-    /// (Q3b). `JudgeResponse.confidence >= threshold AND no
-    /// duplicate AND no fuzzy-title-clash` lands in the
-    /// LearnedSkill chain as an `auto_accepted: true` entry;
-    /// everything else stages for manual approval.
-    ///
-    /// Default `0.85`. Read as: "the operator wants the LLM
-    /// to be quite sure before auto-accept, but not certain
-    /// to the point that the path never fires."
-    ///
-    /// Task 4 stores this field but doesn't act on it; Task 5
-    /// fills in the auto-accept routing.
+    /// Phase 113 — confidence threshold for the auto-accept
+    /// path. Used as the fallback when
+    /// [`Self::per_category`] is `None` (Phase 113 single-
+    /// config posture). Phase 114 — when `per_category` is
+    /// `Some`, the per-category threshold takes precedence
+    /// for the picked category; this field stays as a
+    /// last-resort default.
     pub auto_accept_confidence_threshold: f32,
 
     /// Fuzzy-title-match cutoff for the cheap dedup pre-filter
     /// (Q4b). A candidate with title fuzzy-match similarity
     /// against any existing skill at or above this threshold
-    /// is dropped before the LLM-judge call (cost saver).
-    /// Default `0.80`.
-    ///
-    /// Task 4 stores this field but doesn't act on it; Task 5
-    /// fills in the dedup pre-filter.
+    /// is dropped (LearnedSkill category only).
     pub fuzzy_match_threshold: f32,
+
+    /// Phase 114 — per-`PersonaDeltaCategory` overrides
+    /// produced by the `[persona.auto_propose]` TOML section.
+    /// `None` when the operator only configured the Phase 113
+    /// `[skills.auto_propose]` alias (in which case every
+    /// category falls back to `auto_accept_confidence_threshold`
+    /// AND the LearnedSkill category is the only one
+    /// effectively enabled — Phase 113 behavior). `Some`
+    /// when `[persona.auto_propose]` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_category: Option<PerCategoryConfigSet>,
 }
 
 impl Default for SkillAutoProposeConfig {
@@ -126,8 +128,55 @@ impl Default for SkillAutoProposeConfig {
             judge_max_tokens: 800,
             auto_accept_confidence_threshold: 0.85,
             fuzzy_match_threshold: 0.80,
+            per_category: None,
         }
     }
+}
+
+/// Phase 114 — runtime per-category override set. Mirrors
+/// `aivyx_config::PerCategoryConfigSet` field-for-field so
+/// the `From` conversion is mechanical.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PerCategoryConfigSet {
+    pub assistant_name: PerCategoryConfig,
+    pub operator_profile: PerCategoryConfig,
+    pub communication_style: PerCategoryConfig,
+    pub primary_use_cases: PerCategoryConfig,
+    pub behavioral_preferences: PerCategoryConfig,
+    pub behavioral_constraints: PerCategoryConfig,
+    pub learned_context: PerCategoryConfig,
+    pub communication_adaptations: PerCategoryConfig,
+    pub character_traits: PerCategoryConfig,
+    pub relationship_milestones: PerCategoryConfig,
+    pub learned_skill: PerCategoryConfig,
+}
+
+impl PerCategoryConfigSet {
+    /// Lookup the per-category override for a given
+    /// `PersonaDeltaCategory` label. Returns `None` for
+    /// unknown labels.
+    pub fn lookup(&self, category: &str) -> Option<&PerCategoryConfig> {
+        match category {
+            "AssistantName" => Some(&self.assistant_name),
+            "OperatorProfile" => Some(&self.operator_profile),
+            "CommunicationStyle" => Some(&self.communication_style),
+            "PrimaryUseCases" => Some(&self.primary_use_cases),
+            "BehavioralPreferences" => Some(&self.behavioral_preferences),
+            "BehavioralConstraints" => Some(&self.behavioral_constraints),
+            "LearnedContext" => Some(&self.learned_context),
+            "CommunicationAdaptations" => Some(&self.communication_adaptations),
+            "CharacterTraits" => Some(&self.character_traits),
+            "RelationshipMilestones" => Some(&self.relationship_milestones),
+            "LearnedSkill" => Some(&self.learned_skill),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PerCategoryConfig {
+    pub enabled: bool,
+    pub auto_accept_confidence_threshold: f32,
 }
 
 /// Phase 113 Task 3 — Convert the TOML-loaded
@@ -135,28 +184,90 @@ impl Default for SkillAutoProposeConfig {
 /// `aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig`.
 /// Maps field-for-field; the two structs intentionally mirror
 /// each other so the binary's only job is to call `.into()`.
+///
+/// Phase 114 — produces `per_category: None`, which the
+/// runtime treats as Phase 113 single-config posture
+/// (LearnedSkill only).
 impl From<aivyx_config::SkillAutoProposeConfig> for SkillAutoProposeConfig {
     fn from(c: aivyx_config::SkillAutoProposeConfig) -> Self {
-        let mode = match c.heuristic.mode {
-            aivyx_config::SkillsAutoProposeMatchMode::Any =>
-                aivyx_core::skill_proposer::MatchMode::Any,
-            aivyx_config::SkillsAutoProposeMatchMode::All =>
-                aivyx_core::skill_proposer::MatchMode::All,
-        };
         SkillAutoProposeConfig {
             enabled: c.enabled,
-            heuristic: HeuristicConfig {
-                tool_call_count_min: c.heuristic.tool_call_count_min,
-                distinct_tool_id_min: c.heuristic.distinct_tool_id_min,
-                duration_ms_min: c.heuristic.duration_ms_min,
-                require_gate_resolve: c.heuristic.require_gate_resolve,
-                mode,
-            },
+            heuristic: convert_heuristic(&c.heuristic),
             judge_model: c.judge_model,
             judge_max_tokens: c.judge_max_tokens,
             auto_accept_confidence_threshold: c.auto_accept_confidence_threshold,
             fuzzy_match_threshold: c.fuzzy_match_threshold,
+            per_category: None,
         }
+    }
+}
+
+/// Phase 114 Task 3 — Convert the TOML-loaded
+/// `aivyx_config::PersonaAutoProposeConfig` (per-category)
+/// into the runtime `SkillAutoProposeConfig`. The runtime
+/// type is shared between Phase 113 (no per_category) and
+/// Phase 114 (Some(per_category)).
+impl From<aivyx_config::PersonaAutoProposeConfig> for SkillAutoProposeConfig {
+    fn from(c: aivyx_config::PersonaAutoProposeConfig) -> Self {
+        SkillAutoProposeConfig {
+            enabled: c.enabled,
+            heuristic: convert_heuristic(&c.heuristic),
+            judge_model: c.judge_model,
+            judge_max_tokens: c.judge_max_tokens,
+            // Phase 114 — `PersonaAutoProposeConfig` has no
+            // top-level auto_accept_confidence_threshold; the
+            // per-category settings cover the auto-accept
+            // policy. This field stays as a sane fallback for
+            // categories the operator didn't enumerate (which
+            // shouldn't happen — the struct enumerates all 11
+            // — but the runtime check defends against future
+            // labels too).
+            auto_accept_confidence_threshold:
+                aivyx_config::DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD,
+            fuzzy_match_threshold: c.fuzzy_match_threshold,
+            per_category: Some(convert_per_category_set(c.per_category)),
+        }
+    }
+}
+
+fn convert_heuristic(
+    h: &aivyx_config::SkillsAutoProposeHeuristic,
+) -> HeuristicConfig {
+    HeuristicConfig {
+        tool_call_count_min: h.tool_call_count_min,
+        distinct_tool_id_min: h.distinct_tool_id_min,
+        duration_ms_min: h.duration_ms_min,
+        require_gate_resolve: h.require_gate_resolve,
+        mode: match h.mode {
+            aivyx_config::SkillsAutoProposeMatchMode::Any =>
+                aivyx_core::skill_proposer::MatchMode::Any,
+            aivyx_config::SkillsAutoProposeMatchMode::All =>
+                aivyx_core::skill_proposer::MatchMode::All,
+        },
+    }
+}
+
+fn convert_per_category_set(
+    c: aivyx_config::PerCategoryConfigSet,
+) -> PerCategoryConfigSet {
+    fn cv(p: aivyx_config::PerCategoryConfig) -> PerCategoryConfig {
+        PerCategoryConfig {
+            enabled: p.enabled,
+            auto_accept_confidence_threshold: p.auto_accept_confidence_threshold,
+        }
+    }
+    PerCategoryConfigSet {
+        assistant_name: cv(c.assistant_name),
+        operator_profile: cv(c.operator_profile),
+        communication_style: cv(c.communication_style),
+        primary_use_cases: cv(c.primary_use_cases),
+        behavioral_preferences: cv(c.behavioral_preferences),
+        behavioral_constraints: cv(c.behavioral_constraints),
+        learned_context: cv(c.learned_context),
+        communication_adaptations: cv(c.communication_adaptations),
+        character_traits: cv(c.character_traits),
+        relationship_milestones: cv(c.relationship_milestones),
+        learned_skill: cv(c.learned_skill),
     }
 }
 
@@ -1751,6 +1862,62 @@ mod tests {
         assert_eq!(runtime.heuristic.duration_ms_min, 9000);
         assert!(runtime.heuristic.require_gate_resolve);
         assert_eq!(runtime.heuristic.mode, MatchMode::All);
+    }
+
+    #[test]
+    fn from_aivyx_config_persona_auto_propose_populates_per_category() {
+        let cfg = aivyx_config::PersonaAutoProposeConfig {
+            enabled: true,
+            heuristic: aivyx_config::SkillsAutoProposeHeuristic {
+                tool_call_count_min: 3,
+                distinct_tool_id_min: 2,
+                duration_ms_min: 5000,
+                require_gate_resolve: false,
+                mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
+            },
+            judge_model: "m".into(),
+            judge_max_tokens: 800,
+            fuzzy_match_threshold: 0.80,
+            per_category: aivyx_config::PerCategoryConfigSet::defaults(),
+        };
+        let runtime: SkillAutoProposeConfig = cfg.into();
+        let pc = runtime.per_category.expect("per_category populated");
+        // Scalar defaults — off
+        assert!(!pc.assistant_name.enabled);
+        assert!(!pc.operator_profile.enabled);
+        assert!(!pc.communication_style.enabled);
+        // List defaults — on
+        assert!(pc.behavioral_preferences.enabled);
+        assert!(pc.learned_skill.enabled);
+        assert!(pc.character_traits.enabled);
+        // Lookup helper works
+        assert!(pc.lookup("LearnedSkill").is_some());
+        assert!(pc.lookup("AssistantName").is_some());
+        assert!(pc.lookup("NotARealCategory").is_none());
+    }
+
+    #[test]
+    fn from_aivyx_config_skill_auto_propose_leaves_per_category_none() {
+        // Phase 113 alias path: SkillAutoProposeConfig (skill-only)
+        // → SkillAutoProposeConfig with `per_category: None`. The
+        // runtime treats None as Phase 113 single-config posture.
+        let cfg = aivyx_config::SkillAutoProposeConfig {
+            enabled: true,
+            heuristic: aivyx_config::SkillsAutoProposeHeuristic {
+                tool_call_count_min: 3,
+                distinct_tool_id_min: 2,
+                duration_ms_min: 5000,
+                require_gate_resolve: false,
+                mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
+            },
+            judge_model: "m".into(),
+            judge_max_tokens: 800,
+            auto_accept_confidence_threshold: 0.90,
+            fuzzy_match_threshold: 0.80,
+        };
+        let runtime: SkillAutoProposeConfig = cfg.into();
+        assert!(runtime.per_category.is_none());
+        assert!((runtime.auto_accept_confidence_threshold - 0.90).abs() < 1e-6);
     }
 
     #[test]

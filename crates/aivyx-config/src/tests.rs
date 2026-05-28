@@ -7686,3 +7686,170 @@ fn skills_auto_propose_heuristic_only_arms_section() {
     assert_eq!(sap.heuristic.tool_call_count_min, 7);
     drop(env);
 }
+
+// ---- Phase 114 — [persona.auto_propose] -----------------------
+
+/// No `[persona.auto_propose]` section → `persona_auto_propose:
+/// None`. The Phase 113 alias still works independently
+/// through `skill_auto_propose`.
+#[test]
+fn persona_auto_propose_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.persona_auto_propose.is_none());
+    drop(env);
+}
+
+/// `[persona.auto_propose]` with only `enabled = true` →
+/// defaults filled per the per-category policy.
+#[test]
+fn persona_auto_propose_minimal_section_uses_per_category_defaults() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose]\nenabled = true\n",
+        "pap-minimal",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(pap.enabled);
+    // Scalar defaults: enabled=false, threshold=0.99
+    assert!(!pap.per_category.assistant_name.enabled);
+    assert!(
+        (pap.per_category.assistant_name.auto_accept_confidence_threshold
+            - crate::DEFAULT_PERSONA_SCALAR_THRESHOLD)
+            .abs()
+            < 1e-6
+    );
+    assert!(!pap.per_category.operator_profile.enabled);
+    assert!(!pap.per_category.communication_style.enabled);
+    // List defaults: enabled=true, threshold=0.85
+    assert!(pap.per_category.behavioral_preferences.enabled);
+    assert!(
+        (pap.per_category
+            .behavioral_preferences
+            .auto_accept_confidence_threshold
+            - crate::DEFAULT_PERSONA_LIST_THRESHOLD)
+            .abs()
+            < 1e-6
+    );
+    assert!(pap.per_category.learned_skill.enabled);
+    drop(env);
+}
+
+/// Per-category override: operator enables `assistant_name` with
+/// a custom threshold. Other categories still take defaults.
+#[test]
+fn persona_auto_propose_per_category_override_works() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose.assistant_name]\n\
+         enabled = true\n\
+         auto_accept_confidence_threshold = 0.995\n",
+        "pap-override",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(pap.per_category.assistant_name.enabled);
+    assert!(
+        (pap.per_category.assistant_name.auto_accept_confidence_threshold
+            - 0.995)
+            .abs()
+            < 1e-6
+    );
+    // Untouched categories: defaults.
+    assert!(!pap.per_category.operator_profile.enabled);
+    assert!(pap.per_category.behavioral_preferences.enabled);
+    drop(env);
+}
+
+/// Per-category threshold out of [0.0, 1.0] → Invalid with
+/// field-specific reason.
+#[test]
+fn persona_auto_propose_per_category_threshold_out_of_range_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pap-bad-thresh");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[persona.auto_propose.behavioral_preferences]\n\
+         enabled = true\nauto_accept_confidence_threshold = 1.7\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err =
+        AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "persona.auto_propose.behavioral_preferences.\
+                 auto_accept_confidence_threshold"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Phase 113 alias still works independently: configuring only
+/// `[skills.auto_propose]` populates `skill_auto_propose` and
+/// leaves `persona_auto_propose = None`.
+#[test]
+fn phase_113_alias_skills_auto_propose_still_works() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose]\nenabled = true\n",
+        "alias-skills",
+    );
+    assert!(cfg.skill_auto_propose.is_some());
+    assert!(cfg.persona_auto_propose.is_none());
+    drop(env);
+}
+
+/// Both sections present: each populates its own field. The
+/// bin-side wiring (Task 6) picks `persona_auto_propose` when
+/// present; this test only confirms the loader accepts both
+/// cleanly.
+#[test]
+fn both_sections_present_populate_their_own_fields() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skills.auto_propose]\nenabled = true\n\
+         \n[persona.auto_propose]\nenabled = true\n",
+        "both-sections",
+    );
+    assert!(cfg.skill_auto_propose.is_some());
+    assert!(cfg.persona_auto_propose.is_some());
+    drop(env);
+}
+
+/// PerCategoryConfigSet's lookup matches the runtime
+/// equivalent's category-label dispatch.
+#[test]
+fn per_category_lookup_covers_all_eleven_labels() {
+    let set = crate::PerCategoryConfigSet::defaults();
+    for label in [
+        "AssistantName",
+        "OperatorProfile",
+        "CommunicationStyle",
+        "PrimaryUseCases",
+        "BehavioralPreferences",
+        "BehavioralConstraints",
+        "LearnedContext",
+        "CommunicationAdaptations",
+        "CharacterTraits",
+        "RelationshipMilestones",
+        "LearnedSkill",
+    ] {
+        assert!(set.lookup(label).is_some(), "missing label {label}");
+    }
+    assert!(set.lookup("NotARealCategory").is_none());
+}

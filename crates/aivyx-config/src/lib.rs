@@ -644,7 +644,22 @@ pub struct AivyxConfig {
     /// = None`). `Some` arms the post-finalize auto-propose
     /// pipeline; it still no-ops unless
     /// `SkillAutoProposeConfig::enabled = true`.
+    ///
+    /// Phase 114: this field is preserved as the Phase 113
+    /// alias. If `persona_auto_propose` is `Some`, that
+    /// takes precedence; otherwise the loader synthesizes a
+    /// `PersonaAutoProposeConfig` from this section
+    /// (LearnedSkill-only, every other category disabled).
     pub skill_auto_propose: Option<SkillAutoProposeConfig>,
+
+    /// Phase 114 — `[persona.auto_propose]` section. `None`
+    /// when absent: the loader falls back to
+    /// `skill_auto_propose` (Phase 113 alias). `Some` arms
+    /// the post-finalize auto-propose pipeline across all
+    /// PersonaDeltaCategory variants per the per-category
+    /// config; it still no-ops unless
+    /// `PersonaAutoProposeConfig::enabled = true`.
+    pub persona_auto_propose: Option<PersonaAutoProposeConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -2040,6 +2055,122 @@ pub const DEFAULT_SKILLS_HEURISTIC_TOOL_CALL_MIN: u32 = 3;
 pub const DEFAULT_SKILLS_HEURISTIC_DISTINCT_TOOL_ID_MIN: u32 = 2;
 pub const DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN: u64 = 5000;
 
+/// Phase 114 — `[persona.auto_propose]` runtime config.
+///
+/// The Phase 113 `[skills.auto_propose]` section is now an
+/// alias that maps to this config with all categories disabled
+/// EXCEPT `learned_skill`. New operators use the Phase 114
+/// section; pre-Phase-114 configs keep working byte-identical.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonaAutoProposeConfig {
+    /// Master switch. Default `true` per Q3b — operators who
+    /// configure the section opted in deliberately.
+    pub enabled: bool,
+    /// LLM-judge model. Defaults to
+    /// `DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL`.
+    pub judge_model: String,
+    /// Max tokens the judge may emit. Default 800.
+    pub judge_max_tokens: u32,
+    /// Q4b fuzzy-match pre-filter cutoff for the LearnedSkill
+    /// dedup path. Other categories don't use fuzzy match;
+    /// cross-category dedup is the judge's job.
+    pub fuzzy_match_threshold: f32,
+    /// Q2a — heuristic gate signals (reused from Phase 112).
+    pub heuristic: SkillsAutoProposeHeuristic,
+    /// Q1b — per-category configuration. Each variant carries
+    /// its own enable flag + auto-accept threshold.
+    pub per_category: PerCategoryConfigSet,
+}
+
+/// Phase 114 — per-category configuration. Each
+/// `PersonaDeltaCategory` variant has its own enable flag and
+/// auto-accept threshold. Defaults are operator-conservative
+/// for high-impact scalar categories (off by default) and
+/// permissive for additive list categories.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerCategoryConfigSet {
+    pub assistant_name: PerCategoryConfig,
+    pub operator_profile: PerCategoryConfig,
+    pub communication_style: PerCategoryConfig,
+    pub primary_use_cases: PerCategoryConfig,
+    pub behavioral_preferences: PerCategoryConfig,
+    pub behavioral_constraints: PerCategoryConfig,
+    pub learned_context: PerCategoryConfig,
+    pub communication_adaptations: PerCategoryConfig,
+    pub character_traits: PerCategoryConfig,
+    pub relationship_milestones: PerCategoryConfig,
+    pub learned_skill: PerCategoryConfig,
+}
+
+impl PerCategoryConfigSet {
+    /// Lookup a category's config by the
+    /// `PersonaDeltaCategory` label the judge returns. Returns
+    /// `None` for unknown labels (the auto-proposer treats
+    /// `None` as "category disabled" — fail-safe).
+    pub fn lookup(&self, category: &str) -> Option<&PerCategoryConfig> {
+        match category {
+            "AssistantName" => Some(&self.assistant_name),
+            "OperatorProfile" => Some(&self.operator_profile),
+            "CommunicationStyle" => Some(&self.communication_style),
+            "PrimaryUseCases" => Some(&self.primary_use_cases),
+            "BehavioralPreferences" => Some(&self.behavioral_preferences),
+            "BehavioralConstraints" => Some(&self.behavioral_constraints),
+            "LearnedContext" => Some(&self.learned_context),
+            "CommunicationAdaptations" => Some(&self.communication_adaptations),
+            "CharacterTraits" => Some(&self.character_traits),
+            "RelationshipMilestones" => Some(&self.relationship_milestones),
+            "LearnedSkill" => Some(&self.learned_skill),
+            _ => None,
+        }
+    }
+
+    /// Phase 114 defaults — scalar categories OFF by default
+    /// (each new value replaces the previous one; high-stakes,
+    /// operator must opt in). List categories ON by default
+    /// since they're additive. `LearnedSkill` ON by default
+    /// to preserve Phase 112+113 behavior.
+    pub fn defaults() -> Self {
+        let scalar_default = PerCategoryConfig {
+            enabled: false,
+            auto_accept_confidence_threshold: 0.99,
+        };
+        let list_default = PerCategoryConfig {
+            enabled: true,
+            auto_accept_confidence_threshold: 0.85,
+        };
+        PerCategoryConfigSet {
+            assistant_name: scalar_default.clone(),
+            operator_profile: scalar_default.clone(),
+            communication_style: scalar_default,
+            primary_use_cases: list_default.clone(),
+            behavioral_preferences: list_default.clone(),
+            behavioral_constraints: list_default.clone(),
+            learned_context: list_default.clone(),
+            communication_adaptations: list_default.clone(),
+            character_traits: list_default.clone(),
+            relationship_milestones: list_default.clone(),
+            learned_skill: list_default,
+        }
+    }
+}
+
+impl Default for PerCategoryConfigSet {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerCategoryConfig {
+    pub enabled: bool,
+    pub auto_accept_confidence_threshold: f32,
+}
+
+/// Phase 114 default thresholds. Public so the loader and
+/// runtime tests can reference the same numbers.
+pub const DEFAULT_PERSONA_SCALAR_THRESHOLD: f32 = 0.99;
+pub const DEFAULT_PERSONA_LIST_THRESHOLD: f32 = 0.85;
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -2104,6 +2235,12 @@ struct RawToml {
     /// Phase 112 skill auto-proposer.
     #[serde(default)]
     skills: RawSkills,
+
+    /// `[persona.*]` section namespace. Phase 114 — the
+    /// `[persona.auto_propose]` sub-section configures the
+    /// generalized auto-proposer across all categories.
+    #[serde(default)]
+    persona: RawPersona,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -2908,6 +3045,62 @@ struct RawSkillsAutoProposeHeuristic {
     mode: Option<String>,
 }
 
+/// Phase 114 — `[persona.*]` namespace deserialize target.
+/// Currently only carries `auto_propose`; future Persona-axis
+/// config sections fold under `[persona.*]`.
+#[derive(Debug, Default, Deserialize)]
+struct RawPersona {
+    #[serde(default)]
+    auto_propose: RawPersonaAutoPropose,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawPersonaAutoPropose {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    judge_model: Option<String>,
+    #[serde(default)]
+    judge_max_tokens: Option<u32>,
+    #[serde(default)]
+    fuzzy_match_threshold: Option<f32>,
+    #[serde(default)]
+    heuristic: RawSkillsAutoProposeHeuristic,
+    // Per-category sub-sections. snake_case names match the
+    // TOML field convention; the validator maps them to the
+    // PerCategoryConfigSet struct.
+    #[serde(default)]
+    assistant_name: RawPerCategoryConfig,
+    #[serde(default)]
+    operator_profile: RawPerCategoryConfig,
+    #[serde(default)]
+    communication_style: RawPerCategoryConfig,
+    #[serde(default)]
+    primary_use_cases: RawPerCategoryConfig,
+    #[serde(default)]
+    behavioral_preferences: RawPerCategoryConfig,
+    #[serde(default)]
+    behavioral_constraints: RawPerCategoryConfig,
+    #[serde(default)]
+    learned_context: RawPerCategoryConfig,
+    #[serde(default)]
+    communication_adaptations: RawPerCategoryConfig,
+    #[serde(default)]
+    character_traits: RawPerCategoryConfig,
+    #[serde(default)]
+    relationship_milestones: RawPerCategoryConfig,
+    #[serde(default)]
+    learned_skill: RawPerCategoryConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawPerCategoryConfig {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    auto_accept_confidence_threshold: Option<f32>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyx {
     #[serde(default)]
@@ -3437,6 +3630,8 @@ impl AivyxConfig {
             build_recall_feedback_config(&toml.recall_feedback)?;
         let skill_auto_propose =
             build_skill_auto_propose_config(&toml.skills.auto_propose)?;
+        let persona_auto_propose =
+            build_persona_auto_propose_config(&toml.persona.auto_propose)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -4332,6 +4527,7 @@ impl AivyxConfig {
             recall_judgment,
             recall_feedback,
             skill_auto_propose,
+            persona_auto_propose,
             roles,
             active_role,
             profile,
@@ -5779,6 +5975,215 @@ fn build_skill_auto_propose_config(
         auto_accept_confidence_threshold,
         fuzzy_match_threshold,
     }))
+}
+
+/// Phase 114 — validate a single `[persona.auto_propose.<category>]`
+/// raw sub-section. `default_enabled` and `default_threshold`
+/// come from the per-category default policy
+/// ([`PerCategoryConfigSet::defaults`]) so absent operator
+/// values fall to scalar-vs-list defaults.
+fn build_per_category_config(
+    raw: &RawPerCategoryConfig,
+    default_enabled: bool,
+    default_threshold: f32,
+    field_path: &'static str,
+) -> Result<PerCategoryConfig, ConfigError> {
+    let enabled = raw.enabled.unwrap_or(default_enabled);
+    let auto_accept_confidence_threshold = raw
+        .auto_accept_confidence_threshold
+        .unwrap_or(default_threshold);
+    if !(0.0..=1.0).contains(&auto_accept_confidence_threshold) {
+        return Err(ConfigError::Invalid {
+            field: field_path,
+            reason: "must be in [0.0, 1.0]".into(),
+        });
+    }
+    Ok(PerCategoryConfig {
+        enabled,
+        auto_accept_confidence_threshold,
+    })
+}
+
+/// Phase 114 — `[persona.auto_propose]` → optional runtime
+/// config. Absent section → `None`. Partial section → fills
+/// defaults per [`PerCategoryConfigSet::defaults`] (scalar
+/// categories OFF, list categories ON, both with category-
+/// appropriate thresholds).
+fn build_persona_auto_propose_config(
+    raw: &RawPersonaAutoPropose,
+) -> Result<Option<PersonaAutoProposeConfig>, ConfigError> {
+    let h = &raw.heuristic;
+    let heuristic_any_set = h.tool_call_count_min.is_some()
+        || h.distinct_tool_id_min.is_some()
+        || h.duration_ms_min.is_some()
+        || h.require_gate_resolve.is_some()
+        || h.mode.is_some();
+    let per_cat_any_set = per_category_any_set(raw);
+    let top_any_set = raw.enabled.is_some()
+        || raw.judge_model.is_some()
+        || raw.judge_max_tokens.is_some()
+        || raw.fuzzy_match_threshold.is_some();
+    if !top_any_set && !heuristic_any_set && !per_cat_any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(true);
+    let judge_model = raw
+        .judge_model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL.to_string());
+    if judge_model.trim().is_empty() {
+        return Err(ConfigError::Invalid {
+            field: "persona.auto_propose.judge_model",
+            reason: "`judge_model` must be non-empty".into(),
+        });
+    }
+    let judge_max_tokens = raw
+        .judge_max_tokens
+        .unwrap_or(DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS);
+    if judge_max_tokens == 0 {
+        return Err(ConfigError::Invalid {
+            field: "persona.auto_propose.judge_max_tokens",
+            reason: "`judge_max_tokens` must be >= 1".into(),
+        });
+    }
+    let fuzzy_match_threshold = raw
+        .fuzzy_match_threshold
+        .unwrap_or(DEFAULT_SKILLS_AUTO_PROPOSE_FUZZY_THRESHOLD);
+    if !(0.0..=1.0).contains(&fuzzy_match_threshold) {
+        return Err(ConfigError::Invalid {
+            field: "persona.auto_propose.fuzzy_match_threshold",
+            reason: "must be in [0.0, 1.0]".into(),
+        });
+    }
+
+    // Heuristic (reuse the Phase 113 validator output for the
+    // skill heuristic block; semantics identical).
+    let tool_call_count_min =
+        h.tool_call_count_min.unwrap_or(DEFAULT_SKILLS_HEURISTIC_TOOL_CALL_MIN);
+    let distinct_tool_id_min = h
+        .distinct_tool_id_min
+        .unwrap_or(DEFAULT_SKILLS_HEURISTIC_DISTINCT_TOOL_ID_MIN);
+    let duration_ms_min = h
+        .duration_ms_min
+        .unwrap_or(DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN);
+    let require_gate_resolve = h.require_gate_resolve.unwrap_or(false);
+    let mode = match h.mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("any") | None => SkillsAutoProposeMatchMode::Any,
+        Some("all") => SkillsAutoProposeMatchMode::All,
+        Some(other) => {
+            return Err(ConfigError::Invalid {
+                field: "persona.auto_propose.heuristic.mode",
+                reason: format!("expected \"any\" or \"all\", got \"{other}\""),
+            });
+        }
+    };
+
+    // Per-category sub-sections.
+    let per_category = PerCategoryConfigSet {
+        assistant_name: build_per_category_config(
+            &raw.assistant_name,
+            false,
+            DEFAULT_PERSONA_SCALAR_THRESHOLD,
+            "persona.auto_propose.assistant_name.auto_accept_confidence_threshold",
+        )?,
+        operator_profile: build_per_category_config(
+            &raw.operator_profile,
+            false,
+            DEFAULT_PERSONA_SCALAR_THRESHOLD,
+            "persona.auto_propose.operator_profile.auto_accept_confidence_threshold",
+        )?,
+        communication_style: build_per_category_config(
+            &raw.communication_style,
+            false,
+            DEFAULT_PERSONA_SCALAR_THRESHOLD,
+            "persona.auto_propose.communication_style.auto_accept_confidence_threshold",
+        )?,
+        primary_use_cases: build_per_category_config(
+            &raw.primary_use_cases,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.primary_use_cases.auto_accept_confidence_threshold",
+        )?,
+        behavioral_preferences: build_per_category_config(
+            &raw.behavioral_preferences,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.behavioral_preferences.auto_accept_confidence_threshold",
+        )?,
+        behavioral_constraints: build_per_category_config(
+            &raw.behavioral_constraints,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.behavioral_constraints.auto_accept_confidence_threshold",
+        )?,
+        learned_context: build_per_category_config(
+            &raw.learned_context,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.learned_context.auto_accept_confidence_threshold",
+        )?,
+        communication_adaptations: build_per_category_config(
+            &raw.communication_adaptations,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.communication_adaptations.auto_accept_confidence_threshold",
+        )?,
+        character_traits: build_per_category_config(
+            &raw.character_traits,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.character_traits.auto_accept_confidence_threshold",
+        )?,
+        relationship_milestones: build_per_category_config(
+            &raw.relationship_milestones,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.relationship_milestones.auto_accept_confidence_threshold",
+        )?,
+        learned_skill: build_per_category_config(
+            &raw.learned_skill,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.learned_skill.auto_accept_confidence_threshold",
+        )?,
+    };
+
+    Ok(Some(PersonaAutoProposeConfig {
+        enabled,
+        judge_model,
+        judge_max_tokens,
+        fuzzy_match_threshold,
+        heuristic: SkillsAutoProposeHeuristic {
+            tool_call_count_min,
+            distinct_tool_id_min,
+            duration_ms_min,
+            require_gate_resolve,
+            mode,
+        },
+        per_category,
+    }))
+}
+
+/// Phase 114 — true iff any per-category sub-section has any
+/// field set (used by `build_persona_auto_propose_config` to
+/// distinguish "section absent" from "section present but
+/// empty top-level").
+fn per_category_any_set(raw: &RawPersonaAutoPropose) -> bool {
+    fn p(r: &RawPerCategoryConfig) -> bool {
+        r.enabled.is_some() || r.auto_accept_confidence_threshold.is_some()
+    }
+    p(&raw.assistant_name)
+        || p(&raw.operator_profile)
+        || p(&raw.communication_style)
+        || p(&raw.primary_use_cases)
+        || p(&raw.behavioral_preferences)
+        || p(&raw.behavioral_constraints)
+        || p(&raw.learned_context)
+        || p(&raw.communication_adaptations)
+        || p(&raw.character_traits)
+        || p(&raw.relationship_milestones)
+        || p(&raw.learned_skill)
 }
 
 ///
