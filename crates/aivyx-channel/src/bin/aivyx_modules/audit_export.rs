@@ -424,6 +424,7 @@ mod tests {
                     duration: false,
                     gate_resolve: false,
                 },
+            category: None,
         };
         assert_eq!(event_type_label(&sap), "SkillAutoProposal");
     }

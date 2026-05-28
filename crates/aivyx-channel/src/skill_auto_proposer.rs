@@ -1036,6 +1036,21 @@ pub async fn run_auto_propose_pipeline(
     // Emit the audit event. Best-effort.
     let (outcome_summary, proposed_skill_name, confidence_thousandths) =
         audit_outcome_from(&proposer_outcome, routing.as_ref());
+    // Phase 114 — the category label the judge picked. For
+    // AutoAccept/Staged it comes from the routing decision;
+    // for the other variants the routing doesn't carry the
+    // category, but the verdict does (when present).
+    let category_label = match &routing {
+        Some(SkillRoutingDecision::AutoAccept { category, .. })
+        | Some(SkillRoutingDecision::Staged { category, .. })
+        | Some(SkillRoutingDecision::DroppedCategoryDisabled {
+            category, ..
+        }) => Some(category.clone()),
+        _ => match &proposer_outcome {
+            SkillProposerOutcome::Verdict(v) => v.category.clone(),
+            _ => None,
+        },
+    };
     if let Some(alog) = audit_log {
         let event = aivyx_audit::AuditEvent::SkillAutoProposal {
             session_id,
@@ -1044,6 +1059,7 @@ pub async fn run_auto_propose_pipeline(
             proposed_skill_name,
             judge_latency_ms,
             heuristic_signals_matched: signals_record,
+            category: category_label,
         };
         use aivyx_audit::AuditWriter as _;
         if let Err(e) = alog.append(event) {
