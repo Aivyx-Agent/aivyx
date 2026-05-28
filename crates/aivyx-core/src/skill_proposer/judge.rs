@@ -224,6 +224,27 @@ impl ProposedDraft {
             ProposedDraft::ScalarSet { .. } => "ScalarSet",
         }
     }
+
+    /// Operator-readable label for the proposed draft —
+    /// `LearnedSkill` returns the kebab-case name, list/scalar
+    /// variants return a truncated value. Used as the
+    /// `proposed_skill_name` audit-event field (Phase 112's
+    /// name kept for chain backward compatibility, generalized
+    /// in semantics at Phase 114).
+    pub fn display_name(&self) -> String {
+        match self {
+            ProposedDraft::LearnedSkill { name, .. } => name.clone(),
+            ProposedDraft::ListAppend { value }
+            | ProposedDraft::ScalarSet { value } => {
+                let mut truncated: String =
+                    value.chars().take(80).collect();
+                if value.chars().count() > 80 {
+                    truncated.push('…');
+                }
+                truncated
+            }
+        }
+    }
 }
 
 /// The structured response shape the judge LLM must produce.

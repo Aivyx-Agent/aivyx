@@ -340,23 +340,52 @@ impl SkillProposerOutcome {
 ///   nothing written.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillRoutingDecision {
-    AutoAccept { draft: SkillDraft, confidence: f32 },
-    Staged { draft: SkillDraft, confidence: f32 },
-    DroppedJudgeDup { duplicate_of: String },
-    DroppedFuzzyDup { matched_existing_name: String },
+    /// Auto-accept the draft. Phase 114 — `category` and
+    /// polymorphic `draft` replace the Phase 113 `SkillDraft`-
+    /// only shape.
+    AutoAccept {
+        category: String,
+        draft: ProposedDraft,
+        confidence: f32,
+    },
+    /// Stage the draft for operator approval.
+    Staged {
+        category: String,
+        draft: ProposedDraft,
+        confidence: f32,
+    },
+    DroppedJudgeDup {
+        duplicate_of: String,
+    },
+    DroppedFuzzyDup {
+        matched_existing_name: String,
+    },
     DroppedNotWorthProposing,
+    /// Phase 114 — judge picked a `PersonaDeltaCategory` the
+    /// operator disabled in `[persona.auto_propose.<category>]`.
+    /// No chain write; logged as a distinct audit outcome so
+    /// operators can audit "the auto-proposer wanted to write
+    /// X but I'd disabled X."
+    DroppedCategoryDisabled {
+        category: String,
+    },
 }
 
 impl SkillRoutingDecision {
-    /// Short stable label for the audit log (Task 6) and
-    /// operator forensics.
+    /// Short stable label for the audit log and operator
+    /// forensics.
     pub fn label(&self) -> &'static str {
         match self {
             SkillRoutingDecision::AutoAccept { .. } => "auto-accept",
             SkillRoutingDecision::Staged { .. } => "staged",
             SkillRoutingDecision::DroppedJudgeDup { .. } => "dup-dropped-llm",
             SkillRoutingDecision::DroppedFuzzyDup { .. } => "dup-dropped-fuzzy",
-            SkillRoutingDecision::DroppedNotWorthProposing => "not-worth-proposing",
+            SkillRoutingDecision::DroppedNotWorthProposing => {
+                "not-worth-proposing"
+            }
+            SkillRoutingDecision::DroppedCategoryDisabled { .. } => {
+                "category-disabled"
+            }
         }
     }
 }
@@ -397,41 +426,79 @@ pub fn decide_routing(
         return SkillRoutingDecision::DroppedNotWorthProposing;
     }
 
-    // Step 3 — Judge said yes but the draft is missing (LLM
-    // misbehaved). Treat as not-worth-proposing rather than
-    // ship a broken proposal. Phase 113 routing covers only
-    // the LearnedSkill branch; Phase 114 Task 4 extends this
-    // to dispatch on the verdict's `category` for all 11
-    // PersonaDeltaCategory variants.
-    let Some(draft) = verdict.proposed_skill() else {
+    // Step 3 — Judge must have committed to a category AND a
+    // draft. Phase 114 — these come paired; either missing
+    // means the LLM didn't produce a clean verdict, treat as
+    // not-worth-proposing rather than ship something broken.
+    let Some(category) = verdict.category.as_ref() else {
+        return SkillRoutingDecision::DroppedNotWorthProposing;
+    };
+    let Some(draft) = verdict.proposed_draft.as_ref() else {
         return SkillRoutingDecision::DroppedNotWorthProposing;
     };
 
-    // Step 4 — Fuzzy-title-match pre-filter (final safety
-    // net). The original Q4b design positioned this BEFORE
-    // the judge call; we keep the principle but apply it
-    // after the judge for one extra safety pass. The cost
-    // saving still applies on most real-world traffic: most
-    // turns never reach the judge (heuristic gates them).
-    if let Some(matched) = fuzzy_match_against_existing(
-        &draft.name,
-        existing_skills,
-        config.fuzzy_match_threshold,
-    ) {
-        return SkillRoutingDecision::DroppedFuzzyDup {
-            matched_existing_name: matched,
-        };
+    // Phase 114 — per-category enable check. If the operator
+    // has the picked category disabled, drop with a distinct
+    // outcome so audit forensics can show "the auto-proposer
+    // wanted to write category X but the operator disabled
+    // X."
+    if let Some(pc) = config.per_category.as_ref() {
+        match pc.lookup(category) {
+            Some(per_cat) if !per_cat.enabled => {
+                return SkillRoutingDecision::DroppedCategoryDisabled {
+                    category: category.clone(),
+                };
+            }
+            None => {
+                // Unknown category label (the judge picked
+                // something not in our enumeration). Defensive
+                // — treat as disabled.
+                return SkillRoutingDecision::DroppedCategoryDisabled {
+                    category: category.clone(),
+                };
+            }
+            Some(_) => {} // enabled — fall through
+        }
     }
 
-    // Step 5 — Threshold gate (Q3b).
-    if verdict.confidence >= config.auto_accept_confidence_threshold {
+    // Step 4 — Fuzzy-title-match pre-filter for the
+    // LearnedSkill category only. List + scalar categories
+    // don't use fuzzy match (their values aren't kebab-case
+    // titles); the judge's `is_duplicate_of` handled
+    // cross-category dedup at step 1.
+    if let ProposedDraft::LearnedSkill { name, .. } = draft {
+        if let Some(matched) = fuzzy_match_against_existing(
+            name,
+            existing_skills,
+            config.fuzzy_match_threshold,
+        ) {
+            return SkillRoutingDecision::DroppedFuzzyDup {
+                matched_existing_name: matched,
+            };
+        }
+    }
+
+    // Step 5 — Threshold gate. Use the per-category threshold
+    // when configured; fall back to the top-level
+    // `auto_accept_confidence_threshold` for Phase 113-alias
+    // configs (per_category = None).
+    let threshold = config
+        .per_category
+        .as_ref()
+        .and_then(|pc| pc.lookup(category))
+        .map(|pc| pc.auto_accept_confidence_threshold)
+        .unwrap_or(config.auto_accept_confidence_threshold);
+
+    if verdict.confidence >= threshold {
         SkillRoutingDecision::AutoAccept {
-            draft,
+            category: category.clone(),
+            draft: draft.clone(),
             confidence: verdict.confidence,
         }
     } else {
         SkillRoutingDecision::Staged {
-            draft,
+            category: category.clone(),
+            draft: draft.clone(),
             confidence: verdict.confidence,
         }
     }
@@ -576,22 +643,26 @@ pub fn audit_outcome_from(
             };
             let confidence_thousandths =
                 Some((verdict.confidence * 1000.0).round() as u32);
+            let draft_display = verdict
+                .proposed_draft
+                .as_ref()
+                .map(|d| d.display_name());
             match routing {
                 SkillRoutingDecision::AutoAccept { draft, .. } => (
                     S::AutoAccepted,
-                    Some(draft.name.clone()),
+                    Some(draft.display_name()),
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::Staged { draft, .. } => (
                     S::Staged,
-                    Some(draft.name.clone()),
+                    Some(draft.display_name()),
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::DroppedJudgeDup { duplicate_of } => (
                     S::DuplicateOfExistingLlm {
                         duplicate_of: duplicate_of.clone(),
                     },
-                    verdict.proposed_skill().map(|d| d.name.clone()),
+                    draft_display,
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::DroppedFuzzyDup {
@@ -600,12 +671,30 @@ pub fn audit_outcome_from(
                     S::DuplicateOfExistingFuzzy {
                         matched_existing_name: matched_existing_name.clone(),
                     },
-                    verdict.proposed_skill().map(|d| d.name.clone()),
+                    draft_display,
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::DroppedNotWorthProposing => (
                     S::NotWorthProposing,
-                    verdict.proposed_skill().map(|d| d.name.clone()),
+                    draft_display,
+                    confidence_thousandths,
+                ),
+                SkillRoutingDecision::DroppedCategoryDisabled {
+                    category,
+                } => (
+                    // Phase 114 — reuses the
+                    // NotWorthProposing outcome with the
+                    // category label in the
+                    // proposed_skill_name slot so audit
+                    // forensics can surface "the auto-
+                    // proposer wanted to write category X
+                    // but I'd disabled X." A dedicated
+                    // audit variant is a Task 5 follow-on
+                    // (would require an AuditEvent
+                    // extension; Phase 114 keeps the chain
+                    // shape conservative).
+                    S::NotWorthProposing,
+                    Some(format!("(category-disabled: {category})")),
                     confidence_thousandths,
                 ),
             }
@@ -914,24 +1003,30 @@ pub async fn run_auto_propose_pipeline(
     // the routing decision.
     if let Some(decision) = &routing {
         match decision {
-            SkillRoutingDecision::AutoAccept { draft, .. } => {
+            SkillRoutingDecision::AutoAccept { category, draft, .. } => {
                 if let (Some(plog), Some(pp_log)) =
                     (persona_log, persona_proposal_log)
                 {
-                    let _ = write_auto_accepted_skill(
+                    let _ = write_auto_accepted_delta(
                         plog,
                         pp_log,
                         shared_persona,
+                        category,
                         draft,
                         &session_id,
                     )
                     .await;
                 }
             }
-            SkillRoutingDecision::Staged { draft, .. } => {
+            SkillRoutingDecision::Staged { category, draft, .. } => {
                 if let Some(pp_log) = persona_proposal_log {
-                    let _ =
-                        write_staged_skill(pp_log, draft, &session_id).await;
+                    let _ = write_staged_delta(
+                        pp_log,
+                        category,
+                        draft,
+                        &session_id,
+                    )
+                    .await;
                 }
             }
             _ => {}
@@ -959,19 +1054,32 @@ pub async fn run_auto_propose_pipeline(
     }
 }
 
-/// Chain-write helper for the AutoAccept path. Writes a
-/// `Pending` proposal entry, then an approved `PersonaDelta`,
-/// then the `Approved` proposal-chain transition, then
-/// recomputes the shared persona state. Mirrors the operator-
-/// side `aivyx persona proposals approve` flow but synthesizes
-/// the proposal id locally (no operator interaction).
-async fn write_auto_accepted_skill(
+/// Phase 114 — chain-write helper for the AutoAccept path,
+/// generalized from skill-only to all 11 PersonaDeltaCategory
+/// variants. Dispatches on `category` + `draft` to produce
+/// the right `PersonaDeltaOp` shape:
+///
+/// - `LearnedSkill` (list of JSON-serialized skill objects):
+///   wraps the draft in a `LearnedSkill` struct, JSON-
+///   serializes, emits as `AppendList { value: <json> }`.
+/// - List categories (BehavioralPreferences, LearnedContext,
+///   etc.): emits `AppendList { value: <plain string> }`.
+/// - Scalar categories (AssistantName, OperatorProfile,
+///   CommunicationStyle): emits `SetScalar { value:
+///   Some(<plain string>) }`.
+///
+/// Writes the same three-step sequence as the operator-side
+/// `aivyx persona proposals approve` flow: Pending append →
+/// PersonaDelta append → Approved transition → shared
+/// persona recompute.
+async fn write_auto_accepted_delta(
     persona_log: &Arc<crate::persona::PersistentPersonaLog>,
     persona_proposal_log: &Arc<
         crate::persona_proposal::PersistentPersonaProposalLog,
     >,
     shared_persona: &crate::persona::SharedEffectivePersona,
-    draft: &SkillDraft,
+    category_label: &str,
+    draft: &ProposedDraft,
     session_id: &aivyx_core::SessionId,
 ) -> Result<(), String> {
     let now_ms = std::time::SystemTime::now()
@@ -979,24 +1087,14 @@ async fn write_auto_accepted_skill(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    // Build the LearnedSkill payload and the
-    // ProposedPersonaDelta wrapping it.
-    let learned = crate::persona::LearnedSkill {
-        name: draft.name.clone(),
-        trigger: draft.trigger.clone(),
-        procedure: draft.procedure.clone(),
-    };
-    let proposed_op = crate::persona::ProposedPersonaDelta {
-        category: crate::persona::PersonaDeltaCategory::LearnedSkill,
-        op: crate::persona::PersonaDeltaOp::AppendList {
-            value: learned.to_json_value(),
-        },
-        reason: Some(format!(
-            "auto-accepted by skill-auto-proposer (Phase 112) from session {}",
+    let proposed_op = build_proposed_op(
+        category_label,
+        draft,
+        format!(
+            "auto-accepted by persona-auto-proposer (Phase 114) from session {}",
             session_id.0
-        )),
-        supersedes_proposal_id: None,
-    };
+        ),
+    )?;
     let proposal_id = format!("auto-{}-{}", session_id.0, now_ms);
 
     // Step 1 — pending proposal
@@ -1042,14 +1140,16 @@ async fn write_auto_accepted_skill(
     Ok(())
 }
 
-/// Chain-write helper for the Staged path. Writes a `Pending`
-/// proposal entry; the operator resolves it later through
-/// `aivyx persona proposals approve` or `reject`.
-async fn write_staged_skill(
+/// Phase 114 — chain-write helper for the Staged path,
+/// generalized over all PersonaDeltaCategory variants. Writes
+/// a Pending proposal entry only; the operator resolves
+/// through `aivyx persona proposals approve` / `reject`.
+async fn write_staged_delta(
     persona_proposal_log: &Arc<
         crate::persona_proposal::PersistentPersonaProposalLog,
     >,
-    draft: &SkillDraft,
+    category_label: &str,
+    draft: &ProposedDraft,
     session_id: &aivyx_core::SessionId,
 ) -> Result<(), String> {
     let now_ms = std::time::SystemTime::now()
@@ -1057,22 +1157,14 @@ async fn write_staged_skill(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let learned = crate::persona::LearnedSkill {
-        name: draft.name.clone(),
-        trigger: draft.trigger.clone(),
-        procedure: draft.procedure.clone(),
-    };
-    let proposed_op = crate::persona::ProposedPersonaDelta {
-        category: crate::persona::PersonaDeltaCategory::LearnedSkill,
-        op: crate::persona::PersonaDeltaOp::AppendList {
-            value: learned.to_json_value(),
-        },
-        reason: Some(format!(
-            "staged by skill-auto-proposer (Phase 112) from session {}",
+    let proposed_op = build_proposed_op(
+        category_label,
+        draft,
+        format!(
+            "staged by persona-auto-proposer (Phase 114) from session {}",
             session_id.0
-        )),
-        supersedes_proposal_id: None,
-    };
+        ),
+    )?;
     let proposal_id = format!("auto-{}-{}", session_id.0, now_ms);
 
     persona_proposal_log
@@ -1081,6 +1173,101 @@ async fn write_staged_skill(
         .map_err(|e| format!("pending append: {e}"))?;
 
     Ok(())
+}
+
+/// Phase 114 — map a `(category_label, ProposedDraft)` pair to
+/// the right `ProposedPersonaDelta`. Returns `Err` for
+/// (category, draft variant) pairs the runtime considers
+/// incompatible (e.g. `BehavioralPreferences` + LearnedSkill
+/// draft).
+fn build_proposed_op(
+    category_label: &str,
+    draft: &ProposedDraft,
+    reason: String,
+) -> Result<crate::persona::ProposedPersonaDelta, String> {
+    let category = parse_persona_delta_category(category_label)?;
+    let op = match (category, draft) {
+        // LearnedSkill must come with a LearnedSkill-shaped draft.
+        (
+            crate::persona::PersonaDeltaCategory::LearnedSkill,
+            ProposedDraft::LearnedSkill {
+                name,
+                trigger,
+                procedure,
+            },
+        ) => {
+            let learned = crate::persona::LearnedSkill {
+                name: name.clone(),
+                trigger: trigger.clone(),
+                procedure: procedure.clone(),
+            };
+            crate::persona::PersonaDeltaOp::AppendList {
+                value: learned.to_json_value(),
+            }
+        }
+        // List categories take a plain ListAppend.
+        (
+            crate::persona::PersonaDeltaCategory::PrimaryUseCases
+            | crate::persona::PersonaDeltaCategory::BehavioralPreferences
+            | crate::persona::PersonaDeltaCategory::BehavioralConstraints
+            | crate::persona::PersonaDeltaCategory::LearnedContext
+            | crate::persona::PersonaDeltaCategory::CommunicationAdaptations
+            | crate::persona::PersonaDeltaCategory::CharacterTraits
+            | crate::persona::PersonaDeltaCategory::RelationshipMilestones,
+            ProposedDraft::ListAppend { value },
+        ) => crate::persona::PersonaDeltaOp::AppendList {
+            value: value.clone(),
+        },
+        // Scalar categories take a ScalarSet.
+        (
+            crate::persona::PersonaDeltaCategory::AssistantName
+            | crate::persona::PersonaDeltaCategory::OperatorProfile
+            | crate::persona::PersonaDeltaCategory::CommunicationStyle,
+            ProposedDraft::ScalarSet { value },
+        ) => crate::persona::PersonaDeltaOp::SetScalar {
+            value: Some(value.clone()),
+        },
+        // Any other (category, draft) combination is an
+        // incompatibility — the judge produced a category
+        // that doesn't match its draft shape. Refuse to write.
+        (cat, draft) => {
+            return Err(format!(
+                "category {cat:?} incompatible with draft kind {}",
+                draft.kind_label()
+            ));
+        }
+    };
+    Ok(crate::persona::ProposedPersonaDelta {
+        category,
+        op,
+        reason: Some(reason),
+        supersedes_proposal_id: None,
+    })
+}
+
+/// Phase 114 — parse the judge's category-label string into
+/// the runtime `PersonaDeltaCategory` enum.
+fn parse_persona_delta_category(
+    label: &str,
+) -> Result<crate::persona::PersonaDeltaCategory, String> {
+    use crate::persona::PersonaDeltaCategory as C;
+    let cat = match label {
+        "AssistantName" => C::AssistantName,
+        "OperatorProfile" => C::OperatorProfile,
+        "CommunicationStyle" => C::CommunicationStyle,
+        "PrimaryUseCases" => C::PrimaryUseCases,
+        "BehavioralPreferences" => C::BehavioralPreferences,
+        "BehavioralConstraints" => C::BehavioralConstraints,
+        "LearnedContext" => C::LearnedContext,
+        "CommunicationAdaptations" => C::CommunicationAdaptations,
+        "CharacterTraits" => C::CharacterTraits,
+        "RelationshipMilestones" => C::RelationshipMilestones,
+        "LearnedSkill" => C::LearnedSkill,
+        other => {
+            return Err(format!("unknown persona delta category: {other}"))
+        }
+    };
+    Ok(cat)
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,9 +1662,17 @@ mod tests {
         let config = SkillAutoProposeConfig::default();
         let d = decide_routing(&verdict, &[], &config);
         match &d {
-            SkillRoutingDecision::AutoAccept { confidence, draft } => {
+            SkillRoutingDecision::AutoAccept {
+                confidence,
+                draft,
+                category,
+            } => {
                 assert!((confidence - 0.85).abs() < 1e-6);
-                assert_eq!(draft.name, "research-topic");
+                assert_eq!(category, "LearnedSkill");
+                assert_eq!(
+                    draft.as_skill_draft().unwrap().name,
+                    "research-topic"
+                );
             }
             _ => panic!("expected AutoAccept; got {:?}", d),
         }
@@ -1498,9 +1693,17 @@ mod tests {
         let config = SkillAutoProposeConfig::default();
         let d = decide_routing(&verdict, &[], &config);
         match &d {
-            SkillRoutingDecision::Staged { confidence, draft } => {
+            SkillRoutingDecision::Staged {
+                confidence,
+                draft,
+                category,
+            } => {
                 assert!((confidence - 0.84).abs() < 1e-6);
-                assert_eq!(draft.name, "research-topic");
+                assert_eq!(category, "LearnedSkill");
+                assert_eq!(
+                    draft.as_skill_draft().unwrap().name,
+                    "research-topic"
+                );
             }
             _ => panic!("expected Staged; got {:?}", d),
         }
@@ -1669,6 +1872,294 @@ mod tests {
         let existing = existing_skills_fixture();
         let m = fuzzy_match_against_existing("totally-novel-skill", &existing, 0.80);
         assert!(m.is_none());
+    }
+
+    // ----- Phase 114 Task 4 — Per-category routing -----
+
+    fn config_with_per_category_defaults() -> SkillAutoProposeConfig {
+        SkillAutoProposeConfig {
+            per_category: Some(PerCategoryConfigSet {
+                assistant_name: PerCategoryConfig {
+                    enabled: false,
+                    auto_accept_confidence_threshold: 0.99,
+                },
+                operator_profile: PerCategoryConfig {
+                    enabled: false,
+                    auto_accept_confidence_threshold: 0.99,
+                },
+                communication_style: PerCategoryConfig {
+                    enabled: false,
+                    auto_accept_confidence_threshold: 0.99,
+                },
+                primary_use_cases: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                behavioral_preferences: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                behavioral_constraints: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                learned_context: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                communication_adaptations: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                character_traits: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                relationship_milestones: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                learned_skill: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+            }),
+            ..SkillAutoProposeConfig::default()
+        }
+    }
+
+    fn list_append_verdict(
+        category: &str,
+        confidence: f32,
+        value: &str,
+    ) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            category: Some(category.into()),
+            proposed_draft: Some(ProposedDraft::ListAppend {
+                value: value.into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    fn scalar_set_verdict(
+        category: &str,
+        confidence: f32,
+        value: &str,
+    ) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            category: Some(category.into()),
+            proposed_draft: Some(ProposedDraft::ScalarSet {
+                value: value.into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    #[test]
+    fn routing_per_category_disabled_drops_to_category_disabled_outcome() {
+        // Scalar default: AssistantName disabled.
+        let verdict =
+            scalar_set_verdict("AssistantName", 0.999, "Aivyx");
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        match &d {
+            SkillRoutingDecision::DroppedCategoryDisabled { category } => {
+                assert_eq!(category, "AssistantName");
+            }
+            _ => panic!("expected DroppedCategoryDisabled; got {:?}", d),
+        }
+        assert_eq!(d.label(), "category-disabled");
+    }
+
+    #[test]
+    fn routing_per_category_uses_per_category_threshold_not_top_level() {
+        // Top-level threshold default 0.85. Per-category set
+        // CommunicationAdaptations threshold to 0.95; a verdict
+        // at 0.90 should stage, not auto-accept.
+        let verdict = list_append_verdict(
+            "CommunicationAdaptations",
+            0.90,
+            "the operator likes concise code reviews",
+        );
+        let mut config = config_with_per_category_defaults();
+        config
+            .per_category
+            .as_mut()
+            .unwrap()
+            .communication_adaptations
+            .auto_accept_confidence_threshold = 0.95;
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::Staged { .. }));
+    }
+
+    #[test]
+    fn routing_per_category_auto_accepts_when_above_per_category_threshold() {
+        let verdict = list_append_verdict(
+            "BehavioralPreferences",
+            0.90,
+            "prefer terse replies",
+        );
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        match &d {
+            SkillRoutingDecision::AutoAccept {
+                category, draft, ..
+            } => {
+                assert_eq!(category, "BehavioralPreferences");
+                assert!(matches!(draft, ProposedDraft::ListAppend { .. }));
+            }
+            _ => panic!("expected AutoAccept; got {:?}", d),
+        }
+    }
+
+    #[test]
+    fn routing_phase_113_alias_path_uses_top_level_threshold() {
+        // Phase 113 config: per_category = None. The routing
+        // falls back to auto_accept_confidence_threshold for
+        // all categories.
+        let verdict = list_append_verdict(
+            "BehavioralPreferences",
+            0.90,
+            "prefer terse",
+        );
+        let config = SkillAutoProposeConfig {
+            auto_accept_confidence_threshold: 0.85,
+            per_category: None,
+            ..SkillAutoProposeConfig::default()
+        };
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::AutoAccept { .. }));
+    }
+
+    #[test]
+    fn routing_unknown_category_drops_to_category_disabled() {
+        // The judge picked a label not in the runtime
+        // enumeration. Defensive — treat as disabled.
+        let verdict = list_append_verdict("NotARealCategory", 0.95, "x");
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(
+            d,
+            SkillRoutingDecision::DroppedCategoryDisabled { .. }
+        ));
+    }
+
+    // ----- Phase 114 Task 4 — Category-op dispatch -----
+
+    #[test]
+    fn build_proposed_op_dispatches_learned_skill() {
+        let draft = ProposedDraft::LearnedSkill {
+            name: "research".into(),
+            trigger: "research X".into(),
+            procedure: "1. ...".into(),
+        };
+        let op = build_proposed_op("LearnedSkill", &draft, "r".into()).unwrap();
+        assert_eq!(
+            op.category,
+            crate::persona::PersonaDeltaCategory::LearnedSkill
+        );
+        match op.op {
+            crate::persona::PersonaDeltaOp::AppendList { value } => {
+                let parsed =
+                    crate::persona::LearnedSkill::from_json_value(&value)
+                        .expect("learned-skill JSON parses");
+                assert_eq!(parsed.name, "research");
+                assert_eq!(parsed.procedure, "1. ...");
+            }
+            other => panic!("expected AppendList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_proposed_op_dispatches_list_append_for_behavioral_preferences() {
+        let draft = ProposedDraft::ListAppend {
+            value: "prefer terse".into(),
+        };
+        let op = build_proposed_op(
+            "BehavioralPreferences",
+            &draft,
+            "r".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            op.category,
+            crate::persona::PersonaDeltaCategory::BehavioralPreferences
+        );
+        match op.op {
+            crate::persona::PersonaDeltaOp::AppendList { value } => {
+                assert_eq!(value, "prefer terse");
+            }
+            other => panic!("expected AppendList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_proposed_op_dispatches_scalar_set_for_assistant_name() {
+        let draft = ProposedDraft::ScalarSet {
+            value: "Aivyx".into(),
+        };
+        let op = build_proposed_op("AssistantName", &draft, "r".into()).unwrap();
+        assert_eq!(
+            op.category,
+            crate::persona::PersonaDeltaCategory::AssistantName
+        );
+        match op.op {
+            crate::persona::PersonaDeltaOp::SetScalar { value } => {
+                assert_eq!(value.as_deref(), Some("Aivyx"));
+            }
+            other => panic!("expected SetScalar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_proposed_op_rejects_incompatible_pairs() {
+        // List category + LearnedSkill draft → incompatible.
+        let bad = ProposedDraft::LearnedSkill {
+            name: "x".into(),
+            trigger: "y".into(),
+            procedure: "z".into(),
+        };
+        let err = build_proposed_op(
+            "BehavioralPreferences",
+            &bad,
+            "r".into(),
+        )
+        .unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
+
+        // Scalar category + ListAppend draft → incompatible.
+        let bad = ProposedDraft::ListAppend { value: "x".into() };
+        let err =
+            build_proposed_op("AssistantName", &bad, "r".into()).unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
+    }
+
+    #[test]
+    fn parse_persona_delta_category_accepts_all_eleven_labels() {
+        for label in [
+            "AssistantName",
+            "OperatorProfile",
+            "CommunicationStyle",
+            "PrimaryUseCases",
+            "BehavioralPreferences",
+            "BehavioralConstraints",
+            "LearnedContext",
+            "CommunicationAdaptations",
+            "CharacterTraits",
+            "RelationshipMilestones",
+            "LearnedSkill",
+        ] {
+            parse_persona_delta_category(label)
+                .unwrap_or_else(|e| panic!("label {label} failed: {e}"));
+        }
+        assert!(parse_persona_delta_category("NotARealCategory").is_err());
     }
 
     // ----- Task 6 — Audit-event construction helpers -----
