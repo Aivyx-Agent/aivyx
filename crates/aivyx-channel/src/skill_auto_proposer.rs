@@ -949,6 +949,11 @@ pub fn snapshot_existing_persona(
         character_traits: state.character_traits.clone(),
         relationship_milestones: state.relationship_milestones.clone(),
         learned_skills,
+        // Phase 118 — JSON-serialized payloads pass through
+        // verbatim; the judge prompt parses them at render
+        // time for the cross-category dedup summary.
+        profile_hints: state.profile_hints.clone(),
+        role_drafts: state.role_drafts.clone(),
     }
 }
 

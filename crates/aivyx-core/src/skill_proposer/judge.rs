@@ -95,6 +95,20 @@ pub struct ExistingPersonaSnapshot {
     pub character_traits: Vec<String>,
     pub relationship_milestones: Vec<String>,
     pub learned_skills: Vec<ExistingSkillSnapshot>,
+    /// Phase 118 — operator-approved `ProfileHint` payloads
+    /// (JSON-serialized [`super::ProfileFieldHint`] strings).
+    /// The judge prompt summarizes these as `field=value`
+    /// pairs so a follow-on judgment can dedup against
+    /// already-staged hints.
+    #[serde(default)]
+    pub profile_hints: Vec<String>,
+    /// Phase 118 — operator-approved `RoleDraft` payloads
+    /// (JSON-serialized [`super::RoleDraft`] strings). The
+    /// judge prompt summarizes these as role-name + parent
+    /// pairs so a follow-on judgment can dedup against
+    /// already-staged drafts.
+    #[serde(default)]
+    pub role_drafts: Vec<String>,
 }
 
 impl ExistingPersonaSnapshot {
@@ -113,6 +127,8 @@ impl ExistingPersonaSnapshot {
             && self.character_traits.is_empty()
             && self.relationship_milestones.is_empty()
             && self.learned_skills.is_empty()
+            && self.profile_hints.is_empty()
+            && self.role_drafts.is_empty()
     }
 }
 
@@ -458,9 +474,9 @@ failed) and decide whether to propose a Persona refinement. \
   (\"never X\"), LearnedContext (\"remember Y\"), or \
   CommunicationAdaptations (\"phrase Z this way\").\n\
 \n\
-The agent's Persona has eleven categories; you pick the right \
+The agent's Persona has thirteen categories; you pick the right \
 one and draft the refinement in the shape that category expects. \
-\n\nThe eleven categories (and their expected draft shape):\n\
+\n\nThe thirteen categories (and their expected draft shape):\n\
 - LearnedSkill — a named procedure the assistant can invoke. \
   Draft: { kind: \"LearnedSkill\", name: kebab-case string, \
   trigger: string, procedure: markdown string }.\n\
@@ -492,12 +508,38 @@ one and draft the refinement in the shape that category expects. \
   string }.\n\
 - CommunicationStyle — the assistant's overall tone (scalar; \
   rare). Draft: { kind: \"ScalarSet\", value: string }.\n\
+- ProfileHint (Phase 118) — a NOTED suggestion that the \
+  operator-declared `[profile]` block in aivyx.toml could be \
+  refined. Targets one of six declared Profile fields: \
+  AssistantName, OperatorProfile, CommunicationStyle, \
+  PrimaryUseCases, BehavioralPreferences, BehavioralConstraints. \
+  Draft: { kind: \"ProfileHint\", field: one of those six, \
+  suggested_value: string, rationale: 1-3 sentences explaining \
+  what recurring observation justifies the hint }.\n\
+  IMPORTANT: ProfileHint is ALWAYS-STAGED for operator approval \
+  regardless of your confidence — Profile is operator-declared \
+  (P13). Your output is reviewed before any state changes; err \
+  on the side of EXPLICIT rationales.\n\
+- RoleDefinitionSuggestion (Phase 118) — a NOTED draft for an \
+  entirely new Role definition the operator-curated Role config \
+  could include. Draft: { kind: \"RoleDefinitionSuggestion\", \
+  name: kebab-case string, parent: optional existing role name \
+  to inherit from, system_prompt_addendum: markdown string \
+  (additive over parent), tool_allowlist_additions: list of \
+  tool-name strings (additive over parent), rationale: 1-3 \
+  sentences explaining the recurring shape that justifies a \
+  new role }.\n\
+  IMPORTANT: RoleDefinitionSuggestion is ALWAYS-STAGED for \
+  operator approval regardless of your confidence — the Role \
+  config is operator-curated (P9). Your output is reviewed \
+  before any state changes; err on the side of EXPLICIT \
+  rationales.\n\
 \n\
 Return ONLY a single JSON object matching this schema:\n\
 {\n\
   \"is_worth_proposing\": bool,\n\
   \"confidence\": float in [0.0, 1.0],\n\
-  \"category\": one of the eleven category names | null,\n\
+  \"category\": one of the thirteen category names | null,\n\
   \"proposed_draft\": draft object (shape per the category) \
   | null,\n\
   \"is_duplicate_of\": existing entry name/value/description \
@@ -513,6 +555,14 @@ category. Reserve >= 0.85 for clear, well-defined, recurring \
 patterns. Scalar categories (AssistantName, OperatorProfile, \
 CommunicationStyle) need very high confidence (>= 0.95) \
 because each new value replaces the previous one.\n\
+- ProfileHint / RoleDefinitionSuggestion (Phase 118): the \
+operator REVIEWS every one of these before any state changes \
+— the routing layer ignores your confidence for these two \
+categories and stages all of them. So your rationale matters \
+more than your confidence; the operator reads the rationale \
+to decide whether to act. Use these categories when the turn \
+suggests the declared Profile or Role config itself is \
+misfit, not just that the Persona-chain should grow.\n\
 - Duplicates: if the candidate is semantically the same as an \
 existing Persona entry in ANY category, set is_duplicate_of \
 to a description of that entry and is_worth_proposing to \
@@ -599,10 +649,80 @@ to false.",
                 ));
             }
         }
+        // Phase 118 — render previously-approved ProfileHint
+        // and RoleDefinitionSuggestion entries as summary
+        // bullets so the judge can dedup against already-
+        // staged drafts. Each entry's stored value is a JSON
+        // blob; we extract just the operator-readable label
+        // (field + suggested_value preview for hints; role
+        // name + parent for drafts) rather than dumping the
+        // whole blob — prompt-budget hygiene.
+        if !p.profile_hints.is_empty() {
+            s.push_str(
+                "- **ProfileHint** (Phase 118 — staged Profile-config refinement suggestions):\n",
+            );
+            for blob in &p.profile_hints {
+                let summary = summarize_profile_hint_blob(blob);
+                s.push_str(&format!("  - {summary}\n"));
+            }
+        }
+        if !p.role_drafts.is_empty() {
+            s.push_str(
+                "- **RoleDefinitionSuggestion** (Phase 118 — staged new-Role drafts):\n",
+            );
+            for blob in &p.role_drafts {
+                let summary = summarize_role_draft_blob(blob);
+                s.push_str(&format!("  - {summary}\n"));
+            }
+        }
         s.push('\n');
     }
     s.push_str("Respond with the JudgeResponse JSON now.");
     s
+}
+
+/// Phase 118 — render one stored ProfileHint blob as a short
+/// summary bullet for the judge prompt. Parses the JSON blob
+/// produced by [`ProposedDraft::ProfileHint`] serialization;
+/// falls back to the raw blob if parsing fails (defensive —
+/// the judge still sees something to dedup against).
+fn summarize_profile_hint_blob(blob: &str) -> String {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(blob) {
+        let field = parsed
+            .get("field")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let value = parsed
+            .get("suggested_value")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut truncated: String = value.chars().take(60).collect();
+        if value.chars().count() > 60 {
+            truncated.push('…');
+        }
+        format!("`{field}` → \"{truncated}\"")
+    } else {
+        blob.chars().take(80).collect()
+    }
+}
+
+/// Phase 118 — render one stored RoleDraft blob as a short
+/// summary bullet for the judge prompt.
+fn summarize_role_draft_blob(blob: &str) -> String {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(blob) {
+        let name = parsed
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let parent = parsed
+            .get("parent")
+            .and_then(|v| v.as_str())
+            .map(|s| format!(" (parent: `{s}`)"))
+            .unwrap_or_default();
+        format!("`{name}`{parent}")
+    } else {
+        blob.chars().take(80).collect()
+    }
 }
 
 fn render_list(out: &mut String, label: &str, items: &[String]) {
@@ -812,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_lists_all_eleven_categories() {
+    fn system_prompt_lists_all_thirteen_categories() {
         let p = build_system_prompt();
         for cat in [
             "LearnedSkill",
@@ -826,16 +946,65 @@ mod tests {
             "AssistantName",
             "OperatorProfile",
             "CommunicationStyle",
+            // Phase 118 additions.
+            "ProfileHint",
+            "RoleDefinitionSuggestion",
         ] {
             assert!(p.contains(cat), "system prompt missing category {cat}");
         }
     }
 
     #[test]
-    fn system_prompt_lists_all_three_draft_kinds() {
+    fn system_prompt_lists_all_five_draft_kinds() {
         let p = build_system_prompt();
-        for kind in ["LearnedSkill", "ListAppend", "ScalarSet"] {
+        for kind in [
+            "LearnedSkill",
+            "ListAppend",
+            "ScalarSet",
+            // Phase 118 additions — note these labels match
+            // the serde `tag = "kind"` discriminator values
+            // on `ProposedDraft`.
+            "ProfileHint",
+            "RoleDefinitionSuggestion",
+        ] {
             assert!(p.contains(kind), "system prompt missing draft kind {kind}");
+        }
+    }
+
+    #[test]
+    fn system_prompt_documents_phase_118_always_staged_contract() {
+        // The judge needs to know the operator reviews every
+        // Phase 118 proposal regardless of confidence — and
+        // that rationale matters more than confidence for
+        // these two categories. The contract instruction is
+        // load-bearing for downstream operator value: a judge
+        // that doesn't know this writes terse rationales the
+        // operator can't act on.
+        let p = build_system_prompt();
+        assert!(p.contains("ALWAYS-STAGED"));
+        assert!(p.contains("P13"));
+        assert!(p.contains("P9"));
+        assert!(p.contains("EXPLICIT"));
+        assert!(p.contains("rationale"));
+    }
+
+    #[test]
+    fn system_prompt_documents_six_profile_fields() {
+        // The ProfileHint draft must target one of the six
+        // declared Profile-config fields; the judge must know
+        // which six to pick from.
+        let p = build_system_prompt();
+        // The six declared Profile fields appear in the
+        // ProfileHint description block.
+        for field in [
+            "AssistantName",
+            "OperatorProfile",
+            "CommunicationStyle",
+            "PrimaryUseCases",
+            "BehavioralPreferences",
+            "BehavioralConstraints",
+        ] {
+            assert!(p.contains(field), "missing ProfileField name {field}");
         }
     }
 
@@ -884,6 +1053,100 @@ mod tests {
         assert!(p.contains("LearnedSkill"));
         assert!(p.contains("research-topic"));
         assert!(p.contains("cross-category dedup"));
+    }
+
+    #[test]
+    fn user_prompt_renders_phase_118_profile_hints_as_summary_bullets() {
+        // ProfileHints rendered as `field` → "value" summaries
+        // so the judge can dedup against staged hints
+        // without the raw JSON blob inflating the prompt.
+        let persona = ExistingPersonaSnapshot {
+            profile_hints: vec![
+                r#"{"field":"CommunicationStyle",
+                    "suggested_value":"terse and bullet-formatted",
+                    "rationale":"operator uses bullets"}"#
+                    .to_string(),
+                r#"{"field":"PrimaryUseCases",
+                    "suggested_value":"oncall investigations",
+                    "rationale":"recurring task shape"}"#
+                    .to_string(),
+            ],
+            ..ExistingPersonaSnapshot::default()
+        };
+        let req = JudgeRequest {
+            turn_summary: "ignored",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+        };
+        let p = build_user_prompt(&req);
+        assert!(p.contains("ProfileHint"));
+        // Phase 118 summary shape: `field` → "value".
+        assert!(p.contains("CommunicationStyle"));
+        assert!(p.contains("bullet-formatted"));
+        assert!(p.contains("PrimaryUseCases"));
+        assert!(p.contains("oncall"));
+    }
+
+    #[test]
+    fn user_prompt_renders_phase_118_role_drafts_as_name_plus_parent() {
+        let persona = ExistingPersonaSnapshot {
+            role_drafts: vec![
+                r#"{"name":"research-deploy",
+                    "parent":"research",
+                    "system_prompt_addendum":"...",
+                    "tool_allowlist_additions":["git.commit"],
+                    "rationale":"recurring shape"}"#
+                    .to_string(),
+                r#"{"name":"operator-mode",
+                    "parent":null,
+                    "system_prompt_addendum":"...",
+                    "tool_allowlist_additions":[],
+                    "rationale":"top-level"}"#
+                    .to_string(),
+            ],
+            ..ExistingPersonaSnapshot::default()
+        };
+        let req = JudgeRequest {
+            turn_summary: "ignored",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+        };
+        let p = build_user_prompt(&req);
+        assert!(p.contains("RoleDefinitionSuggestion"));
+        // Phase 118 summary shape: `name` (parent: `parent`)
+        // when parent is Some; bare `name` when None.
+        assert!(p.contains("research-deploy"));
+        assert!(p.contains("parent: `research`"));
+        assert!(p.contains("operator-mode"));
+        // top-level role has no parent label.
+        assert!(!p.contains("parent: `null`"));
+    }
+
+    #[test]
+    fn user_prompt_handles_malformed_profile_hint_blob_defensively() {
+        // Same posture as Phase 110 LearnedSkill malformed-
+        // entry handling — malformed blobs fall back to a
+        // truncated raw rendering rather than crashing the
+        // prompt build.
+        let persona = ExistingPersonaSnapshot {
+            profile_hints: vec!["this is not json".to_string()],
+            ..ExistingPersonaSnapshot::default()
+        };
+        let req = JudgeRequest {
+            turn_summary: "ignored",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+        };
+        let p = build_user_prompt(&req);
+        // Prompt build doesn't panic; raw text appears.
+        assert!(p.contains("ProfileHint"));
+        assert!(p.contains("this is not json"));
     }
 
     // ----- Parser tolerance -----
