@@ -540,7 +540,7 @@ forensic separation.
   proposer bypass costs zero — no LLM call, no chain
   write.
 
-## Tool/skill relevance hints (Phase 116)
+## Tool/skill relevance hints (Phases 116-117)
 
 The Phase 116 relevance ledger tracks per-tool and
 per-skill success/failure outcomes per keyword-extracted
@@ -585,21 +585,24 @@ Skills:
 - research-topic: 2 invocations (2 successes, 0 failures)
 ```
 
-**Phase-116-internal deferral named honestly:** the
-live-prompt augmentation requires a per-turn prompt-
-reassembly substrate change (today's planner builds the
-system prompt once at session-construction time). Phase
-116 ships the substrate (record + render + storage + TOML
-config); the integration into live turns awaits a future
-substrate change.
+**Phase 117 closes both Phase-116-internal deferrals.**
+The relevance section now reaches the LLM in live turns
+via a `RelevancePromptRefiner` that plugs into the Phase
+79 `SystemPromptRefiner` slot on the planner's config; if
+Phase 79 adaptive Persona is also armed, both refiners
+chain in a single install (Phase 79 inner, Phase 117
+outer, composing as `base + adaptive Persona + relevance
+section`).
 
-**Skills tracking (Q3a deferral):** skill names are
-hashed in the audit chain (`skills.invoke` input is
-input-hashed for secrets-safety per D4), so per-skill
-tracking requires a side-channel capture path that's
-also deferred. The ledger schema's `Skill` variant of
-`RelevanceSurfaceKind` is in place so a follow-on can
-ship per-skill tracking without a schema migration.
+Per-skill tracking lands via a new
+`AuditEvent::SkillInvocation` variant that `skills.invoke`
+emits alongside its regular `ToolCall` audit entry. The
+ToolCall keeps the input-hash (D4 secrets-safety
+preserved); the SkillInvocation carries the skill name in
+cleartext so Phase 116's `record_turn_outcomes` can
+populate per-skill ledger rows. `aivyx audit export
+--event-type SkillInvocation` filters to the new variant
+for forensic walks.
 
 **Escape hatches:**
 - The recording hook never blocks a turn — detached

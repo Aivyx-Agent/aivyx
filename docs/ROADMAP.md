@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 117 — Phase 116 Deferral Closeout (live-prompt pipe + per-skill tracking)
 
-**Active — see [PHASE_117.md](PHASE_117.md).** Standalone
+**Frozen — see [PHASE_117.md](PHASE_117.md).** Standalone
 phase that closes both Phase-116-internal deferrals
 together per Q1b sign-off. After Phase 117, the Phase 116
 relevance substrate reaches the LLM in live turns AND
@@ -3465,19 +3465,30 @@ NOT a substrate-novelty phase; ships focused integration
 work taking the Phase 116 substrate and plumbing it into
 live use.
 
-Streak predictions: all three predicted HOLD (DESIGN.md
-→ 8, PRODUCT.md → 8, `aivyx-core/src/lib.rs` → 2). Zero
-new workspace deps. Test count `+30` to `+60`.
+**Streak outcomes:**
+- DESIGN.md: HELD as predicted. Streak → 8.
+- PRODUCT.md: HELD as predicted. Streak → 8.
+- `aivyx-core/src/lib.rs`: BROKE against predicted hold
+  (70/30 risk acknowledged at sign-off; the 30% case
+  fired at the new `AuditTag::SkillInvocation` variant).
+  Streak resets 1 → 1.
 
-Two substrate touches: new `DynamicSystemPromptBuilder`
-trait in aivyx-core (additive); new
-`AuditEvent::SkillInvocation` variant in aivyx-audit
-(Phase 67 `AutoNotifyDispatched` precedent for additive
-audit-event extensions).
+Test count: 2174 → 2188 (+14). **Below** the predicted
++30 to +60 band — honest scope reduction in Task 2
+(reusing existing `SystemPromptRefiner` trait rather
+than introducing a new `DynamicSystemPromptBuilder`
+trait + ConcreteAgent surface) cut test surface
+significantly. The substrate end state is the same; the
+simpler path got there with fewer test artifacts.
+Phase 6 Q5 honesty.
+
+Zero new workspace deps. Zero clippy warnings.
 
 After Phase 117, the last named Chapter E axis (outcome-
 driven Profile/Role refinement) is the only Chapter E
-direction remaining.
+direction remaining. The post-Phase-117 deferral ledger
+is empty — both Phase 116 named deferrals closed in
+this phase.
 
 ## Phase 116 — Tool/Skill Selection Learning from Outcomes (Chapter E #3)
 
