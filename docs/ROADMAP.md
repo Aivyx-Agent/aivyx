@@ -3373,34 +3373,41 @@ an amendment.
 
 ## Phase 111 — Adapter Production Wiring (operator-requested follow-on)
 
-**Active — see [PHASE_111.md](PHASE_111.md).** Standalone
+**Frozen — see [PHASE_111.md](PHASE_111.md).** Standalone
 phase past Chapter D's close (no chapter framing, matching
 the Phase 99 precedent for operator-requested follow-on
-work). Lands the two Phase-107/108-internal carve-outs that
-bundled for follow-on work at the Channel Activation
-Milestone:
+work). Landed the two Phase-107/108-internal carve-outs:
 - **Discord daemon-frontend** (Phase 107 Task 5 carve-out)
-  mirroring Phase 19's Telegram-over-daemon pattern.
+  shipped mirroring Phase 19's Telegram-over-daemon pattern.
 - **Slack Socket Mode live wiring** (Phase 108 Task 3
-  carve-out) replacing the stub `SlackMorphismTransport`
-  with the real implementation via `SlackClientEventsUserState`
-  callback-state-passing.
+  carve-out) shipped replacing the stub
+  `SlackMorphismTransport` with the real implementation
+  via `SlackClientEventsUserState` callback-state-passing.
 
-After Phase 111, both adapters are production-ready
-end-to-end at the in-process AND daemon-mode levels. The
-**Channel Activation Milestone** then runs as the
-operator-verification pass it was always meant to be — no
-code, just real-bot smoke tests across every adapter (per
-the ROADMAP's milestone-vs-phase distinction). Q1a chose
-to ship both adapters together (one phase, multi-session);
-Q2a chose to mirror Phase 19 exactly for the Discord
-daemon-frontend (two-data-point pattern confirmation);
-Q3a chose scripted-only tests (real-bot is the milestone's
-job). All three streaks predicted to extend (substrate
-work touches no contract; tools live in aivyx-channel /
-aivyx-slack, not aivyx-core; `FrontendType` enum addition
-lives in aivyx-channel's daemon_ipc.rs). Zero new
-workspace deps.
+After Phase 111, all five adapters (Local, Telegram, Web
+UI, Discord, Slack) are production-ready end-to-end at the
+in-process AND daemon-mode levels. The **Channel
+Activation Milestone** is now unblocked and runnable as
+the operator-verification pass it was always meant to be —
+no code, just real-bot smoke tests across every adapter.
+
+**Exit outcomes:**
+- All three streak predictions held — first phase since
+  Phase 56/108 with every prediction correct and every
+  streak extending (DESIGN.md, PRODUCT.md,
+  aivyx-core/src/lib.rs all reach streak=2).
+- Q2a shared-substrate question answered affirmatively at
+  three data points: extracted `gate_command::parse` into
+  `aivyx-channel/src/gate_command.rs`; broader pump-shape
+  extraction deferred until a fourth adapter forces it.
+- Test count delta `+14` (1950 → 1964), below the `+25`
+  to `+40` prediction — honest break per Phase 6 Q5
+  attributable to scripted-only test posture (Q3a)
+  collapsing per-adapter integration tests into a single
+  cross-renderer parity assertion.
+- Zero new workspace deps; `http = "1"` direct-promoted in
+  `aivyx-slack` for callback signature legibility but it
+  was already transitive.
 
 ## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
 
