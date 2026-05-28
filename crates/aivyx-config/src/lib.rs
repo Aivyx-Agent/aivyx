@@ -660,6 +660,13 @@ pub struct AivyxConfig {
     /// config; it still no-ops unless
     /// `PersonaAutoProposeConfig::enabled = true`.
     pub persona_auto_propose: Option<PersonaAutoProposeConfig>,
+
+    /// Phase 116 — `[tool_relevance]` section. `None` when
+    /// absent: the daemon wires no tool-relevance ledger
+    /// handle; the post-finalize outcome-recording hook
+    /// no-ops. `Some` with `enabled = true` arms the ledger
+    /// + recording hook.
+    pub tool_relevance: Option<ToolRelevanceConfig>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -2206,6 +2213,46 @@ pub struct PerCategoryConfig {
 pub const DEFAULT_PERSONA_SCALAR_THRESHOLD: f32 = 0.99;
 pub const DEFAULT_PERSONA_LIST_THRESHOLD: f32 = 0.85;
 
+/// Phase 116 — `[tool_relevance]` runtime config.
+///
+/// Operator-opt-in. When `enabled = true`, the daemon
+/// constructs a [`PersistentToolRelevanceLedger`] handle from
+/// `KeyDomain::ToolRelevanceLedger` and wires it into the
+/// turn driver's post-finalize hook (Phase 116 Task 4
+/// outcome recording). The system-prompt-augmentation half
+/// of Phase 116 (live-prompt rendering at turn-start) is a
+/// **Phase-116-internal deferral** — the substrate ships in
+/// Phase 116 but the live-prompt pipe awaits a per-turn
+/// prompt-reassembly substrate change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRelevanceConfig {
+    /// Master switch. Default `false`. Operator opts in.
+    pub enabled: bool,
+    /// Top-K keywords extracted from the user input for the
+    /// ledger key. Default `5`.
+    pub max_keywords: u32,
+    /// Minimum total outcomes (`success + failure`) for a
+    /// row to appear in the rendered relevance section.
+    /// Default `2` — don't show a tool tried just once;
+    /// one data point isn't a pattern.
+    pub min_outcomes_to_show: u32,
+    /// Maximum rows per subsection (Tools / Skills) in the
+    /// rendered relevance section. Default `5` — keeps the
+    /// prompt section bounded.
+    pub top_k_per_section: u32,
+}
+
+impl Default for ToolRelevanceConfig {
+    fn default() -> Self {
+        ToolRelevanceConfig {
+            enabled: false,
+            max_keywords: 5,
+            min_outcomes_to_show: 2,
+            top_k_per_section: 5,
+        }
+    }
+}
+
 // --------------------------------------------------------------------
 // TOML schema (internal deserialize target)
 // --------------------------------------------------------------------
@@ -2276,6 +2323,12 @@ struct RawToml {
     /// generalized auto-proposer across all categories.
     #[serde(default)]
     persona: RawPersona,
+
+    /// `[tool_relevance]` section. Phase 116 — the
+    /// tool/skill relevance ledger + system-prompt
+    /// augmentation substrate.
+    #[serde(default)]
+    tool_relevance: RawToolRelevance,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -3142,6 +3195,20 @@ struct RawPerCategoryConfig {
     auto_accept_confidence_threshold: Option<f32>,
 }
 
+/// Phase 116 — `[tool_relevance]` deserialize target. Absent
+/// section → all-`None` → `tool_relevance: None` (off).
+#[derive(Debug, Default, Deserialize)]
+struct RawToolRelevance {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_keywords: Option<u32>,
+    #[serde(default)]
+    min_outcomes_to_show: Option<u32>,
+    #[serde(default)]
+    top_k_per_section: Option<u32>,
+}
+
 /// Phase 115 — `[persona.auto_propose.failure_outcomes]`
 /// deserialize target. Absent → defaults from
 /// `FailureOutcomesConfig::default()`.
@@ -3688,6 +3755,8 @@ impl AivyxConfig {
             build_skill_auto_propose_config(&toml.skills.auto_propose)?;
         let persona_auto_propose =
             build_persona_auto_propose_config(&toml.persona.auto_propose)?;
+        let tool_relevance =
+            build_tool_relevance_config(&toml.tool_relevance)?;
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -4584,6 +4653,7 @@ impl AivyxConfig {
             recall_feedback,
             skill_auto_propose,
             persona_auto_propose,
+            tool_relevance,
             roles,
             active_role,
             profile,
@@ -6249,6 +6319,54 @@ fn build_persona_auto_propose_config(
         per_category,
         from_failed_turns,
         failure_outcomes,
+    }))
+}
+
+/// Phase 116 — `[tool_relevance]` → optional runtime config.
+/// Absent section → `None`. Partial section → fills defaults
+/// per `ToolRelevanceConfig::default()`. Validates that
+/// numeric knobs are >= 1.
+fn build_tool_relevance_config(
+    raw: &RawToolRelevance,
+) -> Result<Option<ToolRelevanceConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_keywords.is_some()
+        || raw.min_outcomes_to_show.is_some()
+        || raw.top_k_per_section.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+    let defaults = ToolRelevanceConfig::default();
+    let enabled = raw.enabled.unwrap_or(defaults.enabled);
+    let max_keywords =
+        raw.max_keywords.unwrap_or(defaults.max_keywords);
+    if max_keywords == 0 {
+        return Err(ConfigError::Invalid {
+            field: "tool_relevance.max_keywords",
+            reason: "`max_keywords` must be >= 1".into(),
+        });
+    }
+    let min_outcomes_to_show =
+        raw.min_outcomes_to_show.unwrap_or(defaults.min_outcomes_to_show);
+    if min_outcomes_to_show == 0 {
+        return Err(ConfigError::Invalid {
+            field: "tool_relevance.min_outcomes_to_show",
+            reason: "`min_outcomes_to_show` must be >= 1".into(),
+        });
+    }
+    let top_k_per_section =
+        raw.top_k_per_section.unwrap_or(defaults.top_k_per_section);
+    if top_k_per_section == 0 {
+        return Err(ConfigError::Invalid {
+            field: "tool_relevance.top_k_per_section",
+            reason: "`top_k_per_section` must be >= 1".into(),
+        });
+    }
+    Ok(Some(ToolRelevanceConfig {
+        enabled,
+        max_keywords,
+        min_outcomes_to_show,
+        top_k_per_section,
     }))
 }
 

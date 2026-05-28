@@ -7926,3 +7926,153 @@ fn persona_auto_propose_failure_outcomes_only_arms_section() {
     assert!(pap.enabled);
     drop(env);
 }
+
+// ---- Phase 116 — [tool_relevance] config ----
+
+#[test]
+fn tool_relevance_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.tool_relevance.is_none());
+    drop(env);
+}
+
+#[test]
+fn tool_relevance_minimal_section_uses_defaults() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[tool_relevance]\nenabled = true\n",
+        "tr-minimal",
+    );
+    let tr = cfg.tool_relevance.expect("section present");
+    assert!(tr.enabled);
+    assert_eq!(tr.max_keywords, 5);
+    assert_eq!(tr.min_outcomes_to_show, 2);
+    assert_eq!(tr.top_k_per_section, 5);
+    drop(env);
+}
+
+#[test]
+fn tool_relevance_full_section_parses_all_fields() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[tool_relevance]\n\
+         enabled = true\n\
+         max_keywords = 7\n\
+         min_outcomes_to_show = 3\n\
+         top_k_per_section = 10\n",
+        "tr-full",
+    );
+    let tr = cfg.tool_relevance.expect("section present");
+    assert!(tr.enabled);
+    assert_eq!(tr.max_keywords, 7);
+    assert_eq!(tr.min_outcomes_to_show, 3);
+    assert_eq!(tr.top_k_per_section, 10);
+    drop(env);
+}
+
+#[test]
+fn tool_relevance_zero_max_keywords_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tr-bad-mk");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[tool_relevance]\nenabled = true\nmax_keywords = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err =
+        AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "tool_relevance.max_keywords");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn tool_relevance_zero_min_outcomes_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tr-bad-mo");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[tool_relevance]\nenabled = true\nmin_outcomes_to_show = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err =
+        AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "tool_relevance.min_outcomes_to_show");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn tool_relevance_zero_top_k_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("tr-bad-tk");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[tool_relevance]\nenabled = true\ntop_k_per_section = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err =
+        AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "tool_relevance.top_k_per_section");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+/// Disabled section is still loaded (so the operator can stage
+/// config without enabling). `enabled = false` is the explicit
+/// off state; absent section is the implicit off state.
+#[test]
+fn tool_relevance_disabled_section_loads_with_enabled_false() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[tool_relevance]\nenabled = false\nmax_keywords = 7\n",
+        "tr-disabled",
+    );
+    let tr = cfg.tool_relevance.expect("section present");
+    assert!(!tr.enabled);
+    assert_eq!(tr.max_keywords, 7);
+    drop(env);
+}

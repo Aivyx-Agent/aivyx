@@ -2927,6 +2927,11 @@ async fn run_async(
         // construction to populate the per-category config in
         // the runtime auto-proposer.
         persona_auto_propose: config_persona_auto_propose,
+        // Phase 116 — `[tool_relevance]` loaded config. When
+        // `Some(_).enabled == true` the bin constructs a
+        // PersistentToolRelevanceLedger handle from the
+        // storage domain and threads it through DaemonConfig.
+        tool_relevance: config_tool_relevance,
         // Phase 11 Task 4 — the binary now resolves the active role
         // here and sources its `system_prompt`, `tool_allowlist`, and
         // `memory_topic_prefix` from the entry in `roles` keyed by
@@ -4801,12 +4806,19 @@ async fn run_async(
             // section is absent (operator hasn't opted in).
             skill_auto_proposer: skill_auto_proposer_ctx,
             // Phase 116 — tool/skill relevance ledger handle.
-            // `None` until Task 6 wires the `[tool_relevance]`
-            // TOML config + constructs the handle from the
-            // operator's settings. Phase 114 behavior preserved
-            // by default; opting in is a one-line TOML edit
-            // once Task 6 lands.
-            tool_relevance_ledger: None,
+            // Constructed when the operator has
+            // `[tool_relevance] enabled = true` in their TOML.
+            // None when absent / disabled.
+            tool_relevance_ledger: config_tool_relevance
+                .as_ref()
+                .filter(|c| c.enabled)
+                .map(|_| {
+                    Arc::new(
+                        aivyx_channel::tool_relevance_ledger::PersistentToolRelevanceLedger::new(
+                            storage.domain(KeyDomain::ToolRelevanceLedger),
+                        ),
+                    )
+                }),
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the
