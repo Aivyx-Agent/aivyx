@@ -2080,6 +2080,41 @@ pub struct PersonaAutoProposeConfig {
     /// Q1b — per-category configuration. Each variant carries
     /// its own enable flag + auto-accept threshold.
     pub per_category: PerCategoryConfigSet,
+    /// Phase 115 — master switch for the negative-feedback
+    /// path. Default `false` (Phase 114 behavior preserved).
+    /// `true` enables the failed-turn pipeline gated further
+    /// by `failure_outcomes`.
+    pub from_failed_turns: bool,
+    /// Phase 115 — per-failure-outcome enable flags.
+    pub failure_outcomes: FailureOutcomesConfig,
+}
+
+/// Phase 115 — per-failure-outcome enable flags (config
+/// side). Mirrors `aivyx_core::skill_proposer::
+/// FailureHeuristicConfig`; the From conversion in
+/// aivyx-channel maps these to the runtime type.
+///
+/// Defaults: Failed=true (clear failure signal),
+/// TimedOut=true (clear failure signal), Cancelled=false
+/// (operator-driven; usually not learnable), Escalated=false
+/// (agent doing the right thing under D1's Tier-2 rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailureOutcomesConfig {
+    pub failed: bool,
+    pub cancelled: bool,
+    pub timed_out: bool,
+    pub escalated: bool,
+}
+
+impl Default for FailureOutcomesConfig {
+    fn default() -> Self {
+        FailureOutcomesConfig {
+            failed: true,
+            cancelled: false,
+            timed_out: true,
+            escalated: false,
+        }
+    }
 }
 
 /// Phase 114 — per-category configuration. Each
@@ -3066,6 +3101,12 @@ struct RawPersonaAutoPropose {
     fuzzy_match_threshold: Option<f32>,
     #[serde(default)]
     heuristic: RawSkillsAutoProposeHeuristic,
+    // Phase 115 — failure-feedback master switch + per-
+    // outcome enables.
+    #[serde(default)]
+    from_failed_turns: Option<bool>,
+    #[serde(default)]
+    failure_outcomes: RawFailureOutcomesConfig,
     // Per-category sub-sections. snake_case names match the
     // TOML field convention; the validator maps them to the
     // PerCategoryConfigSet struct.
@@ -3099,6 +3140,21 @@ struct RawPerCategoryConfig {
     enabled: Option<bool>,
     #[serde(default)]
     auto_accept_confidence_threshold: Option<f32>,
+}
+
+/// Phase 115 — `[persona.auto_propose.failure_outcomes]`
+/// deserialize target. Absent → defaults from
+/// `FailureOutcomesConfig::default()`.
+#[derive(Debug, Default, Deserialize)]
+struct RawFailureOutcomesConfig {
+    #[serde(default)]
+    failed: Option<bool>,
+    #[serde(default)]
+    cancelled: Option<bool>,
+    #[serde(default)]
+    timed_out: Option<bool>,
+    #[serde(default)]
+    escalated: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6019,11 +6075,21 @@ fn build_persona_auto_propose_config(
         || h.require_gate_resolve.is_some()
         || h.mode.is_some();
     let per_cat_any_set = per_category_any_set(raw);
+    let fo = &raw.failure_outcomes;
+    let failure_outcomes_any_set = fo.failed.is_some()
+        || fo.cancelled.is_some()
+        || fo.timed_out.is_some()
+        || fo.escalated.is_some();
     let top_any_set = raw.enabled.is_some()
         || raw.judge_model.is_some()
         || raw.judge_max_tokens.is_some()
-        || raw.fuzzy_match_threshold.is_some();
-    if !top_any_set && !heuristic_any_set && !per_cat_any_set {
+        || raw.fuzzy_match_threshold.is_some()
+        || raw.from_failed_turns.is_some();
+    if !top_any_set
+        && !heuristic_any_set
+        && !per_cat_any_set
+        && !failure_outcomes_any_set
+    {
         return Ok(None);
     }
 
@@ -6149,6 +6215,25 @@ fn build_persona_auto_propose_config(
         )?,
     };
 
+    // Phase 115 — failure-feedback fields.
+    let from_failed_turns = raw.from_failed_turns.unwrap_or(false);
+    let default_fo = FailureOutcomesConfig::default();
+    let failure_outcomes = FailureOutcomesConfig {
+        failed: raw.failure_outcomes.failed.unwrap_or(default_fo.failed),
+        cancelled: raw
+            .failure_outcomes
+            .cancelled
+            .unwrap_or(default_fo.cancelled),
+        timed_out: raw
+            .failure_outcomes
+            .timed_out
+            .unwrap_or(default_fo.timed_out),
+        escalated: raw
+            .failure_outcomes
+            .escalated
+            .unwrap_or(default_fo.escalated),
+    };
+
     Ok(Some(PersonaAutoProposeConfig {
         enabled,
         judge_model,
@@ -6162,6 +6247,8 @@ fn build_persona_auto_propose_config(
             mode,
         },
         per_category,
+        from_failed_turns,
+        failure_outcomes,
     }))
 }
 

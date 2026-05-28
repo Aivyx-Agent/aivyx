@@ -7853,3 +7853,76 @@ fn per_category_lookup_covers_all_eleven_labels() {
     }
     assert!(set.lookup("NotARealCategory").is_none());
 }
+
+// ---- Phase 115 — failure-feedback config ----
+
+/// Absent `from_failed_turns` field → default `false`,
+/// failure_outcomes defaults (Failed=true, TimedOut=true,
+/// Cancelled=false, Escalated=false).
+#[test]
+fn persona_auto_propose_failure_defaults_when_section_arms_via_other_field() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose]\nenabled = true\n",
+        "pap-failure-defaults",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(!pap.from_failed_turns);
+    assert!(pap.failure_outcomes.failed);
+    assert!(pap.failure_outcomes.timed_out);
+    assert!(!pap.failure_outcomes.cancelled);
+    assert!(!pap.failure_outcomes.escalated);
+    drop(env);
+}
+
+/// Explicit `from_failed_turns = true` flips the master
+/// switch on; failure_outcomes still takes defaults.
+#[test]
+fn persona_auto_propose_from_failed_turns_explicit_true() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose]\nfrom_failed_turns = true\n",
+        "pap-ftt-true",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(pap.from_failed_turns);
+    drop(env);
+}
+
+/// Per-failure-outcome override: operator enables
+/// cancelled + escalated, disables timed_out.
+#[test]
+fn persona_auto_propose_failure_outcomes_override_works() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose]\nfrom_failed_turns = true\n\
+         \n[persona.auto_propose.failure_outcomes]\n\
+         cancelled = true\nescalated = true\ntimed_out = false\n",
+        "pap-failure-override",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(pap.from_failed_turns);
+    assert!(pap.failure_outcomes.failed);  // default
+    assert!(pap.failure_outcomes.cancelled);  // overridden
+    assert!(!pap.failure_outcomes.timed_out);  // overridden
+    assert!(pap.failure_outcomes.escalated);  // overridden
+    drop(env);
+}
+
+/// Section armed by failure_outcomes sub-section alone
+/// (no top-level fields set) still produces Some.
+#[test]
+fn persona_auto_propose_failure_outcomes_only_arms_section() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose.failure_outcomes]\nescalated = true\n",
+        "pap-fo-only",
+    );
+    let pap = cfg.persona_auto_propose.expect("nested-only arms section");
+    assert!(pap.failure_outcomes.escalated);
+    // Section enabled defaults to true (operator-conservative
+    // posture: configuring any sub-section means they want the
+    // feature on).
+    assert!(pap.enabled);
+    drop(env);
+}

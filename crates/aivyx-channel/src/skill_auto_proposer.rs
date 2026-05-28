@@ -250,14 +250,15 @@ impl From<aivyx_config::PersonaAutoProposeConfig> for SkillAutoProposeConfig {
                 aivyx_config::DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD,
             fuzzy_match_threshold: c.fuzzy_match_threshold,
             per_category: Some(convert_per_category_set(c.per_category)),
-            // Phase 115 — fields populated by Task 6's TOML
-            // wiring. Phase 114 callers that use this
-            // conversion default to off; Task 6 extends
-            // PersonaAutoProposeConfig to carry the
-            // failure-feedback knobs and updates this
-            // conversion to plumb them through.
-            from_failed_turns: false,
-            failure_outcomes: FailureHeuristicConfig::default(),
+            // Phase 115 — failure-feedback fields plumbed
+            // from aivyx-config.
+            from_failed_turns: c.from_failed_turns,
+            failure_outcomes: FailureHeuristicConfig {
+                failed: c.failure_outcomes.failed,
+                cancelled: c.failure_outcomes.cancelled,
+                timed_out: c.failure_outcomes.timed_out,
+                escalated: c.failure_outcomes.escalated,
+            },
         }
     }
 }
@@ -2516,6 +2517,8 @@ mod tests {
             judge_max_tokens: 800,
             fuzzy_match_threshold: 0.80,
             per_category: aivyx_config::PerCategoryConfigSet::defaults(),
+            from_failed_turns: false,
+            failure_outcomes: aivyx_config::FailureOutcomesConfig::default(),
         };
         let runtime: SkillAutoProposeConfig = cfg.into();
         let pc = runtime.per_category.expect("per_category populated");
