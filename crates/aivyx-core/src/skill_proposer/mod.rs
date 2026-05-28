@@ -27,5 +27,10 @@
 //! call fires.
 
 pub mod heuristic;
+pub mod judge;
 
 pub use heuristic::{HeuristicConfig, MatchMode, TurnSignals, is_candidate};
+pub use judge::{
+    ExistingSkillSnapshot, JudgeError, JudgeRequest, JudgeResponse, SkillDraft, judge,
+    parse_judge_response,
+};
