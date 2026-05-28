@@ -48,8 +48,8 @@ use std::sync::Arc;
 // directly. Phase 112 keeps the auto-proposer's caller-facing surface
 // homed in aivyx-channel.
 pub use aivyx_core::skill_proposer::{
-    ExistingSkillSnapshot, HeuristicConfig, JudgeError, JudgeRequest,
-    JudgeResponse, SkillDraft, TurnSignals,
+    ExistingPersonaSnapshot, ExistingSkillSnapshot, HeuristicConfig, JudgeError,
+    JudgeRequest, JudgeResponse, ProposedDraft, SkillDraft, TurnSignals,
 };
 use aivyx_core::skill_proposer;
 use aivyx_core::CancellationToken;
@@ -255,7 +255,7 @@ impl SkillRoutingDecision {
 /// running first (cheap dedup catches obvious title-dups
 /// before any further work).
 ///
-/// **The pre-filter runs against `verdict.proposed_skill`'s
+/// **The pre-filter runs against `verdict.proposed_skill()`'s
 /// title, not the original turn summary.** The judge has
 /// already drafted a candidate skill at this point; we check
 /// if its title fuzzy-matches an existing skill *as a final
@@ -288,8 +288,11 @@ pub fn decide_routing(
 
     // Step 3 — Judge said yes but the draft is missing (LLM
     // misbehaved). Treat as not-worth-proposing rather than
-    // ship a broken proposal.
-    let Some(draft) = verdict.proposed_skill.clone() else {
+    // ship a broken proposal. Phase 113 routing covers only
+    // the LearnedSkill branch; Phase 114 Task 4 extends this
+    // to dispatch on the verdict's `category` for all 11
+    // PersonaDeltaCategory variants.
+    let Some(draft) = verdict.proposed_skill() else {
         return SkillRoutingDecision::DroppedNotWorthProposing;
     };
 
@@ -477,10 +480,7 @@ pub fn audit_outcome_from(
                     S::DuplicateOfExistingLlm {
                         duplicate_of: duplicate_of.clone(),
                     },
-                    verdict
-                        .proposed_skill
-                        .as_ref()
-                        .map(|d| d.name.clone()),
+                    verdict.proposed_skill().map(|d| d.name.clone()),
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::DroppedFuzzyDup {
@@ -489,18 +489,12 @@ pub fn audit_outcome_from(
                     S::DuplicateOfExistingFuzzy {
                         matched_existing_name: matched_existing_name.clone(),
                     },
-                    verdict
-                        .proposed_skill
-                        .as_ref()
-                        .map(|d| d.name.clone()),
+                    verdict.proposed_skill().map(|d| d.name.clone()),
                     confidence_thousandths,
                 ),
                 SkillRoutingDecision::DroppedNotWorthProposing => (
                     S::NotWorthProposing,
-                    verdict
-                        .proposed_skill
-                        .as_ref()
-                        .map(|d| d.name.clone()),
+                    verdict.proposed_skill().map(|d| d.name.clone()),
                     confidence_thousandths,
                 ),
             }
@@ -525,7 +519,7 @@ pub async fn auto_propose_for_turn(
     config: &SkillAutoProposeConfig,
     signals: TurnSignals,
     turn_summary: String,
-    existing_skills: Vec<ExistingSkillSnapshot>,
+    existing_persona: ExistingPersonaSnapshot,
     cancellation: &CancellationToken,
 ) -> SkillProposerOutcome {
     if !config.enabled {
@@ -538,7 +532,7 @@ pub async fn auto_propose_for_turn(
 
     let request = JudgeRequest {
         turn_summary: &turn_summary,
-        existing_skills: &existing_skills,
+        existing_persona: &existing_persona,
         model: &config.judge_model,
         max_tokens: config.judge_max_tokens,
     };
@@ -577,7 +571,7 @@ pub fn spawn_auto_proposer_task(
     config: SkillAutoProposeConfig,
     signals: TurnSignals,
     turn_summary: String,
-    existing_skills: Vec<ExistingSkillSnapshot>,
+    existing_persona: ExistingPersonaSnapshot,
     cancellation: CancellationToken,
 ) -> tokio::task::JoinHandle<SkillProposerOutcome> {
     tokio::spawn(async move {
@@ -586,7 +580,7 @@ pub fn spawn_auto_proposer_task(
             &config,
             signals,
             turn_summary,
-            existing_skills,
+            existing_persona,
             &cancellation,
         )
         .await;
@@ -629,37 +623,57 @@ impl std::fmt::Debug for SkillAutoProposerContext {
     }
 }
 
-/// Snapshot the approved-skills list from the current
-/// `SharedEffectivePersona` into the form the judge needs for
-/// the dedup check. Reads under the read lock and copies a
-/// short tuple per skill (name, trigger, procedure summary)
-/// so the judge call doesn't hold the lock.
+/// Phase 114 — snapshot the full effective Persona state
+/// into the form the judge needs for cross-category dedup.
+/// Reads under the read lock and copies every category so
+/// the judge call doesn't hold the lock.
 ///
 /// Malformed `LearnedSkill` JSON entries are skipped (same
 /// posture the renderer takes — Phase 110 Q3c precedent).
-pub fn snapshot_existing_skills(
+pub fn snapshot_existing_persona(
     shared: &crate::persona::SharedEffectivePersona,
-) -> Vec<ExistingSkillSnapshot> {
+) -> ExistingPersonaSnapshot {
     let Ok(state) = shared.read() else {
-        return Vec::new();
+        return ExistingPersonaSnapshot::default();
     };
-    state
+    let learned_skills = state
         .learned_skills
         .iter()
         .filter_map(|s| crate::persona::LearnedSkill::from_json_value(s))
         .map(|sk| {
-            let summary: String = sk
-                .procedure
-                .chars()
-                .take(200)
-                .collect::<String>();
+            let summary: String = sk.procedure.chars().take(200).collect();
             ExistingSkillSnapshot {
                 name: sk.name,
                 trigger: sk.trigger,
                 procedure_summary: summary,
             }
         })
-        .collect()
+        .collect();
+    ExistingPersonaSnapshot {
+        assistant_name: state.assistant_name.clone(),
+        operator_profile: state.operator_profile.clone(),
+        communication_style: state.communication_style.clone(),
+        primary_use_cases: state.primary_use_cases.clone(),
+        behavioral_preferences: state.behavioral_preferences.clone(),
+        behavioral_constraints: state.behavioral_constraints.clone(),
+        learned_context: state.learned_context.clone(),
+        communication_adaptations: state.communication_adaptations.clone(),
+        character_traits: state.character_traits.clone(),
+        relationship_milestones: state.relationship_milestones.clone(),
+        learned_skills,
+    }
+}
+
+/// Phase 113 backwards-compat alias. Returns just the
+/// `learned_skills` portion of the full Persona snapshot —
+/// callers that only need the skill list (e.g. `decide_routing`'s
+/// fuzzy-match input) can use this without changing their code
+/// after the Phase 114 generalization. Internally delegates to
+/// [`snapshot_existing_persona`].
+pub fn snapshot_existing_skills(
+    shared: &crate::persona::SharedEffectivePersona,
+) -> Vec<ExistingSkillSnapshot> {
+    snapshot_existing_persona(shared).learned_skills
 }
 
 /// Compose a turn summary string from the user input and the
@@ -745,7 +759,10 @@ pub async fn run_auto_propose_pipeline(
 ) {
     let signals_record =
         signals_matched(&signals, &proposer_ctx.config.heuristic);
-    let existing = snapshot_existing_skills(shared_persona);
+    // Phase 114 — full Persona snapshot. The auto-proposer
+    // sees every category; the routing decide-fn extracts
+    // just the skill list for fuzzy-match.
+    let existing_persona = snapshot_existing_persona(shared_persona);
 
     // Time the judge call so the audit event carries latency.
     let judge_started = std::time::Instant::now();
@@ -754,7 +771,7 @@ pub async fn run_auto_propose_pipeline(
         &proposer_ctx.config,
         signals,
         turn_summary,
-        existing.clone(),
+        existing_persona.clone(),
         cancellation,
     )
     .await;
@@ -768,11 +785,14 @@ pub async fn run_auto_propose_pipeline(
     };
 
     // Compute the routing decision (and perform chain writes
-    // for AutoAccept/Staged outcomes).
+    // for AutoAccept/Staged outcomes). `decide_routing`'s
+    // fuzzy-match input scoped to the LearnedSkill list per
+    // Phase 113; cross-category dedup is handled by the
+    // judge's `is_duplicate_of` field directly.
     let routing = match &proposer_outcome {
         SkillProposerOutcome::Verdict(verdict) => Some(decide_routing(
             verdict,
-            &existing,
+            &existing_persona.learned_skills,
             &proposer_ctx.config,
         )),
         _ => None,
@@ -1073,7 +1093,7 @@ mod tests {
             &config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1094,7 +1114,7 @@ mod tests {
             &config,
             below_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1106,7 +1126,9 @@ mod tests {
     async fn candidate_turn_with_worth_proposing_verdict_returns_verdict() {
         let provider = ScriptedProvider::new(vec![ScriptedStep::FinalText(
             r#"{"is_worth_proposing":true,"confidence":0.91,
-            "proposed_skill":{"name":"research-topic","trigger":"research X",
+            "category":"LearnedSkill",
+            "proposed_draft":{"kind":"LearnedSkill",
+            "name":"research-topic","trigger":"research X",
             "procedure":"1. ...\n2. ..."},"is_duplicate_of":null,
             "reasoning":"recurring"}"#
                 .into(),
@@ -1118,7 +1140,7 @@ mod tests {
             &config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1126,9 +1148,10 @@ mod tests {
             SkillProposerOutcome::Verdict(r) => {
                 assert!(r.is_worth_proposing);
                 assert!((r.confidence - 0.91).abs() < 1e-6);
-                let draft = r.proposed_skill.as_ref().unwrap();
+                let draft = r.proposed_skill().unwrap();
                 assert_eq!(draft.name, "research-topic");
-                let _ = SkillDraft::clone(draft); // ensure SkillDraft re-export is wired
+                // Ensure SkillDraft re-export is wired
+                let _ = SkillDraft::clone(&draft);
             }
             _ => panic!("expected Verdict; got {:?}", outcome),
         }
@@ -1146,7 +1169,7 @@ mod tests {
             &config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1171,7 +1194,7 @@ mod tests {
             &config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1197,7 +1220,7 @@ mod tests {
             &config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             &cancel,
         )
         .await;
@@ -1225,7 +1248,7 @@ mod tests {
             config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             cancel,
         );
         let outcome = handle.await.expect("task must not panic");
@@ -1254,7 +1277,7 @@ mod tests {
             config,
             fire_threshold_signals(),
             "summary".into(),
-            vec![],
+            ExistingPersonaSnapshot::default(),
             cancel,
         );
         let outcome = handle.await.expect("spawn must not panic");
@@ -1287,8 +1310,31 @@ mod tests {
         JudgeResponse {
             is_worth_proposing: true,
             confidence,
-            proposed_skill: Some(SkillDraft {
+            category: Some("LearnedSkill".into()),
+            proposed_draft: Some(ProposedDraft::LearnedSkill {
                 name: "research-topic".into(),
+                trigger: "user asks to research X".into(),
+                procedure: "1. fs.read\n2. web.fetch".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    /// Helper for tests that need a verdict with a specific
+    /// LearnedSkill name. Mirrors `worth_proposing_verdict` but
+    /// lets the caller override the skill name (used by
+    /// fuzzy-match dedup tests).
+    fn worth_proposing_verdict_with_name(
+        confidence: f32,
+        name: &str,
+    ) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            category: Some("LearnedSkill".into()),
+            proposed_draft: Some(ProposedDraft::LearnedSkill {
+                name: name.into(),
                 trigger: "user asks to research X".into(),
                 procedure: "1. fs.read\n2. web.fetch".into(),
             }),
@@ -1371,7 +1417,8 @@ mod tests {
         let verdict = JudgeResponse {
             is_worth_proposing: false,
             confidence: 0.5,
-            proposed_skill: None,
+            category: None,
+            proposed_draft: None,
             is_duplicate_of: None,
             reasoning: Some("one-off chat".into()),
         };
@@ -1387,7 +1434,8 @@ mod tests {
         let verdict = JudgeResponse {
             is_worth_proposing: true,
             confidence: 0.9,
-            proposed_skill: None,
+            category: Some("LearnedSkill".into()),
+            proposed_draft: None,
             is_duplicate_of: None,
             reasoning: None,
         };
@@ -1400,8 +1448,7 @@ mod tests {
     fn routing_fuzzy_match_drops_obvious_title_dup() {
         // Existing: "summarize-pdf"; candidate: "summarize-pdf" → identical
         // title → fuzzy match fires.
-        let mut verdict = worth_proposing_verdict(0.95);
-        verdict.proposed_skill.as_mut().unwrap().name = "summarize-pdf".into();
+        let verdict = worth_proposing_verdict_with_name(0.95, "summarize-pdf");
         let config = SkillAutoProposeConfig::default();
         let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
         match &d {
@@ -1419,8 +1466,7 @@ mod tests {
     fn routing_fuzzy_match_drops_underscored_vs_dotted_variant() {
         // Existing: "summarize-pdf"; candidate: "summarize_pdf" — same
         // tokens after normalization.
-        let mut verdict = worth_proposing_verdict(0.95);
-        verdict.proposed_skill.as_mut().unwrap().name = "summarize_pdf".into();
+        let verdict = worth_proposing_verdict_with_name(0.95, "summarize_pdf");
         let config = SkillAutoProposeConfig::default();
         let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
         assert!(matches!(d, SkillRoutingDecision::DroppedFuzzyDup { .. }));
@@ -1430,8 +1476,7 @@ mod tests {
     fn routing_fuzzy_match_drops_reordered_tokens() {
         // Existing: "deploy-to-staging"; candidate: "staging-to-deploy" —
         // same token set after normalization → Jaccard 1.0.
-        let mut verdict = worth_proposing_verdict(0.95);
-        verdict.proposed_skill.as_mut().unwrap().name = "staging-to-deploy".into();
+        let verdict = worth_proposing_verdict_with_name(0.95, "staging-to-deploy");
         let config = SkillAutoProposeConfig::default();
         let d = decide_routing(&verdict, &existing_skills_fixture(), &config);
         assert!(matches!(d, SkillRoutingDecision::DroppedFuzzyDup { .. }));
@@ -1453,8 +1498,7 @@ mod tests {
         // count as a dup. Existing "summarize-pdf"; candidate
         // "summarize-doc" — overlap is {summarize} of {summarize, pdf,
         // doc} → 1/3 → below 0.99.
-        let mut verdict = worth_proposing_verdict(0.95);
-        verdict.proposed_skill.as_mut().unwrap().name = "summarize-doc".into();
+        let verdict = worth_proposing_verdict_with_name(0.95, "summarize-doc");
         let config = SkillAutoProposeConfig {
             fuzzy_match_threshold: 0.99,
             ..SkillAutoProposeConfig::default()
@@ -1658,8 +1702,7 @@ mod tests {
 
     #[test]
     fn audit_outcome_dup_fuzzy_carries_matched_name() {
-        let mut verdict = worth_proposing_verdict(0.95);
-        verdict.proposed_skill.as_mut().unwrap().name = "summarize-pdf".into();
+        let verdict = worth_proposing_verdict_with_name(0.95, "summarize-pdf");
         let routing = decide_routing(
             &verdict,
             &existing_skills_fixture(),
@@ -1736,7 +1779,8 @@ mod tests {
         let verdict = JudgeResponse {
             is_worth_proposing: false,
             confidence: 0.30,
-            proposed_skill: None,
+            category: None,
+            proposed_draft: None,
             is_duplicate_of: None,
             reasoning: None,
         };

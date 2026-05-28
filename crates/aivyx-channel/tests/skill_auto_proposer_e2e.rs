@@ -140,7 +140,9 @@ fn fire_threshold_signals() -> TurnSignals {
 const AUTO_ACCEPT_VERDICT_JSON: &str = r#"{
     "is_worth_proposing": true,
     "confidence": 0.92,
-    "proposed_skill": {
+    "category": "LearnedSkill",
+    "proposed_draft": {
+        "kind": "LearnedSkill",
         "name": "research-multi-source",
         "trigger": "user asks to research a topic across multiple sources",
         "procedure": "1. fs.read project notes\n2. web.fetch each candidate URL\n3. summarize"
@@ -152,7 +154,9 @@ const AUTO_ACCEPT_VERDICT_JSON: &str = r#"{
 const STAGED_VERDICT_JSON: &str = r#"{
     "is_worth_proposing": true,
     "confidence": 0.72,
-    "proposed_skill": {
+    "category": "LearnedSkill",
+    "proposed_draft": {
+        "kind": "LearnedSkill",
         "name": "borderline-skill",
         "trigger": "uncertain",
         "procedure": "..."

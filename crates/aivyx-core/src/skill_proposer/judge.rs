@@ -1,13 +1,26 @@
 //! Phase 112 Task 3 — LLM-judge surface for skill auto-
 //! proposal candidates.
 //!
+//! **Phase 114 generalization:** the judge now picks the
+//! best `PersonaDeltaCategory` for the turn (not just
+//! `LearnedSkill`), and the proposed draft shape varies by
+//! category — `LearnedSkill` is full `{name, trigger,
+//! procedure}`, list categories are a single string to
+//! append, scalar categories are a single string to set.
+//! The existing-persona snapshot the judge sees covers
+//! every category, not just skills, so dedup can fire
+//! across the whole Persona surface.
+//!
 //! Q1b's second stage. Given a turn the [`heuristic`] gate
 //! flagged as a candidate, this module asks an LLM:
 //!
-//! 1. Is the turn pattern worth proposing as a learned skill?
+//! 1. Is the turn pattern worth proposing as a Persona
+//!    refinement (any category)?
 //! 2. With what confidence?
-//! 3. If yes, draft the skill (name + trigger + procedure).
-//! 4. Does it semantically duplicate any existing skill?
+//! 3. If yes, which category — and draft the proposal in
+//!    the shape that category expects.
+//! 4. Does it semantically duplicate any existing Persona
+//!    entry?
 //!
 //! All four questions in **one** LLM round-trip per Q4b:
 //! the dedup check piggybacks on the same call so the auto-
@@ -60,9 +73,50 @@ pub struct ExistingSkillSnapshot {
     pub procedure_summary: String,
 }
 
+/// Phase 114 — Full Persona snapshot the judge sees for
+/// cross-category dedup and pattern-awareness. Built by the
+/// caller from the daemon's `SharedEffectivePersona` at
+/// judge-call time. Every field is owned for prompt-budget
+/// predictability (the snapshot can be truncated by the
+/// caller before being passed to the judge if a category
+/// has grown too large).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExistingPersonaSnapshot {
+    pub assistant_name: Option<String>,
+    pub operator_profile: Option<String>,
+    pub communication_style: Option<String>,
+    pub primary_use_cases: Vec<String>,
+    pub behavioral_preferences: Vec<String>,
+    pub behavioral_constraints: Vec<String>,
+    pub learned_context: Vec<String>,
+    pub communication_adaptations: Vec<String>,
+    pub character_traits: Vec<String>,
+    pub relationship_milestones: Vec<String>,
+    pub learned_skills: Vec<ExistingSkillSnapshot>,
+}
+
+impl ExistingPersonaSnapshot {
+    /// `true` when no field has any populated content. Useful
+    /// for the prompt builder's "(no Persona state yet)"
+    /// short-circuit.
+    pub fn is_empty(&self) -> bool {
+        self.assistant_name.is_none()
+            && self.operator_profile.is_none()
+            && self.communication_style.is_none()
+            && self.primary_use_cases.is_empty()
+            && self.behavioral_preferences.is_empty()
+            && self.behavioral_constraints.is_empty()
+            && self.learned_context.is_empty()
+            && self.communication_adaptations.is_empty()
+            && self.character_traits.is_empty()
+            && self.relationship_milestones.is_empty()
+            && self.learned_skills.is_empty()
+    }
+}
+
 /// Input to [`judge`]. Caller builds this from the
-/// just-finalized turn's signals + the current approved skill
-/// set.
+/// just-finalized turn's signals + the current Persona
+/// snapshot.
 #[derive(Debug, Clone)]
 pub struct JudgeRequest<'a> {
     /// Short narrative of what happened in the turn — user
@@ -73,25 +127,28 @@ pub struct JudgeRequest<'a> {
     /// tokens).
     pub turn_summary: &'a str,
 
-    /// Snapshots of every currently-approved skill. The judge
-    /// scans this list for the dedup check; if none exist,
-    /// pass an empty slice.
-    pub existing_skills: &'a [ExistingSkillSnapshot],
+    /// Phase 114 — full Persona snapshot. The judge scans
+    /// this for the cross-category dedup check and for
+    /// pattern-awareness (e.g. "the operator already has a
+    /// CommunicationStyle field set; don't propose a
+    /// conflicting BehavioralPreferences refinement").
+    pub existing_persona: &'a ExistingPersonaSnapshot,
 
     /// Provider-specific model identifier. Operator-configured
-    /// in the TOML `[skills.auto_propose] judge_model` field
-    /// (Task 5).
+    /// in the TOML `[persona.auto_propose] judge_model` field
+    /// (Phase 114 Task 3, alias of Phase 113's
+    /// `[skills.auto_propose] judge_model`).
     pub model: &'a str,
 
     /// Maximum tokens the judge may emit. Defaults to a
     /// generous-but-bounded 800 if not overridden; long
-    /// enough for a full SkillDraft + reasoning, short
-    /// enough to keep cost predictable.
+    /// enough for a full draft + reasoning, short enough to
+    /// keep cost predictable.
     pub max_tokens: u32,
 }
 
 /// What the judge actually proposes when it decides a turn is
-/// skill-worthy. Mirrors the `LearnedSkill` shape from
+/// proposal-worthy. Mirrors the `LearnedSkill` shape from
 /// `aivyx-channel::persona`, but kept independent here so
 /// `aivyx-core` doesn't take on a dep edge upward.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,37 +162,134 @@ pub struct SkillDraft {
     pub procedure: String,
 }
 
+/// Phase 114 — Polymorphic proposed-draft shape, varying by
+/// `PersonaDeltaCategory`. The `kind` discriminator is set
+/// by the LLM judge to one of `"LearnedSkill"`,
+/// `"ListAppend"`, or `"ScalarSet"`; serde-tagged so the
+/// JSON wire form is self-describing.
+///
+/// Category → variant mapping (the caller validates the
+/// pair):
+/// - `LearnedSkill` → [`ProposedDraft::LearnedSkill`]
+/// - `PrimaryUseCases`, `BehavioralPreferences`,
+///   `BehavioralConstraints`, `LearnedContext`,
+///   `CommunicationAdaptations`, `CharacterTraits`,
+///   `RelationshipMilestones` → [`ProposedDraft::ListAppend`]
+/// - `AssistantName`, `OperatorProfile`,
+///   `CommunicationStyle` → [`ProposedDraft::ScalarSet`]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum ProposedDraft {
+    /// Full `LearnedSkill` shape (name + trigger + procedure).
+    /// Used iff the judge picks `category = "LearnedSkill"`.
+    LearnedSkill {
+        name: String,
+        trigger: String,
+        procedure: String,
+    },
+    /// Append a string to a list category. Used for the seven
+    /// list-shaped categories.
+    ListAppend { value: String },
+    /// Set a scalar category's value. Used for the three
+    /// scalar categories (`AssistantName`, `OperatorProfile`,
+    /// `CommunicationStyle`).
+    ScalarSet { value: String },
+}
+
+impl ProposedDraft {
+    /// If this draft is a `LearnedSkill`, return the
+    /// `SkillDraft` view. Backwards-compatibility helper for
+    /// callers that already consumed the Phase 113 shape.
+    pub fn as_skill_draft(&self) -> Option<SkillDraft> {
+        match self {
+            ProposedDraft::LearnedSkill {
+                name,
+                trigger,
+                procedure,
+            } => Some(SkillDraft {
+                name: name.clone(),
+                trigger: trigger.clone(),
+                procedure: procedure.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Short stable label for the variant — used in audit
+    /// events and operator-facing messages.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            ProposedDraft::LearnedSkill { .. } => "LearnedSkill",
+            ProposedDraft::ListAppend { .. } => "ListAppend",
+            ProposedDraft::ScalarSet { .. } => "ScalarSet",
+        }
+    }
+}
+
 /// The structured response shape the judge LLM must produce.
 /// Returned as JSON; parsed by [`parse_judge_response`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JudgeResponse {
     /// Top-line verdict. If `false`, the turn pattern isn't
-    /// general enough or recurring enough to warrant a skill.
+    /// general enough or recurring enough to warrant a
+    /// Persona refinement.
     pub is_worth_proposing: bool,
 
     /// LLM's self-reported confidence, 0.0 – 1.0. The
-    /// threshold-gate in Task 5 compares this against the
-    /// operator-configured `auto_accept_confidence_threshold`.
+    /// threshold-gate compares this against the operator-
+    /// configured `auto_accept_confidence_threshold` for the
+    /// picked category.
     pub confidence: f32,
 
-    /// The drafted skill, populated iff
-    /// `is_worth_proposing == true`. (The parser doesn't
-    /// enforce the cross-field constraint — a downstream
-    /// consumer can decide whether to require non-None here.)
-    pub proposed_skill: Option<SkillDraft>,
+    /// Phase 114 — the `PersonaDeltaCategory` label the judge
+    /// picked. `None` when `is_worth_proposing == false` or
+    /// the judge declined to commit to a category.
+    /// Expected values (the runtime validates):
+    /// `"AssistantName"`, `"OperatorProfile"`,
+    /// `"CommunicationStyle"`, `"PrimaryUseCases"`,
+    /// `"BehavioralPreferences"`, `"BehavioralConstraints"`,
+    /// `"LearnedContext"`, `"CommunicationAdaptations"`,
+    /// `"CharacterTraits"`, `"RelationshipMilestones"`,
+    /// `"LearnedSkill"`.
+    #[serde(default)]
+    pub category: Option<String>,
 
-    /// Name of an existing skill this candidate semantically
-    /// duplicates, if any. The Q4b dedup signal — populated
-    /// when the LLM concludes the candidate is paraphrase of
-    /// an existing skill even though title fuzzy-match
-    /// didn't catch it.
+    /// Phase 114 — the drafted proposal in the shape the
+    /// picked category expects. Populated iff
+    /// `is_worth_proposing == true` and `category` is set.
+    /// (The parser doesn't enforce the cross-field
+    /// constraint — a downstream consumer can decide
+    /// whether to require non-None here.)
+    #[serde(default)]
+    pub proposed_draft: Option<ProposedDraft>,
+
+    /// Name of an existing Persona entry this candidate
+    /// semantically duplicates, if any. The Q4b dedup signal
+    /// — populated when the LLM concludes the candidate
+    /// paraphrases an existing entry even though title
+    /// fuzzy-match didn't catch it. For `LearnedSkill`, this
+    /// is the skill name; for list categories, it's the
+    /// existing list-item value; for scalar categories, it's
+    /// a description of the conflicting scalar.
     pub is_duplicate_of: Option<String>,
 
     /// Optional short rationale. Useful for the audit log
-    /// (Task 6) and for operator inspection of the auto-
-    /// proposer's behavior.
+    /// and for operator inspection of the auto-proposer's
+    /// behavior.
     #[serde(default)]
     pub reasoning: Option<String>,
+}
+
+impl JudgeResponse {
+    /// Backwards-compatibility helper: if the picked category
+    /// is `LearnedSkill`, return the draft as a `SkillDraft`.
+    /// Phase 113 callers expecting `proposed_skill` flow can
+    /// call this without changing their match shape.
+    pub fn proposed_skill(&self) -> Option<SkillDraft> {
+        self.proposed_draft
+            .as_ref()
+            .and_then(|d| d.as_skill_draft())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -160,53 +314,141 @@ pub enum JudgeError {
 /// as a golden value.
 pub fn build_system_prompt() -> String {
     String::from(
-        "You are a learned-skills judge for an AI personal assistant. \
-Your job is to look at one completed turn and decide whether the \
-pattern is worth saving as a reusable skill. A 'skill' is a short \
-named procedure the assistant can invoke on future similar turns. \
-\n\nReturn ONLY a single JSON object matching this schema:\n\
+        "You are a Persona-refinement judge for an AI personal \
+assistant. Your job is to look at one completed turn and decide \
+whether the pattern is worth proposing as a Persona refinement. \
+The agent's Persona has eleven categories; you pick the right \
+one and draft the refinement in the shape that category expects. \
+\n\nThe eleven categories (and their expected draft shape):\n\
+- LearnedSkill — a named procedure the assistant can invoke. \
+  Draft: { kind: \"LearnedSkill\", name: kebab-case string, \
+  trigger: string, procedure: markdown string }.\n\
+- BehavioralPreferences — a single string the operator prefers \
+  the assistant to follow (\"prefer terse replies\"). Draft: \
+  { kind: \"ListAppend\", value: string }.\n\
+- BehavioralConstraints — a single string the assistant must \
+  avoid (\"never run shell commands without operator approval\"). \
+  Draft: { kind: \"ListAppend\", value: string }.\n\
+- LearnedContext — a fact about the operator's world the \
+  assistant should remember (\"the operator's primary repo is \
+  aivyx\"). Draft: { kind: \"ListAppend\", value: string }.\n\
+- CommunicationAdaptations — a tone or style adaptation \
+  (\"the operator likes brief responses with code blocks\"). \
+  Draft: { kind: \"ListAppend\", value: string }.\n\
+- CharacterTraits — a personality trait that emerged across \
+  many turns (\"curious about underlying mechanisms\"). \
+  Draft: { kind: \"ListAppend\", value: string }.\n\
+- RelationshipMilestones — a noteworthy moment in the \
+  operator-assistant relationship. \
+  Draft: { kind: \"ListAppend\", value: string }.\n\
+- PrimaryUseCases — a use-case the operator actually uses \
+  the assistant for. Draft: { kind: \"ListAppend\", \
+  value: string }.\n\
+- AssistantName — a name for the assistant (scalar; rare). \
+  Draft: { kind: \"ScalarSet\", value: string }.\n\
+- OperatorProfile — a short identity-summary of the operator \
+  (scalar; rare). Draft: { kind: \"ScalarSet\", value: \
+  string }.\n\
+- CommunicationStyle — the assistant's overall tone (scalar; \
+  rare). Draft: { kind: \"ScalarSet\", value: string }.\n\
+\n\
+Return ONLY a single JSON object matching this schema:\n\
 {\n\
   \"is_worth_proposing\": bool,\n\
   \"confidence\": float in [0.0, 1.0],\n\
-  \"proposed_skill\": { \"name\": kebab-case string, \"trigger\": \
-string, \"procedure\": markdown string } | null,\n\
-  \"is_duplicate_of\": existing skill name string | null,\n\
+  \"category\": one of the eleven category names | null,\n\
+  \"proposed_draft\": draft object (shape per the category) \
+  | null,\n\
+  \"is_duplicate_of\": existing entry name/value/description \
+  | null,\n\
   \"reasoning\": short string explaining the verdict\n\
 }\n\n\
 Criteria:\n\
-- Worth proposing: the turn shows a reusable multi-step pattern that's \
-likely to recur, not a one-off chat or trivial single-step action.\n\
-- Confidence: how strongly the pattern reads as a 'real skill.' \
-Reserve >= 0.85 for clear, well-defined, recurring patterns.\n\
-- Duplicates: if the candidate is semantically the same as an existing \
-skill (even with different wording), set is_duplicate_of to that \
-skill's name and is_worth_proposing to false.\n\
+- Worth proposing: the turn shows a recurring or generalizable \
+pattern worth saving, not a one-off chat. Pick the category \
+that fits best.\n\
+- Confidence: how strongly the pattern fits the picked \
+category. Reserve >= 0.85 for clear, well-defined, recurring \
+patterns. Scalar categories (AssistantName, OperatorProfile, \
+CommunicationStyle) need very high confidence (>= 0.95) \
+because each new value replaces the previous one.\n\
+- Duplicates: if the candidate is semantically the same as an \
+existing Persona entry in ANY category, set is_duplicate_of \
+to a description of that entry and is_worth_proposing to \
+false.\n\
 - No prose outside the JSON. No markdown fences. JSON only.",
     )
 }
 
 /// Build the user prompt the judge sees for one candidate
-/// turn. Embeds the turn summary and the existing-skills
-/// catalog (for the dedup check).
+/// turn. Embeds the turn summary and the full Persona
+/// snapshot (for cross-category dedup and pattern-
+/// awareness).
 pub fn build_user_prompt(request: &JudgeRequest<'_>) -> String {
     let mut s = String::new();
     s.push_str("## Completed turn\n\n");
     s.push_str(request.turn_summary);
-    s.push_str("\n\n## Currently approved skills");
-    if request.existing_skills.is_empty() {
-        s.push_str("\n\n(none — the skill set is empty)\n\n");
+    s.push_str("\n\n## Current Persona state");
+    let p = request.existing_persona;
+    if p.is_empty() {
+        s.push_str("\n\n(no Persona state yet — every category is empty)\n\n");
     } else {
-        s.push_str(" (for dedup check)\n\n");
-        for skill in request.existing_skills {
-            s.push_str(&format!(
-                "- **{}** — trigger: {}\n  summary: {}\n",
-                skill.name, skill.trigger, skill.procedure_summary
-            ));
+        s.push_str(" (for cross-category dedup and pattern-awareness)\n\n");
+        if let Some(v) = &p.assistant_name {
+            s.push_str(&format!("- **AssistantName** (scalar): {v}\n"));
+        }
+        if let Some(v) = &p.operator_profile {
+            s.push_str(&format!("- **OperatorProfile** (scalar): {v}\n"));
+        }
+        if let Some(v) = &p.communication_style {
+            s.push_str(&format!("- **CommunicationStyle** (scalar): {v}\n"));
+        }
+        render_list(&mut s, "PrimaryUseCases", &p.primary_use_cases);
+        render_list(
+            &mut s,
+            "BehavioralPreferences",
+            &p.behavioral_preferences,
+        );
+        render_list(
+            &mut s,
+            "BehavioralConstraints",
+            &p.behavioral_constraints,
+        );
+        render_list(&mut s, "LearnedContext", &p.learned_context);
+        render_list(
+            &mut s,
+            "CommunicationAdaptations",
+            &p.communication_adaptations,
+        );
+        render_list(&mut s, "CharacterTraits", &p.character_traits);
+        render_list(
+            &mut s,
+            "RelationshipMilestones",
+            &p.relationship_milestones,
+        );
+        if !p.learned_skills.is_empty() {
+            s.push_str("- **LearnedSkill** (list of named procedures):\n");
+            for skill in &p.learned_skills {
+                s.push_str(&format!(
+                    "  - **{}** — trigger: {}\n    summary: {}\n",
+                    skill.name, skill.trigger, skill.procedure_summary
+                ));
+            }
         }
         s.push('\n');
     }
     s.push_str("Respond with the JudgeResponse JSON now.");
     s
+}
+
+fn render_list(out: &mut String, label: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    out.push_str(&format!("- **{label}** (list):\n"));
+    for item in items {
+        out.push_str(&format!("  - {item}\n"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +629,10 @@ mod tests {
         }
     }
 
+    fn empty_persona() -> ExistingPersonaSnapshot {
+        ExistingPersonaSnapshot::default()
+    }
+
     // ----- Prompt-shape stability (golden) -----
 
     #[test]
@@ -394,83 +640,165 @@ mod tests {
         let p = build_system_prompt();
         assert!(p.contains("is_worth_proposing"));
         assert!(p.contains("confidence"));
-        assert!(p.contains("proposed_skill"));
+        assert!(p.contains("category"));
+        assert!(p.contains("proposed_draft"));
         assert!(p.contains("is_duplicate_of"));
         assert!(p.contains("reasoning"));
         assert!(p.contains("JSON only"));
     }
 
     #[test]
-    fn user_prompt_embeds_turn_summary_and_empty_skill_set() {
+    fn system_prompt_lists_all_eleven_categories() {
+        let p = build_system_prompt();
+        for cat in [
+            "LearnedSkill",
+            "BehavioralPreferences",
+            "BehavioralConstraints",
+            "LearnedContext",
+            "CommunicationAdaptations",
+            "CharacterTraits",
+            "RelationshipMilestones",
+            "PrimaryUseCases",
+            "AssistantName",
+            "OperatorProfile",
+            "CommunicationStyle",
+        ] {
+            assert!(p.contains(cat), "system prompt missing category {cat}");
+        }
+    }
+
+    #[test]
+    fn system_prompt_lists_all_three_draft_kinds() {
+        let p = build_system_prompt();
+        for kind in ["LearnedSkill", "ListAppend", "ScalarSet"] {
+            assert!(p.contains(kind), "system prompt missing draft kind {kind}");
+        }
+    }
+
+    #[test]
+    fn user_prompt_embeds_turn_summary_and_empty_persona() {
+        let persona = empty_persona();
         let req = JudgeRequest {
             turn_summary: "User asked X; agent ran fs.read, web.fetch; replied Y.",
-            existing_skills: &[],
+            existing_persona: &persona,
             model: "claude-haiku-4-5",
             max_tokens: 800,
         };
         let p = build_user_prompt(&req);
         assert!(p.contains("User asked X"));
-        assert!(p.contains("the skill set is empty"));
+        assert!(p.contains("no Persona state yet"));
     }
 
     #[test]
-    fn user_prompt_lists_existing_skills_for_dedup() {
-        let existing = vec![
-            ExistingSkillSnapshot {
+    fn user_prompt_lists_existing_persona_state_across_categories() {
+        let persona = ExistingPersonaSnapshot {
+            assistant_name: Some("Aivyx".into()),
+            behavioral_preferences: vec![
+                "prefer terse replies".into(),
+                "use code blocks for shell commands".into(),
+            ],
+            learned_skills: vec![ExistingSkillSnapshot {
                 name: "research-topic".into(),
                 trigger: "user asks 'research X'".into(),
                 procedure_summary: "fs.read project notes, web.fetch ...".into(),
-            },
-            ExistingSkillSnapshot {
-                name: "summarize-pdf".into(),
-                trigger: "user shares a PDF".into(),
-                procedure_summary: "fs.read PDF, extract sections ...".into(),
-            },
-        ];
+            }],
+            ..ExistingPersonaSnapshot::default()
+        };
         let req = JudgeRequest {
             turn_summary: "ignored",
-            existing_skills: &existing,
+            existing_persona: &persona,
             model: "m",
             max_tokens: 800,
         };
         let p = build_user_prompt(&req);
+        assert!(p.contains("AssistantName"));
+        assert!(p.contains("Aivyx"));
+        assert!(p.contains("BehavioralPreferences"));
+        assert!(p.contains("prefer terse replies"));
+        assert!(p.contains("LearnedSkill"));
         assert!(p.contains("research-topic"));
-        assert!(p.contains("summarize-pdf"));
-        assert!(p.contains("dedup check"));
+        assert!(p.contains("cross-category dedup"));
     }
 
     // ----- Parser tolerance -----
 
     #[test]
-    fn parses_clean_json_response() {
+    fn parses_clean_learned_skill_response() {
         let raw = r#"{"is_worth_proposing":true,"confidence":0.91,
-          "proposed_skill":{"name":"research-topic","trigger":"research X",
-          "procedure":"step 1 ..."},"is_duplicate_of":null,
-          "reasoning":"recurring multi-step pattern"}"#;
+          "category":"LearnedSkill",
+          "proposed_draft":{"kind":"LearnedSkill","name":"research-topic",
+          "trigger":"research X","procedure":"step 1 ..."},
+          "is_duplicate_of":null,"reasoning":"recurring multi-step pattern"}"#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(r.is_worth_proposing);
         assert!((r.confidence - 0.91).abs() < 1e-6);
-        assert_eq!(r.proposed_skill.as_ref().unwrap().name, "research-topic");
-        assert!(r.is_duplicate_of.is_none());
+        assert_eq!(r.category.as_deref(), Some("LearnedSkill"));
+        match r.proposed_draft.as_ref().unwrap() {
+            ProposedDraft::LearnedSkill { name, .. } => {
+                assert_eq!(name, "research-topic");
+            }
+            other => panic!("expected LearnedSkill draft, got {other:?}"),
+        }
+        // Backward-compat helper still works.
+        assert_eq!(r.proposed_skill().unwrap().name, "research-topic");
+    }
+
+    #[test]
+    fn parses_list_append_response() {
+        let raw = r#"{"is_worth_proposing":true,"confidence":0.88,
+          "category":"BehavioralPreferences",
+          "proposed_draft":{"kind":"ListAppend",
+          "value":"prefer terse replies for command-style requests"},
+          "is_duplicate_of":null}"#;
+        let r = parse_judge_response(raw).expect("parse");
+        assert!(r.is_worth_proposing);
+        assert_eq!(r.category.as_deref(), Some("BehavioralPreferences"));
+        match r.proposed_draft.as_ref().unwrap() {
+            ProposedDraft::ListAppend { value } => {
+                assert!(value.contains("terse"));
+            }
+            other => panic!("expected ListAppend, got {other:?}"),
+        }
+        // Backward-compat helper returns None for non-skill drafts.
+        assert!(r.proposed_skill().is_none());
+    }
+
+    #[test]
+    fn parses_scalar_set_response() {
+        let raw = r#"{"is_worth_proposing":true,"confidence":0.96,
+          "category":"AssistantName",
+          "proposed_draft":{"kind":"ScalarSet","value":"Aivyx"},
+          "is_duplicate_of":null}"#;
+        let r = parse_judge_response(raw).expect("parse");
+        assert!(r.is_worth_proposing);
+        assert_eq!(r.category.as_deref(), Some("AssistantName"));
+        match r.proposed_draft.as_ref().unwrap() {
+            ProposedDraft::ScalarSet { value } => {
+                assert_eq!(value, "Aivyx");
+            }
+            other => panic!("expected ScalarSet, got {other:?}"),
+        }
     }
 
     #[test]
     fn parses_response_wrapped_in_markdown_fences() {
         let raw = r#"Sure, here you go:
 ```json
-{"is_worth_proposing":false,"confidence":0.4,"proposed_skill":null,
- "is_duplicate_of":null,"reasoning":"one-off chat"}
+{"is_worth_proposing":false,"confidence":0.4,"category":null,
+ "proposed_draft":null,"is_duplicate_of":null,"reasoning":"one-off chat"}
 ```
 that's my call."#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(!r.is_worth_proposing);
-        assert!(r.proposed_skill.is_none());
+        assert!(r.proposed_draft.is_none());
+        assert!(r.category.is_none());
     }
 
     #[test]
     fn parses_response_with_short_preamble() {
         let raw = r#"Here's the verdict: {"is_worth_proposing":true,
-          "confidence":0.88,"proposed_skill":{"name":"a","trigger":"b",
+          "confidence":0.88,"category":"LearnedSkill",
+          "proposed_draft":{"kind":"LearnedSkill","name":"a","trigger":"b",
           "procedure":"c"},"is_duplicate_of":null}"#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(r.is_worth_proposing);
@@ -479,11 +807,24 @@ that's my call."#;
     #[test]
     fn parses_response_with_dup_set() {
         let raw = r#"{"is_worth_proposing":false,"confidence":0.95,
-          "proposed_skill":null,"is_duplicate_of":"research-topic",
+          "category":null,"proposed_draft":null,
+          "is_duplicate_of":"research-topic",
           "reasoning":"paraphrase of an existing skill"}"#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(!r.is_worth_proposing);
         assert_eq!(r.is_duplicate_of.as_deref(), Some("research-topic"));
+    }
+
+    #[test]
+    fn parses_response_with_omitted_optional_fields() {
+        // category, proposed_draft, reasoning are all #[serde(default)]
+        // optional — the judge may omit them when not relevant.
+        let raw = r#"{"is_worth_proposing":false,"confidence":0.2,
+          "is_duplicate_of":null}"#;
+        let r = parse_judge_response(raw).expect("parse");
+        assert!(!r.is_worth_proposing);
+        assert!(r.category.is_none());
+        assert!(r.proposed_draft.is_none());
     }
 
     #[test]
@@ -502,7 +843,7 @@ that's my call."#;
     #[test]
     fn rejects_confidence_above_one() {
         let raw = r#"{"is_worth_proposing":true,"confidence":1.5,
-          "proposed_skill":null,"is_duplicate_of":null}"#;
+          "category":null,"proposed_draft":null,"is_duplicate_of":null}"#;
         let err = parse_judge_response(raw).unwrap_err();
         matches!(err, JudgeError::ConfidenceOutOfRange(_));
     }
@@ -510,7 +851,7 @@ that's my call."#;
     #[test]
     fn rejects_confidence_below_zero() {
         let raw = r#"{"is_worth_proposing":true,"confidence":-0.1,
-          "proposed_skill":null,"is_duplicate_of":null}"#;
+          "category":null,"proposed_draft":null,"is_duplicate_of":null}"#;
         let err = parse_judge_response(raw).unwrap_err();
         matches!(err, JudgeError::ConfidenceOutOfRange(_));
     }
@@ -520,27 +861,31 @@ that's my call."#;
         // The procedure string contains `{` — extractor must
         // respect quoting, not just brace count.
         let raw = r#"{"is_worth_proposing":true,"confidence":0.9,
-          "proposed_skill":{"name":"x","trigger":"y",
+          "category":"LearnedSkill",
+          "proposed_draft":{"kind":"LearnedSkill","name":"x","trigger":"y",
           "procedure":"call shell.exec with {arg: value}"},
           "is_duplicate_of":null}"#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(r.is_worth_proposing);
-        let proc_text = r.proposed_skill.unwrap().procedure;
+        let proc_text = r.proposed_skill().unwrap().procedure;
         assert!(proc_text.contains("{arg: value}"));
     }
 
     // ----- Integration via scripted provider -----
 
     #[tokio::test]
-    async fn judge_returns_worth_proposing_branch() {
+    async fn judge_returns_worth_proposing_branch_for_learned_skill() {
         let provider = ScriptedProvider::new(vec![
             r#"{"is_worth_proposing":true,"confidence":0.92,
-               "proposed_skill":{"name":"a","trigger":"t","procedure":"p"},
+               "category":"LearnedSkill",
+               "proposed_draft":{"kind":"LearnedSkill","name":"a",
+               "trigger":"t","procedure":"p"},
                "is_duplicate_of":null,"reasoning":"r"}"#,
         ]);
+        let persona = empty_persona();
         let req = JudgeRequest {
             turn_summary: "summary",
-            existing_skills: &[],
+            existing_persona: &persona,
             model: "m",
             max_tokens: 800,
         };
@@ -548,38 +893,68 @@ that's my call."#;
         let resp = judge(provider, req, &cancel).await.expect("ok");
         assert!(resp.is_worth_proposing);
         assert!((resp.confidence - 0.92).abs() < 1e-6);
-        assert_eq!(resp.proposed_skill.unwrap().name, "a");
+        assert_eq!(resp.category.as_deref(), Some("LearnedSkill"));
+        assert_eq!(resp.proposed_skill().unwrap().name, "a");
+    }
+
+    #[tokio::test]
+    async fn judge_returns_list_append_for_behavioral_preference() {
+        let provider = ScriptedProvider::new(vec![
+            r#"{"is_worth_proposing":true,"confidence":0.88,
+               "category":"BehavioralPreferences",
+               "proposed_draft":{"kind":"ListAppend",
+               "value":"prefer terse replies"},
+               "is_duplicate_of":null}"#,
+        ]);
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "summary",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+        };
+        let cancel = CancellationToken::new();
+        let resp = judge(provider, req, &cancel).await.expect("ok");
+        assert_eq!(resp.category.as_deref(), Some("BehavioralPreferences"));
+        match resp.proposed_draft.unwrap() {
+            ProposedDraft::ListAppend { value } => {
+                assert!(value.contains("terse"));
+            }
+            other => panic!("expected ListAppend, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn judge_returns_dup_branch() {
         let provider = ScriptedProvider::new(vec![
             r#"{"is_worth_proposing":false,"confidence":0.96,
-               "proposed_skill":null,"is_duplicate_of":"existing-skill",
-               "reasoning":"dup"}"#,
+               "category":null,"proposed_draft":null,
+               "is_duplicate_of":"existing-entry","reasoning":"dup"}"#,
         ]);
+        let persona = empty_persona();
         let req = JudgeRequest {
             turn_summary: "summary",
-            existing_skills: &[],
+            existing_persona: &persona,
             model: "m",
             max_tokens: 800,
         };
         let cancel = CancellationToken::new();
         let resp = judge(provider, req, &cancel).await.expect("ok");
         assert!(!resp.is_worth_proposing);
-        assert_eq!(resp.is_duplicate_of.as_deref(), Some("existing-skill"));
+        assert_eq!(resp.is_duplicate_of.as_deref(), Some("existing-entry"));
     }
 
     #[tokio::test]
     async fn judge_returns_not_worth_branch() {
         let provider = ScriptedProvider::new(vec![
             r#"{"is_worth_proposing":false,"confidence":0.3,
-               "proposed_skill":null,"is_duplicate_of":null,
-               "reasoning":"one-off chat"}"#,
+               "category":null,"proposed_draft":null,
+               "is_duplicate_of":null,"reasoning":"one-off chat"}"#,
         ]);
+        let persona = empty_persona();
         let req = JudgeRequest {
             turn_summary: "summary",
-            existing_skills: &[],
+            existing_persona: &persona,
             model: "m",
             max_tokens: 800,
         };
@@ -591,9 +966,10 @@ that's my call."#;
     #[tokio::test]
     async fn judge_propagates_parse_failure_for_garbage_response() {
         let provider = ScriptedProvider::new(vec!["this is not json at all"]);
+        let persona = empty_persona();
         let req = JudgeRequest {
             turn_summary: "summary",
-            existing_skills: &[],
+            existing_persona: &persona,
             model: "m",
             max_tokens: 800,
         };
@@ -605,17 +981,52 @@ that's my call."#;
     // ----- Serde round-trip -----
 
     #[test]
-    fn judge_response_round_trips_through_serde_json() {
+    fn judge_response_round_trips_for_learned_skill() {
         let original = JudgeResponse {
             is_worth_proposing: true,
             confidence: 0.87,
-            proposed_skill: Some(SkillDraft {
+            category: Some("LearnedSkill".into()),
+            proposed_draft: Some(ProposedDraft::LearnedSkill {
                 name: "research-topic".into(),
                 trigger: "user asks 'research X'".into(),
                 procedure: "1. fs.read\n2. web.fetch\n3. summarize".into(),
             }),
             is_duplicate_of: None,
             reasoning: Some("multi-step recurring pattern".into()),
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: JudgeResponse = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn judge_response_round_trips_for_list_append() {
+        let original = JudgeResponse {
+            is_worth_proposing: true,
+            confidence: 0.78,
+            category: Some("LearnedContext".into()),
+            proposed_draft: Some(ProposedDraft::ListAppend {
+                value: "the operator's primary repo is aivyx".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: JudgeResponse = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn judge_response_round_trips_for_scalar_set() {
+        let original = JudgeResponse {
+            is_worth_proposing: true,
+            confidence: 0.97,
+            category: Some("AssistantName".into()),
+            proposed_draft: Some(ProposedDraft::ScalarSet {
+                value: "Aivyx".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
         };
         let s = serde_json::to_string(&original).unwrap();
         let back: JudgeResponse = serde_json::from_str(&s).unwrap();
@@ -632,5 +1043,61 @@ that's my call."#;
         let s = serde_json::to_string(&original).unwrap();
         let back: ExistingSkillSnapshot = serde_json::from_str(&s).unwrap();
         assert_eq!(back, original);
+    }
+
+    #[test]
+    fn existing_persona_snapshot_round_trips() {
+        let original = ExistingPersonaSnapshot {
+            assistant_name: Some("Aivyx".into()),
+            behavioral_preferences: vec!["terse".into()],
+            learned_skills: vec![ExistingSkillSnapshot {
+                name: "x".into(),
+                trigger: "y".into(),
+                procedure_summary: "z".into(),
+            }],
+            ..ExistingPersonaSnapshot::default()
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: ExistingPersonaSnapshot =
+            serde_json::from_str(&s).unwrap();
+        assert_eq!(back, original);
+    }
+
+    // ----- ProposedDraft helpers -----
+
+    #[test]
+    fn proposed_draft_kind_label_is_stable() {
+        let learned = ProposedDraft::LearnedSkill {
+            name: "x".into(),
+            trigger: "y".into(),
+            procedure: "z".into(),
+        };
+        assert_eq!(learned.kind_label(), "LearnedSkill");
+
+        let list = ProposedDraft::ListAppend { value: "v".into() };
+        assert_eq!(list.kind_label(), "ListAppend");
+
+        let scalar = ProposedDraft::ScalarSet { value: "v".into() };
+        assert_eq!(scalar.kind_label(), "ScalarSet");
+    }
+
+    #[test]
+    fn proposed_draft_as_skill_draft_returns_some_only_for_learned_skill() {
+        let learned = ProposedDraft::LearnedSkill {
+            name: "x".into(),
+            trigger: "y".into(),
+            procedure: "z".into(),
+        };
+        let sd = learned.as_skill_draft().unwrap();
+        assert_eq!(sd.name, "x");
+        assert_eq!(sd.trigger, "y");
+        assert_eq!(sd.procedure, "z");
+
+        assert!(ProposedDraft::ListAppend { value: "v".into() }
+            .as_skill_draft()
+            .is_none());
+        assert!(ProposedDraft::ScalarSet { value: "v".into() }
+            .as_skill_draft()
+            .is_none());
     }
 }
