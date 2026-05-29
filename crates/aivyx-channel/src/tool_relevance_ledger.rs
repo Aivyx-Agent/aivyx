@@ -177,6 +177,66 @@ impl PersistentToolRelevanceLedger {
             .map_err(|e| ToolRelevanceLedgerError::Storage(e.to_string()))?;
         Ok(())
     }
+
+    /// Phase 119 Task 6 — operator-inspection iteration. Returns
+    /// every `(keyword_key, RelevanceEntry)` pair in the ledger,
+    /// optionally filtered to a single keyword key for the
+    /// `aivyx tool-relevance dump --keyword-key <key>` flow.
+    ///
+    /// The storage layer's `scan_prefix` with an empty prefix walks
+    /// every row in the domain (same path
+    /// `scan_prefix_empty_prefix_returns_every_key_in_domain` test
+    /// pins in aivyx-storage). Keys are stored as UTF-8 keyword-
+    /// key bytes; we decode each one for the rendered surface.
+    ///
+    /// Returns rows sorted ascending by `keyword_key` (matches the
+    /// underlying redb byte-ordering — operator-stable for the
+    /// dump table). Malformed rows (corrupt JSON, invalid UTF-8
+    /// keys) are skipped with a stderr warn; the ledger contract
+    /// is best-effort inspection, not strict-decode.
+    pub async fn list_all_entries(
+        &self,
+        keyword_key_filter: Option<&str>,
+    ) -> Result<Vec<(String, RelevanceEntry)>, ToolRelevanceLedgerError> {
+        let prefix: Vec<u8> = match keyword_key_filter {
+            Some(k) => k.as_bytes().to_vec(),
+            None => Vec::new(),
+        };
+        let rows = self
+            .handle
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| ToolRelevanceLedgerError::Storage(e.to_string()))?;
+        let mut out: Vec<(String, RelevanceEntry)> = Vec::with_capacity(rows.len());
+        for (key_bytes, value_bytes) in rows {
+            let Ok(key) = std::str::from_utf8(&key_bytes) else {
+                eprintln!(
+                    "aivyx tool-relevance: skipping non-UTF8 keyword key in ledger"
+                );
+                continue;
+            };
+            // With a non-empty filter, scan_prefix returns rows where
+            // the key STARTS WITH the filter — for our exact-match
+            // semantics we require the keys to be equal.
+            if let Some(filter) = keyword_key_filter {
+                if key != filter {
+                    continue;
+                }
+            }
+            let entry: RelevanceEntry = match serde_json::from_slice(&value_bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!(
+                        "aivyx tool-relevance: skipping malformed entry for \
+                         keyword key `{key}`: {e}"
+                    );
+                    continue;
+                }
+            };
+            out.push((key.to_string(), entry));
+        }
+        Ok(out)
+    }
 }
 
 // ---------------------------------------------------------------------------

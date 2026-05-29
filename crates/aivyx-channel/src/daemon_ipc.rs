@@ -222,6 +222,16 @@ pub enum QueryPayload {
         #[serde(default)]
         window_secs: Option<u64>,
     },
+    /// Phase 119 Task 6 — operator-inspection dump of the
+    /// Phase 116 `KeyDomain::ToolRelevanceLedger`. Returns every
+    /// per-keyword-key outcome row optionally filtered to a
+    /// single keyword key. `#[serde(default)]` so the filter is
+    /// absent in pre-Phase-119 frames (which won't send this
+    /// query at all, but the wire-compat pattern stays uniform).
+    DumpToolRelevance {
+        #[serde(default)]
+        keyword_key_filter: Option<String>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -452,6 +462,36 @@ pub enum QueryResponsePayload {
     ToolStats {
         tools: Vec<ToolStat>,
     },
+    /// Phase 119 Task 6 — response to
+    /// [`QueryPayload::DumpToolRelevance`]. Flat per-row table
+    /// rather than per-keyword-key nested entries: the operator's
+    /// CLI renders one table row per `(keyword_key, surface_kind,
+    /// identifier)` triple, so the wire shape pre-flattens.
+    /// An empty `Vec` is a valid "no entries" answer, not an
+    /// error. Rows are ordered ascending by
+    /// `(keyword_key, surface_kind, identifier)` so the operator's
+    /// table renders in a stable column order.
+    ToolRelevanceDump {
+        rows: Vec<ToolRelevanceDumpRow>,
+    },
+}
+
+/// Phase 119 Task 6 — wire-format per-row dump entry for
+/// [`QueryResponsePayload::ToolRelevanceDump`]. Flattens the
+/// `(keyword_key, OutcomeRow)` pair so the CLI renders one
+/// table row per entry without nested decode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRelevanceDumpRow {
+    /// The Phase 116 keyword key the outcome was recorded under.
+    pub keyword_key: String,
+    /// `"tool"` or `"skill"` (matches `RelevanceSurfaceKind::label()`).
+    pub surface_kind: String,
+    /// The tool or skill identifier (e.g. `fs.read`,
+    /// `summarize-pdf`).
+    pub identifier: String,
+    pub success_count: u32,
+    pub failure_count: u32,
+    pub last_seen_unix_ms: u64,
 }
 
 /// Phase 102 — wire-format per-tool observability row for

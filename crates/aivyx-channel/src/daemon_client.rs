@@ -734,6 +734,33 @@ pub async fn apply_profile_hint(
     }
 }
 
+/// Phase 119 Task 6 — operator-CLI tool-relevance ledger dump over
+/// IPC. Returns the per-row dump table (one row per
+/// `(keyword_key, surface_kind, identifier)` triple) optionally
+/// filtered to a single keyword key.
+pub async fn dump_tool_relevance(
+    socket_path: &Path,
+    keyword_key_filter: Option<&str>,
+) -> Result<Vec<crate::daemon_ipc::ToolRelevanceDumpRow>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "tr-dump",
+        QueryPayload::DumpToolRelevance {
+            keyword_key_filter: keyword_key_filter.map(str::to_string),
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ToolRelevanceDump { rows } => Ok(rows),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ToolRelevanceDump, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 119 — operator-CLI ImportRoleDraft over IPC. Mirrors
 /// `apply_profile_hint` for the second Phase 118 category.
 pub async fn import_role_draft(

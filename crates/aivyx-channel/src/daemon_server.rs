@@ -1750,6 +1750,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_feedback_config.as_ref(),
                                 &cadence_stats,
                                 &tool_descriptors,
+                                tool_relevance_ledger.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2352,6 +2353,9 @@ async fn handle_query(
     recall_feedback_config: Option<&aivyx_config::RecallFeedbackConfig>,
     cadence_stats: &crate::reflection_scheduler::SharedRecentReflectionStats,
     tool_descriptors: &[ToolDescriptor],
+    tool_relevance_ledger: Option<
+        &Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>,
+    >,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -2481,6 +2485,52 @@ async fn handle_query(
                     message: e.to_string(),
                 },
             }
+        }
+        QueryPayload::DumpToolRelevance { keyword_key_filter } => {
+            let Some(ledger) = tool_relevance_ledger else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_tool_relevance_ledger".into(),
+                    message:
+                        "daemon has no tool-relevance ledger configured \
+                         (enable `[tool_relevance]` in aivyx.toml)"
+                            .into(),
+                };
+            };
+            let entries = match ledger
+                .list_all_entries(keyword_key_filter.as_deref())
+                .await
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "tool_relevance_dump_failed".into(),
+                        message: e.to_string(),
+                    };
+                }
+            };
+            let mut rows: Vec<crate::daemon_ipc::ToolRelevanceDumpRow> = Vec::new();
+            for (keyword_key, entry) in entries {
+                for row in entry.outcomes {
+                    rows.push(crate::daemon_ipc::ToolRelevanceDumpRow {
+                        keyword_key: keyword_key.clone(),
+                        surface_kind: row.surface_kind.label().to_string(),
+                        identifier: row.identifier,
+                        success_count: row.success_count,
+                        failure_count: row.failure_count,
+                        last_seen_unix_ms: row.last_seen_unix_ms,
+                    });
+                }
+            }
+            // Stable column ordering for the operator-facing table.
+            rows.sort_by(|a, b| {
+                (a.keyword_key.as_str(), a.surface_kind.as_str(), a.identifier.as_str())
+                    .cmp(&(
+                        b.keyword_key.as_str(),
+                        b.surface_kind.as_str(),
+                        b.identifier.as_str(),
+                    ))
+            });
+            QueryResponsePayload::ToolRelevanceDump { rows }
         }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
             profile: profile_summary_from_profile(profile),

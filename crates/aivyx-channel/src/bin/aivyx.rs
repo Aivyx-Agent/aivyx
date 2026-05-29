@@ -120,6 +120,8 @@ mod persona;
 mod profile;
 #[path = "aivyx_modules/role.rs"]
 mod role;
+#[path = "aivyx_modules/tool_relevance.rs"]
+mod tool_relevance;
 #[path = "aivyx_modules/tools.rs"]
 mod tools;
 #[path = "aivyx_modules/tool_init.rs"]
@@ -499,6 +501,21 @@ fn run() -> Result<(), String> {
                     &proposal_id,
                     yes,
                     force,
+                ))
+            }
+        };
+    }
+
+    // ---- Phase 119 Task 6: tool-relevance dump (Phase 116 deferral) --
+    if let CliMode::ToolRelevance(sub) = mode {
+        return match sub {
+            ToolRelevanceSubcommand::Dump { keyword_key_filter } => {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to start runtime: {e}"))?;
+                runtime.block_on(tool_relevance::run_tool_relevance_dump(
+                    keyword_key_filter.as_deref(),
                 ))
             }
         };
@@ -1284,6 +1301,21 @@ enum CliMode {
     /// via the Task 3 atomic primitive and records the
     /// `AuditEvent::RoleDraftImported` event via daemon IPC.
     Role(RoleSubcommand),
+    /// `aivyx tool-relevance <subcommand>`: Phase 119 Task 6 —
+    /// closes the Phase 116 deferred inspection surface. Currently
+    /// only `dump [--keyword-key <key>]` — renders the encrypted
+    /// per-keyword-key relevance ledger as a human-readable table.
+    /// IPC-backed.
+    ToolRelevance(ToolRelevanceSubcommand),
+}
+
+/// Phase 119 Task 6 — `aivyx tool-relevance <subcommand>` variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum ToolRelevanceSubcommand {
+    /// `aivyx tool-relevance dump [--keyword-key <key>]` — render
+    /// the Phase 116 relevance ledger as a flat table. With
+    /// `--keyword-key`, restricts to the single key.
+    Dump { keyword_key_filter: Option<String> },
 }
 
 /// Phase 119 Task 5 — `aivyx role <subcommand>` variants.
@@ -2621,6 +2653,60 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Role(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 119 Task 6 — `aivyx tool-relevance <subcommand>`.
+    if !args.is_empty() && args[0] == "tool-relevance" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx tool-relevance` requires a subcommand. \
+             Supported: dump [--keyword-key <key>]"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "dump" => {
+                let mut keyword_key_filter: Option<String> = None;
+                let mut i = 2;
+                while i < args.len() {
+                    let arg = &args[i];
+                    if arg == "--keyword-key" {
+                        let value = args.get(i + 1).ok_or_else(|| {
+                            "`--keyword-key` requires a value. \
+                             Usage: `aivyx tool-relevance dump --keyword-key <key>`"
+                                .to_string()
+                        })?;
+                        keyword_key_filter = Some(value.clone());
+                        i += 2;
+                    } else if arg.starts_with('-') {
+                        return Err(format!(
+                            "unrecognized flag for `aivyx tool-relevance dump`: \
+                             `{arg}`. Supported flag: --keyword-key <key>"
+                        ));
+                    } else {
+                        return Err(format!(
+                            "`aivyx tool-relevance dump` does not accept \
+                             positional arguments. Got: `{arg}`"
+                        ));
+                    }
+                }
+                ToolRelevanceSubcommand::Dump { keyword_key_filter }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized tool-relevance subcommand: `{other}`. \
+                     Supported: tool-relevance dump"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::ToolRelevance(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -7386,6 +7472,98 @@ mod tests {
             .expect_err("`role delete` must error");
         assert!(
             err.contains("unrecognized role subcommand"),
+            "error: {err}"
+        );
+    }
+
+    // ----- Phase 119 Task 6 — `tool-relevance dump` parser -----
+
+    #[test]
+    fn tool_relevance_dump_parses_without_filter() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "tool-relevance",
+            "dump",
+        ]))
+        .expect("`tool-relevance dump` must parse");
+        match parsed.mode {
+            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump {
+                keyword_key_filter,
+            }) => {
+                assert!(keyword_key_filter.is_none());
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_relevance_dump_parses_keyword_key_filter() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "tool-relevance",
+            "dump",
+            "--keyword-key",
+            "research+deploy",
+        ]))
+        .expect("`--keyword-key research+deploy` must parse");
+        match parsed.mode {
+            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump {
+                keyword_key_filter,
+            }) => {
+                assert_eq!(keyword_key_filter.as_deref(), Some("research+deploy"));
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_relevance_dump_requires_value_after_keyword_key_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "tool-relevance",
+            "dump",
+            "--keyword-key",
+        ]))
+        .expect_err("--keyword-key without value must error");
+        assert!(err.contains("requires a value"), "error: {err}");
+    }
+
+    #[test]
+    fn tool_relevance_dump_rejects_unknown_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "tool-relevance",
+            "dump",
+            "--limit",
+            "10",
+        ]))
+        .expect_err("--limit is not supported");
+        assert!(err.contains("unrecognized flag"), "error: {err}");
+    }
+
+    #[test]
+    fn tool_relevance_dump_rejects_positional_args() {
+        let err = parse_cli_args_from(&argv(&[
+            "tool-relevance",
+            "dump",
+            "some-key",
+        ]))
+        .expect_err("positional args not supported (use --keyword-key)");
+        assert!(
+            err.contains("does not accept positional arguments"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn tool_relevance_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["tool-relevance"]))
+            .expect_err("`tool-relevance` alone must error");
+        assert!(err.contains("dump"), "error must list dump: {err}");
+    }
+
+    #[test]
+    fn tool_relevance_unknown_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["tool-relevance", "clear"]))
+            .expect_err("`tool-relevance clear` must error");
+        assert!(
+            err.contains("unrecognized tool-relevance subcommand"),
             "error: {err}"
         );
     }
