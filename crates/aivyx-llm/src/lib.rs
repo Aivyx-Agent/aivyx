@@ -349,6 +349,46 @@ pub struct ToolCallEnd {
     pub call_id: String,
     pub tool_name: String,
     pub input: Value,
+    /// Phase 120 — provider-side validation of `tool_name` against
+    /// the canonical tool set the request advertised. The Phase 120
+    /// planner branches on this to decide whether to dispatch
+    /// directly (`Known`) or to run fuzzy-match recovery
+    /// (`Unknown { original }`).
+    ///
+    /// The OpenAI / Ollama / Anthropic providers populate this at
+    /// stream-build time from a `HashSet<&str>` over
+    /// `request.tools[].name`. The substrate stays pure-function;
+    /// no auto-correct happens here (Q2(c) at Phase 120 sign-off —
+    /// the planner owns recovery semantics).
+    ///
+    /// Default `NameResolution::Known` preserves the pre-Phase-120
+    /// behavior for any direct caller that constructs
+    /// `ToolCallEnd` literally (e.g. test fixtures); production
+    /// providers always populate truthfully.
+    pub name_resolution: NameResolution,
+}
+
+/// Phase 120 — provider-side classification of a tool name against
+/// the canonical tool set the request advertised. See
+/// [`ToolCallEnd::name_resolution`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum NameResolution {
+    /// The provider matched `tool_name` against an entry in the
+    /// request's `tools[].name` set. The planner dispatches
+    /// directly; no recovery needed.
+    #[default]
+    Known,
+    /// The provider could not match `tool_name` against the
+    /// advertised set. The planner's Phase 120 recovery path takes
+    /// over: fuzzy-match against the registered tool names; above
+    /// threshold → auto-correct + audit; below threshold →
+    /// structured "did you mean?" error to the model.
+    ///
+    /// `original` is the verbatim name the model emitted — useful
+    /// for the audit event and for the "did you mean?" message
+    /// (operator forensics: did the model say `fs_read`, `FsRead`,
+    /// or `fs read`?).
+    Unknown { original: String },
 }
 
 /// Token usage accounting for one step. All fields are optional in
@@ -682,6 +722,7 @@ mod tests {
                     call_id: "toolu_01".to_string(),
                     tool_name: "memory.read".to_string(),
                     input: input.clone(),
+                    name_resolution: crate::NameResolution::Known,
                 }],
                 text_so_far: String::new(),
                 usage: LlmUsage::default(),

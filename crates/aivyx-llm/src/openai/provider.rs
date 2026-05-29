@@ -181,12 +181,23 @@ impl LlmProvider for OpenAiProvider {
             .post_sse(&endpoint, &headers, body_bytes, cancellation)
             .await?;
 
+        // Phase 120 — snapshot the canonical tool-name set so the
+        // terminal-build step can flag any pending tool-call whose
+        // name doesn't match. Pure-function check; no auto-correct
+        // here (the planner owns recovery semantics per Q2(c)).
+        let known_tool_names: std::collections::HashSet<String> = request
+            .tools
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
         Ok(Box::new(OpenAiStream {
             stream: byte_stream,
             buf: Vec::with_capacity(4096),
             exhausted: false,
             state: StreamState::default(),
             terminal: None,
+            known_tool_names,
         }))
     }
 }
@@ -341,6 +352,11 @@ struct OpenAiStream {
     exhausted: bool,
     state: StreamState,
     terminal: Option<LlmStepEnd>,
+    /// Phase 120 — canonical tool-name set the planner advertised
+    /// for this request. Stream-builder validates each pending
+    /// `tool_name` against this at terminal-build time. Empty when
+    /// the request advertised no tools (turn body was a plain chat).
+    known_tool_names: std::collections::HashSet<String>,
 }
 
 #[async_trait]
@@ -455,10 +471,24 @@ impl OpenAiStream {
                         LlmError::Parse(format!("tool arguments JSON: {e}"))
                     })?
                 };
+                // Phase 120 — validate the model's emitted name
+                // against the canonical set the request advertised.
+                // No auto-correct here: the planner owns recovery.
+                let name_resolution = if self
+                    .known_tool_names
+                    .contains(&pending.tool_name)
+                {
+                    crate::NameResolution::Known
+                } else {
+                    crate::NameResolution::Unknown {
+                        original: pending.tool_name.clone(),
+                    }
+                };
                 calls.push(crate::ToolCallEnd {
                     call_id: pending.call_id,
                     tool_name: pending.tool_name,
                     input,
+                    name_resolution,
                 });
             }
             Ok(LlmStepEnd::ToolCalls {
@@ -670,6 +700,151 @@ data: [DONE]\n\n";
                 assert_eq!(calls[0].input["location"], "SF");
                 assert_eq!(usage.input_tokens, 5);
                 assert_eq!(usage.output_tokens, 8);
+                // Phase 120 — the request advertises NO tools (simple_request
+                // returns an empty tools Vec), so the model's emitted name is
+                // flagged Unknown. The planner's Phase 120 recovery path
+                // takes over from here.
+                match &calls[0].name_resolution {
+                    crate::NameResolution::Unknown { original } => {
+                        assert_eq!(original, "get_weather");
+                    }
+                    other => panic!(
+                        "expected Unknown (no tools advertised), got {other:?}"
+                    ),
+                }
+            }
+            _ => panic!("expected ToolCalls"),
+        }
+    }
+
+    // ----- Phase 120 — Provider-side validation of tool names -----
+
+    fn request_with_tools<'a>(
+        msgs: &'a [LlmMessage],
+        tools: &'a [LlmToolDescriptor],
+    ) -> LlmRequest<'a> {
+        // Helper for the Phase 120 validation tests so each test
+        // doesn't replicate the LlmRequest scaffolding.
+        LlmRequest {
+            model: "gpt-4",
+            system: None,
+            messages: msgs,
+            tools,
+            max_tokens: 1000,
+            temperature: None,
+        }
+    }
+
+    fn tool_descriptor(name: &str) -> LlmToolDescriptor {
+        LlmToolDescriptor {
+            name: name.into(),
+            description: format!("{name} description"),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn name_resolution_known_when_request_advertises_the_tool() {
+        // Model emits `fs.read` AND the request advertised `fs.read`
+        // in tools[] → NameResolution::Known. Planner dispatches
+        // directly, no recovery needed.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"c1\",\"function\":{\"name\":\"fs.read\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n";
+        let provider = test_provider(sse);
+        let msgs = vec![LlmMessage::user_text("read a file")];
+        let tools = vec![tool_descriptor("fs.read")];
+        let req = request_with_tools(&msgs, &tools);
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, .. } => {
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert!(matches!(
+                    calls[0].name_resolution,
+                    crate::NameResolution::Known
+                ));
+            }
+            _ => panic!("expected ToolCalls"),
+        }
+    }
+
+    #[tokio::test]
+    async fn name_resolution_unknown_when_model_hallucinates_separator() {
+        // Phase 120's load-bearing case: local model (qwen3.6:27b
+        // pattern) emits `fs_read` when the registered tool is
+        // `fs.read`. Provider doesn't know about the underscore-vs-
+        // dot equivalence — that's the planner's fuzzy-match job
+        // at Task 4. Provider just flags Unknown with the verbatim
+        // original name.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"c1\",\"function\":{\"name\":\"fs_read\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n";
+        let provider = test_provider(sse);
+        let msgs = vec![LlmMessage::user_text("read a file")];
+        let tools = vec![tool_descriptor("fs.read")];
+        let req = request_with_tools(&msgs, &tools);
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, .. } => {
+                assert_eq!(calls[0].tool_name, "fs_read");
+                match &calls[0].name_resolution {
+                    crate::NameResolution::Unknown { original } => {
+                        assert_eq!(
+                            original, "fs_read",
+                            "original must be the verbatim emitted name"
+                        );
+                    }
+                    other => panic!("expected Unknown, got {other:?}"),
+                }
+            }
+            _ => panic!("expected ToolCalls"),
+        }
+    }
+
+    #[tokio::test]
+    async fn name_resolution_classifies_per_call_in_a_batch() {
+        // A parallel-tool batch: one Known + one Unknown. Phase
+        // 120 validation runs per-pending-call; the planner sees
+        // both classifications and recovers only the Unknown one.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"fs.read\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"c2\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n";
+        let provider = test_provider(sse);
+        let msgs = vec![LlmMessage::user_text("read then fetch")];
+        let tools = vec![
+            tool_descriptor("fs.read"),
+            tool_descriptor("web.fetch"),
+        ];
+        let req = request_with_tools(&msgs, &tools);
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, .. } => {
+                assert_eq!(calls.len(), 2);
+                // First call: known.
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert!(matches!(
+                    calls[0].name_resolution,
+                    crate::NameResolution::Known
+                ));
+                // Second call: unknown (web_fetch vs registered web.fetch).
+                assert_eq!(calls[1].tool_name, "web_fetch");
+                assert!(matches!(
+                    calls[1].name_resolution,
+                    crate::NameResolution::Unknown { .. }
+                ));
             }
             _ => panic!("expected ToolCalls"),
         }

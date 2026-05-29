@@ -260,6 +260,7 @@ fn memory_write_script(topic: &str, body: &str) -> Vec<ScriptedStep> {
                     call_id: "toolu_write_01".to_string(),
                     tool_name: "memory.write".to_string(),
                     input: json!({ "topic": topic, "body": body }),
+                    name_resolution: aivyx_llm::NameResolution::Known,
                 }],
                 text_so_far: String::new(),
                 usage: zero_usage(),

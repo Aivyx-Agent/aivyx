@@ -130,10 +130,18 @@ impl LlmProvider for AnthropicProvider {
             .post_sse(&endpoint, &headers, body_bytes, cancellation)
             .await?;
 
+        // Phase 120 — same snapshot pattern as the OpenAI provider.
+        let known_tool_names: std::collections::HashSet<String> = request
+            .tools
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
         Ok(Box::new(AnthropicStream {
             sse: SseReader::new(byte_stream),
             state: StreamState::default(),
             terminal: None,
+            known_tool_names,
         }))
     }
 }
@@ -308,6 +316,13 @@ struct AnthropicStream {
     sse: SseReader,
     state: StreamState,
     terminal: Option<LlmStepEnd>,
+    /// Phase 120 — canonical tool-name set the planner advertised.
+    /// Anthropic's hosted models rarely hallucinate tool names
+    /// (well-trained tool-use protocol), but the validation runs
+    /// uniformly so the substrate doesn't have provider-specific
+    /// recovery semantics. Empty set when the request advertised
+    /// no tools.
+    known_tool_names: std::collections::HashSet<String>,
 }
 
 #[async_trait]
@@ -445,10 +460,24 @@ impl AnthropicStream {
             }
             let calls = std::mem::take(&mut self.state.completed_tools)
                 .into_iter()
-                .map(|t| crate::ToolCallEnd {
-                    call_id: t.call_id,
-                    tool_name: t.tool_name,
-                    input: t.input,
+                .map(|t| {
+                    // Phase 120 — validate against the snapshot.
+                    let name_resolution = if self
+                        .known_tool_names
+                        .contains(&t.tool_name)
+                    {
+                        crate::NameResolution::Known
+                    } else {
+                        crate::NameResolution::Unknown {
+                            original: t.tool_name.clone(),
+                        }
+                    };
+                    crate::ToolCallEnd {
+                        call_id: t.call_id,
+                        tool_name: t.tool_name,
+                        input: t.input,
+                        name_resolution,
+                    }
                 })
                 .collect();
             Ok(LlmStepEnd::ToolCalls {
