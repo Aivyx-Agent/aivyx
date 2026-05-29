@@ -265,7 +265,7 @@ Roughly seven sub-tasks plus exit + backfill:
   (`d481f79`).
 - [x] Operator config knob — Task 5 (`192de4f`).
 - [x] "Did you mean?" suggestions — Task 6 (`84f2e55`).
-- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (`25cbc56`).
 - [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (Q1a + Q2c + Q3a recorded above).
 - [x] DESIGN.md streak — **HELD as predicted**.
