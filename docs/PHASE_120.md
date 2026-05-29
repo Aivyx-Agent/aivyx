@@ -257,32 +257,102 @@ Roughly seven sub-tasks plus exit + backfill:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_120.md` + ROADMAP Phase 120 entry +
-  docs/README status row — Task 1.
-- [ ] Title-similarity primitive lift — Task 2.
-- [ ] Provider-side validation — Task 3.
-- [ ] Planner-side fuzzy recovery + audit — Task 4.
-- [ ] Operator config knob — Task 5.
-- [ ] "Did you mean?" suggestions — Task 6.
-- [ ] Scripted e2e + INSTALL.md sweep — Task 7.
-- [ ] Q1/Q2/Q3 resolved with operator sign-off pre-Task
+- [x] `docs/PHASE_120.md` + ROADMAP Phase 120 entry +
+  docs/README status row — Task 1 (`9e2046f`).
+- [x] Title-similarity primitive lift — Task 2 (`79601c1`).
+- [x] Provider-side validation — Task 3 (`4aca08a`).
+- [x] Planner-side fuzzy recovery + audit — Task 4
+  (`d481f79`).
+- [x] Operator config knob — Task 5 (`192de4f`).
+- [x] "Did you mean?" suggestions — Task 6 (`84f2e55`).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (Q1a + Q2c + Q3a recorded above).
-- [ ] DESIGN.md streak — predicted HOLD (streak → 11).
-- [ ] PRODUCT.md streak — predicted HOLD (streak → 11).
-- [ ] `aivyx-core/src/lib.rs` streak — predicted BREAK
-  (streak resets 3 → 1), honest 30/70 hold. Will
-  attempt the additive `auto_corrected_from` field
-  route at Task 4 to preserve the streak; report at
-  exit.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta within `+25` to `+45`.
-- [ ] Zero clippy warnings.
-- [ ] **Local-LLM hallucination failure mode closed.**
+- [x] DESIGN.md streak — **HELD as predicted**.
+  `c2be6d51…` unchanged. Streak extends 10 → 11.
+- [x] PRODUCT.md streak — **HELD as predicted**.
+  `6e840cef…` unchanged. Streak extends 10 → 11.
+- [x] `aivyx-core/src/lib.rs` streak — **BROKE as
+  predicted** (70/30 break case fired). `d1d4373b…` →
+  `b420405b…`. Streak resets 3 → 1. The additive
+  `auto_corrected_from: Option<String>` field on
+  `AuditTag::ToolCall` is the cleanest mechanism for
+  threading the auto-correction through to the audit
+  emission; the alternative (sidecar audit path
+  bypassing AuditHook) would have added more substrate
+  for less semantic clarity. Honest trade picked.
+- [x] Zero new workspace dependencies.
+- [x] Test count delta `+34` (2309 → 2346) — within
+  the predicted `+25 to +45` band.
+- [x] Zero clippy warnings.
+- [x] **Local-LLM hallucination failure mode closed.**
   Tool-name hallucination from qwen3.6/gemma4 (and
   similar) is caught at the LLM boundary and
   recovered into a successful tool dispatch (when the
   fuzzy match is confident) or a structured retry-able
-  error to the model (when it isn't).
+  error to the model with `did_you_mean` suggestions
+  (when it isn't). G6 (privacy non-negotiable)
+  distinguishing claim's local-LLM story moves from
+  "supported but degraded" toward first-class.
+
+## Prediction vs reality
+
+**Two of three streak predictions correct.** The 70/30
+break case at lib.rs fired as anticipated by the open
+doc; DESIGN.md and PRODUCT.md held.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; tool-call recovery
+  is operator-value polish under D6's error contract.
+  Streak: 10 → 11.
+
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). P8 (outcome-driven audited reflection)
+  covers the new audit-event field; P10 untouched (no
+  new substrate tool added). Streak: 10 → 11.
+
+- **`aivyx-core/src/lib.rs`** — BROKE as predicted
+  (70/30 case fired). `d1d4373b…` → `b420405b…`. The
+  auto-correction needed to flow through the existing
+  `AuditTag::ToolCall` → `AuditEvent::ToolCall` bridge;
+  adding the additive `auto_corrected_from:
+  Option<String>` field to `AuditTag::ToolCall` is the
+  minimum-touch mechanism. Phase 117 `SkillInvocation`
+  precedent's same path. Streak: 3 → 1. Phase 121 has
+  a fresh shot at re-establishing the streak.
+
+**Test count `+37` is within the predicted `+25 to
++45` range.** Each Phase 120 task shipped its own
+focused coverage:
+- Task 2: 9 tests for the lifted title_similarity
+  primitive (new hallucination cases NEWLY targeted).
+- Task 3: 3 tests for provider-side validation
+  (Known/Unknown classification + per-call in batch).
+- Task 4: 6 tests for the planner-side recovery path
+  (fuzzy-dispatch, below-threshold fall-through,
+  no-auto-correction-for-known, pure-helper unit
+  tests).
+- Task 5: 9 tests for the operator config knob (TOML
+  round-trip, range validation, builder method).
+- Task 6: 6 tests for the "did you mean?" suggestions
+  (top-N ranking, empty-registry fallback, end-to-end
+  did_you_mean in history).
+- Task 7: 4 wire-compat tests for
+  `auto_corrected_from` (HMAC-chain round-trip, pre-
+  Phase-120 decode-with-None, skip-serialize-when-None
+  preserves byte-identical canonical JSON, full HMAC
+  chain with auto-correction).
+
+**Q-block went through as operator-picked.** Q1a + Q2c
+(non-Recommended belt-and-suspenders) + Q3a all
+shipped.
+
+**Honest scope correction documented in Task 5 commit:**
+the open doc described `0.0` as "never auto-correct"
+but the actual semantics are "every match clears" — the
+conservative disable is `1.0` (exact-match only). The
+test name + body documents the correction and pins the
+inclusive-bound semantics.
 
 ## Direction after Phase 120
 

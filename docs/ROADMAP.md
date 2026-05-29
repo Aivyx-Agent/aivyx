@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 120 — Tool-Call Validation + Recovery (Local-LLM Rehabilitation #1)
 
-**Active — see [PHASE_120.md](PHASE_120.md).** First-named
+**Frozen — see [PHASE_120.md](PHASE_120.md).** First-named
 phase against the audit's local-LLM rehabilitation axis.
 Closes the qwen3.6/gemma4 tool-name hallucination failure
 mode (per phase-99-local-builds memory): when a local
@@ -3459,34 +3459,35 @@ mean?" message to the model so it retries.
 
 **Q-block (two Recommended, one non-Recommended):**
 - Q1a — Tool-call validation + recovery only
-  (Recommended). Focused phase; per-model prompt variants
-  and native Ollama path deferred to Phase 121/122
-  candidates.
+  (Recommended).
 - Q2c — Both layers (non-Recommended; picked over
-  provider-only Recommended). Provider flags unknown
-  names; planner runs the fuzzy recovery. Belt-and-
-  suspenders posture.
+  provider-only Recommended). Belt-and-suspenders
+  posture.
 - Q3a — Fuzzy-match auto-correct above threshold
-  (Recommended). Phase 112 `title_similarity` reuse;
-  default threshold `0.80`.
+  (Recommended).
 
-**Streak predictions:** DESIGN.md HOLD → 11; PRODUCT.md
-HOLD → 11; `aivyx-core/src/lib.rs` predicted BREAK 3 → 1
-(honest 30/70 hold; auto-correction lives inside the turn
-loop using `AuditHook` → `AuditTag` bridge, same path
-Phase 117 `SkillInvocation` broke from). Will attempt the
-additive-field route at Task 4 to preserve the streak.
+**Streak outcomes:** 2-of-3 predictions correct as the
+open doc framed.
+- DESIGN.md: HELD as predicted. Streak → 11.
+- PRODUCT.md: HELD as predicted. Streak → 11.
+- `aivyx-core/src/lib.rs`: **BROKE as predicted** (70/30
+  break case fired). Additive `auto_corrected_from:
+  Option<String>` field on `AuditTag::ToolCall` is the
+  minimum-touch mechanism for threading auto-correction
+  through to the audit emission. Streak resets 3 → 1.
 
-Test count: predicted `+25 to +45`. Zero new workspace
-deps anticipated.
+Test count: 2309 → 2346 (+37). Within the predicted
+`+25 to +45` band. Each task carries focused coverage
+for one Phase 120 surface.
 
-**Audit context — ninth consecutive substrate/polish
-phase picked over the Channel Activation Milestone.**
-Honest tracking. The substrate ledger has been empty
-since Phase 119; Phase 120 opens against the audit's #3
-direction (G6 distinguishing claim). The milestone
-becomes harder to defer each phase; the audit ranking
-stays unchanged.
+Zero new workspace deps. Zero clippy warnings.
+
+**Honest scope correction (Task 5):** the open doc
+described `0.0` as "never auto-correct" but actual
+semantics are "every match clears". Conservative disable
+is `1.0` (exact-match only). Pinned in
+`phase_120_zero_threshold_disables_fuzzy_recovery` test
+body.
 
 After Phase 120, Phase 121 candidates (per audit + Phase
 120 exit ranking): Channel Activation Milestone, per-

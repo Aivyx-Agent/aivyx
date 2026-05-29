@@ -816,6 +816,150 @@ false` in `aivyx.toml`, the dump errors with
 table (the substrate is bypassed entirely, not silently
 empty).
 
+## Local-LLM tool-call recovery (Phase 120)
+
+Local models like qwen3.6:27b and gemma4:31b occasionally
+hallucinate tool names — emitting `fs_read` when the
+registered tool is `fs.read`, or `web_fetch` instead of
+`web.fetch`. Cloud models (Anthropic) rarely do this;
+local models with smaller training corpora are the
+dominant source.
+
+Before Phase 120, hallucinated names caused turns to fail
+ungracefully: the planner couldn't dispatch a non-existent
+tool, and the agent terminated with
+`TurnOutcome::Failed`. Phase 120 closes that failure mode
+with belt-and-suspenders validation at the LLM-provider
+boundary AND fuzzy-match recovery at the planner.
+
+**The fix is substrate-shaped, not model-shaped.** We
+can't make local models stop hallucinating; we catch the
+hallucination at the boundary and give the model a
+structured response that lets it recover.
+
+### What happens when the model hallucinates
+
+1. The OpenAI/Ollama or Anthropic provider classifies
+   every emitted tool name against the canonical tool set
+   the request advertised. Unknown names get flagged as
+   `NameResolution::Unknown { original }` before the
+   stream terminates.
+
+2. The planner's recovery path computes Phase 112's
+   `title_similarity` (tokenized Jaccard) against every
+   registered tool. The algorithm normalizes separators
+   and case, so `fs_read` and `fs.read` both tokenize to
+   `{fs, read}` — Jaccard 1.0.
+
+3. **Above the operator-configured threshold (default
+   0.80)**, the planner dispatches the matched tool and
+   records the verbatim original name in the audit chain
+   via `AuditEvent::ToolCall.auto_corrected_from`.
+   Operator forensics see the auto-correction explicitly:
+
+   ```sh
+   aivyx audit export --event-type ToolCall | \
+     jq 'select(.auto_corrected_from)'
+   # {
+   #   "kind": "ToolCall",
+   #   "tool_id": "fs.read",
+   #   "auto_corrected_from": "fs_read",
+   #   ...
+   # }
+   ```
+
+   Rates of `Some(_)` entries across a window of audit
+   events are a useful diagnostic when picking between
+   local models — qwen3.6:27b with N auto-corrections per
+   100 ToolCalls vs gemma4:31b with M tells you which
+   model has the cleaner tool-call protocol.
+
+4. **Below threshold**, the planner emits a synthetic
+   `unknown_tool` tool-result back to the model with a
+   structured "did you mean?" body:
+
+   ```json
+   {
+     "error": "unknown_tool",
+     "message": "tool 'do_the_thing' is not registered. Did you mean 'fs.read', 'fs.write', 'memory.read'?",
+     "did_you_mean": ["fs.read", "fs.write", "memory.read"]
+   }
+   ```
+
+   The top-3 suggestions are ranked by `title_similarity`
+   descending. The model can parse the `did_you_mean`
+   array on its next turn and retry with the right name.
+
+### Operator config knob
+
+The fuzzy threshold is operator-configurable via
+`aivyx.toml`:
+
+```toml
+[providers]
+tool_name_auto_correct_threshold = 0.80   # default
+```
+
+Float in `[0.0, 1.0]` — out-of-range values reject at
+TOML-parse time with `ConfigError::Invalid`. The threshold
+is operator-conservative-leaning at the default:
+
+- `0.80` (default) — matches Phase 112's fuzzy default.
+  Catches the `fs_read` / `web_fetch` / `git_status`
+  separator-hallucination patterns the project memory
+  documents qwen3.6 emitting.
+- `1.0` — exact match only. Disables fuzzy recovery
+  entirely; any Unknown name falls through to the
+  synthetic error path. Operator-paranoid posture: never
+  trust the planner to pick the model's intent.
+- `0.65–0.75` — more aggressive recovery. Useful for
+  smaller local models with messier tool-call
+  protocols. Watch the audit-export
+  `auto_corrected_from` count to confirm the lowered
+  threshold isn't mis-dispatching unrelated tools.
+- `0.0` — every match clears (auto-corrects to the
+  first registered tool). Not useful in practice; pin
+  the inclusive-bound semantics rather than enabling
+  garbage-out behavior.
+
+### What this does NOT change
+
+- **Cloud-model behavior is unchanged in practice.**
+  Anthropic and OpenAI cloud models rarely emit
+  hallucinated tool names; the provider-side validation
+  fires but classifies every call as `Known`, the
+  planner dispatches directly, and `auto_corrected_from`
+  stays `None`. Operators paying for cloud inference see
+  no behavioral difference.
+- **The audit chain stays wire-compatible.**
+  `auto_corrected_from: None` serializes WITHOUT the
+  field (`#[serde(default, skip_serializing_if =
+  "Option::is_none")]`) — pre-Phase-120 chain entries
+  decode unchanged, and a Phase 120 read of a Phase 119
+  ToolCall produces byte-identical canonical JSON. HMAC-
+  chain integrity preserved.
+- **No new tool added to the P10 substrate.** Phase 120
+  ships substrate that fixes the existing tool-dispatch
+  path; the 13-tool substrate cap stays at thirteen.
+
+### Escape hatches
+
+- Set `tool_name_auto_correct_threshold = 1.0` in
+  `aivyx.toml` to disable fuzzy recovery. The provider
+  still classifies, but the planner never auto-corrects;
+  every Unknown name produces the `unknown_tool` error
+  path immediately.
+- The provider-side validation always runs; there is no
+  knob to disable it. Cheap pure-function check; no LLM
+  cost.
+- Audit forensics: `aivyx audit export --event-type
+  ToolCall | jq 'select(.auto_corrected_from)' | jq -s
+  length` counts auto-corrections in the chain. Use this
+  to evaluate whether your local-model choice is
+  producing too much noise (and consider raising the
+  threshold or switching to a model with a cleaner
+  protocol).
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

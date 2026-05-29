@@ -1970,6 +1970,116 @@ mod tests {
         assert_eq!(AuditLog::len(&log), 2);
     }
 
+    // ----- Phase 120 — AuditEvent::ToolCall.auto_corrected_from wire-compat -----
+
+    #[test]
+    fn pre_phase_120_tool_call_decodes_with_auto_corrected_from_none() {
+        // Phase 119-and-earlier chain entries have no
+        // auto_corrected_from field. The #[serde(default,
+        // skip_serializing_if = ...)] attribute means an event
+        // with None already serializes WITHOUT the field — that
+        // wire form IS the pre-Phase-120 shape. Round-trip
+        // through serialize-then-deserialize confirms the
+        // #[serde(default)] supplies None for the absent field.
+        let pre_120_shape = sample_tool_call();
+        let json = serde_json::to_value(&pre_120_shape).unwrap();
+        // The serialized form must NOT carry auto_corrected_from.
+        let obj = json.as_object().expect("object");
+        assert!(
+            !obj.contains_key("auto_corrected_from"),
+            "sample_tool_call() with None must serialize without the field"
+        );
+        // Decoding that same wire form into the Phase 120 struct
+        // must succeed with None.
+        let decoded: AuditEvent = serde_json::from_value(json).expect("decode");
+        match decoded {
+            AuditEvent::ToolCall {
+                auto_corrected_from,
+                ..
+            } => {
+                assert!(auto_corrected_from.is_none());
+            }
+            _ => panic!("expected ToolCall"),
+        }
+    }
+
+    #[test]
+    fn phase_120_tool_call_with_auto_correction_round_trips() {
+        // Phase 120 hallucination case: model emitted `fs_read`,
+        // planner auto-corrected to fs.read. The audit chain records
+        // the verbatim original. Wire-shape stability: round-trip
+        // through canonical JSON and back without loss.
+        let event = AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(15),
+            auto_corrected_from: Some("fs_read".into()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        // The Phase 120 field appears in the wire form.
+        assert_eq!(json["auto_corrected_from"], "fs_read");
+        let parsed: AuditEvent = serde_json::from_value(json).expect("decode");
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn phase_120_tool_call_none_skips_serialize_for_chain_compat() {
+        // `#[serde(default, skip_serializing_if = "Option::is_none")]`
+        // keeps the wire form byte-identical to pre-Phase-120
+        // entries when no auto-correction happened. Critical for
+        // HMAC-chain backward compatibility: a mid-chain Phase 120
+        // read of a Phase 119-written entry must canonicalize
+        // identically.
+        let event = AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(15),
+            auto_corrected_from: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let obj = json.as_object().expect("object");
+        // Critical wire-compat assertion: the field is NOT in the
+        // canonical-JSON form when None.
+        assert!(
+            !obj.contains_key("auto_corrected_from"),
+            "Phase 120 None case must omit the field for HMAC-chain compat"
+        );
+    }
+
+    #[test]
+    fn phase_120_tool_call_with_auto_correction_can_be_hmac_chained() {
+        // Proof-of-life: a ToolCall variant with the Phase 120 field
+        // populated lands in the HmacChainLog and chain verification
+        // still passes. The chain hashes over canonical JSON, so the
+        // new field is part of the MAC computation when populated.
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(15),
+            auto_corrected_from: Some("fs_read".into()),
+        })
+        .unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
+    }
+
     // ---- NullAuditLog ----
 
     #[test]
