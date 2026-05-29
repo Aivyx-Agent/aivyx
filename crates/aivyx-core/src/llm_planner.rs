@@ -762,22 +762,40 @@ impl TurnPlanner for LlmPlanner {
                                         Some(call.tool_name.clone()),
                                     ),
                                     None => {
-                                        // Phase 120 — below threshold:
-                                        // fall through to the existing
-                                        // unknown-tool error path. Task
-                                        // 6 will append "did you mean?"
-                                        // suggestions to the error
-                                        // message.
+                                        // Phase 120 Task 6 — below
+                                        // threshold: enhance the
+                                        // synthetic unknown_tool error
+                                        // with top-3 "did you mean?"
+                                        // suggestions ranked by
+                                        // similarity descending. The
+                                        // model sees them as
+                                        // `available_suggestions` and
+                                        // can retry with the right name.
+                                        let suggestions = top_n_similar_tools(
+                                            &self.registry,
+                                            &call.tool_name,
+                                            3,
+                                        );
+                                        let message = build_unknown_tool_message(
+                                            &call.tool_name,
+                                            &suggestions,
+                                        );
+                                        let mut body = json!({
+                                            "error": "unknown_tool",
+                                            "message": message,
+                                        });
+                                        if !suggestions.is_empty() {
+                                            body["did_you_mean"] =
+                                                json!(
+                                                    suggestions
+                                                        .iter()
+                                                        .map(|(n, _)| n.clone())
+                                                        .collect::<Vec<_>>()
+                                                );
+                                        }
                                         self.history.push(LlmMessage::ToolResult {
                                             call_id: call.call_id,
-                                            content: json!({
-                                                "error": "unknown_tool",
-                                                "message": format!(
-                                                    "tool '{}' is not registered",
-                                                    call.tool_name
-                                                ),
-                                            })
-                                            .to_string(),
+                                            content: body.to_string(),
                                             is_error: true,
                                         });
                                         continue;
@@ -1007,6 +1025,71 @@ fn fuzzy_recover_tool_name(
         }
     }
     best.map(|(id, _)| id)
+}
+
+/// Phase 120 Task 6 — top-N tools ranked by Jaccard title similarity
+/// against the model's emitted name. Used by the synthetic
+/// `unknown_tool` error path so the model sees `available_suggestions`
+/// and can retry with the right name.
+///
+/// Returns `Vec<(tool_name, score)>` sorted descending by score; ties
+/// broken by registration order (stable). At most `n` entries; empty
+/// when the registry is empty (the synthetic message falls back to
+/// a neutral "no tools available" form — see [`build_unknown_tool_message`]).
+///
+/// Pure function modulo the registry iteration.
+fn top_n_similar_tools(
+    registry: &crate::ToolRegistry,
+    emitted_name: &str,
+    n: usize,
+) -> Vec<(String, f32)> {
+    let mut scored: Vec<(String, f32)> = registry
+        .iter_tools()
+        .map(|tool| {
+            let score = crate::skill_proposer::title_similarity(
+                emitted_name,
+                tool.name(),
+            );
+            (tool.name().to_string(), score)
+        })
+        .collect();
+    // Stable sort by score descending; ties keep iteration order
+    // (which matches registration order on `ToolRegistry::iter_tools`).
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(n);
+    scored
+}
+
+/// Phase 120 Task 6 — operator-style synthetic message for the
+/// model when the planner's fuzzy-match recovery couldn't resolve
+/// the emitted name above threshold.
+///
+/// Wording is deliberately unambiguous about WHICH tools to retry
+/// with so the model picks the right name on the next turn:
+/// - With suggestions: `"tool 'X' is not registered. Did you mean
+///   'Y', 'Z', 'W'?"`
+/// - Empty registry: `"tool 'X' is not registered. (no tools
+///   available in this role)"` — neutral fallback rather than a
+///   misleading "did you mean?" with no suggestions.
+fn build_unknown_tool_message(
+    emitted_name: &str,
+    suggestions: &[(String, f32)],
+) -> String {
+    if suggestions.is_empty() {
+        return format!(
+            "tool '{}' is not registered. (no tools available in this role)",
+            emitted_name
+        );
+    }
+    let names: Vec<String> = suggestions
+        .iter()
+        .map(|(n, _)| format!("'{n}'"))
+        .collect();
+    format!(
+        "tool '{}' is not registered. Did you mean {}?",
+        emitted_name,
+        names.join(", "),
+    )
 }
 
 fn validate_tool_input(
@@ -2006,6 +2089,158 @@ mod tests {
             .with_tool_name_auto_correct_threshold(0.55);
         assert!(
             (config.tool_name_auto_correct_threshold - 0.55).abs() < 1e-6
+        );
+    }
+
+    // ----- Phase 120 Task 6 — "Did you mean?" suggestions -----
+
+    #[test]
+    fn phase_120_top_n_orders_by_similarity_descending() {
+        // `fs_read` against {fs.read, fs.write, web.fetch}:
+        //   tokens(fs_read) = {fs, read}
+        //   - fs.read  → {fs, read} → 1.0 (perfect)
+        //   - fs.write → {fs, write} → 1/3
+        //   - web.fetch → {web, fetch} → 0/4
+        // Top-3 must rank fs.read, fs.write, web.fetch in that order.
+        let fs_read = Arc::new(FakeTool::new("fs.read")) as Arc<dyn Tool>;
+        let fs_write = Arc::new(FakeTool::new("fs.write")) as Arc<dyn Tool>;
+        let web_fetch = Arc::new(FakeTool::new("web.fetch")) as Arc<dyn Tool>;
+        let registry = ToolRegistry::new(vec![fs_read, fs_write, web_fetch]);
+        let top = top_n_similar_tools(&registry, "fs_read", 3);
+        assert_eq!(top.len(), 3);
+        assert_eq!(top[0].0, "fs.read");
+        assert_eq!(top[1].0, "fs.write");
+        assert_eq!(top[2].0, "web.fetch");
+        // Scores descending.
+        assert!(top[0].1 > top[1].1);
+        assert!(top[1].1 > top[2].1);
+    }
+
+    #[test]
+    fn phase_120_top_n_caps_at_n() {
+        let tools: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(FakeTool::new("fs.read")),
+            Arc::new(FakeTool::new("fs.write")),
+            Arc::new(FakeTool::new("web.fetch")),
+            Arc::new(FakeTool::new("memory.read")),
+            Arc::new(FakeTool::new("memory.write")),
+        ];
+        let registry = ToolRegistry::new(tools);
+        let top = top_n_similar_tools(&registry, "fs_read", 3);
+        assert_eq!(top.len(), 3, "top-3 cap must hold under 5-tool registry");
+    }
+
+    #[test]
+    fn phase_120_top_n_returns_empty_for_empty_registry() {
+        let registry = ToolRegistry::new(vec![]);
+        let top = top_n_similar_tools(&registry, "fs_read", 3);
+        assert!(top.is_empty());
+    }
+
+    #[test]
+    fn phase_120_build_unknown_message_includes_suggestions() {
+        let suggestions = vec![
+            ("fs.read".to_string(), 1.0),
+            ("fs.write".to_string(), 0.5),
+            ("memory.read".to_string(), 0.33),
+        ];
+        let msg = build_unknown_tool_message("fs_read", &suggestions);
+        // The emitted name appears.
+        assert!(msg.contains("'fs_read'"));
+        // "Did you mean?" prefix appears.
+        assert!(msg.contains("Did you mean"));
+        // All three suggestions appear in order.
+        let pos_a = msg.find("'fs.read'").unwrap();
+        let pos_b = msg.find("'fs.write'").unwrap();
+        let pos_c = msg.find("'memory.read'").unwrap();
+        assert!(pos_a < pos_b);
+        assert!(pos_b < pos_c);
+    }
+
+    #[test]
+    fn phase_120_build_unknown_message_falls_back_for_empty_registry() {
+        // Empty suggestions → neutral fallback. The model should NOT
+        // see a misleading "Did you mean ?" form.
+        let msg = build_unknown_tool_message("fs_read", &[]);
+        assert!(msg.contains("'fs_read'"));
+        assert!(msg.contains("no tools available"));
+        // Critical: no misleading "Did you mean?" with empty list.
+        assert!(!msg.contains("Did you mean"));
+    }
+
+    #[tokio::test]
+    async fn phase_120_below_threshold_includes_did_you_mean_in_history() {
+        // End-to-end: model emits below-threshold name; planner
+        // synthesizes unknown_tool ToolResult; the JSON body
+        // includes a `did_you_mean` field with the ranked
+        // suggestions. The model can parse that field on its next
+        // turn and retry with the right name.
+        let fs_read = Arc::new(FakeTool::new("fs.read"));
+        let web_fetch = Arc::new(FakeTool::new("web.fetch"));
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".into(),
+                        // do_the_thing is below threshold against
+                        // either fs.read or web.fetch (1/4 max).
+                        tool_name: "do_the_thing".into(),
+                        input: json!({}),
+                        name_resolution: aivyx_llm::NameResolution::Unknown {
+                            original: "do_the_thing".into(),
+                        },
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "ok".into(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![fs_read, web_fetch]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("m"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "do it"))
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+        // History carries an unknown_tool ToolResult whose JSON
+        // body includes a did_you_mean field.
+        let body = planner
+            .history()
+            .iter()
+            .find_map(|m| match m {
+                LlmMessage::ToolResult { content, is_error, .. }
+                    if *is_error && content.contains("unknown_tool") =>
+                {
+                    Some(content.clone())
+                }
+                _ => None,
+            })
+            .expect("expected synthetic unknown_tool entry");
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"], "unknown_tool");
+        // did_you_mean array carries the top-3 (or fewer) names.
+        let suggestions = parsed["did_you_mean"]
+            .as_array()
+            .expect("did_you_mean must be an array");
+        assert!(!suggestions.is_empty());
+        // The "Did you mean" phrasing is part of the human-readable
+        // message too.
+        assert!(
+            parsed["message"].as_str().unwrap().contains("Did you mean"),
+            "human message must include 'Did you mean': {body}"
         );
     }
 
