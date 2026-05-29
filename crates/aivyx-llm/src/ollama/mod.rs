@@ -28,8 +28,10 @@
 //! `crate::transport` — the transport seam stays provider-
 //! agnostic.
 
+pub mod jsonl;
 pub mod provider;
 
+pub use jsonl::JsonlReader;
 pub use provider::{
     build_request_body, OllamaConfig, OllamaOptions, OllamaProvider,
     DEFAULT_OLLAMA_BASE_URL,
