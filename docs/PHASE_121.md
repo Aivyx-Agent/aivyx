@@ -273,7 +273,7 @@ Roughly seven sub-tasks plus exit + backfill:
   (`f8bcb55`).
 - [x] aivyx-config wiring + binary dispatch — Task 6
   (`e87f574`).
-- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (`2c558dd`).
 - [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (Q1a + Q2a non-Recommended + Q3a recorded above).
 - [x] DESIGN.md streak — **HELD as predicted**.
