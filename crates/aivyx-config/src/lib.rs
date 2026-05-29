@@ -667,6 +667,13 @@ pub struct AivyxConfig {
     /// no-ops. `Some` with `enabled = true` arms the ledger
     /// + recording hook.
     pub tool_relevance: Option<ToolRelevanceConfig>,
+    /// Phase 121 — `[ollama]` operator-configured generation
+    /// options for the native Ollama provider. All fields
+    /// `Option`-typed; absent fields fall through to Ollama's
+    /// per-model defaults. The binary converts this struct to
+    /// `aivyx_llm::ollama::OllamaOptions` at provider-construction
+    /// time.
+    pub ollama_options: OllamaOptions,
     /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
     /// Threshold in `[0.0, 1.0]` for the planner's tool-name
     /// fuzzy-match recovery. When the LLM emits a tool name not
@@ -2282,6 +2289,46 @@ pub const DEFAULT_PERSONA_LIST_THRESHOLD: f32 = 0.85;
 /// turn driver's post-finalize hook (Phase 116 Task 4
 /// outcome recording). The system-prompt-augmentation half
 /// of Phase 116 (live-prompt rendering at turn-start) is a
+/// Phase 121 Task 6 — operator-configured Ollama generation
+/// options. Mirrors `aivyx_llm::ollama::OllamaOptions`
+/// field-for-field; the binary converts this struct to the
+/// LLM-crate type at provider-construction time so
+/// `aivyx-config` doesn't take on an `aivyx-llm` dep.
+///
+/// All fields are `Option`-typed; the binary preserves `None`
+/// values through the conversion so Ollama's per-model defaults
+/// apply. Operators set fields explicitly via `[ollama]` in
+/// `aivyx.toml`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OllamaOptions {
+    pub num_ctx: Option<u32>,
+    pub num_predict: Option<u32>,
+    pub num_thread: Option<u32>,
+    pub mirostat: Option<u8>,
+    pub top_k: Option<u32>,
+    pub top_p: Option<f32>,
+    pub repeat_penalty: Option<f32>,
+    pub repeat_last_n: Option<i32>,
+    pub seed: Option<i64>,
+}
+
+impl OllamaOptions {
+    /// `true` when every field is `None` — the binary omits the
+    /// `options` block construction entirely when this returns
+    /// true.
+    pub fn is_empty(&self) -> bool {
+        self.num_ctx.is_none()
+            && self.num_predict.is_none()
+            && self.num_thread.is_none()
+            && self.mirostat.is_none()
+            && self.top_k.is_none()
+            && self.top_p.is_none()
+            && self.repeat_penalty.is_none()
+            && self.repeat_last_n.is_none()
+            && self.seed.is_none()
+    }
+}
+
 /// **Phase-116-internal deferral** — the substrate ships in
 /// Phase 116 but the live-prompt pipe awaits a per-turn
 /// prompt-reassembly substrate change.
@@ -2396,6 +2443,10 @@ struct RawToml {
     /// provider-agnostic knobs land additively here.
     #[serde(default)]
     providers: RawProviders,
+    /// `[ollama]` section. Phase 121 Task 6 — native Ollama
+    /// generation options.
+    #[serde(default)]
+    ollama: RawOllama,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -3294,6 +3345,33 @@ struct RawProviders {
     tool_name_auto_correct_threshold: Option<f32>,
 }
 
+/// Phase 121 Task 6 — `[ollama]` deserialize target. All
+/// fields `Option`-typed; absent fields decode as `None` and
+/// the loader propagates `None` so Ollama's per-model defaults
+/// apply. Absent section → all-`None` → default-constructed
+/// `OllamaOptions`.
+#[derive(Debug, Default, Deserialize)]
+struct RawOllama {
+    #[serde(default)]
+    num_ctx: Option<u32>,
+    #[serde(default)]
+    num_predict: Option<u32>,
+    #[serde(default)]
+    num_thread: Option<u32>,
+    #[serde(default)]
+    mirostat: Option<u8>,
+    #[serde(default)]
+    top_k: Option<u32>,
+    #[serde(default)]
+    top_p: Option<f32>,
+    #[serde(default)]
+    repeat_penalty: Option<f32>,
+    #[serde(default)]
+    repeat_last_n: Option<i32>,
+    #[serde(default)]
+    seed: Option<i64>,
+}
+
 /// Phase 115 — `[persona.auto_propose.failure_outcomes]`
 /// deserialize target. Absent → defaults from
 /// `FailureOutcomesConfig::default()`.
@@ -3842,6 +3920,22 @@ impl AivyxConfig {
             build_persona_auto_propose_config(&toml.persona.auto_propose)?;
         let tool_relevance =
             build_tool_relevance_config(&toml.tool_relevance)?;
+
+        // Phase 121 — [ollama] generation options. Mirrors the
+        // raw section field-for-field; range validation lives on
+        // the Ollama runtime side (values pass through unchanged
+        // here so operators get Ollama's own clamps + errors).
+        let ollama_options = OllamaOptions {
+            num_ctx: toml.ollama.num_ctx,
+            num_predict: toml.ollama.num_predict,
+            num_thread: toml.ollama.num_thread,
+            mirostat: toml.ollama.mirostat,
+            top_k: toml.ollama.top_k,
+            top_p: toml.ollama.top_p,
+            repeat_penalty: toml.ollama.repeat_penalty,
+            repeat_last_n: toml.ollama.repeat_last_n,
+            seed: toml.ollama.seed,
+        };
 
         // Phase 120 — [providers] tool_name_auto_correct_threshold.
         // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
@@ -4764,6 +4858,7 @@ impl AivyxConfig {
             skill_auto_propose,
             persona_auto_propose,
             tool_relevance,
+            ollama_options,
             tool_name_auto_correct_threshold,
             roles,
             active_role,

@@ -7974,6 +7974,78 @@ fn tool_relevance_absent_section_is_none() {
     drop(env);
 }
 
+// ----- Phase 121 — [ollama] generation options -----
+
+#[test]
+fn phase_121_ollama_absent_section_yields_all_none_options() {
+    // No [ollama] section → every field stays None; the binary
+    // propagates None values so Ollama's per-model defaults
+    // apply.
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.ollama_options.is_empty());
+    drop(env);
+}
+
+#[test]
+fn phase_121_ollama_partial_section_parses_set_fields_only() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[ollama]\nnum_ctx = 16384\nmirostat = 2\n",
+        "phase121-ollama-partial",
+    );
+    assert_eq!(cfg.ollama_options.num_ctx, Some(16384));
+    assert_eq!(cfg.ollama_options.mirostat, Some(2));
+    // Unset fields stay None.
+    assert!(cfg.ollama_options.num_predict.is_none());
+    assert!(cfg.ollama_options.top_p.is_none());
+    assert!(cfg.ollama_options.seed.is_none());
+    drop(env);
+}
+
+#[test]
+fn phase_121_ollama_full_section_parses_every_field() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[ollama]\n\
+         num_ctx = 32768\n\
+         num_predict = 2048\n\
+         num_thread = 8\n\
+         mirostat = 1\n\
+         top_k = 40\n\
+         top_p = 0.9\n\
+         repeat_penalty = 1.1\n\
+         repeat_last_n = 64\n\
+         seed = 42\n",
+        "phase121-ollama-full",
+    );
+    let opts = &cfg.ollama_options;
+    assert_eq!(opts.num_ctx, Some(32768));
+    assert_eq!(opts.num_predict, Some(2048));
+    assert_eq!(opts.num_thread, Some(8));
+    assert_eq!(opts.mirostat, Some(1));
+    assert_eq!(opts.top_k, Some(40));
+    assert!((opts.top_p.unwrap() - 0.9).abs() < 1e-6);
+    assert!((opts.repeat_penalty.unwrap() - 1.1).abs() < 1e-6);
+    assert_eq!(opts.repeat_last_n, Some(64));
+    assert_eq!(opts.seed, Some(42));
+    drop(env);
+}
+
+#[test]
+fn phase_121_ollama_is_empty_helper_pins_default() {
+    let opts = crate::OllamaOptions::default();
+    assert!(opts.is_empty());
+    let opts = crate::OllamaOptions {
+        num_ctx: Some(1),
+        ..crate::OllamaOptions::default()
+    };
+    assert!(!opts.is_empty());
+}
+
 // ----- Phase 120 — [providers] tool_name_auto_correct_threshold -----
 
 #[test]

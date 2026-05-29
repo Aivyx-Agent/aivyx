@@ -3236,6 +3236,11 @@ async fn run_async(
         // `true`, the memory below is wrapped in a
         // `CanonicalizingMemory` delegate.
         memory_canonicalize_topics: config_memory_canonicalize_topics,
+        // Phase 121 — `[ollama]` operator-configured generation
+        // options. Converted to `aivyx_llm::ollama::OllamaOptions`
+        // at provider-construction time below for
+        // `ProviderKind::Ollama`.
+        ollama_options: config_ollama_options,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
@@ -3386,17 +3391,40 @@ async fn run_async(
             Arc::new(p)
         }
         ProviderKind::Ollama => {
-            let mut cfg = match openai_api_key {
-                Some(key) => OpenAiConfig::new(key.value),
-                None => OpenAiConfig::without_api_key(),
+            // Phase 121 — route through the native OllamaProvider
+            // (against `/api/chat` with JSONL streaming) instead of
+            // the OpenAI-compat path. Q3a at Phase 121 sign-off:
+            // `provider = "ollama"` in aivyx.toml uses the new
+            // adapter transparently.
+            use aivyx_llm::ollama::{
+                OllamaConfig, OllamaOptions as LlmOllamaOptions,
+                OllamaProvider, DEFAULT_OLLAMA_BASE_URL as OLLAMA_BASE,
             };
-            // Ollama default base URL; explicit config overrides.
             let base_url = openai_base_url
                 .map(|s| s.value)
-                .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
+                .unwrap_or_else(|| OLLAMA_BASE.to_string());
             ollama_base_url_for_tools = Some(base_url.clone());
-            cfg = cfg.with_base_url(base_url);
-            let p = OpenAiProvider::new(cfg)
+            // Mirror config-layer OllamaOptions field-for-field
+            // into the LLM-crate type. Keeps aivyx-config free of
+            // an aivyx-llm dep.
+            let llm_options = LlmOllamaOptions {
+                num_ctx: config_ollama_options.num_ctx,
+                num_predict: config_ollama_options.num_predict,
+                num_thread: config_ollama_options.num_thread,
+                mirostat: config_ollama_options.mirostat,
+                top_k: config_ollama_options.top_k,
+                top_p: config_ollama_options.top_p,
+                repeat_penalty: config_ollama_options.repeat_penalty,
+                repeat_last_n: config_ollama_options.repeat_last_n,
+                seed: config_ollama_options.seed,
+            };
+            let mut cfg = OllamaConfig::default_local()
+                .with_base_url(base_url)
+                .with_options(llm_options);
+            if let Some(key) = openai_api_key {
+                cfg = cfg.with_api_key(key.value);
+            }
+            let p = OllamaProvider::new(cfg)
                 .map_err(|e| format!("failed to build Ollama provider: {e}"))?;
 
             // Lightweight health check — warn (don't abort) if Ollama
