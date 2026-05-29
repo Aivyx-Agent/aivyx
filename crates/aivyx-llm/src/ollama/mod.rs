@@ -30,9 +30,11 @@
 
 pub mod jsonl;
 pub mod provider;
+pub mod stream;
 
 pub use jsonl::JsonlReader;
 pub use provider::{
     build_request_body, OllamaConfig, OllamaOptions, OllamaProvider,
     DEFAULT_OLLAMA_BASE_URL,
 };
+pub use stream::OllamaStream;
