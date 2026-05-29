@@ -264,7 +264,7 @@ Roughly seven tasks plus exit + backfill:
   integration — Task 5 (`006b54e`).
 - [x] Proposals-chain integration + CLI rendering for
   both new categories — Task 6 (`1454158`).
-- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (`bf259ad`).
 - [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (Q1c non-Recommended, Q2a/Q3a Recommended).
 - [x] DESIGN.md streak — **HELD as predicted**.
