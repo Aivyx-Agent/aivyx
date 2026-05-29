@@ -3444,6 +3444,56 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 121 — Native Ollama Tool-Calling Path (Local-LLM Rehab #3)
+
+**Active — see [PHASE_121.md](PHASE_121.md).** Second-
+named phase against the audit's local-LLM rehabilitation
+axis. New dedicated `OllamaProvider` in
+`aivyx-llm/src/ollama/` mirroring
+`aivyx-llm/src/openai/`. Talks Ollama's `/api/chat`
+natively (JSONL streaming protocol); bypasses the OpenAI-
+compat translation layer entirely. `ProviderKind::Ollama`
+routes to the new adapter by default; OpenAI-compat
+stays untouched for `provider = "openai"`.
+
+**Q-block (one non-Recommended):**
+- Q1a — New dedicated `OllamaProvider` (Recommended).
+- Q2a — Full streaming via JSONL protocol (non-
+  Recommended; picked over pragmatic "non-streaming for
+  tools" Recommended). Honest scope expansion; cleanest
+  UX.
+- Q3a — `ProviderKind::Ollama` switches to native by
+  default (Recommended). Operators get native benefits
+  transparently.
+
+**Streak predictions:** DESIGN.md HOLD → 12; PRODUCT.md
+HOLD → 12; `aivyx-core/src/lib.rs` predicted HOLD →
+re-establishes to 2 after Phase 120's break (honest
+80/20; adapter lives in aivyx-llm, dispatch routing in
+the binary; both avoid lib.rs).
+
+Test count: predicted `+40 to +70` — honest scope
+expansion from Q2a's full-streaming pick. Zero new
+workspace deps anticipated.
+
+**Honest scope caveat carried in the open doc:** the
+local-model hallucination patterns Phase 120 addressed
+are model-shaped, not protocol-shaped. The native Ollama
+path will NOT fix qwen3.6:27b emitting `fs_read`; what
+it WILL give is per-model Ollama options (`num_ctx`,
+`num_predict`), native streaming fidelity, and no
+OpenAI-compat translation layer to debug. Phase 6 Q5
+honesty at sign-off.
+
+**Tenth consecutive substrate/polish phase picked over
+the Channel Activation Milestone.** Honest tracking;
+the audit ranking has stayed unchanged for ten phases.
+
+After Phase 121, Phase 122 candidates: Channel
+Activation Milestone (eleventh-in-a-row deferral),
+per-model prompt variants (local-LLM rehab #2, still
+unshipped), release prep, Chapter F.
+
 ## Phase 120 — Tool-Call Validation + Recovery (Local-LLM Rehabilitation #1)
 
 **Frozen — see [PHASE_120.md](PHASE_120.md).** First-named
