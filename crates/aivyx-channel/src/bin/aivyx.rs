@@ -122,6 +122,8 @@ mod profile;
 mod tools;
 #[path = "aivyx_modules/tool_init.rs"]
 mod tool_init;
+#[path = "aivyx_modules/toml_edit_apply.rs"]
+mod toml_edit_apply;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
