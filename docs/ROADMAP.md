@@ -3444,6 +3444,50 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 119 — Phase 118 Apply-Side Closeout + Tool-Relevance Dump (Operator-Value Polish)
+
+**Active — see [PHASE_119.md](PHASE_119.md).** Audit-
+informed phase. Closes the manual-edit gap left by
+Phase 118 and the deferred `aivyx tool-relevance dump`
+CLI from Phase 116. Three new operator-side CLI
+commands ship together:
+- `aivyx profile apply-hint <id>` — applies an
+  approved `ProfileHint` to `aivyx.toml`'s `[profile]`
+  section atomically.
+- `aivyx role import <id>` — adds a new
+  `[roles.<name>]` section from an approved
+  `RoleDefinitionSuggestion` (with parent inheritance
+  honored; refuses overwrite without `--force`).
+- `aivyx tool-relevance dump` — renders the encrypted
+  Phase 116 relevance ledger as a human-readable table
+  per keyword-key.
+
+**Q-block (all Recommended):**
+- Q1a — Both apply-helpers + tool-relevance dump
+  (Recommended). Three CLI commands ship in one phase.
+- Q2a — Separate approve + apply commands
+  (Recommended). The existing approve command stays
+  category-agnostic; the new apply commands are
+  independent operator gestures.
+- Q3a — New `ProfileHintApplied` + `RoleDraftImported`
+  audit-event variants (Recommended). Wire-compat
+  serde defaults; the audit chain records the
+  operator's act-on-approval gesture distinctly from
+  the approval itself.
+
+**Streak predictions:** DESIGN.md HOLD → 10; PRODUCT.md
+HOLD → 10; `aivyx-core/src/lib.rs` HOLD → 3 (honest
+70/30; if daemon-side wiring needs new `AuditTag`
+variant for the bridge, the 30% case fires).
+
+Test count: predicted `+25 to +45`. Zero new workspace
+deps anticipated (TBD on `toml_edit` crate presence).
+
+After Phase 119, every named operator-value deferral
+from Phases 112-118 is closed. The Channel Activation
+Milestone becomes the highest-information-value
+direction for Phase 120.
+
 ## Phase 118 — Outcome-Driven Profile/Role Refinement (Chapter E #4 — closer)
 
 **Frozen — see [PHASE_118.md](PHASE_118.md).** The last
