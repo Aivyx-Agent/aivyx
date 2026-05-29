@@ -118,6 +118,8 @@ mod notify;
 mod persona;
 #[path = "aivyx_modules/profile.rs"]
 mod profile;
+#[path = "aivyx_modules/role.rs"]
+mod role;
 #[path = "aivyx_modules/tools.rs"]
 mod tools;
 #[path = "aivyx_modules/tool_init.rs"]
@@ -476,6 +478,27 @@ fn run() -> Result<(), String> {
                 runtime.block_on(profile::run_profile_apply_hint(
                     &proposal_id,
                     yes,
+                ))
+            }
+        };
+    }
+
+    // ---- Phase 119 Task 5: role import (PRODUCT.md P9 + P13) ---------
+    if let CliMode::Role(sub) = mode {
+        return match sub {
+            RoleSubcommand::Import {
+                proposal_id,
+                yes,
+                force,
+            } => {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to start runtime: {e}"))?;
+                runtime.block_on(role::run_role_import(
+                    &proposal_id,
+                    yes,
+                    force,
                 ))
             }
         };
@@ -1254,6 +1277,27 @@ enum CliMode {
     /// recipes` is the *catalog* of recipes for the operator
     /// to copy into `aivyx.toml`.
     Mcp(McpSubcommand),
+    /// `aivyx role <subcommand>`: Phase 119 — operator-side
+    /// role-config commands. Currently only `import <id>` —
+    /// applies an Approved `RoleDefinitionSuggestion`
+    /// proposal to `aivyx.toml`'s `[roles.<name>]` section
+    /// via the Task 3 atomic primitive and records the
+    /// `AuditEvent::RoleDraftImported` event via daemon IPC.
+    Role(RoleSubcommand),
+}
+
+/// Phase 119 Task 5 — `aivyx role <subcommand>` variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum RoleSubcommand {
+    /// `aivyx role import <proposal-id> [--yes] [--force]` —
+    /// applies a Phase 118 `RoleDefinitionSuggestion`
+    /// proposal to `aivyx.toml`. Refuses to overwrite an
+    /// existing role of the same name without `--force`.
+    Import {
+        proposal_id: String,
+        yes: bool,
+        force: bool,
+    },
 }
 
 /// Phase 73 — `aivyx notify` subcommand variants.
@@ -2517,6 +2561,66 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Profile(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 119 Task 5 — `aivyx role <subcommand>`.
+    if !args.is_empty() && args[0] == "role" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx role` requires a subcommand. Supported: import <id>"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "import" => {
+                let mut proposal_id: Option<String> = None;
+                let mut yes = false;
+                let mut force = false;
+                for arg in args[2..].iter() {
+                    if arg == "--yes" || arg == "-y" {
+                        yes = true;
+                    } else if arg == "--force" {
+                        force = true;
+                    } else if arg.starts_with('-') {
+                        return Err(format!(
+                            "unrecognized flag for `aivyx role import`: `{arg}`. \
+                             Supported flags: --yes, --force"
+                        ));
+                    } else if proposal_id.is_none() {
+                        proposal_id = Some(arg.clone());
+                    } else {
+                        return Err(format!(
+                            "`aivyx role import` takes exactly one proposal id. \
+                             Got extra argument: `{arg}`"
+                        ));
+                    }
+                }
+                let id = proposal_id.ok_or_else(|| {
+                    "`aivyx role import` requires a proposal id. \
+                     Usage: `aivyx role import <proposal-id> [--yes] [--force]`"
+                        .to_string()
+                })?;
+                RoleSubcommand::Import {
+                    proposal_id: id,
+                    yes,
+                    force,
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized role subcommand: `{other}`. \
+                     Supported: role import <id>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Role(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -7203,6 +7307,87 @@ mod tests {
         ]))
         .expect_err("two ids must error");
         assert!(err.contains("exactly one proposal id"), "error: {err}");
+    }
+
+    // ----- Phase 119 Task 5 — `role import` parser -----
+
+    #[test]
+    fn role_import_parses_proposal_id() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "role",
+            "import",
+            "pp-xyz",
+        ]))
+        .expect("`role import pp-xyz` must parse");
+        match parsed.mode {
+            CliMode::Role(RoleSubcommand::Import {
+                proposal_id,
+                yes,
+                force,
+            }) => {
+                assert_eq!(proposal_id, "pp-xyz");
+                assert!(!yes, "default yes must be false");
+                assert!(!force, "default force must be false");
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn role_import_parses_yes_and_force_flags_in_either_order() {
+        let parsed_a = parse_cli_args_from(&argv(&[
+            "role", "import", "pp-1", "--yes", "--force",
+        ]))
+        .expect("`--yes --force` must parse");
+        let parsed_b = parse_cli_args_from(&argv(&[
+            "role", "import", "pp-1", "--force", "--yes",
+        ]))
+        .expect("`--force --yes` must parse");
+        for parsed in [parsed_a, parsed_b] {
+            match parsed.mode {
+                CliMode::Role(RoleSubcommand::Import { yes, force, .. }) => {
+                    assert!(yes);
+                    assert!(force);
+                }
+                other => panic!("unexpected mode: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn role_import_without_id_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["role", "import"]))
+            .expect_err("missing id must error");
+        assert!(
+            err.contains("requires a proposal id"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn role_import_rejects_unknown_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "role", "import", "pp-1", "--dry-run",
+        ]))
+        .expect_err("--dry-run is not supported");
+        assert!(err.contains("unrecognized flag"), "error: {err}");
+    }
+
+    #[test]
+    fn role_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["role"]))
+            .expect_err("`role` alone must error");
+        assert!(err.contains("import"), "error must list import: {err}");
+    }
+
+    #[test]
+    fn role_unknown_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["role", "delete"]))
+            .expect_err("`role delete` must error");
+        assert!(
+            err.contains("unrecognized role subcommand"),
+            "error: {err}"
+        );
     }
 
     // -----------------------------------------------------------------
