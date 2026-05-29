@@ -3236,6 +3236,10 @@ async fn run_async(
         // `true`, the memory below is wrapped in a
         // `CanonicalizingMemory` delegate.
         memory_canonicalize_topics: config_memory_canonicalize_topics,
+        // Phase 120 — operator-configurable threshold for the
+        // planner's tool-name fuzzy-match recovery. Threaded
+        // into `LlmPlannerConfig` below.
+        tool_name_auto_correct_threshold: config_tool_name_auto_correct_threshold,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -4601,7 +4605,12 @@ async fn run_async(
             .with_context_window(provider_kind.value.default_context_window())
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory_for_factory)),
-            ));
+            ))
+            // Phase 120 — operator-configured fuzzy-match threshold
+            // for the planner's tool-name recovery path.
+            .with_tool_name_auto_correct_threshold(
+                config_tool_name_auto_correct_threshold.value,
+            );
         // Phase 76 — same auto-recall hook as the parent.
         if let Some(rc) = &recall_context_for_factory {
             planner_config =
@@ -4873,7 +4882,12 @@ async fn run_async(
             .with_context_window(provider_kind.value.default_context_window())
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
-            ));
+            ))
+            // Phase 120 — daemon path mirror of the in-process
+            // factory above.
+            .with_tool_name_auto_correct_threshold(
+                config_tool_name_auto_correct_threshold.value,
+            );
         // Phase 76 — automatic recall (Q1a). Carried by-Arc
         // through the per-turn `planner_config.clone()` in the
         // factory below, exactly like the prune sink.

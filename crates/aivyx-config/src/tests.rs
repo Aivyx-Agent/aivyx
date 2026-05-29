@@ -7974,6 +7974,125 @@ fn tool_relevance_absent_section_is_none() {
     drop(env);
 }
 
+// ----- Phase 120 — [providers] tool_name_auto_correct_threshold -----
+
+#[test]
+fn phase_120_threshold_absent_section_uses_default() {
+    // No [providers] section → loader supplies
+    // DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD (0.80, matches Phase
+    // 112's fuzzy default). FieldSource::Default tagged so the
+    // startup banner can show the operator where the value came from.
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(
+        (cfg.tool_name_auto_correct_threshold.value
+            - crate::DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD)
+            .abs()
+            < 1e-6
+    );
+    assert_eq!(
+        cfg.tool_name_auto_correct_threshold.source,
+        FieldSource::Default
+    );
+    drop(env);
+}
+
+#[test]
+fn phase_120_threshold_explicit_value_parses() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[providers]\ntool_name_auto_correct_threshold = 0.65\n",
+        "phase120-explicit",
+    );
+    assert!(
+        (cfg.tool_name_auto_correct_threshold.value - 0.65).abs() < 1e-6
+    );
+    assert_eq!(
+        cfg.tool_name_auto_correct_threshold.source,
+        FieldSource::Toml
+    );
+    drop(env);
+}
+
+#[test]
+fn phase_120_threshold_zero_is_valid() {
+    // 0.0 → never auto-correct. Operator-conservative posture.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[providers]\ntool_name_auto_correct_threshold = 0.0\n",
+        "phase120-zero",
+    );
+    assert!(cfg.tool_name_auto_correct_threshold.value.abs() < 1e-6);
+    drop(env);
+}
+
+#[test]
+fn phase_120_threshold_one_is_valid() {
+    // 1.0 → exact match only.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[providers]\ntool_name_auto_correct_threshold = 1.0\n",
+        "phase120-one",
+    );
+    assert!((cfg.tool_name_auto_correct_threshold.value - 1.0).abs() < 1e-6);
+    drop(env);
+}
+
+#[test]
+fn phase_120_threshold_above_one_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase120-above");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[providers]\ntool_name_auto_correct_threshold = 1.5\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "providers.tool_name_auto_correct_threshold");
+            assert!(reason.contains("must be in [0.0, 1.0]"));
+        }
+        other => panic!("expected ConfigError::Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn phase_120_threshold_negative_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase120-neg");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[providers]\ntool_name_auto_correct_threshold = -0.1\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
+    assert!(matches!(err, ConfigError::Invalid { .. }));
+    drop(env);
+}
+
 #[test]
 fn tool_relevance_minimal_section_uses_defaults() {
     let env = EnvScope::new();

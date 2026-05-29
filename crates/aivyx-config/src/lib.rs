@@ -667,6 +667,24 @@ pub struct AivyxConfig {
     /// no-ops. `Some` with `enabled = true` arms the ledger
     /// + recording hook.
     pub tool_relevance: Option<ToolRelevanceConfig>,
+    /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
+    /// Threshold in `[0.0, 1.0]` for the planner's tool-name
+    /// fuzzy-match recovery. When the LLM emits a tool name not
+    /// in the request's advertised set, the planner computes
+    /// `title_similarity` against every registered tool; a
+    /// match at or above this threshold dispatches the matched
+    /// tool and records the auto-correction in the audit chain
+    /// via `AuditEvent::ToolCall.auto_corrected_from`.
+    ///
+    /// Defaults to [`DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD`]
+    /// (0.80; matches Phase 112's fuzzy-match default).
+    ///
+    /// `0.0` → never auto-correct (planner falls through to the
+    /// existing synthetic `unknown_tool` error path for every
+    /// Unknown name).
+    /// `1.0` → only exact matches clear the threshold (matches
+    /// the pre-Phase-120 behavior).
+    pub tool_name_auto_correct_threshold: Sourced<f32>,
     /// All roles defined in this config, keyed by role name.
     ///
     /// Phase 11 Task 1 introduced the [`Role`] primitive. The loader
@@ -2062,6 +2080,12 @@ pub const DEFAULT_SKILLS_HEURISTIC_TOOL_CALL_MIN: u32 = 3;
 pub const DEFAULT_SKILLS_HEURISTIC_DISTINCT_TOOL_ID_MIN: u32 = 2;
 pub const DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN: u64 = 5000;
 
+/// Phase 120 — default threshold for the planner's tool-name fuzzy-
+/// match recovery. Matches the Phase 112 fuzzy-match default (0.80)
+/// so the substrate stays uniform; operators can override via
+/// `[providers] tool_name_auto_correct_threshold` in `aivyx.toml`.
+pub const DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD: f32 = 0.80;
+
 /// Phase 114 — `[persona.auto_propose]` runtime config.
 ///
 /// The Phase 113 `[skills.auto_propose]` section is now an
@@ -2366,6 +2390,12 @@ struct RawToml {
     /// augmentation substrate.
     #[serde(default)]
     tool_relevance: RawToolRelevance,
+    /// `[providers]` section. Phase 120 — currently carries
+    /// only `tool_name_auto_correct_threshold` for the
+    /// planner's tool-name fuzzy-match recovery. Future
+    /// provider-agnostic knobs land additively here.
+    #[serde(default)]
+    providers: RawProviders,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -3254,6 +3284,16 @@ struct RawToolRelevance {
     top_k_per_section: Option<u32>,
 }
 
+/// Phase 120 — `[providers]` deserialize target. Currently
+/// carries only `tool_name_auto_correct_threshold`. Absent
+/// section → `None` → loader supplies
+/// [`DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD`].
+#[derive(Debug, Default, Deserialize)]
+struct RawProviders {
+    #[serde(default)]
+    tool_name_auto_correct_threshold: Option<f32>,
+}
+
 /// Phase 115 — `[persona.auto_propose.failure_outcomes]`
 /// deserialize target. Absent → defaults from
 /// `FailureOutcomesConfig::default()`.
@@ -3802,6 +3842,31 @@ impl AivyxConfig {
             build_persona_auto_propose_config(&toml.persona.auto_propose)?;
         let tool_relevance =
             build_tool_relevance_config(&toml.tool_relevance)?;
+
+        // Phase 120 — [providers] tool_name_auto_correct_threshold.
+        // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
+        // absent; reject out-of-range [0.0, 1.0] values at parse
+        // time so the planner never sees a malformed threshold.
+        let tool_name_auto_correct_threshold = match toml
+            .providers
+            .tool_name_auto_correct_threshold
+        {
+            Some(v) => {
+                if !(0.0..=1.0).contains(&v) {
+                    return Err(ConfigError::Invalid {
+                        field: "providers.tool_name_auto_correct_threshold",
+                        reason: format!(
+                            "must be in [0.0, 1.0]; got {v}"
+                        ),
+                    });
+                }
+                Sourced::new(v, FieldSource::Toml)
+            }
+            None => Sourced::new(
+                DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD,
+                FieldSource::Default,
+            ),
+        };
 
         // --- roles -------------------------------------------------
         // Phase 11 Task 1. Either the TOML file defined one or more
@@ -4699,6 +4764,7 @@ impl AivyxConfig {
             skill_auto_propose,
             persona_auto_propose,
             tool_relevance,
+            tool_name_auto_correct_threshold,
             roles,
             active_role,
             profile,

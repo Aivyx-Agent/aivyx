@@ -200,6 +200,21 @@ pub struct LlmPlannerConfig {
     /// means the base prompt is used unchanged (pre-Phase-79
     /// behavior exactly).
     pub system_prompt_refiner: Option<Arc<dyn SystemPromptRefiner>>,
+    /// Phase 120 — threshold for the planner's tool-name fuzzy-
+    /// match recovery. Float in `[0.0, 1.0]`. Defaults to
+    /// [`FUZZY_TOOL_NAME_THRESHOLD`] (0.80, matches Phase 112's
+    /// fuzzy-match default).
+    ///
+    /// Operators set this via `[providers]
+    /// tool_name_auto_correct_threshold = ...` in `aivyx.toml`;
+    /// the binary plumbs it through to this field at planner-
+    /// construction time.
+    ///
+    /// `0.0` → every Unknown name matches (the planner picks the
+    /// first registered tool — effectively garbage out).
+    /// `1.0` → only exact-token-set matches (preserves the
+    /// pre-Phase-120 unknown-tool error path).
+    pub tool_name_auto_correct_threshold: f32,
 }
 
 impl std::fmt::Debug for LlmPlannerConfig {
@@ -236,7 +251,23 @@ impl LlmPlannerConfig {
             prune_sink: None,
             context_provider: None,
             system_prompt_refiner: None,
+            // Phase 120 — same default as the FUZZY_TOOL_NAME_THRESHOLD
+            // const used at Task 4. Operators override via TOML.
+            tool_name_auto_correct_threshold: FUZZY_TOOL_NAME_THRESHOLD,
         }
+    }
+
+    /// Phase 120 — override the tool-name fuzzy-match threshold.
+    /// Caller is responsible for clamping into `[0.0, 1.0]` —
+    /// the config layer (`aivyx-config`) rejects out-of-range
+    /// values at TOML-parse time so the planner never sees a
+    /// malformed value in practice.
+    pub fn with_tool_name_auto_correct_threshold(
+        mut self,
+        threshold: f32,
+    ) -> Self {
+        self.tool_name_auto_correct_threshold = threshold;
+        self
     }
 
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
@@ -724,7 +755,7 @@ impl TurnPlanner for LlmPlanner {
                                 match fuzzy_recover_tool_name(
                                     &self.registry,
                                     &call.tool_name,
-                                    FUZZY_TOOL_NAME_THRESHOLD,
+                                    self.config.tool_name_auto_correct_threshold,
                                 ) {
                                     Some(matched_id) => (
                                         matched_id,
@@ -1953,6 +1984,92 @@ mod tests {
         let registry = ToolRegistry::new(vec![]);
         let resolved = fuzzy_recover_tool_name(&registry, "fs_read", 0.80);
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn phase_120_planner_config_default_threshold_matches_const() {
+        // The LlmPlannerConfig::new default plumbs through the
+        // FUZZY_TOOL_NAME_THRESHOLD const; the config layer's
+        // DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD is the same value.
+        let config = LlmPlannerConfig::new("m");
+        assert!(
+            (config.tool_name_auto_correct_threshold
+                - FUZZY_TOOL_NAME_THRESHOLD)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn phase_120_with_tool_name_auto_correct_threshold_overrides() {
+        let config = LlmPlannerConfig::new("m")
+            .with_tool_name_auto_correct_threshold(0.55);
+        assert!(
+            (config.tool_name_auto_correct_threshold - 0.55).abs() < 1e-6
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_120_zero_threshold_disables_fuzzy_recovery() {
+        // Operator sets the threshold to 0.0 — wait, 0.0 means
+        // "every match clears", which would auto-correct EVERYTHING
+        // (including unrelated names). The semantically conservative
+        // disable is threshold = 1.0 (exact-match only). Test that
+        // posture: with threshold = 1.0, an emitted `fs_read` (Jaccard
+        // 1.0 vs `fs.read`) STILL clears (1.0 >= 1.0); but `fs_rea`
+        // (Jaccard 0.5) does NOT. Pin the inclusive-bound semantics.
+        let fs_read = Arc::new(FakeTool::new("fs.read"));
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".into(),
+                        tool_name: "fs_rea".into(), // partial — Jaccard 0.5
+                        input: json!({}),
+                        name_resolution: aivyx_llm::NameResolution::Unknown {
+                            original: "fs_rea".into(),
+                        },
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "giving up".into(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("m")
+                .with_tool_name_auto_correct_threshold(1.0),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "read"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        // Partial match doesn't clear threshold 1.0 → unknown_tool.
+        assert!(
+            matches!(step, NextStep::FinalMessage(ref m) if m == "giving up")
+        );
+        let has_unknown = planner.history().iter().any(|m| match m {
+            LlmMessage::ToolResult {
+                content, is_error, ..
+            } => *is_error && content.contains("unknown_tool"),
+            _ => false,
+        });
+        assert!(
+            has_unknown,
+            "threshold 1.0 must fail-through for partial matches"
+        );
     }
 
     #[tokio::test]
