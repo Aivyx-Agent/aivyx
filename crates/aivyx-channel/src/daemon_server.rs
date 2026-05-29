@@ -3220,6 +3220,8 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         aivyx_audit::AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
         aivyx_audit::AuditEvent::SkillInvocation { .. } => "SkillInvocation",
+        aivyx_audit::AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
+        aivyx_audit::AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
     }
     .to_string();
 

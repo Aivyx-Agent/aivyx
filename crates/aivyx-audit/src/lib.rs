@@ -237,6 +237,70 @@ pub enum AuditEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<ProposalSourceSummary>,
     },
+
+    /// Phase 119 — operator-side application of an approved
+    /// `ProfileHint` proposal. Distinct from
+    /// `PersonaProposalResolved` (which records the *approve*
+    /// gesture that lands the chain entry); this event records
+    /// the *act-on-approval* gesture that mutates
+    /// `aivyx.toml`'s `[profile]` section.
+    ///
+    /// Forensic walks can answer "the operator approved this
+    /// hint AND acted on it" definitively by pairing this
+    /// event with the source proposal via `proposal_id`.
+    ///
+    /// Wire shape mirrors Phase 117 `SkillInvocation` and the
+    /// Phase 112-114 `SkillAutoProposal` patterns: every
+    /// field is owned + Eq + Serialize, so chain HMAC is
+    /// computed over canonical JSON without surprises.
+    ProfileHintApplied {
+        /// The session whose CLI invocation fired the apply.
+        /// Pair with the surrounding `TurnStarted` /
+        /// `TurnEnded` via session_id for full operator-
+        /// gesture context.
+        session_id: SessionId,
+        /// The proposal id this apply acted on. Links the
+        /// apply event to the source `PersonaProposalResolved`
+        /// and the upstream `SkillAutoProposal` for the
+        /// proposer fire that drafted it.
+        proposal_id: String,
+        /// Which declared `[profile]` field the apply mutated.
+        /// Matches `ProfileField::label()` from
+        /// `aivyx_core::skill_proposer` (one of
+        /// `"assistant_name"`, `"operator_profile"`,
+        /// `"communication_style"`, `"primary_use_cases"`,
+        /// `"behavioral_preferences"`,
+        /// `"behavioral_constraints"`).
+        field: String,
+        /// The value the operator approved + the apply wrote
+        /// into `aivyx.toml`. For scalar fields this is the
+        /// new scalar value; for list fields this is the
+        /// appended entry (apply does not delete; it adds).
+        applied_value: String,
+    },
+
+    /// Phase 119 — operator-side import of an approved
+    /// `RoleDefinitionSuggestion` proposal. Mirrors
+    /// `ProfileHintApplied` for the second Phase 118
+    /// category; records the act-on-approval gesture that
+    /// adds a `[roles.<name>]` section to `aivyx.toml`.
+    RoleDraftImported {
+        /// The session whose CLI invocation fired the import.
+        session_id: SessionId,
+        /// Source proposal id for forensic linkage.
+        proposal_id: String,
+        /// The kebab-case role name the import wrote. Matches
+        /// `RoleDraft::name`.
+        role_name: String,
+        /// The parent role the import declared
+        /// `inherits_from = "<parent>"` for, if any. `None`
+        /// indicates a top-level role (no parent chain).
+        /// `#[serde(default, skip_serializing_if = ...)]`
+        /// preserves wire-compat: an absent field in a
+        /// future read decodes as `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+    },
 }
 
 /// Phase 115 — discriminator for what triggered an auto-
@@ -1771,6 +1835,122 @@ mod tests {
             heuristic_signals_matched: all_signals(),
             category: None,
             source: None,
+        })
+        .unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
+    }
+
+    // ----- Phase 119 — ProfileHintApplied + RoleDraftImported -----
+
+    #[test]
+    fn profile_hint_applied_round_trips_via_serde_jcs() {
+        // Wire-shape stability: every field round-trips
+        // through canonical JSON so the HMAC chain hashes
+        // bind to the same bytes pre- and post-serialize.
+        let event = AuditEvent::ProfileHintApplied {
+            session_id: SessionId::new(),
+            proposal_id: "pp-phase118-hint".into(),
+            field: "communication_style".into(),
+            applied_value: "terse and bullet-formatted".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let parsed: AuditEvent =
+            serde_json::from_value(json).expect("decode");
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn profile_hint_applied_serializes_with_kind_tag() {
+        let event = AuditEvent::ProfileHintApplied {
+            session_id: SessionId::new(),
+            proposal_id: "pp-x".into(),
+            field: "assistant_name".into(),
+            applied_value: "Aivyx".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        // The `#[serde(tag = "kind")]` discriminator picks the
+        // PascalCase variant name as the wire tag — operator-
+        // readable forensic walks rely on this.
+        assert_eq!(json["kind"], "ProfileHintApplied");
+        assert_eq!(json["field"], "assistant_name");
+        assert_eq!(json["applied_value"], "Aivyx");
+        assert_eq!(json["proposal_id"], "pp-x");
+    }
+
+    #[test]
+    fn role_draft_imported_round_trips_via_serde_jcs() {
+        let event = AuditEvent::RoleDraftImported {
+            session_id: SessionId::new(),
+            proposal_id: "pp-phase118-role".into(),
+            role_name: "research-deploy".into(),
+            parent: Some("research".into()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let parsed: AuditEvent =
+            serde_json::from_value(json).expect("decode");
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn role_draft_imported_with_no_parent_round_trips() {
+        let event = AuditEvent::RoleDraftImported {
+            session_id: SessionId::new(),
+            proposal_id: "pp-y".into(),
+            role_name: "operator-mode".into(),
+            parent: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        // `#[serde(skip_serializing_if = "Option::is_none")]`
+        // keeps the wire form compact when no parent —
+        // forensic readers don't see a redundant `null`.
+        assert!(json.as_object().unwrap().get("parent").is_none());
+        let parsed: AuditEvent =
+            serde_json::from_value(json).expect("decode");
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn role_draft_imported_serializes_with_kind_tag() {
+        let event = AuditEvent::RoleDraftImported {
+            session_id: SessionId::new(),
+            proposal_id: "pp-z".into(),
+            role_name: "n".into(),
+            parent: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "RoleDraftImported");
+    }
+
+    #[test]
+    fn profile_hint_applied_can_be_hmac_chained() {
+        // Proof-of-life: the variant lands in the chain
+        // and chain verification still passes. Pair with
+        // the surrounding ToolCall sample_tool_call to
+        // confirm chain hashing is stable across mixed
+        // variant types.
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::ProfileHintApplied {
+            session_id: SessionId::new(),
+            proposal_id: "pp-1".into(),
+            field: "communication_style".into(),
+            applied_value: "terse".into(),
+        })
+        .unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
+    }
+
+    #[test]
+    fn role_draft_imported_can_be_hmac_chained() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(AuditEvent::RoleDraftImported {
+            session_id: SessionId::new(),
+            proposal_id: "pp-2".into(),
+            role_name: "x".into(),
+            parent: Some("y".into()),
         })
         .unwrap();
         log.verify().unwrap();

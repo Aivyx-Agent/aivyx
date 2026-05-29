@@ -222,6 +222,8 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
         AuditEvent::SkillInvocation { .. } => "SkillInvocation",
+        AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
+        AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
     }
 }
 
