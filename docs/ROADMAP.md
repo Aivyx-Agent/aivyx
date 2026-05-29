@@ -3444,6 +3444,55 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 120 — Tool-Call Validation + Recovery (Local-LLM Rehabilitation #1)
+
+**Active — see [PHASE_120.md](PHASE_120.md).** First-named
+phase against the audit's local-LLM rehabilitation axis.
+Closes the qwen3.6/gemma4 tool-name hallucination failure
+mode (per phase-99-local-builds memory): when a local
+model emits a hallucinated tool name like `fs_read`, the
+LLM provider flags it at the LLM boundary; the planner
+runs fuzzy-match auto-correct (Phase 112 `title_similarity`
+reuse, threshold `0.80`); above threshold → auto-correct
+dispatch + audit-event; below → structured "did you
+mean?" message to the model so it retries.
+
+**Q-block (two Recommended, one non-Recommended):**
+- Q1a — Tool-call validation + recovery only
+  (Recommended). Focused phase; per-model prompt variants
+  and native Ollama path deferred to Phase 121/122
+  candidates.
+- Q2c — Both layers (non-Recommended; picked over
+  provider-only Recommended). Provider flags unknown
+  names; planner runs the fuzzy recovery. Belt-and-
+  suspenders posture.
+- Q3a — Fuzzy-match auto-correct above threshold
+  (Recommended). Phase 112 `title_similarity` reuse;
+  default threshold `0.80`.
+
+**Streak predictions:** DESIGN.md HOLD → 11; PRODUCT.md
+HOLD → 11; `aivyx-core/src/lib.rs` predicted BREAK 3 → 1
+(honest 30/70 hold; auto-correction lives inside the turn
+loop using `AuditHook` → `AuditTag` bridge, same path
+Phase 117 `SkillInvocation` broke from). Will attempt the
+additive-field route at Task 4 to preserve the streak.
+
+Test count: predicted `+25 to +45`. Zero new workspace
+deps anticipated.
+
+**Audit context — ninth consecutive substrate/polish
+phase picked over the Channel Activation Milestone.**
+Honest tracking. The substrate ledger has been empty
+since Phase 119; Phase 120 opens against the audit's #3
+direction (G6 distinguishing claim). The milestone
+becomes harder to defer each phase; the audit ranking
+stays unchanged.
+
+After Phase 120, Phase 121 candidates (per audit + Phase
+120 exit ranking): Channel Activation Milestone, per-
+model prompt variants (local-LLM rehab #2), native Ollama
+path (#3), release prep, new Chapter F.
+
 ## Phase 119 — Phase 118 Apply-Side Closeout + Tool-Relevance Dump (Operator-Value Polish)
 
 **Frozen — see [PHASE_119.md](PHASE_119.md).** Audit-
