@@ -409,6 +409,15 @@ fn render_proposal_detail(p: &PersonaProposalSummary) -> String {
         "\n  proposed op:\n{}\n",
         indent_block(&op_str, "    "),
     ));
+    // Phase 118 — when the category is one of the operator-
+    // staged refinement kinds (ProfileHint or
+    // RoleDefinitionSuggestion), the AppendList value is a
+    // JSON-serialized payload. Render it human-readably so
+    // the operator doesn't have to parse JSON-in-JSON to
+    // decide whether to approve.
+    if let Some(rendered) = render_phase_118_payload(&p.category, &p.proposed_op) {
+        out.push_str(&format!("\n  rendered draft:\n{rendered}"));
+    }
     if let Some(reason) = &p.proposed_reason {
         out.push_str(&format!("\n  agent reason: {reason}\n"));
     }
@@ -439,6 +448,112 @@ fn indent_block(s: &str, indent: &str) -> String {
         .map(|line| format!("{indent}{line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Phase 118 — when the proposal's category is one of the
+/// operator-staged refinement kinds, the `AppendList.value`
+/// field carries a JSON-serialized
+/// [`aivyx_core::skill_proposer::ProfileFieldHint`] or
+/// [`aivyx_core::skill_proposer::RoleDraft`] payload. This
+/// renders the payload in operator-readable form so
+/// `aivyx persona proposals show <id>` doesn't make the
+/// operator parse JSON-in-JSON.
+///
+/// Returns `None` when the category isn't Phase 118, when the
+/// op shape isn't `AppendList`, or when the inner blob
+/// doesn't parse — the proposed_op JSON dump above still
+/// shows the raw form so nothing is hidden.
+fn render_phase_118_payload(
+    category: &str,
+    proposed_op: &serde_json::Value,
+) -> Option<String> {
+    // Op must be an `AppendList { value: <json-string> }`.
+    let kind = proposed_op.get("kind")?.as_str()?;
+    if kind != "AppendList" {
+        return None;
+    }
+    let inner_blob = proposed_op.get("value")?.as_str()?;
+    match category {
+        "ProfileHint" => render_profile_hint_payload(inner_blob),
+        "RoleDefinitionSuggestion" => render_role_draft_payload(inner_blob),
+        _ => None,
+    }
+}
+
+fn render_profile_hint_payload(blob: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(blob).ok()?;
+    let field = parsed.get("field")?.as_str()?;
+    let suggested_value = parsed.get("suggested_value")?.as_str()?;
+    let rationale = parsed.get("rationale")?.as_str()?;
+    let mut out = String::new();
+    out.push_str(&format!("    field            = {field}\n"));
+    out.push_str(&format!("    suggested_value  = {suggested_value:?}\n"));
+    out.push_str("    rationale        =\n");
+    for line in rationale.lines() {
+        out.push_str(&format!("      {line}\n"));
+    }
+    out.push_str(
+        "\n  To apply: edit aivyx.toml [profile] and update the\n",
+    );
+    out.push_str(
+        "  field above. Phase 118 does NOT auto-mutate aivyx.toml.\n",
+    );
+    Some(out)
+}
+
+fn render_role_draft_payload(blob: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(blob).ok()?;
+    let name = parsed.get("name")?.as_str()?;
+    let parent = parsed.get("parent").and_then(|v| v.as_str());
+    let system_prompt_addendum =
+        parsed.get("system_prompt_addendum")?.as_str()?;
+    let tool_allowlist_additions: Vec<String> = parsed
+        .get("tool_allowlist_additions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let rationale = parsed.get("rationale")?.as_str()?;
+    let mut out = String::new();
+    out.push_str(&format!("    name             = {name}\n"));
+    match parent {
+        Some(p) => {
+            out.push_str(&format!("    parent           = {p}\n"));
+        }
+        None => {
+            out.push_str("    parent           = (none — top-level role)\n");
+        }
+    }
+    out.push_str("    system_prompt_addendum:\n");
+    for line in system_prompt_addendum.lines() {
+        out.push_str(&format!("      {line}\n"));
+    }
+    if tool_allowlist_additions.is_empty() {
+        out.push_str("    tool_allowlist_additions: (none)\n");
+    } else {
+        out.push_str("    tool_allowlist_additions:\n");
+        for tool in &tool_allowlist_additions {
+            out.push_str(&format!("      - {tool}\n"));
+        }
+    }
+    out.push_str("    rationale        =\n");
+    for line in rationale.lines() {
+        out.push_str(&format!("      {line}\n"));
+    }
+    out.push_str(
+        "\n  To apply: edit aivyx.toml and add a [roles.<name>]\n",
+    );
+    out.push_str(
+        "  section using the addendum + tool_allowlist above\n",
+    );
+    out.push_str(
+        "  on top of any inherited parent role. Phase 118 does NOT\n",
+    );
+    out.push_str("  auto-mutate aivyx.toml.\n");
+    Some(out)
 }
 
 #[cfg(test)]
@@ -803,5 +918,169 @@ mod phase_113_filter_tests {
         // If a future phase changes either side, this test surfaces
         // the divergence.
         assert_eq!(AUTO_ACCEPTED_DELTA_ID_PREFIX, "pd-auto-");
+    }
+
+    // ----- Phase 118 — proposal-detail rendering for the new categories -----
+
+    fn profile_hint_proposal() -> PersonaProposalSummary {
+        let payload = serde_json::json!({
+            "field": "CommunicationStyle",
+            "suggested_value": "terse and bullet-formatted",
+            "rationale": "operator consistently uses bullets in their own messages",
+        });
+        PersonaProposalSummary {
+            id: "pp-phase118-hint".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-118".into(),
+            status: "Pending".into(),
+            category: "ProfileHint".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": payload.to_string(),
+            }),
+            proposed_reason: Some(
+                "Phase 118 — observed recurring style preference".into(),
+            ),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: None,
+        }
+    }
+
+    fn role_definition_suggestion_proposal() -> PersonaProposalSummary {
+        let payload = serde_json::json!({
+            "name": "research-deploy",
+            "parent": "research",
+            "system_prompt_addendum": "After research, summarize deploy diff for approval.",
+            "tool_allowlist_additions": ["git.commit", "shell.deploy"],
+            "rationale": "operator's research-then-deploy shape repeats five+ times this week",
+        });
+        PersonaProposalSummary {
+            id: "pp-phase118-role".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-118".into(),
+            status: "Pending".into(),
+            category: "RoleDefinitionSuggestion".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": payload.to_string(),
+            }),
+            proposed_reason: Some(
+                "Phase 118 — recurring shape past existing role envelope".into(),
+            ),
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: None,
+        }
+    }
+
+    #[test]
+    fn proposal_detail_renders_profile_hint_payload_humanreadably() {
+        let proposal = profile_hint_proposal();
+        let out = render_proposal_detail(&proposal);
+        // Header carries the category.
+        assert!(out.contains("category    = ProfileHint"));
+        // Rendered draft block carries the field, value, rationale.
+        assert!(out.contains("rendered draft:"));
+        assert!(out.contains("field            = CommunicationStyle"));
+        assert!(out.contains("bullet-formatted"));
+        assert!(out.contains("rationale"));
+        assert!(out.contains("uses bullets"));
+        // Operator action instruction explains the workflow
+        // (Phase 118 does NOT auto-mutate aivyx.toml).
+        assert!(out.contains("To apply"));
+        assert!(out.contains("aivyx.toml"));
+        assert!(out.contains("does NOT auto-mutate"));
+    }
+
+    #[test]
+    fn proposal_detail_renders_role_draft_payload_humanreadably() {
+        let proposal = role_definition_suggestion_proposal();
+        let out = render_proposal_detail(&proposal);
+        assert!(out.contains("category    = RoleDefinitionSuggestion"));
+        assert!(out.contains("rendered draft:"));
+        assert!(out.contains("name             = research-deploy"));
+        assert!(out.contains("parent           = research"));
+        assert!(out.contains("system_prompt_addendum"));
+        assert!(out.contains("summarize deploy diff"));
+        assert!(out.contains("tool_allowlist_additions"));
+        assert!(out.contains("- git.commit"));
+        assert!(out.contains("- shell.deploy"));
+        assert!(out.contains("rationale"));
+        assert!(out.contains("repeats"));
+        assert!(out.contains("[roles.<name>]"));
+        assert!(out.contains("does NOT"));
+    }
+
+    #[test]
+    fn proposal_detail_renders_role_draft_with_no_parent_as_top_level() {
+        let mut proposal = role_definition_suggestion_proposal();
+        // Override the payload's parent to null.
+        let payload = serde_json::json!({
+            "name": "operator-mode",
+            "parent": null,
+            "system_prompt_addendum": "operator-direct mode",
+            "tool_allowlist_additions": [],
+            "rationale": "top-level role distinct from anything existing",
+        });
+        proposal.proposed_op = serde_json::json!({
+            "kind": "AppendList",
+            "value": payload.to_string(),
+        });
+        let out = render_proposal_detail(&proposal);
+        assert!(out.contains("name             = operator-mode"));
+        assert!(out.contains("parent           = (none — top-level role)"));
+        // Empty allowlist → explicit "(none)" rather than blank.
+        assert!(out.contains("tool_allowlist_additions: (none)"));
+    }
+
+    #[test]
+    fn proposal_detail_renders_non_phase_118_proposal_without_rendered_draft() {
+        // Phase 117-and-earlier categories don't get the
+        // rendered-draft block — the standard JSON dump above
+        // the helper already shows everything.
+        let proposal = PersonaProposalSummary {
+            id: "pp-legacy".into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-legacy".into(),
+            status: "Pending".into(),
+            category: "BehavioralPreferences".into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": "prefer terse replies",
+            }),
+            proposed_reason: None,
+            applied_op: None,
+            applied_seq: None,
+            rejected_reason: None,
+            resolved_at_unix_ms: None,
+            supersedes_proposal_id: None,
+        };
+        let out = render_proposal_detail(&proposal);
+        assert!(out.contains("category    = BehavioralPreferences"));
+        // No rendered-draft block for legacy categories.
+        assert!(!out.contains("rendered draft:"));
+    }
+
+    #[test]
+    fn proposal_detail_falls_back_when_phase_118_payload_is_malformed() {
+        // Defensive: a malformed inner JSON blob shouldn't
+        // crash the renderer. The proposed_op JSON dump above
+        // still shows the raw value so nothing is hidden.
+        let mut proposal = profile_hint_proposal();
+        proposal.proposed_op = serde_json::json!({
+            "kind": "AppendList",
+            "value": "this is not valid json",
+        });
+        let out = render_proposal_detail(&proposal);
+        assert!(out.contains("category    = ProfileHint"));
+        // Rendered-draft helper returned None; section absent.
+        assert!(!out.contains("rendered draft:"));
+        // Raw op block is still there.
+        assert!(out.contains("proposed op:"));
     }
 }

@@ -1456,6 +1456,55 @@ fn build_proposed_op(
         ) => crate::persona::PersonaDeltaOp::SetScalar {
             value: Some(value.clone()),
         },
+        // Phase 118 — ProfileHint must come with the matching
+        // ProfileHint-shaped draft. The payload is JSON-
+        // serialized so it rides inside the list-shaped
+        // category's `AppendList { value }` op (same pattern
+        // as Phase 110 LearnedSkill).
+        (
+            crate::persona::PersonaDeltaCategory::ProfileHint,
+            ProposedDraft::ProfileHint {
+                field,
+                suggested_value,
+                rationale,
+            },
+        ) => {
+            let payload = aivyx_core::skill_proposer::ProfileFieldHint {
+                field: *field,
+                suggested_value: suggested_value.clone(),
+                rationale: rationale.clone(),
+            };
+            crate::persona::PersonaDeltaOp::AppendList {
+                value: serde_json::to_string(&payload).map_err(|e| {
+                    format!("ProfileHint payload encode: {e}")
+                })?,
+            }
+        }
+        // Phase 118 — RoleDefinitionSuggestion must come with
+        // the matching RoleDefinitionSuggestion-shaped draft.
+        (
+            crate::persona::PersonaDeltaCategory::RoleDefinitionSuggestion,
+            ProposedDraft::RoleDefinitionSuggestion {
+                name,
+                parent,
+                system_prompt_addendum,
+                tool_allowlist_additions,
+                rationale,
+            },
+        ) => {
+            let payload = aivyx_core::skill_proposer::RoleDraft {
+                name: name.clone(),
+                parent: parent.clone(),
+                system_prompt_addendum: system_prompt_addendum.clone(),
+                tool_allowlist_additions: tool_allowlist_additions.clone(),
+                rationale: rationale.clone(),
+            };
+            crate::persona::PersonaDeltaOp::AppendList {
+                value: serde_json::to_string(&payload).map_err(|e| {
+                    format!("RoleDraft payload encode: {e}")
+                })?,
+            }
+        }
         // Any other (category, draft) combination is an
         // incompatibility — the judge produced a category
         // that doesn't match its draft shape. Refuse to write.
@@ -1492,6 +1541,14 @@ fn parse_persona_delta_category(
         "CharacterTraits" => C::CharacterTraits,
         "RelationshipMilestones" => C::RelationshipMilestones,
         "LearnedSkill" => C::LearnedSkill,
+        // Phase 118 — the two operator-staged refinement
+        // categories. Always-staged routing in
+        // `decide_routing` makes the chain write path the
+        // operator-approval flow's job, but the proposer's
+        // `build_proposed_op` still has to construct the
+        // pending PersonaDelta.
+        "ProfileHint" => C::ProfileHint,
+        "RoleDefinitionSuggestion" => C::RoleDefinitionSuggestion,
         other => {
             return Err(format!("unknown persona delta category: {other}"))
         }
@@ -2559,7 +2616,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_persona_delta_category_accepts_all_eleven_labels() {
+    fn parse_persona_delta_category_accepts_all_thirteen_labels() {
         for label in [
             "AssistantName",
             "OperatorProfile",
@@ -2572,11 +2629,104 @@ mod tests {
             "CharacterTraits",
             "RelationshipMilestones",
             "LearnedSkill",
+            // Phase 118 additions.
+            "ProfileHint",
+            "RoleDefinitionSuggestion",
         ] {
             parse_persona_delta_category(label)
                 .unwrap_or_else(|e| panic!("label {label} failed: {e}"));
         }
         assert!(parse_persona_delta_category("NotARealCategory").is_err());
+    }
+
+    // ----- Phase 118 — build_proposed_op dispatch -----
+
+    #[test]
+    fn build_proposed_op_dispatches_profile_hint() {
+        let draft = ProposedDraft::ProfileHint {
+            field: aivyx_core::skill_proposer::ProfileField::CommunicationStyle,
+            suggested_value: "terse and bullet-formatted".into(),
+            rationale: "operator consistently uses bullets".into(),
+        };
+        let op = build_proposed_op(
+            "ProfileHint",
+            &draft,
+            "reason text".into(),
+        )
+        .expect("compatible pair");
+        assert_eq!(op.category, crate::persona::PersonaDeltaCategory::ProfileHint);
+        assert_eq!(op.reason.as_deref(), Some("reason text"));
+        match &op.op {
+            crate::persona::PersonaDeltaOp::AppendList { value } => {
+                // The chain value is a JSON-serialized
+                // ProfileFieldHint payload. Round-trip-decode
+                // it to verify the contents.
+                let parsed: aivyx_core::skill_proposer::ProfileFieldHint =
+                    serde_json::from_str(value).expect("round-trip");
+                assert_eq!(
+                    parsed.field,
+                    aivyx_core::skill_proposer::ProfileField::CommunicationStyle
+                );
+                assert!(parsed.suggested_value.contains("bullet-formatted"));
+                assert!(parsed.rationale.contains("bullets"));
+            }
+            other => panic!("expected AppendList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_proposed_op_dispatches_role_definition_suggestion() {
+        let draft = ProposedDraft::RoleDefinitionSuggestion {
+            name: "research-deploy".into(),
+            parent: Some("research".into()),
+            system_prompt_addendum: "After research, summarize the diff.".into(),
+            tool_allowlist_additions: vec!["git.commit".into()],
+            rationale: "operator's research-then-deploy shape repeats".into(),
+        };
+        let op = build_proposed_op(
+            "RoleDefinitionSuggestion",
+            &draft,
+            "r".into(),
+        )
+        .expect("compatible pair");
+        assert_eq!(
+            op.category,
+            crate::persona::PersonaDeltaCategory::RoleDefinitionSuggestion
+        );
+        match &op.op {
+            crate::persona::PersonaDeltaOp::AppendList { value } => {
+                let parsed: aivyx_core::skill_proposer::RoleDraft =
+                    serde_json::from_str(value).expect("round-trip");
+                assert_eq!(parsed.name, "research-deploy");
+                assert_eq!(parsed.parent.as_deref(), Some("research"));
+                assert_eq!(parsed.tool_allowlist_additions.len(), 1);
+                assert!(parsed.rationale.contains("repeats"));
+            }
+            other => panic!("expected AppendList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_proposed_op_rejects_profile_hint_with_wrong_draft_shape() {
+        // Category ProfileHint + ListAppend draft → incompatible.
+        let bad = ProposedDraft::ListAppend { value: "x".into() };
+        let err =
+            build_proposed_op("ProfileHint", &bad, "r".into()).unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
+    }
+
+    #[test]
+    fn build_proposed_op_rejects_role_definition_with_wrong_draft_shape() {
+        // Category RoleDefinitionSuggestion + LearnedSkill draft → incompatible.
+        let bad = ProposedDraft::LearnedSkill {
+            name: "x".into(),
+            trigger: "y".into(),
+            procedure: "z".into(),
+        };
+        let err =
+            build_proposed_op("RoleDefinitionSuggestion", &bad, "r".into())
+                .unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
     }
 
     // ----- Task 6 — Audit-event construction helpers -----
