@@ -271,7 +271,7 @@ Roughly seven sub-tasks plus exit + backfill:
   (`4100820`).
 - [x] `aivyx role import <id>` CLI — Task 5 (`d3da33b`).
 - [x] `aivyx tool-relevance dump` CLI — Task 6 (`6289e1a`).
-- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (`f6993d3`).
 - [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (all three Recommended).
 - [x] DESIGN.md streak — **HELD as predicted**.
