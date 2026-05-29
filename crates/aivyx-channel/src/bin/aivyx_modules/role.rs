@@ -315,4 +315,136 @@ mod tests {
         let draft = parse_proposal_as_role_draft(&proposal).unwrap();
         assert_eq!(draft.name, "inline-role");
     }
+
+    // ----- Phase 119 Task 7 — scripted e2e (role import pipeline) -----
+
+    fn e2e_tempdir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "aivyx-phase119-task7-role-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn e2e_role_import_pipeline_from_approved_proposal_to_aivyx_toml() {
+        // Mirrors the ProfileHint e2e in profile.rs for the second
+        // Phase 118 category. Steps:
+        //   1. Build the wire-shape PersonaProposalSummary.
+        //   2. Validate via the pure parser.
+        //   3. Apply via the Task 3 atomic primitive.
+        //   4. Read back the file; assert the [roles.<name>] section
+        //      landed with the right addendum + parent + allowlist.
+        //   5. Append the audit event the daemon would have written,
+        //      assert chain HMAC verifies.
+        use crate::toml_edit_apply::apply_role_draft_to_path;
+        let dir = e2e_tempdir("import-pipeline");
+        let aivyx_toml = dir.join("aivyx.toml");
+        // Pre-existing config has a profile + an unrelated role.
+        // Import must add the new role WITHOUT touching either.
+        std::fs::write(
+            &aivyx_toml,
+            "[profile]\n\
+             assistant_name = \"Aivyx\"\n\
+             \n\
+             [roles.coder]\n\
+             tool_allowlist = [\"fs.read\"]\n",
+        )
+        .unwrap();
+
+        // Step 1 — wire-shape proposal.
+        let proposal = proposal_fixture(
+            "pp-e2e-role-1",
+            "RoleDefinitionSuggestion",
+            "Approved",
+            Some(role_draft_payload("research-deploy", Some("research"))),
+        );
+
+        // Step 2 — pure parse.
+        let draft = parse_proposal_as_role_draft(&proposal)
+            .expect("Phase 118 proposal must validate as RoleDraft");
+        assert_eq!(draft.name, "research-deploy");
+        assert_eq!(draft.parent.as_deref(), Some("research"));
+
+        // Step 3 — Task 3 atomic apply (force=false; no conflict
+        // since `research-deploy` isn't in the pre-existing toml).
+        let applied = apply_role_draft_to_path(&aivyx_toml, &draft, false)
+            .expect("apply must succeed");
+        assert_eq!(applied.role_name, "research-deploy");
+        assert_eq!(applied.parent.as_deref(), Some("research"));
+
+        // Step 4 — file contents reflect the apply.
+        let post = std::fs::read_to_string(&aivyx_toml).unwrap();
+        // New section landed.
+        assert!(post.contains("[roles.research-deploy]"));
+        assert!(post.contains("inherits_from = \"research\""));
+        assert!(post.contains("system_prompt = \"Test addendum.\""));
+        assert!(post.contains("\"git.commit\""));
+        // Pre-existing state untouched.
+        assert!(post.contains("[profile]"));
+        assert!(post.contains("\"Aivyx\""));
+        assert!(post.contains("[roles.coder]"));
+        assert!(post.contains("\"fs.read\""));
+
+        // Step 5 — audit event linkage.
+        use aivyx_audit::{AuditEvent, AuditLog, AuditWriter, HmacChainLog};
+        let chain = HmacChainLog::new(b"phase-119-task7-test-key-32-byte".to_vec());
+        chain
+            .append(AuditEvent::RoleDraftImported {
+                session_id: aivyx_core::SessionId::new(),
+                proposal_id: proposal.id.clone(),
+                role_name: applied.role_name.clone(),
+                parent: applied.parent.clone(),
+            })
+            .expect("audit append must succeed");
+        chain.verify().expect("chain must verify");
+        assert_eq!(AuditLog::len(&chain), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn e2e_role_import_refuses_overwrite_then_force_succeeds() {
+        // The --force semantics end-to-end: same-name role already
+        // present → RoleExists without --force; succeeds with --force
+        // and replaces the section.
+        use crate::toml_edit_apply::{apply_role_draft_to_path, TomlApplyError};
+        let dir = e2e_tempdir("force-overwrite");
+        let aivyx_toml = dir.join("aivyx.toml");
+        std::fs::write(
+            &aivyx_toml,
+            "[roles.research-deploy]\n\
+             tool_allowlist = [\"git.status\"]\n",
+        )
+        .unwrap();
+
+        let proposal = proposal_fixture(
+            "pp-force-1",
+            "RoleDefinitionSuggestion",
+            "Approved",
+            Some(role_draft_payload("research-deploy", None)),
+        );
+        let draft = parse_proposal_as_role_draft(&proposal).unwrap();
+
+        // Without --force: refuses.
+        let err = apply_role_draft_to_path(&aivyx_toml, &draft, false)
+            .unwrap_err();
+        assert!(matches!(err, TomlApplyError::RoleExists { .. }));
+        // File untouched.
+        let mid = std::fs::read_to_string(&aivyx_toml).unwrap();
+        assert!(mid.contains("\"git.status\""));
+
+        // With --force: succeeds and replaces.
+        let applied = apply_role_draft_to_path(&aivyx_toml, &draft, true)
+            .expect("apply with force must succeed");
+        assert_eq!(applied.role_name, "research-deploy");
+        let post = std::fs::read_to_string(&aivyx_toml).unwrap();
+        // Old allowlist gone (full section replacement).
+        assert!(!post.contains("\"git.status\""));
+        // New section's allowlist present.
+        assert!(post.contains("\"git.commit\""));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

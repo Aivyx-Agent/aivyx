@@ -261,31 +261,93 @@ Roughly seven sub-tasks plus exit + backfill:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_119.md` + ROADMAP Phase 119 entry +
-  docs/README status row — Task 1 (this commit).
-- [ ] Audit-event variants — Task 2.
-- [ ] Atomic TOML editing primitive — Task 3.
-- [ ] `aivyx profile apply-hint <id>` CLI — Task 4.
-- [ ] `aivyx role import <id>` CLI — Task 5.
-- [ ] `aivyx tool-relevance dump` CLI — Task 6.
-- [ ] Scripted e2e + INSTALL.md sweep — Task 7.
-- [ ] Q1/Q2/Q3 resolved with operator sign-off pre-Task
+- [x] `docs/PHASE_119.md` + ROADMAP Phase 119 entry +
+  docs/README status row — Task 1 (`89992e1`).
+- [x] Audit-event variants — Task 2 (`05df151`).
+- [x] Atomic TOML editing primitive — Task 3 (`e6cc7fa`).
+  `toml_edit` already transitively present (Phase 58
+  `aivyx profile edit`); zero new workspace deps.
+- [x] `aivyx profile apply-hint <id>` CLI — Task 4
+  (`4100820`).
+- [x] `aivyx role import <id>` CLI — Task 5 (`d3da33b`).
+- [x] `aivyx tool-relevance dump` CLI — Task 6 (`6289e1a`).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (all three Recommended).
-- [ ] DESIGN.md streak — predicted HOLD (streak → 10).
-- [ ] PRODUCT.md streak — predicted HOLD (streak → 10).
-- [ ] `aivyx-core/src/lib.rs` streak — predicted HOLD
-  (streak → 3), honest 70/30 hold.
-- [ ] Zero new workspace dependencies, OR honest Q-block
-  re-sign-off if `toml_edit` crate isn't already
-  transitively present.
-- [ ] Test count delta within `+25` to `+45`.
-- [ ] Zero clippy warnings.
-- [ ] Phase 118 operator-value loop **mechanically
+- [x] DESIGN.md streak — **HELD as predicted**.
+  `c2be6d51…` unchanged. Streak extends 9 → 10.
+- [x] PRODUCT.md streak — **HELD as predicted**.
+  `6e840cef…` unchanged. Streak extends 9 → 10.
+- [x] `aivyx-core/src/lib.rs` streak — **HELD as
+  predicted** (70/30 hold case did NOT fire). `d1d4373b…`
+  unchanged. Streak extends 2 → 3. The daemon-side
+  ProfileHintApplied / RoleDraftImported audit writes
+  went directly via `AuditWriter::append` on
+  `PersistentAuditLog`, bypassing the lib.rs `AuditTag`
+  bridge entirely.
+- [x] Zero new workspace dependencies.
+- [ ] Test count delta `+61` (2248 → 2309 after Task 7's
+  e2e) — **above** the predicted `+25 to +45` range.
+  Honest scope reporting: each of the three CLI
+  commands shipped its own thorough parser-coverage
+  block (6-7 tests each), the Task 3 atomic primitive
+  shipped pure-transform AND atomic-I/O coverage (16
+  tests), and Task 2 audit-event variants shipped wire-
+  compat + serde-jcs + HMAC-chain round-trip coverage
+  (7 tests). Phase 6 Q5 honesty: CLI parser bugs surface
+  late in real use; thorough coverage is worth the count.
+- [x] Zero clippy warnings.
+- [x] Phase 118 operator-value loop **mechanically
   closed**: the operator's gesture from "approve a Phase
   118 proposal" to "live config reflects the approval"
-  is a CLI command, not a hand-edit.
-- [ ] Phase 116 `aivyx tool-relevance dump` deferral
+  is now a single CLI command (`apply-hint` /
+  `role import`), not a hand-edit.
+- [x] Phase 116 `aivyx tool-relevance dump` deferral
   closed.
+
+## Prediction vs reality
+
+**All three streak predictions correct, second phase in
+a row.** First time since the Phase 92 streak that two
+consecutive phases have landed 3-of-3 on streak
+predictions.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; Phase 119 ships
+  operator-CLI surface within P8 + P13 + P9 envelopes.
+  Streak: 9 → 10.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). Same posture. Streak: 9 → 10.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted (70/30
+  hold case did NOT fire). The Q3a design choice — write
+  ProfileHintApplied / RoleDraftImported as additive
+  AuditEvent variants in `aivyx-audit` and let the
+  daemon's IPC handler call `AuditWriter::append`
+  directly — bypassed the lib.rs `AuditTag` bridge
+  entirely. Phase 117's `SkillInvocation` precedent
+  needed the bridge because the calling site was inside
+  the core turn loop; Phase 119's calling site is the
+  daemon's IPC handler, which already holds an
+  `AuditWriter` reference. Streak: 2 → 3.
+
+**Test count `+61` is ABOVE the predicted `+25 to +45`
+range.** Phase 6 Q5 honesty: Phase 119 covered three
+distinct CLI commands plus an atomic TOML primitive plus
+two new audit-event variants. Each surface has its own
+parser-coverage, wire-compat, and validation tests.
+Per-command parser coverage is intentionally thorough
+since CLI parsing bugs surface late in real use; each
+test pins one concrete behavior; none are redundant. The
+overshoot is honest reflection of broader surface, not
+test-count inflation. Same posture as Phase 118 (+60
+above the +25-50 band).
+
+**Q-block went through fully as operator-picked.** All
+three Recommended picks shipped as committed:
+- Q1a — Three CLI commands in one phase.
+- Q2a — Separate approve + apply gestures.
+- Q3a — New audit-event variants (in `aivyx-audit`, no
+  lib.rs bridge needed).
 
 ## Direction after Phase 119
 

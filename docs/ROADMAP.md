@@ -3446,11 +3446,11 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 119 — Phase 118 Apply-Side Closeout + Tool-Relevance Dump (Operator-Value Polish)
 
-**Active — see [PHASE_119.md](PHASE_119.md).** Audit-
+**Frozen — see [PHASE_119.md](PHASE_119.md).** Audit-
 informed phase. Closes the manual-edit gap left by
 Phase 118 and the deferred `aivyx tool-relevance dump`
 CLI from Phase 116. Three new operator-side CLI
-commands ship together:
+commands shipped together:
 - `aivyx profile apply-hint <id>` — applies an
   approved `ProfileHint` to `aivyx.toml`'s `[profile]`
   section atomically.
@@ -3475,16 +3475,31 @@ commands ship together:
   operator's act-on-approval gesture distinctly from
   the approval itself.
 
-**Streak predictions:** DESIGN.md HOLD → 10; PRODUCT.md
-HOLD → 10; `aivyx-core/src/lib.rs` HOLD → 3 (honest
-70/30; if daemon-side wiring needs new `AuditTag`
-variant for the bridge, the 30% case fires).
+**Streak outcomes:** all three predictions correct,
+second phase in a row (first 2-in-a-row 3-of-3 streak
+since Phase 92).
+- DESIGN.md: HELD as predicted. Streak → 10.
+- PRODUCT.md: HELD as predicted. Streak → 10.
+- `aivyx-core/src/lib.rs`: HELD as predicted (70/30
+  hold case did NOT fire). Daemon-side audit writes
+  went via `AuditWriter::append` directly, bypassing
+  the lib.rs `AuditTag` bridge. Streak → 3.
 
-Test count: predicted `+25 to +45`. Zero new workspace
-deps anticipated (TBD on `toml_edit` crate presence).
+Test count: 2248 → 2309 (+61). **Above** the predicted
+`+25 to +45` band — honest scope reporting (Phase 6 Q5):
+three distinct CLI commands plus atomic TOML primitive
+plus two audit-event variants each carrying their own
+thorough parser-coverage / wire-compat / validation
+blocks. CLI parser bugs surface late in real use;
+thorough coverage is worth the count. Same posture as
+Phase 118's +60 overshoot.
 
-After Phase 119, every named operator-value deferral
-from Phases 112-118 is closed. The Channel Activation
+Zero new workspace deps (`toml_edit` already
+transitively present from Phase 58 `aivyx profile
+edit`). Zero clippy warnings.
+
+After Phase 119, **every named operator-value deferral
+from Phases 112-118 is closed**. The Channel Activation
 Milestone becomes the highest-information-value
 direction for Phase 120.
 

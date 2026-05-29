@@ -703,28 +703,50 @@ enabled = true          # default; set false to silence
    #   To apply: edit aivyx.toml [profile] and update the
    #   field above. Phase 118 does NOT auto-mutate aivyx.toml.
    ```
-5. To act on the hint, edit `aivyx.toml` directly:
+5. **Phase 119 — apply the hint with one command.** From
+   Phase 119 onward, the operator doesn't have to translate
+   the rendered draft into a TOML edit by hand. Approve the
+   proposal first, then run the apply-helper:
 
-   ```toml
-   [profile]
-   communication_style = "terse and bullet-formatted"
+   ```sh
+   aivyx persona proposals approve pp-abc...
+   aivyx profile apply-hint pp-abc...
+   # Apply `communication_style` = "terse and bullet-formatted" to aivyx.toml?
+   # [y/N] (re-run with --yes to skip this prompt)
+   y
+   #
+   # Applied `communication_style` to aivyx.toml.
+   # Audit event `ProfileHintApplied` recorded for proposal `pp-abc...`.
+   # Restart the daemon for the new value to take effect:
+   # `aivyx daemon stop && aivyx`.
    ```
 
-   Then restart the daemon. The new value takes effect on
-   the next turn.
-6. For a `RoleDefinitionSuggestion`, the `show` output
-   prints the drafted `system_prompt_addendum`,
-   `tool_allowlist_additions`, and `parent`. To apply, add
-   a `[roles.<name>]` section to `aivyx.toml`:
+   The apply is atomic (tmp-file + rename); comments and
+   other sections in `aivyx.toml` are preserved
+   byte-for-byte. List-field hints (e.g.
+   `behavioral_preferences`) append idempotently; re-running
+   the same apply twice is a no-op.
 
-   ```toml
-   [roles.research-deploy]
-   inherits_from = "research"
-   system_prompt = "After research, summarize deploy diff for approval."
-   tool_allowlist = ["git.commit", "shell.deploy"]
+6. For a `RoleDefinitionSuggestion`, the analogous Phase 119
+   command is `aivyx role import`:
+
+   ```sh
+   aivyx persona proposals approve pp-role-xyz...
+   aivyx role import pp-role-xyz...
+   # Import role `research-deploy` inheriting from `research` into aivyx.toml?
+   # [y/N] (re-run with --yes to skip this prompt)
+   y
+   #
+   # Imported role `research-deploy` into aivyx.toml.
+   # Audit event `RoleDraftImported` recorded for proposal `pp-role-xyz...`.
+   # Restart the daemon for the new role to take effect:
+   # `aivyx daemon stop && aivyx`.
    ```
 
-   Then restart the daemon.
+   Refuses to overwrite an existing `[roles.<name>]`
+   section without `--force`. With `--force`, replaces the
+   section entirely.
+
 7. Either way, `aivyx persona proposals approve pp-abc...`
    marks the chain entry as accepted (or `reject` to
    discard). Approved proposals land in
@@ -748,6 +770,51 @@ enabled = true          # default; set false to silence
   on, the approval is a no-op against the live config —
   the entry sits in the chain as "noted but not applied"
   state.
+- **Phase 119 — apply commands also never auto-mutate
+  without operator action.** `aivyx profile apply-hint` and
+  `aivyx role import` are explicit operator gestures. They
+  confirm with `[y/N]` by default; pass `--yes` to skip
+  the prompt in scripted workflows. The apply step records
+  a `ProfileHintApplied` / `RoleDraftImported` audit event
+  via daemon IPC; if the audit-record step fails after the
+  file mutation lands, the CLI surfaces a soft warning and
+  the operator can re-run the command to re-record (the
+  TOML edit is idempotent).
+
+## Inspecting the tool-relevance ledger (Phase 119)
+
+The Phase 116 `KeyDomain::ToolRelevanceLedger` is AEAD-
+encrypted at rest, so before Phase 119 operators had no
+read path into the per-keyword-key outcome rows the self-
+learning loop had accumulated. Phase 119 closes that
+deferred surface:
+
+```sh
+aivyx tool-relevance dump
+# keyword_key      surface  identifier         success  failure  last_seen_unix_ms
+# ---------------  -------  -----------------  -------  -------  -----------------
+# research+deploy  skill    summarize-pdf            3        0      1715000040000
+# research+deploy  tool     fs.read                  7        1      1715000060000
+# research+deploy  tool     web.fetch                2        0      1715000050000
+# (ledger empty — no per-keyword-key outcomes recorded yet)  ← if empty
+```
+
+Rows are sorted ascending by `(keyword_key, surface,
+identifier)` for stable terminal scanning. Column widths
+size to the longest value — keyword keys never truncate.
+Restrict the dump to a single keyword key with
+`--keyword-key`:
+
+```sh
+aivyx tool-relevance dump --keyword-key research+deploy
+```
+
+The dump talks to the running daemon over IPC; it requires
+the daemon to be up. With `[tool_relevance] enabled =
+false` in `aivyx.toml`, the dump errors with
+`no_tool_relevance_ledger` rather than returning an empty
+table (the substrate is bypassed entirely, not silently
+empty).
 
 ## Moving Aivyx to a new machine
 

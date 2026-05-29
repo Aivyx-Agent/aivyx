@@ -890,4 +890,105 @@ assistant_name = \"oops\"
         );
         assert_eq!(hint.suggested_value, "Aivyx");
     }
+
+    // ----- Phase 119 Task 7 — scripted e2e (profile apply pipeline) -----
+
+    fn e2e_tempdir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "aivyx-phase119-task7-profile-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn e2e_profile_apply_pipeline_from_approved_proposal_to_aivyx_toml() {
+        // The full Phase 119 apply pipeline for a ProfileHint:
+        //   1. Build the wire-shape PersonaProposalSummary the daemon
+        //      would have produced after auto-propose + approve.
+        //   2. Validate via the pure parser.
+        //   3. Apply via the Task 3 atomic primitive against a real
+        //      tempfile.
+        //   4. Read back the file; assert the expected [profile] field
+        //      landed verbatim.
+        //   5. Append the audit event the daemon would have written
+        //      after the apply, assert chain HMAC verifies.
+        // This is the load-bearing assertion that every Phase 119
+        // piece composes — substrate (Task 2) + primitive (Task 3) +
+        // validator (Task 4) all flow end-to-end against the same
+        // Phase 118 chain shape.
+        use crate::toml_edit_apply::apply_profile_hint_to_path;
+        let dir = e2e_tempdir("apply-pipeline");
+        let aivyx_toml = dir.join("aivyx.toml");
+        // The operator already has an existing [profile] section
+        // with a different communication_style — apply must overwrite.
+        std::fs::write(
+            &aivyx_toml,
+            "# Top-level comment retained across apply.\n\
+             [profile]\n\
+             assistant_name = \"Aivyx\"\n\
+             communication_style = \"verbose\"\n",
+        )
+        .unwrap();
+
+        // Step 1 — wire-shape proposal.
+        let proposal = proposal_fixture(
+            "pp-e2e-1",
+            "ProfileHint",
+            "Approved",
+            Some(profile_hint_payload(
+                "CommunicationStyle",
+                "terse and bullet-formatted",
+            )),
+        );
+
+        // Step 2 — pure parse.
+        let hint = parse_proposal_as_profile_hint(&proposal)
+            .expect("Phase 118 proposal must validate as ProfileHint");
+        assert_eq!(
+            hint.field,
+            aivyx_core::skill_proposer::ProfileField::CommunicationStyle
+        );
+
+        // Step 3 — Task 3 atomic apply.
+        let applied = apply_profile_hint_to_path(&aivyx_toml, &hint)
+            .expect("apply must succeed against tempfile");
+        assert_eq!(applied.field, "communication_style");
+        assert_eq!(applied.applied_value, "terse and bullet-formatted");
+
+        // Step 4 — file contents reflect the apply AND the
+        // operator's prior state (other field + comment) is
+        // preserved.
+        let post = std::fs::read_to_string(&aivyx_toml).unwrap();
+        assert!(
+            post.contains("communication_style = \"terse and bullet-formatted\""),
+            "expected new style, got: {post}"
+        );
+        // Old value gone.
+        assert!(!post.contains("\"verbose\""), "old value must be overwritten");
+        // Other Profile field untouched.
+        assert!(post.contains("assistant_name = \"Aivyx\""));
+        // Top-level comment retained.
+        assert!(post.contains("# Top-level comment"));
+
+        // Step 5 — audit event linkage. The daemon would emit
+        // ProfileHintApplied carrying the applied field + value
+        // + the source proposal id. Verify the event lands in
+        // an HmacChainLog and the chain verifies.
+        use aivyx_audit::{AuditEvent, AuditLog, AuditWriter, HmacChainLog};
+        let chain = HmacChainLog::new(b"phase-119-task7-test-key-32-byte".to_vec());
+        chain
+            .append(AuditEvent::ProfileHintApplied {
+                session_id: aivyx_core::SessionId::new(),
+                proposal_id: proposal.id.clone(),
+                field: applied.field.clone(),
+                applied_value: applied.applied_value.clone(),
+            })
+            .expect("audit append must succeed");
+        chain.verify().expect("chain must verify");
+        assert_eq!(AuditLog::len(&chain), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
