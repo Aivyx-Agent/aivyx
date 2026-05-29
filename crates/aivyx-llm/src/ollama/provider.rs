@@ -238,6 +238,61 @@ impl OllamaProvider {
 }
 
 // ---------------------------------------------------------------------------
+// LlmProvider impl (Phase 121 Task 5)
+// ---------------------------------------------------------------------------
+
+#[async_trait::async_trait]
+impl crate::LlmProvider for OllamaProvider {
+    async fn chat_stream(
+        &self,
+        request: crate::LlmRequest<'_>,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<Box<dyn crate::LlmStream>, LlmError> {
+        let body = build_request_body(&request, &self.config.options)?;
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            LlmError::Parse(format!("request serialization: {e}"))
+        })?;
+
+        let mut headers: Vec<(&str, &str)> =
+            vec![("content-type", "application/json")];
+        // Ollama doesn't require auth by default; the API key is
+        // for operator-protected deployments behind a proxy.
+        // Following the OpenAI provider's posture: only emit
+        // Authorization when an api_key is configured so we
+        // don't send `Bearer ` with an empty secret to vanilla
+        // Ollama.
+        let auth_header;
+        if let Some(ref key) = self.config.api_key {
+            use secrecy::ExposeSecret;
+            auth_header = format!("Bearer {}", key.expose_secret());
+            headers.push(("authorization", auth_header.as_str()));
+        }
+
+        let endpoint = self.endpoint();
+        let byte_stream = self
+            .transport
+            .post_sse(&endpoint, &headers, body_bytes, cancellation)
+            .await?;
+
+        // Phase 120 Task 3 — snapshot the canonical tool-name
+        // set so the stream's terminal-build step can flag any
+        // emitted tool_name that doesn't match. Same posture as
+        // the OpenAI and Anthropic providers.
+        let known_tool_names: std::collections::HashSet<String> = request
+            .tools
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        let reader = super::jsonl::JsonlReader::new(byte_stream);
+        Ok(Box::new(super::stream::OllamaStream::new(
+            reader,
+            known_tool_names,
+        )))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Request-body construction (Phase 121 Task 2)
 // ---------------------------------------------------------------------------
 
@@ -730,5 +785,408 @@ mod tests {
         let images = user["images"].as_array().unwrap();
         assert_eq!(images.len(), 1);
         assert_eq!(images[0], "AAA");
+    }
+
+    // ----- Phase 121 Task 5 — chat_stream integration -----
+
+    use crate::transport::{ByteStream, HttpTransport};
+    use crate::{LlmProvider, LlmStepEnd, LlmStreamEvent};
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures_util::stream;
+    use std::pin::Pin;
+    use tokio_util::sync::CancellationToken;
+
+    /// Fake HttpTransport that returns canned bytes for any
+    /// post_sse. Records the request body + URL so tests can
+    /// assert on what the provider sent.
+    struct FakeOllamaTransport {
+        canned_jsonl: Vec<u8>,
+        captured: std::sync::Mutex<Vec<CapturedRequest>>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct CapturedRequest {
+        url: String,
+        body: Vec<u8>,
+        had_auth: bool,
+    }
+
+    impl FakeOllamaTransport {
+        fn new(jsonl: &str) -> Self {
+            FakeOllamaTransport {
+                canned_jsonl: jsonl.as_bytes().to_vec(),
+                captured: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl HttpTransport for FakeOllamaTransport {
+        async fn post_sse(
+            &self,
+            url: &str,
+            headers: &[(&str, &str)],
+            body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            let had_auth =
+                headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization"));
+            self.captured.lock().unwrap().push(CapturedRequest {
+                url: url.to_string(),
+                body,
+                had_auth,
+            });
+            let chunk = Bytes::from(self.canned_jsonl.clone());
+            Ok(Pin::from(Box::new(stream::once(async move { Ok(chunk) })))
+                as Pin<Box<dyn futures_util::Stream<Item = _> + Send>>)
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_posts_to_api_chat_endpoint() {
+        // The load-bearing wiring assertion: chat_stream routes
+        // to /api/chat (not the OpenAI-compat /v1/chat/completions).
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let transport = FakeOllamaTransport::new(jsonl);
+        let captured_handle = std::sync::Arc::new(std::sync::Mutex::new(
+            Vec::<CapturedRequest>::new(),
+        ));
+        // Move the transport's mutex pointer into the provider;
+        // we'll snapshot below.
+        let provider = OllamaProvider::with_transport(
+            OllamaConfig::default_local(),
+            Box::new(transport),
+        );
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        // Drain and verify terminal.
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        assert!(matches!(end, LlmStepEnd::FinalMessage { .. }));
+        // captured_handle is the Arc above, but we can't peek
+        // into the transport from here (it was moved). Use a
+        // separate test below for the URL assertion via a
+        // capturing transport variant.
+        let _ = captured_handle;
+    }
+
+    /// Helper: build a provider with a transport whose captured
+    /// state we can inspect after `chat_stream`. Returns the
+    /// provider AND a clone of the inner Arc<Mutex<...>> so tests
+    /// can read what the provider sent.
+    fn provider_with_capturing_transport(
+        jsonl: &str,
+        config: OllamaConfig,
+    ) -> (
+        OllamaProvider,
+        std::sync::Arc<std::sync::Mutex<Option<CapturedRequest>>>,
+    ) {
+        struct CapturingTransport {
+            canned: Vec<u8>,
+            captured:
+                std::sync::Arc<std::sync::Mutex<Option<CapturedRequest>>>,
+        }
+        #[async_trait]
+        impl HttpTransport for CapturingTransport {
+            async fn post_sse(
+                &self,
+                url: &str,
+                headers: &[(&str, &str)],
+                body: Vec<u8>,
+                _cancellation: &CancellationToken,
+            ) -> Result<ByteStream, LlmError> {
+                let had_auth = headers.iter().any(|(k, _)| {
+                    k.eq_ignore_ascii_case("authorization")
+                });
+                *self.captured.lock().unwrap() = Some(CapturedRequest {
+                    url: url.to_string(),
+                    body: body.clone(),
+                    had_auth,
+                });
+                let chunk = Bytes::from(self.canned.clone());
+                Ok(Pin::from(Box::new(stream::once(
+                    async move { Ok(chunk) },
+                )))
+                    as Pin<
+                        Box<dyn futures_util::Stream<Item = _> + Send>,
+                    >)
+            }
+        }
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let transport = CapturingTransport {
+            canned: jsonl.as_bytes().to_vec(),
+            captured: std::sync::Arc::clone(&captured),
+        };
+        let provider =
+            OllamaProvider::with_transport(config, Box::new(transport));
+        (provider, captured)
+    }
+
+    #[tokio::test]
+    async fn chat_stream_targets_native_api_chat_endpoint_not_openai_compat() {
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let (provider, captured) = provider_with_capturing_transport(
+            jsonl,
+            OllamaConfig::default_local(),
+        );
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let _ = stream.finish().await.unwrap();
+        let cap = captured.lock().unwrap().clone().expect("captured");
+        // The Phase 121 load-bearing wiring assertion: native
+        // /api/chat endpoint, NOT the OpenAI-compat
+        // /v1/chat/completions.
+        assert!(
+            cap.url.ends_with("/api/chat"),
+            "expected /api/chat endpoint, got {}",
+            cap.url
+        );
+        assert!(
+            !cap.url.contains("/v1/chat/completions"),
+            "must NOT route through OpenAI-compat path; got {}",
+            cap.url
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_default_config_omits_authorization_header() {
+        // Vanilla `ollama serve` doesn't authenticate; the
+        // provider must NOT emit `Authorization: Bearer ` with
+        // an empty secret. Matches the OpenAI provider's
+        // empty-key posture.
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let (provider, captured) = provider_with_capturing_transport(
+            jsonl,
+            OllamaConfig::default_local(),
+        );
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let _ = provider.chat_stream(req, &cancel).await.unwrap();
+        let cap = captured.lock().unwrap().clone().expect("captured");
+        assert!(
+            !cap.had_auth,
+            "no Authorization header expected for default-config Ollama"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emits_authorization_when_api_key_set() {
+        // Operator-protected Ollama behind a proxy: the api_key
+        // is propagated as Bearer token.
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let config = OllamaConfig::default_local()
+            .with_api_key(secrecy::SecretString::new("opaque-token".into()));
+        let (provider, captured) =
+            provider_with_capturing_transport(jsonl, config);
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let _ = provider.chat_stream(req, &cancel).await.unwrap();
+        let cap = captured.lock().unwrap().clone().expect("captured");
+        assert!(cap.had_auth, "Authorization header expected when api_key set");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_text_only_turn_produces_final_message() {
+        // End-to-end: three-chunk JSONL response → FinalMessage
+        // with accumulated text + usage. Phase 121's most-common
+        // turn shape (chat-only response).
+        let jsonl = concat!(
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"done\":false}\n",
+            "{\"message\":{\"role\":\"assistant\",\"content\":\" world\"},\"done\":false}\n",
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"prompt_eval_count\":7,\"eval_count\":3}\n",
+        );
+        let (provider, _) = provider_with_capturing_transport(
+            jsonl,
+            OllamaConfig::default_local(),
+        );
+        let msgs = vec![LlmMessage::user_text("say hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        let mut text = String::new();
+        while let Some(ev) = stream.next_event().await.unwrap() {
+            if let LlmStreamEvent::TextChunk(s) = ev {
+                text.push_str(&s);
+            }
+        }
+        assert_eq!(text, "Hello world");
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, usage } => {
+                assert_eq!(text, "Hello world");
+                assert_eq!(usage.input_tokens, 7);
+                assert_eq!(usage.output_tokens, 3);
+            }
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_tool_call_turn_with_known_name() {
+        // End-to-end: request advertises fs.read; model emits a
+        // tool call with the verbatim name; provider classifies
+        // Known and dispatches the ToolCallEnd through.
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"fs.read\",\"arguments\":{\"path\":\"a\"}}}]},\"done\":true,\"prompt_eval_count\":5,\"eval_count\":2}\n";
+        let (provider, _) = provider_with_capturing_transport(
+            jsonl,
+            OllamaConfig::default_local(),
+        );
+        let msgs = vec![LlmMessage::user_text("read a file")];
+        let tools = vec![LlmToolDescriptor {
+            name: "fs.read".into(),
+            description: "Read a file".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, usage, .. } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert_eq!(calls[0].input["path"], "a");
+                assert!(matches!(
+                    calls[0].name_resolution,
+                    crate::NameResolution::Known
+                ));
+                assert_eq!(usage.input_tokens, 5);
+                assert_eq!(usage.output_tokens, 2);
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_hallucinated_name_flagged_unknown_through_provider() {
+        // End-to-end Phase 121 load-bearing case: provider
+        // wires Phase 120 Task 3 NameResolution into the stream
+        // through chat_stream. Request advertised fs.read; model
+        // emitted fs_read. Provider flags Unknown all the way to
+        // the planner's downstream Phase 120 recovery.
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"fs_read\",\"arguments\":{\"path\":\"a\"}}}]},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let (provider, _) = provider_with_capturing_transport(
+            jsonl,
+            OllamaConfig::default_local(),
+        );
+        let msgs = vec![LlmMessage::user_text("read")];
+        let tools = vec![LlmToolDescriptor {
+            name: "fs.read".into(),
+            description: "Read a file".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, .. } => {
+                assert_eq!(calls[0].tool_name, "fs_read");
+                match &calls[0].name_resolution {
+                    crate::NameResolution::Unknown { original } => {
+                        assert_eq!(original, "fs_read");
+                    }
+                    other => panic!("expected Unknown, got {other:?}"),
+                }
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_serializes_request_body_with_native_shape() {
+        // Verify the request body the transport receives matches
+        // Ollama's /api/chat wire shape (not OpenAI's).
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let config = OllamaConfig::default_local().with_options(
+            OllamaOptions {
+                num_ctx: Some(8192),
+                ..OllamaOptions::default()
+            },
+        );
+        let (provider, captured) =
+            provider_with_capturing_transport(jsonl, config);
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: Some(0.7),
+        };
+        let cancel = CancellationToken::new();
+        let _ = provider.chat_stream(req, &cancel).await.unwrap();
+        let cap = captured.lock().unwrap().clone().expect("captured");
+        let body: Value = serde_json::from_slice(&cap.body).unwrap();
+        // The wire shape: model + messages + stream:true +
+        // options block with operator's num_ctx AND the request's
+        // temperature merged in.
+        assert_eq!(body["model"], "qwen3.6:27b");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["options"]["num_ctx"], 8192);
+        assert!(
+            (body["options"]["temperature"].as_f64().unwrap() - 0.7).abs()
+                < 1e-6
+        );
     }
 }
