@@ -156,6 +156,13 @@ impl Default for SkillAutoProposeConfig {
 /// Phase 114 — runtime per-category override set. Mirrors
 /// `aivyx_config::PerCategoryConfigSet` field-for-field so
 /// the `From` conversion is mechanical.
+///
+/// Phase 118 — `profile_hint` + `role_definition_suggestion`
+/// fields mirror the TOML config. Their
+/// `auto_accept_confidence_threshold` is semantically dead at
+/// runtime ([`decide_routing`] hard-codes a Staged outcome for
+/// these two categories per the always-staged Q2(a) contract);
+/// the threshold stays on the struct for type-shape consistency.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PerCategoryConfigSet {
     pub assistant_name: PerCategoryConfig,
@@ -169,6 +176,22 @@ pub struct PerCategoryConfigSet {
     pub character_traits: PerCategoryConfig,
     pub relationship_milestones: PerCategoryConfig,
     pub learned_skill: PerCategoryConfig,
+    /// Phase 118 — `ProfileHint` per-category override.
+    /// `auto_accept_confidence_threshold` is ignored at
+    /// routing time (always-staged). Default-enabled.
+    #[serde(default = "default_phase_118_enabled_list")]
+    pub profile_hint: PerCategoryConfig,
+    /// Phase 118 — `RoleDefinitionSuggestion` per-category
+    /// override. Same notes as `profile_hint`.
+    #[serde(default = "default_phase_118_enabled_list")]
+    pub role_definition_suggestion: PerCategoryConfig,
+}
+
+fn default_phase_118_enabled_list() -> PerCategoryConfig {
+    PerCategoryConfig {
+        enabled: true,
+        auto_accept_confidence_threshold: 0.85,
+    }
 }
 
 impl PerCategoryConfigSet {
@@ -188,6 +211,13 @@ impl PerCategoryConfigSet {
             "CharacterTraits" => Some(&self.character_traits),
             "RelationshipMilestones" => Some(&self.relationship_milestones),
             "LearnedSkill" => Some(&self.learned_skill),
+            // Phase 118 — recognized labels so the unknown-
+            // category fail-safe in `decide_routing` doesn't
+            // fire on these. The threshold is dead-code at
+            // routing time; the enable flag is the operator's
+            // disable knob.
+            "ProfileHint" => Some(&self.profile_hint),
+            "RoleDefinitionSuggestion" => Some(&self.role_definition_suggestion),
             _ => None,
         }
     }
@@ -306,6 +336,10 @@ fn convert_per_category_set(
         character_traits: cv(c.character_traits),
         relationship_milestones: cv(c.relationship_milestones),
         learned_skill: cv(c.learned_skill),
+        // Phase 118 — pass-through; threshold field carried
+        // for type-shape consistency but ignored at routing.
+        profile_hint: cv(c.profile_hint),
+        role_definition_suggestion: cv(c.role_definition_suggestion),
     }
 }
 
@@ -516,6 +550,25 @@ pub fn decide_routing(
         }
     }
 
+    // Phase 118 — always-staged override for the two
+    // operator-staged refinement categories. The P13 (Profile
+    // is operator-declared) and P9 (Role config is operator-
+    // curated) contracts make auto-accept on these categories
+    // a contract violation regardless of judge confidence.
+    // Routing forces Staged; the threshold gate below is
+    // skipped. The override is hard-coded at the category
+    // level (not operator-configurable) — Q2(a) at Phase 118
+    // sign-off. Operators who want to disable proposing these
+    // categories entirely use the per-category `enabled`
+    // flag, which has already fired above.
+    if is_always_staged_category(category) {
+        return SkillRoutingDecision::Staged {
+            category: category.clone(),
+            draft: draft.clone(),
+            confidence: verdict.confidence,
+        };
+    }
+
     // Step 5 — Threshold gate. Use the per-category threshold
     // when configured; fall back to the top-level
     // `auto_accept_confidence_threshold` for Phase 113-alias
@@ -540,6 +593,17 @@ pub fn decide_routing(
             confidence: verdict.confidence,
         }
     }
+}
+
+/// Phase 118 — `true` for category labels whose routing is
+/// hard-coded to `Staged` regardless of judge confidence.
+/// Pure function; the contract is the source of truth (P13 +
+/// P9), not operator policy.
+///
+/// Used by [`decide_routing`] to short-circuit the threshold
+/// gate for the two operator-staged refinement categories.
+pub fn is_always_staged_category(category: &str) -> bool {
+    matches!(category, "ProfileHint" | "RoleDefinitionSuggestion")
 }
 
 // ---------------------------------------------------------------------------
@@ -2090,6 +2154,18 @@ mod tests {
                     enabled: true,
                     auto_accept_confidence_threshold: 0.85,
                 },
+                // Phase 118 — enabled by default in test
+                // fixture; threshold value is dead code at
+                // routing time but carried for shape
+                // consistency.
+                profile_hint: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
+                role_definition_suggestion: PerCategoryConfig {
+                    enabled: true,
+                    auto_accept_confidence_threshold: 0.85,
+                },
             }),
             ..SkillAutoProposeConfig::default()
         }
@@ -2216,6 +2292,180 @@ mod tests {
             d,
             SkillRoutingDecision::DroppedCategoryDisabled { .. }
         ));
+    }
+
+    // ----- Phase 118 — Always-staged routing override -----
+
+    fn profile_hint_verdict(confidence: f32) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            category: Some("ProfileHint".into()),
+            proposed_draft: Some(ProposedDraft::ProfileHint {
+                field: aivyx_core::skill_proposer::ProfileField::CommunicationStyle,
+                suggested_value: "terse".into(),
+                rationale: "operator consistently uses brevity".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    fn role_def_suggestion_verdict(confidence: f32) -> JudgeResponse {
+        JudgeResponse {
+            is_worth_proposing: true,
+            confidence,
+            category: Some("RoleDefinitionSuggestion".into()),
+            proposed_draft: Some(ProposedDraft::RoleDefinitionSuggestion {
+                name: "research-deploy".into(),
+                parent: Some("research".into()),
+                system_prompt_addendum: "...".into(),
+                tool_allowlist_additions: vec!["git.commit".into()],
+                rationale: "operator's research-then-deploy shape repeats".into(),
+            }),
+            is_duplicate_of: None,
+            reasoning: None,
+        }
+    }
+
+    #[test]
+    fn is_always_staged_category_recognizes_phase_118_labels() {
+        // Pure-function pin so the contract is checkable
+        // without setting up a full routing fixture. The two
+        // labels here are the contract; everything else
+        // returns false.
+        assert!(is_always_staged_category("ProfileHint"));
+        assert!(is_always_staged_category("RoleDefinitionSuggestion"));
+        assert!(!is_always_staged_category("LearnedSkill"));
+        assert!(!is_always_staged_category("BehavioralPreferences"));
+        assert!(!is_always_staged_category("CommunicationStyle"));
+        assert!(!is_always_staged_category(""));
+    }
+
+    #[test]
+    fn routing_profile_hint_stages_even_at_max_confidence() {
+        // The P13 Profile-operator-owned contract makes
+        // auto-accept a contract violation regardless of how
+        // confident the judge is. Confidence at 1.0 still
+        // routes to Staged.
+        let verdict = profile_hint_verdict(1.0);
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        match d {
+            SkillRoutingDecision::Staged {
+                category,
+                confidence,
+                ..
+            } => {
+                assert_eq!(category, "ProfileHint");
+                assert!((confidence - 1.0).abs() < 1e-6);
+            }
+            other => panic!("expected Staged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routing_role_definition_suggestion_stages_even_at_max_confidence() {
+        // P9 Role-config operator-curated contract preserved
+        // by hard-coded Staged routing.
+        let verdict = role_def_suggestion_verdict(1.0);
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        match d {
+            SkillRoutingDecision::Staged {
+                category,
+                confidence,
+                ..
+            } => {
+                assert_eq!(category, "RoleDefinitionSuggestion");
+                assert!((confidence - 1.0).abs() < 1e-6);
+            }
+            other => panic!("expected Staged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routing_phase_118_categories_under_phase_113_alias_config_still_stage() {
+        // Phase 113 alias config has `per_category = None`
+        // (single top-level threshold). The always-staged
+        // override must still fire — it's a category-name
+        // check, not a per_category-shape check.
+        let verdict = profile_hint_verdict(0.99);
+        let config = SkillAutoProposeConfig::default(); // per_category = None
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(
+            matches!(d, SkillRoutingDecision::Staged { ref category, .. } if category == "ProfileHint"),
+            "expected Staged for ProfileHint under per_category=None config, got {d:?}",
+        );
+    }
+
+    #[test]
+    fn routing_profile_hint_respects_operator_disable() {
+        // Operator can still disable proposing Phase 118
+        // categories entirely via the per-category enable
+        // flag. The always-staged override is for the
+        // confidence axis; the enable axis stays operator-
+        // controlled.
+        let verdict = profile_hint_verdict(0.95);
+        let mut config = config_with_per_category_defaults();
+        if let Some(pc) = config.per_category.as_mut() {
+            pc.profile_hint.enabled = false;
+        }
+        let d = decide_routing(&verdict, &[], &config);
+        match d {
+            SkillRoutingDecision::DroppedCategoryDisabled { category } => {
+                assert_eq!(category, "ProfileHint");
+            }
+            other => panic!("expected DroppedCategoryDisabled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routing_role_definition_suggestion_respects_operator_disable() {
+        let verdict = role_def_suggestion_verdict(0.95);
+        let mut config = config_with_per_category_defaults();
+        if let Some(pc) = config.per_category.as_mut() {
+            pc.role_definition_suggestion.enabled = false;
+        }
+        let d = decide_routing(&verdict, &[], &config);
+        match d {
+            SkillRoutingDecision::DroppedCategoryDisabled { category } => {
+                assert_eq!(category, "RoleDefinitionSuggestion");
+            }
+            other => panic!("expected DroppedCategoryDisabled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routing_profile_hint_still_drops_when_judge_says_not_worth_proposing() {
+        // The always-staged override only fires when the
+        // proposal makes it to the threshold gate. A judge
+        // verdict of `is_worth_proposing = false` drops
+        // upstream regardless of category.
+        let verdict = JudgeResponse {
+            is_worth_proposing: false,
+            ..profile_hint_verdict(0.0)
+        };
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(
+            d,
+            SkillRoutingDecision::DroppedNotWorthProposing
+        ));
+    }
+
+    #[test]
+    fn routing_profile_hint_judge_dup_still_drops() {
+        // Cross-category dedup from the judge still drops
+        // Phase 118 candidates — same contract as every other
+        // category.
+        let verdict = JudgeResponse {
+            is_duplicate_of: Some("existing CommunicationStyle hint".into()),
+            ..profile_hint_verdict(0.95)
+        };
+        let config = config_with_per_category_defaults();
+        let d = decide_routing(&verdict, &[], &config);
+        assert!(matches!(d, SkillRoutingDecision::DroppedJudgeDup { .. }));
     }
 
     // ----- Phase 114 Task 4 — Category-op dispatch -----
@@ -2601,6 +2851,13 @@ mod tests {
         assert!(pc.lookup("LearnedSkill").is_some());
         assert!(pc.lookup("AssistantName").is_some());
         assert!(pc.lookup("NotARealCategory").is_none());
+        // Phase 118 — recognized labels with the defaults
+        // policy (enabled=true; threshold honored at parse
+        // but ignored at routing).
+        assert!(pc.profile_hint.enabled);
+        assert!(pc.role_definition_suggestion.enabled);
+        assert!(pc.lookup("ProfileHint").is_some());
+        assert!(pc.lookup("RoleDefinitionSuggestion").is_some());
     }
 
     #[test]

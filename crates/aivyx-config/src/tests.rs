@@ -7735,6 +7735,40 @@ fn persona_auto_propose_minimal_section_uses_per_category_defaults() {
             < 1e-6
     );
     assert!(pap.per_category.learned_skill.enabled);
+    // Phase 118 — the two new categories default-enabled
+    // (list-shaped). Threshold honored at parse but ignored
+    // at routing (always-staged).
+    assert!(pap.per_category.profile_hint.enabled);
+    assert!(pap.per_category.role_definition_suggestion.enabled);
+    assert!(
+        (pap.per_category.profile_hint.auto_accept_confidence_threshold
+            - crate::DEFAULT_PERSONA_LIST_THRESHOLD)
+            .abs()
+            < 1e-6
+    );
+    drop(env);
+}
+
+/// Phase 118 — operator can disable proposing the new
+/// Profile/Role categories via the dedicated sub-section
+/// while leaving everything else on defaults.
+#[test]
+fn persona_auto_propose_phase_118_per_category_disable_works() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona.auto_propose.profile_hint]\n\
+         enabled = false\n\
+         \n[persona.auto_propose.role_definition_suggestion]\n\
+         enabled = false\n",
+        "pap-phase-118-disable",
+    );
+    let pap = cfg.persona_auto_propose.expect("section present");
+    assert!(!pap.per_category.profile_hint.enabled);
+    assert!(!pap.per_category.role_definition_suggestion.enabled);
+    // Other categories untouched at defaults.
+    assert!(pap.per_category.behavioral_preferences.enabled);
+    assert!(pap.per_category.learned_skill.enabled);
+    assert!(!pap.per_category.assistant_name.enabled);
     drop(env);
 }
 

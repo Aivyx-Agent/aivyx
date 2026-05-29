@@ -514,7 +514,9 @@ fn config_with_per_category(
         communication_adaptations: list.clone(),
         character_traits: list.clone(),
         relationship_milestones: list.clone(),
-        learned_skill: list,
+        learned_skill: list.clone(),
+        profile_hint: list.clone(),
+        role_definition_suggestion: list,
     };
     overrides(&mut set);
     SkillAutoProposeConfig {
@@ -853,7 +855,9 @@ fn config_with_failure_feedback(
             communication_adaptations: list.clone(),
             character_traits: list.clone(),
             relationship_milestones: list.clone(),
-            learned_skill: list,
+            learned_skill: list.clone(),
+            profile_hint: list.clone(),
+            role_definition_suggestion: list,
         }),
         from_failed_turns: true,
         failure_outcomes: failure_cfg,

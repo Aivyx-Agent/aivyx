@@ -2129,6 +2129,18 @@ impl Default for FailureOutcomesConfig {
 /// auto-accept threshold. Defaults are operator-conservative
 /// for high-impact scalar categories (off by default) and
 /// permissive for additive list categories.
+///
+/// Phase 118 — extended with `profile_hint` and
+/// `role_definition_suggestion`. The `auto_accept_confidence_threshold`
+/// values on these two are SEMANTICALLY DEAD at runtime: the
+/// `decide_routing` function in `aivyx-channel::skill_auto_proposer`
+/// hard-codes a Staged outcome for these categories regardless
+/// of judge confidence vs threshold (Q2(a) at Phase 118 sign-
+/// off — P13/P9 contract preservation). The threshold field
+/// stays on the struct only so the type's wire shape and TOML
+/// section names stay uniform with the other eleven categories;
+/// operators who set the value are honored on the `enabled`
+/// axis but never on the threshold axis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PerCategoryConfigSet {
     pub assistant_name: PerCategoryConfig,
@@ -2142,6 +2154,14 @@ pub struct PerCategoryConfigSet {
     pub character_traits: PerCategoryConfig,
     pub relationship_milestones: PerCategoryConfig,
     pub learned_skill: PerCategoryConfig,
+    /// Phase 118 — operator-staged Profile-config hint
+    /// category. Threshold is honored at parse time but
+    /// ignored at routing time (always-staged override).
+    pub profile_hint: PerCategoryConfig,
+    /// Phase 118 — operator-staged new-Role draft category.
+    /// Threshold is honored at parse time but ignored at
+    /// routing time (always-staged override).
+    pub role_definition_suggestion: PerCategoryConfig,
 }
 
 impl PerCategoryConfigSet {
@@ -2162,6 +2182,11 @@ impl PerCategoryConfigSet {
             "CharacterTraits" => Some(&self.character_traits),
             "RelationshipMilestones" => Some(&self.relationship_milestones),
             "LearnedSkill" => Some(&self.learned_skill),
+            // Phase 118 — recognized so the auto-proposer's
+            // unknown-label-is-disabled fail-safe doesn't fire
+            // on these. enabled axis still honored.
+            "ProfileHint" => Some(&self.profile_hint),
+            "RoleDefinitionSuggestion" => Some(&self.role_definition_suggestion),
             _ => None,
         }
     }
@@ -2171,6 +2196,12 @@ impl PerCategoryConfigSet {
     /// operator must opt in). List categories ON by default
     /// since they're additive. `LearnedSkill` ON by default
     /// to preserve Phase 112+113 behavior.
+    ///
+    /// Phase 118 — `profile_hint` and
+    /// `role_definition_suggestion` default to ON (list-shaped;
+    /// always-staged routing means there's no auto-accept
+    /// risk). Threshold value is meaningful only at TOML
+    /// parse time; runtime routing ignores it.
     pub fn defaults() -> Self {
         let scalar_default = PerCategoryConfig {
             enabled: false,
@@ -2191,7 +2222,13 @@ impl PerCategoryConfigSet {
             communication_adaptations: list_default.clone(),
             character_traits: list_default.clone(),
             relationship_milestones: list_default.clone(),
-            learned_skill: list_default,
+            learned_skill: list_default.clone(),
+            // Phase 118 — operator can disable proposing these
+            // by setting [persona.auto_propose.profile_hint]
+            // enabled = false (or the equivalent for role_definition_suggestion);
+            // threshold here is informational only.
+            profile_hint: list_default.clone(),
+            role_definition_suggestion: list_default,
         }
     }
 }
@@ -3185,6 +3222,14 @@ struct RawPersonaAutoPropose {
     relationship_milestones: RawPerCategoryConfig,
     #[serde(default)]
     learned_skill: RawPerCategoryConfig,
+    // Phase 118 — operator can override enable + threshold for
+    // the two new always-staged categories via dedicated TOML
+    // sub-sections. Threshold is informational; the routing
+    // override forces Staged regardless of confidence.
+    #[serde(default)]
+    profile_hint: RawPerCategoryConfig,
+    #[serde(default)]
+    role_definition_suggestion: RawPerCategoryConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6283,6 +6328,23 @@ fn build_persona_auto_propose_config(
             DEFAULT_PERSONA_LIST_THRESHOLD,
             "persona.auto_propose.learned_skill.auto_accept_confidence_threshold",
         )?,
+        // Phase 118 — both categories default ON (operator
+        // can disable via the dedicated sub-section).
+        // Threshold honored at parse time for wire-shape
+        // consistency; the runtime routing override forces
+        // Staged regardless of confidence.
+        profile_hint: build_per_category_config(
+            &raw.profile_hint,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.profile_hint.auto_accept_confidence_threshold",
+        )?,
+        role_definition_suggestion: build_per_category_config(
+            &raw.role_definition_suggestion,
+            true,
+            DEFAULT_PERSONA_LIST_THRESHOLD,
+            "persona.auto_propose.role_definition_suggestion.auto_accept_confidence_threshold",
+        )?,
     };
 
     // Phase 115 — failure-feedback fields.
@@ -6389,6 +6451,11 @@ fn per_category_any_set(raw: &RawPersonaAutoPropose) -> bool {
         || p(&raw.character_traits)
         || p(&raw.relationship_milestones)
         || p(&raw.learned_skill)
+        // Phase 118 — operator-set values on either of the
+        // new Phase 118 sub-sections also opt the operator
+        // into the `Some(persona_auto_propose)` config shape.
+        || p(&raw.profile_hint)
+        || p(&raw.role_definition_suggestion)
 }
 
 ///
