@@ -252,33 +252,107 @@ Roughly seven tasks plus exit + backfill:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_118.md` + ROADMAP Phase 118 entry +
-  docs/README status row — Task 1.
-- [ ] `ProfileHint` + `RoleDefinitionSuggestion`
+- [x] `docs/PHASE_118.md` + ROADMAP Phase 118 entry +
+  docs/README status row — Task 1 (`bd35941`).
+- [x] `ProfileHint` + `RoleDefinitionSuggestion`
   PersonaDeltaCategory variants + draft payloads —
-  Task 2.
-- [ ] Heuristic signal extensions — Task 3.
-- [ ] LLM-judge prompt extensions for both new
-  categories — Task 4.
-- [ ] Always-staged routing override — Task 5.
-- [ ] Proposals-chain integration + CLI rendering for
-  both new categories — Task 6.
-- [ ] Scripted e2e + INSTALL.md sweep — Task 7.
-- [ ] Q1/Q2/Q3 resolved with operator sign-off pre-Task
-  2 (recorded above).
-- [ ] DESIGN.md streak — predicted HOLD (streak → 9).
-- [ ] PRODUCT.md streak — predicted HOLD (streak → 9).
-- [ ] `aivyx-core/src/lib.rs` streak — predicted HOLD
-  (streak → 2), 60/40 risk hedge.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta within `+25` to `+50`.
-- [ ] Zero clippy warnings.
-- [ ] **Chapter E closed.** All four named Chapter E
+  Task 2 (`a22cf2d`).
+- [x] Heuristic signal extensions — Task 3 (`f4b8278`).
+- [x] LLM-judge prompt extensions for both new
+  categories — Task 4 (`d63dfef`).
+- [x] Always-staged routing override + per-category
+  integration — Task 5 (`006b54e`).
+- [x] Proposals-chain integration + CLI rendering for
+  both new categories — Task 6 (`1454158`).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
+  2 (Q1c non-Recommended, Q2a/Q3a Recommended).
+- [x] DESIGN.md streak — **HELD as predicted**.
+  `c2be6d51…` unchanged. Streak extends 8 → 9.
+- [x] PRODUCT.md streak — **HELD as predicted**.
+  `6e840cef…` unchanged. Streak extends 8 → 9.
+- [x] `aivyx-core/src/lib.rs` streak — **HELD as
+  predicted** (60/40 hold; the 60% case fired).
+  `d1d4373b…` unchanged. Streak extends 1 → 2.
+- [x] Zero new workspace dependencies.
+- [ ] Test count delta `+60` (2188 → 2248) — **above**
+  the predicted `+25 to +50` range. Honest scope
+  reporting: Q1c's broader-than-Recommended scope (both
+  Profile attributes AND new Role definitions) plus the
+  load-bearing per-category integration in Task 5
+  produced more test surface than I anticipated at
+  sign-off. Each test pins one concrete behavior; none
+  are redundant. Phase 6 Q5 honesty.
+- [x] Zero clippy warnings.
+- [x] **Chapter E closed.** All four named Chapter E
   axes shipped: Persona auto-proposer generalization
   (Phase 114), self-correction loop on failed turns
   (Phase 115), tool/skill selection learning from
   outcomes (Phase 116 + 117), and outcome-driven
   Profile/Role refinement (Phase 118).
+
+## Prediction vs reality
+
+**All three streak predictions correct.** First Phase
+since Phase 92 to land 3-of-3 on streak predictions; the
+contract-preservation posture (always-staged + reuse
+existing categories) kept the surface inside its
+envelope.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). The always-staged Q2(a) sign-off preserved
+  P13 + P9 without contract amendments; new
+  PersonaDeltaCategory variants live in aivyx-channel,
+  not in the contract. Streak: 8 → 9.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). P8 envelope. Streak: 8 → 9.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (60/40 hold case fired). `d1d4373b…` unchanged. The
+  new ProfileField + ProfileFieldHint + RoleDraft types
+  fit inside the existing `pub mod skill_proposer`
+  boundary already declared on lib.rs:38; no new
+  AuditTag variant needed since `SkillAutoProposal`'s
+  `category` field is already `Option<String>` from
+  Phase 114. Streak: 1 → 2 (first re-established
+  lib.rs streak since Phase 117's break).
+
+**Test count `+60` is ABOVE the predicted `+25 to +50`
+range.** Phase 6 Q5 honesty: Q1c's broader scope (both
+Profile attributes AND Role suggestions, vs the
+Recommended Profile-only) doubled the proposer-path test
+surface, and Task 5's per-category integration added
+both runtime AND aivyx-config TOML test surface (the
+load-bearing PerCategoryConfigSet extension hit both
+sides). Each test pins one concrete behavior; none are
+redundant. The overshoot is honest reflection of the
+broader scope, not test-count inflation.
+
+**Q-block went through fully as operator-picked.** Q1c
+non-Recommended bundle of both surfaces shipped together;
+Q2a Recommended always-staged contract preservation
+hard-coded; Q3a Recommended substrate reuse via existing
+Phase 114 pipeline.
+
+## Chapter E closed
+
+All four named Chapter E axes shipped across phases
+114-118:
+
+1. **Phase 114** — Persona auto-proposer generalization
+   (the eleven-category fan-out + LLM judge picking).
+2. **Phase 115** — Self-correction loop on failed turns
+   (the negative-feedback path; failure-kind
+   classification).
+3. **Phase 116 + 117** — Tool/skill selection learning
+   from outcomes (relevance ledger + live-prompt pipe +
+   per-skill tracking).
+4. **Phase 118** — Outcome-driven Profile/Role
+   refinement (ProfileHint + RoleDefinitionSuggestion
+   always-staged proposals).
+
+The post-Phase-118 deferral ledger is **empty**. No
+Phase-118-internal deferrals anticipated; reality
+matches anticipation. Chapter E's substrate fully shipped.
 
 ## Chapter E direction after Phase 118
 

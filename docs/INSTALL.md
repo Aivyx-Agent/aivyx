@@ -617,6 +617,138 @@ for forensic walks.
   domain stays present in storage but no rows are
   written or read.
 
+## Profile/Role refinement (Phase 118)
+
+Phase 118 closes Chapter E with the last named axis:
+**outcome-driven Profile/Role refinement**. The agent
+observes recurring task shapes that don't fit the current
+operator-declared Profile or operator-curated Role config
+and proposes refinements as `ProfileHint` or
+`RoleDefinitionSuggestion` Persona-chain entries. The
+operator reviews each proposal and copies the rendered
+draft into `aivyx.toml` if they want to act on it.
+
+**Contract preservation.** Phase 118 honors:
+- **P13** (Profile is operator-declared, Phase 56 amendment).
+  `ProfileHint` proposals NEVER mutate `aivyx.toml`. Approved
+  hints sit in the Persona chain as a record-of-suggestion
+  the operator can read at their convenience.
+- **P9** (Per-Role full capability declaration, Phase 13).
+  `RoleDefinitionSuggestion` proposals NEVER mutate
+  `aivyx.toml`. Approved drafts likewise sit in the chain
+  for operator copy-paste.
+
+Both categories are **always-staged for operator approval**,
+hard-coded at the routing layer regardless of judge
+confidence. Operators who don't want auto-proposing these
+categories at all can disable them via TOML.
+
+**TOML config sub-sections:**
+
+```toml
+[persona.auto_propose.profile_hint]
+enabled = true          # default; set false to silence
+# auto_accept_confidence_threshold parses but is
+# IGNORED at runtime — the always-staged routing
+# override forces Staged regardless. Documented here
+# for type-shape consistency only.
+
+[persona.auto_propose.role_definition_suggestion]
+enabled = true          # default; set false to silence
+```
+
+**Operator workflow:**
+
+1. The auto-proposer fires after a turn whose signals
+   cross the heuristic gate. Two new Phase 118 heuristic
+   signals feed this:
+   - `profile_pattern_repeated` — fires when the current
+     turn's keyword_key (Phase 116) has accumulated
+     ≥ `profile_pattern_recurrence_min` (default 5)
+     prior outcomes in the relevance ledger.
+   - `role_shape_recurring` — fires when the recent
+     session window contains ≥
+     `role_shape_scope_denied_min` (default 2)
+     `ScopeDenied` audit events.
+2. The LLM judge picks `ProfileHint` or
+   `RoleDefinitionSuggestion` and drafts the payload
+   inline (field + suggested_value + rationale, or full
+   role draft + rationale). The judge is instructed to err
+   on the side of EXPLICIT rationales because the operator
+   reads them.
+3. `decide_routing` forces `Staged` regardless of
+   confidence. The proposal lands in the persona-proposal
+   chain as Pending, and a `SkillAutoProposal` audit event
+   records `outcome=Staged` + `category=ProfileHint` (or
+   `RoleDefinitionSuggestion`) for forensic visibility.
+4. The operator reviews:
+
+   ```sh
+   aivyx persona proposals list
+   # [Pending] pp-abc...  category=ProfileHint  ...
+   #   op = {"kind":"AppendList","value":"..."}
+
+   aivyx persona proposals show pp-abc...
+   # Proposal pp-abc...
+   # =========================
+   #   category    = ProfileHint
+   #   proposed op:  { ... raw JSON ... }
+   #   rendered draft:
+   #     field            = communication_style
+   #     suggested_value  = "terse and bullet-formatted"
+   #     rationale        =
+   #       operator consistently uses bullets in their
+   #       own messages and asks for shorter replies
+   #
+   #   To apply: edit aivyx.toml [profile] and update the
+   #   field above. Phase 118 does NOT auto-mutate aivyx.toml.
+   ```
+5. To act on the hint, edit `aivyx.toml` directly:
+
+   ```toml
+   [profile]
+   communication_style = "terse and bullet-formatted"
+   ```
+
+   Then restart the daemon. The new value takes effect on
+   the next turn.
+6. For a `RoleDefinitionSuggestion`, the `show` output
+   prints the drafted `system_prompt_addendum`,
+   `tool_allowlist_additions`, and `parent`. To apply, add
+   a `[roles.<name>]` section to `aivyx.toml`:
+
+   ```toml
+   [roles.research-deploy]
+   inherits_from = "research"
+   system_prompt = "After research, summarize deploy diff for approval."
+   tool_allowlist = ["git.commit", "shell.deploy"]
+   ```
+
+   Then restart the daemon.
+7. Either way, `aivyx persona proposals approve pp-abc...`
+   marks the chain entry as accepted (or `reject` to
+   discard). Approved proposals land in
+   `EffectivePersona::profile_hints` /
+   `EffectivePersona::role_drafts` as a record-of-decision;
+   the operator can list them later with the same `list`
+   command (status `Applied`).
+
+**Escape hatches:**
+- Set `enabled = false` on either sub-section to silence
+  proposing entirely. The heuristic still fires and the
+  judge still runs for OTHER categories; only the Phase
+  118 categories drop with `DroppedCategoryDisabled`.
+- Set both `enabled = false` AND disable the Phase 116
+  relevance ledger to suppress the `profile_pattern_repeated`
+  signal source. The `role_shape_recurring` signal sources
+  directly from the audit chain and stays active.
+- Phase 118 never auto-mutates `aivyx.toml`. The operator
+  is always in the loop. If a `ProfileHint` or `RoleDraft`
+  approval shows up that the operator doesn't want to act
+  on, the approval is a no-op against the live config —
+  the entry sits in the chain as "noted but not applied"
+  state.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

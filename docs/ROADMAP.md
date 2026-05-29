@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 118 — Outcome-Driven Profile/Role Refinement (Chapter E #4 — closer)
 
-**Active — see [PHASE_118.md](PHASE_118.md).** The last
+**Frozen — see [PHASE_118.md](PHASE_118.md).** The last
 named Chapter E axis. Adds `ProfileHint` and
 `RoleDefinitionSuggestion` variants to
 `PersonaDeltaCategory`, extends the Phase 114 auto-
@@ -3463,19 +3463,34 @@ proposals` CLI for operator copy into `aivyx.toml`.
   closes Chapter E #4 in one phase.
 - Q2a — Always-staged for operator approval
   (Recommended). Preserves P13 (Profile-operator-owned)
-  and P9 (Role-config operator-curated).
+  and P9 (Role-config operator-curated). Hard-coded
+  routing override, not operator policy.
 - Q3a — Extend Phase 114 auto-proposer with new
   categories (Recommended). Maximum substrate reuse.
 
-**Streak predictions:** DESIGN.md HOLD → 9; PRODUCT.md
-HOLD → 9; `aivyx-core/src/lib.rs` HOLD → 2 (honest 60/40).
+**Streak outcomes:** all three predictions correct.
+- DESIGN.md: HELD as predicted. Streak → 9.
+- PRODUCT.md: HELD as predicted. Streak → 9.
+- `aivyx-core/src/lib.rs`: HELD as predicted (60/40 hold
+  case fired). No new AuditTag needed; new draft types
+  fit inside existing `pub mod skill_proposer`
+  boundary. Streak resets 1 → 2.
 
-Test count: predicted `+25 to +50`. Zero new workspace
-deps.
+Test count: 2188 → 2248 (+60). **Above** the predicted
+`+25 to +50` band — honest scope reporting (Phase 6 Q5):
+Q1c's broader scope (both Profile attributes AND Role
+suggestions) plus Task 5's per-category integration
+(load-bearing across both runtime and aivyx-config TOML
+surfaces) produced more test surface than anticipated
+at sign-off. Each test pins one concrete behavior.
 
-After Phase 118, Chapter E closes. The next phase opens
-against the Channel Activation Milestone OR a new
-thematic Chapter F shaped by operator pressure.
+Zero new workspace deps. Zero clippy warnings.
+
+**Chapter E closes with Phase 118.** All four named
+axes shipped (Phases 114-118). Post-Phase-118 deferral
+ledger is empty. The next phase opens against the
+Channel Activation Milestone OR a new thematic Chapter F
+shaped by operator pressure.
 
 ## Phase 117 — Phase 116 Deferral Closeout (live-prompt pipe + per-skill tracking)
 

@@ -1140,3 +1140,319 @@ async fn config_phase_113_alias_does_not_fire_failure_path() {
     // only).
     assert_eq!(persona_log.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 118 — Always-staged routing e2e for ProfileHint + RoleDefinitionSuggestion
+// ---------------------------------------------------------------------------
+//
+// The pipeline above proves the existing categories' shape (auto-accept
+// vs threshold-gated staged). Phase 118 adds the always-staged contract:
+// even at confidence 1.0, ProfileHint and RoleDefinitionSuggestion route
+// to Staged. These e2e tests assert the full pipeline path lands on
+// chains correctly: proposal chain gets one Pending entry; persona chain
+// stays empty (no auto-apply); audit chain records the Staged outcome
+// with the right category label for forensics.
+
+const PROFILE_HINT_MAX_CONFIDENCE_VERDICT_JSON: &str = r#"{
+    "is_worth_proposing": true,
+    "confidence": 1.0,
+    "category": "ProfileHint",
+    "proposed_draft": {
+        "kind": "ProfileHint",
+        "field": "CommunicationStyle",
+        "suggested_value": "terse and bullet-formatted",
+        "rationale": "operator consistently uses bullets in their own messages and asks for shorter replies"
+    },
+    "is_duplicate_of": null,
+    "reasoning": "recurring style preference"
+}"#;
+
+const ROLE_DEFINITION_SUGGESTION_MAX_CONFIDENCE_VERDICT_JSON: &str = r#"{
+    "is_worth_proposing": true,
+    "confidence": 1.0,
+    "category": "RoleDefinitionSuggestion",
+    "proposed_draft": {
+        "kind": "RoleDefinitionSuggestion",
+        "name": "research-deploy",
+        "parent": "research",
+        "system_prompt_addendum": "When deploy artifacts are ready, summarize the diff and surface for approval.",
+        "tool_allowlist_additions": ["git.commit", "shell.deploy"],
+        "rationale": "operator's research-then-deploy shape repeated five+ times this week"
+    },
+    "is_duplicate_of": null,
+    "reasoning": "recurring multi-step shape past existing role envelope"
+}"#;
+
+#[tokio::test]
+async fn phase_118_profile_hint_stages_even_at_max_confidence() {
+    // The full pipeline path for the ProfileHint category at
+    // judge.confidence = 1.0. The always-staged routing
+    // override in `decide_routing` forces a Staged outcome
+    // regardless. Chain shape after the pipeline runs:
+    //   - persona log: EMPTY (no auto-apply at routing time)
+    //   - proposal log: 1 Pending entry awaiting operator approval
+    //   - audit log:   1 SkillAutoProposal event, outcome=Staged,
+    //                  category=Some("ProfileHint")
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    // Phase 114 per-category config (so ProfileHint is
+    // recognized; default-enabled per Phase 118 Task 5).
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|_pc| {
+            // Defaults already enable profile_hint.
+        }),
+        llm_provider: ScriptedProvider::new(vec![
+            PROFILE_HINT_MAX_CONFIDENCE_VERDICT_JSON,
+        ]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "operator asked for short bullet-formatted reply yet again".into(),
+        &cancel,
+    )
+    .await;
+
+    // Persona chain: STAYS EMPTY despite confidence 1.0.
+    // The P13 Profile-operator-owned contract is preserved by
+    // the always-staged routing.
+    assert_eq!(
+        persona_log.len(),
+        0,
+        "persona chain MUST stay empty for ProfileHint at confidence 1.0 \
+         (always-staged contract preservation per Q2(a) at Phase 118 sign-off)"
+    );
+
+    // Proposal chain: 1 Pending entry awaiting operator review.
+    assert_eq!(
+        proposal_log.len(),
+        1,
+        "proposal chain should have exactly 1 Pending entry"
+    );
+
+    // Audit chain: 1 SkillAutoProposal event; outcome must be
+    // Staged; category must carry "ProfileHint" so forensic
+    // walks can answer "did the always-staged override fire?"
+    assert_eq!(AuditLog::len(audit_log.as_ref()), 1);
+    let entries = audit_log.entries().expect("audit entries fetch");
+    let event = &entries[0].event;
+    match event {
+        AuditEvent::SkillAutoProposal {
+            outcome,
+            confidence_thousandths,
+            category,
+            proposed_skill_name,
+            ..
+        } => {
+            assert!(
+                matches!(
+                    outcome,
+                    aivyx_audit::SkillAutoProposalOutcomeSummary::Staged
+                ),
+                "expected Staged outcome despite confidence 1.0, got {outcome:?}"
+            );
+            // Confidence carried through truthfully — 1.0 →
+            // 1000 thousandths.
+            assert_eq!(*confidence_thousandths, Some(1000));
+            assert_eq!(category.as_deref(), Some("ProfileHint"));
+            // display_name for ProfileHint is "field=value"
+            // truncated form (Phase 118 Task 2).
+            let name = proposed_skill_name.as_deref().expect("name carried");
+            assert!(name.contains("communication_style"));
+            assert!(name.contains("bullet-formatted"));
+        }
+        other => panic!("expected SkillAutoProposal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn phase_118_role_definition_suggestion_stages_even_at_max_confidence() {
+    // Same shape as the ProfileHint e2e but for the second
+    // Phase 118 category. P9 Role-config operator-curated
+    // contract preserved by the same always-staged routing.
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|_pc| {}),
+        llm_provider: ScriptedProvider::new(vec![
+            ROLE_DEFINITION_SUGGESTION_MAX_CONFIDENCE_VERDICT_JSON,
+        ]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "operator did research then deploy yet again".into(),
+        &cancel,
+    )
+    .await;
+
+    assert_eq!(
+        persona_log.len(),
+        0,
+        "persona chain MUST stay empty for RoleDefinitionSuggestion at \
+         confidence 1.0 (P9 Role-config operator-curated contract)"
+    );
+    assert_eq!(proposal_log.len(), 1);
+
+    let entries = audit_log.entries().expect("audit entries fetch");
+    let event = &entries[0].event;
+    match event {
+        AuditEvent::SkillAutoProposal {
+            outcome,
+            category,
+            proposed_skill_name,
+            ..
+        } => {
+            assert!(matches!(
+                outcome,
+                aivyx_audit::SkillAutoProposalOutcomeSummary::Staged
+            ));
+            assert_eq!(category.as_deref(), Some("RoleDefinitionSuggestion"));
+            // display_name for RoleDefinitionSuggestion is the
+            // kebab-case role name (Phase 118 Task 2).
+            assert_eq!(
+                proposed_skill_name.as_deref(),
+                Some("research-deploy")
+            );
+        }
+        other => panic!("expected SkillAutoProposal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn phase_118_profile_hint_disabled_drops_with_correct_audit_signal() {
+    // Operator can still disable proposing ProfileHints
+    // entirely via the per-category enable flag — the
+    // always-staged override is for the confidence axis only.
+    // A disabled-but-fired-for verdict drops with
+    // DroppedCategoryDisabled, NOT Staged.
+    let storage = scratch_storage().await;
+    let persona_log = Arc::new(
+        PersistentPersonaLog::open(
+            storage.handle.domain(KeyDomain::Persona),
+            test_chain_key(),
+        )
+        .await
+        .expect("persona log opens"),
+    );
+    let proposal_log = Arc::new(
+        PersistentPersonaProposalLog::open(
+            storage.handle.domain(KeyDomain::PersonaProposals),
+            test_chain_key(),
+        )
+        .await
+        .expect("proposal log opens"),
+    );
+    let audit_log = Arc::new(
+        PersistentAuditLog::open(Arc::clone(&storage.handle), [0xABu8; 32])
+            .await
+            .expect("audit log opens"),
+    );
+    let shared: SharedEffectivePersona =
+        persona::shared_effective_persona(EffectivePersona::default());
+
+    let proposer_ctx = Arc::new(SkillAutoProposerContext {
+        config: config_with_per_category(|pc| {
+            pc.profile_hint.enabled = false;
+        }),
+        llm_provider: ScriptedProvider::new(vec![
+            PROFILE_HINT_MAX_CONFIDENCE_VERDICT_JSON,
+        ]),
+    });
+
+    let session_id = SessionId::new();
+    let cancel = CancellationToken::new();
+    run_auto_propose_pipeline(
+        &proposer_ctx,
+        Some(&audit_log),
+        Some(&persona_log),
+        Some(&proposal_log),
+        &shared,
+        session_id,
+        fire_threshold_signals(),
+        "operator-disabled category test".into(),
+        &cancel,
+    )
+    .await;
+
+    // No persona or proposal chain writes.
+    assert_eq!(persona_log.len(), 0);
+    assert_eq!(proposal_log.len(), 0);
+
+    // Audit event records the operator's disable decision.
+    // Phase 114 reuses the NotWorthProposing outcome variant
+    // for category-disabled drops; the category label lands
+    // in the proposed_skill_name slot for forensic visibility
+    // (matches the precedent established by
+    // operator_profile_disabled_drops_with_correct_audit_signal).
+    let entries = audit_log.entries().expect("audit entries fetch");
+    let event = &entries[0].event;
+    match event {
+        AuditEvent::SkillAutoProposal { category, .. } => {
+            assert_eq!(category.as_deref(), Some("ProfileHint"));
+        }
+        other => panic!("expected SkillAutoProposal, got {other:?}"),
+    }
+}
