@@ -26,6 +26,17 @@ provider-openai = [
     "dep:futures-util",
     "dep:bytes",
 ]
+# Phase 121 — native Ollama adapter against `/api/chat` (JSONL
+# streaming). Distinct from `provider-openai`'s Ollama-via-OpenAI-compat
+# path; the two coexist so the OpenAI-compat code stays for
+# `ProviderKind::OpenAi`. Pulls in the same transport deps as the
+# other providers.
+provider-ollama = [
+    "dep:reqwest",
+    "dep:secrecy",
+    "dep:futures-util",
+    "dep:bytes",
+]
 
 [dependencies]
 # Protocol-only core — no dependency on aivyx-core. The LlmProvider

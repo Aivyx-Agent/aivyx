@@ -48,7 +48,11 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 pub mod transport;
 
 #[cfg(feature = "provider-anthropic")]
@@ -57,19 +61,30 @@ pub mod anthropic;
 #[cfg(feature = "provider-openai")]
 pub mod openai;
 
+#[cfg(feature = "provider-ollama")]
+pub mod ollama;
+
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
 /// `/v1/embeddings` client whose `base_url` can point at the
 /// cloud API or a local server (ollama / llama.cpp /
 /// text-embeddings-inference).
-#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 pub mod embedding;
 
 /// Phase 104 — `aivyx init` provider credential verification.
 /// Issues `GET /v1/models` against Anthropic / OpenAI to confirm
 /// `(api_key, model)` is valid before the wizard writes
 /// `aivyx.toml`. See [`verify::verify_provider_credentials`].
-#[cfg(any(feature = "provider-anthropic", feature = "provider-openai"))]
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 pub mod verify;
 
 // ---------------------------------------------------------------------------
