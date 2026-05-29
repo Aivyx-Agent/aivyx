@@ -29,6 +29,7 @@
 pub mod heuristic;
 pub mod judge;
 pub mod profile_proposer;
+pub mod similarity;
 
 pub use heuristic::{
     FailureHeuristicConfig, FailureKind, HeuristicConfig, MatchMode, TurnSignals,
@@ -40,3 +41,4 @@ pub use judge::{
     parse_judge_response,
 };
 pub use profile_proposer::{ProfileField, ProfileFieldHint, RoleDraft};
+pub use similarity::title_similarity;

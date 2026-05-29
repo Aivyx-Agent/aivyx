@@ -611,45 +611,14 @@ pub fn is_always_staged_category(category: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Compute a normalized title similarity in `[0.0, 1.0]`
-/// between two skill names. The algorithm:
+/// between two skill names.
 ///
-/// 1. Lowercase both inputs.
-/// 2. Replace any non-alphanumeric character with `-`.
-/// 3. Compute the Jaccard similarity of the resulting token
-///    sets (split on `-`).
-///
-/// This is deliberately cheap (`O(n + m)` set construction
-/// followed by an intersection scan) so it can fire on every
-/// candidate without measurable cost. It catches the obvious
-/// cases the Q4b pre-filter is designed for:
-/// `memory.gc` vs `memory_gc`; `research-topic` vs
-/// `topic-research`; `aivyx-mcp-recipes` vs
-/// `mcp-recipes-aivyx`. It does NOT catch deep semantic
-/// dups — those land on the LLM-judge call's
-/// `is_duplicate_of` path.
-pub fn title_similarity(a: &str, b: &str) -> f32 {
-    fn tokens(s: &str) -> std::collections::HashSet<String> {
-        s.to_ascii_lowercase()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect::<String>()
-            .split('-')
-            .filter(|t| !t.is_empty())
-            .map(|t| t.to_string())
-            .collect()
-    }
-    let ta = tokens(a);
-    let tb = tokens(b);
-    if ta.is_empty() && tb.is_empty() {
-        return 1.0;
-    }
-    let intersection = ta.intersection(&tb).count();
-    let union = ta.union(&tb).count();
-    if union == 0 {
-        return 0.0;
-    }
-    intersection as f32 / union as f32
-}
+/// Phase 120 Task 2 — lifted into
+/// [`aivyx_core::skill_proposer::title_similarity`] so the
+/// Phase 120 planner-side tool-name recovery path can share
+/// the same primitive. Re-exported here so every existing
+/// Phase 112 caller and in-module test keeps the same path.
+pub use aivyx_core::skill_proposer::title_similarity;
 
 /// Return the name of the first existing skill whose title
 /// similarity against `candidate_title` meets or exceeds
