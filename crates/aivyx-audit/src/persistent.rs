@@ -670,6 +670,7 @@ mod tests {
                 verified: VerificationSummary::NotApplicable,
             },
             duration: Duration::from_millis(1),
+            auto_corrected_from: None,
         }
     }
 

@@ -683,6 +683,7 @@ async fn tier_attenuation_denies_shell_exec_through_real_telegram_channel() {
     let plan = vec![NextStep::ToolCall {
         tool_id,
         input: serde_json::json!({"command": "rm"}),
+        auto_corrected_from: None,
     }];
     let agent = ConcreteAgent::new(
         AgentId::new(),

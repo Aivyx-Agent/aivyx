@@ -4180,6 +4180,7 @@ mod tests {
                 input_hash: [0u8; 32],
                 outcome,
                 duration: std::time::Duration::from_millis(duration_ms),
+                auto_corrected_from: None,
             },
             mac: [0u8; 32],
             prev_mac: [0u8; 32],

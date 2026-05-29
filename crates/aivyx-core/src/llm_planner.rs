@@ -707,57 +707,88 @@ impl TurnPlanner for LlmPlanner {
                     let validate_enabled = repair_rounds < 2;
 
                     for call in calls {
-                        match self.registry.find_by_name(&call.tool_name) {
-                            Some(tool_id) => {
-                                // Phase 101 — validate the call input
-                                // against the tool's declared schema
-                                // before dispatch. On a mismatch the
-                                // call is not batched; the model gets a
-                                // structured `invalid_input` result and
-                                // is looped to repair the call.
-                                if validate_enabled {
-                                    if let Some(tool) = self.registry.get(tool_id) {
-                                        if let Err(summary) = validate_tool_input(
-                                            tool.input_schema(),
-                                            &call.input,
-                                        ) {
-                                            let schema = tool.input_schema().clone();
-                                            self.history.push(LlmMessage::ToolResult {
-                                                call_id: call.call_id,
-                                                content: json!({
-                                                    "error": "invalid_input",
-                                                    "message": summary,
-                                                    "expected_schema": schema,
-                                                })
-                                                .to_string(),
-                                                is_error: true,
-                                            });
-                                            had_invalid_input = true;
-                                            continue;
-                                        }
+                        // Phase 120 — resolve the tool name. The
+                        // dominant case is `find_by_name -> Some`
+                        // (model emitted a registered name verbatim).
+                        // When `None`, the fuzzy-match recovery path
+                        // runs against the registry's full tool set;
+                        // a hit at or above `FUZZY_TOOL_NAME_THRESHOLD`
+                        // dispatches the matched tool and records the
+                        // verbatim original as `auto_corrected_from`
+                        // for forensic visibility.
+                        let resolution =
+                            self.registry.find_by_name(&call.tool_name);
+                        let (tool_id, auto_corrected_from) = match resolution {
+                            Some(id) => (id, None),
+                            None => {
+                                match fuzzy_recover_tool_name(
+                                    &self.registry,
+                                    &call.tool_name,
+                                    FUZZY_TOOL_NAME_THRESHOLD,
+                                ) {
+                                    Some(matched_id) => (
+                                        matched_id,
+                                        Some(call.tool_name.clone()),
+                                    ),
+                                    None => {
+                                        // Phase 120 — below threshold:
+                                        // fall through to the existing
+                                        // unknown-tool error path. Task
+                                        // 6 will append "did you mean?"
+                                        // suggestions to the error
+                                        // message.
+                                        self.history.push(LlmMessage::ToolResult {
+                                            call_id: call.call_id,
+                                            content: json!({
+                                                "error": "unknown_tool",
+                                                "message": format!(
+                                                    "tool '{}' is not registered",
+                                                    call.tool_name
+                                                ),
+                                            })
+                                            .to_string(),
+                                            is_error: true,
+                                        });
+                                        continue;
                                     }
                                 }
-                                self.pending_call_ids.push_back(call.call_id);
-                                batch.push(ToolCallRequest {
-                                    tool_id,
-                                    input: call.input,
-                                });
                             }
-                            None => {
-                                self.history.push(LlmMessage::ToolResult {
-                                    call_id: call.call_id,
-                                    content: json!({
-                                        "error": "unknown_tool",
-                                        "message": format!(
-                                            "tool '{}' is not registered",
-                                            call.tool_name
-                                        ),
-                                    })
-                                    .to_string(),
-                                    is_error: true,
-                                });
+                        };
+
+                        // Phase 101 — validate the call input
+                        // against the tool's declared schema
+                        // before dispatch. On a mismatch the
+                        // call is not batched; the model gets a
+                        // structured `invalid_input` result and
+                        // is looped to repair the call.
+                        if validate_enabled {
+                            if let Some(tool) = self.registry.get(tool_id) {
+                                if let Err(summary) = validate_tool_input(
+                                    tool.input_schema(),
+                                    &call.input,
+                                ) {
+                                    let schema = tool.input_schema().clone();
+                                    self.history.push(LlmMessage::ToolResult {
+                                        call_id: call.call_id,
+                                        content: json!({
+                                            "error": "invalid_input",
+                                            "message": summary,
+                                            "expected_schema": schema,
+                                        })
+                                        .to_string(),
+                                        is_error: true,
+                                    });
+                                    had_invalid_input = true;
+                                    continue;
+                                }
                             }
                         }
+                        self.pending_call_ids.push_back(call.call_id);
+                        batch.push(ToolCallRequest {
+                            tool_id,
+                            input: call.input,
+                            auto_corrected_from,
+                        });
                     }
 
                     // Phase 101 — a round that emitted an `invalid_input`
@@ -775,10 +806,13 @@ impl TurnPlanner for LlmPlanner {
 
                     if batch.len() == 1 {
                         // Single known tool — use the singular path.
+                        // Phase 120 — preserve the auto-correction flag
+                        // from the per-call ToolCallRequest.
                         let req = batch.into_iter().next().unwrap();
                         return NextStep::ToolCall {
                             tool_id: req.tool_id,
                             input: req.input,
+                            auto_corrected_from: req.auto_corrected_from,
                         };
                     }
 
@@ -895,6 +929,55 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
 /// its own tool's dispatch — the worst case degrades to
 /// pre-Phase-101 behavior (the tool's own `execute` validation is
 /// still the floor).
+/// Phase 120 Task 4 — fuzzy-match threshold for the tool-name
+/// recovery path. Default `0.80` matches Phase 112's fuzzy-match
+/// default (the substrate's load-bearing threshold for tokenized
+/// Jaccard similarity decisions). Task 5 will make this operator-
+/// configurable via `[providers] tool_name_auto_correct_threshold`.
+const FUZZY_TOOL_NAME_THRESHOLD: f32 = 0.80;
+
+/// Phase 120 Task 4 — fuzzy-match recovery for hallucinated tool
+/// names. Walks `registry`'s tools, computes
+/// `aivyx_core::skill_proposer::title_similarity(emitted_name,
+/// tool_name)`, and returns the `ToolId` of the best match if and
+/// only if its score meets or exceeds `threshold`.
+///
+/// Returns `None` when:
+/// - The registry is empty (no tools registered for this turn).
+/// - No tool's name scores at or above `threshold`.
+///
+/// Ties broken by registration order (the first tool to reach the
+/// max score wins). In practice ties are rare since the threshold
+/// gates on a meaningful similarity ceiling.
+///
+/// Pure function modulo the registry iteration; planner-internal.
+fn fuzzy_recover_tool_name(
+    registry: &crate::ToolRegistry,
+    emitted_name: &str,
+    threshold: f32,
+) -> Option<crate::ToolId> {
+    let mut best: Option<(crate::ToolId, f32)> = None;
+    for tool in registry.iter_tools() {
+        let score = crate::skill_proposer::title_similarity(
+            emitted_name,
+            tool.name(),
+        );
+        if score >= threshold {
+            // Find the id for this tool by name (cheap — the
+            // registry's `find_by_name` is the canonical lookup).
+            let Some(id) = registry.find_by_name(tool.name()) else {
+                continue;
+            };
+            match best {
+                None => best = Some((id, score)),
+                Some((_, b)) if score > b => best = Some((id, score)),
+                _ => {} // existing best wins on tie
+            }
+        }
+    }
+    best.map(|(id, _)| id)
+}
+
 fn validate_tool_input(
     schema: &serde_json::Value,
     input: &serde_json::Value,
@@ -1499,6 +1582,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: returned,
                 input,
+                auto_corrected_from: None,
             } => {
                 assert_eq!(returned, tool_id);
                 assert_eq!(input, json!({"query": "yesterday"}));
@@ -1682,6 +1766,193 @@ mod tests {
             _ => false,
         });
         assert!(has_unknown, "expected a synthetic unknown_tool entry");
+    }
+
+    // ----- Phase 120 — Tool-name fuzzy recovery + auto-correction audit -----
+
+    #[tokio::test]
+    async fn phase_120_fuzzy_recovery_dispatches_close_match() {
+        // qwen3.6:27b emits `fs_read`; the registered tool is `fs.read`.
+        // title_similarity("fs_read", "fs.read") = 1.0 (same tokens
+        // after separator normalization) → above the 0.80 threshold
+        // → the planner dispatches `fs.read` and records the verbatim
+        // `fs_read` as auto_corrected_from.
+        let fs_read = Arc::new(FakeTool::new("fs.read"));
+        let fs_read_id = fs_read.id();
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "c1".into(),
+                    tool_name: "fs_read".into(),
+                    input: json!({}),
+                    // Provider flagged Unknown; planner takes over.
+                    name_resolution: aivyx_llm::NameResolution::Unknown {
+                        original: "fs_read".into(),
+                    },
+                }],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("local-qwen"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "read a file"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                auto_corrected_from,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_read_id);
+                assert_eq!(auto_corrected_from.as_deref(), Some("fs_read"));
+            }
+            other => panic!(
+                "expected ToolCall with auto-correction, got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_120_below_threshold_synthesizes_unknown_tool_error() {
+        // `do_the_thing` vs registered `memory.read` has too few
+        // shared tokens to clear 0.80 (1/4 Jaccard). Fall-through
+        // path: synthetic unknown_tool error message; loop continues
+        // so the model can retry.
+        let memory_read = Arc::new(FakeTool::new("memory.read"));
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".into(),
+                        tool_name: "do_the_thing".into(),
+                        input: json!({}),
+                        name_resolution: aivyx_llm::NameResolution::Unknown {
+                            original: "do_the_thing".into(),
+                        },
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "giving up".into(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![memory_read]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("local-qwen"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "do it"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        // Loop continued past the unknown call and reached
+        // FinalMessage on the next chat_stream.
+        assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "giving up"));
+        // History carries the synthetic error.
+        let has_unknown = planner.history().iter().any(|m| match m {
+            LlmMessage::ToolResult {
+                content, is_error, ..
+            } => *is_error && content.contains("unknown_tool"),
+            _ => false,
+        });
+        assert!(has_unknown, "below-threshold path must synthesize unknown_tool");
+    }
+
+    #[tokio::test]
+    async fn phase_120_known_name_dispatches_with_no_auto_correction() {
+        // The dominant case: model emits a registered name verbatim;
+        // no recovery needed; auto_corrected_from is None.
+        let fs_read = Arc::new(FakeTool::new("fs.read"));
+        let fs_read_id = fs_read.id();
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "c1".into(),
+                    tool_name: "fs.read".into(),
+                    input: json!({}),
+                    name_resolution: aivyx_llm::NameResolution::Known,
+                }],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("m"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "read"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                auto_corrected_from,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_read_id);
+                assert!(
+                    auto_corrected_from.is_none(),
+                    "verbatim Known dispatch must NOT report an auto-correction"
+                );
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase_120_fuzzy_recover_picks_best_match() {
+        // Threshold-pinning unit test for the pure helper. With both
+        // fs.read and web.fetch registered, an emitted `fs_read`
+        // resolves to fs.read (not web.fetch).
+        let fs_read = Arc::new(FakeTool::new("fs.read")) as Arc<dyn Tool>;
+        let web_fetch = Arc::new(FakeTool::new("web.fetch")) as Arc<dyn Tool>;
+        let fs_id = fs_read.id();
+        let registry = ToolRegistry::new(vec![fs_read, web_fetch]);
+        let resolved = fuzzy_recover_tool_name(&registry, "fs_read", 0.80);
+        assert_eq!(resolved, Some(fs_id));
+    }
+
+    #[test]
+    fn phase_120_fuzzy_recover_returns_none_when_no_match_clears_threshold() {
+        let memory_read =
+            Arc::new(FakeTool::new("memory.read")) as Arc<dyn Tool>;
+        let registry = ToolRegistry::new(vec![memory_read]);
+        // do_the_thing vs memory.read → Jaccard 0/5 = 0 < 0.80.
+        let resolved = fuzzy_recover_tool_name(&registry, "do_the_thing", 0.80);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn phase_120_fuzzy_recover_returns_none_for_empty_registry() {
+        let registry = ToolRegistry::new(vec![]);
+        let resolved = fuzzy_recover_tool_name(&registry, "fs_read", 0.80);
+        assert!(resolved.is_none());
     }
 
     #[tokio::test]
@@ -2358,7 +2629,7 @@ mod tests {
             .begin_turn(&Message::text(channel.session, "go"))
             .await;
         match planner.next_step(&[], &channel).await {
-            NextStep::ToolCall { tool_id: got, input } => {
+            NextStep::ToolCall { tool_id: got, input, .. } => {
                 assert_eq!(got, tool_id);
                 assert_eq!(input, json!({"path": "fixed.txt"}));
             }

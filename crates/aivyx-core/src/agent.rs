@@ -260,7 +260,11 @@ impl Agent for ConcreteAgent {
                     loop_outcome = LoopOutcome::Completed;
                     break;
                 }
-                NextStep::ToolCall { tool_id, input } => {
+                NextStep::ToolCall {
+                    tool_id,
+                    input,
+                    auto_corrected_from,
+                } => {
                     tool_calls_made += 1;
                     let (observation, outcome) = self
                         .run_tool_call(
@@ -270,6 +274,7 @@ impl Agent for ConcreteAgent {
                             channel,
                             &cancellation,
                             &effective,
+                            auto_corrected_from,
                         )
                         .await;
                     observed.push(observation);
@@ -302,6 +307,7 @@ impl Agent for ConcreteAgent {
                                 channel,
                                 &cancellation,
                                 &effective,
+                                req.auto_corrected_from,
                             )
                         })
                         .collect();
@@ -406,6 +412,7 @@ impl ConcreteAgent {
     /// planner's `observe_tool_outcome` callback). The observation is
     /// what the audit sees; the full outcome is what a smart planner
     /// (e.g. the LLM planner) needs to reason about next.
+    #[allow(clippy::too_many_arguments)]
     async fn run_tool_call(
         &self,
         turn_id: TurnId,
@@ -414,6 +421,7 @@ impl ConcreteAgent {
         channel: &dyn ChannelContext,
         cancellation: &CancellationToken,
         effective: &CapabilitySet,
+        auto_corrected_from: Option<String>,
     ) -> (StepObservation, ToolOutcome) {
         let Some(tool) = self.tools.get(tool_id) else {
             // Unknown tool — no scope check possible. This shouldn't happen
@@ -643,6 +651,11 @@ impl ConcreteAgent {
             input_hash,
             outcome: summary.clone(),
             duration: step_duration,
+            // Phase 120 — populated when the planner's fuzzy-
+            // match recovery resolved to this `tool_id` from a
+            // different name the model emitted. Carried through
+            // from `NextStep::ToolCall.auto_corrected_from`.
+            auto_corrected_from,
         });
 
         (StepObservation { tool_id, summary }, outcome)
@@ -1025,6 +1038,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 input: json!({"query": "yesterday"}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("here's what I found".to_string()),
         ];
@@ -1098,6 +1112,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -1193,6 +1208,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("ok".to_string()),
         ];
@@ -1244,6 +1260,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({"command": "rm"}),
+            auto_corrected_from: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1300,6 +1317,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({}),
+            auto_corrected_from: None,
         }];
         let agent = make_agent(
             CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
@@ -1357,6 +1375,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 input: json!({"session": "abc"}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -1412,6 +1431,7 @@ mod tests {
                 NextStep::ToolCall {
                     tool_id: shell_id,
                     input: json!({"command": "rm"}),
+                    auto_corrected_from: None,
                 },
                 NextStep::FinalMessage(
                     "I can't run shell commands from Telegram.".to_string(),
@@ -1466,6 +1486,7 @@ mod tests {
                 NextStep::ToolCall {
                     tool_id,
                     input: json!({}),
+                    auto_corrected_from: None,
                 },
                 NextStep::Stop,
             ],
@@ -1597,6 +1618,7 @@ mod tests {
             .map(|_| NextStep::ToolCall {
                 tool_id,
                 input: json!({}),
+                auto_corrected_from: None,
             })
             .collect();
 
@@ -1683,6 +1705,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({}), // missing required `path`
+            auto_corrected_from: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1746,6 +1769,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({"path": "notes/today.md"}),
+            auto_corrected_from: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1793,6 +1817,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({"topic": "notes"}),
+            auto_corrected_from: None,
         }];
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
 
@@ -1871,6 +1896,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id,
             input: json!({}),
+            auto_corrected_from: None,
         }];
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
 
@@ -1936,6 +1962,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id: shell_id,
             input: json!({}),
+            auto_corrected_from: None,
         }];
 
         let registry = Arc::new(ToolRegistry::new(vec![
@@ -2007,6 +2034,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: shell_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2065,6 +2093,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: shell_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("ok".to_string()),
         ];
@@ -2109,6 +2138,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id: shell_id,
             input: json!({}),
+            auto_corrected_from: None,
         }];
         let registry =
             Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
@@ -2186,6 +2216,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: target,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2704,6 +2735,7 @@ mod tests {
                     "target": "researcher",
                     "task": "read file X and summarize"
                 }),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("parent done".to_string()),
         ];
@@ -2808,6 +2840,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: role_switch_id,
                 input: json!({ "target": "scribe", "task": "x" }),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2875,6 +2908,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: role_switch_id,
                 input: json!({ "target": "phantom", "task": "x" }),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2945,6 +2979,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: role_switch_id,
                 input: json!({ "target": "researcher", "task": "x" }),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3023,6 +3058,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: role_switch_id,
                 input: json!({ "target": "researcher", "task": "x" }),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("parent done".to_string()),
         ];
@@ -3087,6 +3123,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: mem_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3139,6 +3176,7 @@ mod tests {
         let plan = vec![NextStep::ToolCall {
             tool_id: shell_id,
             input: json!({}),
+            auto_corrected_from: None,
         }];
         let registry = Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
         let plan_arc = Arc::new(plan);
@@ -3193,6 +3231,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id: mem_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3302,6 +3341,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 input: json!({}),
+                auto_corrected_from: None,
             },
             // The loop should never reach this step — it breaks on
             // escalation before asking the planner for another step.
@@ -3365,10 +3405,12 @@ mod tests {
                 ToolCallRequest {
                     tool_id: tool_a_id,
                     input: json!({"path": "/a.txt"}),
+                    auto_corrected_from: None,
                 },
                 ToolCallRequest {
                     tool_id: tool_b_id,
                     input: json!({"topic": "notes"}),
+                    auto_corrected_from: None,
                 },
             ]),
             NextStep::FinalMessage("done".to_string()),

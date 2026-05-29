@@ -538,6 +538,21 @@ pub enum AuditTag {
         input_hash: [u8; 32],
         outcome: ToolOutcomeSummary,
         duration: Duration,
+        /// Phase 120 — when the planner auto-corrected the
+        /// LLM's emitted tool name via fuzzy match (Phase 112
+        /// `title_similarity` reuse), this carries the verbatim
+        /// name the model originally emitted. `None` when the
+        /// model emitted a name that matched a registered tool
+        /// verbatim (the dominant case).
+        ///
+        /// Forensic walks can answer "did the model say
+        /// `fs_read` and Aivyx auto-correct to `fs.read`, or
+        /// did the model say `fs.read` directly?" by reading
+        /// this field. Operators picking between local models
+        /// can use the rate of `Some(_)` entries as a
+        /// diagnostic for which model has the cleanest tool-
+        /// call protocol.
+        auto_corrected_from: Option<String>,
     },
     ScopeDenied {
         turn_id: TurnId,

@@ -19,7 +19,19 @@ use crate::{ChannelContext, Message, TokenUsage, Tool, ToolId, ToolOutcome, Tool
 pub enum NextStep {
     /// Call this tool with this input. The loop will scope-check it and
     /// either execute or deny.
-    ToolCall { tool_id: ToolId, input: Value },
+    ///
+    /// Phase 120 — `auto_corrected_from` carries the verbatim name the
+    /// LLM originally emitted when the planner's fuzzy-match recovery
+    /// path landed on a different `tool_id` than the model said. `None`
+    /// for the dominant case (model emitted a registered name verbatim).
+    /// Threaded through to the agent's `AuditTag::ToolCall` emission so
+    /// forensic walks see the correction.
+    ToolCall {
+        tool_id: ToolId,
+        input: Value,
+        #[doc(hidden)]
+        auto_corrected_from: Option<String>,
+    },
 
     /// Execute multiple tool calls concurrently. The loop dispatches all
     /// of them via `join_all`, observes every outcome, then asks the
@@ -43,6 +55,11 @@ pub enum NextStep {
 pub struct ToolCallRequest {
     pub tool_id: ToolId,
     pub input: Value,
+    /// Phase 120 — verbatim name the LLM emitted before the planner's
+    /// fuzzy-match recovery resolved to this `tool_id`. `None` in the
+    /// dominant case. Threaded to the per-call `AuditTag::ToolCall`
+    /// emission.
+    pub auto_corrected_from: Option<String>,
 }
 
 /// What the planner observes after each executed step. Carries only the

@@ -133,6 +133,7 @@ async fn concrete_agent_writes_real_hmac_chain_through_bridge() {
         NextStep::ToolCall {
             tool_id,
             input: json!({"query": "yesterday"}),
+            auto_corrected_from: None,
         },
         NextStep::FinalMessage("here is what I found".to_string()),
     ];

@@ -734,6 +734,7 @@ mod tests {
                 input_hash: [0u8; 32],
                 outcome,
                 duration: Duration::from_millis(10),
+                auto_corrected_from: None,
             },
             mac: [0u8; 32],
             prev_mac: [0u8; 32],

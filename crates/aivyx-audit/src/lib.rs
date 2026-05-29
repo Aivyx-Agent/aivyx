@@ -75,6 +75,16 @@ pub enum AuditEvent {
         input_hash: [u8; 32],
         outcome: ToolOutcomeSummary,
         duration: Duration,
+        /// Phase 120 — verbatim name the LLM originally emitted
+        /// when the planner auto-corrected via fuzzy match.
+        /// `None` for the dominant case (model emitted a
+        /// registered name verbatim). `#[serde(default,
+        /// skip_serializing_if = "Option::is_none")]` preserves
+        /// HMAC-chain byte-identical canonical JSON for
+        /// pre-Phase-120 entries (Phase 92 / Phase 117 /
+        /// Phase 118 wire-compat precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_corrected_from: Option<String>,
     },
 
     /// A scope check denied a tool call.
@@ -877,6 +887,7 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 input_hash,
                 outcome,
                 duration,
+                auto_corrected_from,
             } => AuditEvent::ToolCall {
                 turn_id,
                 tool_id,
@@ -884,6 +895,7 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 input_hash,
                 outcome,
                 duration,
+                auto_corrected_from,
             },
             AuditTag::ScopeDenied {
                 turn_id,
@@ -1040,6 +1052,7 @@ mod tests {
                 verified: aivyx_core::VerificationSummary::NotApplicable,
             },
             duration: Duration::from_millis(37),
+            auto_corrected_from: None,
         }
     }
 
@@ -2056,6 +2069,7 @@ mod tests {
                 verified: aivyx_core::VerificationSummary::NotApplicable,
             },
             duration: Duration::from_millis(3),
+            auto_corrected_from: None,
         });
 
         // Chain length went up, verification still holds.
@@ -2097,6 +2111,7 @@ mod tests {
                 verified: aivyx_core::VerificationSummary::NotApplicable,
             },
             duration: Duration::from_millis(1),
+            auto_corrected_from: None,
         });
         bridge.on_event(AuditTag::ScopeDenied {
             turn_id,
@@ -2162,6 +2177,7 @@ mod tests {
                 verified: aivyx_core::VerificationSummary::NotApplicable,
             },
             duration: Duration::from_millis(1),
+            auto_corrected_from: None,
         });
 
         let errors = captured.lock().unwrap();
