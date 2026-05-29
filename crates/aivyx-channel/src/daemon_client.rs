@@ -670,6 +670,128 @@ pub async fn evict_memory_topic(
     }
 }
 
+/// Phase 119 — operator-CLI ApplyProfileHint over IPC. Sends the
+/// apply-record request after the CLI has already mutated
+/// `aivyx.toml` via the Task 3 atomic primitive; the daemon's job is
+/// to record the `AuditEvent::ProfileHintApplied` entry. Returns the
+/// error message on a daemon-side failure (audit log unconfigured,
+/// chain append error, etc.); the caller decides whether to surface
+/// the audit failure as a soft warning (the file mutation already
+/// landed) or as a hard error.
+pub async fn apply_profile_hint(
+    socket_path: &Path,
+    proposal_id: &str,
+    field: &str,
+    applied_value: &str,
+) -> Result<(), DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::ApplyProfileHint {
+        id: "ah-cli".into(),
+        proposal_id: proposal_id.to_string(),
+        field: field.to_string(),
+        applied_value: applied_value.to_string(),
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::ProfileHintApplyAcked { ok, error, .. },
+                _,
+            )) => {
+                if ok {
+                    return Ok(());
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "apply-profile-hint failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected ProfileHintApplyAcked, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Phase 119 — operator-CLI ImportRoleDraft over IPC. Mirrors
+/// `apply_profile_hint` for the second Phase 118 category.
+pub async fn import_role_draft(
+    socket_path: &Path,
+    proposal_id: &str,
+    role_name: &str,
+    parent: Option<&str>,
+) -> Result<(), DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::ImportRoleDraft {
+        id: "ir-cli".into(),
+        proposal_id: proposal_id.to_string(),
+        role_name: role_name.to_string(),
+        parent: parent.map(str::to_string),
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::RoleDraftImportAcked { ok, error, .. },
+                _,
+            )) => {
+                if ok {
+                    return Ok(());
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "import-role-draft failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected RoleDraftImportAcked, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Phase 73 — paginated notification history walk over IPC.
 /// Returns the `(entries, total_len)` pair from
 /// `QueryPayload::ListNotificationHistory`.

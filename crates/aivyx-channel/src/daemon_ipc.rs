@@ -851,6 +851,44 @@ pub enum FrontendMessage {
         id: String,
         topic: String,
     },
+    /// Phase 119 — operator's act-on-approval gesture for a
+    /// Phase 118 `ProfileHint` proposal. Carries the values
+    /// the CLI already wrote to `aivyx.toml` via the Task 3
+    /// atomic primitive; the daemon's job is to record the
+    /// `AuditEvent::ProfileHintApplied` entry so forensic
+    /// walks see the apply alongside the upstream
+    /// `SkillAutoProposal` + `PersonaProposalResolved`.
+    ///
+    /// Reply: [`DaemonMessage::ProfileHintApplyAcked`].
+    ApplyProfileHint {
+        id: String,
+        /// Source proposal id from the operator-approved
+        /// `ProfileHint` chain entry.
+        proposal_id: String,
+        /// The declared Profile-config field the apply
+        /// mutated (matches `ProfileField::label()`).
+        field: String,
+        /// The value written to aivyx.toml — new scalar for
+        /// scalar fields, appended entry for list fields.
+        applied_value: String,
+    },
+    /// Phase 119 — operator's act-on-approval gesture for a
+    /// Phase 118 `RoleDefinitionSuggestion` proposal.
+    /// Mirrors `ApplyProfileHint` for the second category.
+    ///
+    /// Reply: [`DaemonMessage::RoleDraftImportAcked`].
+    ImportRoleDraft {
+        id: String,
+        /// Source proposal id from the operator-approved
+        /// `RoleDefinitionSuggestion` chain entry.
+        proposal_id: String,
+        /// The kebab-case role name written.
+        role_name: String,
+        /// The parent role for inheritance (or `None` for
+        /// top-level).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+    },
 }
 
 /// Phase 70 — operator resolution variants for
@@ -984,6 +1022,24 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    /// Phase 119 — ack for [`FrontendMessage::ApplyProfileHint`].
+    /// `ok = true` means the daemon recorded the
+    /// `AuditEvent::ProfileHintApplied` entry; `ok = false`
+    /// with `error` populated means the audit-log append
+    /// failed (the operator's `aivyx.toml` mutation already
+    /// landed CLI-side before the IPC fired).
+    ProfileHintApplyAcked {
+        id: String,
+        ok: bool,
+        error: Option<String>,
+    },
+    /// Phase 119 — ack for [`FrontendMessage::ImportRoleDraft`].
+    /// Same shape as `ProfileHintApplyAcked`.
+    RoleDraftImportAcked {
+        id: String,
+        ok: bool,
         error: Option<String>,
     },
     /// Phase 69 — broadcast-style Web UI desktop notification.
@@ -1276,6 +1332,20 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    // Phase 119 — ProfileHint apply ack.
+    ProfileHintApplyAcked {
+        id: String,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    // Phase 119 — RoleDraft import ack.
+    RoleDraftImportAcked {
+        id: String,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
 }

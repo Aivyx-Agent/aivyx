@@ -465,6 +465,19 @@ fn run() -> Result<(), String> {
         return match sub {
             ProfileSubcommand::Show => profile::run_profile_show(),
             ProfileSubcommand::Edit => profile::run_profile_edit(),
+            ProfileSubcommand::ApplyHint { proposal_id, yes } => {
+                // Phase 119 Task 4 — daemon IPC, hence a minimal
+                // tokio runtime (matches the persona subcommand
+                // dispatch pattern in this binary).
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to start runtime: {e}"))?;
+                runtime.block_on(profile::run_profile_apply_hint(
+                    &proposal_id,
+                    yes,
+                ))
+            }
         };
     }
 
@@ -1364,7 +1377,7 @@ enum ProposalsSubcommand {
 
 /// Subcommand discriminator under [`CliMode::Profile`]. Phase 58
 /// — PRODUCT.md P13.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum ProfileSubcommand {
     /// `aivyx profile show` — print the current Profile to stdout
     /// in a labeled human-readable form. Reads `aivyx.toml` from
@@ -1373,6 +1386,11 @@ enum ProfileSubcommand {
     /// `aivyx profile edit` — surgical `[profile]` section edit in
     /// `$EDITOR` per Q2(a) at sign-off (wired in Task 3).
     Edit,
+    /// `aivyx profile apply-hint <id> [--yes]` — Phase 119 Task 4.
+    /// Applies an Approved ProfileHint to `aivyx.toml`'s [profile]
+    /// section via the Task 3 atomic primitive, then records the
+    /// `AuditEvent::ProfileHintApplied` event via daemon IPC.
+    ApplyHint { proposal_id: String, yes: bool },
 }
 
 /// Phase 103 — `aivyx tool` subcommand variants.
@@ -2434,25 +2452,69 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // and Edit variants today; future variants land additively.
     if !args.is_empty() && args[0] == "profile" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx profile` requires a subcommand. Supported: show, edit".to_string()
+            "`aivyx profile` requires a subcommand. Supported: show, edit, apply-hint <id>"
+                .to_string()
         })?;
         let subcommand = match sub.as_str() {
-            "show" => ProfileSubcommand::Show,
-            "edit" => ProfileSubcommand::Edit,
+            "show" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx profile show` does not accept additional arguments. \
+                         Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                ProfileSubcommand::Show
+            }
+            "edit" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx profile edit` does not accept additional arguments. \
+                         Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                ProfileSubcommand::Edit
+            }
+            "apply-hint" => {
+                // Phase 119 Task 4 — `apply-hint <proposal-id> [--yes]`.
+                let mut proposal_id: Option<String> = None;
+                let mut yes = false;
+                for arg in args[2..].iter() {
+                    if arg == "--yes" || arg == "-y" {
+                        yes = true;
+                    } else if arg.starts_with('-') {
+                        return Err(format!(
+                            "unrecognized flag for `aivyx profile apply-hint`: `{arg}`. \
+                             Supported flag: --yes"
+                        ));
+                    } else if proposal_id.is_none() {
+                        proposal_id = Some(arg.clone());
+                    } else {
+                        return Err(format!(
+                            "`aivyx profile apply-hint` takes exactly one proposal id. \
+                             Got extra argument: `{arg}`"
+                        ));
+                    }
+                }
+                let id = proposal_id.ok_or_else(|| {
+                    "`aivyx profile apply-hint` requires a proposal id. \
+                     Usage: `aivyx profile apply-hint <proposal-id> [--yes]`"
+                        .to_string()
+                })?;
+                ProfileSubcommand::ApplyHint {
+                    proposal_id: id,
+                    yes,
+                }
+            }
             other => {
                 return Err(format!(
                     "unrecognized profile subcommand: `{other}`. \
-                     Supported: profile show, profile edit"
+                     Supported: profile show, profile edit, \
+                     profile apply-hint <id>"
                 ));
             }
         };
-        if args.len() > 2 {
-            return Err(format!(
-                "`aivyx profile {sub}` does not accept additional arguments. \
-                 Got: `{}`",
-                args[2..].join(" ")
-            ));
-        }
         return Ok(CliArgs {
             mode: CliMode::Profile(subcommand),
             channel: ChannelKind::Local,
@@ -7048,6 +7110,99 @@ mod tests {
             err.contains("does not accept additional arguments"),
             "error: {err}"
         );
+    }
+
+    // ----- Phase 119 Task 4 — `profile apply-hint` parser -----
+
+    #[test]
+    fn profile_apply_hint_parses_proposal_id() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "profile",
+            "apply-hint",
+            "pp-abc",
+        ]))
+        .expect("`profile apply-hint pp-abc` must parse");
+        match parsed.mode {
+            CliMode::Profile(ProfileSubcommand::ApplyHint {
+                proposal_id,
+                yes,
+            }) => {
+                assert_eq!(proposal_id, "pp-abc");
+                assert!(!yes, "default yes must be false");
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_apply_hint_parses_yes_flag() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "profile",
+            "apply-hint",
+            "pp-abc",
+            "--yes",
+        ]))
+        .expect("--yes flag must parse");
+        match parsed.mode {
+            CliMode::Profile(ProfileSubcommand::ApplyHint { yes, .. }) => {
+                assert!(yes);
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_apply_hint_accepts_short_y_flag() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "profile",
+            "apply-hint",
+            "pp-abc",
+            "-y",
+        ]))
+        .expect("-y flag must parse");
+        match parsed.mode {
+            CliMode::Profile(ProfileSubcommand::ApplyHint { yes, .. }) => {
+                assert!(yes);
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_apply_hint_without_id_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["profile", "apply-hint"]))
+            .expect_err("missing id must error");
+        assert!(
+            err.contains("requires a proposal id"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn profile_apply_hint_rejects_unknown_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "profile",
+            "apply-hint",
+            "pp-abc",
+            "--force",
+        ]))
+        .expect_err("--force is not supported on apply-hint");
+        assert!(
+            err.contains("unrecognized flag"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn profile_apply_hint_rejects_extra_positional_args() {
+        let err = parse_cli_args_from(&argv(&[
+            "profile",
+            "apply-hint",
+            "pp-abc",
+            "pp-def",
+        ]))
+        .expect_err("two ids must error");
+        assert!(err.contains("exactly one proposal id"), "error: {err}");
     }
 
     // -----------------------------------------------------------------

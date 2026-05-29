@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
-use aivyx_audit::PersistentAuditLog;
+use aivyx_audit::{AuditWriter, PersistentAuditLog};
 use aivyx_core::{Agent, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome};
 
 use aivyx_storage::DomainHandle;
@@ -1863,6 +1863,94 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                         }
                                     }
                                 },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::ApplyProfileHint {
+                            id,
+                            proposal_id,
+                            field,
+                            applied_value,
+                        } => {
+                            // Phase 119 — operator's act-on-approval
+                            // gesture for a ProfileHint. The CLI has
+                            // already mutated aivyx.toml via the Task 3
+                            // atomic primitive; this handler's only
+                            // job is to record the audit event so
+                            // forensic walks can pair the apply with
+                            // the upstream proposal.
+                            let resp = match audit_log.as_ref() {
+                                None => DaemonMessage::ProfileHintApplyAcked {
+                                    id,
+                                    ok: false,
+                                    error: Some(
+                                        "daemon has no audit log configured"
+                                            .into(),
+                                    ),
+                                },
+                                Some(al) => {
+                                    let event = aivyx_audit::AuditEvent::ProfileHintApplied {
+                                        session_id: aivyx_core::SessionId::new(),
+                                        proposal_id,
+                                        field,
+                                        applied_value,
+                                    };
+                                    match al.append(event) {
+                                        Ok(_) => DaemonMessage::ProfileHintApplyAcked {
+                                            id,
+                                            ok: true,
+                                            error: None,
+                                        },
+                                        Err(e) => DaemonMessage::ProfileHintApplyAcked {
+                                            id,
+                                            ok: false,
+                                            error: Some(e.to_string()),
+                                        },
+                                    }
+                                }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::ImportRoleDraft {
+                            id,
+                            proposal_id,
+                            role_name,
+                            parent,
+                        } => {
+                            // Phase 119 — operator's act-on-approval
+                            // gesture for a RoleDefinitionSuggestion.
+                            // Same shape as ApplyProfileHint.
+                            let resp = match audit_log.as_ref() {
+                                None => DaemonMessage::RoleDraftImportAcked {
+                                    id,
+                                    ok: false,
+                                    error: Some(
+                                        "daemon has no audit log configured"
+                                            .into(),
+                                    ),
+                                },
+                                Some(al) => {
+                                    let event = aivyx_audit::AuditEvent::RoleDraftImported {
+                                        session_id: aivyx_core::SessionId::new(),
+                                        proposal_id,
+                                        role_name,
+                                        parent,
+                                    };
+                                    match al.append(event) {
+                                        Ok(_) => DaemonMessage::RoleDraftImportAcked {
+                                            id,
+                                            ok: true,
+                                            error: None,
+                                        },
+                                        Err(e) => DaemonMessage::RoleDraftImportAcked {
+                                            id,
+                                            ok: false,
+                                            error: Some(e.to_string()),
+                                        },
+                                    }
+                                }
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;

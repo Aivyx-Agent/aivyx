@@ -101,6 +101,167 @@ pub fn run_profile_edit() -> Result<(), String> {
     Ok(())
 }
 
+/// Entry point for `aivyx profile apply-hint <proposal-id> [--yes]`.
+/// Phase 119 Task 4.
+///
+/// Operator workflow:
+/// 1. Operator has already run `aivyx persona proposals approve <id>`
+///    on a `ProfileHint` proposal (Q2(a) at Phase 119 sign-off —
+///    separate approve and apply gestures).
+/// 2. This command fetches the now-Approved proposal, validates the
+///    category, parses the inner `ProfileFieldHint` payload,
+///    confirms with the operator (unless `--yes`), applies the field
+///    update to `aivyx.toml` atomically via the Task 3 primitive,
+///    records an `AuditEvent::ProfileHintApplied` event via daemon
+///    IPC, and surfaces a "restart the daemon" reminder.
+pub async fn run_profile_apply_hint(
+    proposal_id: &str,
+    yes: bool,
+) -> Result<(), String> {
+    use aivyx_channel::daemon_client::{
+        apply_profile_hint, daemon_is_running, get_persona_proposal,
+    };
+    use aivyx_channel::daemon_ipc::default_socket_path;
+
+    let socket_path = default_socket_path()?;
+    if !daemon_is_running(&socket_path).await {
+        return Err(format!(
+            "aivyx profile apply-hint: daemon must be running \
+             (socket {}). Start it with `aivyx`.",
+            socket_path.display(),
+        ));
+    }
+
+    let proposal = get_persona_proposal(&socket_path, proposal_id)
+        .await
+        .map_err(|e| format!("failed to fetch proposal: {e}"))?
+        .ok_or_else(|| format!("no proposal with id `{proposal_id}`"))?;
+
+    let hint = parse_proposal_as_profile_hint(&proposal)?;
+
+    // Confirm with operator. The hint's rationale is part of why
+    // the operator approved it; surfacing the field + value at
+    // apply time is enough to catch a mistaken proposal id.
+    if !yes {
+        eprintln!(
+            "Apply `{field}` = {value:?} to {path}?",
+            field = hint.field.label(),
+            value = hint.suggested_value,
+            path = PROFILE_TOML_PATH,
+        );
+        eprintln!("[y/N] (re-run with --yes to skip this prompt)");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).map_err(|e| {
+            format!("failed to read confirmation: {e}")
+        })?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        {
+            return Err("apply cancelled by operator".to_string());
+        }
+    }
+
+    let applied = crate::toml_edit_apply::apply_profile_hint_to_path(
+        Path::new(PROFILE_TOML_PATH),
+        &hint,
+    )
+    .map_err(|e| format!("failed to apply hint to {PROFILE_TOML_PATH}: {e}"))?;
+
+    // Record the audit event via daemon IPC. If the audit-record
+    // step fails AFTER the aivyx.toml mutation landed, surface as
+    // a soft warning — the file mutation is the load-bearing
+    // result; the audit event is forensic.
+    let audit_result = apply_profile_hint(
+        &socket_path,
+        proposal_id,
+        &applied.field,
+        &applied.applied_value,
+    )
+    .await;
+
+    eprintln!();
+    eprintln!(
+        "Applied `{field}` to {path}.",
+        field = applied.field,
+        path = PROFILE_TOML_PATH,
+    );
+    match audit_result {
+        Ok(()) => {
+            eprintln!(
+                "Audit event `ProfileHintApplied` recorded for proposal \
+                 `{proposal_id}`."
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: audit-event record failed: {e}\n\
+                 The aivyx.toml mutation is in place; you can re-record \
+                 the audit event by running the command again."
+            );
+        }
+    }
+    eprintln!(
+        "Restart the daemon for the new value to take effect: \
+         `aivyx daemon stop && aivyx`."
+    );
+    Ok(())
+}
+
+/// Pure validator: parse the proposal's wire shape into a
+/// [`ProfileFieldHint`]. Fails closed:
+/// - Refuses non-`ProfileHint` categories (operator picked wrong
+///   proposal id).
+/// - Refuses non-`Approved` statuses (apply only acts on already-
+///   approved hints per Q2(a) Phase 119 sign-off).
+/// - Refuses malformed JSON payloads (the proposal's
+///   `applied_op.value` must decode as a `ProfileFieldHint`).
+///
+/// Extracted as a pure function so the validation logic is
+/// testable without IPC scaffolding.
+fn parse_proposal_as_profile_hint(
+    proposal: &aivyx_channel::daemon_ipc::PersonaProposalSummary,
+) -> Result<aivyx_core::skill_proposer::ProfileFieldHint, String> {
+    if proposal.category != "ProfileHint" {
+        return Err(format!(
+            "proposal `{}` has category `{}`, not `ProfileHint`. \
+             Use `aivyx role import` for RoleDefinitionSuggestion.",
+            proposal.id, proposal.category
+        ));
+    }
+    if proposal.status != "Approved" {
+        return Err(format!(
+            "proposal `{}` has status `{}`; only Approved proposals can be \
+             applied. Run `aivyx persona proposals approve {}` first.",
+            proposal.id, proposal.status, proposal.id
+        ));
+    }
+    // The Phase 118 chain stores the payload inside applied_op
+    // (operator approved → applied_op set from proposed_op verbatim
+    // unless the operator edited). Fall back to proposed_op if the
+    // applied_op is absent (old chain shape).
+    let op = proposal
+        .applied_op
+        .as_ref()
+        .unwrap_or(&proposal.proposed_op);
+    let value = op
+        .get("value")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            format!(
+                "proposal `{}` op shape is unexpected (no AppendList.value); \
+                 cannot decode ProfileFieldHint payload.",
+                proposal.id
+            )
+        })?;
+    let hint: aivyx_core::skill_proposer::ProfileFieldHint =
+        serde_json::from_str(value).map_err(|e| {
+            format!(
+                "proposal `{}` value is not a valid ProfileFieldHint payload: {e}",
+                proposal.id
+            )
+        })?;
+    Ok(hint)
+}
+
 /// Parse `original_text` (the existing `aivyx.toml`) and return the
 /// `[profile]` section as a standalone TOML document the operator can
 /// edit in a tempfile. If the original document has no `[profile]`
@@ -595,5 +756,138 @@ assistant_name = \"oops\"
         // Operator-declared assistant_name flips injection to ENABLED
         // even when most fields are unset.
         assert!(out.contains("Profile injection: ENABLED"));
+    }
+
+    // ----- Phase 119 Task 4 — parse_proposal_as_profile_hint -----
+
+    fn proposal_fixture(
+        id: &str,
+        category: &str,
+        status: &str,
+        applied_op: Option<serde_json::Value>,
+    ) -> aivyx_channel::daemon_ipc::PersonaProposalSummary {
+        aivyx_channel::daemon_ipc::PersonaProposalSummary {
+            id: id.into(),
+            proposed_at_unix_ms: 1_715_000_000_000,
+            source_reflection_session_id: "ses-118".into(),
+            status: status.into(),
+            category: category.into(),
+            proposed_op: serde_json::json!({
+                "kind": "AppendList",
+                "value": "",
+            }),
+            proposed_reason: None,
+            applied_op,
+            applied_seq: Some(7),
+            rejected_reason: None,
+            resolved_at_unix_ms: Some(1_715_000_060_000),
+            supersedes_proposal_id: None,
+        }
+    }
+
+    fn profile_hint_payload(field: &str, value: &str) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "AppendList",
+            "value": serde_json::json!({
+                "field": field,
+                "suggested_value": value,
+                "rationale": "operator pattern observed",
+            })
+            .to_string(),
+        })
+    }
+
+    #[test]
+    fn parse_proposal_accepts_approved_profile_hint() {
+        let proposal = proposal_fixture(
+            "pp-1",
+            "ProfileHint",
+            "Approved",
+            Some(profile_hint_payload(
+                "CommunicationStyle",
+                "terse and bullet-formatted",
+            )),
+        );
+        let hint = parse_proposal_as_profile_hint(&proposal).unwrap();
+        assert_eq!(
+            hint.field,
+            aivyx_core::skill_proposer::ProfileField::CommunicationStyle
+        );
+        assert!(hint.suggested_value.contains("bullet-formatted"));
+        assert!(hint.rationale.contains("pattern"));
+    }
+
+    #[test]
+    fn parse_proposal_refuses_non_profile_hint_category() {
+        // Operator picked an `RoleDefinitionSuggestion` id by mistake.
+        let proposal = proposal_fixture(
+            "pp-x",
+            "RoleDefinitionSuggestion",
+            "Approved",
+            Some(serde_json::json!({"kind":"AppendList","value":"{}"})),
+        );
+        let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
+        assert!(err.contains("not `ProfileHint`"));
+        assert!(err.contains("aivyx role import"));
+    }
+
+    #[test]
+    fn parse_proposal_refuses_pending_status() {
+        // Operator forgot to approve first.
+        let proposal = proposal_fixture(
+            "pp-y",
+            "ProfileHint",
+            "Pending",
+            None,
+        );
+        let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
+        assert!(err.contains("only Approved proposals"));
+        assert!(err.contains("aivyx persona proposals approve"));
+    }
+
+    #[test]
+    fn parse_proposal_refuses_rejected_status() {
+        let proposal = proposal_fixture(
+            "pp-z",
+            "ProfileHint",
+            "Rejected",
+            None,
+        );
+        let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
+        assert!(err.contains("only Approved"));
+    }
+
+    #[test]
+    fn parse_proposal_refuses_malformed_payload() {
+        let proposal = proposal_fixture(
+            "pp-bad",
+            "ProfileHint",
+            "Approved",
+            Some(serde_json::json!({"kind":"AppendList","value":"not json"})),
+        );
+        let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
+        assert!(err.contains("ProfileFieldHint"));
+    }
+
+    #[test]
+    fn parse_proposal_falls_back_to_proposed_op_when_applied_op_absent() {
+        // Backward-compat: old chain entries might not have
+        // applied_op populated. Falls back to proposed_op.
+        let mut proposal = proposal_fixture(
+            "pp-fallback",
+            "ProfileHint",
+            "Approved",
+            None,
+        );
+        proposal.proposed_op = profile_hint_payload(
+            "AssistantName",
+            "Aivyx",
+        );
+        let hint = parse_proposal_as_profile_hint(&proposal).unwrap();
+        assert_eq!(
+            hint.field,
+            aivyx_core::skill_proposer::ProfileField::AssistantName
+        );
+        assert_eq!(hint.suggested_value, "Aivyx");
     }
 }
