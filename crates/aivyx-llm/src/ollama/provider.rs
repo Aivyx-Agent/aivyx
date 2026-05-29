@@ -1189,4 +1189,87 @@ mod tests {
                 < 1e-6
         );
     }
+
+    // ----- Phase 121 Task 7 — Split-chunk JSONL through full pipeline -----
+
+    /// Transport that returns the canned JSONL bytes as MULTIPLE
+    /// chunks, simulating a real network stream where a single
+    /// JSON object spans two TCP reads. Exercises the
+    /// JsonlReader's buffer state machine through the full
+    /// OllamaProvider → JsonlReader → OllamaStream chain.
+    struct ChunkedFakeTransport {
+        chunks: Vec<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl HttpTransport for ChunkedFakeTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            let items: Vec<Result<Bytes, LlmError>> = self
+                .chunks
+                .iter()
+                .map(|c| Ok::<_, LlmError>(Bytes::from(c.clone())))
+                .collect();
+            Ok(Pin::from(Box::new(stream::iter(items)))
+                as Pin<Box<dyn futures_util::Stream<Item = _> + Send>>)
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_reassembles_jsonl_chunks_split_across_reads() {
+        // Phase 121 Task 7 e2e: a real-network simulation where
+        // one of the Ollama JSON objects arrives split across
+        // two ByteStream chunks. The JsonlReader's buffer state
+        // machine (Task 3) reassembles it; the OllamaStream
+        // (Task 4) consumes one logical line per parse; the
+        // OllamaProvider chat_stream (Task 5) ties the chain
+        // together end-to-end.
+        let chunks: Vec<Vec<u8>> = vec![
+            // First chunk: complete first object + start of
+            // second.
+            b"{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"done\":false}\n{\"message\":{\"role\":\"assistant\",\"content\":\" wor".to_vec(),
+            // Second chunk: rest of second object + complete
+            // terminal chunk.
+            b"ld\"},\"done\":false}\n{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"prompt_eval_count\":7,\"eval_count\":3}\n".to_vec(),
+        ];
+        let transport = ChunkedFakeTransport { chunks };
+        let provider = OllamaProvider::with_transport(
+            OllamaConfig::default_local(),
+            Box::new(transport),
+        );
+        let msgs = vec![LlmMessage::user_text("say hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        let mut text = String::new();
+        while let Some(ev) = stream.next_event().await.unwrap() {
+            if let LlmStreamEvent::TextChunk(s) = ev {
+                text.push_str(&s);
+            }
+        }
+        // Both text deltas reassembled correctly across the
+        // ByteStream-chunk split.
+        assert_eq!(text, "Hello world");
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, usage } => {
+                assert_eq!(text, "Hello world");
+                assert_eq!(usage.input_tokens, 7);
+                assert_eq!(usage.output_tokens, 3);
+            }
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+    }
 }

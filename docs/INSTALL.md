@@ -960,6 +960,145 @@ is operator-conservative-leaning at the default:
   threshold or switching to a model with a cleaner
   protocol).
 
+## Native Ollama provider (Phase 121)
+
+Phase 25 added OpenAI-compatible LLM support; Phase 34
+brought Ollama to first-class status by routing
+`provider = "ollama"` through that same OpenAI-compat
+path. The translation worked but lost fidelity on
+Ollama-specific options (`num_ctx`, `num_predict`,
+`mirostat`) and on Ollama's native JSONL streaming
+protocol.
+
+**Phase 121 ships a dedicated `OllamaProvider`** that talks
+Ollama's `/api/chat` natively. After Phase 121, `provider
+= "ollama"` in `aivyx.toml` routes to the native adapter
+**transparently** — operators using Ollama get native
+benefits without changing their config.
+
+### What changed for `provider = "ollama"`
+
+- **Endpoint**: `/api/chat` (was `/v1/chat/completions`
+  through the OpenAI-compat path).
+- **Streaming**: native JSONL (newline-delimited JSON
+  objects) instead of SSE `data:` framing.
+- **Tool calls**: arrive complete in the final `done:
+  true` chunk (Ollama's actual protocol; the OpenAI-compat
+  path was reassembling delta-streamed arguments that
+  Ollama never sent that way).
+- **Usage**: `prompt_eval_count` → input tokens,
+  `eval_count` → output tokens, on the terminal chunk.
+- **Tool-call arguments**: passed as JSON **objects** on
+  the wire (Ollama's native format), not JSON-encoded
+  strings.
+
+**Behavior NOT changed:**
+- Existing `aivyx.toml` files with `provider = "ollama"`
+  work unchanged. The base-URL handling, model-name
+  selection, and channel adapters all continue to work.
+- Phase 120's tool-call recovery substrate flows uniformly
+  through the native adapter: `NameResolution::Unknown`
+  classification fires on hallucinated names (e.g.
+  qwen3.6:27b emitting `fs_read` when the registered
+  tool is `fs.read`), and the planner's fuzzy-match
+  recovery dispatches as before.
+- The OpenAI-compat path stays for explicit `provider =
+  "openai"` (cloud OpenAI or non-Ollama OpenAI-compat
+  services).
+
+### Configuring Ollama-specific options
+
+Phase 121 introduces a new `[ollama]` section in
+`aivyx.toml` for the operator-relevant subset of Ollama's
+modelfile options. All fields are optional; unset fields
+fall through to Ollama's per-model defaults.
+
+```toml
+provider = "ollama"
+model = "qwen3.6:27b"
+
+[ollama]
+# Resource knobs:
+num_ctx = 16384       # context window override (default: per-model)
+num_predict = 2048    # max tokens to generate
+num_thread = 8        # threads for the runtime
+
+# Sampling knobs:
+mirostat = 2          # 0 = off, 1 = Mirostat, 2 = Mirostat 2.0
+top_k = 40
+top_p = 0.9
+repeat_penalty = 1.1
+repeat_last_n = 64
+
+# Reproducibility:
+seed = 42
+```
+
+These propagate into Ollama's request `options: {...}`
+block. Ollama's per-model defaults apply for any field
+the operator hasn't overridden — `num_ctx`, in
+particular, varies widely by model (some are 2048, some
+are 128K+).
+
+### Operator-protected Ollama deployments
+
+Vanilla `ollama serve` doesn't require authentication, but
+operators running Ollama behind a reverse proxy (Caddy,
+nginx, Cloudflare Access) can attach an API key. The
+provider emits `Authorization: Bearer <key>` only when
+`OLLAMA_API_KEY` is set; absent means no header (matches
+the OpenAI provider's defensive empty-key posture).
+
+```sh
+export OLLAMA_API_KEY="opaque-token-issued-by-your-proxy"
+aivyx
+```
+
+### When to pick `provider = "openai"` instead
+
+The native adapter is the right default for any Ollama
+deployment. The OpenAI-compat path is the right choice
+when:
+
+- You're targeting cloud OpenAI directly (Phase 25 use
+  case).
+- You're targeting a non-Ollama OpenAI-compat service
+  (vLLM with OpenAI-compat enabled, LM Studio,
+  llama.cpp's `--api-base`, etc.) that doesn't speak
+  Ollama's native JSONL protocol.
+
+In both cases use `provider = "openai"` and set
+`OPENAI_BASE_URL` to the target endpoint.
+
+### Phase 120 substrate uniformity
+
+The Phase 120 tool-name recovery substrate flows uniformly
+through the native Ollama adapter. The provider classifies
+each emitted tool name against the request's advertised
+set; the planner runs `title_similarity` fuzzy-match
+recovery above the operator-configured threshold; auto-
+corrections land in `AuditEvent::ToolCall.auto_corrected_from`
+with HMAC-chain-byte-identical canonical-JSON for the
+dominant (no-correction) case. Same operator-forensics
+recipe works:
+
+```sh
+aivyx audit export --event-type ToolCall | \
+  jq 'select(.auto_corrected_from)'
+```
+
+### Honest scope caveat carried from open doc
+
+The Phase 121 open doc surfaced this at sign-off:
+**the native Ollama adapter does not fix model-shaped
+hallucination patterns directly.** A model that emits
+`fs_read` will keep emitting `fs_read`. What Phase 121
+gives is the substrate gain: native protocol fidelity,
+operator-tunable Ollama options, and no OpenAI-compat
+translation layer to debug. The hallucination recovery
+itself is Phase 120's substrate, running uniformly
+through both adapter paths.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

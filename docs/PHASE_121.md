@@ -262,35 +262,123 @@ Roughly seven sub-tasks plus exit + backfill:
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_121.md` + ROADMAP Phase 121 entry +
-  docs/README status row — Task 1.
-- [ ] `OllamaProvider` skeleton + request body — Task 2.
-- [ ] JSONL streaming line reader — Task 3.
-- [ ] Stream state machine + chunk parser — Task 4.
-- [ ] OllamaProvider::chat_stream integration — Task 5.
-- [ ] aivyx-config wiring + binary dispatch — Task 6.
-- [ ] Scripted e2e + INSTALL.md sweep — Task 7.
-- [ ] Q1/Q2/Q3 resolved with operator sign-off pre-Task
+- [x] `docs/PHASE_121.md` + ROADMAP Phase 121 entry +
+  docs/README status row — Task 1 (`97cc7d8`).
+- [x] `OllamaProvider` skeleton + request body — Task 2
+  (`7cb5566`).
+- [x] JSONL streaming line reader — Task 3 (`d0ad4e7`).
+- [x] Stream state machine + chunk parser — Task 4
+  (`d7d9564`).
+- [x] OllamaProvider::chat_stream integration — Task 5
+  (`f8bcb55`).
+- [x] aivyx-config wiring + binary dispatch — Task 6
+  (`e87f574`).
+- [x] Scripted e2e + INSTALL.md sweep — Task 7 (this commit).
+- [x] Q1/Q2/Q3 resolved with operator sign-off pre-Task
   2 (Q1a + Q2a non-Recommended + Q3a recorded above).
-- [ ] DESIGN.md streak — predicted HOLD (streak → 12).
-- [ ] PRODUCT.md streak — predicted HOLD (streak → 12).
-- [ ] `aivyx-core/src/lib.rs` streak — predicted HOLD
-  (streak re-establishes to 2 after Phase 120 break),
-  honest 80/20 hold.
-- [ ] Zero new workspace dependencies.
-- [ ] Test count delta within `+40` to `+70`.
-- [ ] Zero clippy warnings.
-- [ ] **Ollama users get first-class native treatment.**
+- [x] DESIGN.md streak — **HELD as predicted**.
+  `c2be6d51…` unchanged. Streak extends 11 → 12.
+- [x] PRODUCT.md streak — **HELD as predicted**.
+  `6e840cef…` unchanged. Streak extends 11 → 12.
+- [x] `aivyx-core/src/lib.rs` streak — **HELD as
+  predicted** (80/20 hold case carried through).
+  `b420405b…` unchanged. Streak re-establishes 1 → 2
+  after Phase 120's break. The new adapter lives
+  entirely in `aivyx-llm`, the OllamaOptions struct in
+  `aivyx-config`, and the dispatch routing in
+  `aivyx-channel` — Q1a's "dedicated module" pick
+  deliberately kept changes off lib.rs and the 80%
+  case landed.
+- [x] Zero new workspace dependencies. `provider-ollama`
+  feature reuses existing transport deps.
+- [ ] Test count delta `+54` (2346 → 2400) — within the
+  predicted `+40 to +70` band.
+- [x] Zero clippy warnings.
+- [x] **Ollama users get first-class native treatment.**
   `provider = "ollama"` uses Ollama's `/api/chat`
   directly; the OpenAI-compat translation layer is no
   longer in the request path for local-model
   operators.
-- [ ] **Operator-facing changes are transparent or
+- [x] **Operator-facing changes are transparent or
   additive.** Existing `aivyx.toml` files with
   `provider = "ollama"` work unchanged after Phase 121
-  ships (just routed through the native path); the
+  ships (now routed through the native path); the
   new `[ollama]` options sub-section is purely
   additive (absent → Ollama's own defaults).
+
+## Prediction vs reality
+
+**Three of three streak predictions correct.** Phase 121
+returns to the Phase 119 posture: all three streaks
+held, the lib.rs streak re-established to 2 after Phase
+120's break. The Q1a "dedicated module" pick paid off
+exactly as the open doc anticipated.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; Phase 121 ships a
+  new LlmProvider implementation inside the existing
+  trait shape. Streak: 11 → 12.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 (Local execution, privacy non-
+  negotiable) covers Ollama first-class support;
+  Phase 121 strengthens that commitment by removing the
+  OpenAI-compat translation indirection without
+  contract change. Streak: 11 → 12.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (80/20 hold case held). `b420405b…` unchanged. The
+  new adapter lives in `aivyx-llm/src/ollama/`; the
+  OllamaOptions config struct lives in `aivyx-config`;
+  the dispatch routing in `aivyx-channel/src/bin/aivyx.rs`.
+  Q1a's deliberate "dedicated module" architectural
+  pick made this hold. Streak re-establishes 1 → 2.
+
+**Test count `+54` is within the predicted `+40 to
++70` range.** Per-task breakdown:
+- Task 2: 17 tests for the skeleton + request body
+  builder (config helpers, endpoint, request shape,
+  message translation).
+- Task 3: 14 tests for the JSONL line reader (pure
+  helper + async stream-driven cases including the
+  load-bearing line-spanning-chunks reassembly).
+- Task 4: 10 tests for the stream state machine
+  (text-only, tool-call all-at-once on done, mixed
+  text-then-tool-calls, hallucinated name flagging,
+  multiple tool calls in one batch, malformed-chunk
+  defensive paths).
+- Task 5: 8 chat_stream integration tests (`/api/chat`
+  endpoint routing, auth header behavior, text-only,
+  tool-call, hallucinated name through provider, wire
+  shape capture).
+- Task 6: 4 aivyx-config tests for the `[ollama]`
+  TOML section.
+- Task 7: 1 final e2e test (split-chunk JSONL through
+  the full pipeline).
+
+**Q-block went through as operator-picked.** Q1a + Q2a
+(non-Recommended full streaming) + Q3a all shipped.
+The Q2a non-Recommended pick paid off: full JSONL
+streaming supports text-deltas-while-tools shape (text
+then tool calls on terminal) cleanly, which the
+"non-streaming for tools" pragmatic option would have
+sacrificed.
+
+**Phase 120 substrate uniformity preserved.** The
+provider-side `NameResolution` validation, the planner's
+fuzzy-match recovery, and the audit chain's
+`auto_corrected_from` field all flow through the native
+Ollama adapter identically to how they flow through the
+OpenAI and Anthropic providers. Phase 121 was substrate-
+expansion at the LLM layer; Phase 120's substrate-fix at
+the planner layer composes on top.
+
+**Honest scope caveat held at exit.** The open doc
+flagged that the native adapter does NOT fix model-shaped
+hallucination patterns directly. Reality matches: the
+hallucination recovery remains Phase 120's substrate
+(running uniformly through both adapters); Phase 121's
+contribution is native protocol fidelity, operator-
+tunable Ollama options, and zero translation-layer
+debugging. The honest-up-front sign-off carried through.
 
 ## Direction after Phase 121
 

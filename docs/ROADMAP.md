@@ -3446,44 +3446,55 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 121 — Native Ollama Tool-Calling Path (Local-LLM Rehab #3)
 
-**Active — see [PHASE_121.md](PHASE_121.md).** Second-
+**Frozen — see [PHASE_121.md](PHASE_121.md).** Second-
 named phase against the audit's local-LLM rehabilitation
 axis. New dedicated `OllamaProvider` in
-`aivyx-llm/src/ollama/` mirroring
-`aivyx-llm/src/openai/`. Talks Ollama's `/api/chat`
-natively (JSONL streaming protocol); bypasses the OpenAI-
-compat translation layer entirely. `ProviderKind::Ollama`
-routes to the new adapter by default; OpenAI-compat
-stays untouched for `provider = "openai"`.
+`aivyx-llm/src/ollama/` mirroring `aivyx-llm/src/openai/`.
+Talks Ollama's `/api/chat` natively (JSONL streaming
+protocol); bypasses the OpenAI-compat translation layer
+entirely. `ProviderKind::Ollama` routes to the new
+adapter by default; OpenAI-compat stays untouched for
+`provider = "openai"`.
 
 **Q-block (one non-Recommended):**
 - Q1a — New dedicated `OllamaProvider` (Recommended).
 - Q2a — Full streaming via JSONL protocol (non-
   Recommended; picked over pragmatic "non-streaming for
-  tools" Recommended). Honest scope expansion; cleanest
-  UX.
+  tools" Recommended). Honest scope expansion; the Q2a
+  pick paid off — full JSONL streaming supports text-
+  deltas-then-tools shape cleanly.
 - Q3a — `ProviderKind::Ollama` switches to native by
   default (Recommended). Operators get native benefits
   transparently.
 
-**Streak predictions:** DESIGN.md HOLD → 12; PRODUCT.md
-HOLD → 12; `aivyx-core/src/lib.rs` predicted HOLD →
-re-establishes to 2 after Phase 120's break (honest
-80/20; adapter lives in aivyx-llm, dispatch routing in
-the binary; both avoid lib.rs).
+**Streak outcomes:** 3-of-3 predictions correct. Phase
+121 returns to the Phase 119 posture: all three streaks
+held; the lib.rs streak re-establishes to 2 after
+Phase 120's break. Q1a's "dedicated module" pick
+deliberately kept changes off lib.rs and the 80% hold
+case landed.
+- DESIGN.md: HELD as predicted. Streak → 12.
+- PRODUCT.md: HELD as predicted. Streak → 12.
+- `aivyx-core/src/lib.rs`: HELD as predicted (80% hold).
+  New adapter lives in aivyx-llm; OllamaOptions config
+  struct in aivyx-config; dispatch routing in
+  aivyx-channel. Streak re-establishes 1 → 2.
 
-Test count: predicted `+40 to +70` — honest scope
-expansion from Q2a's full-streaming pick. Zero new
-workspace deps anticipated.
+Test count: 2346 → 2400 (+54). Within the predicted
+`+40 to +70` band. Each task carries focused coverage
+for one Phase 121 surface.
 
-**Honest scope caveat carried in the open doc:** the
-local-model hallucination patterns Phase 120 addressed
-are model-shaped, not protocol-shaped. The native Ollama
-path will NOT fix qwen3.6:27b emitting `fs_read`; what
-it WILL give is per-model Ollama options (`num_ctx`,
-`num_predict`), native streaming fidelity, and no
-OpenAI-compat translation layer to debug. Phase 6 Q5
-honesty at sign-off.
+Zero new workspace deps (`provider-ollama` feature
+reuses existing transport deps).
+
+**Honest scope caveat held at exit.** The open doc
+flagged that the native adapter does NOT fix model-
+shaped hallucination patterns directly; reality
+matched. Phase 121's contribution is native protocol
+fidelity, operator-tunable Ollama options
+(`num_ctx`, `num_predict`, `mirostat`, etc.), and zero
+translation-layer debugging. Phase 120's substrate
+recovery flows uniformly through both adapters.
 
 **Tenth consecutive substrate/polish phase picked over
 the Channel Activation Milestone.** Honest tracking;
