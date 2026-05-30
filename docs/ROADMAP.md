@@ -3536,10 +3536,38 @@ determines whether this substrate breaks through or
 whether four substrate phases (120 + 121 + 122 + 124) all
 hit the same model-layer wall.
 
-**Live verification outcome:** _backfilled at exit-hash
-backfill commit; see PHASE_124.md "Live verification
-(Task 4)" placeholder. Q3a posture: exit reports whatever
-the test shows._
+**Live verification outcome — fourth-substrate-phase
+failure on the load-bearing invocation question.** Neither
+qwen3.6:27b nor gemma4:31b produced an actual fs.write
+invocation through the protocol. A bonus glm-4.7-flash
+control (undetected family → strategy=none) showed the
+same failure mode without any Aivyx substrate, confirming
+the failure is at the model layer, not Phase 124's
+substrate. **The model-layer ceiling holds definitively
+after four substrate attempts (Phase 120 fuzzy recovery
++ Phase 121 native protocol + Phase 122 structured catalog
++ Phase 124 few-shot examples).**
+
+Three secondary findings worth carrying forward to
+Phase 125: (1) qwen3 emitted structurally-correct
+`<tool_code>` JSON as TEXT — wrong channel, but textual-
+tool-call extraction would rescue it; (2) gemma4's
+invented `fs.write_file` sits at similarity 0.667,
+below Phase 120's 0.80 default — operators can opt-in
+by lowering the threshold; (3) the failure mode is
+identical with NO substrate (glm control), so substrate
+isn't making things worse.
+
+**FewShotExamples stays as the default** for qwen3 +
+gemma4 — not because it broke through, but because the
+Phase 124 outcomes (text-form tool-call attempt;
+hallucinated alternative) are slightly more substrate-
+rescuable than Phase 122's outcomes (timeout; refusal)
+even though neither produces a real invocation.
+
+**Phase 125 should pivot to operator-side mitigation,
+not a fifth substrate attempt** — see PHASE_124.md
+exit doc for the full reasoning.
 
 **Thirteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking. Audit's #1

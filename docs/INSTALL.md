@@ -1319,12 +1319,49 @@ to Phase 122 substrate) or `prompt_strategy = "none"`
 (drops all augmentation) remain operator-settable in
 `[ollama.prompt_strategies]`.
 
-**Phase 124 live verification outcome:** _to be filled
-in at exit. Same probe pattern as Phase 122 (dev-run.sh
-against qwen3.6:27b + gemma4:31b; ask for tool
-enumeration; ask for fs.write invocation; observe).
-Q3a sign-off locks in honest reporting regardless of
-outcome._
+**Phase 124 live verification outcome — fourth-
+substrate-phase failure on actual tool invocation.**
+Neither qwen3.6:27b nor gemma4:31b produced a real
+`fs.write` invocation through the protocol. gemma4
+explicitly refused the exact tool by exact name despite
+the WRONG/RIGHT framing literally saying *"you DO have
+fs.write"* — confirming the capability-denial prior is
+prompt-unreachable. A glm-4.7-flash control (strategy=
+none) showed the same failure mode without any Aivyx
+substrate, ruling out "Phase 124 made things worse." See
+PHASE_124.md "Live verification (Task 4)" for the full
+empirical table.
+
+**Two operator-actionable findings carried forward to
+Phase 125:**
+
+1. **qwen3 with FewShotExamples emits structurally
+   correct `<tool_code>` JSON as response TEXT** rather
+   than invoking via the Ollama protocol — wrong channel,
+   right shape. A future textual-tool-call extraction
+   substrate (planner-side parser for `<tool_code>` /
+   `<tool_call>` blocks) would rescue this case. Phase
+   125 candidate.
+
+2. **gemma4's hallucinated `fs.write_file` is below
+   Phase 120's default fuzzy-recovery threshold.** Jaccard
+   similarity to `fs.write` is ~0.667; default threshold
+   is 0.80. Operators running gemma4 can opt in to
+   recovery by lowering
+   `[providers] tool_name_auto_correct_threshold` to
+   `0.60` — substrate already exists; just needs the
+   knob turned. **This is operator-actionable today; no
+   substrate work required.**
+
+**Honest framing — local-LLM tool-use is currently
+prompt-substrate-bounded.** Four substrate phases (120 +
+121 + 122 + 124) have hit the same model-layer wall.
+Operators with tool-use workloads should consider
+cloud providers (Anthropic / OpenAI) for those workloads
+specifically; local models remain useful for
+conversation, drafting, and other non-tool-invoking
+tasks. See PHASE_124.md exit doc for the full
+recommendation.
 
 ## External productivity integrations (Chapter F)
 
