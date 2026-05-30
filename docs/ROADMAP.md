@@ -3496,10 +3496,25 @@ version-only (matching gemma + llama) in the same
 task; tests and defaults updated. Phase 6 Q5 honesty
 applied at the task level.
 
-**Live verification outcome:** _backfilled at exit-
-hash backfill commit; see PHASE_122.md "Live
-verification (Task 7)" placeholder. Q3b posture: exit
-reports whatever the test shows._
+**Live verification outcome — partial substrate effect;
+capability-denial prior is prompt-unreachable.** Both
+qwen3.6:27b and gemma4:31b ran under
+`structured_injection` (banner confirmed). Catalog
+confabulation **measurably reduced** on both: qwen3.6
+stopped inventing "Good Morning"-style names; gemma4
+stopped generating 60+ fictional tools (though gemma4
+went to vague prose categorization rather than exact-
+name listing). But the load-bearing test —
+*invocation on command* — **failed for both**:
+qwen3.6's fs.write turn timed out; gemma4 explicitly
+refused while `fs.write` was literally listed in the
+injection block. Audit: zero tool calls across both
+sessions. The substrate ceiling sits at the model
+layer, exactly as the open-doc honest-scope flag
+predicted. Operators keep `structured_injection` for
+enumeration honesty or fall back to `prompt_strategy =
+"none"` for cost-sensitive deployments. See PHASE_122.md
+"Live verification (Task 7)" for the empirical table.
 
 **Eleventh consecutive substrate/polish phase picked
 over the Channel Activation Milestone.** Honest

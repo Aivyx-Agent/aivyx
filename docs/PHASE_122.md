@@ -411,24 +411,108 @@ task. Recorded honestly in the Task 2 commit
 
 ### Live verification (Task 7)
 
-> **PLACEHOLDER — populated post-live-test.**
->
-> Verification against qwen3.6:27b and gemma4:31b
-> through `./scripts/dev-run.sh` with `[ollama.prompt_strategies]`
-> defaulted to `structured_injection` for both. The
-> exit-doc backfill commit will replace this block
-> with the empirical table:
->
-> | Model       | Strategy on            | Tool catalog confabulation? | Tool invocation on command? |
-> |-------------|------------------------|------------------------------|------------------------------|
-> | qwen3.6:27b | `structured_injection` | _to be observed_             | _to be observed_             |
-> | gemma4:31b  | `structured_injection` | _to be observed_             | _to be observed_             |
->
-> Q3b sign-off lock: exit reports whatever the test
-> shows. If neither model improves, the exit doc
-> names the substrate ceiling and documents what
-> per-family `prompt_strategy = "none"` opt-out
-> means for that operator. If one improves and one
-> doesn't, the exit doc reports asymmetric outcomes
-> honestly. If both improve, the exit doc validates
-> the structured-injection bet.
+Verification against qwen3.6:27b and gemma4:31b via
+`./scripts/dev-run.sh --release --reset --model <name>`.
+Both runs used the per-family default
+(`structured_injection`); banner confirmed strategy
+resolution on both:
+
+```
+ollama_prompt_strategy = "structured_injection" (family: qwen3, default)
+ollama_prompt_strategy = "structured_injection" (family: gemma4, default)
+```
+
+Three identical probes per session: (1) enumeration —
+*"What tools do you have available?"*; (2) invocation
+— *"Please call fs.write to create a file at test.txt
+with the content 'phase 122 verification'."*; (3)
+Ctrl-D exit. No audit-export check needed — neither
+model emitted a tool call.
+
+**Empirical table — pre-vs-post comparison:**
+
+| Surface                    | qwen3.6:27b pre-Phase-122                          | qwen3.6:27b post-Phase-122                                                                                                                | gemma4:31b pre-Phase-122                            | gemma4:31b post-Phase-122                                                                                              |
+|----------------------------|----------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| **Enumeration**            | Confabulated 12 tools (mix real + invented incl. "Good Morning") | Listed ~25 *mostly real* tools by exact name; no obvious invention. **But `fs.read` and `fs.write` omitted from the enumeration despite being in the injection block.** | Confabulated 60+ entirely-invented tools             | **No exact tool names returned at all.** Pure prose categorization ("File Management: I can read, write, create, and delete files…"). |
+| **Invocation on command**  | Verbal refusal ("I don't have fs.write")           | `[turn timed out]` — different failure shape; possibly attempted but didn't complete inside the harness window                            | Empty assistant message; 25 output tokens; no call   | Explicit verbal refusal: *"I do not have a tool called `fs.write`"* — **directly contradicting the injection block listing fs.write**. |
+| **Audit chain ToolCalls**  | 0                                                  | 0                                                                                                                                          | 0                                                    | 0                                                                                                                       |
+| **Phase 120 auto-corrects**| 0 (nothing to recover from)                        | 0 (still nothing to recover from)                                                                                                          | 0                                                    | 0                                                                                                                       |
+
+**Honest reading — substrate worked on the prose
+layer; capability-denial prior is prompt-unreachable.**
+
+The structured-injection block measurably **reduced
+confabulation** on both models: qwen3.6 stopped
+inventing names like "Good Morning"; gemma4 stopped
+generating 60+ fictional tools. That's a real
+operator-facing win for transparency — the model is
+now telling the operator something closer to what's
+actually wired.
+
+But the load-bearing question — *does the model
+actually invoke tools it's commanded to call by exact
+name?* — answered **NO** for both models. gemma4's
+post-Phase-122 response is the clearest possible
+evidence the ceiling sits at the model layer: it
+claims `fs.write` doesn't exist while that exact
+name is literally listed five lines above in the
+same prompt. No amount of prompt engineering bridges
+a model trained-prior that overrides its current
+context.
+
+qwen3.6's `[turn timed out]` is a different but
+adjacent failure: the model may have attempted
+something (vs the previous outright verbal refusal),
+but couldn't complete in the harness window.
+Possibly a positive signal — possibly just a slower
+form of denial — the audit shows no tool call
+landed either way.
+
+**The open-doc honest-scope flag held at exit
+exactly as predicted.** Both risks materialized:
+gemma4's prior IS prompt-unreachable; qwen3.6's
+behavior shifted but didn't reach invocation. Q3b's
+"declare reality at exit" posture means we ship the
+substrate with this documented, not silently.
+
+**Operator-facing implications:**
+
+- **Keep `structured_injection` for enumeration
+  honesty.** The catalog block measurably stops
+  confabulation. An operator who cares about "what
+  does my model actually know it has" gets better
+  ground-truth post-Phase-122.
+
+- **`prompt_strategy = "none"` is the right escape
+  hatch for cost-sensitive deployments.** ~400-700
+  input tokens per turn for an outcome that doesn't
+  rescue invocation is a bad trade if the operator
+  values context budget over enumeration honesty.
+
+- **Phase 120's fuzzy-recovery substrate remains
+  the right tool for hallucinated invocations.**
+  Phase 122 was orthogonal at sign-off and remains
+  orthogonal at exit — the two substrates compose;
+  Phase 120 still catches `fs_read` → `fs.read` etc
+  whenever a model does emit a tool call.
+
+- **Local-model tool-use is currently
+  prompt-substrate-bounded.** Three named rehab
+  phases (120 + 121 + 122) shipped real substrate;
+  the residual gap is at the model layer. Next
+  pressure: either model-side improvements as
+  newer Ollama models ship, or operator pressure
+  redirects this axis entirely. The audit's #1
+  recommendation (Channel Activation Milestone)
+  has now been deferred eleven times and pressure
+  to address it grows.
+
+**This exit confirms the Phase 6 Q5 honest-up-front
+sign-off in the open doc.** Substrate ships, value
+is real but partial, limitations documented,
+operator has a clean opt-out. The Phase 122
+contribution is best framed as: *operators get a
+TOML knob and a banner line that shows them whether
+their model will at least describe its tools
+honestly; whether the model will then invoke them
+remains the model's call.*
