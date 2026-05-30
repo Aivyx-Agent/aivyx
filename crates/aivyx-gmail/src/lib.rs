@@ -40,6 +40,7 @@
 pub mod auth_cli;
 pub mod gmail_client;
 pub mod harness;
+pub mod mime;
 pub mod oauth;
 pub mod tools;
 

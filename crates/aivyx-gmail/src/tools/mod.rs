@@ -9,12 +9,14 @@
 //!
 //! - [`search`] — Task 4: `gmail.search` (email.read scope).
 //! - [`read`] — Task 5: `gmail.read` (email.read scope).
-//! - `draft` — Task 6: `gmail.draft` (email.write scope).
+//! - [`draft`] — Task 6: `gmail.draft` (email.write scope).
 //! - `send` — Task 7: `gmail.send` (email.send scope, Trusted-
 //!   gated).
 
+pub mod draft;
 pub mod read;
 pub mod search;
 
+pub use draft::GmailDraft;
 pub use read::GmailRead;
 pub use search::GmailSearch;
