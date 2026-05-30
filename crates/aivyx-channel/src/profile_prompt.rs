@@ -42,6 +42,7 @@
 //! "Your name is Aivyx" noise prepended to every default config.
 
 use aivyx_config::Profile;
+use aivyx_llm::LlmToolDescriptor;
 
 use crate::persona::EffectivePersona;
 
@@ -381,6 +382,63 @@ fn render_persona_section(persona: &EffectivePersona) -> String {
         out.push_str("\nRelationship milestones:\n");
         for c in &persona.relationship_milestones {
             out.push_str(&format!("- {c}\n"));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// Phase 122 Task 3 — Append a `## Tools available` block to
+/// an already-assembled session prompt.
+///
+/// **Why:** pre-Phase-122 testing found that qwen3.6:27b and
+/// gemma4:31b confabulate tool catalogs at the prose level
+/// (qwen3.6 invented "Good Morning"; gemma4 invented 60+ tools)
+/// and refuse to invoke even tools they were commanded to call
+/// by exact name. The Ollama protocol's `tools: [...]` array
+/// reaches the model's tool-call surface but apparently not its
+/// prose-level reasoning. This helper injects the catalog
+/// directly into the system prompt where the prose layer
+/// cannot ignore it.
+///
+/// **Behavior:**
+/// - If `tools` is empty, return `base_prompt.to_string()`
+///   unchanged. Calling sites that pass an empty tool slice
+///   get no-op behavior — no spurious "## Tools available"
+///   block with an empty list.
+/// - Otherwise, trim trailing whitespace from `base_prompt`,
+///   append a blank line, then a `## Tools available`
+///   section: a one-line preamble discouraging invention,
+///   followed by a bulleted list of every tool by exact
+///   `name` and `description`.
+///
+/// **Decoupled from strategy selection.** This helper does
+/// the formatting; deciding whether to call it is the
+/// planner's job (Task 4) per the operator's per-family
+/// [`OllamaFamilyStrategy`](aivyx_config::OllamaFamilyStrategy).
+///
+/// Allocates a fresh `String`. The allocation is dwarfed by
+/// the per-turn LLM round-trip cost.
+pub fn append_tool_catalog(
+    base_prompt: &str,
+    tools: &[LlmToolDescriptor],
+) -> String {
+    if tools.is_empty() {
+        return base_prompt.to_string();
+    }
+    let mut out = String::with_capacity(base_prompt.len() + 256);
+    out.push_str(base_prompt.trim_end());
+    out.push_str("\n\n## Tools available\n\n");
+    out.push_str(
+        "You can invoke these tools by their exact names listed below. \
+         Do not invent or guess tool names; tools not on this list do \
+         not exist.\n\n",
+    );
+    for tool in tools {
+        let desc = tool.description.trim();
+        if desc.is_empty() {
+            out.push_str(&format!("- `{}`\n", tool.name));
+        } else {
+            out.push_str(&format!("- `{}` — {desc}\n", tool.name));
         }
     }
     out.trim_end().to_string()
@@ -815,5 +873,104 @@ mod tests {
         );
         assert!(out.contains("Tools recently used"));
         assert!(out.contains("## Active role: default"));
+    }
+
+    // ----- Phase 122 Task 3 — append_tool_catalog -----
+
+    fn tool(name: &str, description: &str) -> LlmToolDescriptor {
+        LlmToolDescriptor {
+            name: name.to_string(),
+            description: description.to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_empty_tools_is_noop() {
+        let base = "## Active role: default\n\nYou are helpful.";
+        let out = append_tool_catalog(base, &[]);
+        assert_eq!(out, base);
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_adds_section_header() {
+        let base = "## Active role: default\n\nYou are helpful.";
+        let tools = vec![tool("fs.read", "Read a file")];
+        let out = append_tool_catalog(base, &tools);
+        assert!(out.contains("## Tools available"));
+        assert!(out.starts_with(base));
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_lists_every_tool_by_exact_name() {
+        let base = "role";
+        let tools = vec![
+            tool("fs.read", "Read a file"),
+            tool("fs.write", "Write a file"),
+            tool("memory.read", "Read a memory entry"),
+        ];
+        let out = append_tool_catalog(base, &tools);
+        // Each tool name appears literally in the output.
+        assert!(out.contains("`fs.read`"));
+        assert!(out.contains("`fs.write`"));
+        assert!(out.contains("`memory.read`"));
+        // Descriptions accompany each name.
+        assert!(out.contains("Read a file"));
+        assert!(out.contains("Write a file"));
+        assert!(out.contains("Read a memory entry"));
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_warns_against_invention() {
+        // The diagnostic data motivating Phase 122 was tool-name
+        // confabulation (qwen3.6 → "Good Morning"; gemma4 → 60+
+        // invented tools). The preamble must explicitly discourage
+        // invention; otherwise the catalog block is just a longer
+        // hallucination prompt.
+        let base = "role";
+        let tools = vec![tool("fs.read", "Read a file")];
+        let out = append_tool_catalog(base, &tools);
+        let lower = out.to_lowercase();
+        assert!(
+            lower.contains("do not invent") || lower.contains("do not guess"),
+            "expected anti-invention preamble; got: {out}"
+        );
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_tool_with_empty_description_omits_dash() {
+        // Defensive — tools registered without a description
+        // shouldn't render as `- \`name\` — ` with a trailing
+        // em-dash and empty body.
+        let base = "role";
+        let tools = vec![tool("fs.read", "")];
+        let out = append_tool_catalog(base, &tools);
+        assert!(out.contains("- `fs.read`\n") || out.ends_with("- `fs.read`"));
+        assert!(!out.contains("- `fs.read` — "));
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_preserves_base_prompt_content() {
+        // Don't drop any of the base prompt — operators rely on
+        // the assembled Profile/Persona/role layering being
+        // intact end-to-end.
+        let base = "## About this assistant\n\nYour name is Aivyx.\n\n## Active role: default\n\nbody";
+        let tools = vec![tool("fs.read", "Read a file")];
+        let out = append_tool_catalog(base, &tools);
+        assert!(out.contains("Your name is Aivyx."));
+        assert!(out.contains("## Active role: default"));
+        assert!(out.contains("body"));
+    }
+
+    #[test]
+    fn phase_122_append_tool_catalog_trims_base_prompt_trailing_whitespace() {
+        // Two newlines max between base and the appended
+        // section, regardless of how many trailing newlines the
+        // base prompt has.
+        let base = "role\n\n\n\n";
+        let tools = vec![tool("fs.read", "Read a file")];
+        let out = append_tool_catalog(base, &tools);
+        assert!(out.contains("role\n\n## Tools available"));
+        assert!(!out.contains("role\n\n\n## Tools available"));
     }
 }
