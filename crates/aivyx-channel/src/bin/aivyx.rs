@@ -1050,6 +1050,18 @@ fn print_config_banner(config: &AivyxConfig) {
         config.model.value,
         source_label(config.model.source),
     );
+    // Phase 122 Task 6 — surface the resolved Ollama prompt
+    // strategy so the operator can confirm at a glance whether
+    // `structured_injection` is active, which family was
+    // detected, and whether their `[ollama.prompt_strategies]`
+    // override (if any) is being honored. Only shown when the
+    // provider is Ollama — cloud providers handle their own
+    // tool-catalog surface. Pure-string formatting lives in
+    // `format_ollama_prompt_strategy_banner_line` so it can be
+    // unit-tested without capturing stderr.
+    if let Some(line) = format_ollama_prompt_strategy_banner_line(config) {
+        eprintln!("{line}");
+    }
     eprintln!(
         "  system_prompt     = {:?} ({})",
         truncate_for_log(&config.system_prompt.value, 60),
@@ -1138,6 +1150,50 @@ fn print_config_banner(config: &AivyxConfig) {
             eprintln!("  - {warning}");
         }
     }
+}
+
+/// Phase 122 Task 6 — Format the `ollama_prompt_strategy`
+/// banner line for the operator-facing config banner.
+///
+/// Returns `None` when the provider is not Ollama (cloud
+/// providers handle their own tool-catalog surface; no
+/// strategy line to show).
+///
+/// Returns `Some(line)` when the provider is Ollama. The line
+/// reports the resolved strategy label and a provenance hint:
+/// - `family: <name>, default` — model detected; per-family
+///   default applies (operator has no override for this family).
+/// - `family: <name>, override` — model detected; operator has
+///   an explicit `[ollama.prompt_strategies] <name> = "..."`
+///   entry that's overriding the per-family default.
+/// - `family: undetected` — model name doesn't parse to any
+///   known Ollama family. Strategy is always `"none"` in this
+///   case (operator-conservative).
+fn format_ollama_prompt_strategy_banner_line(
+    config: &AivyxConfig,
+) -> Option<String> {
+    if config.provider.value != aivyx_config::ProviderKind::Ollama {
+        return None;
+    }
+    let family = aivyx_config::detect_model_family(&config.model.value);
+    let strategy = aivyx_config::resolve_ollama_prompt_strategy(
+        &config.model.value,
+        &config.ollama_prompt_strategies,
+    );
+    let provenance = match &family {
+        None => "family: undetected".to_string(),
+        Some(fam) => {
+            if config.ollama_prompt_strategies.contains_key(fam) {
+                format!("family: {fam}, override")
+            } else {
+                format!("family: {fam}, default")
+            }
+        }
+    };
+    Some(format!(
+        "  ollama_prompt_strategy = {:?} ({provenance})",
+        strategy.label(),
+    ))
 }
 
 fn source_label(src: FieldSource) -> &'static str {
@@ -8351,5 +8407,120 @@ mod tests {
             parse_cli_args_from(&argv(&["learning", "--bogus"]))
                 .expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 122 Task 6 — banner-line formatter for the resolved
+    // Ollama prompt strategy. The formatter is pure so we don't
+    // need to capture stderr; the binary calls it from
+    // `print_config_banner` and emits the returned line verbatim.
+    // ------------------------------------------------------------------
+
+    fn load_phase_122_config(extra: &str) -> AivyxConfig {
+        let scratch = Scratch::new();
+        let toml_path = scratch.dir.join("aivyx.toml");
+        let body = format!(
+            "[anthropic]\n\
+             api_key = \"sk-test\"\n\
+             \n\
+             [aivyx]\n\
+             passphrase = \"test\"\n\
+             {extra}\n",
+        );
+        std::fs::write(&toml_path, body).unwrap();
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        };
+        AivyxConfig::load_from_env_and_toml(&opts).expect("load")
+    }
+
+    #[test]
+    fn phase_122_banner_line_absent_for_anthropic_provider() {
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"anthropic\"\nmodel = \"claude-haiku-4-5\"\n",
+        );
+        assert!(
+            format_ollama_prompt_strategy_banner_line(&cfg).is_none(),
+            "non-Ollama providers must not emit the strategy line"
+        );
+    }
+
+    #[test]
+    fn phase_122_banner_line_shows_default_for_detected_family() {
+        // qwen3.6 → family "qwen3" → default StructuredInjection.
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        assert!(line.contains("\"structured_injection\""), "{line}");
+        assert!(line.contains("family: qwen3"), "{line}");
+        assert!(line.contains("default"), "{line}");
+        assert!(!line.contains("override"), "{line}");
+    }
+
+    #[test]
+    fn phase_122_banner_line_shows_override_when_operator_sets_one() {
+        // qwen3.6 default is StructuredInjection; operator overrides
+        // to "none". Line must reflect "none" + "override" so the
+        // operator sees their TOML is being honored.
+        let cfg = load_phase_122_config(
+            "[agent]\n\
+             provider = \"ollama\"\n\
+             model = \"qwen3.6:27b\"\n\
+             \n\
+             [ollama.prompt_strategies]\n\
+             qwen3 = \"none\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        assert!(line.contains("\"none\""), "{line}");
+        assert!(line.contains("family: qwen3"), "{line}");
+        assert!(line.contains("override"), "{line}");
+    }
+
+    #[test]
+    fn phase_122_banner_line_shows_undetected_family_for_unknown_model() {
+        // Made-up model name that doesn't parse to any Ollama family.
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"ollama\"\nmodel = \"madeup-99:latest\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        assert!(line.contains("family: undetected"), "{line}");
+        // Undetected families always get strategy "none"
+        // (operator-conservative).
+        assert!(line.contains("\"none\""), "{line}");
+    }
+
+    #[test]
+    fn phase_122_banner_line_default_for_gemma4() {
+        // Pin gemma4 → "gemma4" → StructuredInjection (default).
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"ollama\"\nmodel = \"gemma4:31b\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        assert!(line.contains("\"structured_injection\""), "{line}");
+        assert!(line.contains("family: gemma4"), "{line}");
+        assert!(line.contains("default"), "{line}");
+    }
+
+    #[test]
+    fn phase_122_banner_line_default_for_llama3() {
+        // Pin llama3 → "llama3" → None (default; protocol-only).
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"ollama\"\nmodel = \"llama3.1:latest\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        assert!(line.contains("\"none\""), "{line}");
+        assert!(line.contains("family: llama3"), "{line}");
+        assert!(line.contains("default"), "{line}");
     }
 }
