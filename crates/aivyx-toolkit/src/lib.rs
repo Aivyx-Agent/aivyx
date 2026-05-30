@@ -50,4 +50,7 @@ pub use health_store::{
     HealthStore, HealthStoreError, ProbeOutcome, Transition, Watcher, WatcherState,
 };
 pub use task_store::{Task, TaskStatus, TaskStore, TaskStoreError};
-pub use tools::{TaskComplete, TaskCreate, TaskDelete, TaskList, WebSearch};
+pub use tools::{
+    HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, TaskComplete,
+    TaskCreate, TaskDelete, TaskList, WebSearch,
+};
