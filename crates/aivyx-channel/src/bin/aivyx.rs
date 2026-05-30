@@ -4492,11 +4492,10 @@ async fn run_async(
         })
         .collect();
 
-    // Phase 122 Task 4 — snapshot a tool catalog for the
-    // structured-injection prompt block. Built only when the
-    // per-family strategy is StructuredInjection; otherwise
-    // an empty `Vec` so `append_tool_catalog` is a guaranteed
-    // no-op at every call site.
+    // Phase 122 Task 4 / Phase 124 Task 3 — snapshot a tool
+    // catalog for the prompt-augmentation strategies. Built
+    // for any strategy other than `None`; an empty `Vec`
+    // for `None` so the dispatcher is a guaranteed no-op.
     //
     // Filtered by the role's `tool_allowlist` so the catalog
     // mirrors what the model can actually invoke (an allowlist
@@ -4506,6 +4505,7 @@ async fn run_async(
         if matches!(
             ollama_prompt_strategy,
             aivyx_config::OllamaFamilyStrategy::StructuredInjection
+                | aivyx_config::OllamaFamilyStrategy::FewShotExamples
         ) {
             tools
                 .iter_tools()
@@ -4523,13 +4523,14 @@ async fn run_async(
             Vec::new()
         };
 
-    // Phase 122 Task 4 — apply the structured-injection block
-    // to the startup-assembled system prompt. No-op when
-    // `prompt_tool_catalog` is empty (i.e. strategy is `None`,
-    // or no tools survived the allowlist filter).
-    let system_prompt = aivyx_channel::profile_prompt::append_tool_catalog(
+    // Phase 124 Task 3 — apply the per-family strategy via
+    // the dispatcher. `None` returns the base prompt
+    // unchanged; `StructuredInjection` adds the catalog;
+    // `FewShotExamples` adds catalog + worked examples.
+    let system_prompt = aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
         &system_prompt,
         &prompt_tool_catalog,
+        ollama_prompt_strategy,
     );
 
     // ---- Capabilities -------------------------------------------------
@@ -4744,14 +4745,15 @@ async fn run_async(
             };
         let child_memory_topic_prefix: Option<String> =
             target_role.memory_topic_prefix.value;
-        // Phase 122 Task 4 — child agents get their own
-        // catalog snapshot filtered by the child role's
-        // allowlist. Built only when the operator's strategy
-        // is StructuredInjection; empty otherwise → no-op.
+        // Phase 122 Task 4 / Phase 124 Task 3 — child agents
+        // get their own catalog snapshot filtered by the child
+        // role's allowlist. Built for any non-`None` strategy;
+        // empty otherwise → dispatcher is a no-op.
         let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> =
             if matches!(
                 ollama_prompt_strategy,
                 aivyx_config::OllamaFamilyStrategy::StructuredInjection
+                    | aivyx_config::OllamaFamilyStrategy::FewShotExamples
             ) {
                 tools_for_factory
                     .iter_tools()
@@ -4768,10 +4770,12 @@ async fn run_async(
             } else {
                 Vec::new()
             };
-        let child_system_prompt = aivyx_channel::profile_prompt::append_tool_catalog(
-            &child_assembled,
-            &child_prompt_tool_catalog,
-        );
+        let child_system_prompt =
+            aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                &child_assembled,
+                &child_prompt_tool_catalog,
+                ollama_prompt_strategy,
+            );
 
         // Build the child's planner factory. Same shape as the
         // parent's `run_session` planner factory: captures the
@@ -4829,9 +4833,10 @@ async fn run_async(
                 &child_refresher_role_prompt,
             );
             cfg.system_prompt = Some(
-                aivyx_channel::profile_prompt::append_tool_catalog(
+                aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                     &assembled,
                     &child_refresher_catalog,
+                    ollama_prompt_strategy,
                 ),
             );
             drop(snap);
@@ -5118,9 +5123,10 @@ async fn run_async(
                 &daemon_refresher_role_prompt,
             );
             cfg.system_prompt = Some(
-                aivyx_channel::profile_prompt::append_tool_catalog(
+                aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                     &assembled,
                     &daemon_refresher_catalog,
+                    ollama_prompt_strategy,
                 ),
             );
             drop(snap);
@@ -5615,9 +5621,10 @@ async fn run_async(
                         &refresher_role_name,
                         &refresher_role_prompt,
                     );
-                    aivyx_channel::profile_prompt::append_tool_catalog(
+                    aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                         &assembled,
                         &refresher_catalog,
+                        ollama_prompt_strategy,
                     )
                 });
 
@@ -8451,14 +8458,15 @@ mod tests {
     }
 
     #[test]
-    fn phase_122_banner_line_shows_default_for_detected_family() {
-        // qwen3.6 → family "qwen3" → default StructuredInjection.
+    fn phase_124_banner_line_shows_default_for_detected_family() {
+        // qwen3.6 → family "qwen3" → default FewShotExamples
+        // (Phase 124 upgrade from Phase 122's StructuredInjection).
         let cfg = load_phase_122_config(
             "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n",
         );
         let line =
             format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
-        assert!(line.contains("\"structured_injection\""), "{line}");
+        assert!(line.contains("\"few_shot_examples\""), "{line}");
         assert!(line.contains("family: qwen3"), "{line}");
         assert!(line.contains("default"), "{line}");
         assert!(!line.contains("override"), "{line}");
@@ -8499,16 +8507,42 @@ mod tests {
     }
 
     #[test]
-    fn phase_122_banner_line_default_for_gemma4() {
-        // Pin gemma4 → "gemma4" → StructuredInjection (default).
+    fn phase_124_banner_line_default_for_gemma4() {
+        // Pin gemma4 → "gemma4" → FewShotExamples (Phase 124
+        // default upgrade from Phase 122's StructuredInjection).
         let cfg = load_phase_122_config(
             "[agent]\nprovider = \"ollama\"\nmodel = \"gemma4:31b\"\n",
         );
         let line =
             format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
-        assert!(line.contains("\"structured_injection\""), "{line}");
+        assert!(line.contains("\"few_shot_examples\""), "{line}");
         assert!(line.contains("family: gemma4"), "{line}");
         assert!(line.contains("default"), "{line}");
+    }
+
+    #[test]
+    fn phase_124_banner_line_shows_few_shot_examples_label_explicitly() {
+        // Pin the wire label for FewShotExamples — operators
+        // see this in the startup banner; the label must match
+        // the TOML wire form so an operator copy-pasting from
+        // the banner into their `[ollama.prompt_strategies]`
+        // section gets a valid string.
+        let cfg = load_phase_122_config(
+            "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n",
+        );
+        let line =
+            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        // Spot-pinned exact wire label.
+        assert!(line.contains("\"few_shot_examples\""), "{line}");
+        // Confirm wire round-trip: parse the label back.
+        let parsed = aivyx_config::OllamaFamilyStrategy::parse(
+            "few_shot_examples",
+        )
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            aivyx_config::OllamaFamilyStrategy::FewShotExamples
+        );
     }
 
     #[test]

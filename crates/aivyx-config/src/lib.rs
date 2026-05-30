@@ -2408,27 +2408,34 @@ impl OllamaFamilyStrategy {
     /// Phase 122 Task 2 — per-family default lookup. Used by
     /// the loader to fill in defaults when an operator's
     /// `aivyx.toml` doesn't override a specific family.
+    /// Defaults upgraded at Phase 124 from StructuredInjection
+    /// to FewShotExamples for qwen3 + gemma4.
     ///
-    /// Defaults landed at Phase 122 sign-off per Q3b
-    /// "declare reality at exit" posture — the Phase 6 Q5
-    /// honest report at exit time will document whether
-    /// these defaults actually helped each model:
-    /// - `qwen3` → `StructuredInjection` — qwen3.6:27b
-    ///   confabulated tool catalog and refused fs.write
-    ///   invocation in pre-Phase-122 testing.
-    /// - `gemma4` → `StructuredInjection` — gemma4:31b
-    ///   confabulated 60+ invented tools and produced empty
-    ///   output when commanded to invoke fs.write.
+    /// Per Q3b/Q3a "declare reality at exit" posture, the
+    /// exit-time empirical findings document whether each
+    /// default actually helps:
+    /// - `qwen3` → `FewShotExamples` (Phase 124 upgrade from
+    ///   Phase 122's `StructuredInjection`) — qwen3.6:27b's
+    ///   Phase 122 exit behavior was `[turn timed out]` on
+    ///   fs.write invocation under structured injection;
+    ///   Phase 124 attempts breakthrough with worked examples.
+    /// - `gemma4` → `FewShotExamples` (Phase 124 upgrade) —
+    ///   gemma4:31b's Phase 122 exit behavior was an explicit
+    ///   verbal refusal *"I do not have a tool called fs.write"*
+    ///   while fs.write was literally listed in its own
+    ///   structured-injection block; Phase 124 attempts
+    ///   breakthrough with the WRONG/RIGHT-framed examples
+    ///   that directly counter that refusal pattern.
     /// - `llama3` → `None` — llama3's tool-use protocol is
     ///   presumed more reliable; pre-Phase-122 behavior
-    ///   preserved.
+    ///   preserved across Phase 122 and Phase 124.
     /// - Unknown families → `None` — default-conservative
     ///   posture so a new model release doesn't silently get
     ///   substrate it wasn't tested against.
     pub fn default_for_family(family: &str) -> Self {
         match family {
-            "qwen3" => OllamaFamilyStrategy::StructuredInjection,
-            "gemma4" => OllamaFamilyStrategy::StructuredInjection,
+            "qwen3" => OllamaFamilyStrategy::FewShotExamples,
+            "gemma4" => OllamaFamilyStrategy::FewShotExamples,
             "llama3" => OllamaFamilyStrategy::None,
             _ => OllamaFamilyStrategy::None,
         }

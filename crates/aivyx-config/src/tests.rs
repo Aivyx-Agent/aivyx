@@ -8120,20 +8120,21 @@ fn phase_122_detect_returns_none_for_empty_input() {
 }
 
 #[test]
-fn phase_122_family_strategy_defaults_match_sign_off() {
-    // qwen3 and gemma4 default to StructuredInjection per the
-    // pre-Phase-122 diagnostic data (both models confabulate
-    // tool catalogs at the prose level).
+fn phase_124_family_strategy_defaults_match_sign_off() {
+    // qwen3 and gemma4 default to FewShotExamples (Phase 124
+    // upgrade from Phase 122's StructuredInjection). Phase 122
+    // empirically showed StructuredInjection wasn't enough;
+    // Phase 124 attempts breakthrough with worked examples.
     assert_eq!(
         crate::OllamaFamilyStrategy::default_for_family("qwen3"),
-        crate::OllamaFamilyStrategy::StructuredInjection
+        crate::OllamaFamilyStrategy::FewShotExamples
     );
     assert_eq!(
         crate::OllamaFamilyStrategy::default_for_family("gemma4"),
-        crate::OllamaFamilyStrategy::StructuredInjection
+        crate::OllamaFamilyStrategy::FewShotExamples
     );
     // llama3's tool-use protocol is presumed more reliable;
-    // pre-Phase-122 behavior preserved as the default.
+    // None preserved across both phases.
     assert_eq!(
         crate::OllamaFamilyStrategy::default_for_family("llama3"),
         crate::OllamaFamilyStrategy::None
@@ -8240,12 +8241,12 @@ fn phase_122_parse_rejects_unknown_strategy() {
 #[test]
 fn phase_122_resolve_uses_default_when_no_override_present() {
     let overrides = std::collections::BTreeMap::new();
-    // qwen3 → StructuredInjection (sign-off default).
+    // qwen3 → FewShotExamples (Phase 124 default upgrade).
     assert_eq!(
         crate::resolve_ollama_prompt_strategy("qwen3.6:27b", &overrides),
-        crate::OllamaFamilyStrategy::StructuredInjection
+        crate::OllamaFamilyStrategy::FewShotExamples
     );
-    // llama3 → None (sign-off default).
+    // llama3 → None (preserved across phases).
     assert_eq!(
         crate::resolve_ollama_prompt_strategy("llama3.1:latest", &overrides),
         crate::OllamaFamilyStrategy::None

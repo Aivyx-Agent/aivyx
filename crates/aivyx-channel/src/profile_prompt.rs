@@ -41,7 +41,7 @@
 //! the helper returns the role's `system_prompt` unchanged. No
 //! "Your name is Aivyx" noise prepended to every default config.
 
-use aivyx_config::Profile;
+use aivyx_config::{OllamaFamilyStrategy, Profile};
 use aivyx_llm::LlmToolDescriptor;
 
 use crate::persona::EffectivePersona;
@@ -550,6 +550,45 @@ pub fn append_few_shot_examples(
          and do not invent tools that are not in the list.\n",
     );
     out.trim_end().to_string()
+}
+
+/// Phase 124 Task 3 — Apply an `OllamaFamilyStrategy` to a
+/// base prompt + tool list, dispatching to the appropriate
+/// helper(s).
+///
+/// **Strategy dispatch:**
+/// - `None` → return `base_prompt.to_string()` unchanged.
+///   No catalog block, no examples.
+/// - `StructuredInjection` → `append_tool_catalog` only.
+///   Phase 122 substrate.
+/// - `FewShotExamples` → `append_tool_catalog` THEN
+///   `append_few_shot_examples`. Phase 124 substrate.
+///
+/// This is the operator-facing dispatch helper. Per-call-site
+/// strategy-aware logic lives here instead of being inlined
+/// at every prompt-assembly site in the binary (initial
+/// system_prompt + daemon refresher + in-process CLI
+/// refresher + child agent's initial + child refresher = 5
+/// sites; one dispatcher beats five copies).
+///
+/// `tools` is the same filtered catalog used by both
+/// helpers; pass it once and let the dispatcher decide what
+/// to render.
+pub fn apply_ollama_prompt_strategy(
+    base_prompt: &str,
+    tools: &[LlmToolDescriptor],
+    strategy: OllamaFamilyStrategy,
+) -> String {
+    match strategy {
+        OllamaFamilyStrategy::None => base_prompt.to_string(),
+        OllamaFamilyStrategy::StructuredInjection => {
+            append_tool_catalog(base_prompt, tools)
+        }
+        OllamaFamilyStrategy::FewShotExamples => {
+            let with_catalog = append_tool_catalog(base_prompt, tools);
+            append_few_shot_examples(&with_catalog, tools)
+        }
+    }
 }
 
 #[cfg(test)]
