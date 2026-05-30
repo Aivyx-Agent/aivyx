@@ -41,6 +41,19 @@ serde_json = { workspace = true }
 # Already workspace-wide.
 base64 = { workspace = true }
 
+# TOML for the operator-supplied OAuth client config file at
+# `~/.aivyx/tool-processes/gmail/config.toml`. Version-pinned to
+# match aivyx-config's existing `toml` dependency so the
+# workspace stays version-coherent without yet promoting `toml`
+# to a `[workspace.dependencies]` entry (deferred until enough
+# crates need it to justify the workspace-deps surface change).
+toml = "0.8"
+
+# Uuid for OAuth `state` parameter (CSRF binding between the
+# consent URL and the loopback callback). v4 — already workspace-
+# wide.
+uuid = { workspace = true }
+
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -37,6 +37,7 @@
 //! G6 (Local execution, privacy non-negotiable) + Phase 99
 //! local-builds posture.
 
+pub mod auth_cli;
 pub mod oauth;
 
 pub use oauth::{
