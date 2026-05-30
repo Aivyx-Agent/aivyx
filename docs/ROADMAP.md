@@ -3535,6 +3535,69 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 126 — Textual Tool-Call Extraction
+
+**Active — see [PHASE_126.md](PHASE_126.md).** Operator
+picked this as the next direction after Phase 125 exit
+listed it as the most concrete substrate move remaining
+on the local-LLM-rehab axis. Phase 124's secondary finding
+(qwen3 emits structurally correct tool-call JSON in
+RESPONSE TEXT, wrong channel) is what this phase rescues.
+
+**Not "Local-LLM Rehab #5"** — the substrate is provider-
+agnostic. Any model emitting tool-call JSON in response
+text gets rescued by a planner-side extractor; just
+happens that the load-bearing motivating case is qwen3.
+
+Phase 126 adds:
+- New `aivyx-core/src/textual_tool_call.rs` module —
+  pure-function extractor recognizing `<tool_code>` and
+  `<tool_call>` wrappers, both `name`/`arguments` and
+  `tool`/`parameters` JSON shapes.
+- Planner integration in `llm_planner` — when the LLM
+  response has zero protocol tool_calls AND content has
+  extractable text, extract → synthesize → dispatch.
+  Phase 120 fuzzy-recovery composes on the extracted
+  tool name (catches gemma4's `fs.write_file` →
+  `fs.write` at lowered threshold ~0.60).
+- New `AuditTag::ToolCall.extracted_from_text:
+  Option<String>` field for forensic visibility.
+
+**Q-block (all four Recommended — third all-Recommended
+phase in a row):**
+- Q1a — Planner-side extraction.
+- Q2a — Both `<tool_code>` AND `<tool_call>` wrappers +
+  both JSON shapes.
+- Q3a — New `extracted_from_text` audit field
+  (**breaks lib.rs streak at 6** — honest framing per
+  Phase 6 Q5; the alternative made audit chain
+  misleading).
+- Q4a — Live verification against qwen3 + gemma4 at
+  exit; honest reporting regardless.
+
+**Streak predictions:** DESIGN.md HOLD → 17; PRODUCT.md
+HOLD → 17; **`aivyx-core/src/lib.rs` BREAK** (resets 6 →
+0). Test count `+40 to +60`. Zero new workspace deps.
+
+**Honest scope risks at sign-off:**
+- Streak break is locked in by Q3a; not anticipated
+  recovery in Phase 126 itself. Rebuild starts Phase
+  127+.
+- Extraction works but model intent may not — a model
+  emitting `<tool_call>` text might just be describing
+  what it would do rather than wanting to do it.
+- gemma4 rescue is paired with operator lowering
+  `tool_name_auto_correct_threshold` to ~0.60;
+  INSTALL.md documents this as operator-actionable.
+- The Phase 124 qwen3 `<tool_code>` emission was
+  observed in one session; if a future live test
+  doesn't reproduce, the substrate works but has
+  nothing to extract.
+
+**Fourteenth consecutive deferral of the Channel
+Activation Milestone.** Honest tracking. Audit's #1
+unchanged.
+
 ## Phase 125 — Personal Assistant Tool Bundle (Chapter G #1)
 
 **Frozen — see [PHASE_125.md](PHASE_125.md).** Chapter G
