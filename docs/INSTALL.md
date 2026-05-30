@@ -1582,6 +1582,229 @@ fallback.
   shared vault becomes worth doing once enough
   integrations exist to feel the duplication.
 
+## Operator-facing personal assistant capabilities (Chapter G)
+
+After Chapter F #1 (Gmail) shipped and the Phase 124 exit
+named the local-LLM-rehab axis as exhausted, the operator
+framing on Chapter G was load-bearing:
+
+> "There is little point giving the Aivyx Agent Channels if
+> it's still unable to actually do jobs that a Personal
+> Assistant should be able to do."
+
+Chapter G fills operator-facing tool surface gaps. Different
+from Chapter F (specific external services like Gmail
+through their APIs); Chapter G is **broader operator
+capability** — web search, task tracking, monitoring, future
+tools like calendar reminders, expense tracking, etc.
+
+Per P10 + P11 + P12, every Chapter G tool ships as a third-
+party tool process. Aivyx core stays at the thirteen-tools-
+forever cap. Chapter G reuses Phase 123's substrate (multi-
+tool harness + per-tool-process config + per-tool-process
+file storage) without architectural additions.
+
+### Personal Assistant Tool Bundle (Phase 125)
+
+The first Chapter G integration ships **eight tools through
+a single `aivyx-toolkit` binary**:
+
+| Category | Tools | Scope |
+|---|---|---|
+| Web search | `web.search` | `web.search` |
+| TODO tracking | `task.create`, `task.list`, `task.complete`, `task.delete` | `task.read` / `task.write` |
+| Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes` | `health.read` / `health.write` |
+
+All five scopes ship in `aivyx-capability::CEILING_TRUSTED`
+ONLY by default. SemiTrusted and Untrusted roles get zero
+toolkit scopes by default (same gating as `shell.exec` /
+`notify.send` / `email.*` per Phase 62 Q2(a)). Operators who
+want narrow access from a remote channel grant individual
+bases via `capability_scopes` on the role.
+
+#### One-time operator setup
+
+**1. Build / install the toolkit binary.**
+
+From the workspace root:
+
+```sh
+cargo install --path crates/aivyx-toolkit
+# Installs `aivyx-toolkit` to $CARGO_HOME/bin (default
+# ~/.cargo/bin); ensure it's on $PATH for the daemon.
+```
+
+**2. (Optional) Configure web.search via Brave Search.**
+
+`web.search` requires a Brave Search API key. Skip if you
+won't use web search.
+
+- Get a free key at <https://api.search.brave.com/>. The
+  free tier allows 2000 queries/month at the time of
+  writing.
+- Create `~/.aivyx/tool-processes/toolkit/config.toml`:
+
+```toml
+[brave_search]
+api_key = "BSA-..."
+```
+
+(The other tools — `task.*` and `health.check.*` — need NO
+external credentials.)
+
+**3. Register the tool process in `aivyx.toml`:**
+
+```toml
+[[tool_process]]
+name = "toolkit"
+command = "aivyx-toolkit"
+```
+
+The daemon spawns `aivyx-toolkit` at startup, performs the
+handshake, and registers all eight tools into the catalog.
+
+**4. Grant the scopes on the role(s) that will use them.**
+
+The Trusted-tier-only default means even a Local-channel
+role doesn't auto-inherit these scopes; the role's
+`capability_scopes` must list them explicitly:
+
+```toml
+[[role]]
+name = "personal_assistant"
+parent = "default"
+capability_scopes = [
+  # Existing scopes you already have...
+  "memory.read", "memory.write",
+  # Toolkit scopes:
+  "web.search",
+  "task.read", "task.write",
+  "health.read", "health.write",
+  # For the health-check alert composition recipe:
+  "notify.send",
+  "schedule.create", "schedule.list",
+]
+```
+
+For a read-only triage role, narrow the toolkit grants:
+
+```toml
+[[role]]
+name = "readonly_triage"
+parent = "default"
+capability_scopes = [
+  "memory.read",
+  "web.search",        # search but no other side-effects
+  "task.read",         # browse but not modify tasks
+  "health.read",       # see watcher state but not register
+]
+```
+
+#### What each tool does
+
+**`web.search`** — `{q, count?}` → `{query, results: [{title, url, description}], result_count}`. Single GET to Brave; results trimmed from Brave's ~40-field-per-result response to the three the LLM needs.
+
+**`task.create`** — `{title, notes?, due_date?}` → `{id, title, status: "open", created_at}`. Due date is RFC 3339 (`2026-06-01T12:00:00Z`).
+
+**`task.list`** — `{status: "open" | "complete" | "all", limit?}` → `{tasks: [...], total_count}`. `total_count` reflects the full filtered set so the LLM can detect truncation.
+
+**`task.complete`** — `{id, completion_note?}` → `{id, status: "complete", completed_at}`.
+
+**`task.delete`** — `{id}` → `{id, deleted: true}`.
+
+**`health.check.add`** — `{name, url, interval_secs, expect_status?}` → registered watcher. Interval is 60-86400s; default expect_status is 200.
+
+**`health.check.list`** — `{}` → `{watchers: [{name, url, ..., last_check_at?, last_status_code?, last_ok}]}`. Optional fields omitted on just-registered watchers.
+
+**`health.check.recent_changes`** — `{window_minutes?}` → `{changes: [{watcher_name, transitioned_at, from_ok, to_ok, status_code?}], count}`. Empty `changes` means "all stable in window."
+
+#### Health-monitoring alert composition recipe
+
+The polling loop records state transitions; the **agent
+composes alerts**. Substrate-minimal per Phase 125 — no
+daemon-side automatic alert dispatch (deferred to Phase
+126+). Operator's setup:
+
+```toml
+# In your aivyx.toml or via the schedule.create tool:
+[[schedule]]
+name = "health-monitor-sweep"
+cron = "0 * * * *"   # every hour at minute 0
+prompt = "Check `health.check.recent_changes` for any state flips in the last hour. For each change, send a notify.send summarizing the watcher name, the old state, and the new state. If there are no changes, do nothing."
+```
+
+The fired turn:
+1. Invokes `health.check.recent_changes {window_minutes: 60}`.
+2. If `count > 0`, composes a `notify.send` per change.
+3. If `count == 0`, exits silently.
+
+This works reliably under cloud providers (Anthropic /
+OpenAI) per the Phase 124 finding — local Ollama models
+won't reliably make the multi-tool call sequence even if
+the tools themselves are simple.
+
+#### Operator state files
+
+All toolkit data lives under `~/.aivyx/tool-processes/toolkit/`:
+
+| File | Owner | Sensitivity |
+|---|---|---|
+| `config.toml` | operator (write) | Brave API key — 0600 recommended |
+| `tasks.json` | tool process (read/write) | TODO content — 0600 auto |
+| `health.json` | tool process (read/write) | Watcher URLs + state — 0600 auto |
+
+All files use the same atomic write-then-rename pattern as
+Gmail's token file (Phase 123). Operators backing up Aivyx
+state should include this directory.
+
+#### Operator-side troubleshooting
+
+- **"$HOME unset; cannot resolve token path"** at daemon
+  startup. The daemon's spawn environment doesn't inherit
+  `$HOME`. Set it explicitly in the systemd / launchd
+  unit, or use an absolute `aivyx-toolkit` invocation in
+  the `command` field with an explicit `HOME=` env var.
+
+- **`web.search` returns "401" or "missing API key".** Your
+  `[brave_search].api_key` is missing or wrong. Check
+  `~/.aivyx/tool-processes/toolkit/config.toml`; regenerate
+  the key at the Brave dashboard if needed.
+
+- **Health watcher never polls.** The watcher's
+  `interval_secs` was set too high (24h max), OR the tool
+  process crashed at startup before the polling loop
+  spawned. Check the daemon's stderr; `aivyx-toolkit (ipc):
+  failed to open health store: ...` would be the message.
+
+- **`health.check.add` rejects URL.** Must start with
+  `http://` or `https://`. `localhost` is fine for local-
+  service monitoring; the tool process trusts the operator
+  to validate target reachability.
+
+- **Task `due_date` parse error.** Must be RFC 3339 —
+  `2026-06-01T12:00:00Z` or with offset `2026-06-01T07:00:00-05:00`.
+  Dates without times (`2026-06-01`) are rejected; if the
+  operator just wants a "due that day" semantic, use
+  `2026-06-01T23:59:59Z`.
+
+#### What Phase 125 deliberately leaves to follow-on phases
+
+- **No `health.check.remove` tool.** Operators can manually
+  edit `health.json` until a proper remove tool ships.
+- **No automatic alert dispatch.** The agent composes
+  alerts from `health.check.recent_changes`; the daemon
+  doesn't auto-call `notify.send`. Phase 126+ may add a
+  daemon-side IPC hook for tool processes to dispatch
+  notifications directly.
+- **No multi-tool harness lift.** Phase 123's SDK-validation
+  finding (lift `run_multi_tool_subprocess` from per-crate
+  duplicates into `aivyx-tool`) is still outstanding;
+  `aivyx-toolkit` mirrors `aivyx-gmail`'s harness inline.
+- **No web.search result enrichment.** Brave's response has
+  per-result snippets we trim; an operator who needs full
+  page content can chain `web.search` → `web.fetch`. A
+  future tool could combine the two if pressure surfaces.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

@@ -417,3 +417,111 @@ for Phase 126:
 Phase-by-phase decision at Phase 125 exit, sharpened by
 the operator's first-real-use signal once the tool
 bundle ships.
+
+## Prediction vs reality
+
+**Three of three streak predictions correct.** All three
+byte-identity streaks held through Tasks 2-6; substrate
+stayed entirely within the new `aivyx-toolkit` crate +
+`aivyx-capability`'s `KNOWN_BASES` extension as
+predicted.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; consumes existing
+  Tool trait + Scope machinery + Phase 123 multi-tool
+  harness pattern unchanged. Streak: 15 → 16.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). P10 + P11 + P12 already covered this case
+  exactly: every Chapter G tool is third-party. G6
+  covers privacy posture (operator-provided Brave key;
+  no shared Aivyx credentials). Streak: 15 → 16.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted (90/10
+  hold case held). `b420405b…` unchanged. New crate
+  consumes Tool / Scope / ToolContext / Verification
+  without trait extension. Streak: 5 → 6.
+
+**Test count `+102` lands inside the predicted `+80 to
++130` range — comfortably in the middle.** Per-task
+breakdown:
+
+- Task 2 (skeleton + 5 capability bases + A3 addendum):
+  **+10** (6 config: brave section, empty file, NotFound,
+  Parse, serde round-trip, state-dir path; 4 harness:
+  outcome-to-wire, empty-list rejection, duplicate-name
+  rejection, plus the inherited verification-roundtrip).
+- Task 3 (`web.search`): **+15** (7 parse_input; 4
+  shape_response; 1 schema; 1 scope; 2 HTTP integration
+  via in-process mock).
+- Task 4 (`task.*` CRUD + TaskStore): **+32** (15
+  task_store: open/create/list/complete/delete with all
+  error paths + due-date parsing + 0600 perms + atomic
+  write; 17 tools: parse helpers, shape projection, end-
+  to-end CRUD, schemas, scope pins).
+- Task 5 (health.check polling substrate): **+26** (21
+  health_store covering validators + add/list/due/next +
+  transition semantics + ring buffer cap + persistence;
+  5 health_polling covering probe ok/not-ok/network-fail +
+  polling tick updates store + records transition).
+- Task 6 (health.check.* tools + IPC wiring): **+19**
+  (parse_add minimal + override + missing fields +
+  out-of-range expect_status; parse_window default/cap/
+  zero/non-int; shape_watcher with/without state;
+  shape_transition with/without status; end-to-end
+  add+list and recent-changes-window; per-tool scope
+  pins; schema shapes).
+
+**Q-block went through as operator-picked.** All three
+Recommended (Q1 bundle, Q2 web.search first, Q3
+scheduled health.check). No mid-task re-asks; no
+architectural constraints surfaced post-sign-off.
+Substrate-internal scope kept surprise-free.
+
+**Zero new workspace dependencies** as predicted.
+`chrono` added with a per-crate `features = ["serde"]`
+override (workspace declaration doesn't carry the serde
+feature; promoting to workspace would side-effect-touch
+`aivyx-channel`). Per-crate feature add doesn't count as
+a new workspace dep.
+
+**Honest scope risks at sign-off, materialized at exit:**
+
+- **8 tools in one phase was dense but tractable.** The
+  Phase 123 multi-tool harness substrate carried most of
+  the per-tool boilerplate; per-tool task time was
+  smaller than predicted. Task 5 (polling substrate) was
+  the largest piece because background tokio task +
+  transition semantics + ring buffer needed careful
+  invariant work.
+- **Local-LLM invocation reliability is unchanged.** As
+  predicted — Phase 125 expanded the surface that works
+  WHEN tool invocation works; didn't close the model-
+  layer ceiling Phase 124 named. The health-check alert
+  composition recipe explicitly notes this: works
+  reliably under cloud providers; local Ollama won't
+  reliably chain `recent_changes` → `notify.send`.
+- **Alert composition is agent-driven, not automatic.**
+  Substrate-minimal as documented; daemon-side automatic
+  alert IPC stays deferred to Phase 126+.
+- **Brave Search free tier limit (2000/month)** —
+  documented in INSTALL.md.
+
+**No live verification at exit** — substrate-correctness
+phase, not substrate-effectiveness phase. The 102 tests
+cover the tool surface in isolation; first-real-use
+empirical findings (UX edge cases, operator-onboarding
+friction, etc) become a memory note rather than blocking
+the exit. Pattern matches Phase 123 (Gmail), distinct
+from the Phase 122/124 local-LLM-rehab pattern that
+required live verification because substrate-effectiveness
+was the load-bearing question.
+
+**SDK-validation finding from Phase 123 is now twice-
+duplicated.** `aivyx-gmail/src/harness.rs` and now
+`aivyx-toolkit/src/harness.rs` are line-for-line copies
+of the multi-tool harness. The Phase 123 exit recommended
+lifting to `aivyx-tool` as substrate; not done yet. Two
+in-tree copies is the threshold where the lift becomes
+"clear win"; documented honestly in the toolkit harness
+preamble. A future phase should land the lift alongside
+either Chapter G #2 or Chapter F #2 — whichever ships
+first.

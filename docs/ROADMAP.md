@@ -3518,12 +3518,16 @@ pattern) without architectural additions.
 
 **Expected phases (subject to revision at each exit):**
 
-- **Phase 125 — Personal Assistant Tool Bundle.** Active
-  — see below and [PHASE_125.md](PHASE_125.md). Bundles
-  three tools through one `aivyx-toolkit` binary:
-  `web.search` (Brave API), `task.*` (TODO CRUD),
-  `health.check.*` (scheduled URL monitoring with
-  agent-composable alerts).
+- **Phase 125 — Personal Assistant Tool Bundle.** Frozen
+  — see below and [PHASE_125.md](PHASE_125.md). Bundled
+  eight tools through one `aivyx-toolkit` binary:
+  `web.search` (Brave API), four `task.*` (TODO CRUD),
+  three `health.check.*` (scheduled URL monitoring with
+  agent-composable alerts). Three-of-three streak hold;
+  test count `+102` inside `+80 to +130` prediction;
+  Phase 123 SDK-validation finding now twice-duplicated
+  across gmail + toolkit harnesses (lift recommended
+  alongside the next Chapter F/G integration).
 
 Subsequent Chapter G phases (Chapter G #2 candidates:
 calendar reminders, lightweight budget tracking,
@@ -3533,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 125 — Personal Assistant Tool Bundle (Chapter G #1)
 
-**Active — see [PHASE_125.md](PHASE_125.md).** Chapter G
+**Frozen — see [PHASE_125.md](PHASE_125.md).** Chapter G
 opener. Operator-pressure pick after the Phase 124 exit
 framing left operator-tooling-coverage as the load-bearing
 question.
@@ -3571,26 +3575,44 @@ Phase 125 ships `aivyx-toolkit` — a single binary registering
 A3 amendment bumped 52 → 57 with new "Personal assistant
 tool process scopes" category.
 
-**Streak predictions:** DESIGN.md HOLD → 16; PRODUCT.md
-HOLD → 16; `aivyx-core/src/lib.rs` HOLD → 6 (90/10 hold;
-new crate; no core changes). Test count `+80 to +130`
-(8 tools × per-tool input/schema/round-trip tests +
-polling-loop substrate). Zero new workspace deps.
+**Streak predictions — three of three correct.** DESIGN.md
+HELD → 16; PRODUCT.md HELD → 16; aivyx-core/src/lib.rs
+HELD → 6 (90/10 hold case held; new crate; no core
+changes). Test count `+102` inside `+80 to +130`
+predicted range (8 tools × per-tool tests + the
+substantial Task 5 polling-loop substrate landed in the
+middle of the range). Zero new workspace dependencies
+as predicted.
 
-**Honest scope risks at sign-off:** 8 tools is dense for
-one phase (Phase 123 was 4 tools through 8 tasks; Phase
-125 is 8 tools through 7 tasks). Local-LLM invocation
-reliability is unchanged — Phase 125 expands the surface
-that works WHEN tool invocation works; doesn't close
-the model-layer ceiling Phase 124 named. Alert
-composition is agent-driven, not automatic — only fires
-when the agent reliably invokes (cloud providers; future-
-fixed-local).
+**Q-block went through as picked.** All three Recommended
+(Q1a bundle + Q2a web.search first + Q3a scheduled
+monitoring). No mid-task re-asks; no architectural
+constraints surfaced post-sign-off.
+
+**Honest scope risks at sign-off, materialized at exit:**
+8 tools in one phase was dense but tractable — Phase 123's
+multi-tool harness substrate carried most of the per-tool
+boilerplate. Local-LLM invocation reliability is unchanged
+as predicted; Phase 125 expanded the surface that works
+WHEN tool invocation works. The health-check alert
+composition recipe works reliably under cloud providers;
+local Ollama won't reliably chain `recent_changes` →
+`notify.send`.
+
+**SDK-validation finding from Phase 123 now twice-
+duplicated.** `aivyx-gmail/src/harness.rs` +
+`aivyx-toolkit/src/harness.rs` are line-for-line copies
+of the multi-tool harness. Two in-tree copies is the
+clear-win threshold for the lift. Phase 126 should land
+the lift alongside whichever Chapter F #2 or Chapter G
+#2 ships first.
 
 **Thirteenth consecutive deferral of the Channel
 Activation Milestone.** Operator framing on the deferral
 is load-bearing correct: channels without working tools
-is wrong-order. Phase 125 prioritizes the tools.
+is wrong-order. Phase 125 prioritized the tools; the
+deferral count now stands at 13. Phase 126 candidates
+include the milestone itself; honest tracking continues.
 
 ## Phase 124 — Few-Shot Tool-Call Examples (Local-LLM Rehab #4)
 
