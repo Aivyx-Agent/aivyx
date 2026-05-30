@@ -38,6 +38,8 @@
 
 pub mod config;
 pub mod harness;
+pub mod tools;
 
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
+pub use tools::WebSearch;
