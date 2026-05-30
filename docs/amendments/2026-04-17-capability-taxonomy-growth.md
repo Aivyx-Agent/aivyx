@@ -244,7 +244,27 @@ path; no new capability gate.)
 | Phase 123 | `email.write` | Chapter F #1 — `gmail.draft` (creates a Gmail draft; safe write — requires explicit Gmail-UI send) |
 | Phase 123 | `email.send` | Chapter F #1 — `gmail.send` (direct send; Trusted-tier only at the ceiling level, matching `shell.exec` / `notify.send`) |
 
-### Current full enumeration (52 bases)
+## Phase 125 addendum — Chapter G #1 personal assistant tool bundle (2026-05-31)
+
+> *Added at Phase 125 exit. Chapter G (Operator-Facing Personal
+> Assistant Capabilities) opens with the aivyx-toolkit bundle
+> as the first integration. Per P10/P11/P12 the entire bundle
+> ships as a single third-party tool process registering eight
+> tools across three categories. The five new bases below gate
+> those tools. All five Trusted-tier-only by default — same
+> gating pattern as `email.*` and `notify.send` per Phase 62
+> Q2(a): personal-assistant tools shouldn't be reachable from
+> remote channels without explicit role grant.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 125 | `web.search` | Chapter G #1 — `web.search` tool (Brave Search API; operator-provided key; distinct from `net.fetch` because the search API is a credentialed external service, not generic HTTP fetch) |
+| Phase 125 | `task.read` | Chapter G #1 — `task.list` (lightweight TODO listing) |
+| Phase 125 | `task.write` | Chapter G #1 — `task.create`, `task.complete`, `task.delete` (TODO CRUD; separate from `task.read` so a read-only role can browse tasks without write authority) |
+| Phase 125 | `health.read` | Chapter G #1 — `health.check.list`, `health.check.recent_changes` (URL monitor state inspection) |
+| Phase 125 | `health.write` | Chapter G #1 — `health.check.add` (register new URL watcher for the polling loop) |
+
+### Current full enumeration (57 bases)
 
 Substrate-facing operator scopes (16):
 - `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
@@ -273,11 +293,14 @@ Infrastructure (28):
 - Notify: `notify.send`
 - Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
 
-Third-party tool process scopes (3):
+Third-party tool process scopes (8):
 - Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
   `email.send`
+- Personal assistant tool bundle (Chapter G #1, Phase 125):
+  `web.search`, `task.read`, `task.write`, `health.read`,
+  `health.write`
 
-Total: 16 + 5 + 28 + 3 = 52.
+Total: 16 + 5 + 28 + 8 = 57.
 
 ### Verification
 

@@ -86,6 +86,24 @@ const KNOWN_BASES: &[&str] = &[
     "email.read",
     "email.write",
     "email.send",
+    // Personal assistant tool bundle (Phase 125 — Chapter G #1,
+    // aivyx-toolkit third-party tool process). Five bases for
+    // the bundled tool surface:
+    //   web.search   — web.search tool (Brave Search API).
+    //   task.read    — task.list.
+    //   task.write   — task.create, task.complete, task.delete.
+    //   health.read  — health.check.list,
+    //                  health.check.recent_changes.
+    //   health.write — health.check.add.
+    // All five Trusted-tier only by default (same gating pattern
+    // as email.*: personal-assistant tools shouldn't be reachable
+    // from remote channels without explicit role grant per
+    // Phase 62 Q2(a)).
+    "web.search",
+    "task.read",
+    "task.write",
+    "health.read",
+    "health.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -719,6 +737,17 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "email.read",
         "email.write",
         "email.send",
+        // Phase 125 — Personal assistant tool bundle (Chapter
+        // G #1). Five bases for the aivyx-toolkit tool process
+        // surface; same Trusted-only default as email.* and
+        // notify.send. Operators who want narrow access from a
+        // remote channel can grant individual bases via a
+        // role's `capability_scopes`.
+        "web.search",
+        "task.read",
+        "task.write",
+        "health.read",
+        "health.write",
     ])
 });
 
@@ -1524,14 +1553,14 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_123_a3_addendum() {
+    fn known_bases_count_matches_phase_125_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 123) lists every entry.
+        // — the latest addendum (Phase 125) lists every entry.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            52,
+            57,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

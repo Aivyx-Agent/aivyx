@@ -1,0 +1,54 @@
+[package]
+name = "aivyx-toolkit"
+description = "Operator-facing personal assistant tool bundle for Aivyx (Phase 125 — Chapter G #1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-toolkit"
+path = "src/main.rs"
+
+[dependencies]
+# Tool process SDK — same shape as aivyx-gmail. Multi-tool
+# harness pattern still inline here per the Phase 123
+# SDK-validation finding (lift recommendation still
+# outstanding). Phase 125 mirrors aivyx-gmail's harness
+# implementation; lifting to aivyx-tool is follow-on substrate.
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime — `process` not needed (we ARE the child
+# process); `io-util` for read_frame/write_frame; `fs` for
+# config + state file I/O; `time` for the health.check
+# polling loop.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+# HTTP + JSON — already workspace-wide via aivyx-llm and
+# aivyx-gmail. rustls-tls keeps the OpenSSL-free posture.
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# TOML for the operator-supplied tool-bundle config file at
+# `~/.aivyx/tool-processes/toolkit/config.toml`. Version-
+# pinned to match aivyx-config / aivyx-gmail.
+toml = "0.8"
+
+# Uuid for task IDs (v4) and for health-check state-transition
+# IDs. Already workspace-wide.
+uuid = { workspace = true }
+
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
