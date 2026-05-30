@@ -319,3 +319,90 @@ through four times. Phase 125 candidates:
 
 Phase-by-phase decision at Phase 124 exit, sharpened by
 the empirical findings from the live verification.
+
+## Prediction vs reality
+
+**Three of three streak predictions correct.** All three
+byte-identity streaks held through Tasks 2-3; the substrate
+stayed entirely within `aivyx-config` + `aivyx-channel` as
+expected.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; new enum variant fits
+  the existing additive pattern Phase 122 established.
+  Streak: 14 → 15.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 covers; no contract amendment. Streak:
+  14 → 15.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted (90/10
+  hold case held). `b420405b…` unchanged. New helper
+  lives in `aivyx-channel/src/profile_prompt.rs`; enum
+  variant lives in `aivyx-config`; dispatcher hides the
+  per-call-site logic. Streak: 4 → 5.
+
+**Test count `+12` lands inside the predicted `+15 to +30`
+range — close to the lower bound.** Per-task breakdown:
+- Task 2 (FewShotExamples variant + helper): **+11**
+  (3 aivyx-config: new label, new parse-wire-label,
+  error-message-lists-all-three; 8 aivyx-channel
+  profile_prompt: empty-noop, no-targets-noop,
+  fs.write-only, only-registered-subset,
+  all-three-registered, preamble content, whitespace
+  trim, composes-after-catalog, chained-noop).
+- Task 3 (defaults + dispatcher + banner): **net +1**
+  (renamed + flipped 3 existing banner/default tests;
+  added 1 explicit wire-label round-trip test).
+
+The lower-bound landing reflects Phase 124's deliberate
+substrate-additive shape — the dispatcher pattern means
+the wiring tests in main.rs didn't multiply across the 5
+call sites; the helper-shape tests in profile_prompt did
+the load-bearing work.
+
+**Q-block went through as operator-picked.** Q1a + Q2a +
+Q3a — first all-Recommended Q-block since Phase 121. No
+mid-task re-asks; no architectural constraints surfaced
+post-sign-off. The substrate-internal scope plus the
+prior Phase 122 substrate posture meant no surprises.
+
+**Zero new workspace dependencies** as predicted.
+
+### Live verification (Task 4)
+
+> **PLACEHOLDER — populated post-live-test.**
+>
+> Verification against qwen3.6:27b and gemma4:31b through
+> `./scripts/dev-run.sh` with the new FewShotExamples
+> default. The exit-doc backfill commit will replace this
+> block with the empirical table:
+>
+> | Model       | Pre-122 baseline                            | Phase 122 (StructuredInjection)                    | Phase 124 (FewShotExamples)             |
+> |-------------|---------------------------------------------|----------------------------------------------------|------------------------------------------|
+> | qwen3.6:27b | Confabulated 12 / verbal refusal            | Listed ~25 / `[turn timed out]` on fs.write        | _to be observed_                         |
+> | gemma4:31b  | Confabulated 60+ / empty                    | Vague prose / explicit "I don't have fs.write"     | _to be observed_                         |
+>
+> **Three outcome cases** per Q3a's "declare reality at
+> exit" lock:
+>
+> 1. **Both invoke fs.write.** Substrate breakthrough.
+>    Exit doc validates the few-shot bet; recommends
+>    FewShotExamples as the stable default; closes the
+>    local-LLM-rehab axis honestly.
+> 2. **One improves, one doesn't.** Asymmetric. Exit
+>    doc reports per-model reality; recommends per-family
+>    configuration based on what worked.
+> 3. **Neither improves.** Fourth substrate-phase
+>    failure. Exit doc names the model-layer ceiling
+>    definitively; recommends operators use cloud
+>    providers for tool-use workloads; documents
+>    FewShotExamples as available substrate for
+>    enumeration-honesty operators who accept the cost
+>    overhead.
+>
+> The probe pattern matches Phase 122 exit exactly:
+> banner observation, "what tools do you have?" probe,
+> "please call fs.write to create a file at test.txt
+> with the content 'phase 124 verification'" probe.
+> Both runs use `--reset` so each model gets a clean
+> store; audit-export check between runs confirms
+> tool-call landings.

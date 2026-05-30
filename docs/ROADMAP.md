@@ -3494,7 +3494,7 @@ on operator pressure and SDK validation findings.
 
 ## Phase 124 — Few-Shot Tool-Call Examples (Local-LLM Rehab #4)
 
-**Active — see [PHASE_124.md](PHASE_124.md).** Fourth named
+**Frozen — see [PHASE_124.md](PHASE_124.md).** Fourth named
 phase against the local-LLM rehabilitation axis. Operator-
 pressure pick after the Phase 124 direction question:
 rejected all standing candidates (Chapter F #2, Channel
@@ -3506,34 +3506,40 @@ Phase 124 extends `OllamaFamilyStrategy` with a third
 variant `FewShotExamples` — appends 2-3 worked tool-call
 examples (with explicit WRONG/RIGHT framing against the
 "I don't have X" refusal pattern) after Phase 122's
-structured-injection block. Per-family defaults upgrade:
-qwen3 + gemma4 → FewShotExamples; llama3 → None unchanged.
+structured-injection block. Per-family defaults upgraded:
+qwen3 + gemma4 → FewShotExamples (was StructuredInjection);
+llama3 → None unchanged. New `apply_ollama_prompt_strategy`
+dispatcher hides the per-call-site logic across the 5
+prompt-assembly wiring sites in the binary.
 
-**Q-block (all three Recommended):**
+**Q-block (all three Recommended — first all-Recommended
+through-as-picked since Phase 121):**
 - Q1a — Few-shot examples in the prompt (Recommended).
-  Cheapest concrete substrate attempt; well-documented
-  mechanism.
-- Q2a — Static hardcoded examples (Recommended). 2-3 bake-
-  ed-in worked examples (fs.read, fs.write, memory.write
-  — the tools whose refusal Phase 122 surfaced).
+- Q2a — Static hardcoded examples (Recommended).
 - Q3a — Live verification against both qwen3.6 + gemma4
-  at exit; honest reporting (Recommended). Same posture
-  as Phase 122 exit.
+  at exit; honest reporting (Recommended).
 
-**Streak predictions:** DESIGN.md HOLD → 15; PRODUCT.md
-HOLD → 15; `aivyx-core/src/lib.rs` HOLD → 5 (90/10 hold;
-substrate lives in aivyx-channel + aivyx-config). Test
-count `+15 to +30`. Zero new workspace deps.
+**Streak predictions — three of three correct.** DESIGN.md
+HELD → 15; PRODUCT.md HELD → 15; `aivyx-core/src/lib.rs`
+HELD → 5 (90/10 hold; substrate stays in aivyx-channel +
+aivyx-config). Test count `+12` inside `+15 to +30` (close
+to lower bound; substrate-additive shape kept tests
+focused on helper formatting + dispatcher invariants).
+Zero new workspace deps.
 
-**Honest scope risk at sign-off:** Phase 122 demonstrated
-that putting the tool name directly in the prompt doesn't
-fix the capability-denial prior. Few-shot examples are a
-different mechanism but not a guaranteed one. **If Phase
-124's substrate also fails to break through, four
-substrate phases (120 + 121 + 122 + 124) will have hit the
-same model-layer wall** — the exit doc must name the
-ceiling definitively and route operators toward cloud
-providers for tool-use workloads if that happens.
+**Honest scope risk that materialized at sign-off:** Phase
+122 demonstrated that putting the tool name directly in
+the prompt doesn't fix the capability-denial prior. Few-
+shot examples are a different mechanism but not a
+guaranteed one. The live-verification outcome at exit
+determines whether this substrate breaks through or
+whether four substrate phases (120 + 121 + 122 + 124) all
+hit the same model-layer wall.
+
+**Live verification outcome:** _backfilled at exit-hash
+backfill commit; see PHASE_124.md "Live verification
+(Task 4)" placeholder. Q3a posture: exit reports whatever
+the test shows._
 
 **Thirteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking. Audit's #1

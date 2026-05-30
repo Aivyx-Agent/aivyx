@@ -1132,8 +1132,8 @@ provider = "ollama"
 model = "qwen3.6:27b"
 
 [ollama.prompt_strategies]
-qwen3 = "structured_injection"       # default for qwen3.x
-gemma4 = "structured_injection"      # default for gemma4
+qwen3 = "few_shot_examples"          # default for qwen3.x (Phase 124)
+gemma4 = "few_shot_examples"         # default for gemma4 (Phase 124)
 llama3 = "none"                      # default for llama3.x
 ```
 
@@ -1141,11 +1141,20 @@ Each value is one of:
 - `"none"` — pre-Phase-122 behavior. Tools flow only
   via the Ollama protocol `tools: [...]` array. The
   assembled system prompt is unchanged.
-- `"structured_injection"` — append a `## Tools
-  available` block listing every tool the active role
-  can invoke by exact name (filtered by the role's
-  `tool_allowlist`), with a one-line preamble
-  discouraging invention.
+- `"structured_injection"` — Phase 122 substrate. Append a
+  `## Tools available` block listing every tool the active
+  role can invoke by exact name (filtered by the role's
+  `tool_allowlist`), with a one-line preamble discouraging
+  invention.
+- `"few_shot_examples"` — Phase 124 substrate. Includes
+  the `## Tools available` block AND appends a
+  `## Example tool use` block with 2-3 worked tool-call
+  examples (fs.read / fs.write / memory.write — only the
+  ones registered in the active role's allowlist), each
+  carrying explicit WRONG/RIGHT framing against the
+  "I don't have X" refusal pattern. Phase 124's substrate
+  attempt on the capability-denial prior Phase 122 left
+  unresolved.
 
 Keys are family strings, not full model names. The
 binary maps a model name to its family at startup:
@@ -1171,15 +1180,17 @@ tested against.
 ### Per-family defaults
 
 Operators who don't set `[ollama.prompt_strategies]`
-get pre-baked defaults from the Phase 122 sign-off
-diagnostic data:
+get pre-baked defaults. Phase 124 upgraded qwen3 + gemma4
+from `structured_injection` to `few_shot_examples` after
+Phase 122 empirically showed the catalog block alone
+didn't bridge the capability-denial prior:
 
-| Family   | Default                  | Why                                               |
-|----------|--------------------------|---------------------------------------------------|
-| `qwen3`  | `structured_injection`   | qwen3.6:27b confabulated tools, refused fs.write  |
-| `gemma4` | `structured_injection`   | gemma4:31b confabulated 60+, returned empty       |
-| `llama3` | `none`                   | tool-use protocol presumed reliable               |
-| _other_  | `none`                   | conservative default for untested families        |
+| Family   | Default              | Why                                                                              |
+|----------|----------------------|----------------------------------------------------------------------------------|
+| `qwen3`  | `few_shot_examples`  | Phase 124 upgrade — qwen3.6:27b timed out on fs.write under `structured_injection` |
+| `gemma4` | `few_shot_examples`  | Phase 124 upgrade — gemma4:31b refused fs.write despite catalog listing it       |
+| `llama3` | `none`               | tool-use protocol presumed reliable; preserved across phases                     |
+| _other_  | `none`               | conservative default for untested families                                       |
 
 An explicit `[ollama.prompt_strategies] <family> =
 "..."` always wins over the default.
@@ -1193,7 +1204,7 @@ your model and where it came from:
 aivyx config sources:
   provider          = ollama (toml)
   model             = "qwen3.6:27b" (toml)
-  ollama_prompt_strategy = "structured_injection" (family: qwen3, default)
+  ollama_prompt_strategy = "few_shot_examples" (family: qwen3, default)
 ```
 
 Provenance suffixes:
@@ -1207,19 +1218,29 @@ Provenance suffixes:
 
 ### Cost: per-turn input-token overhead
 
-The structured-injection block lists every tool the
-active role can invoke. For the default role on a
-typical install, that's ~12-20 tools at ~30-50
-tokens each — roughly **400-700 input tokens per
-turn** on top of the existing prompt. For small-
-context models or cost-sensitive cloud deployments,
-this trade may be unfavorable; the per-family
-`none` override is the operator's escape hatch.
+The `structured_injection` catalog block adds roughly
+**400-700 input tokens per turn** for the default role
+(~12-20 tools at ~30-50 tokens each). The
+`few_shot_examples` strategy adds another **~250-350
+tokens** on top of that for the worked examples — total
+**~650-1050 input tokens per turn** at the
+`few_shot_examples` default.
+
+For small-context models or cost-sensitive cloud
+deployments, the per-family override is the operator's
+escape hatch:
+- Set `prompt_strategy = "structured_injection"` to drop
+  back to the Phase 122 catalog-only block (saves the
+  examples overhead).
+- Set `prompt_strategy = "none"` to drop the whole
+  augmentation (saves both blocks).
 
 The block scales with the active role's
 `tool_allowlist`: a role with a restricted allowlist
 sees only the tools that survived the filter, not
-the full registered tool set.
+the full registered tool set. The few-shot examples
+also defensively skip examples whose target tool isn't
+registered.
 
 ### Honest scope caveat carried from open doc
 
@@ -1238,6 +1259,72 @@ substrate might not fix:
 Phase 6 Q5 honesty applies to RESULTS, not to
 ANTICIPATION. Whatever the live verification at exit
 shows, the exit doc reports it.
+
+**Phase 122 live verification outcome:** both risks
+materialized. qwen3.6 timed out on fs.write under
+`structured_injection`; gemma4 explicitly refused
+fs.write while the tool was literally listed in its own
+system prompt. Catalog enumeration improved (qwen3.6
+stopped inventing "Good Morning"; gemma4 stopped
+generating 60+ fictional tools), but invocation on
+command did not — the substrate ceiling sat at the model
+layer. Phase 124 below attempts one more rehab against
+that ceiling.
+
+### Few-shot examples (Phase 124 default upgrade)
+
+Phase 124 promoted qwen3 + gemma4 from
+`structured_injection` to `few_shot_examples` as the
+default. Same `## Tools available` catalog block as
+Phase 122, **plus** a `## Example tool use` block with
+2-3 worked tool-call examples (fs.read, fs.write,
+memory.write — only the ones registered in the active
+role's allowlist).
+
+Each example carries explicit WRONG/RIGHT framing
+directly against the gemma4-refusal pattern Phase 122
+documented:
+
+```
+Operator: "Please save 'hello' to test.txt."
+- You should: invoke fs.write with {"path": "test.txt",
+  "content": "hello"} and report the result.
+- You should NOT: respond "I don't have a tool called
+  fs.write" — you DO have fs.write; it is in your tool
+  list above.
+```
+
+**Why this might work where structured injection didn't.**
+Phase 122 demonstrated that *assertion-of-availability*
+(catalog listing) isn't enough; gemma4 refused while the
+tool was right there. Few-shot examples are a different
+mechanism — the model sees a *concrete worked pattern*
+of "operator asks → assistant invokes → result reported,"
+not just an assertion that tools exist. Few-shot prompting
+is well-documented to change model behavior more reliably
+than instructions. Whether it's *sufficient* against a
+strong training prior is the open question Phase 124's
+live verification answers.
+
+**Honest scope risk at sign-off:** four substrate phases
+deep (120 + 121 + 122 + 124). If Phase 124's examples also
+fail to break through, the model-layer ceiling will need
+to be named definitively — operators using local models
+for tool-use workloads would have to either accept the
+limitation or fall back to cloud providers.
+
+**Operator escape hatches preserved.** Per-family
+`prompt_strategy = "structured_injection"` (drops back
+to Phase 122 substrate) or `prompt_strategy = "none"`
+(drops all augmentation) remain operator-settable in
+`[ollama.prompt_strategies]`.
+
+**Phase 124 live verification outcome:** _to be filled
+in at exit. Same probe pattern as Phase 122 (dev-run.sh
+against qwen3.6:27b + gemma4:31b; ask for tool
+enumeration; ask for fs.write invocation; observe).
+Q3a sign-off locks in honest reporting regardless of
+outcome._
 
 ## External productivity integrations (Chapter F)
 
