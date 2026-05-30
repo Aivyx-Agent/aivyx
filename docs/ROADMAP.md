@@ -3444,6 +3444,60 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Phase 122 — Per-Model Prompt Variants (Local-LLM Rehab #2)
+
+**Active — see [PHASE_122.md](PHASE_122.md).** Third-named
+phase against the audit's local-LLM rehabilitation axis,
+opened against signal from real interactive use after
+Phase 121 shipped: 13 turns × 0 tool calls between
+qwen3.6:27b and gemma4:31b. Both models confabulate
+their tool catalogs at the prose level; both refuse or
+return empty when commanded to invoke. Phase 120
+substrate is orthogonal to this failure mode (it
+catches hallucinated invocations; this is hallucinated
+capability denial).
+
+Phase 122 ships per-family TOML config + structured
+per-turn tool catalog injection. Per-family detection
+from model name prefix; per-family defaults supplied
+for qwen35 and gemma4 (both `structured_injection`);
+operator-tunable via `[ollama.<family>] prompt_strategy`.
+
+**Q-block (two non-Recommended):**
+- Q1c — Both substrate moves (non-Recommended). Per
+  Phase 6 Q5 honest framing correction documented in
+  open doc: "suppress in-prompt catalog" is a no-op
+  (Aivyx's system prompt has no tool catalog; tools
+  flow via Ollama's protocol tools array only). The
+  pick reduces to "ship per-turn injection."
+- Q2a — Per-model-family TOML config (Recommended).
+- Q3b — Try everything; declare reality at exit (non-
+  Recommended; refused pre-emptive scope reduction).
+  Task 7 locked into verification against qwen3.6:27b
+  AND gemma4:31b regardless of outcome.
+
+**Streak predictions:** DESIGN.md HOLD → 13; PRODUCT.md
+HOLD → 13; `aivyx-core/src/lib.rs` predicted HOLD → 3
+(honest 85/15; substrate lives in aivyx-channel +
+aivyx-config; aivyx-core boundary preserved).
+
+Test count: predicted `+35 to +60`. Zero new workspace
+deps anticipated.
+
+**Honest scope risks named at sign-off:** the data we
+collected suggests gemma4's prior may be unfixable from
+the prompt side. Q3b's "declare reality at exit"
+posture means the exit doc will honestly document
+whichever models improve and which don't.
+
+**Eleventh consecutive substrate/polish phase picked
+over the Channel Activation Milestone.** Honest
+tracking. The audit's #1 has been chosen against
+eleven times. After Phase 122, Phase 123 candidates:
+Channel Activation Milestone (twelfth-in-a-row
+deferral if skipped), release prep, Chapter F,
+operator-pressure-driven new direction.
+
 ## Phase 121 — Native Ollama Tool-Calling Path (Local-LLM Rehab #3)
 
 **Frozen — see [PHASE_121.md](PHASE_121.md).** Second-
