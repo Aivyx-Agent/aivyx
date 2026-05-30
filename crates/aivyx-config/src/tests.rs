@@ -8046,6 +8046,127 @@ fn phase_121_ollama_is_empty_helper_pins_default() {
     assert!(!opts.is_empty());
 }
 
+// ----- Phase 122 Task 2 — detect_model_family + OllamaFamilyStrategy -----
+
+#[test]
+fn phase_122_detect_qwen_models() {
+    // qwen3.6:27b and qwen3.5:7b → qwen3 (major version
+    // only; qwen3.x minor revisions share substrate and the
+    // same per-family default strategy).
+    assert_eq!(
+        crate::detect_model_family("qwen3.6:27b").as_deref(),
+        Some("qwen3")
+    );
+    assert_eq!(
+        crate::detect_model_family("qwen3.5:7b").as_deref(),
+        Some("qwen3")
+    );
+    // qwen2.5:7b → qwen2 (separate major).
+    assert_eq!(
+        crate::detect_model_family("qwen2.5:7b").as_deref(),
+        Some("qwen2")
+    );
+}
+
+#[test]
+fn phase_122_detect_gemma_models() {
+    assert_eq!(
+        crate::detect_model_family("gemma4:31b").as_deref(),
+        Some("gemma4")
+    );
+    assert_eq!(
+        crate::detect_model_family("gemma3:9b").as_deref(),
+        Some("gemma3")
+    );
+}
+
+#[test]
+fn phase_122_detect_llama_models() {
+    assert_eq!(
+        crate::detect_model_family("llama3.1:latest").as_deref(),
+        Some("llama3")
+    );
+    assert_eq!(
+        crate::detect_model_family("llama3.2:1b").as_deref(),
+        Some("llama3")
+    );
+    assert_eq!(
+        crate::detect_model_family("llama2:13b").as_deref(),
+        Some("llama2")
+    );
+}
+
+#[test]
+fn phase_122_detect_returns_none_for_non_ollama_model_names() {
+    // Cloud model names don't follow Ollama's family:tag
+    // convention.
+    assert!(crate::detect_model_family("claude-haiku-4-5").is_none());
+    assert!(crate::detect_model_family("gpt-4").is_none());
+    assert!(crate::detect_model_family("gpt-4o-mini").is_none());
+}
+
+#[test]
+fn phase_122_detect_returns_none_for_bare_family_without_digits() {
+    // "qwen" alone — no version, no family-key.
+    assert!(crate::detect_model_family("qwen").is_none());
+    assert!(crate::detect_model_family("qwen:latest").is_none());
+    assert!(crate::detect_model_family("gemma").is_none());
+}
+
+#[test]
+fn phase_122_detect_returns_none_for_empty_input() {
+    assert!(crate::detect_model_family("").is_none());
+    assert!(crate::detect_model_family(":tag-only").is_none());
+}
+
+#[test]
+fn phase_122_family_strategy_defaults_match_sign_off() {
+    // qwen3 and gemma4 default to StructuredInjection per the
+    // pre-Phase-122 diagnostic data (both models confabulate
+    // tool catalogs at the prose level).
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family("qwen3"),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family("gemma4"),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+    // llama3's tool-use protocol is presumed more reliable;
+    // pre-Phase-122 behavior preserved as the default.
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family("llama3"),
+        crate::OllamaFamilyStrategy::None
+    );
+    // Unknown families default to None — operator-conservative.
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family("unknown"),
+        crate::OllamaFamilyStrategy::None
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family(""),
+        crate::OllamaFamilyStrategy::None
+    );
+}
+
+#[test]
+fn phase_122_family_strategy_label_is_stable_lowercase() {
+    // Labels match the TOML wire form so the operator's
+    // aivyx.toml can pass `prompt_strategy = "none"` /
+    // `prompt_strategy = "structured_injection"` directly.
+    assert_eq!(crate::OllamaFamilyStrategy::None.label(), "none");
+    assert_eq!(
+        crate::OllamaFamilyStrategy::StructuredInjection.label(),
+        "structured_injection"
+    );
+}
+
+#[test]
+fn phase_122_family_strategy_default_trait_returns_none() {
+    let s = crate::OllamaFamilyStrategy::default();
+    assert_eq!(s, crate::OllamaFamilyStrategy::None);
+}
+
 // ----- Phase 120 — [providers] tool_name_auto_correct_threshold -----
 
 #[test]

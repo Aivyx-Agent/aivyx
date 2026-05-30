@@ -2329,6 +2329,165 @@ impl OllamaOptions {
     }
 }
 
+/// Phase 122 Task 2 — per-family prompt-strategy enum.
+/// Operators select strategies in `aivyx.toml` via
+/// `[ollama.<family>] prompt_strategy = "..."`. Family
+/// detection from the model-name prefix lands in
+/// [`detect_model_family`]; per-family defaults land in
+/// [`OllamaFamilyStrategy::default_for_family`].
+///
+/// Each Phase 122 substrate move is a distinct enum variant
+/// so future strategies (concise-descriptions, relevance-
+/// filtered, etc.) can land additively without breaking the
+/// wire shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OllamaFamilyStrategy {
+    /// Phase 122 baseline — pre-Phase-122 behavior.
+    /// `assemble_session_prompt` runs unchanged; tools flow
+    /// only via the Ollama protocol `tools: [...]` array.
+    /// Operator chooses this when their model is known to
+    /// use the protocol surface reliably (e.g. `llama3` at
+    /// time of Phase 122 sign-off).
+    #[default]
+    None,
+    /// Phase 122 substrate move — append a strict
+    /// "## Tools available" section to the assembled system
+    /// prompt listing every tool the model can invoke by
+    /// exact name. Targets the per-Q3b verification case:
+    /// qwen3.6:27b and gemma4:31b confabulate at the prose
+    /// level when asked to enumerate their tools and refuse
+    /// or return empty when commanded to invoke. The
+    /// structured-injection block forces the protocol-array
+    /// catalog into the system prompt where the model's
+    /// prose-level reasoning cannot ignore it.
+    StructuredInjection,
+}
+
+impl OllamaFamilyStrategy {
+    /// Phase 122 Task 5 — per-family default lookup. Used by
+    /// the loader to fill in defaults when an operator's
+    /// `aivyx.toml` doesn't override a specific family.
+    ///
+    /// Defaults landed at Phase 122 sign-off per Q3b
+    /// "declare reality at exit" posture — the Phase 6 Q5
+    /// honest report at exit time will document whether
+    /// these defaults actually helped each model:
+    /// - `qwen3` → `StructuredInjection` — qwen3.6:27b
+    ///   confabulated tool catalog and refused fs.write
+    ///   invocation in pre-Phase-122 testing.
+    /// - `gemma4` → `StructuredInjection` — gemma4:31b
+    ///   confabulated 60+ invented tools and produced empty
+    ///   output when commanded to invoke fs.write.
+    /// - `llama3` → `None` — llama3's tool-use protocol is
+    ///   presumed more reliable; pre-Phase-122 behavior
+    ///   preserved.
+    /// - Unknown families → `None` — default-conservative
+    ///   posture so a new model release doesn't silently get
+    ///   substrate it wasn't tested against.
+    pub fn default_for_family(family: &str) -> Self {
+        match family {
+            "qwen3" => OllamaFamilyStrategy::StructuredInjection,
+            "gemma4" => OllamaFamilyStrategy::StructuredInjection,
+            "llama3" => OllamaFamilyStrategy::None,
+            _ => OllamaFamilyStrategy::None,
+        }
+    }
+
+    /// Short stable label for the strategy. Used in the
+    /// startup banner and in operator-readable error
+    /// messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            OllamaFamilyStrategy::None => "none",
+            OllamaFamilyStrategy::StructuredInjection => {
+                "structured_injection"
+            }
+        }
+    }
+}
+
+/// Phase 122 Task 2 — Detect a model family from a model name.
+///
+/// Ollama model names follow `<family>:<tag>` (e.g.
+/// `qwen3.6:27b`, `gemma4:31b`, `llama3.1:latest`). The family
+/// part can include dots and digits; we collapse to a stable
+/// short key that maps to per-family TOML sections:
+///
+/// - `qwen3.6:27b` → `Some("qwen3")` — keep major version
+///   only; qwen3.x minor revisions share substrate.
+/// - `gemma4:31b` → `Some("gemma4")`.
+/// - `llama3.1:latest` → `Some("llama3")`.
+/// - `claude-haiku-4-5` → `None` (not an Ollama-family
+///   model; cloud model names don't follow Ollama's
+///   convention).
+///
+/// Returns `None` for names that don't match any documented
+/// Ollama family. Operators can still configure
+/// `[ollama.<family>]` for the actual detected family even
+/// when this returns `None` — the helper documents the
+/// Phase 122 sign-off-time defaults, not the full Ollama
+/// model surface.
+pub fn detect_model_family(model: &str) -> Option<String> {
+    // Ollama models are `<family>:<tag>`. Split on `:` and
+    // take the family part.
+    let family_part = model.split(':').next()?;
+    if family_part.is_empty() {
+        return None;
+    }
+
+    // qwen3.6, qwen3.5, qwen2.5 → qwen3 / qwen2. Major
+    // version only; minor revisions within a major share
+    // substrate and the same default strategy.
+    if let Some(rest) = family_part.strip_prefix("qwen") {
+        if rest.is_empty() {
+            return None;
+        }
+        let digits: String =
+            rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        let major: String = digits.chars().take(1).collect();
+        return Some(format!("qwen{major}"));
+    }
+
+    // gemma4, gemma3 → gemma4 / gemma3. Single major version.
+    if let Some(rest) = family_part.strip_prefix("gemma") {
+        if rest.is_empty() {
+            return None;
+        }
+        let digits: String =
+            rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        // gemma4 / gemma3 — keep first digit as the family
+        // key.
+        let major: String = digits.chars().take(1).collect();
+        return Some(format!("gemma{major}"));
+    }
+
+    // llama3.1, llama3.2, llama2 → llama3 / llama2. Keep
+    // first digit only.
+    if let Some(rest) = family_part.strip_prefix("llama") {
+        if rest.is_empty() {
+            return None;
+        }
+        let digits: String =
+            rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        let major: String = digits.chars().take(1).collect();
+        return Some(format!("llama{major}"));
+    }
+
+    // Unrecognized family — operator can still configure
+    // [ollama.<arbitrary-family>] in TOML; this helper just
+    // doesn't recognize the prefix.
+    None
+}
+
 /// **Phase-116-internal deferral** — the substrate ships in
 /// Phase 116 but the live-prompt pipe awaits a per-turn
 /// prompt-reassembly substrate change.
