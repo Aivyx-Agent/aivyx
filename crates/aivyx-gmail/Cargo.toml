@@ -1,0 +1,47 @@
+[package]
+name = "aivyx-gmail"
+description = "Gmail third-party tool process for Aivyx (Phase 123 — Chapter F #1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-gmail"
+path = "src/main.rs"
+
+[dependencies]
+# Tool process SDK — wire envelopes + harness primitives. Phase 123
+# uses the wire types directly and writes a multi-tool harness
+# inline (single-tool `run_tool_as_subprocess` doesn't fit Gmail's
+# four-tool process; documented as the Phase 123 SDK-validation
+# finding for follow-up substrate work in a future phase).
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime — `process` not needed (we ARE the child process);
+# `io-util` for read_frame/write_frame; `signal` is harmless.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+# HTTP + JSON — already workspace-wide via aivyx-llm. rustls-tls
+# avoids OpenSSL; matches the rest of the workspace's TLS posture.
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Base64 for OAuth (PKCE) + MIME body encoding (Tasks 6/7).
+# Already workspace-wide.
+base64 = { workspace = true }
+
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
