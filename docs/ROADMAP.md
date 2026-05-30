@@ -3492,6 +3492,106 @@ Subsequent Chapter F phases (Calendar, Drive, GitHub,
 shared credential vault) picked at each phase exit based
 on operator pressure and SDK validation findings.
 
+## Chapter G — Operator-Facing Personal Assistant Capabilities (Phases 125+)
+
+After Chapter F #1 (Phase 123 Gmail) shipped and Phase 124
+exited with the local-LLM-rehab axis exhausted, the
+operator framed the next direction: tooling has to be
+fully functional and complete before Channel Activation
+matters. Channels-without-working-tools is wrong-order.
+
+Chapter G fills operator-facing tool surface gaps the
+Phase 122/124 transcripts surfaced (gemma4's hallucinated
+enumeration partly mapped to existing Aivyx tools, partly
+to gaps). Different from Chapter F (Gmail / Calendar /
+etc are specific external service integrations); Chapter
+G is broader operator capability — web search, task
+tracking, monitoring, future tools like calendar
+reminders, expense tracking, etc.
+
+Per P10 + P11 + P12, every Chapter G integration ships as
+a third-party tool process. Aivyx core stays at the
+thirteen-tools-forever cap. Chapter G reuses Phase 123's
+substrate (multi-tool harness + per-tool-process config +
+per-tool-process file storage + capability-base extension
+pattern) without architectural additions.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 125 — Personal Assistant Tool Bundle.** Active
+  — see below and [PHASE_125.md](PHASE_125.md). Bundles
+  three tools through one `aivyx-toolkit` binary:
+  `web.search` (Brave API), `task.*` (TODO CRUD),
+  `health.check.*` (scheduled URL monitoring with
+  agent-composable alerts).
+
+Subsequent Chapter G phases (Chapter G #2 candidates:
+calendar reminders, lightweight budget tracking,
+health.check.remove + automatic alert dispatch) picked at
+each phase exit based on operator pressure and observed
+first-real-use signal.
+
+## Phase 125 — Personal Assistant Tool Bundle (Chapter G #1)
+
+**Active — see [PHASE_125.md](PHASE_125.md).** Chapter G
+opener. Operator-pressure pick after the Phase 124 exit
+framing left operator-tooling-coverage as the load-bearing
+question.
+
+Phase 125 ships `aivyx-toolkit` — a single binary registering
+8 tools through Phase 123's multi-tool harness substrate:
+
+- **`web.search`** (1 tool, scope `web.search`) — Brave
+  Search API; operator-provided API key in
+  `~/.aivyx/tool-processes/toolkit/config.toml`. Free tier
+  fits personal use.
+- **`task.create / list / complete / delete`** (4 tools,
+  scopes `task.read` + `task.write`) — lightweight TODO
+  tracking; JSON file storage at
+  `~/.aivyx/tool-processes/toolkit/tasks.json` with
+  0600 perms.
+- **`health.check.add / list / recent_changes`** (3 tools,
+  scopes `health.read` + `health.write`) — scheduled URL
+  monitoring; tool-process-side polling loop; state
+  transitions recorded in ring buffer; alert dispatch
+  composed by agent loop via `recent_changes` +
+  `notify.send` (substrate-minimal — defers
+  daemon-side automatic dispatch to Phase 126+).
+
+**Q-block (all three operator-resolved pre-Task-2):**
+- Q1 — Bundle three tools in one phase (over sequence /
+  hybrid).
+- Q2 — `web.search` first within the bundle.
+- Q3 — `health.check` shape: scheduled monitoring with
+  state + alerts (Recommended; over one-shot / defer).
+
+**Capability bases:** five new bases in `KNOWN_BASES`
+(`web.search`, `task.read`, `task.write`, `health.read`,
+`health.write`); all CEILING_TRUSTED only by default.
+A3 amendment bumped 52 → 57 with new "Personal assistant
+tool process scopes" category.
+
+**Streak predictions:** DESIGN.md HOLD → 16; PRODUCT.md
+HOLD → 16; `aivyx-core/src/lib.rs` HOLD → 6 (90/10 hold;
+new crate; no core changes). Test count `+80 to +130`
+(8 tools × per-tool input/schema/round-trip tests +
+polling-loop substrate). Zero new workspace deps.
+
+**Honest scope risks at sign-off:** 8 tools is dense for
+one phase (Phase 123 was 4 tools through 8 tasks; Phase
+125 is 8 tools through 7 tasks). Local-LLM invocation
+reliability is unchanged — Phase 125 expands the surface
+that works WHEN tool invocation works; doesn't close
+the model-layer ceiling Phase 124 named. Alert
+composition is agent-driven, not automatic — only fires
+when the agent reliably invokes (cloud providers; future-
+fixed-local).
+
+**Thirteenth consecutive deferral of the Channel
+Activation Milestone.** Operator framing on the deferral
+is load-bearing correct: channels without working tools
+is wrong-order. Phase 125 prioritizes the tools.
+
 ## Phase 124 — Few-Shot Tool-Call Examples (Local-LLM Rehab #4)
 
 **Frozen — see [PHASE_124.md](PHASE_124.md).** Fourth named
