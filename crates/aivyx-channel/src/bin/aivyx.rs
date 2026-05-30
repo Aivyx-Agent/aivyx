@@ -3241,6 +3241,11 @@ async fn run_async(
         // at provider-construction time below for
         // `ProviderKind::Ollama`.
         ollama_options: config_ollama_options,
+        // Phase 122 Task 5 — operator-overridable per-family
+        // prompt-strategy map. Consumed at the Ollama-strategy
+        // resolution site below via
+        // `resolve_ollama_prompt_strategy(&model, &..)`.
+        ollama_prompt_strategies: config_ollama_prompt_strategies,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
@@ -3439,27 +3444,26 @@ async fn run_async(
         }
     };
 
-    // ---- Phase 122 Task 4 — per-family prompt strategy ---------------
-    // Resolve the Ollama prompt strategy from the model name. Non-Ollama
-    // providers always end up at `OllamaFamilyStrategy::None` (no
-    // catalog injection) since the strategy enum gates the
+    // ---- Phase 122 Task 4/5 — per-family prompt strategy -------------
+    // Resolve the Ollama prompt strategy from the model name, layering
+    // operator overrides (Task 5) over per-family defaults (Task 4):
+    //
+    // - `[ollama.prompt_strategies] qwen3 = "none"` → operator opts out
+    //   of the structured-injection default for qwen3.
+    // - Family detected, no override → per-family default.
+    // - Family not detected (cloud model, bare-family-without-digits) →
+    //   `OllamaFamilyStrategy::None`. Operator-conservative.
+    //
+    // Non-Ollama providers always end up at `None` (no catalog
+    // injection) since the strategy enum gates the
     // `append_tool_catalog` call below — cloud providers handle their
     // tool-catalog surface natively.
-    //
-    // The strategy is `None` for unknown Ollama families too —
-    // operator-conservative: a new model release doesn't silently get
-    // substrate it wasn't tested against.
-    //
-    // Task 5 will layer the operator-facing `[ollama.<family>]
-    // prompt_strategy = "..."` override on top of this default.
     let ollama_prompt_strategy: aivyx_config::OllamaFamilyStrategy =
         if matches!(provider_kind.value, ProviderKind::Ollama) {
-            match aivyx_config::detect_model_family(&model) {
-                Some(family) => {
-                    aivyx_config::OllamaFamilyStrategy::default_for_family(&family)
-                }
-                None => aivyx_config::OllamaFamilyStrategy::None,
-            }
+            aivyx_config::resolve_ollama_prompt_strategy(
+                &model,
+                &config_ollama_prompt_strategies,
+            )
         } else {
             aivyx_config::OllamaFamilyStrategy::None
         };

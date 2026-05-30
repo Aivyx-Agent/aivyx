@@ -8167,6 +8167,162 @@ fn phase_122_family_strategy_default_trait_returns_none() {
     assert_eq!(s, crate::OllamaFamilyStrategy::None);
 }
 
+// ----- Phase 122 Task 5 — parse + resolve + TOML override surface -----
+
+#[test]
+fn phase_122_parse_accepts_wire_labels() {
+    // Labels round-trip with `.label()` so the operator's TOML
+    // can use the same spelling the helper emits.
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("none").unwrap(),
+        crate::OllamaFamilyStrategy::None
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("structured_injection").unwrap(),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+}
+
+#[test]
+fn phase_122_parse_is_case_insensitive_and_trims_whitespace() {
+    // Operators typing "None" or "  none  " shouldn't get a
+    // confusing config error.
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("None").unwrap(),
+        crate::OllamaFamilyStrategy::None
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("STRUCTURED_INJECTION").unwrap(),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("  none  ").unwrap(),
+        crate::OllamaFamilyStrategy::None
+    );
+}
+
+#[test]
+fn phase_122_parse_rejects_unknown_strategy() {
+    let err = crate::OllamaFamilyStrategy::parse("aggressive").unwrap_err();
+    assert!(
+        err.contains("none") && err.contains("structured_injection"),
+        "error should name valid options; got: {err}"
+    );
+}
+
+#[test]
+fn phase_122_resolve_uses_default_when_no_override_present() {
+    let overrides = std::collections::BTreeMap::new();
+    // qwen3 → StructuredInjection (sign-off default).
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("qwen3.6:27b", &overrides),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+    // llama3 → None (sign-off default).
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("llama3.1:latest", &overrides),
+        crate::OllamaFamilyStrategy::None
+    );
+}
+
+#[test]
+fn phase_122_resolve_operator_override_beats_default() {
+    let mut overrides = std::collections::BTreeMap::new();
+    // Operator opts out of qwen3's structured-injection default.
+    overrides.insert("qwen3".to_string(), crate::OllamaFamilyStrategy::None);
+    // Operator opts llama3 INTO structured-injection.
+    overrides.insert(
+        "llama3".to_string(),
+        crate::OllamaFamilyStrategy::StructuredInjection,
+    );
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("qwen3.6:27b", &overrides),
+        crate::OllamaFamilyStrategy::None
+    );
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("llama3.1:latest", &overrides),
+        crate::OllamaFamilyStrategy::StructuredInjection
+    );
+}
+
+#[test]
+fn phase_122_resolve_returns_none_for_undetected_model() {
+    let mut overrides = std::collections::BTreeMap::new();
+    // Override for a family the cloud model can't be detected as.
+    overrides.insert(
+        "qwen3".to_string(),
+        crate::OllamaFamilyStrategy::StructuredInjection,
+    );
+    // Cloud model name → detect_model_family returns None →
+    // resolve returns None regardless of any overrides.
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("claude-haiku-4-5", &overrides),
+        crate::OllamaFamilyStrategy::None
+    );
+}
+
+#[test]
+fn phase_122_loader_parses_prompt_strategies_section() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[ollama.prompt_strategies]\n\
+         qwen3 = \"none\"\n\
+         llama3 = \"structured_injection\"\n",
+        "phase122-prompt-strategies",
+    );
+    assert_eq!(
+        cfg.ollama_prompt_strategies.get("qwen3").copied(),
+        Some(crate::OllamaFamilyStrategy::None)
+    );
+    assert_eq!(
+        cfg.ollama_prompt_strategies.get("llama3").copied(),
+        Some(crate::OllamaFamilyStrategy::StructuredInjection)
+    );
+    // Unset family → not in map; resolve falls through to default.
+    assert!(!cfg.ollama_prompt_strategies.contains_key("gemma4"));
+    drop(env);
+}
+
+#[test]
+fn phase_122_loader_rejects_unknown_strategy_string() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("phase122-bad-strategy");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[ollama.prompt_strategies]\n\
+         qwen3 = \"aggressive\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("loader rejects unknown strategy string");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ollama.prompt_strategies") && msg.contains("qwen3"),
+        "error should name section + offending family; got: {msg}"
+    );
+    drop(env);
+}
+
+#[test]
+fn phase_122_loader_absent_section_yields_empty_map() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.ollama_prompt_strategies.is_empty());
+    drop(env);
+}
+
 // ----- Phase 120 — [providers] tool_name_auto_correct_threshold -----
 
 #[test]

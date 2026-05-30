@@ -674,6 +674,13 @@ pub struct AivyxConfig {
     /// `aivyx_llm::ollama::OllamaOptions` at provider-construction
     /// time.
     pub ollama_options: OllamaOptions,
+    /// Phase 122 Task 5 — `[ollama.prompt_strategies]` operator
+    /// override map for per-family prompt-assembly strategy.
+    /// Keyed on family strings matching [`detect_model_family`]
+    /// output. Absent / unset family keys fall through to
+    /// [`OllamaFamilyStrategy::default_for_family`] at lookup
+    /// time via [`resolve_ollama_prompt_strategy`].
+    pub ollama_prompt_strategies: BTreeMap<String, OllamaFamilyStrategy>,
     /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
     /// Threshold in `[0.0, 1.0]` for the planner's tool-name
     /// fuzzy-match recovery. When the LLM emits a tool name not
@@ -2364,7 +2371,28 @@ pub enum OllamaFamilyStrategy {
 }
 
 impl OllamaFamilyStrategy {
-    /// Phase 122 Task 5 — per-family default lookup. Used by
+    /// Phase 122 Task 5 — Parse a strategy from the operator-
+    /// facing wire string (matches [`label`](Self::label) so
+    /// `[ollama.prompt_strategies]` accepts the exact spelling
+    /// the helper emits). Case-insensitive on the input so
+    /// operators typing `"None"` get the same behavior as
+    /// `"none"`.
+    ///
+    /// Returns `Err` with a short reason for unknown strings;
+    /// the loader wraps it into a `ConfigError::Invalid` with
+    /// the offending family key as part of the field path.
+    pub fn parse(s: &str) -> Result<Self, &'static str> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(OllamaFamilyStrategy::None),
+            "structured_injection" => Ok(OllamaFamilyStrategy::StructuredInjection),
+            _ => Err(
+                "unknown ollama prompt_strategy; \
+                 valid: \"none\" | \"structured_injection\"",
+            ),
+        }
+    }
+
+    /// Phase 122 Task 2 — per-family default lookup. Used by
     /// the loader to fill in defaults when an operator's
     /// `aivyx.toml` doesn't override a specific family.
     ///
@@ -2486,6 +2514,43 @@ pub fn detect_model_family(model: &str) -> Option<String> {
     // [ollama.<arbitrary-family>] in TOML; this helper just
     // doesn't recognize the prefix.
     None
+}
+
+/// Phase 122 Task 5 — Resolve the effective prompt strategy
+/// for a model, layering operator overrides over per-family
+/// defaults.
+///
+/// Resolution priority (highest first):
+/// 1. **Operator override** keyed on the detected family
+///    string in `overrides` (the parsed
+///    `[ollama.prompt_strategies]` map from the loader).
+/// 2. **Per-family default** from
+///    [`OllamaFamilyStrategy::default_for_family`].
+/// 3. **`None`** when [`detect_model_family`] returns `None`
+///    (cloud model name, bare family without digits, empty
+///    input). Unknown families always resolve to `None` so a
+///    new model release doesn't silently pick up substrate
+///    it wasn't tested against.
+///
+/// **Operator override of an unknown family.** If the operator
+/// explicitly maps a family this helper doesn't auto-detect,
+/// they can still set `[ollama.prompt_strategies] qwen5 =
+/// "structured_injection"` and the override applies as long as
+/// `detect_model_family(model)` returns `"qwen5"`. If detection
+/// returns `None` (model name doesn't parse to any family), no
+/// override applies — the operator's escape hatch is to use a
+/// model name the detector recognizes.
+pub fn resolve_ollama_prompt_strategy(
+    model: &str,
+    overrides: &BTreeMap<String, OllamaFamilyStrategy>,
+) -> OllamaFamilyStrategy {
+    match detect_model_family(model) {
+        Some(family) => match overrides.get(&family) {
+            Some(s) => *s,
+            None => OllamaFamilyStrategy::default_for_family(&family),
+        },
+        None => OllamaFamilyStrategy::None,
+    }
 }
 
 /// **Phase-116-internal deferral** — the substrate ships in
@@ -3529,6 +3594,16 @@ struct RawOllama {
     repeat_last_n: Option<i32>,
     #[serde(default)]
     seed: Option<i64>,
+    /// Phase 122 Task 5 — `[ollama.prompt_strategies]` operator-
+    /// facing per-family override map. Keys are family strings
+    /// matching [`detect_model_family`]'s output (`"qwen3"`,
+    /// `"gemma4"`, `"llama3"`, …); values are wire-form strategy
+    /// labels parsed by [`OllamaFamilyStrategy::parse`].
+    ///
+    /// Absent → empty map → every family resolves to
+    /// [`OllamaFamilyStrategy::default_for_family`].
+    #[serde(default)]
+    prompt_strategies: BTreeMap<String, String>,
 }
 
 /// Phase 115 — `[persona.auto_propose.failure_outcomes]`
@@ -4095,6 +4170,32 @@ impl AivyxConfig {
             repeat_last_n: toml.ollama.repeat_last_n,
             seed: toml.ollama.seed,
         };
+
+        // Phase 122 Task 5 — [ollama.prompt_strategies] operator
+        // per-family overrides. Each value parses through
+        // `OllamaFamilyStrategy::parse`; the first unknown string
+        // surfaces as `ConfigError::Invalid` with the offending
+        // family key in the field path so the operator sees
+        // exactly which row to fix.
+        let mut ollama_prompt_strategies: BTreeMap<
+            String,
+            OllamaFamilyStrategy,
+        > = BTreeMap::new();
+        for (family, raw_value) in &toml.ollama.prompt_strategies {
+            match OllamaFamilyStrategy::parse(raw_value) {
+                Ok(s) => {
+                    ollama_prompt_strategies.insert(family.clone(), s);
+                }
+                Err(reason) => {
+                    return Err(ConfigError::Invalid {
+                        field: "ollama.prompt_strategies",
+                        reason: format!(
+                            "family {family:?} value {raw_value:?}: {reason}"
+                        ),
+                    });
+                }
+            }
+        }
 
         // Phase 120 — [providers] tool_name_auto_correct_threshold.
         // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
@@ -5018,6 +5119,7 @@ impl AivyxConfig {
             persona_auto_propose,
             tool_relevance,
             ollama_options,
+            ollama_prompt_strategies,
             tool_name_auto_correct_threshold,
             roles,
             active_role,
