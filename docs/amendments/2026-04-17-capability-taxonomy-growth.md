@@ -227,7 +227,24 @@ Phase 113 reuses the existing `persona.propose` and
 `skills.propose` bases for the auto-proposer's chain-write
 path; no new capability gate.)
 
-### Current full enumeration (49 bases)
+## Phase 123 addendum — Chapter F #1 Gmail (2026-05-30)
+
+> *Added at Phase 123 exit. Chapter F (External Productivity
+> Integrations) opens with Gmail as the first integration;
+> per P10/P11/P12 it ships as a third-party tool process,
+> NOT as substrate. The three new bases below gate the four
+> Gmail tools (`gmail.search`, `gmail.read`, `gmail.draft`,
+> `gmail.send`) that the `aivyx-gmail` tool process registers.
+> All three Trusted-tier-only by default (mirrors
+> `shell.exec` / `notify.send` gating per Phase 62 Q2(a)).*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 123 | `email.read` | Chapter F #1 — `gmail.search` + `gmail.read` (read-only inbox + message access via the Gmail third-party tool process) |
+| Phase 123 | `email.write` | Chapter F #1 — `gmail.draft` (creates a Gmail draft; safe write — requires explicit Gmail-UI send) |
+| Phase 123 | `email.send` | Chapter F #1 — `gmail.send` (direct send; Trusted-tier only at the ceiling level, matching `shell.exec` / `notify.send`) |
+
+### Current full enumeration (52 bases)
 
 Substrate-facing operator scopes (16):
 - `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
@@ -256,7 +273,11 @@ Infrastructure (28):
 - Notify: `notify.send`
 - Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
 
-Total: 16 + 5 + 28 = 49.
+Third-party tool process scopes (3):
+- Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
+  `email.send`
+
+Total: 16 + 5 + 28 + 3 = 52.
 
 ### Verification
 

@@ -38,8 +38,13 @@
 //! local-builds posture.
 
 pub mod auth_cli;
+pub mod gmail_client;
+pub mod harness;
 pub mod oauth;
+pub mod tools;
 
+pub use gmail_client::{GmailClient, GmailClientError};
+pub use harness::{run_multi_tool_subprocess, HarnessError};
 pub use oauth::{
     OAuthConfig, OAuthError, TokenSet, DEFAULT_GMAIL_SCOPES,
     GOOGLE_AUTH_ENDPOINT, GOOGLE_TOKEN_ENDPOINT,

@@ -72,6 +72,20 @@ const KNOWN_BASES: &[&str] = &[
     "config.write",
     // role allowlist (synthetic — Phase 11 Task 4)
     "tool.allowlist",
+    // email (Phase 123 — Chapter F #1, Gmail third-party
+    // tool process per P10/P11/P12). Three bases mirroring the
+    // Gmail OAuth scope hierarchy:
+    //   email.read   — gmail.search, gmail.read
+    //   email.write  — gmail.draft (creates a draft only)
+    //   email.send   — gmail.send (Trusted-tier only by default,
+    //                  matching shell.exec / notify.send gating).
+    // Only the Trusted ceiling carries any of these; SemiTrusted
+    // and Untrusted operators reading personal inboxes through
+    // a remote adapter would cross the same trust boundary
+    // notify.send guards against (Phase 62 Q2(a)).
+    "email.read",
+    "email.write",
+    "email.send",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -695,6 +709,16 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // notifications can leak data across trust boundaries,
         // so SemiTrusted does not inherit this base.
         "notify.send",
+        // Phase 123 — Gmail third-party tool process (Chapter
+        // F #1). All three bases Trusted-tier only by default;
+        // SemiTrusted operators reading a personal inbox
+        // through a remote adapter would cross the same trust
+        // boundary notify.send guards against. Operators who
+        // explicitly want SemiTrusted email access can grant
+        // narrow bases via a role's `capability_scopes`.
+        "email.read",
+        "email.write",
+        "email.send",
     ])
 });
 
@@ -1500,16 +1524,16 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_113_a3_addendum() {
+    fn known_bases_count_matches_phase_123_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the Phase 113 addendum lists every entry. Any
-        // change here means updating the addendum's
+        // — the latest addendum (Phase 123) lists every entry.
+        // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            49,
+            52,
             "If KNOWN_BASES grew, also update the A3 addendum's \
-             Phase 113 count + per-base list."
+             latest count + per-base list."
         );
     }
 }

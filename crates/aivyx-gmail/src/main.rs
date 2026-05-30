@@ -8,6 +8,8 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use aivyx_gmail::auth_cli::{
     cli::{help_text, parse_cli_args_from, AuthMode, BinaryMode},
     config_file::{default_config_path, load_oauth_config},
@@ -15,7 +17,11 @@ use aivyx_gmail::auth_cli::{
     revoke::{run_auth_revoke, GOOGLE_REVOKE_ENDPOINT},
     status::run_auth_status,
 };
-use aivyx_gmail::oauth::storage::default_token_path;
+use aivyx_gmail::gmail_client::GmailClient;
+use aivyx_gmail::harness::run_multi_tool_subprocess;
+use aivyx_gmail::oauth::{load_tokens, storage::default_token_path};
+use aivyx_gmail::tools::GmailSearch;
+use aivyx_core::Tool;
 
 /// Operator-facing default for how long `auth init` waits for
 /// the browser callback. 5 minutes accommodates a slow consent
@@ -42,21 +48,7 @@ async fn main() -> ExitCode {
         BinaryMode::Auth(AuthMode::Init) => run_init().await,
         BinaryMode::Auth(AuthMode::Status) => run_status().await,
         BinaryMode::Auth(AuthMode::Revoke) => run_revoke().await,
-        BinaryMode::IpcLoop => {
-            // Tasks 4-7 will replace this with the multi-tool
-            // IPC harness loop. For Phase 123 Task 3, an
-            // operator-actionable error so a daemon
-            // `[[tool_process]]` spawn doesn't silently hang
-            // waiting for stdin.
-            eprintln!(
-                "aivyx-gmail: the IPC tool-process loop lands in Phase 123 Tasks 4-7.\n\
-                 Task 3 ships the operator-facing CLI only (`auth init / status / revoke`).\n\
-                 Once Tasks 4-7 ship, the daemon's `[[tool_process]]` spawn will land here\n\
-                 with no args and run the IPC handler. For now, this exits non-zero so the\n\
-                 daemon's tool-process bridge surfaces a clear startup failure."
-            );
-            ExitCode::from(2)
-        }
+        BinaryMode::IpcLoop => run_ipc_loop().await,
     }
 }
 
@@ -107,6 +99,70 @@ async fn run_status() -> ExitCode {
         }
         Err(e) => {
             eprintln!("aivyx-gmail auth status: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Daemon-spawned IPC loop. Loads OAuth config + tokens,
+/// constructs the shared GmailClient, registers every Gmail
+/// tool, and hands the registry to
+/// [`run_multi_tool_subprocess`] which drives the IPC loop
+/// against stdin/stdout. Returns only on `ToolShutdown` or
+/// stream EOF.
+async fn run_ipc_loop() -> ExitCode {
+    let config_path = match default_config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("aivyx-gmail (ipc): {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let oauth_config = match load_oauth_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("aivyx-gmail (ipc): {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let token_path = match default_token_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("aivyx-gmail (ipc): $HOME unset; cannot resolve token path");
+            return ExitCode::from(2);
+        }
+    };
+    let tokens = match load_tokens(&token_path).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            eprintln!(
+                "aivyx-gmail (ipc): no tokens at {token_path:?} — run `aivyx-gmail auth init` first"
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) => {
+            eprintln!("aivyx-gmail (ipc): token load failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let client = Arc::new(GmailClient::new(
+        reqwest::Client::new(),
+        oauth_config,
+        tokens,
+        token_path,
+    ));
+
+    // Task 4: gmail.search. Tasks 5-7 will push read / draft /
+    // send into this Vec.
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(GmailSearch::new(Arc::clone(&client))),
+    ];
+
+    match run_multi_tool_subprocess(tools, "aivyx-gmail").await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("aivyx-gmail (ipc): harness exited with error: {e}");
             ExitCode::from(1)
         }
     }
