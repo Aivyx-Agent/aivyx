@@ -3444,6 +3444,113 @@ learning from outcomes; self-correction loop on failed
 turns; outcome-driven Profile/Role refinement) based on
 operator pressure and observed value from Phase 114.
 
+## Chapter F — External Productivity Integrations (Phases 123+)
+
+After Chapter E's #4 closed by Phase 118 and three named
+Local-LLM Rehab phases (120 + 121 + 122) shipped real
+substrate, Chapter F opens a fresh thematic axis:
+**Aivyx as a productivity assistant, not just a chat
+surface.** External integrations — Gmail, Calendar, Drive,
+GitHub, etc — as first-class operator-facing capabilities.
+
+Per P10 + P11 + P12, every Chapter F integration ships as
+a separate third-party tool process via the existing
+`[[tool_process]]` substrate (Phase 49). Aivyx core
+stays at exactly thirteen substrate tools forever; each
+Chapter F integration is a separate binary the operator
+installs and registers. P10 explicitly names email and
+calendar as third-party territory; the architecture is
+the contract's intended shape, not a constraint to work
+around.
+
+Chapter F is also the first real consumer of the third-
+party SDK contract (P11 + P12). The SDK has shipped but
+has no non-trivial external consumer yet. Phase 123 is the
+first; SDK-contract validation findings from each Chapter F
+phase feed back into substrate-improvement candidates for
+subsequent phases.
+
+Chapter ordering follows "easy wins first" per Chapter D:
+Gmail picked first as the Google OAuth substrate
+establisher (Calendar / Drive reuse the same pattern);
+subsequent integrations picked by operator pressure at
+each phase exit.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 123 — Gmail Integration.** Active — see below
+  and [PHASE_123.md](PHASE_123.md). Operator-provided
+  Google OAuth (Q1a Recommended); full read + draft +
+  send tool surface (Q2c non-Recommended; honest scope
+  acceptance); per-tool-process token file storage
+  (Q3a re-asked under P10 third-party constraint).
+  Validates the third-party SDK contract on the first
+  real consumer.
+
+Subsequent Chapter F phases (Calendar, Drive, GitHub,
+shared credential vault) picked at each phase exit based
+on operator pressure and SDK validation findings.
+
+## Phase 123 — Gmail Integration (Chapter F #1)
+
+**Active — see [PHASE_123.md](PHASE_123.md).** Chapter F
+opener. Operator-pressure pick after the audit's #1
+(Channel Activation Milestone) was deferred for the
+twelfth time. Targets the external-productivity-
+integrations axis: Aivyx as productivity assistant, not
+just chat surface.
+
+Phase 123 ships Gmail as a separate `aivyx-gmail` binary
+wired via the existing `[[tool_process]]` substrate (P12,
+Phase 49). Architectural constraint surfaced at sign-off:
+P10 caps substrate at thirteen tools forever and
+explicitly names email as third-party territory; Phase
+123 is the first real consumer of the third-party SDK
+contract (P11 + P12).
+
+**Tool surface (Q2c non-Recommended):**
+- `gmail.search` — Gmail query DSL (capability scope
+  `email.read`).
+- `gmail.read` — one full message by ID (`email.read`).
+- `gmail.draft` — RFC 5322 draft creation (`email.write`).
+- `gmail.send` — direct send (`email.send`); Trusted/Local
+  only by default (mirrors `shell.exec` gating).
+
+**Auth substrate:**
+- Operator-provided Google OAuth app (Q1a Recommended):
+  operator creates own GCP project, pastes `client_id` +
+  `client_secret`. Aligns with G6 + Phase 99 local-builds
+  posture.
+- `aivyx-gmail auth init` CLI handles auth-code exchange
+  via local-loopback HTTP server.
+- Per-tool-process token file at `~/.aivyx/tool-processes/gmail/tokens.json`
+  (0600). Auto-refresh near token expiry.
+
+**Streak predictions:** DESIGN.md HOLD → 14; PRODUCT.md
+HOLD → 14 (P10 + P11 + P12 already cover this exact
+case); `aivyx-core/src/lib.rs` HOLD → 4 (90/10 hold; new
+crate, no core changes). Test count `+30 to +55`. At
+most 1 new workspace dep (likely `base64` for MIME
+encoding).
+
+**Honest scope risks named at sign-off:**
+- Q2c full-surface risk — read + draft + send in one
+  phase is more review surface than read-only would be.
+- OAuth complexity — operator-onboarding walkthrough is
+  load-bearing; bad docs mean phase failure on the
+  operator surface regardless of substrate quality.
+- SDK contract may have gaps — first real third-party
+  consumer; gaps surface in this phase. Exit doc
+  includes a load-bearing SDK-validation finding.
+- Google's OAuth verification — Gmail scopes are
+  sensitive; operators may hit verification limits for
+  production-mode publishing. INSTALL.md surfaces this.
+
+**Twelfth consecutive deferral of the Channel Activation
+Milestone.** Honest tracking. The audit's #1 has now been
+chosen against twelve times; thirteenth deferral if
+Phase 124 also skips it.
+
 ## Phase 122 — Per-Model Prompt Variants (Local-LLM Rehab #2)
 
 **Frozen — see [PHASE_122.md](PHASE_122.md).** Third-named
