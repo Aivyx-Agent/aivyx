@@ -38,8 +38,10 @@
 
 pub mod config;
 pub mod harness;
+pub mod task_store;
 pub mod tools;
 
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
-pub use tools::WebSearch;
+pub use task_store::{Task, TaskStatus, TaskStore, TaskStoreError};
+pub use tools::{TaskComplete, TaskCreate, TaskDelete, TaskList, WebSearch};

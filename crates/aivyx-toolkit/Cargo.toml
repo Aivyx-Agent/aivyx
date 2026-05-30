@@ -48,6 +48,15 @@ toml = "0.8"
 # IDs. Already workspace-wide.
 uuid = { workspace = true }
 
+# Chrono for RFC 3339 / ISO 8601 timestamps in the task store
+# (`created_at`, `completed_at`, `due_date`) and health-check
+# state transitions. Operators read the on-disk JSON files
+# directly during debugging; ISO strings stay human-readable.
+# Already workspace-wide via aivyx-channel — we add the
+# `serde` feature here so DateTime<Utc> derives serialize
+# correctly inside the Task struct.
+chrono = { workspace = true, features = ["serde"] }
+
 thiserror = { workspace = true }
 
 [dev-dependencies]

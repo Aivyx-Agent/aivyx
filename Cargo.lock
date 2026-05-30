@@ -326,6 +326,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-tool",
  "async-trait",
+ "chrono",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
