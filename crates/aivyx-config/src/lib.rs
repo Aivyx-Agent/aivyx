@@ -2368,6 +2368,17 @@ pub enum OllamaFamilyStrategy {
     /// catalog into the system prompt where the model's
     /// prose-level reasoning cannot ignore it.
     StructuredInjection,
+    /// Phase 124 substrate move (Local-LLM Rehab #4) —
+    /// extend [`StructuredInjection`](Self::StructuredInjection)
+    /// with 2-3 worked tool-call examples appended after the
+    /// catalog. Each example carries explicit WRONG/RIGHT
+    /// framing against the "I don't have X" refusal pattern
+    /// observed in Phase 122 (gemma4:31b refused fs.write
+    /// while it was literally listed in its own prompt).
+    /// Different mechanism than enumeration: the model sees
+    /// concrete examples of itself successfully calling
+    /// tools, not just an assertion that they exist.
+    FewShotExamples,
 }
 
 impl OllamaFamilyStrategy {
@@ -2385,9 +2396,11 @@ impl OllamaFamilyStrategy {
         match s.trim().to_ascii_lowercase().as_str() {
             "none" => Ok(OllamaFamilyStrategy::None),
             "structured_injection" => Ok(OllamaFamilyStrategy::StructuredInjection),
+            "few_shot_examples" => Ok(OllamaFamilyStrategy::FewShotExamples),
             _ => Err(
                 "unknown ollama prompt_strategy; \
-                 valid: \"none\" | \"structured_injection\"",
+                 valid: \"none\" | \"structured_injection\" | \
+                 \"few_shot_examples\"",
             ),
         }
     }
@@ -2430,6 +2443,7 @@ impl OllamaFamilyStrategy {
             OllamaFamilyStrategy::StructuredInjection => {
                 "structured_injection"
             }
+            OllamaFamilyStrategy::FewShotExamples => "few_shot_examples",
         }
     }
 }

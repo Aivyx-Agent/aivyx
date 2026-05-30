@@ -8153,11 +8153,38 @@ fn phase_122_family_strategy_defaults_match_sign_off() {
 fn phase_122_family_strategy_label_is_stable_lowercase() {
     // Labels match the TOML wire form so the operator's
     // aivyx.toml can pass `prompt_strategy = "none"` /
-    // `prompt_strategy = "structured_injection"` directly.
+    // `prompt_strategy = "structured_injection"` /
+    // `prompt_strategy = "few_shot_examples"` directly.
     assert_eq!(crate::OllamaFamilyStrategy::None.label(), "none");
     assert_eq!(
         crate::OllamaFamilyStrategy::StructuredInjection.label(),
         "structured_injection"
+    );
+    assert_eq!(
+        crate::OllamaFamilyStrategy::FewShotExamples.label(),
+        "few_shot_examples"
+    );
+}
+
+#[test]
+fn phase_124_parse_accepts_few_shot_examples_wire_label() {
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("few_shot_examples").unwrap(),
+        crate::OllamaFamilyStrategy::FewShotExamples
+    );
+    // Case-insensitive (matches the other variants).
+    assert_eq!(
+        crate::OllamaFamilyStrategy::parse("FEW_SHOT_EXAMPLES").unwrap(),
+        crate::OllamaFamilyStrategy::FewShotExamples
+    );
+}
+
+#[test]
+fn phase_124_parse_error_message_lists_few_shot_examples() {
+    let err = crate::OllamaFamilyStrategy::parse("aggressive").unwrap_err();
+    assert!(
+        err.contains("few_shot_examples"),
+        "error message should list few_shot_examples as a valid option; got: {err}"
     );
 }
 

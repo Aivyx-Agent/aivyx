@@ -444,6 +444,114 @@ pub fn append_tool_catalog(
     out.trim_end().to_string()
 }
 
+/// Phase 124 Task 2 — Append a `## Example tool use` block
+/// after [`append_tool_catalog`].
+///
+/// **Why a separate helper than the catalog.** Phase 122
+/// shipped catalog enumeration; gemma4:31b still refused
+/// `fs.write` with the tool literally listed five lines
+/// above. The Phase 122 exit doc framed this as the
+/// model-layer ceiling. Phase 124 attempts one more
+/// substrate move — few-shot examples are a different
+/// mechanism than assertion-of-availability. The model sees
+/// concrete worked patterns of "operator asks → assistant
+/// invokes → result reported," with explicit WRONG/RIGHT
+/// framing against the observed refusal pattern.
+///
+/// **Behavior:**
+/// - If `tools` is empty, return `base_prompt.to_string()`
+///   unchanged. No catalog → no examples.
+/// - If NONE of the example-targeted tools (`fs.read`,
+///   `fs.write`, `memory.write`) are in the registered set,
+///   the helper still appends the block but only with
+///   examples for tools that ARE registered. If zero are
+///   registered (operator's role narrowly allow-listed),
+///   the block is omitted entirely — anchoring on a tool
+///   the model can't actually call would undermine the
+///   point.
+/// - Otherwise, trim trailing whitespace from `base_prompt`,
+///   append a blank line, then a `## Example tool use`
+///   section.
+///
+/// The function takes the SAME tool slice the catalog
+/// helper does so caller-side filtering for role allowlists
+/// flows through identically. Intended to be called
+/// directly after `append_tool_catalog`:
+///
+/// ```text
+/// let with_catalog = append_tool_catalog(&base, &tools);
+/// let with_examples = append_few_shot_examples(&with_catalog, &tools);
+/// ```
+///
+/// Allocates a fresh `String`.
+pub fn append_few_shot_examples(
+    base_prompt: &str,
+    tools: &[LlmToolDescriptor],
+) -> String {
+    if tools.is_empty() {
+        return base_prompt.to_string();
+    }
+    let has_fs_read = tools.iter().any(|t| t.name == "fs.read");
+    let has_fs_write = tools.iter().any(|t| t.name == "fs.write");
+    let has_memory_write = tools.iter().any(|t| t.name == "memory.write");
+    if !has_fs_read && !has_fs_write && !has_memory_write {
+        // None of the example-targeted tools are available;
+        // skip the block rather than anchor on tools the
+        // model can't actually call.
+        return base_prompt.to_string();
+    }
+    let mut out = String::with_capacity(base_prompt.len() + 768);
+    out.push_str(base_prompt.trim_end());
+    out.push_str("\n\n## Example tool use\n\n");
+    out.push_str(
+        "The tools listed above are real and you have them. \
+         When the operator asks you to use one, INVOKE it — \
+         do not respond with prose claiming you don't have \
+         it. Examples:\n\n",
+    );
+
+    if has_fs_write {
+        out.push_str(
+            "Operator: \"Please save 'hello' to test.txt.\"\n\
+             - You should: invoke `fs.write` with \
+             `{\"path\": \"test.txt\", \"content\": \"hello\"}` \
+             and report the result.\n\
+             - You should NOT: respond \"I don't have a tool \
+             called fs.write\" — you DO have fs.write; it is \
+             in your tool list above.\n\n",
+        );
+    }
+    if has_memory_write {
+        out.push_str(
+            "Operator: \"Remember that I'm working on the \
+             Aivyx project.\"\n\
+             - You should: invoke `memory.write` with \
+             `{\"topic\": \"current-projects\", \"content\": \
+             \"Working on Aivyx project\"}` and confirm \
+             succinctly.\n\
+             - You should NOT: enumerate your memory tools in \
+             prose; the operator knows your tools already.\n\n",
+        );
+    }
+    if has_fs_read {
+        out.push_str(
+            "Operator: \"What's in README.md?\"\n\
+             - You should: invoke `fs.read` with \
+             `{\"path\": \"README.md\"}` and summarize what \
+             you find.\n\
+             - You should NOT: ask the operator to paste the \
+             file contents; you can read it yourself with \
+             `fs.read`.\n\n",
+        );
+    }
+    out.push_str(
+        "When asked what tools you have, name them concisely \
+         from the list above — do not describe each at length \
+         and do not invent tools that are not in the list.\n",
+    );
+    out.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,5 +1115,129 @@ mod tests {
         let out = append_tool_catalog(base, &tools);
         assert!(out.contains("role\n\n## Tools available"));
         assert!(!out.contains("role\n\n\n## Tools available"));
+    }
+
+    // ----- Phase 124 Task 2 — append_few_shot_examples -----
+
+    #[test]
+    fn phase_124_few_shot_empty_tools_is_noop() {
+        let base = "role";
+        let out = append_few_shot_examples(base, &[]);
+        assert_eq!(out, base);
+    }
+
+    #[test]
+    fn phase_124_few_shot_with_no_example_targets_is_noop() {
+        // None of fs.read / fs.write / memory.write registered —
+        // skip the block rather than anchor on a tool the model
+        // can't actually call.
+        let base = "role";
+        let tools = vec![tool("net.dns", "Resolve a hostname")];
+        let out = append_few_shot_examples(base, &tools);
+        assert_eq!(out, base);
+    }
+
+    #[test]
+    fn phase_124_few_shot_includes_example_when_fs_write_registered() {
+        let base = "role";
+        let tools = vec![tool("fs.write", "Write a file")];
+        let out = append_few_shot_examples(base, &tools);
+        assert!(out.contains("## Example tool use"));
+        assert!(out.contains("`fs.write`"));
+        // The load-bearing WRONG/RIGHT framing — directly
+        // counters gemma4's observed refusal pattern.
+        assert!(out.contains("You should NOT"), "{out}");
+        assert!(
+            out.contains("I don't have"),
+            "the WRONG line must literally name the refusal phrase; got: {out}"
+        );
+    }
+
+    #[test]
+    fn phase_124_few_shot_includes_only_examples_for_registered_tools() {
+        // Only fs.read registered; the fs.write + memory.write
+        // examples should NOT appear (they'd point at unregistered
+        // tools).
+        let base = "role";
+        let tools = vec![tool("fs.read", "Read a file")];
+        let out = append_few_shot_examples(base, &tools);
+        assert!(out.contains("`fs.read`"));
+        assert!(!out.contains("`fs.write`"));
+        assert!(!out.contains("`memory.write`"));
+    }
+
+    #[test]
+    fn phase_124_few_shot_includes_all_three_when_all_registered() {
+        let base = "role";
+        let tools = vec![
+            tool("fs.read", "Read a file"),
+            tool("fs.write", "Write a file"),
+            tool("memory.write", "Write a memory entry"),
+        ];
+        let out = append_few_shot_examples(base, &tools);
+        assert!(out.contains("`fs.read`"));
+        assert!(out.contains("`fs.write`"));
+        assert!(out.contains("`memory.write`"));
+    }
+
+    #[test]
+    fn phase_124_few_shot_preamble_asserts_tools_are_real() {
+        // The preamble is the load-bearing operator-facing
+        // assertion that the catalog is authoritative.
+        let base = "role";
+        let tools = vec![tool("fs.write", "Write a file")];
+        let out = append_few_shot_examples(base, &tools);
+        assert!(out.contains("are real"), "{out}");
+        assert!(out.contains("INVOKE"), "{out}");
+    }
+
+    #[test]
+    fn phase_124_few_shot_trims_base_prompt_trailing_whitespace() {
+        let base = "role\n\n\n\n";
+        let tools = vec![tool("fs.write", "Write a file")];
+        let out = append_few_shot_examples(base, &tools);
+        assert!(out.contains("role\n\n## Example tool use"));
+        assert!(!out.contains("role\n\n\n## Example tool use"));
+    }
+
+    #[test]
+    fn phase_124_few_shot_composes_after_catalog_block() {
+        // End-to-end shape: assemble_session_prompt →
+        // append_tool_catalog → append_few_shot_examples.
+        // The Example block must land AFTER the Tools-available
+        // block; tests pin the relative ordering.
+        let profile = operator_declared_profile();
+        let assembled = assemble_session_prompt(
+            &profile,
+            None,
+            "default",
+            "You are helpful.",
+        );
+        let tools = vec![tool("fs.write", "Write a file")];
+        let with_catalog = append_tool_catalog(&assembled, &tools);
+        let composed = append_few_shot_examples(&with_catalog, &tools);
+        let catalog_idx = composed.find("## Tools available").unwrap();
+        let example_idx = composed.find("## Example tool use").unwrap();
+        assert!(
+            example_idx > catalog_idx,
+            "examples must follow catalog so the model sees them \
+             in last-most-recent position; got catalog_idx={catalog_idx}, \
+             example_idx={example_idx}"
+        );
+        // Profile + role sections still present.
+        assert!(composed.contains("## About this assistant"));
+        assert!(composed.contains("## Active role: default"));
+    }
+
+    #[test]
+    fn phase_124_few_shot_when_catalog_was_noop_still_noop() {
+        // If `append_tool_catalog` was called with no tools and
+        // returned the base unchanged, calling
+        // `append_few_shot_examples` with the same (empty) slice
+        // is also a no-op — chained no-ops compose to no-op.
+        let base = "role";
+        let after_catalog = append_tool_catalog(base, &[]);
+        let after_examples = append_few_shot_examples(&after_catalog, &[]);
+        assert_eq!(after_examples, base);
     }
 }
