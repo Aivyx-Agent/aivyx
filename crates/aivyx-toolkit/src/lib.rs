@@ -38,10 +38,16 @@
 
 pub mod config;
 pub mod harness;
+pub mod health_polling;
+pub mod health_store;
 pub mod task_store;
 pub mod tools;
 
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
+pub use health_polling::{probe, run_polling_loop, run_polling_tick};
+pub use health_store::{
+    HealthStore, HealthStoreError, ProbeOutcome, Transition, Watcher, WatcherState,
+};
 pub use task_store::{Task, TaskStatus, TaskStore, TaskStoreError};
 pub use tools::{TaskComplete, TaskCreate, TaskDelete, TaskList, WebSearch};
