@@ -342,3 +342,93 @@ variants). Phase 123 candidates:
 4. **Operator-pressure-driven new direction**.
 
 Phase-by-phase decision at Phase 122 exit.
+
+## Prediction vs reality
+
+**Three of three streak predictions correct.** All
+three byte-identity streaks held through Tasks 2-6;
+the substrate stayed entirely within
+`aivyx-config` + `aivyx-channel` as Q2a / Q3a
+deliberately placed it.
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; Phase 122 ships
+  inside the existing turn-loop + prompt-assembly
+  envelope. Streak: 12 → 13.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 (Local execution, privacy non-
+  negotiable) covers Ollama first-class support;
+  Phase 122 strengthens that commitment without
+  contract change. Streak: 12 → 13.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (85/15 hold case held). `b420405b…` unchanged.
+  The substrate landed in `aivyx-channel/src/
+  profile_prompt.rs` (`append_tool_catalog`) +
+  `aivyx-channel/src/bin/aivyx.rs` (wiring) +
+  `aivyx-config/src/lib.rs` (`OllamaFamilyStrategy`,
+  `detect_model_family`, `resolve_ollama_prompt_strategy`).
+  Streak re-establishes 2 → 3.
+
+**Test count `+38` is within the predicted `+35 to
++60` range.** Per-task breakdown:
+- Task 2: 9 tests for `OllamaFamilyStrategy` +
+  `detect_model_family` (qwen / gemma / llama major-
+  version detection, none-on-cloud-names, none-on-
+  empty, defaults, label round-trip).
+- Task 3: 7 tests for `append_tool_catalog` (empty-
+  tools no-op, header, exact-name listing, anti-
+  invention preamble, empty-description handling,
+  base-prompt preservation, whitespace trim) + 1
+  composition test pinning the layered shape against
+  `assemble_session_prompt`.
+- Task 5: 9 tests for the operator override surface
+  (parse wire labels + case + trim + reject, resolve
+  default + override + undetected, loader happy /
+  unknown-string / absent-section).
+- Task 6: 6 banner-line tests (anthropic absent,
+  qwen3 default, qwen3 override, undetected
+  fallback, gemma4 default, llama3 default).
+
+**Q-block went through as operator-picked.** Q1c
+non-Recommended + Q2a + Q3b non-Recommended all
+shipped. The Phase 6 Q5 honest framing correction
+documented in the open doc held through exit: Q1c's
+"suppress in-prompt catalog" half was a no-op (the
+system prompt has no catalog to suppress); the pick
+reduced cleanly to per-turn injection.
+
+**Phase 122 honest-scope adjustment landed mid-Task 2.**
+The `detect_model_family` helper's original draft
+mapped qwen3.6 → `qwen35` via a `take(2)`-on-digits
+collapse the docstring asserted but the code
+contradicted (it actually produced `qwen36`). On re-
+reading post-test-failure, the simpler "major-
+version-only" pattern matching gemma and llama was
+both correct and operator-mental-model-aligned;
+helper, defaults, and tests updated in the same
+task. Recorded honestly in the Task 2 commit
+(`0feac55`).
+
+### Live verification (Task 7)
+
+> **PLACEHOLDER — populated post-live-test.**
+>
+> Verification against qwen3.6:27b and gemma4:31b
+> through `./scripts/dev-run.sh` with `[ollama.prompt_strategies]`
+> defaulted to `structured_injection` for both. The
+> exit-doc backfill commit will replace this block
+> with the empirical table:
+>
+> | Model       | Strategy on            | Tool catalog confabulation? | Tool invocation on command? |
+> |-------------|------------------------|------------------------------|------------------------------|
+> | qwen3.6:27b | `structured_injection` | _to be observed_             | _to be observed_             |
+> | gemma4:31b  | `structured_injection` | _to be observed_             | _to be observed_             |
+>
+> Q3b sign-off lock: exit reports whatever the test
+> shows. If neither model improves, the exit doc
+> names the substrate ceiling and documents what
+> per-family `prompt_strategy = "none"` opt-out
+> means for that operator. If one improves and one
+> doesn't, the exit doc reports asymmetric outcomes
+> honestly. If both improve, the exit doc validates
+> the structured-injection bet.

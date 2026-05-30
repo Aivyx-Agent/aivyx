@@ -1099,6 +1099,146 @@ translation layer to debug. The hallucination recovery
 itself is Phase 120's substrate, running uniformly
 through both adapter paths.
 
+## Per-model prompt variants (Phase 122)
+
+After Phase 121 shipped, real-use signal across 13
+interactive turns produced **zero tool calls** between
+qwen3.6:27b and gemma4:31b. Both models confabulate
+their tool catalogs at the prose level (qwen3.6
+invented "Good Morning" as a tool; gemma4 invented
+60+ entirely-fictional tools) and refuse or return
+empty when commanded to invoke a tool by exact name.
+Phase 120's substrate is orthogonal to this failure
+mode — it catches hallucinated *invocations*; this is
+hallucinated *capability denial*.
+
+**Phase 122 ships structured per-turn tool-catalog
+injection** with operator-tunable per-family
+selection. The fix is prompt-side: tools flow through
+Ollama's protocol `tools: [...]` array *and* land in
+the assembled system prompt under a `## Tools
+available` block. The catalog block forces the
+protocol-array catalog into the model's visible prose
+context where its prose-level reasoning cannot ignore
+it.
+
+### Per-family TOML override
+
+The operator-overridable surface is a new sub-table
+under `[ollama]`:
+
+```toml
+provider = "ollama"
+model = "qwen3.6:27b"
+
+[ollama.prompt_strategies]
+qwen3 = "structured_injection"       # default for qwen3.x
+gemma4 = "structured_injection"      # default for gemma4
+llama3 = "none"                      # default for llama3.x
+```
+
+Each value is one of:
+- `"none"` — pre-Phase-122 behavior. Tools flow only
+  via the Ollama protocol `tools: [...]` array. The
+  assembled system prompt is unchanged.
+- `"structured_injection"` — append a `## Tools
+  available` block listing every tool the active role
+  can invoke by exact name (filtered by the role's
+  `tool_allowlist`), with a one-line preamble
+  discouraging invention.
+
+Keys are family strings, not full model names. The
+binary maps a model name to its family at startup:
+
+| Model name           | Family   |
+|----------------------|----------|
+| `qwen3.6:27b`        | `qwen3`  |
+| `qwen3.5:7b`         | `qwen3`  |
+| `qwen2.5:7b`         | `qwen2`  |
+| `gemma4:31b`         | `gemma4` |
+| `gemma3:9b`          | `gemma3` |
+| `llama3.1:latest`    | `llama3` |
+| `llama2:13b`         | `llama2` |
+| `claude-haiku-4-5`   | (none)   |
+
+Anything that doesn't parse to a known Ollama family
+prefix (cloud model names, future families this build
+doesn't recognize) gets `OllamaFamilyStrategy::None`
+unconditionally — operator-conservative: a new model
+release doesn't silently get substrate it wasn't
+tested against.
+
+### Per-family defaults
+
+Operators who don't set `[ollama.prompt_strategies]`
+get pre-baked defaults from the Phase 122 sign-off
+diagnostic data:
+
+| Family   | Default                  | Why                                               |
+|----------|--------------------------|---------------------------------------------------|
+| `qwen3`  | `structured_injection`   | qwen3.6:27b confabulated tools, refused fs.write  |
+| `gemma4` | `structured_injection`   | gemma4:31b confabulated 60+, returned empty       |
+| `llama3` | `none`                   | tool-use protocol presumed reliable               |
+| _other_  | `none`                   | conservative default for untested families        |
+
+An explicit `[ollama.prompt_strategies] <family> =
+"..."` always wins over the default.
+
+### Startup banner provenance
+
+The config banner shows which strategy resolved for
+your model and where it came from:
+
+```
+aivyx config sources:
+  provider          = ollama (toml)
+  model             = "qwen3.6:27b" (toml)
+  ollama_prompt_strategy = "structured_injection" (family: qwen3, default)
+```
+
+Provenance suffixes:
+- `family: <name>, default` — model detected; no
+  override in your TOML; per-family default applied.
+- `family: <name>, override` — model detected; your
+  `[ollama.prompt_strategies] <name>` override is
+  being honored.
+- `family: undetected` — model name didn't parse to
+  any known family. Strategy always shows `"none"`.
+
+### Cost: per-turn input-token overhead
+
+The structured-injection block lists every tool the
+active role can invoke. For the default role on a
+typical install, that's ~12-20 tools at ~30-50
+tokens each — roughly **400-700 input tokens per
+turn** on top of the existing prompt. For small-
+context models or cost-sensitive cloud deployments,
+this trade may be unfavorable; the per-family
+`none` override is the operator's escape hatch.
+
+The block scales with the active role's
+`tool_allowlist`: a role with a restricted allowlist
+sees only the tools that survived the filter, not
+the full registered tool set.
+
+### Honest scope caveat carried from open doc
+
+The Phase 122 open doc flagged two failure modes the
+substrate might not fix:
+- **gemma4's capability-denial prior may be
+  prompt-unreachable.** If the model's training prior
+  on "what AI assistants can do" dominates any in-
+  prompt reinforcement, structured injection won't
+  rescue it. Exit-doc will document the observed
+  outcome regardless.
+- **qwen3.6's verbal refusal may persist** even with
+  the catalog block visible. Same reasoning: model
+  prior may dominate.
+
+Phase 6 Q5 honesty applies to RESULTS, not to
+ANTICIPATION. Whatever the live verification at exit
+shows, the exit doc reports it.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

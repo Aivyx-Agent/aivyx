@@ -3446,7 +3446,7 @@ operator pressure and observed value from Phase 114.
 
 ## Phase 122 — Per-Model Prompt Variants (Local-LLM Rehab #2)
 
-**Active — see [PHASE_122.md](PHASE_122.md).** Third-named
+**Frozen — see [PHASE_122.md](PHASE_122.md).** Third-named
 phase against the audit's local-LLM rehabilitation axis,
 opened against signal from real interactive use after
 Phase 121 shipped: 13 turns × 0 tool calls between
@@ -3458,37 +3458,48 @@ catches hallucinated invocations; this is hallucinated
 capability denial).
 
 Phase 122 ships per-family TOML config + structured
-per-turn tool catalog injection. Per-family detection
-from model name prefix; per-family defaults supplied
-for qwen35 and gemma4 (both `structured_injection`);
-operator-tunable via `[ollama.<family>] prompt_strategy`.
+per-turn tool catalog injection (the new
+`aivyx_channel::profile_prompt::append_tool_catalog`
+helper). Per-family detection from model name prefix
+(qwen3.6 → `qwen3`, gemma4 → `gemma4`, llama3.1 →
+`llama3`); per-family defaults supplied for `qwen3`
+and `gemma4` (both `structured_injection`); operator-
+tunable via `[ollama.prompt_strategies] <family> =
+"..."`. Startup config banner surfaces resolved
+strategy + provenance (`family: qwen3, default` /
+`family: qwen3, override` / `family: undetected`).
 
-**Q-block (two non-Recommended):**
+**Q-block (two non-Recommended) — all three through as picked:**
 - Q1c — Both substrate moves (non-Recommended). Per
   Phase 6 Q5 honest framing correction documented in
   open doc: "suppress in-prompt catalog" is a no-op
   (Aivyx's system prompt has no tool catalog; tools
   flow via Ollama's protocol tools array only). The
-  pick reduces to "ship per-turn injection."
+  pick reduced to "ship per-turn injection."
 - Q2a — Per-model-family TOML config (Recommended).
 - Q3b — Try everything; declare reality at exit (non-
   Recommended; refused pre-emptive scope reduction).
-  Task 7 locked into verification against qwen3.6:27b
-  AND gemma4:31b regardless of outcome.
 
-**Streak predictions:** DESIGN.md HOLD → 13; PRODUCT.md
-HOLD → 13; `aivyx-core/src/lib.rs` predicted HOLD → 3
-(honest 85/15; substrate lives in aivyx-channel +
-aivyx-config; aivyx-core boundary preserved).
+**Streak predictions — three of three correct:**
+DESIGN.md HELD → 13; PRODUCT.md HELD → 13;
+`aivyx-core/src/lib.rs` HELD → 3 (85/15 hold case
+held; substrate placed entirely in aivyx-channel +
+aivyx-config). Test count `+38` within `+35 to +60`.
+Zero new workspace deps.
 
-Test count: predicted `+35 to +60`. Zero new workspace
-deps anticipated.
+**Mid-Task-2 honest-scope correction:** the
+`detect_model_family` helper's original draft mapped
+qwen3.6 → `qwen35` via a `take(2)`-on-digits collapse
+the docstring asserted but the code contradicted
+(actually produced `qwen36`). Switched to major-
+version-only (matching gemma + llama) in the same
+task; tests and defaults updated. Phase 6 Q5 honesty
+applied at the task level.
 
-**Honest scope risks named at sign-off:** the data we
-collected suggests gemma4's prior may be unfixable from
-the prompt side. Q3b's "declare reality at exit"
-posture means the exit doc will honestly document
-whichever models improve and which don't.
+**Live verification outcome:** _backfilled at exit-
+hash backfill commit; see PHASE_122.md "Live
+verification (Task 7)" placeholder. Q3b posture: exit
+reports whatever the test shows._
 
 **Eleventh consecutive substrate/polish phase picked
 over the Channel Activation Milestone.** Honest
