@@ -425,10 +425,183 @@ for Phase 124:
    core substrate (KeyDomain expansion, IPC credential
    API). Only worth doing if Phase 123 + the next
    integration surface enough pressure.
-5. **Channel Activation Milestone** — twelfth-in-a-row
+5. **Multi-tool SDK harness substrate** — lift Phase 123's
+   inline `run_multi_tool_subprocess` into `aivyx-tool`
+   as `run_tools_as_subprocess(Vec<Arc<dyn Tool>>, …)`.
+   Phase 123's load-bearing SDK-validation finding (see
+   below); cheap follow-on. Likely combined with the
+   first Chapter F #2 phase, not standalone.
+6. **Channel Activation Milestone** — twelfth-in-a-row
    deferral as of Phase 123 open; thirteenth if
    skipped at Phase 124 too. Audit's #1 unchanged.
-6. **Operator-pressure-driven new direction**.
+7. **Operator-pressure-driven new direction**.
 
 Phase-by-phase decision at Phase 123 exit, sharpened by
-the SDK-contract validation finding from Task 8.
+the SDK-contract validation finding documented below.
+
+## Prediction vs reality
+
+**Three of three streak predictions correct.** All three
+byte-identity streaks held end-to-end; the substrate stayed
+entirely within `aivyx-gmail` + `aivyx-capability` (no
+`aivyx-core/src/lib.rs` change, no contract amendment).
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…` unchanged).
+  No contract amendment; Phase 123 consumes the existing
+  Tool trait + Scope machinery unchanged. Streak: 13 → 14.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…` unchanged).
+  P10 + P11 + P12 + G6 covered this case exactly as the
+  open doc anticipated; the third-party tool process
+  architecture is the contract's intended shape for
+  email/calendar/etc. Streak: 13 → 14.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted (90/10
+  hold case held). `b420405b…` unchanged. New crate; no
+  trait extension; no new core type. Streak re-establishes
+  3 → 4.
+
+**Test count `+151` substantially overshot the predicted
+`+30 to +55` range.** Honest report at exit per the Phase 6
+Q5 convention. Per-task breakdown:
+
+- Task 2 (OAuth substrate): **+31** — OAuthConfig serde
+  round-trip, TokenSet refresh-merge semantics, file
+  storage with 0600 + atomic-write + parent-dir 0700,
+  exchange_code + refresh against an in-process mock
+  server (no `wiremock`/`httpmock` dev-dep — hand-rolled
+  TcpListener). Higher than anticipated because every
+  failure-mode of the auth flow (network failures, missing
+  fields, schema-version-too-new, etc) got its own pin.
+- Task 3 (CLI subcommands): **+46** — CLI parser dispatch,
+  config-file load + Parse + NotFound + missing-required-
+  field, init flow's `build_consent_url` + `parse_loopback_port`
+  + `await_callback` + Google-error-callback + timeout +
+  missing-code paths, status-report formatting + token
+  redaction + missing-refresh guidance, revoke prefers-
+  refresh + falls-back-to-access + remote-failure-still-
+  deletes-local + network-failure-still-deletes + no-tokens-
+  noop. Higher than anticipated because the loopback HTTP
+  listener's defensive parsing paths each got their own
+  pin.
+- Task 4 (gmail.search + multi-tool harness): **+19** —
+  GmailClient HTTP + bearer + refresh + decode_json's non-
+  success-status surfacing, gmail.search input parse +
+  schema bounds + scope identity, harness's outcome→wire
+  conversion + empty-list rejection + duplicate-name
+  rejection.
+- Task 5 (gmail.read): **+19** — input parse + URL-meta
+  rejection, header flatten + lowercase + hyphen translation
+  + repeated-header first-wins, payload walk
+  (text/multipart-alternative/mixed-with-attachment/nested/
+  repeated/empty), base64url decode (padded/unpadded/
+  garbage), full `shape_message` round-trips.
+- Task 6 (mime substrate + gmail.draft): **+26** — mime
+  module (18: minimal + from-on/off + ASCII-vs-RFC2047
+  Subject + threading headers + bare-id wrapping + every
+  header-injection field + missing-@-in-to + malformed-
+  message-id + body line-wrapping + base64url round-trip +
+  normalize_message_id idempotence) + tools::draft (8).
+- Task 7 (gmail.send): **+10** — parse minimal + from-
+  honored + threading-fields + missing-to + missing-body +
+  empty-from-as-absent + non-string-optional rejection,
+  schema (from-present + from-optional + required-set +
+  additionalProperties-false), required_scope + no-undo-
+  warning pinning.
+
+**Why the overshoot is justified rather than retconned.**
+Phase 123 is the first real third-party tool process; the
+SDK contract's "policy integration is automatic" promise
+only holds if every error-path-and-failure-mode is exercised
+on the consumer side. Under-testing this phase would mean
+operator-facing failures landing in production rather than
+in the test suite. The honest read: predictions
+under-estimated the surface of `OAuth + 4 tools + multi-tool
+harness + MIME + header-injection defense`; Phase 124+
+predictions for Chapter F integrations should anchor closer
+to `+100` per integration than `+30-55`.
+
+**Q-block went through as operator-picked.** Q1a (Recommended
+operator-provided OAuth), Q2c (non-Recommended full read +
+draft + send surface), Q3a-re-asked (Recommended per-tool-
+process file under the P10 constraint that surfaced
+post-Q-block sign-off). The Q3 re-ask is the only honest
+deviation from the original open doc; documented above.
+
+**Zero new workspace dependencies.** Predicted "at most 1"
+(likely `base64`). Reality: `base64` was already workspace-
+wide via `aivyx-channel`/`aivyx-core`; `toml` mirrored
+`aivyx-config`'s per-crate pin without touching workspace
+deps; `uuid` was already workspace-wide. No new dep crates
+added.
+
+## SDK-validation finding (load-bearing for follow-on phases)
+
+Phase 123 was the first real third-party tool process
+consumer of `aivyx-tool` / `docs/TOOL_SDK.md`. The
+contract held — every operator-facing capability the SDK
+promised (scope checking at handshake, automatic audit,
+cooperative cancellation, schema validation at the planner
+gate) worked unchanged. **One gap surfaced:**
+
+**Gap — single-tool harness assumption.**
+[`aivyx_tool::run_tool_as_subprocess`] wraps exactly ONE
+[`aivyx_core::Tool`] implementation. The natural shape for
+third-party integrations is multiple tools per process —
+Gmail has four; Calendar will have several; Drive will have
+many. Phase 123 wrote a multi-tool harness inline in
+`crates/aivyx-gmail/src/harness.rs` (130 lines including
+the duplicated `outcome_to_wire` + `verification_to_wire`
+helpers that are `fn`-private in `aivyx-tool`). Every
+future Chapter F integration would otherwise re-implement
+the same dispatch.
+
+**Lift recommendation for a follow-on phase:**
+
+1. Add `aivyx_tool::run_tools_as_subprocess(tools:
+   Vec<Arc<dyn Tool>>, tool_process_name: impl Into<String>)`
+   — same handshake + Vec\<ToolDescriptor\> registration +
+   per-call dispatch by name as Phase 123's inline
+   implementation.
+2. Make `outcome_to_wire` and `verification_to_wire` `pub`
+   in `aivyx-tool::harness` so the multi-tool variant can
+   share them (no further duplication).
+3. Have `crates/aivyx-gmail/src/harness.rs` collapse to a
+   one-line re-export of the lifted helper.
+
+**Estimated cost:** ~40 LoC code change + ~15 LoC tests in
+`aivyx-tool`. Most cheaply landed in the first Chapter F
+#2 phase that needs it (so the substrate motion is paid
+for by the second tool process consumer, not pre-paid
+speculatively). A standalone "Phase 124 — Multi-Tool SDK
+Harness" is technically valid but probably overkill — the
+SDK lift is small enough to ride alongside Calendar or
+Drive.
+
+**Beyond the harness gap, the SDK held perfectly.** No
+trait extension needed; no contract amendment surfaced; no
+audit / capability / cancellation / schema-validation
+gap. The substrate Phase 49 (P12 foundation) + Phase 50
+(in-process unification proof) + Phase 103 (scaffolder)
+established was mature enough to onboard a non-trivial
+third-party integration cleanly. The single harness-shape
+gap is exactly the kind of finding the chapter opener is
+supposed to produce.
+
+## Live verification deferred to operator setup
+
+Phase 122's exit doc carried a load-bearing live-
+verification block (Q3b sign-off lock; the substrate's
+effectiveness was unknown until tested against real
+models). **Phase 123 doesn't have that posture:** the
+substrate's correctness is testable in isolation
+(151 tests covering OAuth, HTTP, MIME, header-injection
+defense, response shaping, scope identity, etc); the
+end-to-end test requires an operator to register a real
+Google Cloud OAuth app, run `aivyx-gmail auth init`, and
+send a real email — which is operator onboarding work,
+not phase verification.
+
+Whenever the operator does set Gmail up in their own
+deployment, empirical findings (browser callback edge
+cases, Gmail's quirks, real OAuth verification quirks,
+etc) should land in a memory file or an INSTALL.md
+addendum, not a retcon of this exit doc.

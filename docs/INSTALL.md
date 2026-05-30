@@ -1239,6 +1239,225 @@ Phase 6 Q5 honesty applies to RESULTS, not to
 ANTICIPATION. Whatever the live verification at exit
 shows, the exit doc reports it.
 
+## External productivity integrations (Chapter F)
+
+After three named local-LLM rehab phases (120-122), the
+operator pressure redirected toward **Aivyx as productivity
+assistant, not just chat surface**. Chapter F opens that
+axis: external services (Gmail, Calendar, Drive, GitHub, …)
+as first-class operator-facing capabilities, each shipped as
+a separate third-party tool process per the P10 substrate
+contract.
+
+Aivyx core stays at the **thirteen substrate tools forever**
+cap (`fs.*`, `memory.*`, `shell.exec`, `web.fetch`,
+`web.post`, `git.read`, `net.dns`). P10 explicitly names
+email and calendar as third-party territory; Chapter F is
+the chapter that validates the third-party SDK on real
+external integrations.
+
+Each Chapter F phase ships one integration as a separate
+binary the operator installs and wires via
+`[[tool_process]]`. The auth substrate appropriate to that
+service (OAuth for Google, PAT for GitHub, etc) is per-
+integration. Per-tool capability scopes registered into the
+existing capability machinery — no new core types.
+
+### Gmail (Phase 123)
+
+The first Chapter F integration. Ships four tools through a
+single `aivyx-gmail` binary:
+
+| Tool | Scope | What it does |
+|---|---|---|
+| `gmail.search` | `email.read` | Search messages via Gmail's query DSL (e.g. `from:alice is:unread`). Returns IDs + thread IDs. |
+| `gmail.read` | `email.read` | Read one full message by ID. Returns headers, body text + HTML, attachment metadata (no bytes). |
+| `gmail.draft` | `email.write` | Create a Gmail draft. **Safe write** — draft requires explicit Gmail-UI send by the operator. |
+| `gmail.send` | `email.send` | Send a message directly. **No undo from Aivyx.** Trusted-tier-only by default. |
+
+All four scopes ship in `aivyx-capability::CEILING_TRUSTED`
+ONLY — SemiTrusted and Untrusted roles get zero email
+scopes by default (mirrors `shell.exec` / `notify.send`
+gating per Phase 62 Q2(a)). Operators who want a remote-
+channel role to read mail can grant `email.read`
+explicitly in the role's `capability_scopes`; the gate
+makes it a conscious choice, not a default.
+
+#### One-time operator setup
+
+Gmail uses operator-provided OAuth (Q1a Recommended at
+Phase 123 sign-off): you create your own OAuth client in
+your own Google Cloud project. Aivyx ships no shared OAuth
+app — privacy posture stays under operator control.
+
+**1. Create a Google Cloud OAuth client:**
+
+- Visit <https://console.cloud.google.com/>; create a new
+  project (or reuse an existing one).
+- Enable the Gmail API: APIs & Services → Library → search
+  "Gmail API" → Enable.
+- Configure the OAuth consent screen: APIs & Services →
+  OAuth consent screen. Pick "External" (or "Internal" if
+  you have a Workspace org); add yourself as a test user.
+- Create credentials: APIs & Services → Credentials →
+  Create Credentials → OAuth client ID → Application type:
+  **Desktop app**. Note the `client_id` and
+  `client_secret` Google issues.
+
+**Heads-up — Google's "Sensitive scope" review.** The Gmail
+scopes (`gmail.readonly`, `gmail.compose`, `gmail.send`)
+are classified Sensitive by Google. In Testing mode your
+OAuth client works for up to 100 manually-added test users
+(your own account counts as one). To publish for general
+operator use, Google requires app verification — out of
+scope for self-hosted single-operator use; relevant only if
+you distribute Aivyx to others.
+
+**2. Write the tool-process config file:**
+
+Create `~/.aivyx/tool-processes/gmail/config.toml`:
+
+```toml
+client_id = "XXXXX.apps.googleusercontent.com"
+client_secret = "GOCSPX-..."
+redirect_uri = "http://127.0.0.1:8088/oauth/callback"
+
+# Optional: narrow the requested scopes.
+# Default includes gmail.readonly + gmail.compose + gmail.send.
+# scopes = [
+#   "https://www.googleapis.com/auth/gmail.readonly",
+# ]
+```
+
+The `redirect_uri` MUST be a loopback URI (Google requires
+`127.0.0.1` or `localhost` for "Desktop app" OAuth clients).
+The port is your choice; `aivyx-gmail auth init` binds a
+short-lived listener on that port to receive the callback.
+
+**3. Run the OAuth flow:**
+
+```sh
+aivyx-gmail auth init
+```
+
+The CLI prints a Google consent URL; paste it into your
+browser, click through the consent screen, and Google
+redirects back to the loopback URI. The CLI captures the
+auth code, exchanges it for tokens via Google's token
+endpoint, and saves the result to
+`~/.aivyx/tool-processes/gmail/tokens.json` (0600 perms).
+
+Subsequent runs of any Gmail tool will use these tokens.
+The access token auto-refreshes ~60 seconds before expiry;
+the refresh token persists across refreshes (Google's
+typical behavior — refresh responses don't include new
+refresh tokens; the on-disk one stays in place).
+
+**4. Confirm with `auth status`:**
+
+```sh
+aivyx-gmail auth status
+```
+
+Prints granted scope, access-token expiry, refresh-
+available flag. The access token is redacted to
+`<N chars, …tail4>` so terminal scrollback / screen-share
+can't leak it.
+
+**5. Register the tool process in `aivyx.toml`:**
+
+```toml
+[[tool_process]]
+name = "gmail"
+command = "aivyx-gmail"
+# Optional per-tool scope overrides — operator CAN narrow,
+# CANNOT widen. The daemon checks override-or-declared
+# against the active role's envelope.
+# [tool_process.scope_overrides]
+# "gmail.send" = "email.send"  # no-op narrowing here; example
+```
+
+The daemon spawns `aivyx-gmail` at startup, performs the
+handshake, and registers all four tools into the catalog.
+Operators who want only some of the tools can omit them
+from a role's `tool_allowlist`:
+
+```toml
+[[role]]
+name = "readonly_mail_triage"
+parent = "default"
+tool_allowlist = ["gmail.search", "gmail.read", "memory.read", "memory.write"]
+capability_scopes = ["email.read", "memory.read", "memory.write"]
+```
+
+(The above role can search + read email but not draft or
+send — `email.write` + `email.send` are absent from
+`capability_scopes`, so even if `gmail.draft` were on the
+allowlist the capability gate would still deny it.)
+
+**6. Revoke when finished:**
+
+```sh
+aivyx-gmail auth revoke
+```
+
+POSTs to Google's revoke endpoint and deletes the local
+token file. If the remote revoke fails (network down, etc),
+the local file is still removed — operators can manually
+revoke at <https://myaccount.google.com/permissions> as a
+fallback.
+
+#### Operator-side troubleshooting
+
+- **"Token refresh failed" at tool dispatch.** The refresh
+  token may have been invalidated by Google (60-day
+  inactivity, password change, scope change). Re-run
+  `aivyx-gmail auth init`.
+
+- **"Scope denied" returned by a tool.** The role's
+  `capability_scopes` doesn't grant the tool's required
+  scope, OR the role's TrustTier (e.g. SemiTrusted for a
+  Telegram operator) intersects the email scopes to empty.
+  Confirm the role config and tier — `email.*` lives only
+  in `CEILING_TRUSTED` by default.
+
+- **`aivyx-gmail` not found at daemon startup.** The
+  `command` field in `[[tool_process]]` must be on the
+  daemon's `$PATH` OR absolute. `cargo install --path
+  crates/aivyx-gmail` puts the binary in
+  `$CARGO_HOME/bin`; ensure that's on PATH.
+
+- **Gmail returns 401 on the first call after a long
+  pause.** Defensive — the in-memory token cache thought
+  the token was fresh but Google revoked it. Re-run `auth
+  init`; if recurring, check whether you changed your
+  Google account password or revoked the app from the
+  permissions page.
+
+- **Drafts not threading into the original conversation.**
+  Pass BOTH `in_reply_to_message_id` (RFC 5322 Message-ID
+  for the email headers) AND `thread_id` (Gmail's internal
+  thread placement) when calling `gmail.draft` or
+  `gmail.send`. Both come from `gmail.read` (the response
+  carries `thread_id` and `headers.message_id`).
+
+#### What Phase 123 deliberately leaves to follow-on phases
+
+- **No attachment-download tool.** `gmail.read` returns
+  attachment metadata + `attachment_id` but no bytes. A
+  future `gmail.attachment.read` could fetch them.
+- **No label management.** `gmail.labels.list`,
+  `gmail.labels.create`, `messages.modify` etc — out of
+  Phase 123 scope.
+- **No `gmail.delete`.** Adding a `messages.delete` tool
+  would need an `email.delete` scope; deferred until
+  operator pressure surfaces.
+- **No shared credential vault.** Each future Chapter F
+  integration (Calendar, Drive, etc) manages its own
+  tokens via the same per-tool-process file pattern. A
+  shared vault becomes worth doing once enough
+  integrations exist to feel the duplication.
+
 ## Moving Aivyx to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your

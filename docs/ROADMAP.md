@@ -3478,14 +3478,15 @@ each phase exit.
 
 **Expected phases (subject to revision at each exit):**
 
-- **Phase 123 — Gmail Integration.** Active — see below
+- **Phase 123 — Gmail Integration.** Frozen — see below
   and [PHASE_123.md](PHASE_123.md). Operator-provided
   Google OAuth (Q1a Recommended); full read + draft +
   send tool surface (Q2c non-Recommended; honest scope
   acceptance); per-tool-process token file storage
   (Q3a re-asked under P10 third-party constraint).
-  Validates the third-party SDK contract on the first
-  real consumer.
+  Validated the third-party SDK contract on the first
+  real consumer; surfaced one substrate gap (single-tool
+  harness assumption); recommended for follow-on lift.
 
 Subsequent Chapter F phases (Calendar, Drive, GitHub,
 shared credential vault) picked at each phase exit based
@@ -3493,7 +3494,7 @@ on operator pressure and SDK validation findings.
 
 ## Phase 123 — Gmail Integration (Chapter F #1)
 
-**Active — see [PHASE_123.md](PHASE_123.md).** Chapter F
+**Frozen — see [PHASE_123.md](PHASE_123.md).** Chapter F
 opener. Operator-pressure pick after the audit's #1
 (Channel Activation Milestone) was deferred for the
 twelfth time. Targets the external-productivity-
@@ -3502,49 +3503,72 @@ just chat surface.
 
 Phase 123 ships Gmail as a separate `aivyx-gmail` binary
 wired via the existing `[[tool_process]]` substrate (P12,
-Phase 49). Architectural constraint surfaced at sign-off:
-P10 caps substrate at thirteen tools forever and
+Phase 49). Architectural constraint surfaced post-Q-block
+sign-off: P10 caps substrate at thirteen tools forever and
 explicitly names email as third-party territory; Phase
 123 is the first real consumer of the third-party SDK
-contract (P11 + P12).
+contract (P11 + P12). Q3 (token storage) was re-asked
+under the corrected constraint and resolved cleanly to
+per-tool-process file storage.
 
-**Tool surface (Q2c non-Recommended):**
+**Tool surface (Q2c non-Recommended — all four shipped):**
 - `gmail.search` — Gmail query DSL (capability scope
   `email.read`).
-- `gmail.read` — one full message by ID (`email.read`).
-- `gmail.draft` — RFC 5322 draft creation (`email.write`).
-- `gmail.send` — direct send (`email.send`); Trusted/Local
-  only by default (mirrors `shell.exec` gating).
+- `gmail.read` — one full message by ID (`email.read`);
+  flattens recursive MIME payload + decodes body parts +
+  enumerates attachment metadata.
+- `gmail.draft` — RFC 5322 draft creation (`email.write`);
+  drafts require explicit Gmail-UI send by the operator.
+- `gmail.send` — direct send (`email.send`); Trusted-tier
+  only by default (mirrors `shell.exec` / `notify.send`
+  gating per Phase 62 Q2(a)). No undo from Aivyx.
 
-**Auth substrate:**
-- Operator-provided Google OAuth app (Q1a Recommended):
-  operator creates own GCP project, pastes `client_id` +
-  `client_secret`. Aligns with G6 + Phase 99 local-builds
-  posture.
+**Auth substrate (Q1a Recommended):**
+- Operator-provided Google OAuth app — operator creates
+  own GCP project, pastes `client_id` + `client_secret`
+  into `~/.aivyx/tool-processes/gmail/config.toml`. Aivyx
+  ships no shared OAuth app.
 - `aivyx-gmail auth init` CLI handles auth-code exchange
-  via local-loopback HTTP server.
-- Per-tool-process token file at `~/.aivyx/tool-processes/gmail/tokens.json`
-  (0600). Auto-refresh near token expiry.
+  via a local-loopback HTTP listener; CSRF state binding
+  via UUID v4.
+- Per-tool-process token file at
+  `~/.aivyx/tool-processes/gmail/tokens.json` (0600 perms,
+  atomic write-then-rename). Auto-refresh ~60s before
+  token expiry; refresh-token preserved across refreshes
+  (Google's typical behavior).
 
-**Streak predictions:** DESIGN.md HOLD → 14; PRODUCT.md
-HOLD → 14 (P10 + P11 + P12 already cover this exact
-case); `aivyx-core/src/lib.rs` HOLD → 4 (90/10 hold; new
-crate, no core changes). Test count `+30 to +55`. At
-most 1 new workspace dep (likely `base64` for MIME
-encoding).
+**Streak predictions (3-of-3 held):** DESIGN.md HELD → 14;
+PRODUCT.md HELD → 14 (P10/P11/P12/G6 already covered the
+case); `aivyx-core/src/lib.rs` HELD → 4 (90/10 hold case
+held; new crate, no core change). Test count `+151`
+substantially overshot the predicted `+30 to +55` —
+honest report per Phase 6 Q5; per-task breakdown in the
+exit doc. Zero new workspace dependencies (predicted "at
+most 1"; reality: 0).
 
-**Honest scope risks named at sign-off:**
-- Q2c full-surface risk — read + draft + send in one
-  phase is more review surface than read-only would be.
-- OAuth complexity — operator-onboarding walkthrough is
-  load-bearing; bad docs mean phase failure on the
-  operator surface regardless of substrate quality.
-- SDK contract may have gaps — first real third-party
-  consumer; gaps surface in this phase. Exit doc
-  includes a load-bearing SDK-validation finding.
-- Google's OAuth verification — Gmail scopes are
-  sensitive; operators may hit verification limits for
-  production-mode publishing. INSTALL.md surfaces this.
+**Load-bearing SDK-validation finding from exit:**
+[`aivyx_tool::run_tool_as_subprocess`] wraps exactly ONE
+tool; Chapter F integrations naturally have multiple
+tools per process. Phase 123 wrote a multi-tool harness
+inline in `aivyx-gmail`; recommendation for a follow-on
+phase is to lift it back into `aivyx-tool` as
+`run_tools_as_subprocess`. Cheap (~40 LoC + 15 LoC tests);
+best landed alongside the first Chapter F #2 integration.
+
+**Honest scope risks named at sign-off, materialized at exit:**
+- **Q2c full-surface risk:** shipped clean; the four
+  tools share substrate (GmailClient + mime module) so
+  the per-tool marginal cost was small. Q2c was the
+  right pick.
+- **OAuth complexity:** INSTALL.md walkthrough landed
+  with 6 numbered setup steps + 5 troubleshooting items.
+  Operator onboarding is testable only by operators
+  actually onboarding; left to operator setup.
+- **SDK contract gap:** ONE gap surfaced as documented
+  above; rest of the SDK held perfectly.
+- **Google's sensitive-scope verification:** documented
+  in INSTALL.md as a heads-up; out of scope for self-
+  hosted single-operator use.
 
 **Twelfth consecutive deferral of the Channel Activation
 Milestone.** Honest tracking. The audit's #1 has now been
