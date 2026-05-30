@@ -20,7 +20,7 @@ use aivyx_gmail::auth_cli::{
 use aivyx_gmail::gmail_client::GmailClient;
 use aivyx_gmail::harness::run_multi_tool_subprocess;
 use aivyx_gmail::oauth::{load_tokens, storage::default_token_path};
-use aivyx_gmail::tools::{GmailDraft, GmailRead, GmailSearch};
+use aivyx_gmail::tools::{GmailDraft, GmailRead, GmailSearch, GmailSend};
 use aivyx_core::Tool;
 
 /// Operator-facing default for how long `auth init` waits for
@@ -153,12 +153,16 @@ async fn run_ipc_loop() -> ExitCode {
         token_path,
     ));
 
-    // Phase 123 tools registered by this process. Task 7
-    // will push `gmail.send` into this Vec.
+    // Phase 123 full Gmail tool surface (Q2c at sign-off).
+    // The daemon's capability gate filters `gmail.send` out
+    // for non-Trusted-tier roles via the email.send ceiling
+    // narrowing in aivyx-capability — operators don't need
+    // to know to omit it from the registration here.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(GmailSearch::new(Arc::clone(&client))),
         Arc::new(GmailRead::new(Arc::clone(&client))),
         Arc::new(GmailDraft::new(Arc::clone(&client))),
+        Arc::new(GmailSend::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-gmail").await {
