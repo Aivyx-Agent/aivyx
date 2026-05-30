@@ -963,6 +963,41 @@ mod tests {
     }
 
     #[test]
+    fn phase_122_append_tool_catalog_composes_with_assemble_session_prompt() {
+        // Task-4 composition shape: planner first calls
+        // `assemble_session_prompt`, then wraps with
+        // `append_tool_catalog` when strategy is
+        // StructuredInjection. This test pins the composed
+        // output shape end-to-end so a future refactor of
+        // either helper doesn't silently drop the catalog
+        // block.
+        let profile = operator_declared_profile();
+        let assembled = assemble_session_prompt(
+            &profile,
+            None,
+            "default",
+            "You are helpful.",
+        );
+        let tools = vec![tool("fs.read", "Read a file")];
+        let composed = append_tool_catalog(&assembled, &tools);
+        // Profile section preserved.
+        assert!(composed.contains("## About this assistant"));
+        // Active role section preserved.
+        assert!(composed.contains("## Active role: default"));
+        assert!(composed.contains("You are helpful."));
+        // Tools-available block landed at the end (after the
+        // role section, not before).
+        let role_idx = composed.find("## Active role:").unwrap();
+        let tools_idx = composed.find("## Tools available").unwrap();
+        assert!(
+            tools_idx > role_idx,
+            "tool catalog must follow the role section so the model \
+             sees the catalog as the most-recent system context; got: \
+             role_idx={role_idx}, tools_idx={tools_idx}"
+        );
+    }
+
+    #[test]
     fn phase_122_append_tool_catalog_trims_base_prompt_trailing_whitespace() {
         // Two newlines max between base and the appended
         // section, regardless of how many trailing newlines the

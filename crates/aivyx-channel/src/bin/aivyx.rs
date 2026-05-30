@@ -3439,6 +3439,31 @@ async fn run_async(
         }
     };
 
+    // ---- Phase 122 Task 4 — per-family prompt strategy ---------------
+    // Resolve the Ollama prompt strategy from the model name. Non-Ollama
+    // providers always end up at `OllamaFamilyStrategy::None` (no
+    // catalog injection) since the strategy enum gates the
+    // `append_tool_catalog` call below — cloud providers handle their
+    // tool-catalog surface natively.
+    //
+    // The strategy is `None` for unknown Ollama families too —
+    // operator-conservative: a new model release doesn't silently get
+    // substrate it wasn't tested against.
+    //
+    // Task 5 will layer the operator-facing `[ollama.<family>]
+    // prompt_strategy = "..."` override on top of this default.
+    let ollama_prompt_strategy: aivyx_config::OllamaFamilyStrategy =
+        if matches!(provider_kind.value, ProviderKind::Ollama) {
+            match aivyx_config::detect_model_family(&model) {
+                Some(family) => {
+                    aivyx_config::OllamaFamilyStrategy::default_for_family(&family)
+                }
+                None => aivyx_config::OllamaFamilyStrategy::None,
+            }
+        } else {
+            aivyx_config::OllamaFamilyStrategy::None
+        };
+
     // ---- Audit --------------------------------------------------------
     // Persistent HMAC-chained audit log over `KeyDomain::Audit`.
     // `PersistentAuditLog::open` verifies the on-disk chain as part
@@ -4407,6 +4432,46 @@ async fn run_async(
         })
         .collect();
 
+    // Phase 122 Task 4 — snapshot a tool catalog for the
+    // structured-injection prompt block. Built only when the
+    // per-family strategy is StructuredInjection; otherwise
+    // an empty `Vec` so `append_tool_catalog` is a guaranteed
+    // no-op at every call site.
+    //
+    // Filtered by the role's `tool_allowlist` so the catalog
+    // mirrors what the model can actually invoke (an allowlist
+    // role shouldn't see tools it'll be denied). `AllowAll`
+    // roles see every registered tool.
+    let prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> =
+        if matches!(
+            ollama_prompt_strategy,
+            aivyx_config::OllamaFamilyStrategy::StructuredInjection
+        ) {
+            tools
+                .iter_tools()
+                .filter(|t| match &tool_allowlist {
+                    None => true,
+                    Some(set) => set.contains(t.name()),
+                })
+                .map(|t| aivyx_llm::LlmToolDescriptor {
+                    name: t.name().to_string(),
+                    description: t.description().to_string(),
+                    input_schema: t.input_schema().clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+    // Phase 122 Task 4 — apply the structured-injection block
+    // to the startup-assembled system prompt. No-op when
+    // `prompt_tool_catalog` is empty (i.e. strategy is `None`,
+    // or no tools survived the allowlist filter).
+    let system_prompt = aivyx_channel::profile_prompt::append_tool_catalog(
+        &system_prompt,
+        &prompt_tool_catalog,
+    );
+
     // ---- Capabilities -------------------------------------------------
     // Phase 13 Task 2 — capability assembly is now role-driven.
     // The hard-coded vector below is the **backcompat floor**
@@ -4605,7 +4670,7 @@ async fn run_async(
         let persona_snapshot = persona_for_factory
             .read()
             .expect("persona lock not poisoned at child session build");
-        let child_system_prompt = aivyx_channel::assemble_session_prompt(
+        let child_assembled = aivyx_channel::assemble_session_prompt(
             &profile_for_factory,
             Some(&*persona_snapshot),
             target,
@@ -4619,6 +4684,34 @@ async fn run_async(
             };
         let child_memory_topic_prefix: Option<String> =
             target_role.memory_topic_prefix.value;
+        // Phase 122 Task 4 — child agents get their own
+        // catalog snapshot filtered by the child role's
+        // allowlist. Built only when the operator's strategy
+        // is StructuredInjection; empty otherwise → no-op.
+        let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> =
+            if matches!(
+                ollama_prompt_strategy,
+                aivyx_config::OllamaFamilyStrategy::StructuredInjection
+            ) {
+                tools_for_factory
+                    .iter_tools()
+                    .filter(|t| match &child_tool_allowlist {
+                        None => true,
+                        Some(set) => set.contains(t.name()),
+                    })
+                    .map(|t| aivyx_llm::LlmToolDescriptor {
+                        name: t.name().to_string(),
+                        description: t.description().to_string(),
+                        input_schema: t.input_schema().clone(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let child_system_prompt = aivyx_channel::profile_prompt::append_tool_catalog(
+            &child_assembled,
+            &child_prompt_tool_catalog,
+        );
 
         // Build the child's planner factory. Same shape as the
         // parent's `run_session` planner factory: captures the
@@ -4660,17 +4753,27 @@ async fn run_async(
         let child_refresher_role_name = target.to_string();
         let child_refresher_role_prompt = target_role.system_prompt.value.clone();
         let child_refresher_shared = persona_for_factory.clone();
+        // Phase 122 Task 4 — same catalog as the initial
+        // child_system_prompt, cloned into every per-turn
+        // re-assembly.
+        let child_refresher_catalog = child_prompt_tool_catalog.clone();
         let child_planner_factory = move || {
             let mut cfg = planner_config.clone();
             let snap = child_refresher_shared
                 .read()
                 .expect("persona lock not poisoned at child turn build");
-            cfg.system_prompt = Some(aivyx_channel::assemble_session_prompt(
+            let assembled = aivyx_channel::assemble_session_prompt(
                 &child_refresher_profile,
                 Some(&*snap),
                 &child_refresher_role_name,
                 &child_refresher_role_prompt,
-            ));
+            );
+            cfg.system_prompt = Some(
+                aivyx_channel::profile_prompt::append_tool_catalog(
+                    &assembled,
+                    &child_refresher_catalog,
+                ),
+            );
             drop(snap);
             Box::new(LlmPlanner::new(
                 Arc::clone(&planner_provider),
@@ -4937,18 +5040,29 @@ async fn run_async(
         let daemon_refresher_role_name = active_role_name.clone();
         let daemon_refresher_role_prompt = role_for_envelope.system_prompt.value.clone();
         let daemon_refresher_shared = shared_persona.clone();
+        // Phase 122 Task 4 — clone the structured-injection
+        // tool catalog into the refresher so every per-turn
+        // re-assembly preserves the `## Tools available`
+        // block. Empty when strategy is `None` → no-op append.
+        let daemon_refresher_catalog = prompt_tool_catalog.clone();
         let planner_factory = move || {
             let mut cfg = planner_config.clone();
             // Per-turn rebuild from current Persona state.
             let snap = daemon_refresher_shared
                 .read()
                 .expect("persona lock not poisoned at turn build");
-            cfg.system_prompt = Some(aivyx_channel::assemble_session_prompt(
+            let assembled = aivyx_channel::assemble_session_prompt(
                 &daemon_refresher_profile,
                 Some(&*snap),
                 &daemon_refresher_role_name,
                 &daemon_refresher_role_prompt,
-            ));
+            );
+            cfg.system_prompt = Some(
+                aivyx_channel::profile_prompt::append_tool_catalog(
+                    &assembled,
+                    &daemon_refresher_catalog,
+                ),
+            );
             drop(snap);
             if let Ok(overrides) = daemon_overrides.read() {
                 if !overrides.is_empty() {
@@ -5426,16 +5540,24 @@ async fn run_async(
             let refresher_role_name = active_role_name.clone();
             let refresher_role_prompt = role_for_envelope.system_prompt.value.clone();
             let refresher_shared = shared_persona.clone();
+            // Phase 122 Task 4 — clone the catalog into the
+            // refresher; preserves the `## Tools available`
+            // block on every per-turn re-assembly.
+            let refresher_catalog = prompt_tool_catalog.clone();
             let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
                 Arc::new(move || {
                     let snap = refresher_shared
                         .read()
                         .expect("persona lock not poisoned at turn build");
-                    aivyx_channel::assemble_session_prompt(
+                    let assembled = aivyx_channel::assemble_session_prompt(
                         &refresher_profile,
                         Some(&*snap),
                         &refresher_role_name,
                         &refresher_role_prompt,
+                    );
+                    aivyx_channel::profile_prompt::append_tool_catalog(
+                        &assembled,
+                        &refresher_catalog,
                     )
                 });
 
