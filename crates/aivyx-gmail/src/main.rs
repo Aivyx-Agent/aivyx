@@ -20,7 +20,7 @@ use aivyx_gmail::auth_cli::{
 use aivyx_gmail::gmail_client::GmailClient;
 use aivyx_gmail::harness::run_multi_tool_subprocess;
 use aivyx_gmail::oauth::{load_tokens, storage::default_token_path};
-use aivyx_gmail::tools::GmailSearch;
+use aivyx_gmail::tools::{GmailRead, GmailSearch};
 use aivyx_core::Tool;
 
 /// Operator-facing default for how long `auth init` waits for
@@ -153,10 +153,11 @@ async fn run_ipc_loop() -> ExitCode {
         token_path,
     ));
 
-    // Task 4: gmail.search. Tasks 5-7 will push read / draft /
-    // send into this Vec.
+    // Phase 123 tools registered by this process. Tasks 6-7
+    // will push draft + send into this Vec.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(GmailSearch::new(Arc::clone(&client))),
+        Arc::new(GmailRead::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-gmail").await {
