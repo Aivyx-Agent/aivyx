@@ -380,3 +380,124 @@ After Phase 126, Phase 127 candidates:
 
 Phase-by-phase decision at Phase 126 exit, sharpened by
 the empirical rescue findings.
+
+## Prediction vs reality
+
+**Two of three streak predictions correct; one break as
+predicted.**
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment. Streak: 16 → 17.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 + the planner-substrate envelope cover
+  this case. Streak: 16 → 17.
+- **`aivyx-core/src/lib.rs`** — **BROKE as predicted via
+  Q3a** (`b420405b…` → `32d5730…` at Task 2 module
+  declaration → `9692e5d…` at Task 3 audit field
+  addition). Streak: 6 → 0. Honest framing held; the
+  alternative (Q3b synthesize-as-normal) was rejected
+  pre-Task-2 because it made the audit chain misleading.
+
+**Test count `+35` undershot the predicted `+40 to +60`
+range — honest report.** Per-task breakdown:
+- Task 2 (extractor module): **+23** — 4 wrapper×shape
+  combinations + 8 dropped/malformed cases + 4 multi-
+  block + 3 edge + 2 prose-surrounded + 4 argument-shape
+  preservation.
+- Task 3 (audit field + plumbing): **+4** — wire-compat
+  round-trip with field populated, None-skips-serialize,
+  both-fields-compose, pre-Phase-126 wire decodes with
+  None.
+- Task 4 (planner integration): **+8** — known dispatch
+  (both wrapper shapes), falls-through-when-no-blocks,
+  composes-with-Phase-120, unknown-tool-loops-with-error,
+  multiple-extracted-batch, malformed-drops-silently,
+  history-preserves-raw-text.
+
+The undershoot reflects the **Task 4 helper-refactor
+benefit**: instead of duplicating the Phase 120/101 loop
+between the protocol-channel ToolCalls arm and the new
+extraction branch, the refactor introduced
+`process_one_call` and reused it. The existing 55
+llm_planner tests cover the helper's behavior via the
+ToolCalls path; new tests focused only on what's distinct
+about the extraction branch. Fewer tests added, same
+coverage. Phase 6 Q5 honest report: the undershoot is a
+"didn't need as many tests as anticipated" finding, not
+a "skipped tests" finding.
+
+**Q-block went through as picked.** All four Recommended
+(Q1a planner-side + Q2a both wrappers/shapes + Q3a
+audit field + Q4a live verification). No mid-task re-
+asks. Q3a's streak-break trade-off was named at sign-off
+and held at exit.
+
+**Zero new workspace dependencies** as predicted.
+
+**Helper-refactor surface (unplanned but honest).** Task
+4 extracted `process_one_call` from the inline Phase
+120/101 loop in the `ToolCalls` arm; the refactor was
+necessary to share the dispatch logic between protocol
+and extraction paths cleanly. The 55 existing
+llm_planner tests passed unchanged post-refactor —
+behavioral preservation confirmed. Not a Q-block item;
+mentioned here for completeness.
+
+### Live verification (Task 5)
+
+> **PLACEHOLDER — populated post-live-test.**
+>
+> Verification against qwen3.6:27b and gemma4:31b
+> through `./scripts/dev-run.sh --release --reset --model
+> <name>`. Same probes as Phase 122/124. Banner should
+> show no Phase-126-specific change (extraction is on
+> by default at the planner-substrate layer; no
+> `prompt_strategy` value covers it).
+>
+> The exit-doc backfill commit replaces this block with
+> the empirical four-cell trajectory table:
+>
+> | Surface | qwen3 Phase 124 | qwen3 Phase 126 | gemma4 Phase 124 | gemma4 Phase 126 (default thresh) | gemma4 Phase 126 (thresh=0.60) |
+> |---|---|---|---|---|---|
+> | Enumeration | Empty | _observed_ | Vague prose | _observed_ | _observed_ |
+> | Invocation | `<tool_code>` text, no real call | _observed_ | `<tool_call>` text w/ `fs.write_file`, no real call | _observed_ | _observed_ |
+> | Audit ToolCalls | 0 | _observed_ | 0 | _observed_ | _observed_ |
+> | `extracted_from_text` populated? | n/a (no extraction) | _observed_ | n/a | _observed_ | _observed_ |
+> | `auto_corrected_from` populated? | n/a | _observed_ | n/a | _observed_ | _observed_ |
+>
+> **Three outcome cases pre-enumerated** per Q4a:
+>
+> 1. **qwen3 invokes fs.write; gemma4 invokes with
+>    lowered threshold.** Substrate breakthrough. Phase
+>    126 closes the local-LLM-rehab axis cleanly. Exit
+>    doc validates the extraction + Phase 120
+>    composition.
+> 2. **qwen3 invokes; gemma4 doesn't even with lowered
+>    threshold.** Honest asymmetric outcome. Exit doc
+>    documents the qwen3 rescue and the gemma4 residual
+>    gap; future investigation could lower threshold
+>    further OR document gemma4 as unsupported for tool-
+>    use workloads.
+> 3. **Neither invokes.** The substrate is technically
+>    correct (parsing + dispatch + audit chain all fire
+>    in unit tests) but the extracted call fails on
+>    some path the unit tests didn't cover. Exit doc
+>    names the residual gap concretely; possible
+>    Phase 127 follow-up.
+>
+> **Probe pattern (deterministic so the comparison
+> against Phase 124 is honest):**
+>
+> 1. Banner observation.
+> 2. `> What tools do you have available?` (enumeration
+>    probe).
+> 3. `> Please call fs.write to create a file at test.txt
+>    with the content 'phase 126 verification'.`
+>    (invocation probe).
+> 4. Ctrl-D.
+>
+> Then for gemma4, a second pass with
+> `[providers] tool_name_auto_correct_threshold = 0.60`
+> in `aivyx.toml`. Three sessions total
+> (qwen3, gemma4-default-thresh, gemma4-low-thresh) for
+> the full empirical signal.

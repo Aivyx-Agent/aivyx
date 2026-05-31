@@ -1363,6 +1363,90 @@ conversation, drafting, and other non-tool-invoking
 tasks. See PHASE_124.md exit doc for the full
 recommendation.
 
+### Textual tool-call extraction (Phase 126)
+
+Phase 124's live verification surfaced that **qwen3.6:27b
+emits structurally correct tool-call JSON in response
+TEXT** rather than the protocol channel:
+
+```text
+<tool_code>
+  {"name": "fs.write", "arguments": {"path": "x.txt", "content": "..."}}
+</tool_code>
+```
+
+The tool name + arguments are correct; only the channel is
+wrong. Phase 126 ships a planner-side extractor that:
+
+1. Detects `<tool_code>` / `<tool_call>` wrapper blocks in
+   response text when the LLM's protocol `tool_calls` array
+   is empty.
+2. Parses the inner JSON (permissive: accepts both
+   `{"name", "arguments"}` and `{"tool", "parameters"}`
+   shapes).
+3. Synthesizes `ToolCallEnd`-shaped values with UUID
+   call IDs and routes them through the same Phase 120
+   fuzzy-recovery + Phase 101 schema validation + dispatch
+   path as protocol-channel calls.
+4. Records `extracted_from_text: Some(wrapper_tag)` on the
+   `AuditTag::ToolCall` audit entry for forensic
+   visibility.
+
+**No operator config required.** Extraction is on by
+default at the planner-substrate layer and is a no-op
+for providers/models that use the protocol channel
+normally (protocol `tool_calls` non-empty → existing path
+runs).
+
+**Composition with Phase 120 fuzzy-recovery.** gemma4's
+observed `<tool_call>{"tool": "fs.write_file", ...}</tool_call>`
+emits a hallucinated tool name. Extraction → synthesized
+call → Phase 120 fuzzy-recovery at Jaccard similarity
+`{fs, write}` vs `{fs, write, file}` = 2/3 ≈ 0.667. The
+default threshold is 0.80, so the recovery doesn't fire
+by default. **Operators running gemma4 should lower the
+threshold:**
+
+```toml
+[providers]
+tool_name_auto_correct_threshold = 0.60
+```
+
+With both substrates active, the gemma4 invocation chain
+becomes: text → extracted `fs.write_file` → fuzzy-
+recovered to `fs.write` → dispatched. The audit entry
+carries **both** `extracted_from_text: Some("tool_call")`
+AND `auto_corrected_from: Some("fs.write_file")` so an
+auditor can see the full rescue trajectory.
+
+**Audit-chain forensics.** The four-way forensic
+distinction is now fully observable in the audit chain:
+
+| `auto_corrected_from` | `extracted_from_text` | Meaning |
+|---|---|---|
+| None | None | Native protocol call with exact tool name (dominant) |
+| Some | None | Protocol call with fuzzy-corrected name (Phase 120) |
+| None | Some | Text-extracted call with exact tool name (qwen3 best case) |
+| Some | Some | Text-extracted call AND fuzzy-corrected (gemma4 rescue path) |
+
+Operators querying the audit chain for "where did this
+tool call actually come from?" can answer with
+`jq 'select(.extracted_from_text)'` / `jq
+'select(.auto_corrected_from)'` filters.
+
+**False-positive defense.** Extraction only fires when
+the LLM's protocol `tool_calls` array is empty. An
+operator literally pasting a `<tool_code>` block into
+chat (e.g. discussing tool-call syntax) wouldn't trigger
+spurious extraction because the model's response would
+carry no protocol tool calls AND its text would just
+quote the operator's block.
+
+**Phase 126 live verification outcome:** _to be filled in
+at exit. Same probe pattern as Phase 122/124 (dev-run.sh
+against qwen3.6:27b + gemma4:31b). Three outcome cases
+pre-enumerated in PHASE_126.md._
+
 ## External productivity integrations (Chapter F)
 
 After three named local-LLM rehab phases (120-122), the

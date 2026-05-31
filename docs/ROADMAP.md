@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 126 — Textual Tool-Call Extraction
 
-**Active — see [PHASE_126.md](PHASE_126.md).** Operator
+**Frozen — see [PHASE_126.md](PHASE_126.md).** Operator
 picked this as the next direction after Phase 125 exit
 listed it as the most concrete substrate move remaining
 on the local-LLM-rehab axis. Phase 124's secondary finding
@@ -3575,24 +3575,36 @@ phase in a row):**
 - Q4a — Live verification against qwen3 + gemma4 at
   exit; honest reporting regardless.
 
-**Streak predictions:** DESIGN.md HOLD → 17; PRODUCT.md
-HOLD → 17; **`aivyx-core/src/lib.rs` BREAK** (resets 6 →
-0). Test count `+40 to +60`. Zero new workspace deps.
+**Streak predictions — two of three correct + one
+break as predicted.** DESIGN.md HELD → 17; PRODUCT.md
+HELD → 17; **aivyx-core/src/lib.rs BROKE as predicted
+via Q3a** (resets 6 → 0; rebuild starts Phase 127+).
+Test count `+35` undershot the predicted `+40 to +60`
+range — honest report: the Task 4 helper-refactor
+(extracted `process_one_call` from the Phase 120/101
+inline loop) meant the new extraction branch reused
+existing 55-test coverage rather than duplicating
+tests. Zero new workspace dependencies.
 
-**Honest scope risks at sign-off:**
-- Streak break is locked in by Q3a; not anticipated
-  recovery in Phase 126 itself. Rebuild starts Phase
-  127+.
-- Extraction works but model intent may not — a model
-  emitting `<tool_call>` text might just be describing
-  what it would do rather than wanting to do it.
-- gemma4 rescue is paired with operator lowering
+**Q-block went through as picked** (all four
+Recommended; Q3a's streak-break trade-off held).
+
+**Honest scope risks at sign-off, status at exit:**
+- Streak break locked in by Q3a; reset confirmed.
+- Extraction works but model intent may not — this
+  is the load-bearing live-verification question;
+  exit doc carries the empirical findings.
+- gemma4 rescue paired with operator lowering
   `tool_name_auto_correct_threshold` to ~0.60;
-  INSTALL.md documents this as operator-actionable.
-- The Phase 124 qwen3 `<tool_code>` emission was
-  observed in one session; if a future live test
-  doesn't reproduce, the substrate works but has
-  nothing to extract.
+  INSTALL.md documents this.
+- qwen3 `<tool_code>` emission was observed in one
+  Phase 124 session; reproduction is the live test's
+  signal.
+
+**Live verification outcome:** _backfilled at exit-
+hash backfill commit; see PHASE_126.md "Live
+verification (Task 5)" placeholder. Q4a posture: exit
+reports whatever the test shows._
 
 **Fourteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking. Audit's #1
