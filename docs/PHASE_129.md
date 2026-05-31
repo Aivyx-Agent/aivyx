@@ -491,7 +491,185 @@ After Phase 129, Phase 130 candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 129 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 20; PRODUCT.md HOLD → 20;
-lib.rs HOLD → 3; test count `+120` to `+170`; zero new
-deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; Chapter F pattern
+  is mature. Streak: 19 → **20**.
+
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 + P10 + P11 + P12 cover this case
+  exactly as Phase 128. Streak: 19 → **20**.
+
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`9692e5d…` unchanged). All Phase 129 work lives in
+  `aivyx-google-oauth` (new crate), `aivyx-drive` (new
+  crate), `aivyx-gmail` + `aivyx-calendar` (OAuth
+  migration), and `aivyx-capability` (two new bases).
+  NO core changes. Streak: 2 → **3**.
+
+**Test count `+117` undershot the predicted `+120 to
++170` range by 3 tests** — honest report. The undershoot
+reflects the OAuth lift's test consolidation working as
+designed:
+
+- aivyx-google-oauth (new crate): **+31** tests
+- aivyx-drive (new crate, all 7 tools + auth_cli body):
+  **+147** tests
+- aivyx-gmail: **-30** (oauth implementation tests
+  moved to the lifted crate)
+- aivyx-calendar: **-31** (same — oauth implementation
+  tests consolidated)
+- aivyx-capability: 0 net (one count test renamed +
+  bumped from 59 to 61)
+
+Sum: 31 + 147 - 30 - 31 = **+117 net workspace tests**.
+
+Without the OAuth lift, Phase 129 would have shipped
+~+177 (the 30+31 = 61 OAuth duplication would have come
+along inline with each of gmail/calendar/drive). The
+"savings" of 61 - 31 = **30 fewer duplicated tests**
+across the workspace is the substrate consolidation
+paying off in test code as well as in implementation
+code (-900 LoC at the Task 2 lift). Test count being
+3 below the lower prediction bound is the cost of
+that consolidation working better than estimated.
+Honest framing per Phase 6 Q5: this isn't a "skipped
+tests" undershoot; it's a "lifted-substrate-eliminated-
+duplication" undershoot, which is a substrate quality
+win.
+
+Per-task breakdown of the Drive +147:
+
+- Task 3 (drive skeleton + capability bases): **+53** —
+  substantial inherited body from the verbatim
+  `auth_cli` copy (calendar's auth_cli moved here with
+  bulk identifier swap; ~50 tests carry over). Plus
+  the drive_client.rs skeleton's 4 tests and the
+  tools/mod.rs `drive_urlencode` 3 tests.
+- Task 4 (drive.search): **+19** — input validation,
+  q-string building (5 combinations), file_summary
+  transformation (4 — including Drive's string-typed
+  `size` field), schema, integration sanity.
+- Task 5 (drive.get_metadata): **+11** — input
+  parsing, full-metadata transform, schema +
+  integration sanity.
+- Task 6 (drive.list_folder): **+13** — input parsing,
+  folder-q building including single-quote and
+  backslash escaping (defensive against DSL injection
+  if a malformed folder_id ever leaks), schema +
+  integration sanity.
+- Task 7 (drive.create_folder): **+11** — input
+  validation, wire-shape (load-bearing folder
+  mimeType), schema + integration sanity.
+- Task 8 (drive.download_file): **+16** — input
+  parsing (with `export_mime_type` optionality),
+  default-export-mime mapping per Google-native type
+  (5 — Docs/Sheets/Slides/Drawings/unknown),
+  truncated-output shape (2), schema + integration
+  sanity.
+- Task 9 (drive.upload_file): **+16** — input
+  parsing including the 10 MB cap boundary (above /
+  exactly-at / well-under), malformed-base64
+  handling, wire-shape (3 — metadata + description +
+  explicit parent), schema + integration sanity.
+- Task 10 (drive.delete_file): **+8** — input
+  parsing + schema + integration sanity.
+
+**Zero new workspace dependencies** as predicted. The
+lifted `aivyx-google-oauth` Cargo.toml is the precise
+subset that gmail's `oauth/` module needed; the new
+`aivyx-drive` Cargo.toml mirrors `aivyx-calendar`'s plus
+the `multipart` reqwest feature for `drive.upload_file`.
+
+**Zero clippy warnings** workspace-wide. Three transient
+lints fixed during dev:
+1. `doc_lazy_continuation` on main.rs preamble ("+ the
+   IPC-loop" → "plus the IPC-loop") — same pattern as
+   Phase 128 Task 3.
+2. Unused `drive_urlencode` warning before Tasks 5/6
+   wired it — added `#[allow(dead_code)]` until first
+   consumer landed.
+3. None on the Drive client's helpers because they were
+   all `pub` from the start (visible to per-tool
+   modules).
+
+**Q-block went through as picked.** Three Recommended +
+one non-Recommended (Q2b 7-tool surface). The 7-tool
+surface landed cleanly with per-tool test parity
+(~13 tests each); the operator's "doubled folder-
+semantics test surface" risk at sign-off materialized
+as `drive.list_folder`'s folder-q escaping tests plus
+`drive.create_folder`'s mimeType wire-shape test —
+both essential, neither runaway.
+
+**OAuth lift behavior preservation confirmed.** Phase
+128 Q2a's "lift at N=3" trigger fired cleanly:
+
+- 117 gmail tests pass unchanged (the 147 → 117
+  delta is OAuth implementation tests that
+  consolidated to the lifted crate, not behavior
+  regressions).
+- 131 calendar tests pass unchanged (same 162 → 131
+  consolidation).
+- Net diff at Task 2 commit: **-900 LoC** (2,422
+  deleted vs 1,522 inserted). Two ~1,300-LoC OAuth
+  copies became one shared crate at ~880 LoC plus thin
+  re-export shims.
+- The pre-lift "absent scopes = service defaults"
+  behavior is preserved at each consumer's config-
+  loading layer; substrate-level `OAuthConfig::new()`
+  yields empty scopes (each consumer chains
+  `.with_scopes(DEFAULT_X_SCOPES.iter().copied())` in
+  its factory). Behavior tests in both consumer crates
+  exercise this path.
+
+**Honest scope risks at sign-off — status at exit:**
+
+- **Q2b's 7-tool surface stayed tractable.** No
+  PR-merge-time scope reduction needed. The two
+  folder tools (list_folder + create_folder) added
+  modest extra test surface around folder semantics
+  that paid off in correctness (single-quote / backslash
+  escaping in list_folder's q-building was caught at
+  the unit-test layer).
+
+- **OAuth lift did NOT break behavior** as feared at
+  sign-off. The behavior-preservation tests across
+  gmail + calendar all passed unchanged post-lift.
+
+- **10 MB inline cap is operator-visible** as planned.
+  INSTALL.md documents the cap + the Phase 130+
+  streaming-substrate trajectory. Both download_file
+  and upload_file enforce the cap with clear error
+  messages.
+
+- **Google-native types** handled via the export
+  endpoint with sensible default mime mappings
+  (Docs → PDF, Sheets → CSV, Slides → PDF, Drawings
+  → PNG, unknown native → PDF). Operators override
+  via `export_mime_type`.
+
+- **Resumable upload deferred** per Q3a. Single-shot
+  multipart covers the cap.
+
+- **Drive's `auth/drive` default is broad** with three
+  narrower options documented in INSTALL.md
+  (`auth/drive.file`, `auth/drive.readonly`,
+  `auth/drive.metadata.readonly`).
+
+- **Seventeenth consecutive deferral of the Channel
+  Activation Milestone** as forecast. Audit's #1. The
+  deferral count is now a load-bearing signal — Phase
+  130+ should weigh it explicitly when picking
+  direction.
+
+**Auth CLI still per-binary** as an honest tech debt
+flag carried from Task 3. After the OAuth lift, each
+Chapter F binary keeps its own `auth_cli/{cli,
+config_file, init, status, revoke}.rs` with bulk
+identifier swaps. A future substrate phase could lift
+the auth_cli helpers too (parameterized by service
+name + default scope set), but the per-binary CLI
+dispatcher would still need to live in each crate.
+Phase 130+ candidate if operator pressure surfaces.

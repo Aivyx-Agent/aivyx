@@ -1979,6 +1979,176 @@ web.search bases.
   at N=3 (next Google integration: Drive / Photos /
   Sheets / etc).
 
+  **Phase 129 update:** Drive shipped as Chapter F #3
+  and Phase 129 Q1a Recommended bundled the OAuth lift
+  in the same phase. Both gmail and calendar now
+  consume the shared `aivyx-google-oauth` substrate;
+  the inline-copy posture is over. Operators don't see
+  this — public APIs preserved across the lift.
+
+### Google Drive (Phase 129)
+
+Chapter F third integration. Same OAuth flow as Gmail
+and Calendar (different scope: `auth/drive`); same
+operator setup pattern.
+
+#### One-time operator setup
+
+Three paths depending on your existing Aivyx Google
+integrations:
+
+**Path A — you already have Gmail and/or Calendar
+configured (recommended):**
+
+1. **Enable the Drive API** in the same GCP project
+   (Console → APIs & Services → "+ ENABLE APIS AND
+   SERVICES" → "Google Drive API").
+2. **Add the Drive scope** to your OAuth consent
+   screen: `https://www.googleapis.com/auth/drive`
+   (broad read+write; narrower options below).
+3. **Add a new redirect URI** to your OAuth client in
+   the GCP Console: `http://127.0.0.1:8767/callback`
+   (gmail uses 8765, calendar 8766; drive uses 8767).
+4. **Write
+   `~/.aivyx/tool-processes/drive/config.toml`** with
+   the SAME `client_id` + `client_secret` as your
+   other integrations:
+
+   ```toml
+   client_id = "XXXXXXXX.apps.googleusercontent.com"
+   client_secret = "GOCSPX-..."
+   redirect_uri = "http://127.0.0.1:8767/callback"
+   ```
+
+5. **Run `aivyx-drive auth init`** to grant the Drive
+   scope.
+
+**Path B / C** — follow the Gmail or Calendar setup
+substituting Drive throughout.
+
+#### Scope-narrowing options
+
+The default `auth/drive` scope grants read+write
+across all files the user can access. Narrower
+options:
+
+```toml
+# Only files created by Aivyx (best least-privilege
+# posture for write workflows; Aivyx can't see
+# pre-existing files):
+scopes = ["https://www.googleapis.com/auth/drive.file"]
+
+# Read-only across all files:
+scopes = ["https://www.googleapis.com/auth/drive.readonly"]
+
+# Read-only metadata only (no content download):
+scopes = ["https://www.googleapis.com/auth/drive.metadata.readonly"]
+```
+
+Default is the broad scope per Phase 129 sign-off —
+fewer "re-auth with new scope" loops. Write tools
+(`drive.create_folder`, `drive.upload_file`,
+`drive.delete_file`) fail with a clear "scope not
+granted" message when narrower scopes are in effect.
+
+#### `aivyx.toml` `[[tool_process]]` registration
+
+```toml
+[[tool_process]]
+name = "aivyx-drive"
+command = "/path/to/aivyx-drive"
+inherit_env = ["HOME"]
+```
+
+The tool process advertises seven tools to the daemon
+at handshake:
+
+| Tool | Capability | Description |
+|---|---|---|
+| `drive.search` | `drive.read` | Query files via Drive's DSL (e.g. `name contains 'budget'`, `mimeType = '...'`). Returns metadata summaries. |
+| `drive.get_metadata` | `drive.read` | Full metadata for one file by ID (description, owner, version, app_properties, etc). |
+| `drive.list_folder` | `drive.read` | Enumerate a folder's direct children. Default `folder_id` is `"root"`. |
+| `drive.create_folder` | `drive.write` | Create a new folder. Trusted-tier-only. |
+| `drive.download_file` | `drive.read` | Fetch file content as base64. 10 MB inline cap; above the cap returns metadata-only with `content_truncated: true`. Google-native types (Docs/Sheets/Slides) use the export endpoint. |
+| `drive.upload_file` | `drive.write` | Create a new file with content. Multipart upload; 10 MB cap. Trusted-tier-only. |
+| `drive.delete_file` | `drive.write` | Permanently delete a file or folder. Idempotent on already-deleted (returns `was_already_deleted: true`). Trusted-tier-only. NOTE: this is permanent delete, not move-to-trash. |
+
+#### Per-role capability grants
+
+`drive.read` and `drive.write` default to Trusted-tier-
+only at the ceiling level (matches the email.* /
+calendar.* / web.search pattern). Non-Trusted role
+grants:
+
+```toml
+[[role]]
+name = "drive-assistant"
+trust_tier = "SemiTrusted"
+capability_scopes = ["drive.read", "drive.write"]
+```
+
+For read-only access (the most common operator-grant
+posture given the breadth of files the agent might
+see), `capability_scopes = ["drive.read"]` alone gives
+search/get/list/download without any write surface.
+
+#### Operator-side troubleshooting
+
+- **`download_file` returns "content_truncated: true"
+  for a file you expected.** Decoded content size
+  exceeds the 10 MB inline cap. Workarounds: narrow
+  to a fragment (for Google Docs, request a smaller
+  export mime via `export_mime_type`); request
+  metadata via `drive.get_metadata` first to confirm
+  the size; or wait for the Phase 130+ streaming
+  substrate.
+- **`download_file` on a Google Doc returns weird
+  content.** Default export is PDF for Docs; you may
+  want `text/plain` instead via `export_mime_type:
+  "text/plain"`. Similarly Sheets default to `text/csv`
+  but `application/pdf` or
+  `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+  may be more useful.
+- **`upload_file` returns "decoded content size N
+  exceeds inline cap".** Same 10 MB limit. Same
+  workaround story.
+- **`delete_file` removes the wrong file.** Drive's
+  DELETE is PERMANENT, not move-to-trash. Confirm with
+  `drive.get_metadata` before calling `delete_file` for
+  files you can't easily replace. There is no
+  `drive.trash` tool in Phase 129; operators wanting
+  move-to-trash semantics use the Drive UI.
+- **Inherited Drive files (shared from another account)
+  may have unexpected behavior.** Sharing-permission
+  semantics aren't surfaced by Phase 129's tool surface;
+  use the Drive UI to inspect / modify sharing.
+
+#### What Phase 129 deliberately leaves to follow-on phases
+
+- **No `drive.update` / rename / move.** Updating
+  metadata or moving files between folders is the
+  natural Phase 130+ candidate; out of Q2b scope.
+- **No `drive.trash` / `drive.untrash`.** Drive's
+  trash-and-restore semantics are distinct from
+  permanent delete; deferred.
+- **No `drive.share` / permissions.** Sharing posture
+  changes are sensitive; the Drive UI is the right
+  surface for now.
+- **No resumable upload.** Above the 10 MB cap is the
+  Phase 130+ streaming-substrate trajectory.
+- **No batch operations.** Each tool does one API
+  call.
+
+#### Phase 129 substrate-lift note (operator-facing)
+
+`aivyx-gmail`, `aivyx-calendar`, and `aivyx-drive` now
+all consume the shared `aivyx-google-oauth` substrate
+internally. Operator config files
+(`~/.aivyx/tool-processes/{gmail,calendar,drive}/config.toml`)
+remain per-service; no operator-side change. The lift
+is documented honestly in
+`docs/PHASE_129.md` for development-side audit trails.
+
 ## Operator-facing personal assistant capabilities (Chapter G)
 
 After Chapter F #1 (Gmail) shipped and the Phase 124 exit

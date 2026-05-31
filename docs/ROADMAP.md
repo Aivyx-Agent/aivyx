@@ -3537,8 +3537,8 @@ first-real-use signal.
 
 ## Phase 129 — Google Drive + OAuth Substrate Lift (Chapter F #3)
 
-**See [PHASE_129.md](PHASE_129.md).** Chapter F third
-integration; first Chapter F phase to ship two pieces of
+**Frozen — see [PHASE_129.md](PHASE_129.md).** Chapter F
+third integration; first Chapter F phase to ship two pieces of
 substrate work in one phase — the OAuth substrate lift
 Phase 128 Q2a deferred to "the third Google integration"
 fires here. Three would-be in-tree OAuth copies (gmail +
@@ -3610,25 +3610,45 @@ the OAuth+auth_cli body via inline copy; Phase 129
 consolidates it to one shared crate (Drive inherits via
 dependency, not duplication).
 
-**Honest scope risks at sign-off:**
-- Q2b's 7-tool surface doubles the folder-semantics
-  test surface; PR-merge-time scope reduction is the
-  escape hatch.
-- OAuth lift could break behavior in either consumer
-  (gmail or calendar); behavior-preservation tests
-  across both are the load-bearing exit criterion for
-  Task 2 (same posture as Phase 128 Task 2's harness
-  lift).
-- 10 MB binary content cap is operator-visible;
-  large-file workflows hit it. INSTALL.md documents the
-  cap + the Phase 130+ streaming-substrate trajectory.
-- Google-native types (Docs/Sheets/Slides) need the
-  `export` endpoint with mime_type;
-  `drive.download_file` dispatches internally.
-- Resumable upload deferred; single-shot multipart
-  covers the cap.
-- Drive's `auth/drive` default is broad; narrower
-  options documented in INSTALL.md.
+**Honest scope risks at sign-off, status at exit:**
+- Q2b's 7-tool surface stayed tractable; no PR-merge-
+  time scope reduction needed. Folder-semantics test
+  surface paid off in correctness (single-quote /
+  backslash escaping caught at unit-test layer).
+- OAuth lift did NOT break behavior. Net diff at
+  Task 2 commit: **-900 LoC** (substantial duplication
+  collapsed). 117 gmail + 131 calendar tests pass
+  unchanged; the 30 each delta reflects oauth
+  implementation tests consolidating to the lifted
+  crate.
+- 10 MB cap operator-visible as planned; INSTALL.md
+  documents.
+- Google-native types handled via export endpoint with
+  default mime mappings (Docs→PDF, Sheets→CSV, etc).
+- Resumable upload deferred per Q3a.
+- Drive's auth/drive default is broad; INSTALL.md
+  documents three narrower options.
+
+**Streak predictions — three of three correct.**
+DESIGN.md HELD → 20; PRODUCT.md HELD → 20;
+`aivyx-core/src/lib.rs` HELD → 3 (Phase 128 ticked to
+2; Phase 129 ticks to 3). Test count **`+117`
+undershot the predicted `+120 to +170` range by 3 tests**
+— honest report: the OAuth lift's test consolidation
+worked better than estimated (61 duplicated oauth tests
+collapsed to one shared crate's 31). Not a "skipped
+tests" undershoot; a "substrate-consolidation worked"
+undershoot. Zero new workspace deps. Zero clippy
+warnings.
+
+**Q-block went through as picked.** Three Recommended
++ one non-Recommended (Q2b 7-tool surface). No mid-task
+re-asks.
+
+**Auth CLI still per-binary as an honest tech debt
+flag.** Each Chapter F binary keeps its own auth_cli
+module after the OAuth lift; the helpers could lift in a
+future substrate phase if operator pressure surfaces.
 
 **Seventeenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking continues.
