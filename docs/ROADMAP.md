@@ -3535,6 +3535,91 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 128 — Google Calendar Integration (Chapter F #2)
+
+**See [PHASE_128.md](PHASE_128.md).** Chapter F second
+integration; first Chapter F phase since Phase 123 shipped
+Gmail. Operator-pressure pick after Phase 127 exit listed
+Chapter F #2 / Chapter G #2 as operator-tool-surface
+candidates; Calendar picked over GitHub / Drive / Budget
+tracking for the "common operator ask, load-bearing for the
+personal-assistant value prop" framing.
+
+**Lands the SDK harness lift alongside.** Phase 125 exit
+explicitly named "land the lift alongside whichever Chapter
+F #2 or Chapter G #2 ships first" — Phase 128 is that
+moment. Three would-be in-tree copies (gmail + toolkit +
+calendar) crosses the clear-win threshold; lift collapses
+to one shared substrate before the third copy lands.
+
+Phase 128 ships:
+
+- **SDK harness lift** — extract the multi-tool harness
+  from `aivyx-gmail/src/harness.rs` +
+  `aivyx-toolkit/src/harness.rs` to a shared module in
+  `aivyx-tool`; both crates migrate to consume the lifted
+  version with behavior preservation.
+- **`aivyx-calendar` binary crate** — separate binary per
+  Chapter F pattern; inline-copies the OAuth substrate
+  from `aivyx-gmail` (third Google integration triggers
+  the OAuth lift; Calendar is N=2).
+- **Five Calendar tools** (Q3b non-Recommended operator
+  pick):
+  - `calendar.list_events` (capability `calendar.read`)
+  - `calendar.get_event` (`calendar.read`)
+  - `calendar.create_event` (`calendar.write`,
+    CEILING_TRUSTED)
+  - `calendar.update_event` (`calendar.write`,
+    CEILING_TRUSTED)
+  - `calendar.delete_event` (`calendar.write`,
+    CEILING_TRUSTED)
+- **Two new capability bases:** `calendar.read`,
+  `calendar.write`.
+- **`aivyx auth` extension** — Calendar uses the same
+  OAuth flow as Gmail with a different scope
+  (`auth/calendar`); auth_cli copy parameterizes.
+- **INSTALL.md walkthrough** — operator-side setup
+  mirroring Phase 123's Gmail section; same GCP project
+  works for both APIs.
+
+**Q-block (3 Recommended + 1 non-Recommended):**
+- Q1a — Bundle SDK harness lift (Recommended).
+- Q2a — Copy OAuth substrate inline from aivyx-gmail
+  (Recommended; OAuth lift deferred to N=3 trigger).
+- Q3b — 5 tools (non-Recommended; operator-picked over
+  Q3a's 4-tool surface for the marginal `update_event`
+  value).
+- Q4a — Operator-discretionary live verification
+  (Recommended).
+
+**Streak predictions — three of three HOLD anticipated.**
+DESIGN.md HOLD → 19; PRODUCT.md HOLD → 19;
+`aivyx-core/src/lib.rs` HOLD → 2 (Phase 127 rebuilt to 1;
+Phase 128 ticks to 2). All Phase 128 work in
+`aivyx-calendar` (new), `aivyx-tool` (harness lift),
+`aivyx-gmail` + `aivyx-toolkit` (harness migration). NO
+core changes. Zero new workspace deps. Test count `+150`
+to `+200` anchored on Phase 123's `+151` for 4 tools
+through OAuth.
+
+**Honest scope risks at sign-off:**
+- Q3b doubles the write-tool review surface vs Q3a;
+  PR-merge-time scope reduction is the escape hatch.
+- OAuth copy is N=2 in-tree; the third copy triggers
+  the OAuth lift. Honest tracking continues.
+- Harness lift could break behavior; behavior-
+  preservation tests across gmail + toolkit are the
+  load-bearing exit criterion.
+- Google Calendar API quotas (GCP project) — operator
+  responsibility; INSTALL.md documents.
+- OAuth scope creep risk (broad `auth/calendar` vs
+  narrower `auth/calendar.events`); INSTALL.md documents
+  both options.
+
+**Sixteenth consecutive deferral of the Channel
+Activation Milestone.** Honest tracking continues.
+Audit's #1.
+
 ## Phase 127 — Multi-Format Tool-Call Extraction (substrate completion)
 
 **Frozen — see [PHASE_127.md](PHASE_127.md).** Phase 126's
