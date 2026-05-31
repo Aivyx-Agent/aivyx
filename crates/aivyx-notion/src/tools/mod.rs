@@ -3,3 +3,7 @@
 //!
 //! Phase 130 Q1a operator-picked surface (7 tools).
 //! Per-tool modules ship in Tasks 3-9.
+
+pub mod search;
+
+pub use search::NotionSearch;
