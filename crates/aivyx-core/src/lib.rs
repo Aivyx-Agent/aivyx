@@ -36,6 +36,7 @@ pub mod planner;
 pub mod relevance;
 pub mod schema;
 pub mod skill_proposer;
+pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
