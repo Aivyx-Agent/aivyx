@@ -1,34 +1,31 @@
 //! OAuth 2.0 substrate for the Gmail tool process.
 //!
-//! Phase 123 Task 2. Operator-provided Google Cloud OAuth app per
-//! Q1a (Recommended): the operator creates an OAuth client in
-//! their own Google Cloud project and pastes
-//! `client_id` + `client_secret` into the tool-process config
-//! file. Aivyx ships no shared OAuth app.
+//! **Phase 129 Task 2 lift:** the OAuth implementation lives
+//! in [`aivyx_google_oauth`]. This module is a thin
+//! re-export shim preserving aivyx-gmail's public OAuth API
+//! (`aivyx_gmail::oauth::OAuthConfig` etc) so no downstream
+//! consumer code changes. The only service-specific bits
+//! that stay here:
 //!
-//! ## Module layout
+//! - [`DEFAULT_GMAIL_SCOPES`] — Gmail's default OAuth scope
+//!   set. Each consumer crate (`aivyx-gmail`,
+//!   `aivyx-calendar`, `aivyx-drive`, …) owns its own
+//!   default scopes constant; the lifted substrate has no
+//!   opinion.
+//! - [`storage::default_token_path`] — gmail-specific token
+//!   file location resolution
+//!   (`~/.aivyx/tool-processes/gmail/tokens.json`).
 //!
-//! - [`config`] — operator-provided [`OAuthConfig`]
-//!   (client_id + client_secret + redirect_uri + scopes).
-//! - [`tokens`] — [`TokenSet`] (access_token, refresh_token,
-//!   expires_at, scope).
-//! - [`storage`] — per-tool-process token file with 0600 perms
-//!   and atomic write-then-rename.
-//! - [`exchange`] — auth-code → tokens; refresh-token → fresh
-//!   access_token. HTTP against Google's token endpoint
-//!   (`https://oauth2.googleapis.com/token`).
-//!
-//! ## What this module deliberately doesn't ship in Task 2
-//!
-//! - Browser-opening / local-loopback callback server — Task 3.
-//! - Gmail API client (search, read, draft, send) — Tasks 4-7.
+//! See the Phase 129 entry doc for the lift rationale (Q2a
+//! Recommended; collapses three would-be in-tree copies of
+//! the OAuth substrate to one shared crate).
 
 pub mod config;
 pub mod exchange;
 pub mod storage;
 pub mod tokens;
 
-pub use config::{OAuthConfig, DEFAULT_GMAIL_SCOPES};
+pub use config::OAuthConfig;
 pub use exchange::{
     exchange_code, refresh_access_token, ExchangeError, GOOGLE_AUTH_ENDPOINT,
     GOOGLE_TOKEN_ENDPOINT,
@@ -36,15 +33,27 @@ pub use exchange::{
 pub use storage::{load_tokens, save_tokens, StorageError};
 pub use tokens::TokenSet;
 
-use thiserror::Error;
+pub use aivyx_google_oauth::OAuthError;
 
-/// Top-level OAuth error covering all sub-module failure modes.
-/// Kept at the module root so callers can `?`-bubble a single
-/// error type from any OAuth-touching path.
-#[derive(Debug, Error)]
-pub enum OAuthError {
-    #[error("token exchange failed: {0}")]
-    Exchange(#[from] ExchangeError),
-    #[error("token storage failed: {0}")]
-    Storage(#[from] StorageError),
-}
+/// Default Gmail OAuth scopes covering the Phase 123
+/// Task 4-7 tool surface.
+///
+/// - `gmail.readonly` — `gmail.search` + `gmail.read`.
+/// - `gmail.compose` — `gmail.draft` (covers draft create
+///   AND sending per Google's scope hierarchy; we use
+///   `gmail.send` separately for the trust-tier
+///   distinction).
+/// - `gmail.send` — `gmail.send` (Trusted-gated).
+///
+/// Stays in this crate (NOT lifted to
+/// `aivyx_google_oauth`) because each Google integration
+/// has its own service-specific default scope set —
+/// `aivyx-calendar` has `DEFAULT_CALENDAR_SCOPES`,
+/// `aivyx-drive` has `DEFAULT_DRIVE_SCOPES`, etc. The
+/// lifted substrate has no opinion on which scopes are
+/// appropriate for which Google API.
+pub const DEFAULT_GMAIL_SCOPES: &[&str] = &[
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+];

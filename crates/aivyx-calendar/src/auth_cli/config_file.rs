@@ -73,10 +73,20 @@ pub fn load_oauth_config(path: &Path) -> Result<OAuthConfig, ConfigFileError> {
             });
         }
     };
-    toml::from_str::<OAuthConfig>(&body).map_err(|e| ConfigFileError::Parse {
-        path: path.to_path_buf(),
-        reason: e.to_string(),
-    })
+    let mut cfg: OAuthConfig =
+        toml::from_str(&body).map_err(|e| ConfigFileError::Parse {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    // Phase 129 OAuth lift: substrate yields empty scopes
+    // on absence; populate calendar default here.
+    if cfg.scopes.is_empty() {
+        cfg.scopes = crate::DEFAULT_CALENDAR_SCOPES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+    }
+    Ok(cfg)
 }
 
 #[cfg(test)]

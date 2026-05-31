@@ -23,6 +23,11 @@ path = "src/main.rs"
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 129 OAuth substrate lift — calendar's oauth/* modules
+# are now thin re-export shims wrapping the shared crate.
+# Phase 128 Q2a's "lift at N=3" fires here via Phase 129's
+# aivyx-drive being the third Google integration.
+aivyx-google-oauth = { path = "../aivyx-google-oauth" }
 
 # Async runtime — `process` not needed (we ARE the child
 # process); `io-util` for read_frame/write_frame; `signal` is

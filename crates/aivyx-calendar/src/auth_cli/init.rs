@@ -394,11 +394,16 @@ mod tests {
     use std::time::Duration;
 
     fn sample_config() -> OAuthConfig {
+        // Phase 129 OAuth lift: OAuthConfig::new yields
+        // empty scopes; chain .with_scopes() with the
+        // calendar-specific default set so consent-URL
+        // construction has a real scope param.
         OAuthConfig::new(
             "id.apps.googleusercontent.com",
             "GOCSPX-secret",
             "http://127.0.0.1:8088/cb",
         )
+        .with_scopes(crate::DEFAULT_CALENDAR_SCOPES.iter().copied())
     }
 
     #[test]

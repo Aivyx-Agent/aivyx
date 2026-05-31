@@ -25,6 +25,9 @@ path = "src/main.rs"
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 129 OAuth substrate lift — gmail's oauth/* modules
+# are now thin re-export shims wrapping the shared crate.
+aivyx-google-oauth = { path = "../aivyx-google-oauth" }
 
 # Async runtime — `process` not needed (we ARE the child process);
 # `io-util` for read_frame/write_frame; `signal` is harmless.

@@ -73,10 +73,24 @@ pub fn load_oauth_config(path: &Path) -> Result<OAuthConfig, ConfigFileError> {
             });
         }
     };
-    toml::from_str::<OAuthConfig>(&body).map_err(|e| ConfigFileError::Parse {
-        path: path.to_path_buf(),
-        reason: e.to_string(),
-    })
+    let mut cfg: OAuthConfig =
+        toml::from_str(&body).map_err(|e| ConfigFileError::Parse {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    // Phase 129 OAuth lift: the substrate-level OAuthConfig
+    // deserializer yields an empty Vec when the operator's
+    // config file omits the `scopes` field. Each consumer
+    // crate populates its own service-specific default
+    // here so the pre-lift "no scopes = gmail defaults"
+    // behavior is preserved.
+    if cfg.scopes.is_empty() {
+        cfg.scopes = crate::DEFAULT_GMAIL_SCOPES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+    }
+    Ok(cfg)
 }
 
 #[cfg(test)]
