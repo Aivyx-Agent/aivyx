@@ -454,6 +454,33 @@ pub trait LlmProvider: Send + Sync {
         request: LlmRequest<'_>,
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError>;
+
+    /// Phase 127 — model-family hint for the textual
+    /// tool-call extractor's parser-priority bias. Returns
+    /// the training-family identifier for `model`
+    /// (Ollama's `details.family` per `/api/show` is the
+    /// canonical source) so the extractor can reorder its
+    /// inner-shape priority — for example, qwen-family
+    /// models prefer Qwen3-Coder XML over JSON inside a
+    /// `<tool_call>` wrapper.
+    ///
+    /// The default impl returns `None` (no hint), which
+    /// the extractor treats as "default priority order."
+    /// Providers that don't have a notion of model family
+    /// (cloud providers serving a single fixed model, or
+    /// providers that can't introspect their model
+    /// metadata) can rely on the default. Ollama overrides
+    /// to query `/api/show` once per model and cache the
+    /// result.
+    ///
+    /// Failure to determine the family — network error,
+    /// model not pulled, response unparseable — returns
+    /// `None`. The substrate falls back to the default
+    /// permissive scan; the hint is purely a priority
+    /// optimization.
+    async fn tool_call_family_hint(&self, _model: &str) -> Option<String> {
+        None
+    }
 }
 
 /// A live LLM response stream. Yields [`LlmStreamEvent`]s via

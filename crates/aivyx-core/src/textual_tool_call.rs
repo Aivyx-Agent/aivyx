@@ -164,6 +164,43 @@ const WRAPPERS: &[WrapperSpec] = &[
 /// N calls when the model emits a JSON list of parallel
 /// tool invocations.
 pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
+    extract_tool_calls_with_hint(text, None)
+}
+
+/// Phase 127 Task 6 — extraction with a family-hint
+/// prioritization signal.
+///
+/// `family_hint` is the model's training-family identifier
+/// (typically what Ollama's `/api/show` returns as
+/// `details.family`). The hint biases the inner-shape
+/// priority order for wrappers that accept multiple inner
+/// shapes — specifically:
+///
+/// - Qwen-family hints (`"qwen35"`, `"qwen3"`,
+///   `"qwen3-coder"`, anything beginning with `"qwen"`)
+///   cause `<tool_call>` content to try Qwen3-Coder XML
+///   FIRST instead of JSON. For valid inputs this doesn't
+///   change behavior (the parsers don't overlap on
+///   well-formed text), but it's load-bearing for
+///   malformed-but-recoverable inputs and communicates
+///   intent for future parser additions.
+/// - Other family hints (gemma, phi, llama, mistral) use
+///   the default order today; reserved for future
+///   per-family bias when overlapping parsers ship.
+/// - `None` or unrecognized families use the default
+///   order. This is what callers without family
+///   information (or non-Ollama providers) pass.
+///
+/// The hint is a HINT, not a contract — every parser is
+/// still tried for every wrapper match, just in a
+/// reordered priority. This matches the "permissive
+/// fallback" posture: if the family-preferred parser
+/// misses, the other parsers still get their chance.
+pub fn extract_tool_calls_with_hint(
+    text: &str,
+    family_hint: Option<&str>,
+) -> Vec<ExtractedToolCall> {
+    let bias = classify_family(family_hint);
     let mut out: Vec<ExtractedToolCall> = Vec::new();
     let mut cursor = 0;
     while cursor < text.len() {
@@ -179,7 +216,7 @@ pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
         };
         let close_abs = content_start + close_rel;
         let inner = &text[content_start..close_abs];
-        out.extend(parse_inner(inner.trim(), spec.tag));
+        out.extend(parse_inner(inner.trim(), spec.tag, bias));
         cursor = close_abs + spec.close.len();
     }
 
@@ -200,6 +237,36 @@ pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
         }
     }
     out
+}
+
+/// Family-hint classification. Maps the loose family
+/// strings Ollama returns into a small set of bias enum
+/// values the parsers can dispatch on. Unknown families
+/// (including `None`) map to `Default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FamilyBias {
+    /// Default order — JSON shapes first inside wrappers
+    /// that accept multiple inner shapes. Applies to
+    /// `None`, unknown families, and explicitly cloud-
+    /// family-flavored providers (anthropic, openai).
+    Default,
+    /// Qwen family — prefer Qwen3-Coder XML inside
+    /// `<tool_call>` over JSON shapes. Matches the
+    /// empirical training format for qwen3.5+
+    /// (per Ollama issues #14493 / #14745).
+    QwenCoder,
+}
+
+fn classify_family(hint: Option<&str>) -> FamilyBias {
+    let Some(raw) = hint else {
+        return FamilyBias::Default;
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.starts_with("qwen") {
+        FamilyBias::QwenCoder
+    } else {
+        FamilyBias::Default
+    }
 }
 
 /// Bare-JSON fallback. Returns `Some(call)` only if the
@@ -273,22 +340,27 @@ fn find_next_open(text: &str, start: usize) -> Option<(usize, &'static WrapperSp
 }
 
 /// Parse the inner content of a wrapper block. Inner
-/// shape is dispatched per-wrapper:
+/// shape is dispatched per-wrapper, with `bias` reordering
+/// the inner-shape priority for wrappers that accept
+/// multiple shapes:
 ///
 /// - `<|tool_call|>` (Phi-4-mini) — JSON list of
-///   `{"name", "arguments"}` objects. Each list element
-///   produces one `ExtractedToolCall`; an empty list
-///   produces zero (still a valid Phi-4-mini emission).
-/// - `<tool_code>` / `<tool_call>` — try JSON
-///   `{"name", "arguments"}` shape first, then
-///   `{"tool", "parameters"}` shape. For `<tool_call>`
-///   only, fall back to Qwen3-Coder XML inner
-///   (`<function=N><parameter=K>V</parameter></function>`)
-///   if both JSON shapes miss.
+///   `{"name", "arguments"}` objects. Single shape; bias
+///   has no effect.
+/// - `<tool_code>` — JSON `{"name", "arguments"}` then
+///   `{"tool", "parameters"}`. Bias has no effect today
+///   (no XML or python-call shape accepted on this
+///   wrapper).
+/// - `<tool_call>` — JSON shapes and Qwen3-Coder XML.
+///   `QwenCoder` bias tries XML FIRST; `Default` tries
+///   JSON first.
+/// - `tool_code_fence` (Gemma 3 markdown) — Python-call
+///   first, JSON fallback. Single primary shape; bias
+///   has no effect.
 ///
 /// First match wins per-element; unmatched shapes drop
 /// silently.
-fn parse_inner(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
+fn parse_inner(inner: &str, wrapper_tag: &str, bias: FamilyBias) -> Vec<ExtractedToolCall> {
     let mut out = Vec::new();
     if inner.is_empty() {
         return out;
@@ -325,7 +397,22 @@ fn parse_inner(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
         // Fall through to the JSON path below.
     }
 
-    // JSON shapes first for the remaining wrappers.
+    // `<tool_call>` with QwenCoder bias: try XML first.
+    // The XML parser only matches genuine Qwen3-Coder
+    // format (`<function=...>`); JSON content doesn't
+    // satisfy it. So the bias matters only for inputs
+    // that ARE Qwen3-Coder XML — for JSON content the
+    // result is identical to default order, just with one
+    // extra failed XML attempt.
+    if wrapper_tag == "tool_call" && bias == FamilyBias::QwenCoder {
+        if let Some(call) = parse_qwen3_coder_xml(inner, wrapper_tag) {
+            out.push(call);
+            return out;
+        }
+    }
+
+    // JSON shapes for `<tool_code>` and `<tool_call>` (and
+    // for `tool_code_fence` fall-through).
     if let Ok(value) = serde_json::from_str::<Value>(inner) {
         if let Some(call) =
             parse_json_name_arguments(&value, wrapper_tag, "json-name-arguments")
@@ -339,13 +426,14 @@ fn parse_inner(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
         }
     }
 
-    // Fall back to Qwen3-Coder XML inside `<tool_call>`.
+    // Fall back to Qwen3-Coder XML inside `<tool_call>`
+    // when the QwenCoder bias didn't already try it.
     // `<tool_code>` is the markdown-fence-like form used
     // for JSON-shape emission per the empirical literature
     // — keeping the XML parser scoped to `<tool_call>`
     // avoids false-positive XML matches inside other
     // wrapper kinds.
-    if wrapper_tag == "tool_call" {
+    if wrapper_tag == "tool_call" && bias != FamilyBias::QwenCoder {
         if let Some(call) = parse_qwen3_coder_xml(inner, wrapper_tag) {
             out.push(call);
         }
@@ -2097,6 +2185,130 @@ I should call fs.write to save that.
         assert_eq!(calls.len(), 1, "only the wrapped call extracts; bare suffix is ignored");
         assert_eq!(calls[0].tool_name, "wrapped");
         assert_eq!(calls[0].wrapper_tag, "tool_call");
+    }
+
+    // ====================================================
+    // Phase 127 Task 6 — family-hint architecture.
+    //
+    // `extract_tool_calls_with_hint(text, family_hint)`
+    // exposes a family-hint signal that can bias inner-
+    // shape priority for wrappers accepting multiple
+    // shapes. Today this matters concretely for `<tool_call>`
+    // (Qwen-family hints try XML first instead of JSON).
+    // Other family hints (gemma, phi, llama, mistral) use
+    // the default order today and are reserved for future
+    // per-family bias.
+    //
+    // The hint is permissive — every parser is still tried;
+    // family hint just reorders the priority. Behavior for
+    // valid inputs is unchanged regardless of hint (parsers
+    // don't ambiguously match well-formed content).
+    // ====================================================
+
+    #[test]
+    fn phase_127_hint_qwen_family_extracts_xml_inside_tool_call() {
+        // Same XML content as the Task 2 baseline test, but
+        // routed via the hint-aware entry point with the
+        // qwen35 family hint. Confirms the family-hint path
+        // also produces the expected extraction.
+        let text = r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls_with_hint(text, Some("qwen35"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].inner_format, "qwen3-coder-xml");
+    }
+
+    #[test]
+    fn phase_127_hint_default_extracts_xml_inside_tool_call() {
+        // Same XML content WITHOUT the family hint — the
+        // fallback path still picks up XML (after JSON
+        // shapes fail). Confirms the no-hint default
+        // behavior is unchanged.
+        let text = r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls_with_hint(text, None);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].inner_format, "qwen3-coder-xml");
+    }
+
+    #[test]
+    fn phase_127_hint_qwen_family_json_still_works() {
+        // JSON content inside `<tool_call>` with QwenCoder
+        // hint: XML attempt fails, JSON shapes still match.
+        // Confirms the hint is non-fatal — wrong-priority
+        // is still recoverable via the other parsers.
+        let text = r#"<tool_call>{"name": "fs.write", "arguments": {"path": "x"}}</tool_call>"#;
+        let calls = extract_tool_calls_with_hint(text, Some("qwen35"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(
+            calls[0].inner_format, "json-name-arguments",
+            "JSON shape matched after XML attempt failed under QwenCoder bias"
+        );
+    }
+
+    #[test]
+    fn phase_127_hint_unknown_family_uses_default_order() {
+        // An unrecognized family string maps to Default
+        // bias. Same extraction behavior as None.
+        let text = r#"<tool_call>{"name": "fs.write", "arguments": {}}</tool_call>"#;
+        let calls = extract_tool_calls_with_hint(text, Some("totally-made-up-model"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].inner_format, "json-name-arguments");
+    }
+
+    #[test]
+    fn phase_127_hint_empty_string_treated_as_default() {
+        let text = r#"<tool_call>{"name": "fs.write", "arguments": {}}</tool_call>"#;
+        let calls = extract_tool_calls_with_hint(text, Some(""));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].inner_format, "json-name-arguments");
+    }
+
+    #[test]
+    fn phase_127_hint_qwen_variants_all_classify_as_qwen() {
+        // All `qwen*` family strings route to QwenCoder
+        // bias. Confirms the prefix-match classifier.
+        let xml = r#"<tool_call><function=fs.write></function></tool_call>"#;
+        for variant in [
+            "qwen", "qwen3", "qwen35", "qwen3-coder", "Qwen35", "QWEN3",
+        ] {
+            let calls = extract_tool_calls_with_hint(xml, Some(variant));
+            assert_eq!(
+                calls.len(),
+                1,
+                "variant {variant:?} should classify as Qwen and extract"
+            );
+            assert_eq!(calls[0].inner_format, "qwen3-coder-xml");
+        }
+    }
+
+    #[test]
+    fn phase_127_hint_legacy_extract_tool_calls_unchanged() {
+        // The zero-hint shim (`extract_tool_calls`) must
+        // produce identical results to
+        // `extract_tool_calls_with_hint(text, None)`.
+        let cases = [
+            r#"<tool_call>{"name": "a", "arguments": {}}</tool_call>"#,
+            r#"<tool_code>{"name": "b", "arguments": {}}</tool_code>"#,
+            r#"<|tool_call|>[{"name": "c", "arguments": {}}]<|/tool_call|>"#,
+            "```tool_code\nd.x()\n```",
+            r#"{"name": "e", "arguments": {}}"#,
+        ];
+        for text in cases {
+            let legacy = extract_tool_calls(text);
+            let with_none = extract_tool_calls_with_hint(text, None);
+            assert_eq!(
+                legacy.len(),
+                with_none.len(),
+                "legacy entry must match no-hint variant for: {text}"
+            );
+            for (a, b) in legacy.iter().zip(with_none.iter()) {
+                assert_eq!(a.tool_name, b.tool_name);
+                assert_eq!(a.wrapper_tag, b.wrapper_tag);
+                assert_eq!(a.inner_format, b.inner_format);
+            }
+        }
     }
 
     #[test]

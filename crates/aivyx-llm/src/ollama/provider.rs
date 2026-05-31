@@ -37,6 +37,9 @@
 //!
 //! Phase 121 Task 4 parses this stream shape.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -183,6 +186,13 @@ impl Default for OllamaConfig {
 pub struct OllamaProvider {
     pub(crate) config: OllamaConfig,
     pub(crate) transport: Box<dyn HttpTransport>,
+    /// Phase 127 Task 6 — per-model family-hint cache.
+    /// `Option<String>` slot: `Some("qwen35")` when
+    /// `/api/show` returned a family; `None` when the
+    /// query failed or returned no family field. Caching
+    /// the `None` outcome avoids re-querying on every
+    /// turn when the model isn't introspectable.
+    family_cache: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl OllamaProvider {
@@ -190,6 +200,7 @@ impl OllamaProvider {
         Ok(OllamaProvider {
             config,
             transport: Box::new(ReqwestTransport::new()?),
+            family_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -197,7 +208,11 @@ impl OllamaProvider {
         config: OllamaConfig,
         transport: Box<dyn HttpTransport>,
     ) -> Self {
-        OllamaProvider { config, transport }
+        OllamaProvider {
+            config,
+            transport,
+            family_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(crate) fn base_url(&self) -> &str {
@@ -212,6 +227,35 @@ impl OllamaProvider {
     /// native endpoint is `/api/chat`.
     pub(crate) fn endpoint(&self) -> String {
         format!("{}/api/chat", self.base_url())
+    }
+
+    /// Phase 127 Task 6 — query Ollama `/api/show` for
+    /// `details.family`. Returns the family string on
+    /// success, `None` on any failure (network, model not
+    /// pulled, parse error, missing family field).
+    /// Failure is silent because the family-hint is a
+    /// best-effort optimization — the substrate falls
+    /// back to permissive scan when the hint is absent.
+    async fn query_model_family(&self, model: &str) -> Option<String> {
+        let url = format!("{}/api/show", self.base_url());
+        let body = serde_json::to_vec(&json!({ "name": model })).ok()?;
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let bytes = self
+            .transport
+            .post_json(&url, &[("content-type", "application/json")], body, &cancellation)
+            .await
+            .ok()?;
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        let family = value
+            .get("details")?
+            .get("family")?
+            .as_str()?
+            .trim()
+            .to_string();
+        if family.is_empty() {
+            return None;
+        }
+        Some(family)
     }
 
     /// Lightweight health check against the Ollama base URL.
@@ -289,6 +333,24 @@ impl crate::LlmProvider for OllamaProvider {
             reader,
             known_tool_names,
         )))
+    }
+
+    async fn tool_call_family_hint(&self, model: &str) -> Option<String> {
+        // Check cache first; release the guard before any
+        // await. `Option<String>` in the value slot: `Some`
+        // means "we tried and got a family"; `None` cached
+        // means "we tried and got nothing — don't re-query."
+        {
+            let cache = self.family_cache.lock().ok()?;
+            if let Some(cached) = cache.get(model) {
+                return cached.clone();
+            }
+        }
+        let family = self.query_model_family(model).await;
+        if let Ok(mut cache) = self.family_cache.lock() {
+            cache.insert(model.to_string(), family.clone());
+        }
+        family
     }
 }
 
@@ -1271,5 +1333,167 @@ mod tests {
             }
             other => panic!("expected FinalMessage, got {other:?}"),
         }
+    }
+
+    // ----- Phase 127 Task 6 — family-hint cache + /api/show -----
+
+    use std::sync::Arc;
+
+    /// Fake transport for `/api/show` testing. The shared
+    /// `state` lets the test inspect call count + URLs
+    /// after the provider has taken ownership of the
+    /// transport via its `Box<dyn HttpTransport>` slot.
+    /// `post_sse` errors — these tests don't exercise it.
+    #[derive(Clone)]
+    struct FakeShowTransport {
+        state: Arc<FakeShowState>,
+    }
+
+    struct FakeShowState {
+        canned_json: Vec<u8>,
+        // None ⇒ post_json returns the canned JSON;
+        // Some ⇒ post_json errors with the given Api error.
+        force_error: Option<(u16, String)>,
+        post_json_calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeShowTransport {
+        fn ok(canned_json: &str) -> Self {
+            Self {
+                state: Arc::new(FakeShowState {
+                    canned_json: canned_json.as_bytes().to_vec(),
+                    force_error: None,
+                    post_json_calls: std::sync::Mutex::new(Vec::new()),
+                }),
+            }
+        }
+        fn failing() -> Self {
+            Self {
+                state: Arc::new(FakeShowState {
+                    canned_json: Vec::new(),
+                    force_error: Some((404, "model not found".into())),
+                    post_json_calls: std::sync::Mutex::new(Vec::new()),
+                }),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.state.post_json_calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl HttpTransport for FakeShowTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            Err(LlmError::Transport("post_sse not used in show test".into()))
+        }
+        async fn post_json(
+            &self,
+            url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Vec<u8>, LlmError> {
+            self.state
+                .post_json_calls
+                .lock()
+                .unwrap()
+                .push(url.to_string());
+            if let Some((status, ref msg)) = self.state.force_error {
+                return Err(LlmError::Api {
+                    status,
+                    message: msg.clone(),
+                });
+            }
+            Ok(self.state.canned_json.clone())
+        }
+    }
+
+    fn provider_with_transport(
+        transport: Box<dyn HttpTransport>,
+    ) -> OllamaProvider {
+        OllamaProvider::with_transport(OllamaConfig::default_local(), transport)
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_returns_qwen_family_from_show() {
+        let canned =
+            r#"{"details": {"family": "qwen35", "parameter_size": "27.8B"}}"#;
+        let transport = FakeShowTransport::ok(canned);
+        let provider = provider_with_transport(Box::new(transport.clone()));
+        let family = provider.tool_call_family_hint("qwen3.6:27b").await;
+        assert_eq!(family.as_deref(), Some("qwen35"));
+        assert_eq!(transport.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_caches_per_model() {
+        // Two calls for the same model should hit /api/show
+        // exactly ONCE.
+        let transport = FakeShowTransport::ok(r#"{"details": {"family": "qwen35"}}"#);
+        let provider = provider_with_transport(Box::new(transport.clone()));
+        provider.tool_call_family_hint("qwen3.6:27b").await;
+        provider.tool_call_family_hint("qwen3.6:27b").await;
+        assert_eq!(
+            transport.call_count(),
+            1,
+            "two queries for the same model should result in exactly one /api/show call"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_distinct_models_cached_separately() {
+        let transport = FakeShowTransport::ok(r#"{"details": {"family": "qwen35"}}"#);
+        let provider = provider_with_transport(Box::new(transport.clone()));
+        provider.tool_call_family_hint("qwen3.6:27b").await;
+        provider.tool_call_family_hint("gemma4:31b").await;
+        assert_eq!(
+            transport.call_count(),
+            2,
+            "distinct model names should each trigger their own /api/show call"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_caches_failures() {
+        // The failure path is also cached: a model that
+        // failed once shouldn't trigger repeat queries.
+        let transport = FakeShowTransport::failing();
+        let provider = provider_with_transport(Box::new(transport.clone()));
+        let first = provider.tool_call_family_hint("unknown:model").await;
+        let second = provider.tool_call_family_hint("unknown:model").await;
+        assert!(first.is_none());
+        assert!(second.is_none());
+        assert_eq!(
+            transport.call_count(),
+            1,
+            "failed lookups cache the failure; second call doesn't retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_missing_details_returns_none() {
+        let transport = FakeShowTransport::ok(r#"{"modelfile": "FROM whatever"}"#);
+        let provider = provider_with_transport(Box::new(transport));
+        let family = provider.tool_call_family_hint("any:model").await;
+        assert!(
+            family.is_none(),
+            "missing details.family returns None even on HTTP success"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_127_family_hint_empty_family_returns_none() {
+        // Edge case: details.family is an empty string;
+        // treat as no hint (string is non-discriminating).
+        let transport = FakeShowTransport::ok(r#"{"details": {"family": "  "}}"#);
+        let provider = provider_with_transport(Box::new(transport));
+        let family = provider.tool_call_family_hint("any:model").await;
+        assert!(family.is_none());
     }
 }
