@@ -129,6 +129,23 @@ const WRAPPERS: &[WrapperSpec] = &[
         open: "<|tool_call|>",
         close: "<|/tool_call|>",
     },
+    // Gemma 3 markdown fence — `\`\`\`tool_code` open,
+    // `\`\`\`` close. Inner is Python-call syntax
+    // (`func.name(k1=v1, k2=v2)`), which the
+    // `parse_python_call` parser translates into JSON
+    // arguments. Multiple calls per fence are extracted
+    // independently. Falls back to JSON shapes if the
+    // inner isn't valid Python-call syntax (covers
+    // operators who paste JSON inside `tool_code` fences).
+    //
+    // Tag is `"tool_code_fence"` (not `"tool_code"`) so
+    // auditors can grep cleanly against the bare
+    // `<tool_code>` HTML-style wrapper.
+    WrapperSpec {
+        tag: "tool_code_fence",
+        open: "```tool_code",
+        close: "```",
+    },
 ];
 
 /// Scan `text` for every textual tool-call block and return
@@ -226,6 +243,18 @@ fn parse_inner(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
             }
         }
         return out;
+    }
+
+    // Gemma 3 markdown-fence wrapper: try Python-call
+    // syntax first (the training format), then fall back
+    // to JSON shapes so operators who pasted JSON inside
+    // a `tool_code` fence still extract.
+    if wrapper_tag == "tool_code_fence" {
+        let py_calls = parse_python_call(inner, wrapper_tag);
+        if !py_calls.is_empty() {
+            return py_calls;
+        }
+        // Fall through to the JSON path below.
     }
 
     // JSON shapes first for the remaining wrappers.
@@ -412,6 +441,402 @@ fn coerce_xml_param_value(raw: &str) -> Value {
     match serde_json::from_str::<Value>(trimmed) {
         Ok(v) => v,
         Err(_) => Value::String(raw.to_string()),
+    }
+}
+
+// ========================================================
+// Phase 127 Task 4 — Gemma 3 Python-call parser.
+//
+// Gemma 3 (per Google's "function calling with Gemma"
+// docs) emits tool invocations as Python expression
+// syntax inside a ```tool_code``` markdown fence:
+//
+//   ```tool_code
+//   fs.write(path='test.txt', content='hi')
+//   ```
+//
+// This parser walks the inner with a small hand-written
+// recursive-descent grammar (no Python AST dependency).
+// One or more calls per fence are supported; each call
+// becomes an `ExtractedToolCall` with arguments translated
+// from Python kwargs into a JSON object. Unknown
+// identifiers, malformed syntax, and unterminated strings
+// all silently drop the offending call — matching the
+// Phase 126 permissive-parse posture.
+//
+// Supported value forms:
+//   - 'single-quoted' / "double-quoted" strings (with
+//     `\\`, `\'`, `\"`, `\n`, `\t`, `\r` escapes)
+//   - Integers (`42`, `-3`) and floats (`0.5`, `-1.0`,
+//     `1e3`)
+//   - Booleans (`True`, `False`) → JSON true/false
+//   - `None` → JSON null
+//   - Lists (`[v, ...]`) and dicts (`{"k": v, ...}`)
+//     recursing on value
+//
+// Known limitations of the MVP:
+//   - Dict keys must be STRING literals (Python allows
+//     numeric/bool keys; tool kwargs realistically never
+//     do).
+//   - No bytestring (`b'...'`), no raw string (`r'...'`),
+//     no f-string. These don't appear in tool-call
+//     emissions.
+//   - No identifier values — only literals. A model
+//     emitting `func(arg=variable)` drops; tool args are
+//     always literal.
+// ========================================================
+
+/// Parse the inner of a `\`\`\`tool_code` fence as a
+/// sequence of Python-style function calls. Returns one
+/// `ExtractedToolCall` per parsed call; an empty Vec means
+/// the inner didn't match the grammar (the caller falls
+/// back to alternative parsers).
+fn parse_python_call(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
+    let mut out = Vec::new();
+    let mut p = PyParser::new(inner);
+    loop {
+        p.skip_whitespace_and_separators();
+        if p.at_end() {
+            break;
+        }
+        match p.parse_call() {
+            Some((name, args)) => {
+                out.push(ExtractedToolCall {
+                    tool_name: name,
+                    arguments: Value::Object(args),
+                    wrapper_tag: wrapper_tag.to_string(),
+                    inner_format: "python-call".to_string(),
+                });
+            }
+            // Couldn't parse from this position — bail.
+            // Previously-parsed calls are kept; the parser
+            // is permissive (drops only what didn't parse).
+            None => break,
+        }
+    }
+    out
+}
+
+struct PyParser<'a> {
+    src: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> PyParser<'a> {
+    fn new(src: &'a str) -> Self {
+        Self {
+            src: src.as_bytes(),
+            pos: 0,
+        }
+    }
+
+    fn at_end(&self) -> bool {
+        self.pos >= self.src.len()
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.src.get(self.pos).copied()
+    }
+
+    fn advance(&mut self) -> Option<u8> {
+        let c = self.peek()?;
+        self.pos += 1;
+        Some(c)
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.peek() {
+            if matches!(c, b' ' | b'\t' | b'\n' | b'\r') {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Like `skip_whitespace` but also consumes `;`
+    /// separators between calls. Gemma 3 typically uses
+    /// newlines between calls but we tolerate semicolons
+    /// for robustness.
+    fn skip_whitespace_and_separators(&mut self) {
+        loop {
+            let before = self.pos;
+            self.skip_whitespace();
+            while self.peek() == Some(b';') {
+                self.pos += 1;
+            }
+            if self.pos == before {
+                break;
+            }
+        }
+    }
+
+    fn match_byte(&mut self, b: u8) -> bool {
+        if self.peek() == Some(b) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `IDENT := [A-Za-z_][A-Za-z_0-9]*`
+    fn parse_ident(&mut self) -> Option<String> {
+        let start = self.pos;
+        let first = self.peek()?;
+        if !(first.is_ascii_alphabetic() || first == b'_') {
+            return None;
+        }
+        self.pos += 1;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        Some(
+            std::str::from_utf8(&self.src[start..self.pos])
+                .ok()?
+                .to_string(),
+        )
+    }
+
+    /// `DOTTED := IDENT ('.' IDENT)*`
+    fn parse_dotted_ident(&mut self) -> Option<String> {
+        let start = self.pos;
+        self.parse_ident()?;
+        loop {
+            let save = self.pos;
+            if self.peek() != Some(b'.') {
+                break;
+            }
+            self.pos += 1;
+            if self.parse_ident().is_none() {
+                self.pos = save;
+                break;
+            }
+        }
+        Some(
+            std::str::from_utf8(&self.src[start..self.pos])
+                .ok()?
+                .to_string(),
+        )
+    }
+
+    /// `CALL := DOTTED '(' [ARGS] ')'`. Returns
+    /// `(name, kwargs_map)`.
+    fn parse_call(&mut self) -> Option<(String, serde_json::Map<String, Value>)> {
+        let name = self.parse_dotted_ident()?;
+        self.skip_whitespace();
+        if !self.match_byte(b'(') {
+            return None;
+        }
+        let mut args = serde_json::Map::<String, Value>::new();
+        loop {
+            self.skip_whitespace();
+            if self.match_byte(b')') {
+                break;
+            }
+            let key = self.parse_ident()?;
+            self.skip_whitespace();
+            if !self.match_byte(b'=') {
+                return None;
+            }
+            self.skip_whitespace();
+            let val = self.parse_value()?;
+            args.insert(key, val);
+            self.skip_whitespace();
+            if self.match_byte(b',') {
+                continue;
+            }
+            if self.match_byte(b')') {
+                break;
+            }
+            // Neither `,` nor `)` — syntax error.
+            return None;
+        }
+        Some((name, args))
+    }
+
+    /// `VALUE := STRING | NUMBER | BOOL | NONE | LIST | DICT`
+    fn parse_value(&mut self) -> Option<Value> {
+        self.skip_whitespace();
+        let c = self.peek()?;
+        match c {
+            b'"' | b'\'' => self.parse_string(),
+            b'[' => self.parse_list(),
+            b'{' => self.parse_dict(),
+            b'-' | b'+' => self.parse_number(),
+            d if d.is_ascii_digit() => self.parse_number(),
+            a if a.is_ascii_alphabetic() || a == b'_' => self.parse_keyword(),
+            _ => None,
+        }
+    }
+
+    /// `STRING := ' ... ' | " ... "` with backslash escapes
+    /// (`\\`, `\'`, `\"`, `\n`, `\t`, `\r`). Unknown escape
+    /// sequences are preserved verbatim (`\x` → `\x`) so
+    /// the parser doesn't silently corrupt operator
+    /// payloads.
+    fn parse_string(&mut self) -> Option<Value> {
+        let quote = self.advance()?;
+        if quote != b'"' && quote != b'\'' {
+            return None;
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            let c = self.advance()?;
+            if c == quote {
+                let s = String::from_utf8(buf).ok()?;
+                return Some(Value::String(s));
+            }
+            if c == b'\\' {
+                let next = self.advance()?;
+                match next {
+                    b'\\' => buf.push(b'\\'),
+                    b'\'' => buf.push(b'\''),
+                    b'"' => buf.push(b'"'),
+                    b'n' => buf.push(b'\n'),
+                    b't' => buf.push(b'\t'),
+                    b'r' => buf.push(b'\r'),
+                    other => {
+                        buf.push(b'\\');
+                        buf.push(other);
+                    }
+                }
+            } else {
+                buf.push(c);
+            }
+        }
+    }
+
+    /// `NUMBER := [+-]? DIGITS ( '.' DIGITS )? ( [eE] [+-]? DIGITS )?`
+    /// (Note: `.5` without leading digit is NOT supported.
+    /// Gemma 3 emits canonical numbers; the model would
+    /// have to be unusual to emit `.5`.)
+    fn parse_number(&mut self) -> Option<Value> {
+        let start = self.pos;
+        if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+            self.pos += 1;
+        }
+        let int_start = self.pos;
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+            self.pos += 1;
+        }
+        if self.pos == int_start {
+            // No digits after the sign — not a number.
+            return None;
+        }
+        let mut is_float = false;
+        if self.peek() == Some(b'.') {
+            is_float = true;
+            self.pos += 1;
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.pos += 1;
+            }
+        }
+        if matches!(self.peek(), Some(b'e') | Some(b'E')) {
+            is_float = true;
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+                self.pos += 1;
+            }
+            let exp_start = self.pos;
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            if self.pos == exp_start {
+                // Trailing exponent with no digits — invalid.
+                return None;
+            }
+        }
+        let s = std::str::from_utf8(&self.src[start..self.pos]).ok()?;
+        if is_float {
+            let f = s.parse::<f64>().ok()?;
+            serde_json::Number::from_f64(f).map(Value::Number)
+        } else {
+            s.parse::<i64>().ok().map(|i| Value::Number(i.into()))
+        }
+    }
+
+    /// `BOOL | NONE`. Any other identifier is rejected
+    /// (Python supports identifier expressions but tool
+    /// kwargs realistically only use literals).
+    fn parse_keyword(&mut self) -> Option<Value> {
+        let start = self.pos;
+        let ident = self.parse_ident()?;
+        match ident.as_str() {
+            "True" => Some(Value::Bool(true)),
+            "False" => Some(Value::Bool(false)),
+            "None" => Some(Value::Null),
+            _ => {
+                // Not a recognized literal; rewind so the
+                // outer parser fails cleanly.
+                self.pos = start;
+                None
+            }
+        }
+    }
+
+    /// `LIST := '[' [VALUE (',' VALUE)*] ']'`
+    fn parse_list(&mut self) -> Option<Value> {
+        if !self.match_byte(b'[') {
+            return None;
+        }
+        let mut elements: Vec<Value> = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.match_byte(b']') {
+                break;
+            }
+            let v = self.parse_value()?;
+            elements.push(v);
+            self.skip_whitespace();
+            if self.match_byte(b',') {
+                continue;
+            }
+            if self.match_byte(b']') {
+                break;
+            }
+            return None;
+        }
+        Some(Value::Array(elements))
+    }
+
+    /// `DICT := '{' [STRING ':' VALUE (',' STRING ':' VALUE)*] '}'`.
+    /// Keys must be string literals.
+    fn parse_dict(&mut self) -> Option<Value> {
+        if !self.match_byte(b'{') {
+            return None;
+        }
+        let mut entries = serde_json::Map::<String, Value>::new();
+        loop {
+            self.skip_whitespace();
+            if self.match_byte(b'}') {
+                break;
+            }
+            let key_val = self.parse_string()?;
+            let Value::String(key) = key_val else {
+                return None;
+            };
+            self.skip_whitespace();
+            if !self.match_byte(b':') {
+                return None;
+            }
+            self.skip_whitespace();
+            let val = self.parse_value()?;
+            entries.insert(key, val);
+            self.skip_whitespace();
+            if self.match_byte(b',') {
+                continue;
+            }
+            if self.match_byte(b'}') {
+                break;
+            }
+            return None;
+        }
+        Some(Value::Object(entries))
     }
 }
 
@@ -1159,6 +1584,307 @@ mod tests {
         assert_eq!(
             calls[0].inner_format, "json-name-arguments",
             "and uses the single-object JSON path, not the list path"
+        );
+    }
+
+    // ====================================================
+    // Phase 127 Task 4 — Gemma 3 ```tool_code` python-fence
+    // wrapper + Python-call inner-format parser.
+    //
+    // Gemma 3 emits tool calls as Python expression syntax
+    // inside a markdown `tool_code` fence:
+    //
+    //   ```tool_code
+    //   fs.write(path='test.txt', content='hi')
+    //   ```
+    //
+    // The wrapper tag is `"tool_code_fence"` (distinct from
+    // the bare `<tool_code>` wrapper) and the inner_format
+    // is `"python-call"`.
+    // ====================================================
+
+    #[test]
+    fn phase_127_gemma3_python_fence_single_call() {
+        let text =
+            "```tool_code\nfs.write(path='test.txt', content='hi')\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].wrapper_tag, "tool_code_fence");
+        assert_eq!(calls[0].inner_format, "python-call");
+        assert_eq!(calls[0].arguments["path"], "test.txt");
+        assert_eq!(calls[0].arguments["content"], "hi");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_no_args() {
+        let text = "```tool_code\ntime.now()\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "time.now");
+        assert_eq!(calls[0].arguments, json!({}));
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_int_arg() {
+        let text = "```tool_code\ntask.set(count=42)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["count"], 42);
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_negative_int() {
+        let text = "```tool_code\nmath.shift(offset=-3)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["offset"], -3);
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_float_arg() {
+        let text = "```tool_code\ntask.set(ratio=0.75)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["ratio"].as_f64(), Some(0.75));
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_float_with_exponent() {
+        let text = "```tool_code\nfn(big=1.5e3)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["big"].as_f64(), Some(1500.0));
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_bool_true() {
+        let text = "```tool_code\nfeature.set(enabled=True)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["enabled"], true);
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_bool_false() {
+        let text = "```tool_code\nfeature.set(enabled=False)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["enabled"], false);
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_none_value() {
+        let text = "```tool_code\nmemory.read(topic=None)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].arguments["topic"].is_null());
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_list_arg() {
+        let text = "```tool_code\ntask.set(tags=[1, 2, 3])\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["tags"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_nested_dict_arg() {
+        let text =
+            r#"```tool_code
+task.set(meta={"size": 42, "owner": "alice"})
+```"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["meta"]["size"], 42);
+        assert_eq!(calls[0].arguments["meta"]["owner"], "alice");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_single_quoted_string() {
+        let text = "```tool_code\nfs.write(path='single.txt')\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "single.txt");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_double_quoted_string() {
+        let text = "```tool_code\nfs.write(path=\"double.txt\")\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "double.txt");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_string_with_escapes() {
+        // Escape sequences inside string literals.
+        let text =
+            r#"```tool_code
+fs.write(content='line one\nline two\t\\tabbed')
+```"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["content"],
+            "line one\nline two\t\\tabbed"
+        );
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_dotted_function_name() {
+        // Three-level dotted name (`health.check.add`).
+        let text =
+            "```tool_code\nhealth.check.add(url='https://example.com', interval_minutes=15)\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "health.check.add");
+        assert_eq!(calls[0].arguments["interval_minutes"], 15);
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_multi_call_per_fence() {
+        // Multiple calls inside one fence, separated by
+        // newlines. Each becomes its own ExtractedToolCall.
+        let text =
+            "```tool_code\nfs.write(path='a')\nfs.read(path='b')\nmemory.read(topic='c')\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[1].tool_name, "fs.read");
+        assert_eq!(calls[2].tool_name, "memory.read");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_multi_call_with_semicolons() {
+        // Tolerates `;` as a separator (Gemma 3 usually
+        // uses newlines, but defensive).
+        let text =
+            "```tool_code\nfs.write(path='a'); fs.read(path='b')\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[1].tool_name, "fs.read");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_multiline_call() {
+        // Python-style multi-line call with kwargs on
+        // separate lines.
+        let text = r#"```tool_code
+fs.write(
+    path='multiline.txt',
+    content='hi'
+)
+```"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "multiline.txt");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_drops_unclosed_paren() {
+        let text = "```tool_code\nfs.write(path='x'\n```";
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_drops_missing_equals() {
+        let text = "```tool_code\nfs.write('positional-arg')\n```";
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "positional args (no `key=value`) drop — tool kwargs only"
+        );
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_drops_unmatched_quote() {
+        let text = "```tool_code\nfs.write(path='unterminated)\n```";
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_drops_identifier_value() {
+        // Identifier values (variables) aren't supported —
+        // tool kwargs realistically only use literals. A
+        // call with an identifier value drops.
+        let text = "```tool_code\nfs.write(path=variable_ref)\n```";
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_empty_list_and_dict() {
+        let text = "```tool_code\nfn(tags=[], meta={})\n```";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["tags"], json!([]));
+        assert_eq!(calls[0].arguments["meta"], json!({}));
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_falls_back_to_json() {
+        // Operators sometimes paste JSON into a tool_code
+        // fence; the wrapper falls back to JSON shapes
+        // when Python-call doesn't match.
+        let text =
+            r#"```tool_code
+{"name": "fs.write", "arguments": {"path": "x"}}
+```"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(
+            calls[0].wrapper_tag, "tool_code_fence",
+            "wrapper_tag preserves the fence variant even when JSON-shape inner matches"
+        );
+        assert_eq!(calls[0].inner_format, "json-name-arguments");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_only_extracts_tool_code_language() {
+        // `\`\`\`python` (or any other language tag) does
+        // NOT extract — only `\`\`\`tool_code` is the
+        // Gemma 3 protocol fence.
+        let text = "```python\nfs.write(path='x')\n```";
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "only `tool_code` language fence triggers Python-call extraction"
+        );
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_with_surrounding_prose() {
+        let text = "Let me save that for you.\n\n```tool_code\nfs.write(path='note.txt', content='saved')\n```\n\nDone.";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].arguments["content"], "saved");
+    }
+
+    #[test]
+    fn phase_127_gemma3_python_fence_mixed_value_types() {
+        // The end-to-end test: a realistic call with one
+        // of each value type the grammar supports.
+        let text = r#"```tool_code
+health.check.add(url='https://example.com', interval_minutes=15, enabled=True, alert=None, tags=['critical', 'oncall'], thresholds={"latency_ms": 500})
+```"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "health.check.add");
+        assert_eq!(calls[0].arguments["url"], "https://example.com");
+        assert_eq!(calls[0].arguments["interval_minutes"], 15);
+        assert_eq!(calls[0].arguments["enabled"], true);
+        assert!(calls[0].arguments["alert"].is_null());
+        assert_eq!(calls[0].arguments["tags"], json!(["critical", "oncall"]));
+        assert_eq!(
+            calls[0].arguments["thresholds"]["latency_ms"],
+            500
         );
     }
 }
