@@ -414,7 +414,159 @@ After Phase 128, Phase 129 candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 128 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 19; PRODUCT.md HOLD → 19;
-lib.rs HOLD → 2; test count `+150` to `+200`; zero new
-deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; Chapter F pattern
+  is already established from Phase 123. Streak: 18 →
+  **19**.
+
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 + P10 + P11 + P12 cover this case
+  exactly as Phase 123. Streak: 18 → **19**.
+
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`9692e5d…` unchanged). All Phase 128 work lives in
+  `aivyx-calendar` (new crate), `aivyx-tool` (harness
+  lift), `aivyx-gmail` + `aivyx-toolkit` (harness
+  migration), and `aivyx-capability` (two new bases).
+  NO core changes. Streak: 1 → **2** (Phase 127 rebuilt
+  to 1 from the Phase 126 reset; Phase 128 ticks to 2).
+
+**Test count `+167` landed inside the predicted `+150 to
++200` range** — honest report. Per-task breakdown:
+
+- Task 2 (SDK harness lift): **+5** — lifted module ships
+  with its 4 behavior tests + 1 channel_name-format
+  convention test. gmail/toolkit harness tests removed
+  (1108 → 1108 unchanged elsewhere).
+- Task 3 (`aivyx-calendar` skeleton + OAuth copy +
+  capability bases): **+82** — substantial inherited
+  body from the verbatim oauth + auth_cli copy (80
+  tests from gmail's substrate carry over), plus 1
+  count-test rename (capability `KNOWN_BASES_COUNT`
+  delta 57 → 59), plus 1 new "default-scopes-contain-
+  broad-calendar" test on the Calendar-narrowed default.
+- Task 4 (`calendar.list_events`): **+21** — input
+  validation, output transformation (date/dateTime/
+  minimal), URL encoding, schema introspection,
+  integration sanity.
+- Task 5 (`calendar.get_event`): **+17** — 15 tests in
+  get_event + 3 URL-encoder tests RELOCATED to
+  `tools::shared_tests` - 3 dropped from list_events (no
+  net change to the URL-encoder coverage). The +17 nets
+  out: +15 get_event + 3 shared - 1 duplicate path that
+  list_events covered before relocation.
+- Task 6 (`calendar.create_event`): **+17** — input
+  validation (10), wire-shape translation (4), schema
+  introspection (1), integration sanity (2).
+- Task 7 (`calendar.update_event`): **+16** — input
+  parsing (9), PATCH body shape (3), schema
+  introspection (1), integration sanity (3).
+- Task 8 (`calendar.delete_event`): **+11** — input
+  parsing (7), schema (2), integration sanity (2).
+
+Total visible test count: aivyx-calendar lib 162 +
+aivyx-tool +5 net = +167 over the Phase 127 baseline.
+
+**Zero new workspace dependencies** as predicted. The
+calendar crate's Cargo.toml mirrors aivyx-gmail's
+deps verbatim (reqwest, serde, serde_json, base64, toml,
+uuid, thiserror, async-trait, tokio); all already
+workspace-coherent.
+
+**Zero clippy warnings** workspace-wide
+(`cargo clippy --workspace --all-targets --all-features
+-- -D warnings`). Three transient lints fixed during dev:
+1. `clippy::manual_contains` on a `.iter().any(|s| *s ==
+   ...)` pattern in the new scope test → `.contains(&...)`.
+2. `clippy::doc_lazy_continuation` on a doc-comment
+   paragraph in `main.rs::run_ipc_loop` that started a
+   list item by mistake ("+ tokens" → "and tokens").
+3. `non_snake_case` on a test function name
+   `event_summary_flattens_dateTime_form` →
+   `event_summary_flattens_date_time_form`.
+4. `clippy::map_clone` on `.map(|ep| ep.clone())` →
+   `.cloned()`.
+
+**Q-block went through as picked.** Three Recommended + 1
+non-Recommended (Q3b 5-tool surface over Q3a 4-tool
+default). The Q3b richer surface landed cleanly with
+test parity per tool (~16 tests each); the operator's
+"doubled write-tool review surface" risk at sign-off
+materialized as one additional tool task (update_event)
+that mirrored create_event's shape — modest extra surface
+that paid off in operator usability (`update_event` is a
+common operator ask).
+
+**Harness lift behavior preservation confirmed.** Phase
+125 exit's "twice-duplicated harness" finding closed: at
+Phase 128 entry, 834 lines of duplication across
+`aivyx-gmail/src/harness.rs` + `aivyx-toolkit/src/harness.rs`.
+At Phase 128 Task 2 commit, 488 lines of substrate in
+`aivyx-tool/src/multi_harness.rs` plus two 17-line
+re-export shims preserving every consumer's existing
+public API. Net diff: **-304 LoC** despite adding the
+new substrate file. All 1,108 prior tests across gmail
++ toolkit passed unchanged; the lift is genuinely
+behavior-preserving.
+
+**OAuth copy is N=2 in-tree as predicted.** Phase 128
+Q2a Recommended deferred the OAuth substrate lift to
+N=3 (next Google integration). The two copies are
+documented honestly in each crate's `oauth/mod.rs`
+preamble; the lift becomes the natural opener for the
+phase that ships Chapter F #3 if that integration is
+Google-flavored (Drive / Photos / Sheets).
+
+**Live verification deliberately skipped** per Q4a
+Recommended posture. Substrate is unit-tested per-tool
+(162 tests in the calendar crate); OAuth flow inherits
+the integration-tested fake transport pattern from
+Phase 123. Operators can run an interactive session
+post-exit to validate empirically against their real
+Google account; not a phase exit gate. Matches the
+Phase 127 precedent.
+
+**Honest scope risks at sign-off — status at exit:**
+
+- **Q3b's doubled write-tool review surface materialized
+  but stayed tractable.** Five write tools (create +
+  update + delete) shipped without scope reduction; each
+  tool's input-validation + wire-shape tests caught the
+  routine "what if the operator passes empty / wrong-
+  shape / missing" cases. No PR-merge-time scope
+  reduction needed.
+
+- **OAuth copy is N=2 in-tree** as predicted. The third
+  copy triggers the OAuth substrate lift the same way
+  the harness lift trigger fired at N=3 this phase.
+  Honest tracking continues in `oauth/mod.rs` preambles.
+
+- **Harness lift did NOT break behavior** as feared at
+  sign-off. The behavior-preservation tests across gmail
+  + toolkit all passed unchanged post-lift; the
+  `channel_name` parameterization (was hard-coded
+  literal; now derived from `tool_process_name`) landed
+  at identical values for both consumers because both
+  passed matching process-name strings pre-lift.
+
+- **Google Calendar API quotas remain operator-side.**
+  INSTALL.md documents the auth-init / scope-narrowing
+  paths; quota tuning at the GCP project level is
+  operator responsibility (mirrors Phase 123 posture).
+
+- **OAuth scope creep risk acknowledged at sign-off
+  stays.** Default is the broad `auth/calendar` per
+  Phase 128 sign-off framing; INSTALL.md documents the
+  three narrower options (`calendar.events`,
+  `calendar.readonly`, `calendar.events.readonly`) with
+  the tradeoff that write tools fail with a clear
+  "scope not granted" message when narrower scopes are
+  in effect.
+
+- **Sixteenth consecutive deferral of the Channel
+  Activation Milestone** as forecast. Audit's #1.
+  Sixteen deferrals is honest tracking; the milestone's
+  status doesn't change just because we keep picking
+  operator-tool-surface phases over verification work.

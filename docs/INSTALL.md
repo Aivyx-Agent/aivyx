@@ -1808,6 +1808,177 @@ fallback.
   shared vault becomes worth doing once enough
   integrations exist to feel the duplication.
 
+### Google Calendar (Phase 128)
+
+Chapter F second integration. `aivyx-calendar` is a
+separate binary the operator installs and wires into
+`aivyx.toml` via `[[tool_process]]` — same shape as the
+Gmail tool process. Calendar uses the SAME Google OAuth
+flow as Gmail, just a different scope. Most operators
+will reuse their existing Gmail OAuth client.
+
+#### One-time operator setup
+
+Two paths depending on whether you already set up Gmail:
+
+**Path A — you already have an Aivyx Gmail OAuth client
+in your GCP project (recommended):**
+
+1. **Enable the Calendar API** in the same GCP project
+   you used for Gmail (Console → APIs & Services →
+   Enable APIs → "Google Calendar API").
+2. **Add the Calendar scope** to your OAuth consent
+   screen: `https://www.googleapis.com/auth/calendar`
+   (the broad read+write scope — narrower options below).
+3. **Write
+   `~/.aivyx/tool-processes/calendar/config.toml`** with
+   the SAME `client_id` + `client_secret` you used for
+   Gmail:
+
+   ```toml
+   client_id = "XXXXXXXX.apps.googleusercontent.com"
+   client_secret = "GOCSPX-..."
+   redirect_uri = "http://127.0.0.1:8766/callback"
+   ```
+
+   Note the different `redirect_uri` port from Gmail's
+   `8765` — each tool process binds its own loopback
+   port for the auth-code callback. Add `8766` to your
+   OAuth client's Authorized redirect URIs in the GCP
+   Console.
+
+4. **Run `aivyx-calendar auth init`** to grant the
+   Calendar scope. The browser will show the existing
+   consent screen with the new Calendar scope listed.
+
+**Path B — you're not running Gmail and Calendar is your
+first Google integration:**
+
+Follow the Phase 123 Gmail setup steps (Console → new
+GCP project → enable Calendar API → create OAuth client
+→ etc) substituting Calendar for Gmail throughout.
+
+#### Scope-narrowing options
+
+The default `auth/calendar` scope grants read+write
+across ALL calendars accessible to the authenticated
+user. Operators wanting a narrower posture can supply a
+`scopes` field in `config.toml`:
+
+```toml
+# Events-only (no calendar list / settings access):
+scopes = ["https://www.googleapis.com/auth/calendar.events"]
+
+# Read-only across all calendars:
+scopes = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+# Read-only events only:
+scopes = ["https://www.googleapis.com/auth/calendar.events.readonly"]
+```
+
+The default is the broad scope per Phase 128 sign-off —
+fewer "re-auth with new scope" loops for operators. The
+write tools (create / update / delete) all error with a
+clear "scope not granted" message when the narrower
+read-only scopes are in effect, so the failure surface is
+operator-discoverable rather than silent.
+
+#### `aivyx.toml` `[[tool_process]]` registration
+
+```toml
+[[tool_process]]
+name = "aivyx-calendar"
+command = "/path/to/aivyx-calendar"
+# The process inherits HOME for OAuth token file resolution.
+inherit_env = ["HOME"]
+```
+
+The tool process advertises five tools to the daemon at
+handshake:
+
+| Tool | Capability | Description |
+|---|---|---|
+| `calendar.list_events` | `calendar.read` | Range query a calendar; returns event summaries with `id`, `summary`, `start`, `end`, `location`, `attendee_count`. |
+| `calendar.get_event` | `calendar.read` | Fetch full event detail by ID; includes description, organizer, attendee response statuses, recurrence rule, conference data. |
+| `calendar.create_event` | `calendar.write` | Create a new event; required `summary`/`start`/`end`, optional attendees/location/etc. Trusted-tier-only by default. |
+| `calendar.update_event` | `calendar.write` | Partial-patch an existing event by ID. Only fields you supply are changed; everything else is preserved. Trusted-tier-only. |
+| `calendar.delete_event` | `calendar.write` | Delete an event by ID. Idempotent — already-deleted events succeed with `was_already_deleted: true`. Trusted-tier-only. |
+
+#### Per-role capability grants
+
+`calendar.read` and `calendar.write` default to
+Trusted-tier-only at the ceiling level (matches the
+email.* / web.search third-party-tool-process gating
+pattern). Operators who want to grant Calendar access to
+a non-Trusted role can do so via `capability_scopes` in
+that role's `aivyx.toml` entry:
+
+```toml
+[[role]]
+name = "calendar-assistant"
+trust_tier = "SemiTrusted"
+capability_scopes = ["calendar.read", "calendar.write"]
+```
+
+Narrower grants (just read; just write certain calendars
+via scope qualifier) are supported by the existing
+capability machinery — same as for the email.* /
+web.search bases.
+
+#### Operator-side troubleshooting
+
+- **`auth init` opens the wrong consent screen.** You
+  probably forgot to enable the Calendar API on the GCP
+  project. Console → APIs & Services → "+ ENABLE APIS
+  AND SERVICES" → search "Google Calendar API".
+- **`auth init` succeeds but `calendar.list_events`
+  returns "Insufficient Permission".** The Calendar scope
+  wasn't requested at auth time. Re-run `aivyx-calendar
+  auth init` after confirming
+  `auth/calendar` is in your `scopes` config (or you're
+  using the default).
+- **`calendar.update_event` returns "Not Found"** even
+  with a valid event_id. The event_id may belong to a
+  calendar you don't have write access to. Use
+  `calendar.list_events` first with the right
+  `calendar_id` to confirm visibility, then re-fetch
+  with `calendar.get_event` to see the
+  authoritative event_id (sometimes recurring-event
+  instance IDs differ from the source event's ID).
+- **`calendar.delete_event` returns `was_already_deleted:
+  true`** when you expected a fresh delete. Someone else
+  (or another tool call) already deleted it. The result
+  is still "the event is gone" so the post-condition
+  holds; check the audit chain for prior deletions.
+- **Recurring events return many entries.** The
+  `singleEvents=true` query param (always on in
+  `calendar.list_events`) expands recurrences. If you
+  want the source recurring-event template, pass the
+  recurring event's ID directly to
+  `calendar.get_event` — the response will include the
+  `recurrence` array (RRULE strings).
+
+#### What Phase 128 deliberately leaves to follow-on phases
+
+- **No free/busy query.** A `calendar.freebusy` tool that
+  queries availability across multiple calendars in one
+  call would be the natural Phase 129+ candidate;
+  deferred until operator pressure surfaces.
+- **No calendar.list (calendar inventory).** The
+  authenticated user's calendar list is its own API
+  surface; `calendar.list_events` defaults to `primary`
+  which is enough for most operator flows.
+- **No batch operations.** Each tool does one API call;
+  bulk create/update/delete would need a separate
+  `calendar.batch.*` substrate. Out of scope for Phase
+  128; operator can compose via multiple sequential
+  tool calls.
+- **OAuth substrate still inline-copied per Phase 128
+  Q2a.** Two in-tree copies (gmail + calendar); the
+  lift to a shared `aivyx-google-oauth` crate triggers
+  at N=3 (next Google integration: Drive / Photos /
+  Sheets / etc).
+
 ## Operator-facing personal assistant capabilities (Chapter G)
 
 After Chapter F #1 (Gmail) shipped and the Phase 124 exit

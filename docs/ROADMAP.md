@@ -3537,9 +3537,9 @@ first-real-use signal.
 
 ## Phase 128 — Google Calendar Integration (Chapter F #2)
 
-**See [PHASE_128.md](PHASE_128.md).** Chapter F second
-integration; first Chapter F phase since Phase 123 shipped
-Gmail. Operator-pressure pick after Phase 127 exit listed
+**Frozen — see [PHASE_128.md](PHASE_128.md).** Chapter F
+second integration; first Chapter F phase since Phase 123
+shipped Gmail. Operator-pressure pick after Phase 127 exit listed
 Chapter F #2 / Chapter G #2 as operator-tool-surface
 candidates; Calendar picked over GitHub / Drive / Budget
 tracking for the "common operator ask, load-bearing for the
@@ -3602,19 +3602,33 @@ core changes. Zero new workspace deps. Test count `+150`
 to `+200` anchored on Phase 123's `+151` for 4 tools
 through OAuth.
 
-**Honest scope risks at sign-off:**
-- Q3b doubles the write-tool review surface vs Q3a;
-  PR-merge-time scope reduction is the escape hatch.
-- OAuth copy is N=2 in-tree; the third copy triggers
-  the OAuth lift. Honest tracking continues.
-- Harness lift could break behavior; behavior-
-  preservation tests across gmail + toolkit are the
-  load-bearing exit criterion.
-- Google Calendar API quotas (GCP project) — operator
-  responsibility; INSTALL.md documents.
-- OAuth scope creep risk (broad `auth/calendar` vs
-  narrower `auth/calendar.events`); INSTALL.md documents
-  both options.
+**Honest scope risks at sign-off, status at exit:**
+- Q3b's doubled write-tool review surface stayed
+  tractable; all five tools shipped without scope
+  reduction. Per-tool test parity (~16 tests each).
+- OAuth copy is N=2 in-tree as predicted; OAuth
+  substrate lift deferred to the next Google
+  integration (N=3 trigger).
+- Harness lift did NOT break behavior; all 1,108 prior
+  tests across gmail + toolkit pass unchanged. Net
+  diff -304 LoC despite adding 488 lines of new
+  substrate (488 - 2×417 + 2×17 = -312 LoC delta).
+- Google Calendar API quotas remain operator-side as
+  documented in INSTALL.md.
+- Default scope is the broad `auth/calendar`;
+  INSTALL.md documents three narrower options for
+  operators wanting tighter posture.
+
+**Streak predictions — three of three correct.**
+DESIGN.md HELD → 19; PRODUCT.md HELD → 19;
+`aivyx-core/src/lib.rs` HELD → 2 (Phase 127 rebuilt to
+1; Phase 128 ticks to 2). Test count `+167` landed
+inside the predicted `+150 to +200` range. Zero new
+workspace deps. Zero clippy warnings.
+
+**Q-block went through as picked.** Three Recommended
++ one non-Recommended (Q3b 5-tool surface). No mid-task
+re-asks.
 
 **Sixteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking continues.
