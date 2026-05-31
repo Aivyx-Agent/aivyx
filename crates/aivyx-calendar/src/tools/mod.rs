@@ -28,11 +28,13 @@
 //! per role).
 
 pub mod create_event;
+pub mod delete_event;
 pub mod get_event;
 pub mod list_events;
 pub mod update_event;
 
 pub use create_event::CalendarCreateEvent;
+pub use delete_event::CalendarDeleteEvent;
 pub use get_event::CalendarGetEvent;
 pub use list_events::CalendarListEvents;
 pub use update_event::CalendarUpdateEvent;
