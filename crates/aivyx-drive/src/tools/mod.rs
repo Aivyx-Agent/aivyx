@@ -7,9 +7,11 @@
 //! the harness's `Vec<Arc<dyn Tool>>`.
 
 pub mod get_metadata;
+pub mod list_folder;
 pub mod search;
 
 pub use get_metadata::DriveGetMetadata;
+pub use list_folder::DriveListFolder;
 pub use search::DriveSearch;
 
 /// Inline cap on file content for the base64-in-JSON
