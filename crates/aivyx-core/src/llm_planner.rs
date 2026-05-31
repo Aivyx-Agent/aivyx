@@ -795,8 +795,24 @@ impl TurnPlanner for LlmPlanner {
                     // the wrapper-tag is threaded into the per-call
                     // `extracted_from_text` audit field for
                     // forensic visibility.
-                    let extracted =
-                        crate::textual_tool_call::extract_tool_calls(&text);
+                    //
+                    // Phase 127 Task 7 — the extractor receives a
+                    // family-hint from the provider (Ollama queries
+                    // `/api/show` once per model; other providers
+                    // return None via the trait default). The hint
+                    // biases inner-shape priority — qwen-family
+                    // models prefer Qwen3-Coder XML over JSON
+                    // inside `<tool_call>`. Failure to determine
+                    // the family is silent — the substrate falls
+                    // back to the default permissive scan.
+                    let family_hint = self
+                        .provider
+                        .tool_call_family_hint(&self.config.model)
+                        .await;
+                    let extracted = crate::textual_tool_call::extract_tool_calls_with_hint(
+                        &text,
+                        family_hint.as_deref(),
+                    );
                     if !extracted.is_empty() {
                         // Synthesize ToolCallEnds with UUID call IDs
                         // (the protocol channel didn't issue any).
@@ -3592,5 +3608,223 @@ mod tests {
             "synthesized call_id carries the extraction prefix; got {:?}",
             assistant_msg.1[0].call_id
         );
+    }
+
+    // ====================================================
+    // Phase 127 Task 7 — planner composition with the new
+    // parser families. Each test confirms the end-to-end
+    // path works: model emits text in format X, planner
+    // extracts via the substrate, synthesizes a ToolCallEnd,
+    // dispatches to the registered tool. The `extracted_
+    // from_text` audit field carries the wrapper-tag through
+    // to the audit chain.
+    //
+    // The FakeLlmProvider used here does NOT override
+    // `tool_call_family_hint`, so the family hint is None
+    // and the substrate uses default priority order. The
+    // parsers don't ambiguously match on these inputs, so
+    // hint-less extraction produces correct results.
+    // ====================================================
+
+    #[tokio::test]
+    async fn phase_127_planner_extracts_qwen3_coder_xml() {
+        // Qwen3.5/3.6 emits XML inside `<tool_call>` per
+        // Ollama issue #14745. Phase 127 Task 2's parser
+        // catches it; the planner dispatches via the same
+        // Phase 120/101 helper as protocol tool calls.
+        let fs_write = FakeTool::new("fs.write");
+        let fs_write_id = fs_write.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "<tool_call>\
+                       <function=fs.write>\
+                       <parameter=path>test.txt</parameter>\
+                       <parameter=content>phase 127</parameter>\
+                       </function>\
+                       </tool_call>"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "write a file"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                extracted_from_text,
+                input,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_write_id);
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("tool_call"),
+                    "wrapper-tag for Qwen3-Coder XML extracted call"
+                );
+                assert_eq!(input["path"], "test.txt");
+                assert_eq!(input["content"], "phase 127");
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_127_planner_extracts_phi4_mini_list() {
+        // Phi-4-mini emits a JSON array inside the
+        // `<|tool_call|>` special-token wrapper. Even a
+        // single-element list goes through the JSON-list
+        // path. wrapper_tag is the literal `"|tool_call|"`
+        // (with bars).
+        let fs_write = FakeTool::new("fs.write");
+        let fs_write_id = fs_write.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: r#"<|tool_call|>[{"name": "fs.write", "arguments": {"path": "phi.txt"}}]<|/tool_call|>"#
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "x"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                extracted_from_text,
+                input,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_write_id);
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("|tool_call|"),
+                    "wrapper-tag carries the bars verbatim for grep-distinctness"
+                );
+                assert_eq!(input["path"], "phi.txt");
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_127_planner_extracts_gemma3_python_fence() {
+        // Gemma 3 emits Python-call syntax inside a
+        // ```tool_code` markdown fence. Phase 127 Task 4's
+        // hand-written recursive-descent parser translates
+        // Python kwargs into JSON arguments.
+        let fs_write = FakeTool::new("fs.write");
+        let fs_write_id = fs_write.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "```tool_code\nfs.write(path='gemma.txt', content='hi')\n```"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "x"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                extracted_from_text,
+                input,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_write_id);
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("tool_code_fence"),
+                    "wrapper-tag distinguishes the markdown fence from bare <tool_code>"
+                );
+                assert_eq!(input["path"], "gemma.txt");
+                assert_eq!(input["content"], "hi");
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_127_planner_extracts_bare_json() {
+        // Some Ollama models (qwen3:32b per issue #11662)
+        // emit raw JSON with no wrapper at all. Phase 127
+        // Task 5's bare-JSON fallback catches it when the
+        // entire response is exactly one tool-call-shaped
+        // JSON object. wrapper_tag is `"(bare)"` to
+        // communicate "no wrapper detected".
+        let fs_read = FakeTool::new("fs.read");
+        let fs_read_id = fs_read.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: r#"{"name": "fs.read", "arguments": {"path": "x"}}"#
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "x"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                extracted_from_text,
+                input,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_read_id);
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("(bare)"),
+                    "wrapper-tag for bare-JSON is `(bare)`"
+                );
+                assert_eq!(input["path"], "x");
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
     }
 }
