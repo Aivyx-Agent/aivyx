@@ -162,6 +162,12 @@ pub(crate) fn flatten_result(item: &Value) -> Value {
     })
 }
 
+/// Convenience: extract a page's title (when caller knows
+/// it's a page).
+pub(crate) fn extract_title_for_page(page: &Value) -> Value {
+    extract_title(page, "page")
+}
+
 /// Extract a plain-text title from a page or database
 /// object. Returns null when no title is set.
 fn extract_title(item: &Value, object_type: &str) -> Value {
