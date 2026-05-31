@@ -11,12 +11,14 @@ pub mod download_file;
 pub mod get_metadata;
 pub mod list_folder;
 pub mod search;
+pub mod upload_file;
 
 pub use create_folder::DriveCreateFolder;
 pub use download_file::DriveDownloadFile;
 pub use get_metadata::DriveGetMetadata;
 pub use list_folder::DriveListFolder;
 pub use search::DriveSearch;
+pub use upload_file::DriveUploadFile;
 
 /// Inline cap on file content for the base64-in-JSON
 /// substrate. Files above this size return metadata-only

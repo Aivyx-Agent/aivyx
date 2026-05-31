@@ -21,7 +21,7 @@ use aivyx_drive::auth_cli::{
 };
 use aivyx_drive::tools::{
     DriveCreateFolder, DriveDownloadFile, DriveGetMetadata, DriveListFolder,
-    DriveSearch,
+    DriveSearch, DriveUploadFile,
 };
 use aivyx_drive::{
     default_token_path, load_tokens, run_multi_tool_subprocess, DriveClient,
@@ -161,6 +161,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(DriveListFolder::new(Arc::clone(&client))),
         Arc::new(DriveCreateFolder::new(Arc::clone(&client))),
         Arc::new(DriveDownloadFile::new(Arc::clone(&client))),
+        Arc::new(DriveUploadFile::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-drive").await {
