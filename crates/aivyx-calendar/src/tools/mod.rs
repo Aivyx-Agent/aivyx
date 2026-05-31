@@ -30,10 +30,12 @@
 pub mod create_event;
 pub mod get_event;
 pub mod list_events;
+pub mod update_event;
 
 pub use create_event::CalendarCreateEvent;
 pub use get_event::CalendarGetEvent;
 pub use list_events::CalendarListEvents;
+pub use update_event::CalendarUpdateEvent;
 
 /// Minimal URL path-segment encoding shared across the
 /// calendar tools. Calendar IDs (and event IDs) may

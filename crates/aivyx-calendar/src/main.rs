@@ -21,7 +21,7 @@ use aivyx_calendar::auth_cli::{
 };
 use aivyx_calendar::oauth::{load_tokens, storage::default_token_path};
 use aivyx_calendar::tools::{
-    CalendarCreateEvent, CalendarGetEvent, CalendarListEvents,
+    CalendarCreateEvent, CalendarGetEvent, CalendarListEvents, CalendarUpdateEvent,
 };
 use aivyx_calendar::{run_multi_tool_subprocess, CalendarClient};
 use aivyx_core::Tool;
@@ -171,13 +171,13 @@ async fn run_ipc_loop() -> ExitCode {
     ));
 
     // Phase 128 Q3b — five-tool surface (list / get /
-    // create / update / delete). Tasks 4-8 populate this
-    // vector incrementally; Tasks 4 + 5 + 6 add
-    // list_events, get_event, and create_event.
+    // create / update / delete). Tasks 4-7 ship four;
+    // Task 8 adds delete_event.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(CalendarListEvents::new(Arc::clone(&client))),
         Arc::new(CalendarGetEvent::new(Arc::clone(&client))),
         Arc::new(CalendarCreateEvent::new(Arc::clone(&client))),
+        Arc::new(CalendarUpdateEvent::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-calendar").await {
