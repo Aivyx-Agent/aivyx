@@ -138,23 +138,46 @@ impl DriveClient {
         decode_json(resp).await
     }
 
-    /// GET `{DRIVE_API_BASE}{path}?alt=media` returning the
-    /// raw response bytes. Used by `drive.download_file`.
+    /// GET `{DRIVE_API_BASE}{path}` with `alt=media` query
+    /// param + optional caller-supplied additional params.
+    /// Returns raw response bytes. Used by
+    /// `drive.download_file` for regular-file fetches.
     pub async fn get_media(
         &self,
         path: &str,
         extra_query: &[(&str, String)],
     ) -> Result<Vec<u8>, DriveClientError> {
-        let token = self.ensure_fresh_token().await?;
-        let url = format!("{}{}", DRIVE_API_BASE, path);
         let mut query: Vec<(&str, String)> =
             vec![("alt", "media".to_string())];
         query.extend(extra_query.iter().map(|(k, v)| (*k, v.clone())));
+        self.get_bytes_raw(path, &query).await
+    }
+
+    /// GET `{DRIVE_API_BASE}{path}` with caller-supplied
+    /// query params (no `alt=media` auto-added). Used by
+    /// `drive.download_file` for Google-native `/export`
+    /// fetches where `alt=media` would conflict with the
+    /// `mimeType` export param.
+    pub async fn get_bytes(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, DriveClientError> {
+        self.get_bytes_raw(path, query).await
+    }
+
+    async fn get_bytes_raw(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, DriveClientError> {
+        let token = self.ensure_fresh_token().await?;
+        let url = format!("{}{}", DRIVE_API_BASE, path);
         let resp = self
             .http
             .get(&url)
             .bearer_auth(&token)
-            .query(&query)
+            .query(query)
             .send()
             .await
             .map_err(|e| DriveClientError::Transport(e.to_string()))?;
