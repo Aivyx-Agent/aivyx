@@ -1,0 +1,104 @@
+//! # aivyx-drive
+//!
+//! Google Drive third-party tool process for Aivyx.
+//! Chapter F #3 — Phase 129. Ships as a separate binary
+//! the operator installs and wires into `aivyx.toml` via
+//! `[[tool_process]]`. Per PRODUCT.md P10 (substrate is
+//! closed at thirteen tools forever; drive is third-party
+//! territory).
+//!
+//! ## Layout (Phase 129)
+//!
+//! - **OAuth substrate consumed from
+//!   [`aivyx_google_oauth`]** (Phase 129 Task 2 lift) —
+//!   no in-tree OAuth copy. Drive is the third Google
+//!   integration; the lifted substrate is paid for.
+//! - [`auth_cli`] — `aivyx-drive auth init / status /
+//!   revoke` operator-facing CLI subcommand surface.
+//! - [`drive_client`] — Google Drive v3 REST API client
+//!   (token-authenticated reqwest wrapper around
+//!   `https://www.googleapis.com/drive/v3/...` +
+//!   `https://www.googleapis.com/upload/drive/v3/...`
+//!   for uploads).
+//! - [`tools`] — seven `aivyx_core::Tool` impls per Phase
+//!   129 Q2b (operator-picked richer surface):
+//!   - `drive.search` (Task 4; `drive.read`)
+//!   - `drive.get_metadata` (Task 5; `drive.read`)
+//!   - `drive.list_folder` (Task 6; `drive.read`)
+//!   - `drive.create_folder` (Task 7; `drive.write`,
+//!     CEILING_TRUSTED)
+//!   - `drive.download_file` (Task 8; `drive.read`; 10
+//!     MB inline cap)
+//!   - `drive.upload_file` (Task 9; `drive.write`,
+//!     CEILING_TRUSTED; 10 MB cap)
+//!   - `drive.delete_file` (Task 10; `drive.write`,
+//!     CEILING_TRUSTED; idempotent)
+//!
+//! Multi-tool harness consumed from
+//! `aivyx_tool::multi_harness` (Phase 128 Task 2 lift).
+//!
+//! ## Auth model
+//!
+//! Operator-provided OAuth app — same posture as Gmail
+//! and Calendar. Most operators reuse their existing
+//! Aivyx Gmail / Calendar GCP project + client_id +
+//! client_secret; they just enable the Drive API
+//! alongside the others, register
+//! `https://www.googleapis.com/auth/drive` on the OAuth
+//! consent screen, and run `aivyx-drive auth init` to
+//! grant the Drive scope independently.
+
+pub mod auth_cli;
+pub mod drive_client;
+pub mod tools;
+
+pub use drive_client::{DriveClient, DriveClientError};
+
+// Re-export the lifted OAuth substrate so consumers
+// (main.rs + downstream) can use a single import path.
+pub use aivyx_google_oauth::{
+    exchange_code, load_tokens, refresh_access_token, save_tokens, ExchangeError,
+    OAuthConfig, OAuthError, StorageError, TokenSet, GOOGLE_AUTH_ENDPOINT,
+    GOOGLE_TOKEN_ENDPOINT,
+};
+
+// Re-export the lifted multi-tool harness so consumers use
+// the same import surface as aivyx-gmail / aivyx-calendar /
+// aivyx-toolkit.
+pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
+
+/// Default Drive OAuth scopes covering the Phase 129
+/// Task 4-10 tool surface (7 tools — Q2b operator-picked).
+///
+/// Default is the BROAD `auth/drive` scope (read+write
+/// across all files accessible to the user). Per the
+/// Phase 129 honest-scope-risk section, the default
+/// favors operator-ergonomics (fewer "re-auth with new
+/// scope" loops) over least-privilege. INSTALL.md
+/// documents the three narrower options:
+///
+/// - `auth/drive.file` — only files created by Aivyx
+/// - `auth/drive.readonly` — read-only all-files
+/// - `auth/drive.metadata.readonly` — read-only metadata
+///
+/// Operators wanting a narrower posture supply `scopes`
+/// in their config.toml; the write tools fail with a
+/// clear "scope not granted" message when narrower
+/// scopes are in effect.
+pub const DEFAULT_DRIVE_SCOPES: &[&str] = &[
+    "https://www.googleapis.com/auth/drive",
+];
+
+/// Service-specific token storage path
+/// (`$HOME/.aivyx/tool-processes/drive/tokens.json`).
+/// Returns `None` when `$HOME` is unset.
+pub fn default_token_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".aivyx")
+            .join("tool-processes")
+            .join("drive")
+            .join("tokens.json"),
+    )
+}

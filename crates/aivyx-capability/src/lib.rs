@@ -119,6 +119,22 @@ const KNOWN_BASES: &[&str] = &[
     //                    surfaces).
     "calendar.read",
     "calendar.write",
+    // Drive (Phase 129 — Chapter F #3, aivyx-drive
+    // third-party tool process). Two bases for the
+    // seven-tool surface (Q2b operator-picked over
+    // Q2a's 5-tool default):
+    //   drive.read  — drive.search, drive.get_metadata,
+    //                 drive.list_folder,
+    //                 drive.download_file.
+    //   drive.write — drive.create_folder,
+    //                 drive.upload_file,
+    //                 drive.delete_file
+    //                 (Trusted-tier only by default,
+    //                 matching the email.* / calendar.*
+    //                 third-party-tool-process gating
+    //                 pattern).
+    "drive.read",
+    "drive.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -770,6 +786,13 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // third-party-tool-process gating pattern.
         "calendar.read",
         "calendar.write",
+        // Phase 129 — Google Drive third-party tool
+        // process (Chapter F #3). Two bases for the
+        // seven-tool surface (Q2b); Trusted-only default
+        // matches email.* / calendar.* / web.search
+        // third-party-tool-process gating.
+        "drive.read",
+        "drive.write",
     ])
 });
 
@@ -1575,14 +1598,14 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_128_a3_addendum() {
+    fn known_bases_count_matches_phase_129_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 128) lists every entry.
+        // — the latest addendum (Phase 129) lists every entry.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            59,
+            61,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

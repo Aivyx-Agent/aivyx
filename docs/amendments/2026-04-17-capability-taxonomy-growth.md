@@ -264,6 +264,73 @@ path; no new capability gate.)
 | Phase 125 | `health.read` | Chapter G #1 — `health.check.list`, `health.check.recent_changes` (URL monitor state inspection) |
 | Phase 125 | `health.write` | Chapter G #1 — `health.check.add` (register new URL watcher for the polling loop) |
 
+## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
+
+> *Added at Phase 129 exit. Chapter F's third integration —
+> Google Drive via the `aivyx-drive` third-party tool
+> process. Per Phase 129 Q2b (operator-picked over Q2a's
+> 5-tool default), seven tools ship: `drive.search`,
+> `drive.get_metadata`, `drive.list_folder`,
+> `drive.create_folder`, `drive.download_file`,
+> `drive.upload_file`, `drive.delete_file`. Two new bases
+> gate them: `drive.read` for the four read tools and
+> `drive.write` for the three write tools. Both Trusted-tier-
+> only by default — same gating pattern as `email.*` /
+> `calendar.*` per the Phase 62 Q2(a) precedent.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 129 | `drive.read` | Chapter F #3 — `drive.search`, `drive.get_metadata`, `drive.list_folder`, `drive.download_file` against the operator's authorized Google Drive |
+| Phase 129 | `drive.write` | Chapter F #3 — `drive.create_folder`, `drive.upload_file`, `drive.delete_file` (full file-lifecycle mutation; Trusted-tier-only at the ceiling level, matching `email.send` / `calendar.write` / `shell.exec`) |
+
+### Current full enumeration (61 bases)
+
+Substrate-facing operator scopes (16):
+- `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
+- `net.fetch`, `net.post`, `net.dns`
+- `shell.exec`, `shell.spawn`
+- `llm.call`, `llm.embed`
+- `memory.read`, `memory.write`, `memory.forget`, `memory.gc`
+- `git.read`
+
+Channel / audit / config (5):
+- `channel.send`, `channel.receive`, `audit.read`,
+  `config.read`, `config.write`
+
+Infrastructure (28):
+- Role primitive: `tool.allowlist`, `role.switch`, `role.update`
+- Mission: `mission.create`, `mission.gate`, `mission.list`,
+  `mission.status`
+- Scheduling: `schedule.create`, `schedule.list`,
+  `schedule.delete`, `schedule.update`
+- Triggers: `webhook.create`, `webhook.list`, `webhook.delete`,
+  `file_watch.create`, `file_watch.list`, `file_watch.delete`
+- MCP: `mcp.call`
+- Reflection: `reflection.propose`, `reflection.apply`
+- Persona / Skills: `persona.propose`, `skills.propose`,
+  `skills.list`, `skills.invoke`
+- Notify: `notify.send`
+- Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
+
+Third-party tool process scopes (12):
+- Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
+  `email.send`
+- Personal assistant tool bundle (Chapter G #1, Phase 125):
+  `web.search`, `task.read`, `task.write`, `health.read`,
+  `health.write`
+- Calendar (Chapter F #2, Phase 128): `calendar.read`,
+  `calendar.write`
+- Drive (Chapter F #3, Phase 129): `drive.read`, `drive.write`
+
+Total: 16 + 5 + 28 + 12 = 61.
+
+### Verification
+
+A unit test in `aivyx-capability/src/lib.rs` pins the
+count so this addendum and the runtime stay in sync; any
+future base added without an accompanying addendum bump
+surfaces as a test failure rather than silent drift.
+
 ## Phase 128 addendum — Chapter F #2 Google Calendar (2026-06-01)
 
 > *Added at Phase 128 exit. Chapter F's second integration —

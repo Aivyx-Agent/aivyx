@@ -19,6 +19,7 @@ members = [
     "crates/aivyx-toolkit",
     "crates/aivyx-calendar",
     "crates/aivyx-google-oauth",
+    "crates/aivyx-drive",
 ]
 
 [workspace.package]

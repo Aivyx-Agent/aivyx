@@ -1,0 +1,43 @@
+[package]
+name = "aivyx-drive"
+description = "Google Drive third-party tool process for Aivyx (Phase 129 — Chapter F #3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-drive"
+path = "src/main.rs"
+
+[dependencies]
+# Tool process SDK — consumes the Phase 128 Task 2 lifted
+# multi-tool harness directly. No in-tree harness copy.
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+# Phase 129 Task 2 — Google OAuth substrate lift. Drive is
+# the third Google integration; consumes the lifted crate
+# directly from the start (no in-tree OAuth copy).
+aivyx-google-oauth = { path = "../aivyx-google-oauth" }
+
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+reqwest = { workspace = true, features = ["json", "multipart"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+base64 = { workspace = true }
+toml = "0.8"
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }

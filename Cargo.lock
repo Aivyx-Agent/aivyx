@@ -203,6 +203,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-drive"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-google-oauth",
+ "aivyx-tool",
+ "async-trait",
+ "base64",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "aivyx-gmail"
 version = "0.1.0"
 dependencies = [
@@ -2523,6 +2542,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
