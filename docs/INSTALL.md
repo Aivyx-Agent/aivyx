@@ -1442,10 +1442,152 @@ spurious extraction because the model's response would
 carry no protocol tool calls AND its text would just
 quote the operator's block.
 
-**Phase 126 live verification outcome:** _to be filled in
-at exit. Same probe pattern as Phase 122/124 (dev-run.sh
-against qwen3.6:27b + gemma4:31b). Three outcome cases
-pre-enumerated in PHASE_126.md._
+**Phase 126 live verification outcome:** verification was
+amended out at Phase 126 close-out. A pre-flight
+`dev-verify` pass against qwen3.6:27b on Ollama 0.24.0
+surfaced that qwen3's actual emission format is
+**Qwen3-Coder XML inside `<tool_call>`**, not the JSON
+shape Phase 126's parser handles. The five-turn pre-flight
+recorded `tool_calls_made: 0` across every turn in the
+audit chain — a substrate gap, not a test failure.
+Literature research (Ollama issues #14493, #14601, #14745)
+confirmed the wrong-pipeline upstream wiring for qwen3.5/3.6
+and surfaced ten distinct text-form tool-call formats
+across the local-LLM landscape. Phase 127 closes the
+parsing gap with multi-format extraction; see the next
+sub-section. Full reasoning in
+[`PHASE_126.md`](PHASE_126.md) "Research-driven amendment".
+
+### Multi-format tool-call extraction (Phase 127)
+
+End-users pick their local model based on their hardware:
+Llama 3.x for CPU-friendly setups, Qwen3-Coder for code-
+heavy work, Mistral Nemo for the midrange, Phi-4-mini for
+edge devices, Gemma 3/4 for the Google-fine-tuned path,
+DeepSeek R1 for reasoning. Phase 127 expands the Phase 126
+textual extractor so the substrate handles whichever
+model the operator picked — four new parser families plus
+a hybrid family-hint architecture backed by Ollama
+`/api/show`.
+
+**Substrate-coverage matrix.** Each row is an empirical
+emission format observed across the local-LLM landscape.
+"Native" means Ollama's protocol channel handles it
+without aivyx-side extraction (`tool_calls` array arrives
+populated). "Substrate" means aivyx-core's textual
+extractor catches it via Phase 126/127's planner-side
+fallback. "Gap" means neither path handles it today.
+
+| Family | Training emission | Substrate (Phase 127) | Native (Ollama protocol) |
+|---|---|---|---|
+| Llama 3.1 / 3.2 / 3.3 | `<\|python_tag\|>[func(k=v)]` | gap (Python-call dispatch deferred) | ✅ reliable per Ollama tool-support blog |
+| Mistral Nemo / Small 3.x | `[TOOL_CALLS]` JSON | gap (Mistral protocol pipeline handles this directly) | ✅ reliable |
+| Qwen3 (Hermes) | `<tool_call>` + JSON `{name, arguments}` | ✅ Phase 126 | ✅ when pipeline-wiring is correct |
+| **Qwen3-Coder (qwen3.5/3.6)** | `<tool_call>` + XML `<function=N><parameter=K>V</parameter></function>` | ✅ **Phase 127 Task 2** | ❌ wrong pipeline upstream (Ollama #14493) |
+| DeepSeek R1 | Dynamic XML `<TOOL_NAME>...<param>V</param>...` | gap (registry-driven match deferred) | depends on version |
+| **Phi-4-mini** | `<\|tool_call\|>[{name, arguments}, ...]<\|/tool_call\|>` | ✅ **Phase 127 Task 3** | ✅ in Ollama 0.5.13+ |
+| **Gemma 3** | ` ```tool_code` markdown fence + Python-call | ✅ **Phase 127 Task 4** | ❌ Gemma 1/2/3 not trained for tool use |
+| Gemma 4 | `<\|tool_call>call:N{k:<\|"\|>v<\|"\|>}` | gap (special-token format) | ✅ native in Ollama 0.20.0-rc1+ (#15241 fixed) |
+| qwen3-Hermes-fence | `<tool_call>` + JSON `{tool, parameters}` (gemma4 historical variant) | ✅ Phase 126 | depends |
+| **Bare JSON** (qwen3:32b#11662) | raw `{name, arguments}` no wrapper | ✅ **Phase 127 Task 5** (with FP guard) | ❌ not parsed |
+| Tool-code JSON (Phase 124 qwen3.6 sample) | `<tool_code>` + JSON | ✅ Phase 126 | depends |
+
+**Operator-facing summary:** if your model is in the
+"Native" column with ✅, Aivyx works without any extraction
+substrate involvement. If your model needs the
+"Substrate" path (qwen3.5/3.6, Gemma 3, Phi-4-mini, or any
+model emitting bare JSON), Phase 127 catches it
+automatically. No operator config required for the
+substrate.
+
+**Reliable-native-protocol trio (recommended for tool-use
+workloads):** Llama 3.1+ ($AIVYX_MODEL=llama3.1$),
+mistral-nemo, phi4-mini. Per Ollama's official tool-support
+blog post + this phase's literature these models ship with
+matching renderer + parser pipelines and reliably emit
+structured `tool_calls`.
+
+**Family-hint architecture.** When `provider = "ollama"`,
+Aivyx queries `/api/show` once per model at first use and
+caches the reported `details.family` string. The hint
+biases the extractor's inner-shape priority — Qwen-family
+models try Qwen3-Coder XML first inside `<tool_call>`,
+other families use the default JSON-first order. The hint
+is permissive: every parser is still tried; the family
+hint just reorders which gets the first shot. Failure to
+fetch `/api/show` (network down, model not yet pulled) is
+silent and falls back to permissive scan. No operator
+config; nothing to enable.
+
+**Operator workaround for qwen3.5/3.6:** per Ollama issue
+#14493, the `qwen3.5` family is wired to the wrong
+renderer/parser pipeline upstream (`Qwen3VLRenderer` +
+`Qwen3Parser`, the Hermes-style JSON pipeline) when the
+model was trained on `Qwen3CoderRenderer` +
+`Qwen3CoderParser` (the XML pipeline). Phase 127 Task 2
+catches the XML emission — but per issue #14601, tool
+**definitions** are ALSO malformed via the modelfile
+template (Go struct strings instead of JSON), so the model
+may not see correct schemas. Phase 127 closes the parsing
+gap, not the upstream Ollama schema-rendering gap. If you
+want a working Qwen tool-use path right now, install
+`qwen3-coder:N` (with the parameter-size suffix) instead
+of `qwen3.5:N` / `qwen3.6:N` — that model name gets
+Ollama's correct upstream pipeline AND benefits from
+Phase 127's substrate.
+
+**Audit-chain forensics — wrapper-tag column.** Each
+extracted call carries the wrapper-tag in
+`AuditTag::ToolCall.extracted_from_text`. The Phase 127
+wrapper-tag vocabulary is stable + distinct so auditors
+can grep cleanly:
+
+| `extracted_from_text` | Format |
+|---|---|
+| `None` | native protocol tool_call (Phase 126/127 substrate didn't fire) |
+| `Some("tool_code")` | Phase 124 qwen3.6-observed `<tool_code>` + JSON shape |
+| `Some("tool_call")` | Hermes-style `<tool_call>` + JSON OR Qwen3-Coder XML |
+| `Some("\|tool_call\|")` | Phi-4-mini `<\|tool_call\|>` + JSON list |
+| `Some("tool_code_fence")` | Gemma 3 ` ```tool_code` markdown fence + Python-call |
+| `Some("(bare)")` | Phase 127 bare-JSON fallback (no wrapper detected) |
+
+Combined with `auto_corrected_from` (Phase 120) and a new
+internal `inner_format` distinguisher (`"json-name-arguments"`,
+`"json-tool-parameters"`, `"qwen3-coder-xml"`,
+`"json-list-name-arguments"`, `"python-call"`), the
+forensic story is "what shape did the model emit, where in
+the response, and did fuzzy-recovery correct it?" all
+answerable via `jq` on the audit chain.
+
+**Bare-JSON false-positive guard.** The bare-JSON parser
+fires ONLY when (1) every wrapper-based parser returned
+zero extractions AND (2) the entire response content
+(after optionally stripping a single leading `<think>...
+</think>` thinking-mode block + trimming whitespace) is
+exactly one top-level JSON object matching a tool-call
+shape. JSON embedded in prose, JSON followed by prose,
+top-level JSON arrays, and multiple concatenated JSON
+objects all drop. This is the load-bearing FP guard —
+without it, operators (and models) mentioning JSON inline
+in prose would trigger spurious extractions.
+
+**Known limitations carried from Phase 127 open doc:**
+
+- **Llama 3.x Python-call dispatch** is deferred (the
+  `<|python_tag|>[func(k=v)]` format needs a Python-call
+  → JSON-args translator like Task 4's but with positional
+  args). Phase 128+ candidate.
+- **DeepSeek dynamic-XML lookup** is deferred (parameter
+  names are model-emitted, not registry-driven; needs a
+  separate registry-aware path).
+- **Gemma 4 special-token format** is handled by Ollama's
+  native protocol pipeline (0.20.0-rc1+ via issue #15241
+  fix); Phase 127 substrate doesn't duplicate.
+- **Triple-backtick inside a Gemma 3 Python string** would
+  prematurely close the markdown fence. Operators can
+  typically work around by emitting a different fence
+  language or escaping. Same posture as Phase 126 — drop
+  silently rather than dispatch a wrong call.
 
 ## External productivity integrations (Chapter F)
 

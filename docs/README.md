@@ -184,7 +184,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 124 | Frozen | [PHASE_124.md](PHASE_124.md) | `870efbc`  |
 | Phase 125 | Frozen | [PHASE_125.md](PHASE_125.md) | `1f649b1`  |
 | Phase 126 | Frozen | [PHASE_126.md](PHASE_126.md) | `59e34bb`  |
-| Phase 127 | Open   | [PHASE_127.md](PHASE_127.md) | —          |
+| Phase 127 | Frozen | [PHASE_127.md](PHASE_127.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

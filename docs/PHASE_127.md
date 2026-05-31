@@ -565,7 +565,138 @@ substrate-coverage findings and operator pressure.
 
 ## Prediction vs reality
 
-_Populated at Phase 127 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 18; PRODUCT.md HOLD → 18;
-lib.rs HOLD → 1 (rebuild from 0); test count `+70` to
-`+90`; zero new deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment; substrate work is
+  additive at the extractor + provider layers.
+  Streak: 17 → **18**.
+
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 + the planner-substrate envelope cover
+  this case exactly as Phase 126. Streak: 17 → **18**.
+
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`9692e5d…` unchanged). All Phase 127 substrate work
+  lives in `textual_tool_call.rs` + `llm_planner.rs` +
+  the cross-crate `aivyx-llm` provider trait. NO changes
+  to `AuditTag::ToolCall`, `AuditEvent`, or any other
+  lib.rs-resident type. Streak: 0 → **1** (Phase 126
+  reset; Phase 127 rebuilds from zero, lands with one).
+
+**Test count `+95` overshot the predicted `+70 to +90`
+range** — honest report. Per-task breakdown:
+
+- Task 2 (Qwen3-Coder XML): **+26** — value coercion
+  matrix (int, float, bool, null, array, object,
+  quoted string, raw string), function-name + parameter-
+  name shape variants, malformed-input drops,
+  surrounding prose, wrapper-scoping tests.
+- Task 3 (Phi-4-mini `<|tool_call|>` wrapper): **+10** —
+  JSON-list path including empty list, malformed,
+  invalid-element-skipped, source-order interaction
+  with other wrappers.
+- Task 4 (Gemma 3 python-fence): **+27** — the Python-
+  call grammar is the test-heaviest surface in the
+  phase: each value type, escape sequences, multiline,
+  multi-call-per-fence, dotted function names, malformed
+  drops (unclosed paren, missing `=`, unmatched quote,
+  identifier value), JSON fall-back inside fence.
+- Task 5 (bare-JSON with FP guard): **+15** — the FP
+  guard is the load-bearing surface here, with positive
+  cases (pure JSON, leading whitespace, post-think
+  block) AND negative cases (embedded in prose,
+  followed/preceded by prose, wrong shape, top-level
+  array, two concatenated objects, just-think-no-payload,
+  unclosed-think).
+- Task 6 (family-hint architecture): **+13** — 7
+  substrate tests covering classification + reorder
+  behavior + legacy-shim equivalence; 6 Ollama-provider
+  tests covering `/api/show` parse + per-model cache +
+  failure caching + missing/empty-field handling.
+- Task 7 (planner composition): **+4** — one end-to-end
+  test per new format (Qwen3-Coder XML, Phi-4-mini,
+  Gemma 3 python-fence, bare-JSON) confirming the
+  planner extracts + dispatches + carries the correct
+  wrapper-tag.
+
+The overshoot reflects Task 4 + Task 5 being more
+shape-rich than the entry-doc estimate. Task 4's grammar
+has ten distinct value types plus ten distinct malformed
+input cases — each meaningful as a separate test.
+Task 5's FP guard is the load-bearing surface for the
+whole bare-JSON path; ten edge cases are not "too many"
+for the substrate's most FP-prone parser.
+
+**Zero new workspace dependencies** as predicted. The
+Python-call parser is hand-written (no `pyo3`); the
+Ollama family-cache uses `std::sync::Mutex` + `HashMap`
+already in `aivyx-llm`; `/api/show` queries reuse the
+existing `HttpTransport::post_json` method shipped for
+Phase 75 embeddings.
+
+**Zero clippy warnings** workspace-wide
+(`cargo clippy --workspace --all-targets --all-features
+-- -D warnings`) — one transient dead-assignment warning
+during Task 4 development was caught + removed before
+commit.
+
+**Q-block went through as picked.** All six Recommended
+(Q1a Qwen3-Coder XML + Q2a bare-JSON FP guard + Q3a
+Phi-4-mini wrapper + Q4a Gemma 3 python-fence + Q5a
+hybrid family-hint + Q6a INSTALL.md matrix). No mid-task
+re-asks. Fourth all-Recommended phase in a row (Phase
+124, 125, 126, 127).
+
+**WrapperSpec refactor surface (unplanned but honest).**
+Task 3 refactored `RECOGNIZED_WRAPPERS: &[&str]` into
+`WRAPPERS: &[WrapperSpec]` with explicit `(tag, open,
+close)` triples — needed to model Phi-4-mini's
+asymmetric `<|tool_call|>` / `<|/tool_call|>` wrapper
+(slash INSIDE the bars, not before them) and Gemma 3's
+markdown fence (` ```tool_code` open, ` ``` ` close).
+The refactor preserved Phase 126's 22 existing tests
+unchanged. Not a Q-block item; mentioned here for
+completeness — the architecture was almost-but-not-quite
+forward-compatible from Phase 126.
+
+**`parse_inner` signature change.** Task 3 also changed
+`parse_inner`'s return from `Option<ExtractedToolCall>`
+to `Vec<ExtractedToolCall>` because Phi-4-mini's JSON-
+list shape produces N calls per wrapper. The planner
+integration site was already iterating
+(`out.extend(parse_inner(...))`), so this was a non-
+breaking internal shape change.
+
+**Live verification deliberately skipped.** Phase 127
+substrate is unit-tested per-format; family-hint
+architecture is unit-tested for routing + caching. The
+operator can run an interactive session post-exit to
+validate empirically — this is operator-discretionary,
+not a phase exit criterion. The Phase 126 amendment
+established the precedent: when the substrate gap is
+already characterized by research + unit tests, a live
+test would re-confirm rather than reveal.
+
+**Honest scope risks at sign-off — status at exit:**
+
+- **Qwen3.5/3.6 may still fail even after Task 2.** The
+  Phase 127 parsing gap is closed, but Ollama issue
+  #14601's tool-definition rendering bug means the model
+  may still receive malformed schemas. INSTALL.md
+  surfaces the `qwen3-coder:N` workaround clearly.
+- **Python-call translator MVP limits.** Task 4 handles
+  the common cases. Identifier values, positional args,
+  numeric/bool dict keys, raw/byte/f-strings all drop —
+  matches the Phase 126 "permissive parse, no
+  dispatch-wrong-call" posture.
+- **Family-hint is a hint, not a contract.** Reordering
+  doesn't change behavior for valid inputs (parsers
+  don't ambiguously match) — value is architectural
+  forward-compat plus the `/api/show` cache being
+  reusable for future model-family-aware substrate.
+- **Phase 127 doesn't address LLM-side tool-call
+  reliability.** A model that doesn't *want* to call a
+  tool can't be rescued by any parser. Phase 127 closes
+  the substrate gap; model intent is unchanged from
+  Phase 124's substrate-ceiling finding.

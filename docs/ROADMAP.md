@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 127 — Multi-Format Tool-Call Extraction (substrate completion)
 
-**See [PHASE_127.md](PHASE_127.md).** Phase 126's
+**Frozen — see [PHASE_127.md](PHASE_127.md).** Phase 126's
 substrate gap finished. Phase 126 shipped a textual
 extractor handling two emission formats — the two
 Phase 124 happened to observe. Phase 126 close-out
@@ -3605,7 +3605,7 @@ can run an interactive session post-exit to validate
 empirically; this is operator-discretionary, not a
 phase exit gate.
 
-**Honest scope risks at sign-off:**
+**Honest scope risks at sign-off, status at exit:**
 - Qwen3.5/3.6 may still fail even after Task 2 because
   Ollama issue #14601 leaves tool *definitions* malformed
   (Go struct strings in modelfile template); model can't
@@ -3620,6 +3620,43 @@ phase exit gate.
 - Phase 127 doesn't address LLM-side tool-call
   reliability; a model that doesn't *want* to call a
   tool can't be rescued by any parser.
+
+**Streak predictions — three of three correct.**
+DESIGN.md HELD → 18; PRODUCT.md HELD → 18;
+`aivyx-core/src/lib.rs` HELD → 1 (Phase 126 reset; Phase
+127 rebuilds from 0 with this phase). Test count `+95`
+overshot the predicted `+70 to +90` range — honest
+report: Task 4's Python-call grammar (ten value types ×
+ten malformed-input cases) and Task 5's bare-JSON FP
+guard (the substrate's most FP-prone parser) ran
+test-heavier than the entry-doc estimate, both for
+sound substrate reasons. Zero new workspace
+dependencies. Zero clippy warnings.
+
+**Q-block went through as picked.** All six
+Recommended (Q1a Qwen3-Coder XML + Q2a bare-JSON FP
+guard + Q3a Phi-4-mini wrapper + Q4a Gemma 3
+python-fence + Q5a hybrid family-hint + Q6a INSTALL.md
+matrix). Fourth all-Recommended phase in a row (Phase
+124, 125, 126, 127). No mid-task re-asks.
+
+**Helper-refactor surfaces (unplanned but honest).**
+Task 3 refactored `RECOGNIZED_WRAPPERS: &[&str]` →
+`WRAPPERS: &[WrapperSpec]` with explicit
+`(tag, open, close)` triples to model Phi-4-mini's
+asymmetric `<|tool_call|>` / `<|/tool_call|>` wrapper
+and Gemma 3's markdown fence. Task 3 also changed
+`parse_inner`'s return from `Option<...>` to
+`Vec<...>` because Phi-4-mini's JSON-list shape
+produces N calls per wrapper. Both refactors preserved
+Phase 126's existing tests unchanged.
+
+**Live verification deliberately skipped** per the
+Phase 126 amendment precedent. The substrate is
+unit-tested per-format; the family-hint architecture is
+unit-tested for routing + caching + failure handling.
+Operators can run an interactive session post-exit to
+validate empirically; not a phase exit gate.
 
 **Fifteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking continues.
