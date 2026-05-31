@@ -3535,6 +3535,96 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 127 — Multi-Format Tool-Call Extraction (substrate completion)
+
+**See [PHASE_127.md](PHASE_127.md).** Phase 126's
+substrate gap finished. Phase 126 shipped a textual
+extractor handling two emission formats — the two
+Phase 124 happened to observe. Phase 126 close-out
+research catalogued ~10 distinct text-form tool-call
+formats across local LLM families (Llama, Mistral,
+Qwen, Qwen3-Coder, DeepSeek, Phi, Gemma 3, Gemma 4,
+bare-JSON, tool-code-JSON). Phase 127 finishes the
+substrate by adding the four load-bearing-missing
+parsers + a hybrid family-hint architecture so the
+substrate is genuinely model-agnostic.
+
+**Why this, why now:** end-users pick their local
+model based on their hardware (Llama 3.x for CPU-
+friendly setups, Qwen3-Coder for code-heavy work,
+Mistral Nemo for the midrange, Phi-4-mini for edge
+devices, Gemma 3/4 for the Google-fine-tuned path,
+DeepSeek R1 for reasoning). Aivyx's tool-call
+substrate has to handle whichever the operator picked.
+The Phase 126 amendment was explicit: fix the tooling,
+not document the gap.
+
+Phase 127 adds:
+
+- **Qwen3-Coder XML parser** (Task 2) — for the
+  emission qwen3.5/3.6 actually produces per Ollama
+  issue #14745 (`<tool_call><function=N><parameter=K>V</parameter></function></tool_call>`).
+  Most load-bearing for the user's local stack.
+- **Phi-4-mini `<|tool_call|>` wrapper** (Task 3) —
+  JSON-list inside special-token wrapper.
+- **Gemma 3 ```tool_code` python-fence** (Task 4) —
+  markdown-fence wrapper + hand-written Python-call
+  to JSON-args translator.
+- **Bare-JSON extractor with FP guard** (Task 5) —
+  raw JSON without wrapper (qwen3:32b#11662 pattern);
+  guard against extracting JSON the operator mentions
+  in prose.
+- **Hybrid family-hint architecture** (Task 6) — query
+  Ollama `/api/show` once at session start, use
+  reported family to prioritize parser choice;
+  permissive fallback. Not family-strict (because
+  Ollama lies about family vs. pipeline-wiring per
+  the upstream bug literature).
+- **INSTALL.md substrate-coverage matrix +
+  operator-facing model-picking guidance** (Task 8).
+
+**Q-block — all six Recommended** (Q1a Qwen3-Coder XML
++ Q2a bare-JSON with FP guard + Q3a Phi-4-mini wrapper
++ Q4a Gemma 3 python-fence + translator + Q5a hybrid
+family-hint + Q6a INSTALL.md matrix). Fourth all-
+Recommended phase in a row (Phase 124, 125, 126, 127).
+
+**Streak predictions — three-of-three HOLD anticipated.**
+DESIGN.md HOLD → 18; PRODUCT.md HOLD → 18;
+aivyx-core/src/lib.rs HOLD → 1 (Phase 126 reset; Phase
+127 rebuilds from 0). Substrate work is purely additive
+in `textual_tool_call.rs` + new `family_hint`-adjacent
+module in aivyx-llm. Zero new workspace deps. Test
+count `+70` to `+90` (Python-call grammar in Task 4 is
+the test-heaviest surface).
+
+**No live verification** as an exit criterion. Phase
+127 substrate is unit-tested per-format; family-hint
+architecture is unit-tested for routing. The operator
+can run an interactive session post-exit to validate
+empirically; this is operator-discretionary, not a
+phase exit gate.
+
+**Honest scope risks at sign-off:**
+- Qwen3.5/3.6 may still fail even after Task 2 because
+  Ollama issue #14601 leaves tool *definitions* malformed
+  (Go struct strings in modelfile template); model can't
+  see correct schemas. Phase 127 closes the parsing gap,
+  not the upstream Ollama schema-rendering gap.
+  INSTALL.md surfaces the `qwen3-coder:N` workaround.
+- Python-call translator is the most complex piece;
+  malformed-but-recoverable inputs may drop instead of
+  repairing. Conservative posture matches Phase 126.
+- Family-hint is a hint, not a contract — permissive
+  fallback covers Ollama's pipeline-wiring mismatches.
+- Phase 127 doesn't address LLM-side tool-call
+  reliability; a model that doesn't *want* to call a
+  tool can't be rescued by any parser.
+
+**Fifteenth consecutive deferral of the Channel
+Activation Milestone.** Honest tracking continues.
+Audit's #1.
+
 ## Phase 126 — Textual Tool-Call Extraction
 
 **Frozen — see [PHASE_126.md](PHASE_126.md).** Operator
