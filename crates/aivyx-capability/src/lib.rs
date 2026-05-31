@@ -104,6 +104,21 @@ const KNOWN_BASES: &[&str] = &[
     "task.write",
     "health.read",
     "health.write",
+    // Calendar (Phase 128 — Chapter F #2, aivyx-calendar
+    // third-party tool process). Two bases for the
+    // five-tool surface (Q3b operator-picked):
+    //   calendar.read  — calendar.list_events,
+    //                    calendar.get_event.
+    //   calendar.write — calendar.create_event,
+    //                    calendar.update_event,
+    //                    calendar.delete_event
+    //                    (Trusted-tier only by default,
+    //                    matching the email.* pattern
+    //                    Phase 123 established for
+    //                    third-party-tool-process write
+    //                    surfaces).
+    "calendar.read",
+    "calendar.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -748,6 +763,13 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "task.write",
         "health.read",
         "health.write",
+        // Phase 128 — Google Calendar third-party tool
+        // process (Chapter F #2). Two bases for the
+        // five-tool surface (Q3b); Trusted-only default
+        // matches the email.* / web.search / etc.
+        // third-party-tool-process gating pattern.
+        "calendar.read",
+        "calendar.write",
     ])
 });
 
@@ -1553,14 +1575,14 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_125_a3_addendum() {
+    fn known_bases_count_matches_phase_128_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 125) lists every entry.
+        // — the latest addendum (Phase 128) lists every entry.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            57,
+            59,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

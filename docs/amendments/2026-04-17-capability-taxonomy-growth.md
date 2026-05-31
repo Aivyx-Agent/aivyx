@@ -264,7 +264,25 @@ path; no new capability gate.)
 | Phase 125 | `health.read` | Chapter G #1 — `health.check.list`, `health.check.recent_changes` (URL monitor state inspection) |
 | Phase 125 | `health.write` | Chapter G #1 — `health.check.add` (register new URL watcher for the polling loop) |
 
-### Current full enumeration (57 bases)
+## Phase 128 addendum — Chapter F #2 Google Calendar (2026-06-01)
+
+> *Added at Phase 128 exit. Chapter F's second integration —
+> Google Calendar via the `aivyx-calendar` third-party tool
+> process. Per Phase 128 Q3b (operator-picked over Q3a's
+> 4-tool default), five tools ship: `calendar.list_events`,
+> `calendar.get_event`, `calendar.create_event`,
+> `calendar.update_event`, `calendar.delete_event`. Two new
+> bases gate them: `calendar.read` for the two read tools
+> and `calendar.write` for the three write tools. Both
+> Trusted-tier-only by default — same gating pattern as
+> `email.*` per the Phase 62 Q2(a) precedent.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 128 | `calendar.read` | Chapter F #2 — `calendar.list_events` (range query) + `calendar.get_event` (single fetch by ID) against the operator's authorized Google Calendar(s) |
+| Phase 128 | `calendar.write` | Chapter F #2 — `calendar.create_event`, `calendar.update_event`, `calendar.delete_event` (full event-lifecycle mutation; Trusted-tier-only at the ceiling level, matching `email.send` / `shell.exec` / `notify.send`) |
+
+### Current full enumeration (59 bases)
 
 Substrate-facing operator scopes (16):
 - `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
@@ -293,14 +311,16 @@ Infrastructure (28):
 - Notify: `notify.send`
 - Ollama management: `ollama.list`, `ollama.show`, `ollama.pull`
 
-Third-party tool process scopes (8):
+Third-party tool process scopes (10):
 - Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
   `email.send`
 - Personal assistant tool bundle (Chapter G #1, Phase 125):
   `web.search`, `task.read`, `task.write`, `health.read`,
   `health.write`
+- Calendar (Chapter F #2, Phase 128): `calendar.read`,
+  `calendar.write`
 
-Total: 16 + 5 + 28 + 8 = 57.
+Total: 16 + 5 + 28 + 10 = 59.
 
 ### Verification
 

@@ -1,0 +1,55 @@
+[package]
+name = "aivyx-calendar"
+description = "Google Calendar third-party tool process for Aivyx (Phase 128 — Chapter F #2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-calendar"
+path = "src/main.rs"
+
+[dependencies]
+# Tool process SDK — Phase 128 consumes the lifted multi-tool
+# harness from `aivyx-tool::multi_harness` (Phase 128 Task 2
+# lift). No more in-tree harness copy.
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime — `process` not needed (we ARE the child
+# process); `io-util` for read_frame/write_frame; `signal` is
+# harmless.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+# HTTP + JSON — already workspace-wide via aivyx-llm. rustls-tls
+# avoids OpenSSL; matches the rest of the workspace's TLS posture.
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Base64 for OAuth (PKCE).
+base64 = { workspace = true }
+
+# TOML for the operator-supplied OAuth client config file at
+# `~/.aivyx/tool-processes/calendar/config.toml`. Mirrors
+# aivyx-gmail's choice; documented in PHASE_128.md.
+toml = "0.8"
+
+# Uuid for OAuth `state` parameter (CSRF binding between the
+# consent URL and the loopback callback). v4 — already workspace-
+# wide.
+uuid = { workspace = true }
+
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
