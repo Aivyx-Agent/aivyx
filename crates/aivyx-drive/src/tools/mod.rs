@@ -6,6 +6,10 @@
 //! the entry-point that `main.rs` reaches into to build
 //! the harness's `Vec<Arc<dyn Tool>>`.
 
+pub mod search;
+
+pub use search::DriveSearch;
+
 /// Inline cap on file content for the base64-in-JSON
 /// substrate. Files above this size return metadata-only
 /// from `drive.download_file` with `content_truncated:
