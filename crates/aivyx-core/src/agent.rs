@@ -264,6 +264,7 @@ impl Agent for ConcreteAgent {
                     tool_id,
                     input,
                     auto_corrected_from,
+                    extracted_from_text,
                 } => {
                     tool_calls_made += 1;
                     let (observation, outcome) = self
@@ -275,6 +276,7 @@ impl Agent for ConcreteAgent {
                             &cancellation,
                             &effective,
                             auto_corrected_from,
+                            extracted_from_text,
                         )
                         .await;
                     observed.push(observation);
@@ -308,6 +310,7 @@ impl Agent for ConcreteAgent {
                                 &cancellation,
                                 &effective,
                                 req.auto_corrected_from,
+                                req.extracted_from_text,
                             )
                         })
                         .collect();
@@ -422,6 +425,7 @@ impl ConcreteAgent {
         cancellation: &CancellationToken,
         effective: &CapabilitySet,
         auto_corrected_from: Option<String>,
+        extracted_from_text: Option<String>,
     ) -> (StepObservation, ToolOutcome) {
         let Some(tool) = self.tools.get(tool_id) else {
             // Unknown tool — no scope check possible. This shouldn't happen
@@ -656,6 +660,11 @@ impl ConcreteAgent {
             // different name the model emitted. Carried through
             // from `NextStep::ToolCall.auto_corrected_from`.
             auto_corrected_from,
+            // Phase 126 — populated when the planner extracted
+            // this call from response TEXT (e.g. `<tool_code>`
+            // wrappers some LLMs emit). Carried through from
+            // `NextStep::ToolCall.extracted_from_text`.
+            extracted_from_text,
         });
 
         (StepObservation { tool_id, summary }, outcome)
@@ -1039,6 +1048,7 @@ mod tests {
                 tool_id,
                 input: json!({"query": "yesterday"}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("here's what I found".to_string()),
         ];
@@ -1113,6 +1123,7 @@ mod tests {
                 tool_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -1209,6 +1220,7 @@ mod tests {
                 tool_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("ok".to_string()),
         ];
@@ -1261,6 +1273,7 @@ mod tests {
             tool_id,
             input: json!({"command": "rm"}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1318,6 +1331,7 @@ mod tests {
             tool_id,
             input: json!({}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
         let agent = make_agent(
             CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
@@ -1376,6 +1390,7 @@ mod tests {
                 tool_id,
                 input: json!({"session": "abc"}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -1432,6 +1447,7 @@ mod tests {
                     tool_id: shell_id,
                     input: json!({"command": "rm"}),
                     auto_corrected_from: None,
+                    extracted_from_text: None,
                 },
                 NextStep::FinalMessage(
                     "I can't run shell commands from Telegram.".to_string(),
@@ -1487,6 +1503,7 @@ mod tests {
                     tool_id,
                     input: json!({}),
                     auto_corrected_from: None,
+                    extracted_from_text: None,
                 },
                 NextStep::Stop,
             ],
@@ -1619,6 +1636,7 @@ mod tests {
                 tool_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             })
             .collect();
 
@@ -1706,6 +1724,7 @@ mod tests {
             tool_id,
             input: json!({}), // missing required `path`
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1770,6 +1789,7 @@ mod tests {
             tool_id,
             input: json!({"path": "notes/today.md"}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
@@ -1818,6 +1838,7 @@ mod tests {
             tool_id,
             input: json!({"topic": "notes"}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
 
@@ -1897,6 +1918,7 @@ mod tests {
             tool_id,
             input: json!({}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
 
@@ -1963,6 +1985,7 @@ mod tests {
             tool_id: shell_id,
             input: json!({}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
 
         let registry = Arc::new(ToolRegistry::new(vec![
@@ -2035,6 +2058,7 @@ mod tests {
                 tool_id: shell_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2094,6 +2118,7 @@ mod tests {
                 tool_id: shell_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("ok".to_string()),
         ];
@@ -2139,6 +2164,7 @@ mod tests {
             tool_id: shell_id,
             input: json!({}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
         let registry =
             Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
@@ -2217,6 +2243,7 @@ mod tests {
                 tool_id: target,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2736,6 +2763,7 @@ mod tests {
                     "task": "read file X and summarize"
                 }),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("parent done".to_string()),
         ];
@@ -2841,6 +2869,7 @@ mod tests {
                 tool_id: role_switch_id,
                 input: json!({ "target": "scribe", "task": "x" }),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2909,6 +2938,7 @@ mod tests {
                 tool_id: role_switch_id,
                 input: json!({ "target": "phantom", "task": "x" }),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -2980,6 +3010,7 @@ mod tests {
                 tool_id: role_switch_id,
                 input: json!({ "target": "researcher", "task": "x" }),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3059,6 +3090,7 @@ mod tests {
                 tool_id: role_switch_id,
                 input: json!({ "target": "researcher", "task": "x" }),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("parent done".to_string()),
         ];
@@ -3124,6 +3156,7 @@ mod tests {
                 tool_id: mem_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3177,6 +3210,7 @@ mod tests {
             tool_id: shell_id,
             input: json!({}),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }];
         let registry = Arc::new(ToolRegistry::new(vec![shell as Arc<dyn Tool>]));
         let plan_arc = Arc::new(plan);
@@ -3232,6 +3266,7 @@ mod tests {
                 tool_id: mem_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             NextStep::FinalMessage("done".to_string()),
         ];
@@ -3342,6 +3377,7 @@ mod tests {
                 tool_id,
                 input: json!({}),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             // The loop should never reach this step — it breaks on
             // escalation before asking the planner for another step.
@@ -3406,11 +3442,13 @@ mod tests {
                     tool_id: tool_a_id,
                     input: json!({"path": "/a.txt"}),
                     auto_corrected_from: None,
+                    extracted_from_text: None,
                 },
                 ToolCallRequest {
                     tool_id: tool_b_id,
                     input: json!({"topic": "notes"}),
                     auto_corrected_from: None,
+                    extracted_from_text: None,
                 },
             ]),
             NextStep::FinalMessage("done".to_string()),

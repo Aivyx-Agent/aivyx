@@ -26,11 +26,21 @@ pub enum NextStep {
     /// for the dominant case (model emitted a registered name verbatim).
     /// Threaded through to the agent's `AuditTag::ToolCall` emission so
     /// forensic walks see the correction.
+    ///
+    /// Phase 126 — `extracted_from_text` carries the wrapper-tag
+    /// identifier when the planner extracted this call from response
+    /// TEXT (e.g. `<tool_code>` blocks some LLMs emit instead of using
+    /// the protocol channel). `None` for the dominant case. Composes
+    /// with `auto_corrected_from` — both can be `Some` when the
+    /// extracted call carried a hallucinated tool name fuzzy-recovered
+    /// on the way to dispatch.
     ToolCall {
         tool_id: ToolId,
         input: Value,
         #[doc(hidden)]
         auto_corrected_from: Option<String>,
+        #[doc(hidden)]
+        extracted_from_text: Option<String>,
     },
 
     /// Execute multiple tool calls concurrently. The loop dispatches all
@@ -60,6 +70,12 @@ pub struct ToolCallRequest {
     /// dominant case. Threaded to the per-call `AuditTag::ToolCall`
     /// emission.
     pub auto_corrected_from: Option<String>,
+    /// Phase 126 — wrapper-tag identifier (`"tool_code"` or
+    /// `"tool_call"`) when the planner extracted this call from
+    /// response TEXT rather than the protocol channel. `None` in
+    /// the dominant case. Threaded to the per-call audit emission;
+    /// composes with `auto_corrected_from` when both fire.
+    pub extracted_from_text: Option<String>,
 }
 
 /// What the planner observes after each executed step. Carries only the

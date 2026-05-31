@@ -837,6 +837,11 @@ impl TurnPlanner for LlmPlanner {
                             tool_id,
                             input: call.input,
                             auto_corrected_from,
+                            // Phase 126 — protocol-channel calls
+                            // are never extracted; Task 4 wires
+                            // text-extracted calls into a separate
+                            // construction site where this is Some.
+                            extracted_from_text: None,
                         });
                     }
 
@@ -857,11 +862,14 @@ impl TurnPlanner for LlmPlanner {
                         // Single known tool — use the singular path.
                         // Phase 120 — preserve the auto-correction flag
                         // from the per-call ToolCallRequest.
+                        // Phase 126 — preserve the extraction flag too;
+                        // both compose forensically in the audit chain.
                         let req = batch.into_iter().next().unwrap();
                         return NextStep::ToolCall {
                             tool_id: req.tool_id,
                             input: req.input,
                             auto_corrected_from: req.auto_corrected_from,
+                            extracted_from_text: req.extracted_from_text,
                         };
                     }
 
@@ -1697,6 +1705,7 @@ mod tests {
                 tool_id: returned,
                 input,
                 auto_corrected_from: None,
+                extracted_from_text: None,
             } => {
                 assert_eq!(returned, tool_id);
                 assert_eq!(input, json!({"query": "yesterday"}));
@@ -1925,6 +1934,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 auto_corrected_from,
+                extracted_from_text: _,
                 ..
             } => {
                 assert_eq!(tool_id, fs_read_id);
@@ -2027,6 +2037,7 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 auto_corrected_from,
+                extracted_from_text: _,
                 ..
             } => {
                 assert_eq!(tool_id, fs_read_id);

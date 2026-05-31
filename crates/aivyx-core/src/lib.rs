@@ -554,6 +554,25 @@ pub enum AuditTag {
         /// diagnostic for which model has the cleanest tool-
         /// call protocol.
         auto_corrected_from: Option<String>,
+        /// Phase 126 — when the planner extracted this call
+        /// from response TEXT (e.g. `<tool_code>{...}</tool_code>`
+        /// wrappers some LLMs emit instead of using the
+        /// protocol `tool_calls` array), this carries the
+        /// wrapper-tag identifier (`"tool_code"` or
+        /// `"tool_call"`). `None` when the call came through
+        /// the LLM provider's normal protocol channel (the
+        /// dominant case).
+        ///
+        /// Composes with `auto_corrected_from` — both can be
+        /// `Some` when the extracted call carried a
+        /// hallucinated tool name that the Phase 120 fuzzy-
+        /// recovery substrate then corrected on the way to
+        /// dispatch (gemma4's `fs.write_file` → `fs.write`
+        /// at lowered threshold). Forensic queries can
+        /// distinguish the four combinations: native+exact /
+        /// native+corrected / extracted+exact /
+        /// extracted+corrected.
+        extracted_from_text: Option<String>,
     },
     ScopeDenied {
         turn_id: TurnId,

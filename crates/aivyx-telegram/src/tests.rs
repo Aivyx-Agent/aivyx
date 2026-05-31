@@ -684,6 +684,7 @@ async fn tier_attenuation_denies_shell_exec_through_real_telegram_channel() {
         tool_id,
         input: serde_json::json!({"command": "rm"}),
         auto_corrected_from: None,
+        extracted_from_text: None,
     }];
     let agent = ConcreteAgent::new(
         AgentId::new(),

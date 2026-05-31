@@ -735,6 +735,7 @@ mod tests {
                 outcome,
                 duration: Duration::from_millis(10),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             mac: [0u8; 32],
             prev_mac: [0u8; 32],

@@ -85,6 +85,16 @@ pub enum AuditEvent {
         /// Phase 118 wire-compat precedent).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto_corrected_from: Option<String>,
+        /// Phase 126 — wrapper-tag identifier (`"tool_code"` or
+        /// `"tool_call"`) when the planner extracted this call
+        /// from response TEXT. `None` for the dominant case
+        /// (call came through the LLM provider's protocol
+        /// channel). Same `#[serde(default, skip_serializing_if)]`
+        /// pattern as `auto_corrected_from` preserves HMAC-
+        /// chain byte-identical canonical JSON for pre-
+        /// Phase-126 entries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extracted_from_text: Option<String>,
     },
 
     /// A scope check denied a tool call.
@@ -888,6 +898,7 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 outcome,
                 duration,
                 auto_corrected_from,
+                extracted_from_text,
             } => AuditEvent::ToolCall {
                 turn_id,
                 tool_id,
@@ -896,6 +907,7 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 outcome,
                 duration,
                 auto_corrected_from,
+                extracted_from_text,
             },
             AuditTag::ScopeDenied {
                 turn_id,
@@ -1053,6 +1065,7 @@ mod tests {
             },
             duration: Duration::from_millis(37),
             auto_corrected_from: None,
+            extracted_from_text: None,
         }
     }
 
@@ -1995,6 +2008,7 @@ mod tests {
         match decoded {
             AuditEvent::ToolCall {
                 auto_corrected_from,
+                extracted_from_text: _,
                 ..
             } => {
                 assert!(auto_corrected_from.is_none());
@@ -2019,6 +2033,7 @@ mod tests {
             },
             duration: Duration::from_millis(15),
             auto_corrected_from: Some("fs_read".into()),
+            extracted_from_text: Some("fs_read".into()),
         };
         let json = serde_json::to_value(&event).unwrap();
         // The Phase 120 field appears in the wire form.
@@ -2045,6 +2060,7 @@ mod tests {
             },
             duration: Duration::from_millis(15),
             auto_corrected_from: None,
+            extracted_from_text: None,
         };
         let json = serde_json::to_value(&event).unwrap();
         let obj = json.as_object().expect("object");
@@ -2074,10 +2090,127 @@ mod tests {
             },
             duration: Duration::from_millis(15),
             auto_corrected_from: Some("fs_read".into()),
+            extracted_from_text: Some("fs_read".into()),
         })
         .unwrap();
         log.verify().unwrap();
         assert_eq!(AuditLog::len(&log), 2);
+    }
+
+    // ----- Phase 126 — AuditEvent::ToolCall.extracted_from_text wire-compat -----
+
+    #[test]
+    fn phase_126_tool_call_extracted_round_trips() {
+        let event = AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(8),
+            auto_corrected_from: None,
+            extracted_from_text: Some("tool_code".to_string()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["extracted_from_text"], "tool_code");
+        let decoded: AuditEvent = serde_json::from_value(json).unwrap();
+        match decoded {
+            AuditEvent::ToolCall {
+                extracted_from_text,
+                ..
+            } => {
+                assert_eq!(extracted_from_text.as_deref(), Some("tool_code"));
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase_126_tool_call_none_skips_serialize_for_chain_compat() {
+        // Same wire-compat invariant as Phase 120: when the field
+        // is None, the canonical-JSON form omits it entirely so
+        // pre-Phase-126 chain entries continue to verify against
+        // the Phase 126 read path.
+        let event = AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(8),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let obj = json.as_object().expect("object");
+        assert!(
+            !obj.contains_key("extracted_from_text"),
+            "Phase 126 None case must omit the field for HMAC-chain compat"
+        );
+    }
+
+    #[test]
+    fn phase_126_tool_call_with_extraction_and_correction_compose() {
+        // Both fields populated — extracted from text AND
+        // fuzzy-corrected (gemma4 emitting `<tool_call>` with
+        // hallucinated `fs.write_file` that Phase 120 fuzzy-
+        // recovered to `fs.write`). The audit chain records
+        // both forensically.
+        let event = AuditEvent::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: hash_tool_input(b"{}"),
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(8),
+            auto_corrected_from: Some("fs.write_file".to_string()),
+            extracted_from_text: Some("tool_call".to_string()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["auto_corrected_from"], "fs.write_file");
+        assert_eq!(json["extracted_from_text"], "tool_call");
+
+        // HMAC-chain proof: serialize into the chain and verify.
+        let log = HmacChainLog::new(test_key());
+        log.append(event).unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 1);
+    }
+
+    #[test]
+    fn pre_phase_126_tool_call_decodes_with_extracted_from_text_none() {
+        // Same pattern as the Phase 120 wire-compat test: a
+        // ToolCall with extracted_from_text == None serializes
+        // WITHOUT the field (#[serde(default,
+        // skip_serializing_if = "Option::is_none")] preserves
+        // pre-Phase-126 chain compatibility). Round-trip
+        // through serialize-then-deserialize confirms the
+        // #[serde(default)] supplies None on the absent field.
+        let pre_126_shape = sample_tool_call();
+        let json = serde_json::to_value(&pre_126_shape).unwrap();
+        let obj = json.as_object().expect("object");
+        assert!(
+            !obj.contains_key("extracted_from_text"),
+            "sample_tool_call() with None must serialize without the field"
+        );
+        let decoded: AuditEvent = serde_json::from_value(json).expect("decode");
+        match decoded {
+            AuditEvent::ToolCall {
+                extracted_from_text,
+                auto_corrected_from,
+                ..
+            } => {
+                assert!(extracted_from_text.is_none());
+                assert!(auto_corrected_from.is_none());
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
     }
 
     // ---- NullAuditLog ----
@@ -2180,6 +2313,7 @@ mod tests {
             },
             duration: Duration::from_millis(3),
             auto_corrected_from: None,
+            extracted_from_text: None,
         });
 
         // Chain length went up, verification still holds.
@@ -2222,6 +2356,7 @@ mod tests {
             },
             duration: Duration::from_millis(1),
             auto_corrected_from: None,
+            extracted_from_text: None,
         });
         bridge.on_event(AuditTag::ScopeDenied {
             turn_id,
@@ -2288,6 +2423,7 @@ mod tests {
             },
             duration: Duration::from_millis(1),
             auto_corrected_from: None,
+            extracted_from_text: None,
         });
 
         let errors = captured.lock().unwrap();

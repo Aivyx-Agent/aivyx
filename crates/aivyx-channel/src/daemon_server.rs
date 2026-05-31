@@ -4181,6 +4181,7 @@ mod tests {
                 outcome,
                 duration: std::time::Duration::from_millis(duration_ms),
                 auto_corrected_from: None,
+                extracted_from_text: None,
             },
             mac: [0u8; 32],
             prev_mac: [0u8; 32],
