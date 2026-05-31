@@ -182,7 +182,75 @@ pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
         out.extend(parse_inner(inner.trim(), spec.tag));
         cursor = close_abs + spec.close.len();
     }
+
+    // Phase 127 Task 5 — bare-JSON fallback. Runs ONLY
+    // when no wrapper-based extraction matched. The guard
+    // is load-bearing: bare-JSON detection is the highest
+    // false-positive risk path in the substrate because
+    // operators (and models in prose) frequently mention
+    // JSON inline. The guard requires the entire response
+    // content (after optional leading `<think>` block) to
+    // be exactly one top-level JSON object matching a
+    // tool-call shape — JSON embedded in prose, JSON
+    // followed by prose, or multiple concatenated JSON
+    // objects all fail to extract.
+    if out.is_empty() {
+        if let Some(call) = try_bare_json(text) {
+            out.push(call);
+        }
+    }
     out
+}
+
+/// Bare-JSON fallback. Returns `Some(call)` only if the
+/// response content — after trimming whitespace and an
+/// optional leading `<think>...</think>` thinking-mode
+/// prefix — is exactly one top-level JSON object
+/// matching either of the tool-call shapes
+/// (`{name, arguments}` or `{tool, parameters}`).
+///
+/// `wrapper_tag` is `"(bare)"` to communicate "no wrapper
+/// detected" cleanly in audit dumps.
+fn try_bare_json(text: &str) -> Option<ExtractedToolCall> {
+    let body = strip_leading_think_block(text).trim();
+    if body.is_empty() {
+        return None;
+    }
+    // Strict: parse the whole body. If there's trailing
+    // text after the JSON object, this returns Err and
+    // we drop — the load-bearing FP guard.
+    let value: Value = serde_json::from_str(body).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    if let Some(call) =
+        parse_json_name_arguments(&value, "(bare)", "json-name-arguments")
+    {
+        return Some(call);
+    }
+    parse_json_tool_parameters(&value, "(bare)")
+}
+
+/// If `text`, after leading-whitespace trimming, begins
+/// with `<think>` and the block is closed with
+/// `</think>`, return the suffix starting after
+/// `</think>`. Otherwise return `text` unchanged. Only
+/// the first leading block is stripped — interior
+/// thinking blocks are left for the JSON parser to
+/// reject naturally.
+fn strip_leading_think_block(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    let open = "<think>";
+    let close = "</think>";
+    let Some(rest) = trimmed.strip_prefix(open) else {
+        return text;
+    };
+    let Some(close_rel) = rest.find(close) else {
+        // Unclosed `<think>` — don't strip; let parser
+        // fail naturally.
+        return text;
+    };
+    &rest[close_rel + close.len()..]
 }
 
 /// Find the next opening wrapper in `text[start..]`. Returns
@@ -1865,6 +1933,180 @@ fs.write(
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.write");
         assert_eq!(calls[0].arguments["content"], "saved");
+    }
+
+    // ====================================================
+    // Phase 127 Task 5 — bare-JSON fallback with FP guard.
+    //
+    // Some Ollama models (qwen3:32b per issue #11662) emit
+    // tool-call JSON with NO wrapper at all. The bare-JSON
+    // path catches this — but only when the entire response
+    // is exactly one JSON object (optionally preceded by a
+    // `<think>...</think>` thinking-mode prefix). JSON
+    // embedded in prose or followed by prose drops.
+    //
+    // `wrapper_tag` is `"(bare)"` so audit can distinguish.
+    // ====================================================
+
+    #[test]
+    fn phase_127_bare_json_pure_extracts() {
+        let text = r#"{"name": "fs.write", "arguments": {"path": "x.txt"}}"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].wrapper_tag, "(bare)");
+        assert_eq!(calls[0].inner_format, "json-name-arguments");
+        assert_eq!(calls[0].arguments["path"], "x.txt");
+    }
+
+    #[test]
+    fn phase_127_bare_json_with_leading_whitespace() {
+        let text = "   \n  {\"name\": \"fs.read\", \"arguments\": {}}";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.read");
+    }
+
+    #[test]
+    fn phase_127_bare_json_with_trailing_whitespace() {
+        let text = r#"{"name": "fs.read", "arguments": {}}
+
+        "#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.read");
+    }
+
+    #[test]
+    fn phase_127_bare_json_after_think_block() {
+        let text =
+            r#"<think>
+I should call fs.write to save that.
+</think>
+{"name": "fs.write", "arguments": {"path": "out.txt"}}"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].wrapper_tag, "(bare)");
+    }
+
+    #[test]
+    fn phase_127_bare_json_tool_parameters_shape() {
+        // The `{tool, parameters}` alternative shape also
+        // extracts via the bare path.
+        let text = r#"{"tool": "fs.write", "parameters": {"path": "x"}}"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].inner_format, "json-tool-parameters");
+        assert_eq!(calls[0].wrapper_tag, "(bare)");
+    }
+
+    #[test]
+    fn phase_127_bare_json_embedded_in_prose_drops() {
+        // Load-bearing FP guard: model says "The answer is
+        // {...}" with prose surrounding JSON — drop.
+        let text = r#"The answer is {"name": "fs.write", "arguments": {}}, in case you were wondering."#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "JSON embedded in prose must NOT extract via bare path"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_followed_by_prose_drops() {
+        let text =
+            r#"{"name": "fs.write", "arguments": {}} — I think that's the right call."#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "trailing prose after JSON drops the extraction"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_preceded_by_prose_drops() {
+        let text = r#"Here's the call: {"name": "fs.write", "arguments": {}}"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "leading prose before JSON drops (think-block stripping won't trigger because prose isn't `<think>`)"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_wrong_shape_drops() {
+        // Valid JSON but doesn't match either tool-call
+        // shape.
+        let text = r#"{"foo": "bar", "baz": 42}"#;
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_bare_json_empty_content_no_extraction() {
+        assert!(extract_tool_calls("").is_empty());
+        assert!(extract_tool_calls("   \n\t   ").is_empty());
+    }
+
+    #[test]
+    fn phase_127_bare_json_just_think_no_payload_drops() {
+        let text = "<think>\nI'm not sure what to call.\n</think>";
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "empty body after stripping <think> block drops"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_array_at_top_level_drops() {
+        // A JSON array is NOT a tool-call shape on the
+        // bare path. (Phi-4-mini's JSON-list emission goes
+        // through the `<|tool_call|>` wrapper.)
+        let text = r#"[{"name": "fs.write", "arguments": {}}]"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "top-level JSON array does not extract via bare path"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_two_objects_concat_drops() {
+        // Two JSON objects back-to-back — ambiguous; the
+        // bare path requires exactly ONE top-level value.
+        let text = r#"{"name":"a","arguments":{}}{"name":"b","arguments":{}}"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "two concatenated JSON objects fail to parse as one value; drop"
+        );
+    }
+
+    #[test]
+    fn phase_127_bare_json_only_runs_when_wrappers_match_nothing() {
+        // If ANY wrapper-based extraction succeeds, the
+        // bare-JSON fallback does NOT run — even when the
+        // text contains additional bare JSON elsewhere.
+        // Bare-JSON is strictly a "no wrappers anywhere"
+        // fallback.
+        let text = r#"<tool_call>{"name":"wrapped","arguments":{}}</tool_call> Then {"name":"bare","arguments":{}}"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1, "only the wrapped call extracts; bare suffix is ignored");
+        assert_eq!(calls[0].tool_name, "wrapped");
+        assert_eq!(calls[0].wrapper_tag, "tool_call");
+    }
+
+    #[test]
+    fn phase_127_bare_json_unclosed_think_block_falls_through() {
+        // Unclosed `<think>` block — don't strip; the
+        // remaining text isn't pure JSON, so we drop.
+        let text =
+            r#"<think>thinking forever {"name": "fs.write", "arguments": {}}"#;
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
     }
 
     #[test]
