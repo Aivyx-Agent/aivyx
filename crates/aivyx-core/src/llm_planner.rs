@@ -43,7 +43,7 @@ use serde_json::json;
 
 use aivyx_llm::{
     ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
-    LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage,
+    LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, ToolCallEnd,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
@@ -488,6 +488,93 @@ impl LlmPlanner {
 
         stream.finish().await
     }
+
+    /// Phase 126 — per-call dispatch helper extracted from the
+    /// Phase 120 / 101 inline loop. Resolves the tool name
+    /// (with fuzzy-match recovery if unknown), validates the
+    /// input schema (if repair budget remains), and either
+    /// returns a `ToolCallRequest` to batch or surfaces an
+    /// error result into history.
+    ///
+    /// `extracted_from_text` threads into the returned request's
+    /// audit-trail field: `None` for protocol-channel calls;
+    /// `Some(wrapper_tag)` for Phase 126 text-extracted calls.
+    /// The bool in the return tuple is `true` when this call
+    /// emitted an `invalid_input` repair result (the caller
+    /// uses it to advance the repair-rounds counter).
+    fn process_one_call(
+        &mut self,
+        call: ToolCallEnd,
+        extracted_from_text: Option<String>,
+        validate_enabled: bool,
+    ) -> (Option<ToolCallRequest>, bool) {
+        let resolution = self.registry.find_by_name(&call.tool_name);
+        let (tool_id, auto_corrected_from) = match resolution {
+            Some(id) => (id, None),
+            None => match fuzzy_recover_tool_name(
+                &self.registry,
+                &call.tool_name,
+                self.config.tool_name_auto_correct_threshold,
+            ) {
+                Some(matched_id) => (matched_id, Some(call.tool_name.clone())),
+                None => {
+                    let suggestions =
+                        top_n_similar_tools(&self.registry, &call.tool_name, 3);
+                    let message =
+                        build_unknown_tool_message(&call.tool_name, &suggestions);
+                    let mut body = json!({
+                        "error": "unknown_tool",
+                        "message": message,
+                    });
+                    if !suggestions.is_empty() {
+                        body["did_you_mean"] = json!(
+                            suggestions
+                                .iter()
+                                .map(|(n, _)| n.clone())
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    self.history.push(LlmMessage::ToolResult {
+                        call_id: call.call_id,
+                        content: body.to_string(),
+                        is_error: true,
+                    });
+                    return (None, false);
+                }
+            },
+        };
+
+        if validate_enabled {
+            if let Some(tool) = self.registry.get(tool_id) {
+                if let Err(summary) =
+                    validate_tool_input(tool.input_schema(), &call.input)
+                {
+                    let schema = tool.input_schema().clone();
+                    self.history.push(LlmMessage::ToolResult {
+                        call_id: call.call_id,
+                        content: json!({
+                            "error": "invalid_input",
+                            "message": summary,
+                            "expected_schema": schema,
+                        })
+                        .to_string(),
+                        is_error: true,
+                    });
+                    return (None, true);
+                }
+            }
+        }
+        self.pending_call_ids.push_back(call.call_id);
+        (
+            Some(ToolCallRequest {
+                tool_id,
+                input: call.input,
+                auto_corrected_from,
+                extracted_from_text,
+            }),
+            false,
+        )
+    }
 }
 
 #[async_trait]
@@ -695,6 +782,106 @@ impl TurnPlanner for LlmPlanner {
             match terminal {
                 LlmStepEnd::FinalMessage { text, usage } => {
                     self.accumulate(usage);
+
+                    // Phase 126 — before treating this as a final
+                    // message, try to extract tool calls from the
+                    // text. Some LLM providers (qwen3 via Ollama
+                    // observed in Phase 124) emit `<tool_code>` /
+                    // `<tool_call>` JSON in response text rather
+                    // than the protocol `tool_calls` array.
+                    // Extraction yields synthesized ToolCallEnds
+                    // that flow through the same Phase 120/101
+                    // dispatch helper as protocol-channel calls;
+                    // the wrapper-tag is threaded into the per-call
+                    // `extracted_from_text` audit field for
+                    // forensic visibility.
+                    let extracted =
+                        crate::textual_tool_call::extract_tool_calls(&text);
+                    if !extracted.is_empty() {
+                        // Synthesize ToolCallEnds with UUID call IDs
+                        // (the protocol channel didn't issue any).
+                        // Each call carries the wrapper-tag through
+                        // to its eventual audit entry.
+                        let synthesized: Vec<(ToolCallEnd, String)> = extracted
+                            .into_iter()
+                            .map(|ext| {
+                                let wrapper = ext.wrapper_tag.clone();
+                                let call = ToolCallEnd {
+                                    call_id: format!(
+                                        "extracted-{}",
+                                        uuid::Uuid::new_v4()
+                                    ),
+                                    tool_name: ext.tool_name,
+                                    input: ext.arguments,
+                                    name_resolution:
+                                        aivyx_llm::NameResolution::Known,
+                                };
+                                (call, wrapper)
+                            })
+                            .collect();
+
+                        // Push the assistant message AS THE MODEL
+                        // SENT IT — text contains the `<tool_code>`
+                        // blocks; the synthesized records mirror the
+                        // protocol-channel shape so re-feeding history
+                        // on the next round (after tool execution)
+                        // works the same as a normal protocol-channel
+                        // tool-call turn.
+                        let records: Vec<LlmToolCallRecord> = synthesized
+                            .iter()
+                            .map(|(c, _)| LlmToolCallRecord {
+                                call_id: c.call_id.clone(),
+                                tool_name: c.tool_name.clone(),
+                                input: c.input.clone(),
+                            })
+                            .collect();
+                        self.history.push(LlmMessage::Assistant {
+                            text: text.clone(),
+                            tool_calls: records,
+                        });
+
+                        // Process each extracted call through the
+                        // same dispatch helper as protocol calls.
+                        // wrapper_tag flows into the per-request
+                        // `extracted_from_text` field.
+                        let validate_enabled = repair_rounds < 2;
+                        let mut batch: Vec<ToolCallRequest> = Vec::new();
+                        let mut had_invalid_input = false;
+                        for (call, wrapper_tag) in synthesized {
+                            let (req_opt, invalid) = self.process_one_call(
+                                call,
+                                Some(wrapper_tag),
+                                validate_enabled,
+                            );
+                            if invalid {
+                                had_invalid_input = true;
+                            }
+                            if let Some(req) = req_opt {
+                                batch.push(req);
+                            }
+                        }
+                        if had_invalid_input {
+                            repair_rounds += 1;
+                        }
+                        if batch.is_empty() {
+                            // Every extracted call failed (unknown or
+                            // invalid). Loop to retry LLM with error
+                            // results in history.
+                            continue;
+                        }
+                        if batch.len() == 1 {
+                            let req = batch.into_iter().next().unwrap();
+                            return NextStep::ToolCall {
+                                tool_id: req.tool_id,
+                                input: req.input,
+                                auto_corrected_from: req.auto_corrected_from,
+                                extracted_from_text: req.extracted_from_text,
+                            };
+                        }
+                        return NextStep::ToolCalls(batch);
+                    }
+
+                    // No extractable calls — original FinalMessage path.
                     self.history.push(LlmMessage::Assistant {
                         text: text.clone(),
                         tool_calls: Vec::new(),
@@ -738,111 +925,22 @@ impl TurnPlanner for LlmPlanner {
                     let validate_enabled = repair_rounds < 2;
 
                     for call in calls {
-                        // Phase 120 — resolve the tool name. The
-                        // dominant case is `find_by_name -> Some`
-                        // (model emitted a registered name verbatim).
-                        // When `None`, the fuzzy-match recovery path
-                        // runs against the registry's full tool set;
-                        // a hit at or above `FUZZY_TOOL_NAME_THRESHOLD`
-                        // dispatches the matched tool and records the
-                        // verbatim original as `auto_corrected_from`
-                        // for forensic visibility.
-                        let resolution =
-                            self.registry.find_by_name(&call.tool_name);
-                        let (tool_id, auto_corrected_from) = match resolution {
-                            Some(id) => (id, None),
-                            None => {
-                                match fuzzy_recover_tool_name(
-                                    &self.registry,
-                                    &call.tool_name,
-                                    self.config.tool_name_auto_correct_threshold,
-                                ) {
-                                    Some(matched_id) => (
-                                        matched_id,
-                                        Some(call.tool_name.clone()),
-                                    ),
-                                    None => {
-                                        // Phase 120 Task 6 — below
-                                        // threshold: enhance the
-                                        // synthetic unknown_tool error
-                                        // with top-3 "did you mean?"
-                                        // suggestions ranked by
-                                        // similarity descending. The
-                                        // model sees them as
-                                        // `available_suggestions` and
-                                        // can retry with the right name.
-                                        let suggestions = top_n_similar_tools(
-                                            &self.registry,
-                                            &call.tool_name,
-                                            3,
-                                        );
-                                        let message = build_unknown_tool_message(
-                                            &call.tool_name,
-                                            &suggestions,
-                                        );
-                                        let mut body = json!({
-                                            "error": "unknown_tool",
-                                            "message": message,
-                                        });
-                                        if !suggestions.is_empty() {
-                                            body["did_you_mean"] =
-                                                json!(
-                                                    suggestions
-                                                        .iter()
-                                                        .map(|(n, _)| n.clone())
-                                                        .collect::<Vec<_>>()
-                                                );
-                                        }
-                                        self.history.push(LlmMessage::ToolResult {
-                                            call_id: call.call_id,
-                                            content: body.to_string(),
-                                            is_error: true,
-                                        });
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-
-                        // Phase 101 — validate the call input
-                        // against the tool's declared schema
-                        // before dispatch. On a mismatch the
-                        // call is not batched; the model gets a
-                        // structured `invalid_input` result and
-                        // is looped to repair the call.
-                        if validate_enabled {
-                            if let Some(tool) = self.registry.get(tool_id) {
-                                if let Err(summary) = validate_tool_input(
-                                    tool.input_schema(),
-                                    &call.input,
-                                ) {
-                                    let schema = tool.input_schema().clone();
-                                    self.history.push(LlmMessage::ToolResult {
-                                        call_id: call.call_id,
-                                        content: json!({
-                                            "error": "invalid_input",
-                                            "message": summary,
-                                            "expected_schema": schema,
-                                        })
-                                        .to_string(),
-                                        is_error: true,
-                                    });
-                                    had_invalid_input = true;
-                                    continue;
-                                }
-                            }
+                        // Phase 120 fuzzy-recovery + Phase 101
+                        // validation, refactored into a helper
+                        // at Phase 126 Task 4 so the new
+                        // FinalMessage extraction branch can share
+                        // the same dispatch path. Protocol-channel
+                        // calls always carry `extracted_from_text:
+                        // None`; the helper does not synthesize a
+                        // wrapper-tag for these.
+                        let (req_opt, invalid) =
+                            self.process_one_call(call, None, validate_enabled);
+                        if invalid {
+                            had_invalid_input = true;
                         }
-                        self.pending_call_ids.push_back(call.call_id);
-                        batch.push(ToolCallRequest {
-                            tool_id,
-                            input: call.input,
-                            auto_corrected_from,
-                            // Phase 126 — protocol-channel calls
-                            // are never extracted; Task 4 wires
-                            // text-extracted calls into a separate
-                            // construction site where this is Some.
-                            extracted_from_text: None,
-                        });
+                        if let Some(req) = req_opt {
+                            batch.push(req);
+                        }
                     }
 
                     // Phase 101 — a round that emitted an `invalid_input`
@@ -3101,5 +3199,398 @@ mod tests {
             ))
             .count();
         assert_eq!(repairs, 1, "the one invalid call produced one repair result");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 126 — textual-tool-call extraction from FinalMessage text
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn phase_126_tool_code_extraction_dispatches_known_call() {
+        // Model returns text with a `<tool_code>` block containing a
+        // real registered tool. The planner extracts, synthesizes
+        // a ToolCallEnd, dispatches, and the AuditTag::ToolCall
+        // carries extracted_from_text: Some("tool_code").
+        let fs_read = FakeTool::new("fs.read");
+        let fs_read_id = fs_read.id;
+        let script = vec![FakeStep {
+            events: vec![LlmStreamEvent::TextChunk(
+                "I'll read the file.\n\n\
+                 <tool_code>\n  \
+                 {\"name\": \"fs.read\", \"arguments\": {\"path\": \"x.txt\"}}\n\
+                 </tool_code>"
+                    .to_string(),
+            )],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "I'll read the file.\n\n\
+                       <tool_code>\n  \
+                       {\"name\": \"fs.read\", \"arguments\": {\"path\": \"x.txt\"}}\n\
+                       </tool_code>"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "read x.txt")).await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                input,
+                auto_corrected_from,
+                extracted_from_text,
+            } => {
+                assert_eq!(tool_id, fs_read_id, "extraction resolved to fs.read");
+                assert_eq!(input["path"], "x.txt");
+                assert!(
+                    auto_corrected_from.is_none(),
+                    "tool name was exact; no fuzzy-recovery should fire"
+                );
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("tool_code"),
+                    "wrapper-tag identifier threaded through to the audit field"
+                );
+            }
+            other => panic!(
+                "expected NextStep::ToolCall from extraction; got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_126_tool_call_extraction_with_tool_parameters_shape() {
+        // gemma4's observed shape: `<tool_call>` wrapper with
+        // `tool`/`parameters` JSON. Extraction handles both shapes
+        // identically and routes through the same dispatcher.
+        let memory_read = FakeTool::new("memory.read");
+        let memory_read_id = memory_read.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "<tool_call>\
+                       {\"tool\": \"memory.read\", \"parameters\": {\"topic\": \"x\"}}\
+                       </tool_call>"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(memory_read)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "read memory")).await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                extracted_from_text,
+                ..
+            } => {
+                assert_eq!(tool_id, memory_read_id);
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("tool_call"),
+                    "wrapper-tag for <tool_call> shape correctly identified"
+                );
+            }
+            other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_126_extraction_falls_through_to_final_message_when_no_blocks()
+    {
+        // Plain-text response (no `<tool_code>` blocks). Extraction
+        // returns empty; existing FinalMessage path runs unchanged.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "Just regular prose without any tool-call markers.".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "say hi")).await;
+        let step = planner.next_step(&[], &channel).await;
+        assert!(matches!(
+            step,
+            NextStep::FinalMessage(ref m) if m.starts_with("Just regular prose")
+        ));
+    }
+
+    #[tokio::test]
+    async fn phase_126_extraction_composes_with_phase_120_fuzzy_recovery() {
+        // gemma4 observed emitting `fs.write_file` (a hallucinated
+        // alternative). With the operator's tool_name_auto_correct_
+        // threshold lowered to 0.5, Phase 120 fuzzy-recovers
+        // `fs.write_file` → `fs.write`. The audit entry carries
+        // BOTH extracted_from_text AND auto_corrected_from.
+        let fs_write = FakeTool::new("fs.write");
+        let fs_write_id = fs_write.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "<tool_call>\
+                       {\"tool\": \"fs.write_file\", \"parameters\": \
+                        {\"path\": \"x\", \"content\": \"y\"}}\
+                       </tool_call>"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model")
+                .with_tool_name_auto_correct_threshold(0.5),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "save it"))
+            .await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCall {
+                tool_id,
+                auto_corrected_from,
+                extracted_from_text,
+                ..
+            } => {
+                assert_eq!(tool_id, fs_write_id, "fuzzy-recovered to fs.write");
+                assert_eq!(
+                    auto_corrected_from.as_deref(),
+                    Some("fs.write_file"),
+                    "Phase 120 records the hallucinated original"
+                );
+                assert_eq!(
+                    extracted_from_text.as_deref(),
+                    Some("tool_call"),
+                    "Phase 126 records the extraction wrapper-tag"
+                );
+            }
+            other => panic!("expected ToolCall composed; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_126_unknown_tool_in_extracted_call_below_threshold_loops_with_error()
+    {
+        // Extracted tool name not registered AND no fuzzy match
+        // (threshold too high). The planner records an unknown_tool
+        // error in history and loops; the next-step result is
+        // whatever the LLM produces on the second round. Mock
+        // returns a clean final message on round 2 so the test
+        // can assert the loop's outcome.
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "<tool_code>\
+                           {\"name\": \"nonexistent.tool\", \"arguments\": {}}\
+                           </tool_code>"
+                        .to_string(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "sorry, retrying without tool".to_string(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "do thing")).await;
+        let step = planner.next_step(&[], &channel).await;
+        // Round 1 produced an unknown_tool error in history; the
+        // planner looped to round 2 which returned a clean
+        // FinalMessage. The error result must be in history.
+        assert!(matches!(step, NextStep::FinalMessage(ref m) if m.contains("sorry")));
+        let hist = planner.history();
+        let unknown_tool_errors = hist
+            .iter()
+            .filter(|m| matches!(
+                m,
+                LlmMessage::ToolResult { content, .. } if content.contains("unknown_tool")
+            ))
+            .count();
+        assert_eq!(
+            unknown_tool_errors, 1,
+            "extracted call with unknown tool surfaces an unknown_tool error in history"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_126_multiple_extracted_calls_dispatch_as_batch() {
+        // Text contains multiple `<tool_code>` blocks. Planner
+        // extracts all of them and returns ToolCalls(batch) when
+        // more than one is dispatchable.
+        let fs_read = FakeTool::new("fs.read");
+        let memory_read = FakeTool::new("memory.read");
+        let fs_read_id = fs_read.id;
+        let memory_read_id = memory_read.id;
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "Doing two things:\n\
+                       <tool_code>{\"name\": \"fs.read\", \"arguments\": {\"path\": \"x\"}}</tool_code>\n\
+                       <tool_code>{\"name\": \"memory.read\", \"arguments\": {\"topic\": \"y\"}}</tool_code>"
+                    .to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(fs_read),
+            Arc::new(memory_read),
+        ]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "two tasks")).await;
+        let step = planner.next_step(&[], &channel).await;
+        match step {
+            NextStep::ToolCalls(batch) => {
+                assert_eq!(batch.len(), 2);
+                // Source-order preserved.
+                assert_eq!(batch[0].tool_id, fs_read_id);
+                assert_eq!(batch[1].tool_id, memory_read_id);
+                // Both carry the extraction marker.
+                assert_eq!(
+                    batch[0].extracted_from_text.as_deref(),
+                    Some("tool_code")
+                );
+                assert_eq!(
+                    batch[1].extracted_from_text.as_deref(),
+                    Some("tool_code")
+                );
+            }
+            other => panic!("expected ToolCalls(batch); got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_126_malformed_extracted_block_drops_silently() {
+        // `<tool_code>` block with malformed JSON. Extractor drops
+        // it silently; planner sees zero extracted calls; falls
+        // through to FinalMessage.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "<tool_code>not valid json</tool_code>".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "x")).await;
+        let step = planner.next_step(&[], &channel).await;
+        // Malformed → no extraction → falls through to FinalMessage
+        // with the original raw text.
+        assert!(matches!(
+            step,
+            NextStep::FinalMessage(ref m) if m.contains("not valid json")
+        ));
+    }
+
+    #[tokio::test]
+    async fn phase_126_history_preserves_raw_text_with_tool_code_block() {
+        // After extraction, the assistant message pushed to history
+        // contains the raw text (including the `<tool_code>` block)
+        // alongside the synthesized records. This preserves
+        // context for re-feeding the model on the next round.
+        let fs_read = FakeTool::new("fs.read");
+        let raw_text = "<tool_code>\
+                        {\"name\": \"fs.read\", \"arguments\": {\"path\": \"x\"}}\
+                        </tool_code>";
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: raw_text.to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
+        let mut planner = LlmPlanner::new(
+            provider,
+            registry,
+            LlmPlannerConfig::new("test-model"),
+        );
+
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "x")).await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let hist = planner.history();
+        // Expect: User → Assistant { text: raw_text, tool_calls: 1 record }
+        let assistant_msg = hist
+            .iter()
+            .find_map(|m| match m {
+                LlmMessage::Assistant { text, tool_calls } => Some((text, tool_calls)),
+                _ => None,
+            })
+            .expect("history must include synthesized Assistant message");
+        assert_eq!(
+            assistant_msg.0, raw_text,
+            "raw text including <tool_code> block preserved for context"
+        );
+        assert_eq!(
+            assistant_msg.1.len(),
+            1,
+            "one synthesized tool_call record matching the extracted block"
+        );
+        assert_eq!(assistant_msg.1[0].tool_name, "fs.read");
+        // Synthesized call_id prefix.
+        assert!(
+            assistant_msg.1[0].call_id.starts_with("extracted-"),
+            "synthesized call_id carries the extraction prefix; got {:?}",
+            assistant_msg.1[0].call_id
+        );
     }
 }
