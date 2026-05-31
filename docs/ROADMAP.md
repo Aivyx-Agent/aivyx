@@ -3535,6 +3535,106 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 129 — Google Drive + OAuth Substrate Lift (Chapter F #3)
+
+**See [PHASE_129.md](PHASE_129.md).** Chapter F third
+integration; first Chapter F phase to ship two pieces of
+substrate work in one phase — the OAuth substrate lift
+Phase 128 Q2a deferred to "the third Google integration"
+fires here. Three would-be in-tree OAuth copies (gmail +
+calendar + drive) collapse to one shared
+`aivyx-google-oauth` crate before the third lands.
+
+**Why this, why now:** Operator-picked over GitHub /
+Notion / Slack-tools at the Phase 129 direction question
+for the "highest substrate-completion value: triggers
+the OAuth lift" framing. Mirrors Phase 128's SDK-harness-
+lift posture exactly — Phase 125 named the harness lift's
+N=3 trigger; Phase 128 fired it. Phase 128 named the
+OAuth lift's N=3 trigger; Phase 129 fires it.
+
+Phase 129 adds:
+
+- **OAuth substrate lift** (Task 2) — extract gmail's
+  `oauth/` + `auth_cli/helpers` to a shared
+  `aivyx-google-oauth` crate; migrate `aivyx-gmail` +
+  `aivyx-calendar` to consume the lifted crate; build
+  `aivyx-drive` against it from the start. Both existing
+  crates retain their binary's CLI surface as thin
+  wrappers over the lifted helpers, parameterized by
+  service name + default scope set.
+- **`aivyx-drive` binary crate** — Chapter F #3 separate
+  binary; consumes the lifted OAuth substrate.
+- **Seven Drive tools** (Q2b non-Recommended operator
+  pick over Q2a's 5-tool default):
+  - `drive.search` (capability `drive.read`)
+  - `drive.get_metadata` (`drive.read`)
+  - `drive.list_folder` (`drive.read`)
+  - `drive.create_folder` (`drive.write`,
+    CEILING_TRUSTED)
+  - `drive.download_file` (`drive.read`; 10 MB cap with
+    `content_truncated` flag above)
+  - `drive.upload_file` (`drive.write`,
+    CEILING_TRUSTED; 10 MB cap)
+  - `drive.delete_file` (`drive.write`,
+    CEILING_TRUSTED; idempotent)
+- **Two new capability bases:** `drive.read`,
+  `drive.write`.
+- **A3 amendment:** KNOWN_BASES_COUNT 59 → 61.
+- **INSTALL.md walkthrough** with operator-setup paths
+  (already-have-Gmail/Calendar reuse, fresh GCP project
+  setup), scope-narrowing options, troubleshooting,
+  10 MB cap notes.
+
+**Q-block (3 Recommended + 1 non-Recommended):**
+- Q1a — Bundle OAuth substrate lift into Phase 129
+  (Recommended).
+- Q2b — 7 tools (read + write + folder management)
+  (non-Recommended; operator-picked over Q2a's 5-tool
+  default for hierarchical-document workflow value).
+- Q3a — Base64 in JSON with size cap at 10 MB
+  (Recommended).
+- Q4a — Operator-discretionary live verification
+  (Recommended).
+
+**Streak predictions — three of three HOLD anticipated.**
+DESIGN.md HOLD → 20; PRODUCT.md HOLD → 20;
+`aivyx-core/src/lib.rs` HOLD → 3 (Phase 128 ticked to 2;
+Phase 129 ticks to 3). All Phase 129 work in
+`aivyx-google-oauth` (new), `aivyx-drive` (new),
+`aivyx-gmail` + `aivyx-calendar` (OAuth migration),
+`aivyx-capability` (two new bases). NO core changes.
+Zero new workspace deps. Test count `+120` to `+170` —
+lower than Phase 128's `+167` because Phase 128 inherited
+the OAuth+auth_cli body via inline copy; Phase 129
+consolidates it to one shared crate (Drive inherits via
+dependency, not duplication).
+
+**Honest scope risks at sign-off:**
+- Q2b's 7-tool surface doubles the folder-semantics
+  test surface; PR-merge-time scope reduction is the
+  escape hatch.
+- OAuth lift could break behavior in either consumer
+  (gmail or calendar); behavior-preservation tests
+  across both are the load-bearing exit criterion for
+  Task 2 (same posture as Phase 128 Task 2's harness
+  lift).
+- 10 MB binary content cap is operator-visible;
+  large-file workflows hit it. INSTALL.md documents the
+  cap + the Phase 130+ streaming-substrate trajectory.
+- Google-native types (Docs/Sheets/Slides) need the
+  `export` endpoint with mime_type;
+  `drive.download_file` dispatches internally.
+- Resumable upload deferred; single-shot multipart
+  covers the cap.
+- Drive's `auth/drive` default is broad; narrower
+  options documented in INSTALL.md.
+
+**Seventeenth consecutive deferral of the Channel
+Activation Milestone.** Honest tracking continues.
+Audit's #1. The deferral count is now a load-bearing
+signal in its own right.
+
 ## Phase 128 — Google Calendar Integration (Chapter F #2)
 
 **Frozen — see [PHASE_128.md](PHASE_128.md).** Chapter F
