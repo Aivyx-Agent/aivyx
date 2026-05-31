@@ -27,9 +27,11 @@
 //! CEILING_TRUSTED (write tools require an explicit grant
 //! per role).
 
+pub mod create_event;
 pub mod get_event;
 pub mod list_events;
 
+pub use create_event::CalendarCreateEvent;
 pub use get_event::CalendarGetEvent;
 pub use list_events::CalendarListEvents;
 
