@@ -20,8 +20,8 @@ use aivyx_drive::auth_cli::{
     status::run_auth_status,
 };
 use aivyx_drive::tools::{
-    DriveCreateFolder, DriveDownloadFile, DriveGetMetadata, DriveListFolder,
-    DriveSearch, DriveUploadFile,
+    DriveCreateFolder, DriveDeleteFile, DriveDownloadFile, DriveGetMetadata,
+    DriveListFolder, DriveSearch, DriveUploadFile,
 };
 use aivyx_drive::{
     default_token_path, load_tokens, run_multi_tool_subprocess, DriveClient,
@@ -155,6 +155,7 @@ async fn run_ipc_loop() -> ExitCode {
     // get_metadata / list_folder / create_folder /
     // download / upload / delete). Tasks 4-10 populate
     // this vector incrementally; Task 4 adds search.
+    // Phase 129 Q2b — full seven-tool surface.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(DriveSearch::new(Arc::clone(&client))),
         Arc::new(DriveGetMetadata::new(Arc::clone(&client))),
@@ -162,6 +163,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(DriveCreateFolder::new(Arc::clone(&client))),
         Arc::new(DriveDownloadFile::new(Arc::clone(&client))),
         Arc::new(DriveUploadFile::new(Arc::clone(&client))),
+        Arc::new(DriveDeleteFile::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-drive").await {

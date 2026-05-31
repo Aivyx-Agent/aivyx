@@ -7,6 +7,7 @@
 //! the harness's `Vec<Arc<dyn Tool>>`.
 
 pub mod create_folder;
+pub mod delete_file;
 pub mod download_file;
 pub mod get_metadata;
 pub mod list_folder;
@@ -14,6 +15,7 @@ pub mod search;
 pub mod upload_file;
 
 pub use create_folder::DriveCreateFolder;
+pub use delete_file::DriveDeleteFile;
 pub use download_file::DriveDownloadFile;
 pub use get_metadata::DriveGetMetadata;
 pub use list_folder::DriveListFolder;
