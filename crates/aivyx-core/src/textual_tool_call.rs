@@ -89,10 +89,47 @@ pub struct ExtractedToolCall {
     pub inner_format: String,
 }
 
-/// Wrapper tags recognized by this extractor. Order matters
-/// only for the documentation; the extractor scans the text
-/// once and identifies whichever wrapper appears in order.
-const RECOGNIZED_WRAPPERS: &[&str] = &["tool_code", "tool_call"];
+/// Wrapper spec — open and close literals plus the audit-
+/// facing identifier (`tag`) that lands in
+/// `ExtractedToolCall.wrapper_tag`. The open/close are
+/// independent literals because some wrappers have
+/// asymmetric forms; Phi-4-mini's `<|tool_call|>` /
+/// `<|/tool_call|>` (slash INSIDE the bars, not before
+/// them) can't be derived from a single name string.
+struct WrapperSpec {
+    /// Identifier that lands in
+    /// `ExtractedToolCall.wrapper_tag`. Kept stable so
+    /// auditors can grep on it across the chain.
+    tag: &'static str,
+    open: &'static str,
+    close: &'static str,
+}
+
+/// Wrappers recognized by this extractor, in priority
+/// order for documentation. The extractor scans the text
+/// once and picks whichever wrapper opens earliest in
+/// the source; first-by-byte-offset wins.
+const WRAPPERS: &[WrapperSpec] = &[
+    WrapperSpec {
+        tag: "tool_code",
+        open: "<tool_code>",
+        close: "</tool_code>",
+    },
+    WrapperSpec {
+        tag: "tool_call",
+        open: "<tool_call>",
+        close: "</tool_call>",
+    },
+    // Phi-4-mini wrapper — JSON list inside special-token
+    // bars. Inner shape is always a JSON array of
+    // `{"name", "arguments"}` objects per Microsoft's
+    // PhiCookBook and Ollama's phi4-mini modelfile.
+    WrapperSpec {
+        tag: "|tool_call|",
+        open: "<|tool_call|>",
+        close: "<|/tool_call|>",
+    },
+];
 
 /// Scan `text` for every textual tool-call block and return
 /// the extracted calls in source order.
@@ -104,18 +141,20 @@ const RECOGNIZED_WRAPPERS: &[&str] = &["tool_code", "tool_call"];
 /// since the wrapper match might have been spurious anyway
 /// (e.g. inside a fenced code block discussing tool-call
 /// syntax).
+///
+/// Most wrappers produce 0 or 1 call. The Phi-4-mini
+/// wrapper (`<|tool_call|>...<|/tool_call|>`) can produce
+/// N calls when the model emits a JSON list of parallel
+/// tool invocations.
 pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
     let mut out: Vec<ExtractedToolCall> = Vec::new();
     let mut cursor = 0;
     while cursor < text.len() {
-        let Some(start) = find_next_open_tag(text, cursor) else {
+        let Some(open_match) = find_next_open(text, cursor) else {
             break;
         };
-        // start = (offset_of_<, tag_name, after_close_>)
-        let (lt_pos, tag, content_start) = start;
-        // Look for the matching close tag.
-        let close_tag = format!("</{tag}>");
-        let Some(close_rel) = text[content_start..].find(&close_tag) else {
+        let (lt_pos, spec, content_start) = open_match;
+        let Some(close_rel) = text[content_start..].find(spec.close) else {
             // Unclosed wrapper — skip past this `<` so we
             // don't loop forever.
             cursor = lt_pos + 1;
@@ -123,31 +162,24 @@ pub fn extract_tool_calls(text: &str) -> Vec<ExtractedToolCall> {
         };
         let close_abs = content_start + close_rel;
         let inner = &text[content_start..close_abs];
-        if let Some(call) = parse_inner(inner.trim(), tag) {
-            out.push(call);
-        }
-        cursor = close_abs + close_tag.len();
+        out.extend(parse_inner(inner.trim(), spec.tag));
+        cursor = close_abs + spec.close.len();
     }
     out
 }
 
-/// Find the next opening tag matching any recognized
-/// wrapper. Returns `(byte_offset_of_<, tag_name,
-/// byte_offset_after_>)` or `None` if no match in
-/// `text[start..]`.
-fn find_next_open_tag<'a>(
-    text: &'a str,
-    start: usize,
-) -> Option<(usize, &'a str, usize)> {
-    let mut best: Option<(usize, &'a str, usize)> = None;
-    for tag in RECOGNIZED_WRAPPERS {
-        let needle = format!("<{tag}>");
-        if let Some(rel) = text[start..].find(&needle) {
+/// Find the next opening wrapper in `text[start..]`. Returns
+/// `(byte_offset_of_open_start, spec, byte_offset_after_open)`
+/// or `None`.
+fn find_next_open(text: &str, start: usize) -> Option<(usize, &'static WrapperSpec, usize)> {
+    let mut best: Option<(usize, &'static WrapperSpec, usize)> = None;
+    for spec in WRAPPERS {
+        if let Some(rel) = text[start..].find(spec.open) {
             let abs = start + rel;
-            let after = abs + needle.len();
+            let after = abs + spec.open.len();
             best = Some(match best {
-                None => (abs, *tag, after),
-                Some((prev_abs, _, _)) if abs < prev_abs => (abs, *tag, after),
+                None => (abs, spec, after),
+                Some((prev_abs, _, _)) if abs < prev_abs => (abs, spec, after),
                 Some(prev) => prev,
             });
         }
@@ -155,72 +187,125 @@ fn find_next_open_tag<'a>(
     best
 }
 
-/// Parse the inner content of a wrapper block. Three
-/// inner-shape parsers are tried in priority order:
+/// Parse the inner content of a wrapper block. Inner
+/// shape is dispatched per-wrapper:
 ///
-/// 1. `{"name": ..., "arguments": ...}` (Hermes-style;
-///    qwen3, Anthropic, etc.). Either wrapper.
-/// 2. `{"tool": ..., "parameters": ...}` (gemma4 /
-///    common alternative). Either wrapper.
-/// 3. Qwen3-Coder XML inner — `<function=NAME>
-///    <parameter=K>V</parameter>...</function>`. Only
-///    inside `<tool_call>` per the empirical literature
-///    (Ollama issue #14745).
+/// - `<|tool_call|>` (Phi-4-mini) — JSON list of
+///   `{"name", "arguments"}` objects. Each list element
+///   produces one `ExtractedToolCall`; an empty list
+///   produces zero (still a valid Phi-4-mini emission).
+/// - `<tool_code>` / `<tool_call>` — try JSON
+///   `{"name", "arguments"}` shape first, then
+///   `{"tool", "parameters"}` shape. For `<tool_call>`
+///   only, fall back to Qwen3-Coder XML inner
+///   (`<function=N><parameter=K>V</parameter></function>`)
+///   if both JSON shapes miss.
 ///
-/// First match wins; other shapes return `None` (silent
-/// drop).
-fn parse_inner(inner: &str, wrapper_tag: &str) -> Option<ExtractedToolCall> {
+/// First match wins per-element; unmatched shapes drop
+/// silently.
+fn parse_inner(inner: &str, wrapper_tag: &str) -> Vec<ExtractedToolCall> {
+    let mut out = Vec::new();
     if inner.is_empty() {
-        return None;
+        return out;
     }
 
-    // Try JSON shapes first.
-    if let Ok(value) = serde_json::from_str::<Value>(inner) {
-        if let Some(obj) = value.as_object() {
-            // {"name", "arguments"} shape.
-            if let (Some(Value::String(name)), Some(args)) =
-                (obj.get("name"), obj.get("arguments"))
-            {
-                if !name.trim().is_empty() {
-                    return Some(ExtractedToolCall {
-                        tool_name: name.trim().to_string(),
-                        arguments: args.clone(),
-                        wrapper_tag: wrapper_tag.to_string(),
-                        inner_format: "json-name-arguments".to_string(),
-                    });
-                }
-            }
-            // {"tool", "parameters"} shape.
-            if let (Some(Value::String(tool)), Some(params)) =
-                (obj.get("tool"), obj.get("parameters"))
-            {
-                if !tool.trim().is_empty() {
-                    return Some(ExtractedToolCall {
-                        tool_name: tool.trim().to_string(),
-                        arguments: params.clone(),
-                        wrapper_tag: wrapper_tag.to_string(),
-                        inner_format: "json-tool-parameters".to_string(),
-                    });
+    // Phi-4-mini list-wrapper has its own shape and does
+    // NOT fall back to single-object JSON or XML. Keeping
+    // it scoped makes the wrapper_tag distinction
+    // meaningful for audit.
+    if wrapper_tag == "|tool_call|" {
+        if let Ok(arr) = serde_json::from_str::<Vec<Value>>(inner) {
+            for elem in arr {
+                if let Some(call) = parse_json_name_arguments(
+                    &elem,
+                    wrapper_tag,
+                    "json-list-name-arguments",
+                ) {
+                    out.push(call);
                 }
             }
         }
+        return out;
     }
 
-    // Fall back to Qwen3-Coder XML, restricted to the
-    // `<tool_call>` wrapper. The empirical observation
-    // (Ollama issue #14745 — qwen3.5:9b) is that the XML
-    // inner appears inside `<tool_call>` specifically;
+    // JSON shapes first for the remaining wrappers.
+    if let Ok(value) = serde_json::from_str::<Value>(inner) {
+        if let Some(call) =
+            parse_json_name_arguments(&value, wrapper_tag, "json-name-arguments")
+        {
+            out.push(call);
+            return out;
+        }
+        if let Some(call) = parse_json_tool_parameters(&value, wrapper_tag) {
+            out.push(call);
+            return out;
+        }
+    }
+
+    // Fall back to Qwen3-Coder XML inside `<tool_call>`.
     // `<tool_code>` is the markdown-fence-like form used
-    // for JSON-shape emission. Keeping the XML parser
-    // scoped to `<tool_call>` avoids false-positive XML
-    // matches inside other wrapper kinds.
+    // for JSON-shape emission per the empirical literature
+    // — keeping the XML parser scoped to `<tool_call>`
+    // avoids false-positive XML matches inside other
+    // wrapper kinds.
     if wrapper_tag == "tool_call" {
         if let Some(call) = parse_qwen3_coder_xml(inner, wrapper_tag) {
-            return Some(call);
+            out.push(call);
         }
     }
 
-    None
+    out
+}
+
+/// Match the `{"name", "arguments"}` JSON shape on a
+/// single `Value`. Returns `None` if the value isn't an
+/// object with both keys, or if the name is empty/non-
+/// string. `inner_format` is the audit tag the caller
+/// wants ascribed (it differs between the single-object
+/// path and the JSON-list path so the audit chain can
+/// distinguish them).
+fn parse_json_name_arguments(
+    value: &Value,
+    wrapper_tag: &str,
+    inner_format: &str,
+) -> Option<ExtractedToolCall> {
+    let obj = value.as_object()?;
+    let Value::String(name) = obj.get("name")? else {
+        return None;
+    };
+    let args = obj.get("arguments")?;
+    if name.trim().is_empty() {
+        return None;
+    }
+    Some(ExtractedToolCall {
+        tool_name: name.trim().to_string(),
+        arguments: args.clone(),
+        wrapper_tag: wrapper_tag.to_string(),
+        inner_format: inner_format.to_string(),
+    })
+}
+
+/// Match the `{"tool", "parameters"}` JSON shape on a
+/// single `Value`. Same `None` conditions as the
+/// `name`/`arguments` matcher.
+fn parse_json_tool_parameters(
+    value: &Value,
+    wrapper_tag: &str,
+) -> Option<ExtractedToolCall> {
+    let obj = value.as_object()?;
+    let Value::String(tool) = obj.get("tool")? else {
+        return None;
+    };
+    let params = obj.get("parameters")?;
+    if tool.trim().is_empty() {
+        return None;
+    }
+    Some(ExtractedToolCall {
+        tool_name: tool.trim().to_string(),
+        arguments: params.clone(),
+        wrapper_tag: wrapper_tag.to_string(),
+        inner_format: "json-tool-parameters".to_string(),
+    })
 }
 
 /// Parse one Qwen3-Coder-style XML function call. Format:
@@ -909,5 +994,171 @@ mod tests {
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["interval_minutes"], 10);
+    }
+
+    // ====================================================
+    // Phase 127 Task 3 — Phi-4-mini `<|tool_call|>` wrapper.
+    //
+    // Format per Microsoft's PhiCookBook + Ollama's
+    // phi4-mini modelfile template:
+    //
+    //   <|tool_call|>[{"name":"fn1","arguments":{...}},
+    //                 {"name":"fn2","arguments":{...}}]<|/tool_call|>
+    //
+    // Inner is ALWAYS a JSON array (even for single calls),
+    // so the wrapper produces 0..N ExtractedToolCalls per
+    // block. The wrapper open and close are asymmetric —
+    // `<|tool_call|>` open vs `<|/tool_call|>` close
+    // (slash INSIDE the bars, not before them).
+    //
+    // `wrapper_tag` is the literal `"|tool_call|"` (with
+    // bars) so auditors can distinguish from the bare
+    // `<tool_call>` wrapper grep-cleanly.
+    // ====================================================
+
+    #[test]
+    fn phase_127_phi4_mini_single_call_in_list() {
+        let text = r#"<|tool_call|>[{"name": "fs.write", "arguments": {"path": "x.txt"}}]<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].wrapper_tag, "|tool_call|");
+        assert_eq!(calls[0].inner_format, "json-list-name-arguments");
+        assert_eq!(calls[0].arguments["path"], "x.txt");
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_batch_calls_in_list() {
+        // Phi-4-mini's parallel-call form — multiple
+        // function invocations in the same list.
+        let text = r#"<|tool_call|>[
+            {"name": "fs.write", "arguments": {"path": "a.txt", "content": "1"}},
+            {"name": "fs.write", "arguments": {"path": "b.txt", "content": "2"}},
+            {"name": "memory.read", "arguments": {"topic": "x"}}
+        ]<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].arguments["path"], "a.txt");
+        assert_eq!(calls[1].tool_name, "fs.write");
+        assert_eq!(calls[1].arguments["path"], "b.txt");
+        assert_eq!(calls[2].tool_name, "memory.read");
+        assert_eq!(
+            calls[2].inner_format, "json-list-name-arguments",
+            "every list element gets the same inner_format tag"
+        );
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_empty_list_returns_no_calls() {
+        // Empty list is syntactically valid but produces
+        // zero extractions — Phi-4-mini may emit this when
+        // the model decides not to call any tool but its
+        // chat template still includes the wrapper.
+        let text = r#"<|tool_call|>[]<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_single_object_not_a_list_drops() {
+        // `<|tool_call|>` is strictly list-shaped per the
+        // Phi-4-mini training format. A single-object inner
+        // (no array wrapper) should NOT extract — that
+        // emission would be a `<tool_call>{...}</tool_call>`
+        // case, not a Phi-4-mini case.
+        let text = r#"<|tool_call|>{"name": "fs.write", "arguments": {}}<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "Phi-4-mini wrapper only accepts JSON-list inner; single object drops"
+        );
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_malformed_json_drops() {
+        let text = r#"<|tool_call|>not valid json<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_list_element_missing_shape_skipped() {
+        // List with mixed valid + invalid elements:
+        // valid elements extract, invalid ones are skipped
+        // (matches the Phase 126 permissive-parse posture).
+        let text = r#"<|tool_call|>[
+            {"name": "fs.write", "arguments": {"path": "a"}},
+            {"name": "", "arguments": {}},
+            {"name": "memory.read", "arguments": {"topic": "x"}}
+        ]<|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(
+            calls.len(),
+            2,
+            "empty-name element skipped; surrounding valid elements still extract"
+        );
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[1].tool_name, "memory.read");
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_mixed_with_other_wrappers_in_source_order() {
+        // A response can include both a Phi-4-mini list and
+        // a standard `<tool_call>` JSON block (e.g. when an
+        // operator pipes a model behind a bridge that
+        // emulates Phi-4-mini for one tool and standard for
+        // another). Both extract in source order.
+        let text = r#"<|tool_call|>[{"name": "a.x", "arguments": {}}]<|/tool_call|> then <tool_call>{"name": "b.y", "arguments": {}}</tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].wrapper_tag, "|tool_call|");
+        assert_eq!(calls[0].tool_name, "a.x");
+        assert_eq!(calls[1].wrapper_tag, "tool_call");
+        assert_eq!(calls[1].tool_name, "b.y");
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_whitespace_tolerance() {
+        let text = r#"<|tool_call|>
+            [
+                {"name": "fs.write", "arguments": {"path": "x"}}
+            ]
+        <|/tool_call|>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_unclosed_wrapper_drops() {
+        // `<|tool_call|>` opens but no `<|/tool_call|>`
+        // close — skip past the open and continue scanning.
+        let text = r#"<|tool_call|>[{"name": "fs.write", "arguments": {}}]"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "unclosed Phi-4-mini wrapper is dropped, matching the Phase 126 unclosed-wrapper posture"
+        );
+    }
+
+    #[test]
+    fn phase_127_phi4_mini_does_not_match_standard_tool_call_wrapper() {
+        // Sanity check: a bare `<tool_call>` block does
+        // NOT trip the Phi-4-mini path even though both
+        // share the substring "tool_call". The wrapper
+        // literals are distinct (`<tool_call>` vs
+        // `<|tool_call|>`) and matched verbatim.
+        let text = r#"<tool_call>{"name": "fs.write", "arguments": {"path": "x"}}</tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].wrapper_tag, "tool_call",
+            "bare-bracket tool_call wrapper resolves to the standard tag, not Phi-4-mini"
+        );
+        assert_eq!(
+            calls[0].inner_format, "json-name-arguments",
+            "and uses the single-object JSON path, not the list path"
+        );
     }
 }
