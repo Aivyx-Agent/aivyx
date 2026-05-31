@@ -120,7 +120,7 @@ impl Tool for CalendarListEvents {
 
         let path = format!(
             "/calendars/{}/events",
-            urlencode_path_segment(&parsed.calendar_id)
+            super::list_events_urlencode(&parsed.calendar_id)
         );
         let max_results_str = parsed.max_results.to_string();
         let mut query: Vec<(&str, String)> = vec![
@@ -221,33 +221,6 @@ fn flatten_timestamp(slot: Option<&Value>) -> Value {
         return Value::String(d.to_string());
     }
     Value::Null
-}
-
-/// Minimal URL path-segment encoding for the calendar_id
-/// which may legitimately contain `@` (email-style calendar
-/// addresses like `user@example.com`). Google's API
-/// requires the @ encoded as `%40` when in a path segment.
-/// We don't pull a full `url` / `percent_encoding` crate —
-/// just handle the chars that realistically appear in
-/// calendar_ids.
-fn urlencode_path_segment(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(ch),
-            '@' => out.push_str("%40"),
-            '/' => out.push_str("%2F"),
-            ':' => out.push_str("%3A"),
-            other => {
-                let mut buf = [0u8; 4];
-                let encoded = other.encode_utf8(&mut buf);
-                for byte in encoded.bytes() {
-                    out.push_str(&format!("%{:02X}", byte));
-                }
-            }
-        }
-    }
-    out
 }
 
 #[derive(Debug)]
@@ -482,28 +455,6 @@ mod tests {
         assert!(s["end"].is_null());
         assert!(s["location"].is_null());
         assert_eq!(s["attendee_count"], 0);
-    }
-
-    #[test]
-    fn urlencode_path_segment_handles_email_style() {
-        assert_eq!(
-            urlencode_path_segment("user@example.com"),
-            "user%40example.com"
-        );
-    }
-
-    #[test]
-    fn urlencode_path_segment_passes_safe_chars_through() {
-        assert_eq!(urlencode_path_segment("primary"), "primary");
-        assert_eq!(urlencode_path_segment("a-b_c.d"), "a-b_c.d");
-    }
-
-    #[test]
-    fn urlencode_path_segment_encodes_slash() {
-        // A `/` in calendar_id would otherwise break the
-        // path. Google calendar_ids can technically contain
-        // slashes (rare but possible for group calendars).
-        assert_eq!(urlencode_path_segment("a/b"), "a%2Fb");
     }
 
     #[test]

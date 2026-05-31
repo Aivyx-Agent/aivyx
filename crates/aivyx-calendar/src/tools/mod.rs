@@ -27,6 +27,60 @@
 //! CEILING_TRUSTED (write tools require an explicit grant
 //! per role).
 
+pub mod get_event;
 pub mod list_events;
 
+pub use get_event::CalendarGetEvent;
 pub use list_events::CalendarListEvents;
+
+/// Minimal URL path-segment encoding shared across the
+/// calendar tools. Calendar IDs (and event IDs) may
+/// legitimately contain `@` (email-style group calendars
+/// like `team@example.com`) or other characters Google's
+/// API requires percent-encoded when in a path segment.
+/// We don't pull a full `url` / `percent_encoding` crate —
+/// just handle the chars that realistically appear in
+/// calendar / event IDs.
+pub(crate) fn list_events_urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(ch),
+            '@' => out.push_str("%40"),
+            '/' => out.push_str("%2F"),
+            ':' => out.push_str("%3A"),
+            other => {
+                let mut buf = [0u8; 4];
+                let encoded = other.encode_utf8(&mut buf);
+                for byte in encoded.bytes() {
+                    out.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::list_events_urlencode;
+
+    #[test]
+    fn encodes_email_style() {
+        assert_eq!(
+            list_events_urlencode("user@example.com"),
+            "user%40example.com"
+        );
+    }
+
+    #[test]
+    fn passes_safe_chars_through() {
+        assert_eq!(list_events_urlencode("primary"), "primary");
+        assert_eq!(list_events_urlencode("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn encodes_slash_and_colon() {
+        assert_eq!(list_events_urlencode("a/b:c"), "a%2Fb%3Ac");
+    }
+}
