@@ -60,11 +60,6 @@ pub enum CalendarClientError {
 /// are persisted to disk before the in-memory update so
 /// a crash mid-refresh doesn't leave memory ahead of
 /// disk (mirrors `aivyx_gmail::GmailClient`'s posture).
-//
-// dead_code allowance: Task 3 ships the skeleton; the
-// per-tool tasks 4-8 consume every field + helper method
-// here. Removed once a single tool wires up.
-#[allow(dead_code)]
 pub struct CalendarClient {
     http: Client,
     oauth_config: OAuthConfig,
@@ -73,9 +68,6 @@ pub struct CalendarClient {
     token_endpoint: String,
 }
 
-// dead_code allowance: same posture as the struct above —
-// per-tool tasks 4-8 wire every helper.
-#[allow(dead_code)]
 impl CalendarClient {
     /// Build a `CalendarClient` from the operator-loaded
     /// OAuth config + a `TokenSet` (loaded via
@@ -146,7 +138,7 @@ impl CalendarClient {
     /// Internal helper: GET `path` with Authorization
     /// header, parse JSON body. Per-task code uses this
     /// for read-side operations (list / get).
-    pub(crate) async fn get_json<T: DeserializeOwned>(
+    pub async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
         query: &[(&str, String)],
@@ -166,7 +158,7 @@ impl CalendarClient {
 
     /// Internal helper: POST `path` with JSON body.
     /// Per-task code uses this for create operations.
-    pub(crate) async fn post_json<T: DeserializeOwned>(
+    pub async fn post_json<T: DeserializeOwned>(
         &self,
         path: &str,
         body: &Value,
@@ -188,7 +180,7 @@ impl CalendarClient {
     /// Per-task code uses this for update operations
     /// (Google Calendar supports partial updates via
     /// PATCH).
-    pub(crate) async fn patch_json<T: DeserializeOwned>(
+    pub async fn patch_json<T: DeserializeOwned>(
         &self,
         path: &str,
         body: &Value,
@@ -210,7 +202,7 @@ impl CalendarClient {
     /// this for delete operations. Returns the raw status
     /// code so the caller can distinguish 204 (success)
     /// from 410 Gone (already-deleted, idempotent).
-    pub(crate) async fn delete(
+    pub async fn delete(
         &self,
         path: &str,
         query: &[(&str, String)],
@@ -262,6 +254,11 @@ async fn decode_response<T: DeserializeOwned>(
         ))
     })
 }
+
+/// Shared `Arc<CalendarClient>` alias the tools hold
+/// internally. Aliased so the tool impls don't have to
+/// repeat the wrapping.
+pub type SharedCalendarClient = Arc<CalendarClient>;
 
 #[cfg(test)]
 mod tests {

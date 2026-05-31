@@ -26,3 +26,7 @@
 //! Operator-or-higher tier); the write base defaults to
 //! CEILING_TRUSTED (write tools require an explicit grant
 //! per role).
+
+pub mod list_events;
+
+pub use list_events::CalendarListEvents;
