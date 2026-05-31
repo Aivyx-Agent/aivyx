@@ -3535,6 +3535,116 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 130 — Notion + Obsidian Knowledge-Management Bundle (Chapter F #5)
+
+**See [PHASE_130.md](PHASE_130.md).** Largest Chapter F
+phase yet by tool count (13) and task count (17).
+Operator-picked at the Phase 130 direction question: bundle
+Notion and Obsidian under a "knowledge management" theme
+rather than sequencing them across two phases. Two new
+crates, two distinct substrate patterns (REST API + token
+vs local filesystem + markdown). First non-Google + first
+non-OAuth Chapter F phase — proves the substrate
+generalizes beyond Google's OAuth dialect.
+
+**Why this, why now:** Knowledge-management picked over
+Sheets / Docs / Photos / Tasks for maximum operator
+value across the population. Substrate generalization
+test: three consecutive Google integrations (Phases
+123, 128, 129) might give the impression that Chapter F
+is "Google integrations only" — Phase 130 proves the
+chapter pattern works for non-OAuth bearer-token auth
+(Notion) and no-external-API integrations (Obsidian
+filesystem-only). Empirical test signal for the
+per-binary auth_cli posture: Notion's slim auth flow
+empirically tests whether the per-binary auth_cli is
+sustainable at N=4 (gmail + calendar + drive + notion)
+or whether the auth_cli lift becomes necessary.
+
+Phase 130 adds:
+
+- **`aivyx-notion` binary crate** — Notion REST API
+  client; `api.notion.com/v1` with
+  `Authorization: Bearer <integration-token>` +
+  `Notion-Version: 2022-06-28` headers.
+- **Seven Notion tools** (Q1a):
+  - `notion.search` (capability `notion.read`)
+  - `notion.get_page` (`notion.read`)
+  - `notion.list_database` (`notion.read`)
+  - `notion.create_page` (`notion.write`,
+    CEILING_TRUSTED)
+  - `notion.append_blocks` (`notion.write`,
+    CEILING_TRUSTED)
+  - `notion.update_page_properties` (`notion.write`,
+    CEILING_TRUSTED)
+  - `notion.archive_page` (`notion.write`,
+    CEILING_TRUSTED)
+- **`aivyx-obsidian` binary crate** — local Markdown
+  vault client; filesystem operations against a
+  configured vault directory with path-traversal
+  protection + frontmatter parsing + wikilink/tag
+  extraction.
+- **Six Obsidian tools** (Q2a):
+  - `obsidian.search` (`obsidian.read`)
+  - `obsidian.get_note` (`obsidian.read`)
+  - `obsidian.list_folder` (`obsidian.read`)
+  - `obsidian.create_note` (`obsidian.write`,
+    CEILING_TRUSTED)
+  - `obsidian.update_note` (`obsidian.write`,
+    CEILING_TRUSTED)
+  - `obsidian.delete_note` (`obsidian.write`,
+    CEILING_TRUSTED)
+- **Four new capability bases:** `notion.read`,
+  `notion.write`, `obsidian.read`, `obsidian.write`.
+- **A3 amendment:** KNOWN_BASES_COUNT 61 → 65.
+- **INSTALL.md walkthrough** for both integrations
+  including Notion's critical "share each page with
+  the integration" UX quirk and Obsidian's path-
+  traversal guard posture.
+
+**Q-block — all four Recommended.** Q1a Notion 7-tool
+surface; Q2a Obsidian 6-tool surface; Q3a single-vault
+config; Q4a operator-discretionary live verification.
+
+**Streak predictions — three of three HOLD anticipated.**
+DESIGN.md HOLD → 21; PRODUCT.md HOLD → 21;
+`aivyx-core/src/lib.rs` HOLD → 4 (Phase 129 ticked to 3;
+Phase 130 ticks to 4). All Phase 130 work in
+`aivyx-notion` (new), `aivyx-obsidian` (new),
+`aivyx-capability` (four new bases). NO core changes.
+Zero new workspace deps (frontmatter parsing is
+hand-written — same posture as Phase 127's Python-call
+parser). Test count `+200` to `+280` — largest phase to
+date by test count.
+
+**Honest scope risks at sign-off:**
+- Bundled scope is the largest Chapter F phase yet;
+  PR-merge-time scope reduction (defer one integration
+  to Phase 131) is the escape hatch.
+- Notion's "share each page" UX requires very clear
+  INSTALL.md documentation.
+- Obsidian's path-traversal guard is load-bearing for
+  security; symlink + `..` + absolute-path escape all
+  need explicit tests at Task 10.
+- Obsidian wikilink fuzzy-resolution deferred (raw
+  link strings in the output; Phase 131+ candidate).
+- Notion cursor-based pagination has different naming
+  from Drive/Calendar's `next_page_token`.
+- Notion-Version date pin (`2022-06-28`) shields
+  against API breaking changes; future substrate phase
+  bumps if Notion deprecates.
+- Hand-written YAML frontmatter parser handles the
+  common Obsidian shape; exotic frontmatter drops to
+  raw-string passthrough.
+- Auth CLI lift posture empirically tested by Notion's
+  slim auth flow.
+
+**Eighteenth consecutive deferral of the Channel
+Activation Milestone.** Honest tracking continues.
+Audit's #1. The deferral count's signal-strength is
+now load-bearing — Phase 131+ should weigh this
+explicitly when picking direction.
+
 ## Phase 129 — Google Drive + OAuth Substrate Lift (Chapter F #3)
 
 **Frozen — see [PHASE_129.md](PHASE_129.md).** Chapter F
