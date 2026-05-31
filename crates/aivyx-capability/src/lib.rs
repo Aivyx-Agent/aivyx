@@ -135,6 +135,21 @@ const KNOWN_BASES: &[&str] = &[
     //                 pattern).
     "drive.read",
     "drive.write",
+    // Notion (Phase 130 — Chapter F #5, aivyx-notion
+    // third-party tool process). Two bases for the
+    // seven-tool surface (Q1a):
+    //   notion.read  — notion.search,
+    //                  notion.get_page,
+    //                  notion.list_database.
+    //   notion.write — notion.create_page,
+    //                  notion.append_blocks,
+    //                  notion.update_page_properties,
+    //                  notion.archive_page
+    //                  (Trusted-tier only by default,
+    //                  matching the Chapter F write-tool
+    //                  gating pattern).
+    "notion.read",
+    "notion.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -793,6 +808,12 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // third-party-tool-process gating.
         "drive.read",
         "drive.write",
+        // Phase 130 — Notion third-party tool process
+        // (Chapter F #5). Two bases for the seven-tool
+        // surface (Q1a); Trusted-only default matches
+        // Chapter F precedent.
+        "notion.read",
+        "notion.write",
     ])
 });
 
@@ -1598,14 +1619,16 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_129_a3_addendum() {
+    fn known_bases_count_matches_phase_130_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 129) lists every entry.
+        // — the latest addendum (Phase 130) lists every entry.
+        // Phase 130 adds the Notion (this task) bases; the
+        // Obsidian bases land at Phase 130 Task 10.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            61,
+            63,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

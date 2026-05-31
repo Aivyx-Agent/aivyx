@@ -264,6 +264,47 @@ path; no new capability gate.)
 | Phase 125 | `health.read` | Chapter G #1 — `health.check.list`, `health.check.recent_changes` (URL monitor state inspection) |
 | Phase 125 | `health.write` | Chapter G #1 — `health.check.add` (register new URL watcher for the polling loop) |
 
+## Phase 130 addendum (Task 2) — Chapter F #5 Notion (2026-06-01)
+
+> *Added at Phase 130 Task 2 (Notion crate skeleton).
+> Chapter F's fifth integration — Notion via the
+> `aivyx-notion` third-party tool process. First non-Google
+> + first non-OAuth Chapter F integration; uses Notion's
+> Integration token (bearer-token) auth. Per Phase 130 Q1a,
+> seven tools ship: `notion.search`, `notion.get_page`,
+> `notion.list_database`, `notion.create_page`,
+> `notion.append_blocks`, `notion.update_page_properties`,
+> `notion.archive_page`. Two new bases gate them.
+>
+> The Obsidian bases (`obsidian.read`, `obsidian.write`)
+> land at Phase 130 Task 10 and will extend this addendum
+> with an additional row.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 130 | `notion.read` | Chapter F #5 — `notion.search`, `notion.get_page`, `notion.list_database` against the operator's shared Notion content |
+| Phase 130 | `notion.write` | Chapter F #5 — `notion.create_page`, `notion.append_blocks`, `notion.update_page_properties`, `notion.archive_page` (full page-lifecycle mutation; Trusted-tier-only at the ceiling level, matching `email.send` / `calendar.write` / `drive.write`) |
+
+### Current enumeration after Task 2 (63 bases)
+
+Third-party tool process scopes (14):
+- Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
+  `email.send`
+- Personal assistant tool bundle (Chapter G #1, Phase 125):
+  `web.search`, `task.read`, `task.write`, `health.read`,
+  `health.write`
+- Calendar (Chapter F #2, Phase 128): `calendar.read`,
+  `calendar.write`
+- Drive (Chapter F #3, Phase 129): `drive.read`, `drive.write`
+- Notion (Chapter F #5, Phase 130 Task 2): `notion.read`,
+  `notion.write`
+
+Total: 16 substrate + 5 channel/audit/config + 28
+infrastructure + 14 third-party = 63.
+
+**Phase 130 Task 10** adds two more bases (`obsidian.read`,
+`obsidian.write`) for a final Phase 130 count of 65.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —
