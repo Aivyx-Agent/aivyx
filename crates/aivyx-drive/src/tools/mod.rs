@@ -6,10 +6,12 @@
 //! the entry-point that `main.rs` reaches into to build
 //! the harness's `Vec<Arc<dyn Tool>>`.
 
+pub mod create_folder;
 pub mod get_metadata;
 pub mod list_folder;
 pub mod search;
 
+pub use create_folder::DriveCreateFolder;
 pub use get_metadata::DriveGetMetadata;
 pub use list_folder::DriveListFolder;
 pub use search::DriveSearch;
