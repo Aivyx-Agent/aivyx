@@ -22,6 +22,7 @@
 pub mod bridge;
 pub mod frame;
 pub mod harness;
+pub mod multi_harness;
 pub mod proxy;
 pub mod wire;
 
@@ -31,6 +32,13 @@ pub use bridge::{
 };
 pub use frame::{encode_frame, read_frame, write_frame, FrameError, MAX_PAYLOAD_SIZE};
 pub use harness::{run_tool_as_subprocess, HarnessError};
+// Phase 128 — multi-tool harness lifted from
+// aivyx-gmail + aivyx-toolkit. The single-tool
+// `HarnessError` re-export above stays canonical at the
+// crate root; multi-tool consumers use the
+// `multi_harness::HarnessError` path explicitly to
+// disambiguate. Gmail / toolkit re-export from there.
+pub use multi_harness::run_multi_tool_subprocess;
 pub use proxy::ToolProxy;
 pub use wire::{
     DaemonToTool, ToolDescriptor, ToolEventPayload, ToolToDaemon, Verification,
