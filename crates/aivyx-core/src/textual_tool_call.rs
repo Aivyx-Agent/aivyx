@@ -1,4 +1,4 @@
-//! Textual tool-call extraction — Phase 126 substrate.
+//! Textual tool-call extraction — Phase 126 / 127 substrate.
 //!
 //! Some LLM providers emit tool-call JSON in **response
 //! text** rather than the protocol's native `tool_calls`
@@ -19,8 +19,21 @@
 //! </tool_call>
 //! ```
 //!
+//! Phase 127 expanded the substrate with the Qwen3-Coder XML
+//! shape observed in Ollama issue #14745 (qwen3.5:9b) — XML
+//! inside the `<tool_call>` wrapper instead of JSON:
+//!
+//! ```text
+//! <tool_call>
+//! <function=fs.write>
+//! <parameter=path>test.txt</parameter>
+//! <parameter=content>phase 127 verification</parameter>
+//! </function>
+//! </tool_call>
+//! ```
+//!
 //! The extractor in this module is a pure-function parser
-//! that recognizes both wrapper tags and both JSON shapes,
+//! that recognizes both wrapper tags and three inner shapes,
 //! returning a `Vec<ExtractedToolCall>` the planner can
 //! dispatch as if they were real protocol tool calls.
 //!
@@ -61,11 +74,19 @@ use serde_json::Value;
 /// `AuditTag::ToolCall.extracted_from_text` with this so
 /// auditors can distinguish extracted calls from protocol
 /// calls.
+///
+/// `inner_format` records which inner-shape parser matched
+/// — `"json-name-arguments"`, `"json-tool-parameters"`, or
+/// `"qwen3-coder-xml"`. Phase 127 introduced the field so
+/// future tasks can thread it into audit forensics; for
+/// now it's an internal distinguisher useful for tests
+/// and for the eventual audit-side wiring.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedToolCall {
     pub tool_name: String,
     pub arguments: Value,
     pub wrapper_tag: String,
+    pub inner_format: String,
 }
 
 /// Wrapper tags recognized by this extractor. Order matters
@@ -134,44 +155,179 @@ fn find_next_open_tag<'a>(
     best
 }
 
-/// Parse the inner JSON of a wrapper block. Accepts both
-/// the `{"name": ..., "arguments": ...}` shape (qwen3 /
-/// Anthropic-style) and the `{"tool": ...,
-/// "parameters": ...}` shape (gemma4 / common alternative).
-/// Either shape produces an `ExtractedToolCall`; other
-/// shapes return `None` (silent drop).
+/// Parse the inner content of a wrapper block. Three
+/// inner-shape parsers are tried in priority order:
+///
+/// 1. `{"name": ..., "arguments": ...}` (Hermes-style;
+///    qwen3, Anthropic, etc.). Either wrapper.
+/// 2. `{"tool": ..., "parameters": ...}` (gemma4 /
+///    common alternative). Either wrapper.
+/// 3. Qwen3-Coder XML inner — `<function=NAME>
+///    <parameter=K>V</parameter>...</function>`. Only
+///    inside `<tool_call>` per the empirical literature
+///    (Ollama issue #14745).
+///
+/// First match wins; other shapes return `None` (silent
+/// drop).
 fn parse_inner(inner: &str, wrapper_tag: &str) -> Option<ExtractedToolCall> {
     if inner.is_empty() {
         return None;
     }
-    let value: Value = serde_json::from_str(inner).ok()?;
-    let obj = value.as_object()?;
 
-    // Try {"name", "arguments"} first.
-    if let (Some(Value::String(name)), Some(args)) =
-        (obj.get("name"), obj.get("arguments"))
-    {
-        if !name.trim().is_empty() {
-            return Some(ExtractedToolCall {
-                tool_name: name.trim().to_string(),
-                arguments: args.clone(),
-                wrapper_tag: wrapper_tag.to_string(),
-            });
+    // Try JSON shapes first.
+    if let Ok(value) = serde_json::from_str::<Value>(inner) {
+        if let Some(obj) = value.as_object() {
+            // {"name", "arguments"} shape.
+            if let (Some(Value::String(name)), Some(args)) =
+                (obj.get("name"), obj.get("arguments"))
+            {
+                if !name.trim().is_empty() {
+                    return Some(ExtractedToolCall {
+                        tool_name: name.trim().to_string(),
+                        arguments: args.clone(),
+                        wrapper_tag: wrapper_tag.to_string(),
+                        inner_format: "json-name-arguments".to_string(),
+                    });
+                }
+            }
+            // {"tool", "parameters"} shape.
+            if let (Some(Value::String(tool)), Some(params)) =
+                (obj.get("tool"), obj.get("parameters"))
+            {
+                if !tool.trim().is_empty() {
+                    return Some(ExtractedToolCall {
+                        tool_name: tool.trim().to_string(),
+                        arguments: params.clone(),
+                        wrapper_tag: wrapper_tag.to_string(),
+                        inner_format: "json-tool-parameters".to_string(),
+                    });
+                }
+            }
         }
     }
-    // Fall back to {"tool", "parameters"}.
-    if let (Some(Value::String(tool)), Some(params)) =
-        (obj.get("tool"), obj.get("parameters"))
-    {
-        if !tool.trim().is_empty() {
-            return Some(ExtractedToolCall {
-                tool_name: tool.trim().to_string(),
-                arguments: params.clone(),
-                wrapper_tag: wrapper_tag.to_string(),
-            });
+
+    // Fall back to Qwen3-Coder XML, restricted to the
+    // `<tool_call>` wrapper. The empirical observation
+    // (Ollama issue #14745 — qwen3.5:9b) is that the XML
+    // inner appears inside `<tool_call>` specifically;
+    // `<tool_code>` is the markdown-fence-like form used
+    // for JSON-shape emission. Keeping the XML parser
+    // scoped to `<tool_call>` avoids false-positive XML
+    // matches inside other wrapper kinds.
+    if wrapper_tag == "tool_call" {
+        if let Some(call) = parse_qwen3_coder_xml(inner, wrapper_tag) {
+            return Some(call);
         }
     }
+
     None
+}
+
+/// Parse one Qwen3-Coder-style XML function call. Format:
+///
+/// ```text
+/// <function=fs.write>
+/// <parameter=path>test.txt</parameter>
+/// <parameter=content>phase 127 verification</parameter>
+/// </function>
+/// ```
+///
+/// Returns the first complete `<function=...>...</function>`
+/// block found. Parameter VALUEs are JSON-coerced where
+/// the literal text parses as a JSON scalar/array/object;
+/// otherwise the value is treated as a raw string. Repeated
+/// parameter names take the LAST value (override semantics).
+///
+/// Malformed input — missing `<function=>` open tag,
+/// unclosed function block, parameter blocks outside any
+/// function — returns `None`.
+fn parse_qwen3_coder_xml(inner: &str, wrapper_tag: &str) -> Option<ExtractedToolCall> {
+    let func_open_prefix = "<function=";
+    let func_open_start = inner.find(func_open_prefix)?;
+    // Function name runs from after `<function=` to the
+    // next `>`. Bail if the open tag is unterminated.
+    let after_prefix = func_open_start + func_open_prefix.len();
+    let name_end_rel = inner[after_prefix..].find('>')?;
+    let func_name = inner[after_prefix..after_prefix + name_end_rel]
+        .trim()
+        .to_string();
+    if func_name.is_empty() {
+        return None;
+    }
+    let body_start = after_prefix + name_end_rel + 1;
+
+    // Locate the matching `</function>` close. The Qwen3-
+    // Coder format doesn't nest functions, so a flat scan
+    // for the first `</function>` after `body_start` is
+    // correct.
+    let close_tag = "</function>";
+    let close_rel = inner[body_start..].find(close_tag)?;
+    let body = &inner[body_start..body_start + close_rel];
+
+    // Walk the body, extracting each `<parameter=KEY>V</parameter>`.
+    let mut args = serde_json::Map::<String, Value>::new();
+    let mut cursor = 0;
+    let param_open_prefix = "<parameter=";
+    let param_close = "</parameter>";
+    while cursor < body.len() {
+        let Some(open_rel) = body[cursor..].find(param_open_prefix) else {
+            break;
+        };
+        let open_start = cursor + open_rel;
+        let after_param_prefix = open_start + param_open_prefix.len();
+        let Some(key_end_rel) = body[after_param_prefix..].find('>') else {
+            // Unterminated parameter open tag; bail out of
+            // the walk but still return whatever we
+            // accumulated.
+            break;
+        };
+        let key = body[after_param_prefix..after_param_prefix + key_end_rel]
+            .trim()
+            .to_string();
+        let value_start = after_param_prefix + key_end_rel + 1;
+        let Some(close_rel) = body[value_start..].find(param_close) else {
+            break;
+        };
+        let raw_value = &body[value_start..value_start + close_rel];
+        if !key.is_empty() {
+            args.insert(key, coerce_xml_param_value(raw_value));
+        }
+        cursor = value_start + close_rel + param_close.len();
+    }
+
+    Some(ExtractedToolCall {
+        tool_name: func_name,
+        arguments: Value::Object(args),
+        wrapper_tag: wrapper_tag.to_string(),
+        inner_format: "qwen3-coder-xml".to_string(),
+    })
+}
+
+/// JSON-coerce a Qwen3-Coder XML parameter value.
+///
+/// The literal value text is tried as a JSON document; if
+/// it parses to a structured type (number, bool, null,
+/// array, object) the parsed Value is returned. If it
+/// parses to a JSON string (quoted literal), the unquoted
+/// string is returned. Otherwise the raw text is wrapped
+/// as a JSON string verbatim.
+///
+/// This matches the conservative posture of llama.cpp's
+/// Qwen3-Coder parser: numeric-looking strings remain
+/// strings unless the literal is unquoted, so
+/// `<parameter=path>test.txt</parameter>` stays a string
+/// while `<parameter=count>42</parameter>` becomes a
+/// number. Operators can force a string by adding quotes:
+/// `<parameter=count>"42"</parameter>`.
+fn coerce_xml_param_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Value::String(String::new());
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => Value::String(raw.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -415,5 +571,343 @@ mod tests {
             calls[0].tool_name, "fs.write",
             "leading/trailing whitespace trimmed"
         );
+    }
+
+    // ====================================================
+    // Phase 127 Task 2 — Qwen3-Coder XML inner-shape parser.
+    //
+    // Format observed in Ollama issue #14745 (qwen3.5:9b) and
+    // Continue discussion #10534 (qwen3-coder-30b), among
+    // others:
+    //
+    //   <tool_call>
+    //   <function=NAME>
+    //   <parameter=KEY>VALUE</parameter>
+    //   ...
+    //   </function>
+    //   </tool_call>
+    //
+    // The XML inner is only tried inside the `<tool_call>`
+    // wrapper, not `<tool_code>`. Single function block per
+    // wrapper for the MVP — multi-function-per-wrapper
+    // batching is deferred (no empirical evidence of it in
+    // the wild yet).
+    // ====================================================
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_single_string_param() {
+        let text = r#"<tool_call><function=fs.write><parameter=path>test.txt</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].wrapper_tag, "tool_call");
+        assert_eq!(calls[0].inner_format, "qwen3-coder-xml");
+        assert_eq!(calls[0].arguments["path"], "test.txt");
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_multiple_params() {
+        let text = r#"
+            <tool_call>
+            <function=fs.write>
+            <parameter=path>test.txt</parameter>
+            <parameter=content>phase 127 verification</parameter>
+            </function>
+            </tool_call>
+        "#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].arguments["path"], "test.txt");
+        assert_eq!(calls[0].arguments["content"], "phase 127 verification");
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_no_params() {
+        let text =
+            r#"<tool_call><function=time.now></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "time.now");
+        assert_eq!(calls[0].arguments, json!({}));
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_int() {
+        let text = r#"<tool_call><function=task.set><parameter=count>42</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["count"], 42);
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_float() {
+        let text = r#"<tool_call><function=task.set><parameter=ratio>0.75</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        let v = &calls[0].arguments["ratio"];
+        assert!(v.is_f64(), "value should coerce to float; got {v:?}");
+        assert_eq!(v.as_f64(), Some(0.75));
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_bool_true() {
+        let text = r#"<tool_call><function=feature.set><parameter=enabled>true</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["enabled"], true);
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_bool_false() {
+        let text = r#"<tool_call><function=feature.set><parameter=enabled>false</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["enabled"], false);
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_null() {
+        let text = r#"<tool_call><function=memory.read><parameter=topic>null</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        // `null` is a JSON-recognized scalar; coercion
+        // converts to Value::Null.
+        assert!(calls[0].arguments["topic"].is_null());
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_string_with_dots() {
+        // "test.txt" is not valid JSON; falls back to raw
+        // string. This is the load-bearing case for paths
+        // (the operator's most common parameter type).
+        let text = r#"<tool_call><function=fs.write><parameter=path>test.txt</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "test.txt");
+        assert!(calls[0].arguments["path"].is_string());
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_quoted_string_unwrapped() {
+        // Operator-quoted "42" stays a string after JSON
+        // coercion (parses to Value::String).
+        let text = r#"<tool_call><function=task.set><parameter=count>"42"</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["count"], "42");
+        assert!(calls[0].arguments["count"].is_string());
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_json_array() {
+        let text = r#"<tool_call><function=task.set><parameter=tags>[1,2,3]</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["tags"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_value_coercion_json_object() {
+        let text = r#"<tool_call><function=task.set><parameter=meta>{"size":42,"owner":"x"}</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["meta"]["size"], 42);
+        assert_eq!(calls[0].arguments["meta"]["owner"], "x");
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_mixed_value_types() {
+        let text = r#"
+            <tool_call>
+            <function=health.check.add>
+            <parameter=url>https://example.com</parameter>
+            <parameter=interval_minutes>15</parameter>
+            <parameter=enabled>true</parameter>
+            </function>
+            </tool_call>
+        "#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "health.check.add");
+        assert_eq!(calls[0].arguments["url"], "https://example.com");
+        assert_eq!(calls[0].arguments["interval_minutes"], 15);
+        assert_eq!(calls[0].arguments["enabled"], true);
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_dotted_function_name_preserved() {
+        let text = r#"<tool_call><function=fs.delete><parameter=path>x</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].tool_name, "fs.delete",
+            "dotted tool name preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_whitespace_around_params() {
+        let text = r#"<tool_call><function=fs.write><parameter=path>  spaced.txt  </parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        // Raw value preserved as-is (operators may rely on
+        // whitespace for prose-like content). JSON coercion
+        // is tried on the trimmed text, but since
+        // `spaced.txt` doesn't parse as JSON the raw value
+        // (including leading/trailing whitespace) is what
+        // lands.
+        assert_eq!(
+            calls[0].arguments["path"],
+            "  spaced.txt  ",
+            "raw value preserved when not JSON-parseable"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_empty_param_value() {
+        let text = r#"<tool_call><function=task.create><parameter=note></parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["note"], "");
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_repeated_param_takes_last() {
+        let text = r#"<tool_call><function=fs.write><parameter=path>first</parameter><parameter=path>second</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["path"], "second",
+            "repeated parameter name takes the last value"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_multiline_param_value() {
+        let text = "<tool_call><function=fs.write><parameter=content>line one\nline two\nline three</parameter></function></tool_call>";
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["content"],
+            "line one\nline two\nline three"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_drops_missing_close_function() {
+        // Function open with no close — drop.
+        let text = r#"<tool_call><function=fs.write><parameter=path>x</parameter></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "missing </function> close means XML inner doesn't match; JSON shapes also fail; dropped"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_drops_unclosed_parameter() {
+        // Parameter open with no close — parameter is
+        // skipped but the function block still produces an
+        // ExtractedToolCall with the remaining valid params.
+        // For this test, the function has only one (broken)
+        // param, so it produces a call with empty args.
+        let text = r#"<tool_call><function=fs.write><parameter=path>x</function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(
+            calls.len(),
+            1,
+            "function block parses even if one parameter is malformed; broken param dropped"
+        );
+        // The malformed parameter contributed nothing.
+        assert!(calls[0].arguments.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_drops_empty_function_name() {
+        let text = r#"<tool_call><function=><parameter=path>x</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "empty function name dropped"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_only_inside_tool_call_wrapper() {
+        // Same XML inner inside `<tool_code>` MUST NOT
+        // extract — Phase 127's parser is restricted to
+        // `<tool_call>` per the empirical literature.
+        let text = r#"<tool_code><function=fs.write><parameter=path>x</parameter></function></tool_code>"#;
+        let calls = extract_tool_calls(text);
+        assert!(
+            calls.is_empty(),
+            "Qwen3-Coder XML parser is scoped to <tool_call>; <tool_code> wrapper does NOT trigger XML fallback"
+        );
+    }
+
+    #[test]
+    fn phase_127_json_shape_preferred_over_xml_inside_tool_call() {
+        // When `<tool_call>` contains valid JSON, the JSON
+        // parser wins. The XML parser only fires after BOTH
+        // JSON shapes fail.
+        let text = r#"<tool_call>{"name": "fs.write", "arguments": {"path": "x"}}</tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(
+            calls[0].inner_format, "json-name-arguments",
+            "JSON shape wins priority over XML fallback"
+        );
+    }
+
+    #[test]
+    fn phase_127_inner_format_tagging_for_existing_shapes() {
+        // Existing JSON shapes produce the expected
+        // `inner_format` tags. Coverage check for the
+        // Phase 127 field added to ExtractedToolCall.
+        let text_a = r#"<tool_code>{"name": "x", "arguments": {}}</tool_code>"#;
+        let text_b = r#"<tool_call>{"tool": "y", "parameters": {}}</tool_call>"#;
+        assert_eq!(
+            extract_tool_calls(text_a)[0].inner_format,
+            "json-name-arguments"
+        );
+        assert_eq!(
+            extract_tool_calls(text_b)[0].inner_format,
+            "json-tool-parameters"
+        );
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_with_surrounding_prose() {
+        // The model often emits explanatory prose before
+        // and after the tool call; the parser ignores
+        // surrounding text outside the wrapper.
+        let text = r#"
+            Let me write that file for you.
+
+            <tool_call>
+            <function=fs.write>
+            <parameter=path>test.txt</parameter>
+            <parameter=content>phase 127</parameter>
+            </function>
+            </tool_call>
+
+            That should do it.
+        "#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "fs.write");
+        assert_eq!(calls[0].arguments["content"], "phase 127");
+    }
+
+    #[test]
+    fn phase_127_qwen3_coder_xml_underscore_param_name() {
+        // Parameter names can contain underscores — common
+        // in tool schemas (e.g. `interval_minutes`).
+        let text = r#"<tool_call><function=health.check.add><parameter=interval_minutes>10</parameter></function></tool_call>"#;
+        let calls = extract_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["interval_minutes"], 10);
     }
 }
