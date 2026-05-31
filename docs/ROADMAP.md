@@ -3601,10 +3601,24 @@ Recommended; Q3a's streak-break trade-off held).
   Phase 124 session; reproduction is the live test's
   signal.
 
-**Live verification outcome:** _backfilled at exit-
-hash backfill commit; see PHASE_126.md "Live
-verification (Task 5)" placeholder. Q4a posture: exit
-reports whatever the test shows._
+**Live verification — amended out at close-out.** The
+operator amended Q4a after pre-flight surfaced both
+the empirical signal (dev-verify against qwen3.6:27b
+on Ollama 0.24.0: 5 turns, `tool_calls_made: 0`
+everywhere, zero extracted calls) AND the substrate
+gap (literature shows qwen3.5/3.6 emits Qwen3-Coder
+XML inside `<tool_call>`, not the JSON Phase 126's
+parser handles; per Ollama issue #14493 the qwen3.5
+family is wired to the wrong renderer/parser pipeline
+upstream). A redundant live test was rejected in favor
+of moving directly into substrate-completion work.
+See PHASE_126.md "Research-driven amendment" section.
+
+**Phase 127 picks up the substrate work** — Multi-
+Format Tool-Call Extraction — adds Qwen3-Coder XML,
+bare-JSON, Phi-4-mini, and Gemma 3 python-fence
+parsers, plus a hybrid family-hint architecture
+backed by Ollama `/api/show`.
 
 **Fourteenth consecutive deferral of the Channel
 Activation Milestone.** Honest tracking. Audit's #1

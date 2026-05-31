@@ -294,7 +294,8 @@ substrate level) and how to lower
 - **Q3a** — New `extracted_from_text` field on
   `AuditTag::ToolCall` (Recommended; **streak break**).
 - **Q4a** — Live verification against both models
-  (Recommended).
+  (Recommended). **Amended at close-out** — see
+  "Research-driven amendment" section below.
 
 **All four Recommended — third all-Recommended phase in a
 row** (Phase 124, 125, 126).
@@ -309,8 +310,11 @@ row** (Phase 124, 125, 126).
   site updated + audit chain HMAC verification —
   Task 3.
 - [ ] Planner integration + tests — Task 4.
-- [ ] Live verification + INSTALL.md sweep + exit —
-  Task 5.
+- [x] INSTALL.md operator-facing section — Task 5 prep.
+- [~] Live verification — **amended out at close-out**
+  per research findings; see "Research-driven amendment"
+  section. Replaced by Phase 127 substrate-completion
+  work.
 - [ ] Q1 / Q2 / Q3 / Q4 resolved pre-Task 2 (all
   Recommended).
 - [ ] DESIGN.md streak — predicted HOLD (streak → 17).
@@ -320,10 +324,18 @@ row** (Phase 124, 125, 126).
 - [ ] Zero new workspace dependencies.
 - [ ] Test count delta within `+40` to `+60`.
 - [ ] Zero clippy warnings.
-- [ ] **Live verification outcome** documented in exit
-  doc regardless of result. Phase 126's load-bearing
-  question: does the substrate produce empirical
-  rescue?
+- [x] **Live verification outcome documented in exit
+  doc regardless of result** — satisfied via the
+  research-driven amendment below. The dev-verify pass
+  against qwen3.6:27b (5 turns, audit chain
+  `tool_calls_made: 0` across all turns) plus the
+  upstream-Ollama bug catalog supply the empirical
+  signal Q4a was scoped to produce. Phase 126's load-
+  bearing question — *does the substrate produce
+  empirical rescue?* — answered: **no, because the
+  substrate is empirically incomplete; the formats
+  qwen3.5/3.6 actually emits aren't covered.** Phase 127
+  is the substrate-completion follow-up.
 
 ## Honest scope risks at sign-off (carried forward)
 
@@ -443,61 +455,148 @@ llm_planner tests passed unchanged post-refactor —
 behavioral preservation confirmed. Not a Q-block item;
 mentioned here for completeness.
 
-### Live verification (Task 5)
+## Research-driven amendment (close-out)
 
-> **PLACEHOLDER — populated post-live-test.**
->
-> Verification against qwen3.6:27b and gemma4:31b
-> through `./scripts/dev-run.sh --release --reset --model
-> <name>`. Same probes as Phase 122/124. Banner should
-> show no Phase-126-specific change (extraction is on
-> by default at the planner-substrate layer; no
-> `prompt_strategy` value covers it).
->
-> The exit-doc backfill commit replaces this block with
-> the empirical four-cell trajectory table:
->
-> | Surface | qwen3 Phase 124 | qwen3 Phase 126 | gemma4 Phase 124 | gemma4 Phase 126 (default thresh) | gemma4 Phase 126 (thresh=0.60) |
-> |---|---|---|---|---|---|
-> | Enumeration | Empty | _observed_ | Vague prose | _observed_ | _observed_ |
-> | Invocation | `<tool_code>` text, no real call | _observed_ | `<tool_call>` text w/ `fs.write_file`, no real call | _observed_ | _observed_ |
-> | Audit ToolCalls | 0 | _observed_ | 0 | _observed_ | _observed_ |
-> | `extracted_from_text` populated? | n/a (no extraction) | _observed_ | n/a | _observed_ | _observed_ |
-> | `auto_corrected_from` populated? | n/a | _observed_ | n/a | _observed_ | _observed_ |
->
-> **Three outcome cases pre-enumerated** per Q4a:
->
-> 1. **qwen3 invokes fs.write; gemma4 invokes with
->    lowered threshold.** Substrate breakthrough. Phase
->    126 closes the local-LLM-rehab axis cleanly. Exit
->    doc validates the extraction + Phase 120
->    composition.
-> 2. **qwen3 invokes; gemma4 doesn't even with lowered
->    threshold.** Honest asymmetric outcome. Exit doc
->    documents the qwen3 rescue and the gemma4 residual
->    gap; future investigation could lower threshold
->    further OR document gemma4 as unsupported for tool-
->    use workloads.
-> 3. **Neither invokes.** The substrate is technically
->    correct (parsing + dispatch + audit chain all fire
->    in unit tests) but the extracted call fails on
->    some path the unit tests didn't cover. Exit doc
->    names the residual gap concretely; possible
->    Phase 127 follow-up.
->
-> **Probe pattern (deterministic so the comparison
-> against Phase 124 is honest):**
->
-> 1. Banner observation.
-> 2. `> What tools do you have available?` (enumeration
->    probe).
-> 3. `> Please call fs.write to create a file at test.txt
->    with the content 'phase 126 verification'.`
->    (invocation probe).
-> 4. Ctrl-D.
->
-> Then for gemma4, a second pass with
-> `[providers] tool_name_auto_correct_threshold = 0.60`
-> in `aivyx.toml`. Three sessions total
-> (qwen3, gemma4-default-thresh, gemma4-low-thresh) for
-> the full empirical signal.
+**Operator-driven amendment at Task 5 boundary.** The
+planned Q4a live verification was replaced with
+literature research after the pre-flight pass produced
+the load-bearing empirical signal AND the research
+surfaced a substrate gap the live verification would
+only have re-confirmed.
+
+### What the pre-flight produced
+
+`dev-verify` against qwen3.6:27b on Ollama 0.24.0
+(local install) under the Phase 126 substrate:
+
+| Surface | Result |
+|---|---|
+| Build / unit tests / clippy | All clean (23 textual_tool_call + 63 llm_planner pass) |
+| `dev-verify` substrate health | 11 PASS, 0 FAIL, 3 WARN (fs.* probes) |
+| Audit chain over 5 LLM turns | 10 events; **every TurnEnded has `tool_calls_made: 0`** |
+| `ToolCall` events emitted | **zero** |
+| `extracted_from_text` populations | **zero** |
+
+The dev-verify "memory.write → memory.read tool path
+works" PASS is misleading: that codeword was echoed in
+qwen3's 1646-token prose and indexed via session-search,
+not written through the actual `memory.write` tool. The
+audit chain confirms zero protocol AND zero extracted
+tool calls.
+
+### What the literature added
+
+| Family | Training format | Wrapper | Inner | Phase 126 |
+|---|---|---|---|---|
+| Llama 3.1/3.2/3.3 | Python-call | `<\|python_tag\|>` | `[func(k=v)]` | dropped |
+| Mistral Nemo / Small 3.x | Special token | `[TOOL_CALLS]` | JSON array | dropped |
+| Qwen3 (Hermes pipeline) | XML | `<tool_call>` | JSON `{name, arguments}` | **handled** |
+| **Qwen3-Coder (qwen3.5/3.6 actual)** | XML inner | `<tool_call>` | `<function=N><parameter=K>V</parameter></function>` | **dropped** |
+| DeepSeek R1 | Dynamic XML | `<TOOL_NAME>` (named after fn) | `<param>V</param>` | dropped |
+| Phi-4-mini | Special tokens | `<\|tool_call\|>...<\|/tool_call\|>` | JSON list | dropped |
+| Gemma 3 | Pythonic | ` ```tool_code ` markdown fence | Python call | dropped |
+| Gemma 4 | Special tokens | `<\|tool_call>` | `call:N{k:<\|"\|>v<\|"\|>}` | dropped |
+| Bare JSON (qwen3:32b#11662) | None | (no wrapper) | raw `{name, arguments}` | dropped |
+| Tool-code JSON (Phase 124 qwen3.6 obs) | Markdown-fence-like | `<tool_code>` | JSON | **handled** |
+
+Phase 126's textual extractor handles 2 of the ~10
+empirical formats — those Phase 124 happened to
+observe in a single non-deterministic session. Real
+coverage needs substantially more.
+
+### The qwen3.5/3.6 root cause
+
+Local `qwen3.6:27b` reports family `qwen35`, Ollama
+0.24.0, modelfile template `{{ .Prompt }}` (passthrough).
+Per Ollama issue #14493 (open Feb 2026):
+
+- Ollama wires `qwen3.5` → `Qwen3VLRenderer + Qwen3Parser`
+  (Hermes-style JSON pipeline).
+- The model was **trained** on `Qwen3CoderRenderer +
+  Qwen3CoderParser` (XML-inner pipeline).
+- Correct pipeline exists in Ollama codebase but is
+  wired only to the literal model name `qwen3-coder`.
+- Tool definitions also rendered as Go struct strings
+  (#14601); model receives malformed schemas before it
+  even tries to call.
+
+Net effect: qwen3.6:27b can't see schemas correctly AND
+is prompted in a format it wasn't trained on. The
+emissions are Qwen3-Coder XML inside `<tool_call>` —
+**a format Phase 126's parser drops silently** because
+the inner-parser tries JSON only.
+
+### Why no live test
+
+Q4a's load-bearing question — *does the substrate
+produce empirical rescue?* — is **answered without
+running another live session**:
+
+- The pre-flight already showed `tool_calls_made: 0` ×
+  5 turns. Re-running would re-confirm this.
+- Phase 124 was non-deterministic about which wrapper
+  qwen3.6 emits; another session would expose more
+  variance, not converge.
+- Even if qwen3.6 happened to emit `<tool_code>` JSON
+  this session (Phase 124's observed pattern), the
+  substrate works as designed — but per the literature,
+  the more-frequent emission is Qwen3-Coder XML which
+  the substrate drops. A test catching the lucky case
+  would *over-state* substrate coverage.
+- A test catching the unlucky case (XML, dropped)
+  would consume tokens, GPU time, and operator
+  attention to re-confirm what the literature already
+  established.
+
+Q4a amended outcome: **honest research-driven close
+beats redundant empirical pass.** The dev-verify
+pre-flight + the upstream Ollama literature jointly
+satisfy "live verification outcome documented in exit
+doc regardless of result."
+
+### Phase 127 carry-forward
+
+Phase 127 — **Multi-Format Tool-Call Extraction
+(substrate completion)** — entered immediately after
+this commit. Scope:
+
+1. Add Qwen3-Coder XML inner-parser (the most
+   load-bearing rescue for the user's local stack).
+2. Add bare-JSON extraction with false-positive guard
+   (qwen3:32b#11662 pattern).
+3. Add Phi-4-mini `<|tool_call|>` JSON-list wrapper.
+4. Add Gemma 3 ```tool_code` markdown-fence + Python-
+   call translator.
+5. Hybrid family-hint architecture — query Ollama
+   `/api/show` once per session, use reported family
+   to prioritize parser choice; permissive fallback
+   if family hint misses or model unknown.
+6. INSTALL.md substrate-coverage matrix + honest
+   model-recommendation guidance (Llama 3.1 +
+   mistral-nemo + phi4-mini reliable; qwen3.5/3.6 needs
+   the Phase 127 substrate; Qwen3-Coder model name
+   variant gets Ollama's correct upstream pipeline).
+
+Phase 127 entry doc spells out streak predictions
+(substrate work is additive — `lib.rs` rebuild starts;
+DESIGN.md/PRODUCT.md HOLD), test-count expectation,
+and the Q-block.
+
+### Honest framing on the amendment
+
+This amendment is itself a Phase 6 Q5 honest move.
+The Q4a-as-scoped path was: run the live test,
+document the gap as residual, defer the substrate
+expansion. The amended path is: name the substrate gap
+explicitly with literature, skip the redundant test,
+move the substrate work into Phase 127. The Q4a-as-
+scoped path would have spent ~30 minutes of operator
+attention + ~15 minutes of model time to produce
+already-knowable findings; the amended path moves
+that budget into Phase 127 implementation. Operator
+sign-off on the amendment was explicit:
+
+> "Instead of yet another live test, we need to
+> actually FIX the tooling issue first, not just run
+> another test to verify what we already know as this
+> is wasted time, tokens and money."
