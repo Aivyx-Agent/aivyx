@@ -518,6 +518,21 @@ impl ConcreteAgent {
         // *planner* bug (or prompt-injection attempt), not a
         // capability question, and routing it through `Denied`
         // would pollute the scope-denial telemetry stream.
+        //
+        // Audit L4 considered — the Agent Loop review noted that
+        // running validation on calls that the allowlist or scope
+        // gate would later deny is wasted work. Reordering
+        // (allowlist → schema → scope) was rejected because:
+        //   1. JSON-schema validation is bounded and cheap
+        //      (`jsonschema` crate, no external resolution).
+        //   2. "Planner-emitted-malformed-input" is a stronger
+        //      signal than "role doesn't allow this tool" — the
+        //      former indicates a broken planner, the latter is
+        //      routine role attenuation. Surfacing the planner
+        //      bug first matters more.
+        //   3. No side effects: schema validation reads only the
+        //      tool's static schema, so a doomed call costs one
+        //      JSON walk and nothing more.
         if let Err(err) = crate::schema::validate(tool.input_schema(), &input) {
             let outcome = ToolOutcome::Failed(AivyxError::Tool {
                 tool: tool_id,
