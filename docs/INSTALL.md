@@ -2149,6 +2149,257 @@ remain per-service; no operator-side change. The lift
 is documented honestly in
 `docs/PHASE_129.md` for development-side audit trails.
 
+### Notion (Phase 130 — Chapter F #5)
+
+Chapter F's first non-Google + first non-OAuth integration.
+Uses Notion's **Integration token** auth — much simpler
+than OAuth (no callback flow, no token refresh, no token
+storage on disk beyond the operator's config file).
+
+#### One-time operator setup
+
+1. **Create a Notion integration:**
+   Settings → My integrations → New integration →
+   Internal integration → name it something like
+   "Aivyx" → save.
+2. **Copy the Internal Integration Token** that Notion
+   shows (format: `ntn_XXXXXXXX` or older
+   `secret_XXXXXX`).
+3. **Write
+   `~/.aivyx/tool-processes/notion/config.toml`:**
+
+   ```toml
+   notion_token = "ntn_XXXXXXXXXXXX"
+   ```
+
+4. **Verify the token works:**
+
+   ```bash
+   $ aivyx-notion auth check
+   aivyx-notion auth check: OK — token authenticated as bot `Aivyx`
+   ```
+
+#### **Critical UX quirk: share pages with the integration**
+
+Notion integrations DON'T have implicit access to your
+workspace content. After setting up the integration you
+must explicitly share each page or database you want
+Aivyx to see:
+
+- **Via Notion's UI:** open the page → click "Share" →
+  "Invite" → search for your integration's name →
+  select it. Repeat for each page/database. Sharing
+  cascades to child pages, so sharing a parent shares
+  its tree.
+
+Without this step, `notion.search` returns empty
+results and `notion.get_page` returns the
+"page or database not accessible — operator may need to
+share it" error. The error message points operators at
+this step directly.
+
+#### `[[tool_process]]` registration
+
+```toml
+[[tool_process]]
+name = "aivyx-notion"
+command = "/path/to/aivyx-notion"
+inherit_env = ["HOME"]
+```
+
+#### Per-tool capability table
+
+| Tool | Capability | Description |
+|---|---|---|
+| `notion.search` | `notion.read` | Global search across shared content. Substring match on titles. Cursor-based pagination. |
+| `notion.get_page` | `notion.read` | Full page payload: properties + block tree (top-level; nested blocks not recursively fetched — call get_page recursively on `has_children: true` blocks). |
+| `notion.list_database` | `notion.read` | Query a database with Notion's filter/sort DSL. Filter shapes passed verbatim per Notion's API. |
+| `notion.create_page` | `notion.write` | Create a new page under a `page_id` or `database_id` parent. Properties + optional children blocks. Trusted-tier-only. |
+| `notion.append_blocks` | `notion.write` | Append blocks to an existing page. Trusted-tier-only. |
+| `notion.update_page_properties` | `notion.write` | Patch property values on a page (only present keys are updated). Trusted-tier-only. |
+| `notion.archive_page` | `notion.write` | Archive (Notion's "delete") a page; idempotent; recoverable via Notion's Trash menu for ~30 days. Trusted-tier-only. |
+
+#### Per-role capability grants
+
+`notion.read` and `notion.write` are Trusted-tier-only by
+default (Chapter F precedent). Grant via:
+
+```toml
+[[role]]
+name = "notion-assistant"
+trust_tier = "SemiTrusted"
+capability_scopes = ["notion.read"]  # read-only
+```
+
+#### Operator-side troubleshooting
+
+- **`notion.search` returns empty results / `get_page`
+  returns "not_shared":** the integration isn't shared
+  with the relevant content. Re-check sharing in
+  Notion's UI.
+- **`notion.create_page` fails with "validation_error":**
+  the `properties` shape must match the parent
+  database's schema. Pull
+  `notion.list_database` first to see the actual property
+  shapes Notion expects.
+- **`notion.archive_page` succeeds but `was_already_archived:
+  true`:** the page was already archived (by someone
+  else, or by a prior call). The end state matches
+  intent so this isn't an error — but the audit chain
+  shows the distinction.
+- **Rich-text gets flattened in get_page:** by design.
+  Notion's `rich_text` arrays carry per-segment
+  formatting (bold/italic/links/colors); the tool
+  flattens to a single `plain_text` string for LLM
+  ergonomics. Operators wanting full rich-text fidelity
+  bypass aivyx-notion and use Notion's API directly.
+
+#### What Phase 130 deliberately leaves to follow-on phases
+
+- **No nested block recursion** in `get_page`. Operators
+  walk `has_children: true` blocks via further get_page
+  calls. A `notion.get_blocks_tree` substrate could ship
+  in Phase 131+ if pressure surfaces.
+- **No file/attachment uploads.** Notion supports
+  inline files; not in Phase 130's tool surface.
+- **No comments / mentions / page-history.** Out of
+  scope for the read+write CRUD MVP.
+
+### Obsidian (Phase 130 — Chapter F #6)
+
+Chapter F's first integration with **no external API** —
+operates on filesystem reads/writes under your configured
+vault directory. Markdown-aware (parses frontmatter,
+extracts `[[wikilinks]]` and `#tags`).
+
+#### One-time operator setup
+
+1. **Note your vault's absolute path** (e.g.,
+   `~/Documents/MyVault` → `/Users/me/Documents/MyVault`).
+2. **Write
+   `~/.aivyx/tool-processes/obsidian/config.toml`:**
+
+   ```toml
+   vault_path = "/absolute/path/to/MyVault"
+   ```
+
+   Must be an absolute path; the config loader rejects
+   relative paths.
+
+3. **Verify the vault is accessible:**
+
+   ```bash
+   $ aivyx-obsidian auth check
+   aivyx-obsidian auth check: OK
+     config: "/Users/me/.aivyx/tool-processes/obsidian/config.toml"
+     vault root: "/Users/me/Documents/MyVault"
+   ```
+
+#### **Critical safety: path-traversal protection**
+
+Every tool operation resolves operator-supplied paths
+via a load-bearing guard before any I/O:
+
+- **Absolute paths in tool inputs are rejected** at the
+  input layer.
+- **`..` path components are rejected** at the input
+  layer (before canonicalization, so operators see
+  "rejected `..`" rather than a downstream error).
+- **Symlinks are canonicalized and verified to point
+  inside the vault.** An operator-created symlink
+  pointing OUTSIDE the vault is rejected — without
+  this, an agent could read arbitrary filesystem
+  locations via a vault-relative path.
+- **Operators should ALSO register the binary in
+  `[[tool_process]]` with an `allowed_paths` constraint
+  scoped to the vault directory** as a belt-and-
+  suspenders posture. The substrate guard is the
+  primary defense; the daemon-side sandbox is the
+  fallback.
+
+#### `[[tool_process]]` registration
+
+```toml
+[[tool_process]]
+name = "aivyx-obsidian"
+command = "/path/to/aivyx-obsidian"
+inherit_env = ["HOME"]
+# Belt-and-suspenders sandbox:
+allowed_paths = ["/absolute/path/to/MyVault"]
+```
+
+#### Per-tool capability table
+
+| Tool | Capability | Description |
+|---|---|---|
+| `obsidian.search` | `obsidian.read` | Recursive vault walk + grep-style line-by-line search. Optional tag + frontmatter filter. Skips dotfile dirs (`.obsidian`). |
+| `obsidian.get_note` | `obsidian.read` | Full note payload: content, frontmatter_raw (YAML between top `---` markers), body, wikilinks (raw link targets), tags. |
+| `obsidian.list_folder` | `obsidian.read` | List markdown notes in a vault subdirectory. Optional recursive. |
+| `obsidian.create_note` | `obsidian.write` | Create a new note. Refuses overwrite (use update_note). Optional create_parents. Trusted-tier-only. |
+| `obsidian.update_note` | `obsidian.write` | Modify existing note: mode = `"replace"` or `"append"`. Trusted-tier-only. |
+| `obsidian.delete_note` | `obsidian.write` | **Permanent** delete (no trash). Idempotent on already-missing. Trusted-tier-only. |
+
+#### Markdown semantics
+
+- **Frontmatter:** the YAML between the top `---`
+  markers is returned as the literal text in
+  `frontmatter_raw`. Operators YAML-parse LLM-side if
+  they care about specific fields. The substrate's
+  lightweight frontmatter scanner supports `key: value`
+  substring matching in `obsidian.search`'s
+  `frontmatter_key` + `frontmatter_value` filter
+  without pulling a YAML dep.
+- **Wikilinks:** `[[Page Name]]` and `[[Page Name|display
+  text]]` link targets are extracted (display text
+  dropped, deduped, insertion-order preserved). **No
+  fuzzy resolution to actual vault files** — operators
+  wanting to find the target call `obsidian.search` or
+  `obsidian.list_folder` to disambiguate. Wikilink
+  fuzzy resolution is a Phase 131+ candidate.
+- **Tags:** `#tag` tokens are extracted from the body
+  (whitespace-bounded; alphanumeric + `-` + `_` + `/`
+  inner chars; nested-tag form `#projects/aivyx`
+  supported). Headings (`# Title`) don't trigger
+  because of the space after `#`.
+
+#### Per-role capability grants
+
+```toml
+[[role]]
+name = "obsidian-reader"
+trust_tier = "SemiTrusted"
+capability_scopes = ["obsidian.read"]  # read-only access
+```
+
+#### Operator-side troubleshooting
+
+- **"path escapes the vault root"** — input contained
+  `..` or an absolute path or a symlink to outside the
+  vault. Fix the path or move the symlink target inside
+  the vault.
+- **`obsidian.search` returns nothing** — narrow with
+  `tag` or `frontmatter` filters; widen `q` (it's
+  case-insensitive substring); check `folder` arg.
+- **`obsidian.create_note` says "file already exists"**
+  — use `obsidian.update_note` (mode `"replace"` or
+  `"append"`) instead.
+- **`obsidian.delete_note` is permanent.** No trash.
+  Recover via your filesystem backups (Time Machine,
+  Snapshots, git) or your Obsidian Sync history if
+  configured. Aivyx doesn't replicate Obsidian's UI
+  trash semantics.
+
+#### What Phase 130 deliberately leaves to follow-on phases
+
+- **No wikilink fuzzy resolution.** Returns raw link
+  targets; operator-driven follow-up.
+- **No full-text index.** Search is linear scan;
+  practical for vaults up to ~thousands of files.
+- **No file-system watching.** Tools see the vault
+  state at call time.
+- **No image/PDF/canvas handling.** Only `.md` files
+  are scanned by `search` / `list_folder`.
+
 ## Operator-facing personal assistant capabilities (Chapter G)
 
 After Chapter F #1 (Gmail) shipped and the Phase 124 exit

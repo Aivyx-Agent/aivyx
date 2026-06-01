@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 130 — Notion + Obsidian Knowledge-Management Bundle (Chapter F #5)
 
-**See [PHASE_130.md](PHASE_130.md).** Largest Chapter F
+**Frozen — see [PHASE_130.md](PHASE_130.md).** Largest Chapter F
 phase yet by tool count (13) and task count (17).
 Operator-picked at the Phase 130 direction question: bundle
 Notion and Obsidian under a "knowledge management" theme
@@ -3644,6 +3644,23 @@ Activation Milestone.** Honest tracking continues.
 Audit's #1. The deferral count's signal-strength is
 now load-bearing — Phase 131+ should weigh this
 explicitly when picking direction.
+
+**Phase 130 at exit:**
+- DESIGN.md HELD → 21. PRODUCT.md HELD → 21.
+  aivyx-core/src/lib.rs HELD → 4.
+- Test count `+220` (3103 → 3323) — inside the
+  predicted `+200 to +280` range.
+- Zero new workspace deps. Zero clippy warnings.
+- All four Q-block picks Recommended; bundled scope
+  stayed tractable.
+- **Auth CLI lift posture empirically validated** as
+  Phase 131+ substrate work — Notion's slim auth flow
+  was awkward to wrap in OAuth-shaped helpers; the
+  signal flagged in honest-scope-risks materialized.
+- Path-traversal substrate worked as designed; 13
+  vault_client tests covering `..` / absolute / symlink
+  escape cases.
+- 13 tools shipped: 7 Notion + 6 Obsidian.
 
 ## Phase 129 — Google Drive + OAuth Substrate Lift (Chapter F #3)
 

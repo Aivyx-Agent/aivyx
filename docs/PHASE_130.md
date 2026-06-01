@@ -433,7 +433,128 @@ After Phase 130, Phase 131 candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 130 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 21; PRODUCT.md HOLD → 21;
-lib.rs HOLD → 4; test count `+200` to `+280`; zero
-new deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`c2be6d51…`
+  unchanged). No contract amendment. Streak: 20 → **21**.
+- **PRODUCT.md** — HELD as predicted (`6e840cef…`
+  unchanged). G6 + P10 + P11 + P12 cover Notion + Obsidian
+  exactly as P10 framed ("anything domain-specific is
+  third-party"). Streak: 20 → **21**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`9692e5d…` unchanged). All Phase 130 work lives in
+  `aivyx-notion` + `aivyx-obsidian` (both new), plus four
+  new bases in `aivyx-capability`. NO core changes.
+  Streak: 3 → **4**.
+
+**Test count `+220` landed cleanly inside the predicted
+`+200 to +280` range.** Per-crate breakdown:
+
+- aivyx-notion: **+119** tests (Task 2 skeleton: 22
+  inherited from auth_cli + notion_client + config_file;
+  Tasks 3-9 tools: +97 across 7 tools).
+- aivyx-obsidian: **+101** tests (Task 10 skeleton: 44
+  inherited from vault_client + markdown + auth_cli +
+  config_file + check; Tasks 11-16 tools: +57 across 6
+  tools).
+- Net workspace test delta: **+220**.
+
+Workspace test count: 3103 (post-Phase 129) → **3323**
+(post-Phase 130). 13 new tools shipped: 7 Notion +
+6 Obsidian.
+
+**Zero new workspace dependencies** as predicted. Notion
+uses reqwest + serde (existing); Obsidian uses tokio::fs
++ serde (existing). The hand-written markdown frontmatter
+splitter + wikilink/tag extractors avoided pulling
+`serde_yaml`; same posture as Phase 127's hand-written
+Python-call parser.
+
+**Zero clippy warnings** workspace-wide. Three transient
+lints fixed during dev:
+1. `non_snake_case` doesn't apply here (everything's
+   already snake_case from start);
+2. `unnecessary_cast` on `d.as_secs() as u64` →
+   `d.as_secs()` in list_folder;
+3. `doc_lazy_continuation` — none triggered this phase
+   (lessons learned from Phase 128/129 carried over to
+   the doc-comment style).
+
+**Q-block went through as picked — all four
+Recommended.** Five-Recommended phase, first since Phase
+127's six-Recommended.
+
+**Bundled scope stayed tractable.** Both crates landed
+cleanly without PR-merge-time scope reduction. 13 tools
+across 17 tasks; the per-task pattern carried by the
+established Chapter F substrate kept each tool task to
+~300-450 LoC + tests.
+
+**The auth_cli posture empirical signal:** Notion's
+`auth_cli` is dramatically smaller than the OAuth-shaped
+versions in gmail / calendar / drive — just `cli.rs`
+(arg parser), `config_file.rs` (token load), and
+`status.rs` (offline status + online `auth check`). No
+init/revoke flow because there's no token exchange.
+Obsidian's is even smaller: no auth at all, just
+`auth check` to verify the vault path is readable.
+
+**This is the signal Phase 130's honest-scope-risk
+section flagged.** Wrapping Notion's slim flow in the
+OAuth-shaped helpers WOULD have been awkward — verifies
+the case for an `auth_cli` lift to a shared
+`aivyx-auth-cli` substrate crate in a future phase. The
+lift would parameterize the OAuth-flavored helpers by
+service name + scopes, and offer a leaner non-OAuth
+shape for token/path-style auth. **Phase 131+ candidate
+based on this empirical signal.**
+
+**Path-traversal substrate worked as designed.** Every
+write tool (`obsidian.create_note`, `update_note`,
+`delete_note`) and every read tool (`search`,
+`get_note`, `list_folder`) goes through
+`VaultClient::resolve_under_vault`. The 13 tests in
+`vault_client::tests` exercise:
+- simple relative paths accepted
+- subdirectory paths accepted
+- `..` at input layer rejected
+- `..` in middle rejected
+- absolute path rejected
+- read-mode NoteNotFound vs Io error differentiation
+- write-mode non-existent leaf accepted (canonicalizes
+  parent)
+- symlink pointing INSIDE vault accepted
+- symlink pointing OUTSIDE vault rejected (the load-
+  bearing security case)
+
+No path-traversal regressions found in any tool
+implementation.
+
+**Notion's "share with integration" UX quirk documented
+prominently:** `NotShared` is a dedicated error variant
+distinct from generic 404; the error message tells
+operators to share the resource via Notion's UI;
+INSTALL.md flags this as a critical UX note; the help
+text in `aivyx-notion help` mentions it without operators
+having to find INSTALL.md.
+
+**Phase 130 honest scope risks — status at exit:**
+- Bundled scope stayed tractable. ✓
+- Notion sharing UX documented clearly across error
+  variants + help text + INSTALL.md. ✓
+- Obsidian path-traversal guard tested explicitly. ✓
+- Wikilink fuzzy resolution deferred as planned. ✓
+- Notion cursor-pagination different from
+  `next_page_token` — documented. ✓
+- Notion-Version date pin (`2022-06-28`) — held. ✓
+- Hand-written frontmatter parser handles common case;
+  exotic frontmatter drops to raw-string passthrough as
+  planned. ✓
+- **Auth CLI lift posture: empirically validated as
+  Phase 131+ substrate work.**
+
+**Eighteenth consecutive deferral of the Channel
+Activation Milestone** as forecast. Honest tracking
+continues. The deferral count's signal-strength
+remains load-bearing — Phase 131+ should weigh this
+explicitly.
