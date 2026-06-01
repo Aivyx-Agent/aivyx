@@ -13,7 +13,7 @@ use aivyx_n8n::auth_cli::{
     status::{run_auth_check, run_auth_status},
 };
 use aivyx_n8n::tools::{
-    N8nGetExecution, N8nGetWorkflow, N8nListExecutions, N8nListWorkflows,
+    N8nExecuteWorkflow, N8nGetExecution, N8nGetWorkflow, N8nListExecutions, N8nListWorkflows,
 };
 use aivyx_n8n::{run_multi_tool_subprocess, N8nClient};
 
@@ -110,6 +110,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(N8nGetWorkflow::new(client.clone())),
         Arc::new(N8nListExecutions::new(client.clone())),
         Arc::new(N8nGetExecution::new(client.clone())),
+        Arc::new(N8nExecuteWorkflow::new(client.clone())),
     ];
     match run_multi_tool_subprocess(tools, "aivyx-n8n").await {
         Ok(()) => ExitCode::SUCCESS,
