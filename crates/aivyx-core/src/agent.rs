@@ -299,6 +299,26 @@ impl Agent for ConcreteAgent {
                 }
                 NextStep::ToolCalls(batch) => {
                     // Phase 40: parallel dispatch via join_all.
+                    //
+                    // Audit M2 — known limitation: cancellation
+                    // fired mid-batch (deadline task or `/cancel`)
+                    // does not interrupt the batch; the loop's
+                    // top-of-iteration check only re-evaluates
+                    // after every tool in the batch has resolved.
+                    // We deliberately wait for `join_all` rather
+                    // than racing it against `cancellation.cancelled()`
+                    // because aborting in-flight tool futures
+                    // drops their `run_tool_call` body before the
+                    // `AuditTag::ToolCall` emit fires — which
+                    // would violate D1's "every tool call appears
+                    // in the audit chain" invariant. Well-behaved
+                    // tools that honour `ToolContext::cancellation`
+                    // shorten this window cooperatively; the
+                    // deadline task's `token.cancel()` is visible
+                    // to every tool in the batch. A future phase
+                    // could pre-emit a "dispatched" audit entry
+                    // and then race-then-cancel safely, at the
+                    // cost of two audit events per call.
                     let futures: Vec<_> = batch
                         .into_iter()
                         .map(|req| {
@@ -322,7 +342,18 @@ impl Agent for ConcreteAgent {
                     for (observation, outcome) in results {
                         let obs_tool_id = observation.tool_id;
                         observed.push(observation);
-                        if let ToolOutcome::RequiresEscalation { reason } = &outcome {
+                        // Audit M3 fix — first-fire wins for the
+                        // `TurnOutcome::Escalated` payload. The
+                        // earlier `last-write-wins` behaviour silently
+                        // dropped every escalation but the final one
+                        // in iteration order, even though their audit
+                        // entries still landed. Iteration order
+                        // matches `join_all`'s batch order, so this is
+                        // also the natural reading order for the
+                        // operator inspecting the audit chain.
+                        if escalated.is_none()
+                            && let ToolOutcome::RequiresEscalation { reason } = &outcome
+                        {
                             escalated = Some((reason.clone(), obs_tool_id));
                         }
                         planner.observe_tool_outcome(obs_tool_id, &outcome).await;
@@ -371,23 +402,35 @@ impl Agent for ConcreteAgent {
             },
         };
 
+        // Audit M1 fix — finalize first, then emit TurnEnded
+        // with whatever the channel actually saw. Previously
+        // TurnEnded was emitted *before* finalize, so a finalize
+        // failure produced a divergent audit record: the chain
+        // said `Completed` while the caller-facing return value
+        // was `Failed(Channel(...))`. D1 commits the audit chain
+        // to telling the truth about what got executed; the
+        // channel-side delivery is part of that truth.
+        //
+        // The `duration` carried into the audit event still
+        // measures the *loop* duration, not loop+finalize.
+        // Finalize is intentionally fast (channels MUST NOT do
+        // expensive work here per the D2 channel contract) and
+        // operators reading the audit chain expect "time spent
+        // thinking + acting," not "time spent acknowledging."
+        let final_outcome = match channel.finalize(&outcome).await {
+            Ok(()) => outcome,
+            Err(e) => TurnOutcome::Failed(crate::AivyxError::Channel(e.to_string())),
+        };
+
         self.audit.on_event(AuditTag::TurnEnded {
             turn_id,
-            outcome: TurnOutcomeSummary::from(&outcome),
+            outcome: TurnOutcomeSummary::from(&final_outcome),
             tool_calls_made,
             duration,
             usage: planner.turn_usage(),
         });
 
-        // D1: "returning a TurnOutcome to the channel, and yielding control."
-        // finalize is synchronous from the loop's perspective — if the
-        // channel send fails we downgrade to Failed but still return an
-        // outcome, per D3's "every turn completes in some way."
-        if let Err(e) = channel.finalize(&outcome).await {
-            return TurnOutcome::Failed(crate::AivyxError::Channel(e.to_string()));
-        }
-
-        outcome
+        final_outcome
     }
 }
 
@@ -3480,5 +3523,157 @@ mod tests {
             .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
             .count();
         assert_eq!(tool_call_count, 2);
+    }
+
+    // -------------------------------------------------------------
+    // Audit M1 + M3 regressions — Agent Loop review
+    // -------------------------------------------------------------
+
+    /// Channel that always fails `finalize`. Lets the M1 test
+    /// observe the loop's audit-vs-return divergence behaviour
+    /// without affecting any of the existing FakeChannel users.
+    struct FinalizeFailsChannel {
+        session: SessionId,
+        token: CancellationToken,
+    }
+
+    impl FinalizeFailsChannel {
+        fn new() -> Self {
+            FinalizeFailsChannel {
+                session: SessionId::new(),
+                token: CancellationToken::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ChannelContext for FinalizeFailsChannel {
+        fn channel_name(&self) -> &str {
+            "finalize-fails"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> TrustTier {
+            TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            Err(ChannelError::Send("simulated finalize failure".into()))
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_m1_finalize_failure_audit_records_channel_failed_outcome() {
+        // Before the M1 fix, `TurnEnded` was emitted *before*
+        // `channel.finalize()` ran — so a finalize failure
+        // produced a divergent record: audit said `Completed`,
+        // caller saw `Failed(Channel(...))`. The reorder makes
+        // the audit chain reflect what the channel actually saw.
+        let audit = RecordingAudit::new();
+        let plan = vec![NextStep::FinalMessage("done".into())];
+        let agent = make_agent(
+            CapabilitySet::empty(),
+            Vec::new(),
+            audit.clone(),
+            plan,
+        );
+        let channel = FinalizeFailsChannel::new();
+        let msg = Message::text(channel.session, "go");
+
+        let outcome = agent.turn(msg, &channel).await;
+
+        // Caller sees the downgrade.
+        match &outcome {
+            TurnOutcome::Failed(AivyxError::Channel(msg)) => {
+                assert!(msg.contains("simulated finalize failure"));
+            }
+            other => panic!("expected Failed(Channel(_)), got {other:?}"),
+        }
+
+        // Audit chain agrees — the TurnEnded summary is `Failed`,
+        // not the `Completed` the loop produced before finalize.
+        let events = audit.snapshot();
+        let turn_ended = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::TurnEnded { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .expect("TurnEnded must appear in the audit chain");
+        assert!(
+            matches!(turn_ended, TurnOutcomeSummary::Failed),
+            "TurnEnded should record the channel-failed outcome, \
+             got {turn_ended:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_m3_parallel_batch_escalation_picks_first_fire() {
+        // Two escalating tools in one batch. Before the M3 fix,
+        // iteration order made the *last* tool's id survive into
+        // `TurnOutcome::Escalated.pending_tool`. The fix flips it
+        // to first-fire wins — which matches batch order, audit
+        // order, and operator reading order.
+        //
+        // Both tools share the existing `EscalatingTool` impl
+        // (which emits a fixed "approval required" reason), so
+        // the discriminator is `pending_tool` identity, not the
+        // reason string.
+        use crate::planner::ToolCallRequest;
+
+        let audit = RecordingAudit::new();
+        let tool_a = Arc::new(EscalatingTool::new("tool.a", "fs.read"));
+        let tool_b = Arc::new(EscalatingTool::new("tool.b", "fs.read"));
+        let tool_a_id = tool_a.id();
+        let tool_b_id = tool_b.id();
+
+        let caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let plan = vec![NextStep::ToolCalls(vec![
+            ToolCallRequest {
+                tool_id: tool_a_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            ToolCallRequest {
+                tool_id: tool_b_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+        ])];
+
+        let agent = make_agent(caps, vec![tool_a, tool_b], audit.clone(), plan);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "double escalate");
+
+        let outcome = agent.turn(msg, &channel).await;
+        match outcome {
+            TurnOutcome::Escalated { pending_tool, .. } => {
+                assert_eq!(
+                    pending_tool, tool_a_id,
+                    "first batch element's pending_tool id must survive (got tool_b_id={tool_b_id:?})"
+                );
+            }
+            other => panic!("expected Escalated, got {other:?}"),
+        }
+
+        // Both tools still produced ToolCall audit entries — the
+        // outcome-payload choice is purely operator-visibility.
+        let events = audit.snapshot();
+        let tool_call_count = events
+            .iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .count();
+        assert_eq!(tool_call_count, 2, "both escalations are audited");
     }
 }
