@@ -316,6 +316,7 @@ dependencies = [
 name = "aivyx-n8n"
 version = "0.1.0"
 dependencies = [
+ "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
  "aivyx-tool",

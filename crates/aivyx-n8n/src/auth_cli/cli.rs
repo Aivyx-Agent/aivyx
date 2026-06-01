@@ -1,34 +1,16 @@
 //! CLI argument parsing for `aivyx-n8n`.
+//!
+//! Thin wrapper over `aivyx_auth_cli` — Phase 132 lift.
+//! Service-specific bits stay here: binary name in
+//! errors, `help_text` with the n8n-specific config
+//! shape (operator-supplied base URL + API key).
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinaryMode {
-    Help,
-    Auth(AuthMode),
-    IpcLoop,
-}
+pub use aivyx_auth_cli::{AuthMode, BinaryMode};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthMode {
-    Status,
-    Check,
-}
+const BINARY_NAME: &str = "aivyx-n8n";
 
 pub fn parse_cli_args_from(argv: &[String]) -> Result<BinaryMode, String> {
-    let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
-    match args.as_slice() {
-        [] => Ok(BinaryMode::IpcLoop),
-        ["help"] | ["--help"] | ["-h"] => Ok(BinaryMode::Help),
-        ["auth"] => Err(
-            "`aivyx-n8n auth` requires a subcommand; try `auth status` or `auth check`."
-                .to_string(),
-        ),
-        ["auth", "status"] => Ok(BinaryMode::Auth(AuthMode::Status)),
-        ["auth", "check"] => Ok(BinaryMode::Auth(AuthMode::Check)),
-        _ => Err(format!(
-            "unknown subcommand: {}. Run `aivyx-n8n help` for usage.",
-            args.join(" ")
-        )),
-    }
+    aivyx_auth_cli::parse_cli_args(argv, BINARY_NAME)
 }
 
 pub fn help_text() -> &'static str {
@@ -38,7 +20,7 @@ USAGE:
     aivyx-n8n [SUBCOMMAND]
 
 SUBCOMMANDS:
-    auth status    Check config.toml exists and the
+    auth status    Check that config.toml exists and the
                    n8n_base_url + n8n_api_key fields are
                    non-empty. Static; no network call.
     auth check     Ping n8n's /api/v1/workflows?limit=1 to
@@ -62,53 +44,27 @@ CONFIG FILE
 mod tests {
     use super::*;
 
-    fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["aivyx-n8n".to_string()];
-        v.extend(rest.iter().map(|s| s.to_string()));
-        v
-    }
+    // Argument-parsing semantics are tested at the
+    // substrate level. The tests here cover n8n-specific
+    // bits: help text contents and binary-name threading.
 
     #[test]
-    fn no_args_means_ipc_loop() {
-        assert_eq!(parse_cli_args_from(&argv(&[])).unwrap(), BinaryMode::IpcLoop);
-    }
-
-    #[test]
-    fn help_variants() {
-        for h in ["help", "--help", "-h"] {
-            assert_eq!(parse_cli_args_from(&argv(&[h])).unwrap(), BinaryMode::Help);
-        }
-    }
-
-    #[test]
-    fn auth_subcommands_parse() {
-        assert_eq!(
-            parse_cli_args_from(&argv(&["auth", "status"])).unwrap(),
-            BinaryMode::Auth(AuthMode::Status)
-        );
-        assert_eq!(
-            parse_cli_args_from(&argv(&["auth", "check"])).unwrap(),
-            BinaryMode::Auth(AuthMode::Check)
-        );
-    }
-
-    #[test]
-    fn bare_auth_errors() {
-        let e = parse_cli_args_from(&argv(&["auth"])).expect_err("must error");
-        assert!(e.contains("subcommand"), "{e}");
-    }
-
-    #[test]
-    fn unknown_errors() {
-        let e = parse_cli_args_from(&argv(&["wat"])).expect_err("must error");
-        assert!(e.contains("unknown"), "{e}");
-    }
-
-    #[test]
-    fn help_text_mentions_config_fields() {
+    fn help_text_mentions_both_config_fields() {
         let txt = help_text();
         assert!(txt.contains("n8n_base_url"));
         assert!(txt.contains("n8n_api_key"));
-        assert!(txt.contains("Settings"));
+    }
+
+    #[test]
+    fn help_text_mentions_settings_api_key_path() {
+        let txt = help_text();
+        assert!(txt.contains("Settings → API"));
+    }
+
+    #[test]
+    fn parse_cli_args_threads_binary_name_into_errors() {
+        let argv = vec!["aivyx-n8n".to_string(), "auth".to_string()];
+        let e = parse_cli_args_from(&argv).expect_err("must error");
+        assert!(e.contains("aivyx-n8n"), "{e}");
     }
 }

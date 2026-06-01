@@ -1,51 +1,49 @@
 //! Config file loading for `aivyx-n8n`.
+//!
+//! Thin wrapper over `aivyx_auth_cli::load_toml` —
+//! Phase 132 lift. Service-specific validation
+//! (the base URL and the API key must both be
+//! non-empty) lives here.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
 use crate::N8nConfig;
 
+const SERVICE_SUBDIR: &str = "n8n";
+
+/// Composes the substrate's IO/parse errors with
+/// n8n-specific validation errors. See
+/// `aivyx-notion::auth_cli::config_file` for the
+/// shape rationale.
 #[derive(Debug, Error)]
 pub enum ConfigFileError {
-    #[error("config file at {path:?} not found — create it with `n8n_base_url = \"...\"` and `n8n_api_key = \"...\"`. See `aivyx-n8n help`.")]
-    NotFound { path: PathBuf },
-    #[error("I/O error reading {path:?}: {source}")]
-    Io { path: PathBuf, source: io::Error },
-    #[error("parse error in {path:?}: {reason}")]
-    Parse { path: PathBuf, reason: String },
+    /// IO / parse error from `aivyx-auth-cli`.
+    #[error(transparent)]
+    Substrate(#[from] aivyx_auth_cli::ConfigFileError),
+
+    /// Service-specific: the base URL is empty.
     #[error("config field `n8n_base_url` is empty in {path:?}")]
     EmptyBaseUrl { path: PathBuf },
+
+    /// Service-specific: the API key is empty.
     #[error("config field `n8n_api_key` is empty in {path:?}")]
     EmptyApiKey { path: PathBuf },
 }
 
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
-    crate::default_config_path().ok_or_else(|| ConfigFileError::NotFound {
-        path: PathBuf::from("~/.aivyx/tool-processes/n8n/config.toml"),
+    aivyx_auth_cli::default_config_path(SERVICE_SUBDIR).ok_or_else(|| {
+        ConfigFileError::Substrate(aivyx_auth_cli::ConfigFileError::NotFound {
+            path: PathBuf::from(format!(
+                "~/.aivyx/tool-processes/{SERVICE_SUBDIR}/config.toml"
+            )),
+        })
     })
 }
 
 pub fn load_config(path: &Path) -> Result<N8nConfig, ConfigFileError> {
-    let body = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(ConfigFileError::NotFound {
-                path: path.to_path_buf(),
-            });
-        }
-        Err(e) => {
-            return Err(ConfigFileError::Io {
-                path: path.to_path_buf(),
-                source: e,
-            });
-        }
-    };
-    let cfg: N8nConfig = toml::from_str(&body).map_err(|e| ConfigFileError::Parse {
-        path: path.to_path_buf(),
-        reason: e.to_string(),
-    })?;
+    let cfg: N8nConfig = aivyx_auth_cli::load_toml(path)?;
     if cfg.n8n_base_url.trim().is_empty() {
         return Err(ConfigFileError::EmptyBaseUrl {
             path: path.to_path_buf(),
@@ -78,19 +76,10 @@ mod tests {
         path
     }
 
-    #[test]
-    fn returns_not_found_when_missing() {
-        let e = load_config(Path::new("/nope/missing.toml")).expect_err("must error");
-        assert!(matches!(e, ConfigFileError::NotFound { .. }));
-    }
-
-    #[test]
-    fn returns_parse_for_malformed_toml() {
-        let path = tmpfile("not valid ===");
-        let e = load_config(&path).expect_err("must error");
-        assert!(matches!(e, ConfigFileError::Parse { .. }));
-        let _ = std::fs::remove_file(&path);
-    }
+    // Substrate-level behaviour (NotFound on missing
+    // path, Parse on malformed TOML) is tested in
+    // aivyx-auth-cli. These tests cover n8n-specific
+    // validation: empty base URL + empty API key.
 
     #[test]
     fn rejects_empty_base_url() {
@@ -124,5 +113,14 @@ n8n_api_key = "ntn_test""#,
         assert_eq!(cfg.n8n_base_url, "https://n8n.example.com");
         assert_eq!(cfg.n8n_api_key, "ntn_test");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn substrate_not_found_flows_through_transparently() {
+        let e = load_config(Path::new("/nope/missing.toml")).expect_err("must error");
+        assert!(matches!(
+            e,
+            ConfigFileError::Substrate(aivyx_auth_cli::ConfigFileError::NotFound { .. })
+        ));
     }
 }

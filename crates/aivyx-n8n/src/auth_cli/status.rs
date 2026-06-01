@@ -1,58 +1,31 @@
 //! `aivyx-n8n auth status` (offline) + `auth check` (online).
+//!
+//! Thin wrappers around the substrate's `StatusReport`
+//! and `CheckReport` — Phase 132 lift. Service-
+//! specific bits: the n8n base URL is surfaced in the
+//! status report; the check pings
+//! `/api/v1/workflows?limit=1` with the n8n-specific
+//! `X-N8N-API-KEY` header.
 
 use std::path::Path;
+
+pub use aivyx_auth_cli::{CheckReport, StatusReport};
 
 use crate::auth_cli::config_file::{load_config, ConfigFileError};
 use crate::{N8nClient, N8nClientError};
 
-#[derive(Debug)]
-pub struct StatusReport {
-    pub config_path: std::path::PathBuf,
-    pub base_url: String,
-    pub api_key_present: bool,
-}
-
-impl std::fmt::Display for StatusReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.api_key_present {
-            writeln!(
-                f,
-                "aivyx-n8n auth status: OK\n  config: {:?}\n  base_url: {}\n  api_key: present (non-empty)\n  next: run `aivyx-n8n auth check` to ping the instance",
-                self.config_path, self.base_url
-            )
-        } else {
-            writeln!(
-                f,
-                "aivyx-n8n auth status: FAIL\n  config: {:?}\n  api_key MISSING",
-                self.config_path
-            )
-        }
-    }
-}
+const BINARY_NAME: &str = "aivyx-n8n";
 
 pub fn run_auth_status(path: &Path) -> Result<StatusReport, ConfigFileError> {
     let cfg = load_config(path)?;
-    Ok(StatusReport {
-        config_path: path.to_path_buf(),
-        base_url: cfg.n8n_base_url,
-        api_key_present: !cfg.n8n_api_key.trim().is_empty(),
-    })
-}
-
-#[derive(Debug)]
-pub struct CheckReport {
-    pub ok: bool,
-    pub message: String,
-}
-
-impl std::fmt::Display for CheckReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.ok {
-            writeln!(f, "aivyx-n8n auth check: OK — {}", self.message)
-        } else {
-            writeln!(f, "aivyx-n8n auth check: FAIL — {}", self.message)
-        }
-    }
+    Ok(StatusReport::ok(
+        BINARY_NAME,
+        path.to_path_buf(),
+        format!(
+            "base_url: {}\n  api_key: present (non-empty)\n  next: run `aivyx-n8n auth check` to ping the instance",
+            cfg.n8n_base_url
+        ),
+    ))
 }
 
 /// Ping `/api/v1/workflows?limit=1` as a lightweight
@@ -62,62 +35,61 @@ pub async fn run_auth_check(client: &N8nClient) -> CheckReport {
         .get_json::<serde_json::Value>("/workflows", &[("limit", "1".to_string())])
         .await
     {
-        Ok(_) => CheckReport {
-            ok: true,
-            message: "API key accepted; instance reachable".to_string(),
-        },
+        Ok(_) => CheckReport::ok(
+            BINARY_NAME,
+            "API key accepted; instance reachable",
+        ),
         Err(N8nClientError::Api { status: 401, .. })
-        | Err(N8nClientError::Api { status: 403, .. }) => CheckReport {
-            ok: false,
-            message:
-                "key rejected (HTTP 401/403) — check that n8n_api_key matches Settings → API in your n8n instance"
-                    .to_string(),
-        },
-        Err(N8nClientError::Transport(msg)) => CheckReport {
-            ok: false,
-            message: format!(
+        | Err(N8nClientError::Api { status: 403, .. }) => CheckReport::fail(
+            BINARY_NAME,
+            "key rejected (HTTP 401/403) — check that n8n_api_key matches Settings → API in your n8n instance",
+        ),
+        Err(N8nClientError::Transport(msg)) => CheckReport::fail(
+            BINARY_NAME,
+            format!(
                 "could not reach n8n at the configured base URL (transport error: {msg})"
             ),
-        },
-        Err(e) => CheckReport {
-            ok: false,
-            message: format!("n8n API error: {e}"),
-        },
+        ),
+        Err(e) => CheckReport::fail(BINARY_NAME, format!("n8n API error: {e}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    #[test]
-    fn status_report_display_distinguishes_ok_and_fail() {
-        let ok = StatusReport {
-            config_path: "/tmp/x".into(),
-            base_url: "https://n8n.example.com".into(),
-            api_key_present: true,
-        };
-        let fail = StatusReport {
-            config_path: "/tmp/x".into(),
-            base_url: "https://x".into(),
-            api_key_present: false,
-        };
-        assert!(ok.to_string().contains("OK"));
-        assert!(ok.to_string().contains("aivyx-n8n auth check"));
-        assert!(fail.to_string().contains("FAIL"));
+    fn tmpfile(body: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "aivyx-n8n-status-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        path
     }
 
+    // Display impls are tested in aivyx-auth-cli.
+    // The test here covers n8n-specific wiring:
+    // run_auth_status loads the config and surfaces the
+    // base_url in the detail line.
+
     #[test]
-    fn check_report_distinguishes_ok_and_fail() {
-        let ok = CheckReport {
-            ok: true,
-            message: "happy".into(),
-        };
-        let fail = CheckReport {
-            ok: false,
-            message: "sad".into(),
-        };
-        assert!(ok.to_string().contains("OK"));
-        assert!(fail.to_string().contains("FAIL"));
+    fn run_auth_status_includes_base_url_in_detail() {
+        let path = tmpfile(
+            r#"n8n_base_url = "https://n8n.example.com"
+n8n_api_key = "ntn_x""#,
+        );
+        let report = run_auth_status(&path).expect("ok");
+        assert!(report.ok);
+        let s = report.to_string();
+        assert!(s.contains("aivyx-n8n auth status: OK"));
+        assert!(s.contains("https://n8n.example.com"));
+        assert!(s.contains("aivyx-n8n auth check"));
+        let _ = std::fs::remove_file(&path);
     }
 }
