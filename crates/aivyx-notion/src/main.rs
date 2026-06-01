@@ -16,8 +16,8 @@ use aivyx_notion::auth_cli::{
     status::{run_auth_check, run_auth_status},
 };
 use aivyx_notion::tools::{
-    NotionAppendBlocks, NotionCreatePage, NotionGetPage, NotionListDatabase,
-    NotionSearch, NotionUpdatePageProperties,
+    NotionAppendBlocks, NotionArchivePage, NotionCreatePage, NotionGetPage,
+    NotionListDatabase, NotionSearch, NotionUpdatePageProperties,
 };
 use aivyx_notion::{run_multi_tool_subprocess, NotionClient};
 
@@ -119,6 +119,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(NotionCreatePage::new(Arc::clone(&client))),
         Arc::new(NotionAppendBlocks::new(Arc::clone(&client))),
         Arc::new(NotionUpdatePageProperties::new(Arc::clone(&client))),
+        Arc::new(NotionArchivePage::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-notion").await {
