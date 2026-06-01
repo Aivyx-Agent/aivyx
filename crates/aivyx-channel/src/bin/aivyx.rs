@@ -1043,6 +1043,18 @@ fn print_config_banner(config: &AivyxConfig) {
                 "  base_url          = {:?} (default)",
                 DEFAULT_OLLAMA_BASE_URL,
             );
+        } else if config.provider.value == aivyx_config::ProviderKind::LlamaCpp {
+            // Phase 133 — llama-server default.
+            eprintln!(
+                "  base_url          = {:?} (default)",
+                "http://localhost:8080",
+            );
+        } else if config.provider.value == aivyx_config::ProviderKind::Jan {
+            // Phase 133 — Jan default.
+            eprintln!(
+                "  base_url          = {:?} (default)",
+                "http://localhost:1337/v1",
+            );
         }
     }
     eprintln!(
@@ -2871,17 +2883,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| {
-                        "`--provider` requires a value: `anthropic`, `openai`, or `ollama`"
+                        "`--provider` requires a value: `anthropic`, `openai`, `ollama`, `llamacpp`, or `jan`"
                             .to_string()
                     })?;
                 cli_provider = Some(match value.as_str() {
                     "anthropic" => ProviderKind::Anthropic,
                     "openai" => ProviderKind::OpenAi,
                     "ollama" => ProviderKind::Ollama,
+                    // Phase 133 — accept the same aliases as the
+                    // serde alias attribute on the enum.
+                    "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
+                    "jan" => ProviderKind::Jan,
                     other => {
                         return Err(format!(
                             "unrecognized provider `{other}`. \
-                             Supported: anthropic, openai, ollama"
+                             Supported: anthropic, openai, ollama, llamacpp, jan"
                         ));
                     }
                 });
@@ -3496,6 +3512,51 @@ async fn run_async(
                 eprintln!();
             }
 
+            Arc::new(p)
+        }
+        ProviderKind::LlamaCpp => {
+            // Phase 133 — route through the OpenAI-compat provider
+            // against `llama-server`'s default port. Defaults to
+            // `http://localhost:8080`; operator overrides via
+            // `[llm] provider_base_url` in aivyx.toml.
+            //
+            // No native /api/chat equivalent — llama-server speaks
+            // OpenAI-compat exclusively. The API key is accepted if
+            // present but never required (llama-server ignores it),
+            // so we use `OpenAiConfig::without_api_key` as the
+            // baseline and layer a real key on top only when the
+            // operator supplied one.
+            const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
+            let base_url = openai_base_url
+                .map(|s| s.value)
+                .unwrap_or_else(|| DEFAULT_LLAMACPP_BASE_URL.to_string());
+            let cfg = match openai_api_key {
+                Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
+                None => OpenAiConfig::without_api_key().with_base_url(base_url),
+            };
+            let p = OpenAiProvider::new(cfg)
+                .map_err(|e| format!("failed to build llama-server provider: {e}"))?;
+            Arc::new(p)
+        }
+        ProviderKind::Jan => {
+            // Phase 133 — route through the OpenAI-compat provider
+            // against Jan's default port. Defaults to
+            // `http://localhost:1337/v1`; operator overrides via
+            // `[llm] provider_base_url` in aivyx.toml.
+            //
+            // Jan's API mirrors api.openai.com/v1 exactly — no
+            // server-side adaptation needed. The API key is accepted
+            // if present but never required (Jan ignores it).
+            const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337/v1";
+            let base_url = openai_base_url
+                .map(|s| s.value)
+                .unwrap_or_else(|| DEFAULT_JAN_BASE_URL.to_string());
+            let cfg = match openai_api_key {
+                Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
+                None => OpenAiConfig::without_api_key().with_base_url(base_url),
+            };
+            let p = OpenAiProvider::new(cfg)
+                .map_err(|e| format!("failed to build Jan provider: {e}"))?;
             Arc::new(p)
         }
     };

@@ -212,11 +212,26 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx";
 
 /// Which LLM provider backend to use.
 ///
-/// `Ollama` is config-level sugar for the OpenAI-compatible
-/// provider with Ollama-specific defaults: `base_url` defaults
-/// to `http://localhost:11434`, API key is not required, and
-/// `stream_options` is omitted from requests (older Ollama
-/// versions may reject unknown fields).
+/// `Ollama`, `LlamaCpp`, and `Jan` are all **config-level sugar
+/// for the OpenAI-compatible provider with provider-specific
+/// defaults.** Each one differs only in its default base URL and
+/// per-provider quirks; the underlying HTTP dispatch goes through
+/// the same `aivyx-llm::openai` code path (with the exception of
+/// Ollama's Phase 121 native `/api/chat` adapter for first-class
+/// `num_ctx` / `mirostat` / etc. handling).
+///
+/// Provider-specific defaults the binary's dispatch installs at
+/// session-construction time:
+/// - `Ollama` — `base_url = http://localhost:11434`; API key not
+///   required; `stream_options` omitted (older Ollama versions
+///   may reject unknown fields).
+/// - `LlamaCpp` (Phase 133) — `base_url = http://localhost:8080`;
+///   raw `llama-server` OpenAI-compat endpoint; no model
+///   management UX (operator downloads GGUF manually). No
+///   `ollama.list/show/pull` tools registered.
+/// - `Jan` (Phase 133) — `base_url = http://localhost:1337/v1`;
+///   model management via Jan's desktop GUI. No
+///   `ollama.list/show/pull` tools registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -224,13 +239,28 @@ pub enum ProviderKind {
     #[serde(alias = "openai")]
     OpenAi,
     Ollama,
+    /// Phase 133 — raw llama.cpp `llama-server` over OpenAI-compat.
+    #[serde(alias = "llama-cpp", alias = "llama_cpp", alias = "llamacpp")]
+    LlamaCpp,
+    /// Phase 133 — Jan's local API server over OpenAI-compat.
+    Jan,
 }
 
 impl ProviderKind {
     /// Returns `true` if this provider uses the OpenAI-compatible
-    /// API (either cloud OpenAI or local Ollama).
+    /// API. Cloud OpenAI plus every local-LLM runtime Aivyx ships
+    /// with — Ollama, llama-server, Jan — speak OpenAI-compat
+    /// (Ollama additionally exposes its own native `/api/chat`
+    /// endpoint that Aivyx targets directly for first-class
+    /// option handling).
     pub fn is_openai_compatible(&self) -> bool {
-        matches!(self, ProviderKind::OpenAi | ProviderKind::Ollama)
+        matches!(
+            self,
+            ProviderKind::OpenAi
+                | ProviderKind::Ollama
+                | ProviderKind::LlamaCpp
+                | ProviderKind::Jan
+        )
     }
 
     /// Default context window size in tokens for this provider.
@@ -240,10 +270,12 @@ impl ProviderKind {
         match self {
             ProviderKind::Anthropic => 200_000,
             ProviderKind::OpenAi => 128_000,
-            // Ollama models vary widely; 8k is a conservative default
-            // that works for most 7B/13B models. Operators can override
-            // via config.
-            ProviderKind::Ollama => 8_000,
+            // Local-LLM defaults vary widely with the loaded
+            // model; 8k is a conservative default that works for
+            // most 7B/13B models. Operators on llama-server / Jan
+            // routinely load larger-context models (Qwen 32B at
+            // 32k, etc.) and override via config.
+            ProviderKind::Ollama | ProviderKind::LlamaCpp | ProviderKind::Jan => 8_000,
         }
     }
 }
@@ -254,6 +286,8 @@ impl std::fmt::Display for ProviderKind {
             ProviderKind::Anthropic => f.write_str("anthropic"),
             ProviderKind::OpenAi => f.write_str("openai"),
             ProviderKind::Ollama => f.write_str("ollama"),
+            ProviderKind::LlamaCpp => f.write_str("llamacpp"),
+            ProviderKind::Jan => f.write_str("jan"),
         }
     }
 }
@@ -5362,11 +5396,13 @@ impl AivyxConfig {
                         });
                     }
                 }
-                ProviderKind::Ollama => {
-                    // Ollama does not require an API key — it runs
-                    // locally and ignores the Authorization header.
-                    // The key is accepted if present (forwarded to
-                    // the OpenAI provider) but never required.
+                ProviderKind::Ollama | ProviderKind::LlamaCpp | ProviderKind::Jan => {
+                    // Local-LLM providers do not require an API key —
+                    // they run locally and ignore the Authorization
+                    // header. The key is accepted if present
+                    // (forwarded to the OpenAI provider) but never
+                    // required. Phase 133 extended this arm to
+                    // llama-server and Jan; same posture as Ollama.
                 }
             }
         }
