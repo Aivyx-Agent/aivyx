@@ -132,6 +132,25 @@ impl N8nClient {
         decode_response(resp).await
     }
 
+    /// PUT JSON body. n8n's update-workflow endpoint
+    /// (`PUT /workflows/{id}`) expects a full replacement
+    /// rather than a partial patch.
+    pub async fn put_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<T, N8nClientError> {
+        let resp = self
+            .http
+            .put(self.url_for(path))
+            .header(N8N_API_KEY_HEADER, &self.config.n8n_api_key)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| N8nClientError::Transport(e.to_string()))?;
+        decode_response(resp).await
+    }
+
     /// DELETE returning the raw status code so the caller
     /// can distinguish 204/200 from 404 (idempotent
     /// delete pattern).
