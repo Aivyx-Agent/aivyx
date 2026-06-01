@@ -12,7 +12,7 @@ use aivyx_obsidian::auth_cli::{
     cli::{help_text, parse_cli_args_from, BinaryMode},
     config_file::{default_config_path, load_config},
 };
-use aivyx_obsidian::tools::{ObsidianGetNote, ObsidianListFolder, ObsidianSearch};
+use aivyx_obsidian::tools::{ObsidianCreateNote, ObsidianGetNote, ObsidianListFolder, ObsidianSearch};
 use aivyx_obsidian::{run_multi_tool_subprocess, VaultClient};
 
 #[tokio::main]
@@ -78,7 +78,7 @@ async fn run_ipc_loop() -> ExitCode {
 
     // Phase 130 Q2a — six-tool surface. Tasks 11-16
     // populate this incrementally; Task 11 adds search.
-    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(ObsidianSearch::new(Arc::clone(&client))), Arc::new(ObsidianGetNote::new(Arc::clone(&client))), Arc::new(ObsidianListFolder::new(Arc::clone(&client)))];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(ObsidianSearch::new(Arc::clone(&client))), Arc::new(ObsidianGetNote::new(Arc::clone(&client))), Arc::new(ObsidianListFolder::new(Arc::clone(&client))), Arc::new(ObsidianCreateNote::new(Arc::clone(&client)))];
 
     match run_multi_tool_subprocess(tools, "aivyx-obsidian").await {
         Ok(()) => ExitCode::SUCCESS,
