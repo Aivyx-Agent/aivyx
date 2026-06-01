@@ -1304,6 +1304,16 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 session_id: sid.clone(),
                             };
 
+                            // Audit H1 fix — rotate the channel stub's
+                            // cancellation token so a previous turn's
+                            // timeout or `/cancel` does not pre-cancel
+                            // this turn. `CancellationToken` is
+                            // monotonic; without this reset, the first
+                            // timeout/cancel in a daemon session would
+                            // brick every subsequent turn until the
+                            // operator restarted the connection.
+                            bridge.reset_cancellation();
+
                             // Phase 116 — capture the audit chain's
                             // pre-turn length so the post-finalize hook
                             // can read the turn's per-tool-call entries
@@ -1615,9 +1625,20 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             return Ok(());
                         }
                         FrontendMessage::CancelTurn { session_id: _sid } => {
-                            // Cancellation wired through CancellationToken on
-                            // the channel bridge; the turn loop checks it between
-                            // LLM steps.
+                            // Audit C1 fix — fire the channel stub's in-flight
+                            // cancellation token. Before this fix, the handler
+                            // was a no-op (the comment claimed the wiring was
+                            // present, but no code actually called `.cancel()`
+                            // on anything). The four daemon-side stubs
+                            // (Telegram/Discord/Slack/Web) override
+                            // `cancel_inflight` to fire their internal token;
+                            // any non-daemon channel uses the default no-op.
+                            // The turn loop's mid-LLM-step cancellation check
+                            // then translates the cancel into
+                            // `TurnOutcome::Cancelled`.
+                            if let Some(ch) = &channel {
+                                ch.cancel_inflight();
+                            }
                         }
                         FrontendMessage::ResolveGate {
                             mission_id,
@@ -1673,6 +1694,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 ),
                                                 session_id: sid.clone(),
                                             };
+
+                                            // Audit H1 fix — rotate before
+                                            // resuming so a prior cancel does
+                                            // not pre-cancel the resume turn.
+                                            bridge.reset_cancellation();
 
                                             let resume_outcome = agent.turn(msg, &bridge).await;
 
@@ -3665,6 +3691,21 @@ impl ChannelContext for IpcChannelBridge {
 
     fn cancellation_token(&self) -> aivyx_core::CancellationToken {
         self.inner.cancellation_token()
+    }
+
+    fn reset_cancellation(&self) {
+        // Audit H1 fix — the daemon calls this between turns
+        // to rotate the channel stub's token. Forwards to the
+        // underlying daemon stub (Telegram/Discord/Slack/Web)
+        // which holds the actual `Mutex<CancellationToken>`.
+        self.inner.reset_cancellation();
+    }
+
+    fn cancel_inflight(&self) {
+        // Audit C1 fix — the daemon calls this from the
+        // `FrontendMessage::CancelTurn` handler. Forwards to
+        // the underlying daemon stub.
+        self.inner.cancel_inflight();
     }
 }
 

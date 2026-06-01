@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId, StreamEvent,
@@ -47,14 +47,17 @@ use crate::gate_command;
 /// `ConcreteAgent` at construction time.
 pub struct DiscordDaemonChannel {
     session: SessionId,
-    token: CancellationToken,
+    /// Rotated per turn by [`reset_cancellation`] and fired by
+    /// [`cancel_inflight`]. See `TelegramDaemonChannel::token` —
+    /// same C1+H1 audit fix.
+    token: Mutex<CancellationToken>,
 }
 
 impl DiscordDaemonChannel {
     pub fn new() -> Self {
         DiscordDaemonChannel {
             session: SessionId::new(),
-            token: CancellationToken::new(),
+            token: Mutex::new(CancellationToken::new()),
         }
     }
 }
@@ -92,7 +95,16 @@ impl ChannelContext for DiscordDaemonChannel {
     }
 
     fn cancellation_token(&self) -> CancellationToken {
-        self.token.clone()
+        self.token.lock().expect("token mutex poisoned").clone()
+    }
+
+    fn reset_cancellation(&self) {
+        let mut slot = self.token.lock().expect("token mutex poisoned");
+        *slot = CancellationToken::new();
+    }
+
+    fn cancel_inflight(&self) {
+        self.token.lock().expect("token mutex poisoned").cancel();
     }
 }
 
@@ -335,6 +347,24 @@ mod tests {
         assert_eq!(c.channel_name(), "aivyx-discord-daemon");
         assert_eq!(c.platform(), ChannelPlatform::Discord);
         assert_eq!(c.trust_tier(), aivyx_capability::TrustTier::SemiTrusted);
+    }
+
+    // Audit C1+H1 regression — daemon /cancel must fire
+    // the stub's token, and per-turn reset must un-stick
+    // it. Same shape as TelegramDaemonChannel's tests.
+    #[test]
+    fn cancel_inflight_then_reset_yields_fresh_token() {
+        let c = DiscordDaemonChannel::new();
+        let stale = c.cancellation_token();
+        assert!(!stale.is_cancelled());
+        c.cancel_inflight();
+        assert!(stale.is_cancelled(), "cancel_inflight fires the live token");
+        c.reset_cancellation();
+        assert!(
+            !c.cancellation_token().is_cancelled(),
+            "reset_cancellation installs a fresh token"
+        );
+        assert!(stale.is_cancelled(), "the pre-reset token stays cancelled");
     }
 
     #[test]

@@ -15,7 +15,7 @@
 //! forwarding those over IPC.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -53,14 +53,17 @@ const HTML: &str = include_str!("web_ui_static.html");
 /// desktop app, local REST on 127.0.0.1."
 pub struct WebDaemonChannel {
     session: SessionId,
-    token: CancellationToken,
+    /// Rotated per turn by [`reset_cancellation`] and fired by
+    /// [`cancel_inflight`]. See `TelegramDaemonChannel::token` —
+    /// same C1+H1 audit fix.
+    token: Mutex<CancellationToken>,
 }
 
 impl WebDaemonChannel {
     pub fn new() -> Self {
         WebDaemonChannel {
             session: SessionId::new(),
-            token: CancellationToken::new(),
+            token: Mutex::new(CancellationToken::new()),
         }
     }
 }
@@ -98,7 +101,16 @@ impl ChannelContext for WebDaemonChannel {
     }
 
     fn cancellation_token(&self) -> CancellationToken {
-        self.token.clone()
+        self.token.lock().expect("token mutex poisoned").clone()
+    }
+
+    fn reset_cancellation(&self) {
+        let mut slot = self.token.lock().expect("token mutex poisoned");
+        *slot = CancellationToken::new();
+    }
+
+    fn cancel_inflight(&self) {
+        self.token.lock().expect("token mutex poisoned").cancel();
     }
 }
 
@@ -513,6 +525,23 @@ mod tests {
     fn web_channel_name() {
         let ch = WebDaemonChannel::new();
         assert_eq!(ch.channel_name(), "aivyx-web");
+    }
+
+    // Audit C1+H1 regression — same coverage as the
+    // Telegram / Discord / Slack daemon stubs.
+    #[test]
+    fn cancel_inflight_then_reset_yields_fresh_token() {
+        let ch = WebDaemonChannel::new();
+        let stale = ch.cancellation_token();
+        assert!(!stale.is_cancelled());
+        ch.cancel_inflight();
+        assert!(stale.is_cancelled(), "cancel_inflight fires the live token");
+        ch.reset_cancellation();
+        assert!(
+            !ch.cancellation_token().is_cancelled(),
+            "reset_cancellation installs a fresh token"
+        );
+        assert!(stale.is_cancelled(), "the pre-reset token stays cancelled");
     }
 
     #[test]

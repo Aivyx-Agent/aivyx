@@ -261,6 +261,43 @@ pub trait ChannelContext: Send + Sync {
     fn session_partition(&self) -> Option<String> {
         None
     }
+
+    /// Rotate the channel's cancellation token. Callers run this
+    /// between turns so a timeout or cancel on turn N does not
+    /// pre-cancel turn N+1 — `tokio_util::CancellationToken` is
+    /// monotonic, so the daemon's per-turn deadline task
+    /// (`agent::turn`) leaves the token cancelled after firing,
+    /// and any subsequent turn that asks for the token would see
+    /// `is_cancelled() == true` at the top of the loop and bail
+    /// immediately.
+    ///
+    /// Default: no-op, suitable for one-shot channels that build
+    /// a fresh `ChannelContext` per turn (e.g., trigger-fired
+    /// turns). Multi-turn channels that reuse one
+    /// `ChannelContext` across turns (daemon-side stubs;
+    /// in-process Telegram/Discord/Slack channels) override this
+    /// to install a fresh `CancellationToken`.
+    ///
+    /// Audit-pass fix for the C1+H1 finding in the Agent Loop
+    /// review — daemon-side stubs reuse one stub across the
+    /// session, so the daemon now calls this between turns.
+    fn reset_cancellation(&self) {}
+
+    /// Cancel the in-flight turn's cancellation token. The
+    /// daemon's `FrontendMessage::CancelTurn` handler calls this
+    /// when a frontend (Telegram `/cancel`, web UI stop button,
+    /// Slack `/cancel`, Discord `/cancel`) requests
+    /// cancellation of the running turn. The next mid-loop check
+    /// in `agent::turn` then translates the cancellation into
+    /// `TurnOutcome::Cancelled`.
+    ///
+    /// Default: no-op. The four daemon-side channel stubs
+    /// (`TelegramDaemonChannel`, `DiscordDaemonChannel`,
+    /// `SlackDaemonChannel`, `WebDaemonChannel`) override this
+    /// to fire their internal token. Without this override the
+    /// daemon's `CancelTurn` IPC message has no effect — the
+    /// C1 finding in the Agent Loop review.
+    fn cancel_inflight(&self) {}
 }
 
 /// Events the agent pushes to the channel during a turn. Borrowed so the

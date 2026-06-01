@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId, StreamEvent,
@@ -37,14 +37,20 @@ const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 /// handles forwarding those over IPC.
 pub struct TelegramDaemonChannel {
     session: SessionId,
-    token: CancellationToken,
+    /// Rotated per turn by [`reset_cancellation`] and fired by
+    /// [`cancel_inflight`]. Wrapped in `Mutex` so the daemon can
+    /// install a fresh token between turns (C1+H1 fix from the
+    /// Agent Loop audit — `CancellationToken` is monotonic, so a
+    /// single timeout would otherwise brick every subsequent
+    /// turn in this session).
+    token: Mutex<CancellationToken>,
 }
 
 impl TelegramDaemonChannel {
     pub fn new() -> Self {
         TelegramDaemonChannel {
             session: SessionId::new(),
-            token: CancellationToken::new(),
+            token: Mutex::new(CancellationToken::new()),
         }
     }
 }
@@ -82,7 +88,16 @@ impl ChannelContext for TelegramDaemonChannel {
     }
 
     fn cancellation_token(&self) -> CancellationToken {
-        self.token.clone()
+        self.token.lock().expect("token mutex poisoned").clone()
+    }
+
+    fn reset_cancellation(&self) {
+        let mut slot = self.token.lock().expect("token mutex poisoned");
+        *slot = CancellationToken::new();
+    }
+
+    fn cancel_inflight(&self) {
+        self.token.lock().expect("token mutex poisoned").cancel();
     }
 }
 
@@ -359,5 +374,46 @@ mod tests {
         assert!(rendered.contains("APPROVAL GATE"));
         assert!(rendered.contains("/approve m-001 g-abc"));
         assert!(rendered.contains("/reject  m-001 g-abc"));
+    }
+
+    // Audit C1+H1 regression — see DESIGN.md D1 turn-loop
+    // contract and the Agent Loop audit notes. The stub
+    // must (a) fire its token on `cancel_inflight` so the
+    // daemon's CancelTurn handler actually cancels the
+    // in-flight turn, and (b) rotate its token on
+    // `reset_cancellation` so a prior cancel does not
+    // pre-cancel turn N+1.
+
+    #[test]
+    fn cancel_inflight_cancels_the_current_token() {
+        let ch = TelegramDaemonChannel::new();
+        let token = ch.cancellation_token();
+        assert!(!token.is_cancelled(), "fresh token must not be cancelled");
+        ch.cancel_inflight();
+        assert!(
+            token.is_cancelled(),
+            "after cancel_inflight, the snapshot token must report cancelled"
+        );
+    }
+
+    #[test]
+    fn reset_cancellation_installs_a_fresh_token() {
+        let ch = TelegramDaemonChannel::new();
+        ch.cancel_inflight();
+        let stale = ch.cancellation_token();
+        assert!(stale.is_cancelled(), "post-cancel token is cancelled");
+        ch.reset_cancellation();
+        let fresh = ch.cancellation_token();
+        assert!(
+            !fresh.is_cancelled(),
+            "after reset_cancellation the new token must be un-cancelled"
+        );
+        // The old snapshot stays cancelled (monotonic), confirming
+        // that reset swapped in a separate token rather than
+        // un-cancelling the existing one.
+        assert!(
+            stale.is_cancelled(),
+            "the pre-reset token must remain cancelled"
+        );
     }
 }
