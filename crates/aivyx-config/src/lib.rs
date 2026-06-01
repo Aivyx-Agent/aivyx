@@ -3812,12 +3812,17 @@ impl AivyxConfig {
                     "anthropic" => ProviderKind::Anthropic,
                     "openai" => ProviderKind::OpenAi,
                     "ollama" => ProviderKind::Ollama,
+                    // Phase 133 — accept the same aliases as the
+                    // serde alias attribute on `ProviderKind` so
+                    // env + TOML + CLI all parse the same set.
+                    "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
+                    "jan" => ProviderKind::Jan,
                     other => {
                         return Err(ConfigError::Invalid {
                             field: "provider",
                             reason: format!(
                                 "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai, ollama"
+                                 Supported: anthropic, openai, ollama, llamacpp, jan"
                             ),
                         });
                     }

@@ -2701,6 +2701,11 @@ fn provider_kind_is_openai_compatible() {
     assert!(!ProviderKind::Anthropic.is_openai_compatible());
     assert!(ProviderKind::OpenAi.is_openai_compatible());
     assert!(ProviderKind::Ollama.is_openai_compatible());
+    // Phase 133 — llama-server and Jan are both OpenAI-compat
+    // local-LLM providers; they speak the same /v1/chat/completions
+    // surface as the existing Ollama / OpenAI variants.
+    assert!(ProviderKind::LlamaCpp.is_openai_compatible());
+    assert!(ProviderKind::Jan.is_openai_compatible());
 }
 
 #[test]
@@ -2708,6 +2713,164 @@ fn provider_kind_display() {
     assert_eq!(ProviderKind::Anthropic.to_string(), "anthropic");
     assert_eq!(ProviderKind::OpenAi.to_string(), "openai");
     assert_eq!(ProviderKind::Ollama.to_string(), "ollama");
+    // Phase 133 — lowercase, hyphen-free for parity with the
+    // existing variants. The serde deserialize layer accepts
+    // hyphen and underscore aliases for `llamacpp`; Display uses
+    // the canonical lowercase form.
+    assert_eq!(ProviderKind::LlamaCpp.to_string(), "llamacpp");
+    assert_eq!(ProviderKind::Jan.to_string(), "jan");
+}
+
+#[test]
+fn provider_kind_default_context_window_groups_local_llm_providers() {
+    // Phase 133 audit — every local-LLM provider gets the same
+    // conservative 8000-token default. Models vary widely and
+    // operators routinely override via config.
+    assert_eq!(ProviderKind::Ollama.default_context_window(), 8_000);
+    assert_eq!(ProviderKind::LlamaCpp.default_context_window(), 8_000);
+    assert_eq!(ProviderKind::Jan.default_context_window(), 8_000);
+    // Cloud providers keep their existing defaults — regression
+    // guard against accidentally folding them into the local-LLM
+    // group.
+    assert_eq!(ProviderKind::Anthropic.default_context_window(), 200_000);
+    assert_eq!(ProviderKind::OpenAi.default_context_window(), 128_000);
+}
+
+#[test]
+fn llamacpp_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "llamacpp");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::LlamaCpp);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn llamacpp_provider_serde_aliases_parse() {
+    // The serde alias attribute on the enum accepts three
+    // common spellings; verify each round-trips through TOML.
+    for alias in ["llamacpp", "llama-cpp", "llama_cpp"] {
+        let env = EnvScope::new();
+        let tmp = TempDir::new(&format!("llamacpp-toml-{alias}"));
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            format!(
+                r#"
+[agent]
+provider = "{alias}"
+model = "qwen3:32b"
+"#
+            ),
+        )
+        .unwrap();
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        };
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+        assert_eq!(
+            cfg.provider.value,
+            ProviderKind::LlamaCpp,
+            "alias {alias:?} must deserialize to LlamaCpp"
+        );
+        drop(env);
+    }
+}
+
+#[test]
+fn llamacpp_validate_does_not_require_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "llamacpp");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts)
+        .expect("llamacpp must not require an API key even with require_api_key=true");
+    drop(env);
+}
+
+#[test]
+fn jan_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "jan");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Jan);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn jan_provider_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("jan-toml");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "jan"
+model = "qwen2.5-7b-instruct"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Jan);
+    assert_eq!(cfg.model.value, "qwen2.5-7b-instruct");
+    drop(env);
+}
+
+#[test]
+fn jan_validate_does_not_require_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "jan");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts)
+        .expect("jan must not require an API key even with require_api_key=true");
+    drop(env);
 }
 
 // ------------------------------------------------------------------
