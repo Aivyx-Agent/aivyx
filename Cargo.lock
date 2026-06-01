@@ -60,6 +60,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-auth-cli"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "aivyx-calendar"
 version = "0.1.0"
 dependencies = [
