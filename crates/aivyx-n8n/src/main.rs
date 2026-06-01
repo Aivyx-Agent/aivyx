@@ -12,6 +12,7 @@ use aivyx_n8n::auth_cli::{
     config_file::{default_config_path, load_config},
     status::{run_auth_check, run_auth_status},
 };
+use aivyx_n8n::tools::N8nListWorkflows;
 use aivyx_n8n::{run_multi_tool_subprocess, N8nClient};
 
 #[tokio::main]
@@ -97,18 +98,11 @@ async fn run_ipc_loop() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let _client = Arc::new(N8nClient::new(reqwest::Client::new(), config));
+    let client = Arc::new(N8nClient::new(reqwest::Client::new(), config));
 
     // Phase 131 Q1c — 10-tool surface. Tasks 3-12 populate
-    // this incrementally; Task 2 ships the scaffolding.
-    let tools: Vec<Arc<dyn Tool>> = Vec::new();
-    if tools.is_empty() {
-        eprintln!(
-            "aivyx-n8n (ipc): Phase 131 Task 2 scaffold — \
-             no tools registered yet. Exiting cleanly."
-        );
-        return ExitCode::SUCCESS;
-    }
+    // this incrementally; Task 3 wires `n8n.list_workflows`.
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(N8nListWorkflows::new(client.clone()))];
     match run_multi_tool_subprocess(tools, "aivyx-n8n").await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
