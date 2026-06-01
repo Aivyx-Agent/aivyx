@@ -134,6 +134,7 @@ fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result
         TurnOutcomeSummary::Escalated => "escalated",
         TurnOutcomeSummary::TimedOut => "timed out",
         TurnOutcomeSummary::Cancelled => "cancelled",
+        TurnOutcomeSummary::MaxStepsExceeded => "max steps exceeded",
         TurnOutcomeSummary::Failed => "failed",
     };
     writeln!(w, "\n[turn {marker}]")

@@ -389,9 +389,11 @@ impl Agent for ConcreteAgent {
                 tool_calls_made,
                 elapsed: duration,
             },
-            LoopOutcome::MaxStepsExceeded => TurnOutcome::Failed(AivyxError::Internal(
-                format!("planner exceeded {MAX_STEPS_PER_TURN} steps per turn"),
-            )),
+            LoopOutcome::MaxStepsExceeded => TurnOutcome::MaxStepsExceeded {
+                tool_calls_made,
+                duration,
+                max_steps: MAX_STEPS_PER_TURN,
+            },
             LoopOutcome::Escalated {
                 reason,
                 pending_tool,
@@ -1657,13 +1659,16 @@ mod tests {
         ));
     }
 
-    // ---- Max-steps guard: a runaway planner is terminated with Failed ----
+    // ---- Max-steps guard: a runaway planner is terminated with
+    // MaxStepsExceeded ----
     //
     // Phase 2 introduced MAX_STEPS_PER_TURN = 32 so an LLM-backed planner
-    // that never emits FinalMessage cannot loop forever. This test proves
-    // the guard fires by feeding the loop a script that's longer than the
-    // budget — 64 ToolCalls, no FinalMessage — and asserting the loop
-    // terminates with Failed(Internal) rather than running to completion.
+    // that never emits FinalMessage cannot loop forever. The L1+R3 audit
+    // fix promoted the previous `Failed(Internal(...))` translation to a
+    // dedicated `TurnOutcome::MaxStepsExceeded` variant that preserves
+    // `tool_calls_made`, `duration`, and `max_steps` — the other
+    // terminal states carry these too; the runaway case used to drop
+    // them.
 
     #[tokio::test]
     async fn runaway_planner_terminates_with_max_steps_exceeded() {
@@ -1696,13 +1701,22 @@ mod tests {
             .await;
 
         match outcome {
-            TurnOutcome::Failed(AivyxError::Internal(msg)) => {
-                assert!(
-                    msg.contains("exceeded"),
-                    "expected 'exceeded' in error, got {msg:?}"
+            TurnOutcome::MaxStepsExceeded {
+                tool_calls_made,
+                max_steps,
+                ..
+            } => {
+                assert_eq!(
+                    max_steps, MAX_STEPS_PER_TURN,
+                    "outcome carries the configured budget"
+                );
+                assert_eq!(
+                    tool_calls_made, MAX_STEPS_PER_TURN,
+                    "tool_calls_made survives into the public outcome — \
+                     the L1 telemetry-loss this fix closes"
                 );
             }
-            other => panic!("expected Failed(Internal), got {other:?}"),
+            other => panic!("expected MaxStepsExceeded, got {other:?}"),
         }
 
         // The loop should have called exactly MAX_STEPS_PER_TURN tools
@@ -1714,7 +1728,7 @@ mod tests {
             .collect();
         assert_eq!(tool_calls.len(), MAX_STEPS_PER_TURN);
 
-        // TurnEnded should record the Failed summary.
+        // TurnEnded should record the dedicated summary variant.
         let events = audit.snapshot();
         let ended = events
             .iter()
@@ -1722,7 +1736,7 @@ mod tests {
             .expect("TurnEnded should still be emitted");
         match ended {
             AuditTag::TurnEnded { outcome, .. } => {
-                assert_eq!(*outcome, TurnOutcomeSummary::Failed);
+                assert_eq!(*outcome, TurnOutcomeSummary::MaxStepsExceeded);
             }
             _ => unreachable!(),
         }

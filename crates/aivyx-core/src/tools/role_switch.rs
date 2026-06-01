@@ -371,6 +371,20 @@ impl Tool for RoleSwitchTool {
                 }),
                 verified: Verification::NotApplicable,
             },
+            TurnOutcome::MaxStepsExceeded {
+                tool_calls_made,
+                duration,
+                max_steps,
+            } => ToolOutcome::Completed {
+                output: json!({
+                    "status": "max_steps_exceeded",
+                    "target": target,
+                    "tool_calls_made": tool_calls_made,
+                    "duration_ms": duration.as_millis() as u64,
+                    "max_steps": max_steps,
+                }),
+                verified: Verification::NotApplicable,
+            },
             TurnOutcome::Failed(err) => ToolOutcome::Completed {
                 output: json!({
                     "status": "failed",

@@ -1050,6 +1050,9 @@ pub fn build_turn_summary(
         TurnOutcome::Cancelled { .. } => {
             s.push_str("was cancelled");
         }
+        TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
+            s.push_str(&format!("hit max_steps={max_steps} (runaway planner)"));
+        }
         TurnOutcome::Failed(_) => {
             s.push_str("failed");
         }

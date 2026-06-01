@@ -455,6 +455,16 @@ pub enum TurnOutcome {
     Cancelled {
         tool_calls_made: usize,
     },
+    /// Planner exceeded `MAX_STEPS_PER_TURN` — promoted from
+    /// `Failed(Internal(...))` per the L1+R3 audit finding so
+    /// that `tool_calls_made` and `duration` survive into the
+    /// operator-facing outcome (other terminal states preserve
+    /// them; the runaway-planner case used to drop them).
+    MaxStepsExceeded {
+        tool_calls_made: usize,
+        duration: Duration,
+        max_steps: usize,
+    },
     Failed(AivyxError),
 }
 
@@ -482,6 +492,7 @@ pub enum TurnOutcomeSummary {
     Escalated,
     TimedOut,
     Cancelled,
+    MaxStepsExceeded,
     Failed,
 }
 
@@ -516,6 +527,7 @@ impl From<&TurnOutcome> for TurnOutcomeSummary {
             TurnOutcome::Escalated { .. } => TurnOutcomeSummary::Escalated,
             TurnOutcome::TimedOut { .. } => TurnOutcomeSummary::TimedOut,
             TurnOutcome::Cancelled { .. } => TurnOutcomeSummary::Cancelled,
+            TurnOutcome::MaxStepsExceeded { .. } => TurnOutcomeSummary::MaxStepsExceeded,
             TurnOutcome::Failed(_) => TurnOutcomeSummary::Failed,
         }
     }

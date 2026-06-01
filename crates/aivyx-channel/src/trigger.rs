@@ -366,9 +366,14 @@ impl TriggerDispatch {
                         mission::complete_mission(&mut record)
                             .map_err(|e| format!("complete mission: {e}"))?;
                     }
-                    TurnOutcome::Failed(_) | TurnOutcome::Cancelled { .. } | TurnOutcome::TimedOut { .. } => {
+                    TurnOutcome::Failed(_)
+                    | TurnOutcome::Cancelled { .. }
+                    | TurnOutcome::TimedOut { .. }
+                    | TurnOutcome::MaxStepsExceeded { .. } => {
                         // Cancel rather than fail — the mission itself didn't
                         // hit a gate rejection, the turn just didn't succeed.
+                        // `MaxStepsExceeded` joins the other non-success
+                        // terminations here per L1/R3 audit fix.
                         mission::cancel_mission(&mut record)
                             .map_err(|e| format!("cancel mission: {e}"))?;
                     }
@@ -735,6 +740,9 @@ pub fn render_notify_body(outcome: &TurnOutcome) -> String {
             format!("Turn timed out after {elapsed:.1?}")
         }
         TurnOutcome::Cancelled { .. } => "Turn cancelled".to_string(),
+        TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
+            format!("Turn aborted: planner exceeded {max_steps} steps")
+        }
     }
 }
 

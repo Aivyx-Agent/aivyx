@@ -197,6 +197,9 @@ fn finalize_footer(outcome: &TurnOutcome) -> String {
             format!("\n⏱ timed out after {elapsed:?}")
         }
         TurnOutcome::Cancelled { .. } => "\n✕ cancelled".to_string(),
+        TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
+            format!("\n✕ planner exceeded {max_steps} steps per turn")
+        }
         TurnOutcome::Failed(e) => format!("\n✕ failed: {e}"),
     }
 }
