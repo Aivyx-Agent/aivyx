@@ -9,9 +9,11 @@ pub mod create_page;
 pub mod get_page;
 pub mod list_database;
 pub mod search;
+pub mod update_page_properties;
 
 pub use append_blocks::NotionAppendBlocks;
 pub use create_page::NotionCreatePage;
 pub use get_page::NotionGetPage;
 pub use list_database::NotionListDatabase;
 pub use search::NotionSearch;
+pub use update_page_properties::NotionUpdatePageProperties;
