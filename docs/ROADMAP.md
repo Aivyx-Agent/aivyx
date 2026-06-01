@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 131 — n8n Workflow Automation Integration (Chapter F #7)
 
-**See [PHASE_131.md](PHASE_131.md).** Seventh Chapter F
+**Frozen — see [PHASE_131.md](PHASE_131.md).** Seventh Chapter F
 integration; first targeting a workflow-automation
 service. Operator-picked at the Phase 131 direction
 question (n8n bundled with the same posture as Phase
@@ -3612,9 +3612,24 @@ count `+140` to `+200` — about half the size of Phase
   point.** Phase 130 validated; Phase 131 reinforces.
   Phase 132+ candidate.
 
-**Nineteenth consecutive deferral of the Channel
-Activation Milestone** if Phase 131 ships without
-taking it. Honest tracking continues.
+**Twentieth consecutive deferral of the Channel
+Activation Milestone** at Phase 131 exit. The
+deferral-count signal-strength reaches its twentieth
+phase; Phase 132 candidates now explicitly flag this
+as the leading pick.
+
+**At Phase 131 exit:** ten tools shipped (4 read, 3
+lifecycle, 3 CRUD); 109 lib tests added; three-of-
+three streak HOLD predictions hit; test count miss
+(`+109` vs predicted `+140 to +200`) honestly framed
+as a tooling-density artifact (symmetric tool pairs +
+shared parse_id helper; no coverage gap). Auth_cli
+lift now has three concrete data points; Phase 132+
+candidate strengthens to "high-leverage". The first
+operator-supplied-base-URL Chapter F substrate
+shipped clean — verified template for future
+self-hosted integrations (GitHub Enterprise, on-prem
+Jira, etc.).
 
 ## Phase 130 — Notion + Obsidian Knowledge-Management Bundle (Chapter F #5)
 

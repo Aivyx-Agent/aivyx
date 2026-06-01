@@ -347,7 +347,108 @@ the empirical signal from this phase):
 
 ## Prediction vs reality
 
-_Populated at Phase 131 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 22; PRODUCT.md HOLD → 22;
-lib.rs HOLD → 5; test count `+140` to `+200`; zero
-new deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged since Phase 130 exit). No contract
+  amendment for n8n; Chapter F + capability taxonomy
+  cover everything via the established substrate.
+  Streak: 21 → **22**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). G6 + P10 + P11 + P12 frame n8n exactly
+  the way they framed every prior Chapter F member
+  ("anything domain-specific is third-party"); no
+  new product principle needed. Streak: 21 → **22**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 131 work lives
+  in `aivyx-n8n` (new), plus two new bases + one
+  ceiling addition in `aivyx-capability`. NO core
+  changes. Streak: 4 → **5**.
+
+**Test count `+109` landed below the predicted
+`+140 to +200` range.** Per-task breakdown:
+
+- Task 2 (skeleton): **+22** (n8n_client + auth_cli
+  cli/config_file/status).
+- Task 3 (list_workflows): +13.
+- Task 4 (get_workflow): +8.
+- Task 5 (list_executions): +11.
+- Task 6 (get_execution): +9.
+- Task 7 (execute_workflow): +9.
+- Task 8 (activate_workflow): +6.
+- Task 9 (deactivate_workflow): +3 (most parsing
+  reused from activate's tests).
+- Task 10 (create_workflow): +12.
+- Task 11 (update_workflow): +10.
+- Task 12 (delete_workflow): +6.
+- Net: **+109** lib tests.
+
+Workspace test count: 3323 (post-Phase 130) → **3432**
+(post-Phase 131). 10 new tools shipped (all n8n).
+
+**Honest framing of the test-count miss.** The
+prediction assumed Phase 130's tooling-per-tool
+density would repeat. The actual surface had more
+symmetric tools (activate/deactivate; create/update
+share most validation; delete is the simplest tool
+in the surface) and the shared `parse_id` helper
+between activate/deactivate dropped duplicate tests
+in deactivate.rs from ~6 to 3. Each tool's test count
+still validates its specific behavior; no coverage
+gap. Net signal: Q1c's 10-tool surface had less new
+validation logic than the 13-tool Phase 130 surface,
+not less correctness.
+
+**Zero new workspace dependencies** as predicted.
+aivyx-n8n uses reqwest + serde + toml + thiserror,
+all already in the workspace from prior Chapter F
+crates. The bearer-token-with-operator-base-URL
+pattern reused existing primitives.
+
+**Zero clippy warnings** workspace-wide. Two transient
+lints fixed during dev:
+1. `doc_lazy_continuation` on lib.rs module doc
+   (fixed by re-indenting list continuations to 2
+   spaces; same lesson as Phase 128/130).
+2. `doc_overindented_list_items` on the same doc
+   (intermediate overcorrection; final form is 2
+   spaces, neither under- nor over-indented).
+
+**Q-block went through with one non-Recommended pick.**
+Q1c (10-tool surface including risky CRUD) was the
+operator's pick over the Recommended Q1b (7-tool
+surface). The risk noted at sign-off — that
+create_workflow + update_workflow + delete_workflow
+carry definition-write blast radius — is real and
+documented in INSTALL.md's per-role grant guidance.
+No regression on the surface; operators can
+attenuate via `n8n.write:<wf-id>` qualifiers.
+
+**Auth_cli lift posture, third reinforcing data
+point.** Phase 130 validated the case with notion +
+obsidian; Phase 131's n8n surface is nearly
+identical to notion's — same `cli.rs` + `config_file.rs`
++ `status.rs` shape, same `auth status` + `auth check`
+two-subcommand surface, same dropping-of-init/revoke
+because there's no token exchange. **The auth_cli
+lift is now a high-leverage Phase 132+ candidate**
+with three concrete consumers as the design target
+(notion bearer-token, obsidian path-only, n8n
+operator-base-URL plus bearer token).
+
+**The n8n-specific signal: operator-supplied base URL
+patterns work cleanly.** First Chapter F integration
+with a self-hosted/configurable target URL. The
+trailing-slash trim + `url_for` concatenation +
+`X-N8N-API-KEY` header all rode on existing
+substrate primitives. Phase 132+ candidates that
+need a similar pattern (self-hosted GitHub
+Enterprise, on-prem Jira, etc.) have a verified
+template.
+
+**Twentieth consecutive deferral of the Channel
+Activation Milestone.** The deferral count keeps
+growing; the signal-strength for "we should ship a
+Channel Activation Milestone soon" reaches its
+twentieth phase. Direction-after now flags this as
+the leading Phase 132 candidate explicitly.

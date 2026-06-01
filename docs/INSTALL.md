@@ -2400,6 +2400,153 @@ capability_scopes = ["obsidian.read"]  # read-only access
 - **No image/PDF/canvas handling.** Only `.md` files
   are scanned by `search` / `list_folder`.
 
+### n8n (Phase 131 — Chapter F #7)
+
+n8n workflow automation. First Chapter F integration
+with an **operator-supplied base URL** — n8n is most
+commonly self-hosted, so operators point the tool
+process at their own instance (`http://localhost:5678`,
+`https://n8n.example.com`, etc.). The crate constructs
+every request as `{n8n_base_url}/api/v1/<path>` and
+authenticates with the n8n-specific `X-N8N-API-KEY`
+header (not Bearer).
+
+#### Operator setup
+
+1. **Build the binary:**
+
+   ```bash
+   $ cargo build --release -p aivyx-n8n
+   ```
+
+   Produces `target/release/aivyx-n8n`.
+
+2. **Create an n8n API key.** In your n8n web UI, go
+   to Settings → API → "Create an API key". Copy the
+   key (it's shown only once). Modern n8n versions
+   support API keys natively for both Community and
+   Cloud editions.
+
+3. **Write `~/.aivyx/tool-processes/n8n/config.toml`:**
+
+   ```toml
+   n8n_base_url = "https://n8n.example.com"
+   n8n_api_key = "ntn_XXXX..."
+   ```
+
+   No trailing slash on the base URL — the crate
+   appends `/api/v1/<path>` itself, and trims any
+   trailing slashes defensively.
+
+4. **Verify offline + online:**
+
+   ```bash
+   $ aivyx-n8n auth status
+   aivyx-n8n auth status: OK
+     config: "/Users/me/.aivyx/tool-processes/n8n/config.toml"
+     base_url: https://n8n.example.com
+     api_key: present (non-empty)
+     next: run `aivyx-n8n auth check` to ping the instance
+
+   $ aivyx-n8n auth check
+   aivyx-n8n auth check: OK — API key accepted; instance reachable
+   ```
+
+   If the check returns 401/403, the key was rejected
+   — re-copy it from n8n's Settings → API and check
+   for whitespace at either end of the config file's
+   `n8n_api_key`.
+
+5. **Register the binary in Aivyx's `config.toml`:**
+
+   ```toml
+   [[tools]]
+   name = "aivyx-n8n"
+   command = "/path/to/aivyx-n8n"
+   ```
+
+   The binary spawns into IPC-loop mode when invoked
+   with no arguments — same multi-tool harness shape
+   as every other Chapter F tool process.
+
+#### The ten-tool surface (Phase 131 Q1c)
+
+| Tool | Scope | Notes |
+|---|---|---|
+| `n8n.list_workflows` | `n8n.read` | Filters: `active`, `name`, `tags`. Pagination cursor. Returns projected summaries — call `get_workflow` for the full payload. |
+| `n8n.get_workflow` | `n8n.read` | Full definition: nodes, connections, settings, staticData, pinData. Use before update/execute. |
+| `n8n.list_executions` | `n8n.read` | Filters: `workflow_id`, `status` (success/error/waiting). Per-node data payload deliberately stripped — call `get_execution` to fetch it. |
+| `n8n.get_execution` | `n8n.read` | Single execution by id. Optional `include_data` to surface per-node input/output payloads (large). |
+| `n8n.execute_workflow` | `n8n.write` | Trigger a one-off run. Optional `input_data` forwarded to the trigger node. Returns the execution id; poll via `get_execution`. Trusted-tier-only. |
+| `n8n.activate_workflow` | `n8n.write` | Wire up triggers. Idempotent (`was_already_active`). Trusted-tier-only. |
+| `n8n.deactivate_workflow` | `n8n.write` | Pause triggers without deleting. Idempotent (`was_already_inactive`). Trusted-tier-only. |
+| `n8n.create_workflow` | `n8n.write` | Create from full definition. **Inactive by default** — operator second checkpoint before triggers fire. Highest blast radius in the surface. Trusted-tier-only. |
+| `n8n.update_workflow` | `n8n.write` | Full replacement (PUT). Active workflows take effect immediately; for staged rollout use deactivate → update → activate. Trusted-tier-only. |
+| `n8n.delete_workflow` | `n8n.write` | **Permanent** delete (no trash). Execution history also removed. Idempotent (`was_already_missing`). Trusted-tier-only. |
+
+#### Per-role capability grants
+
+```toml
+[[role]]
+name = "n8n-monitor"
+trust_tier = "SemiTrusted"
+capability_scopes = ["n8n.read"]  # read-only — listings + payload inspection
+
+[[role]]
+name = "n8n-operator"
+trust_tier = "Trusted"
+capability_scopes = [
+    "n8n.read",
+    "n8n.write:wf-known-good-id",   # narrow write delegation
+]
+```
+
+Per-workflow attenuation rides the SimpleGlob
+dispatch shape (same as `role.switch` /
+`notify.send` target names): `n8n.write:wf-1` grants
+writes only to workflow id `wf-1`, while bare
+`n8n.write` grants every workflow.
+
+#### Operator-side troubleshooting
+
+- **`auth check` returns 401/403.** Key rejected.
+  Re-copy from n8n's Settings → API. Older
+  Community-edition installs (< 1.x) may not have the
+  public API endpoint enabled; upgrade or set the
+  `N8N_PUBLIC_API_DISABLED=false` environment
+  variable on the n8n side.
+- **`auth check` reports a transport error.** The
+  base URL is unreachable from the operator's
+  machine. Verify the n8n instance is up, the URL is
+  spelled correctly, and (for HTTPS-behind-LAN
+  setups) the cert is trusted by the OS keychain.
+- **`n8n.execute_workflow` 404s on a workflow the LLM
+  just saw via list_workflows.** The workflow may
+  have been deleted between calls, or the n8n public
+  API on the operator's version doesn't support
+  manual execution. Confirm via `n8n.get_workflow`;
+  if that succeeds, the issue is the execute
+  endpoint — consider invoking the workflow via its
+  webhook URL instead.
+- **`n8n.delete_workflow` is permanent.** No trash.
+  Recover from your n8n database backup or save the
+  definition via `n8n.get_workflow` before deleting.
+
+#### What Phase 131 deliberately leaves to follow-on phases
+
+- **No credentials management.** n8n credentials
+  (which workflows bind to) are not readable or
+  writable through this surface — the public API
+  exposes them with a separate trust model.
+- **No tag CRUD.** Read-only tag visibility via
+  `list_workflows` projection.
+- **No webhook URL discovery.** Operators read
+  webhook URLs from n8n's UI or from the
+  `get_workflow` node payload.
+- **No execution log streaming.** `get_execution`
+  returns a snapshot; long-running workflows must be
+  polled.
+
 ## Operator-facing personal assistant capabilities (Chapter G)
 
 After Chapter F #1 (Gmail) shipped and the Phase 124 exit
