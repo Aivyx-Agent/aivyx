@@ -12,6 +12,7 @@ use aivyx_obsidian::auth_cli::{
     cli::{help_text, parse_cli_args_from, BinaryMode},
     config_file::{default_config_path, load_config},
 };
+use aivyx_obsidian::tools::ObsidianSearch;
 use aivyx_obsidian::{run_multi_tool_subprocess, VaultClient};
 
 #[tokio::main]
@@ -67,7 +68,7 @@ async fn run_ipc_loop() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let _client = match VaultClient::new(cfg) {
+    let client = match VaultClient::new(cfg) {
         Ok(c) => Arc::new(c),
         Err(e) => {
             eprintln!("aivyx-obsidian (ipc): vault open failed: {e}");
@@ -75,19 +76,9 @@ async fn run_ipc_loop() -> ExitCode {
         }
     };
 
-    // Phase 130 Q2a — six-tool surface (search /
-    // get_note / list_folder / create_note / update_note /
-    // delete_note). Tasks 11-16 populate this incrementally;
-    // Task 10 ships the scaffolding only.
-    let tools: Vec<Arc<dyn Tool>> = Vec::new();
-
-    if tools.is_empty() {
-        eprintln!(
-            "aivyx-obsidian (ipc): Phase 130 Task 10 scaffold — \
-             no tools registered yet (Tasks 11-16 add them). Exiting cleanly."
-        );
-        return ExitCode::SUCCESS;
-    }
+    // Phase 130 Q2a — six-tool surface. Tasks 11-16
+    // populate this incrementally; Task 11 adds search.
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(ObsidianSearch::new(Arc::clone(&client)))];
 
     match run_multi_tool_subprocess(tools, "aivyx-obsidian").await {
         Ok(()) => ExitCode::SUCCESS,

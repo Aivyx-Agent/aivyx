@@ -2,4 +2,7 @@
 //! vault tool process.
 //!
 //! Phase 130 Q2a operator-picked surface (6 tools).
-//! Per-tool modules ship in Tasks 11-16.
+
+pub mod search;
+
+pub use search::ObsidianSearch;
