@@ -1,0 +1,42 @@
+[package]
+name = "aivyx-obsidian"
+description = "Obsidian vault third-party tool process for Aivyx (Phase 130 — Chapter F #6)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-obsidian"
+path = "src/main.rs"
+
+[dependencies]
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime — vault ops use tokio::fs for async file
+# I/O. No HTTP client needed (Obsidian has no REST API).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+# JSON for tool input/output. No reqwest — there's no
+# external API for Obsidian.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# TOML for the operator-supplied config file at
+# `~/.aivyx/tool-processes/obsidian/config.toml` carrying
+# the vault path.
+toml = "0.8"
+
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }

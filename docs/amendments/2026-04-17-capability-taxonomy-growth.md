@@ -285,9 +285,41 @@ path; no new capability gate.)
 | Phase 130 | `notion.read` | Chapter F #5 — `notion.search`, `notion.get_page`, `notion.list_database` against the operator's shared Notion content |
 | Phase 130 | `notion.write` | Chapter F #5 — `notion.create_page`, `notion.append_blocks`, `notion.update_page_properties`, `notion.archive_page` (full page-lifecycle mutation; Trusted-tier-only at the ceiling level, matching `email.send` / `calendar.write` / `drive.write`) |
 
-### Current enumeration after Task 2 (63 bases)
+### Current enumeration after Task 2 (63 bases — superseded by Task 10 enumeration below)
 
-Third-party tool process scopes (14):
+### Phase 130 Task 10 addendum — Chapter F #6 Obsidian (2026-06-01)
+
+> *Added at Phase 130 Task 10 (Obsidian skeleton).
+> Chapter F's sixth integration — Obsidian vault via the
+> `aivyx-obsidian` third-party tool process. First Chapter F
+> integration with no external API; operates on filesystem
+> reads/writes under a configured vault directory with
+> load-bearing path-traversal protection. Per Phase 130 Q2a,
+> six tools ship: `obsidian.search`, `obsidian.get_note`,
+> `obsidian.list_folder`, `obsidian.create_note`,
+> `obsidian.update_note`, `obsidian.delete_note`. Two new
+> bases gate them.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 130 | `obsidian.read` | Chapter F #6 — `obsidian.search`, `obsidian.get_note`, `obsidian.list_folder` against the operator's configured vault |
+| Phase 130 | `obsidian.write` | Chapter F #6 — `obsidian.create_note`, `obsidian.update_note`, `obsidian.delete_note` (Trusted-tier-only at the ceiling level, matching the Chapter F write-tool gating pattern) |
+
+### Current full enumeration after Phase 130 (65 bases)
+
+Substrate-facing operator scopes (16):
+- `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
+- `net.fetch`, `net.post`, `net.dns`
+- `shell.exec`, `shell.spawn`
+- `llm.call`, `llm.embed`
+- `memory.read`, `memory.write`, `memory.forget`, `memory.gc`
+- `git.read`
+
+Channel / audit / config (5)
+
+Infrastructure (28)
+
+Third-party tool process scopes (16):
 - Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
   `email.send`
 - Personal assistant tool bundle (Chapter G #1, Phase 125):
@@ -298,12 +330,10 @@ Third-party tool process scopes (14):
 - Drive (Chapter F #3, Phase 129): `drive.read`, `drive.write`
 - Notion (Chapter F #5, Phase 130 Task 2): `notion.read`,
   `notion.write`
+- Obsidian (Chapter F #6, Phase 130 Task 10): `obsidian.read`,
+  `obsidian.write`
 
-Total: 16 substrate + 5 channel/audit/config + 28
-infrastructure + 14 third-party = 63.
-
-**Phase 130 Task 10** adds two more bases (`obsidian.read`,
-`obsidian.write`) for a final Phase 130 count of 65.
+Total: 16 + 5 + 28 + 16 = 65.
 
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 

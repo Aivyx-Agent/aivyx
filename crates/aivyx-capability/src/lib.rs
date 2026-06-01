@@ -150,6 +150,18 @@ const KNOWN_BASES: &[&str] = &[
     //                  gating pattern).
     "notion.read",
     "notion.write",
+    // Obsidian (Phase 130 — Chapter F #6, aivyx-obsidian
+    // third-party tool process). Two bases for the
+    // six-tool surface (Q2a):
+    //   obsidian.read  — obsidian.search,
+    //                    obsidian.get_note,
+    //                    obsidian.list_folder.
+    //   obsidian.write — obsidian.create_note,
+    //                    obsidian.update_note,
+    //                    obsidian.delete_note
+    //                    (Trusted-tier only by default).
+    "obsidian.read",
+    "obsidian.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -814,6 +826,11 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Chapter F precedent.
         "notion.read",
         "notion.write",
+        // Phase 130 Task 10 — Obsidian vault third-party
+        // tool process (Chapter F #6). Two bases for the
+        // six-tool surface (Q2a); Trusted-only default.
+        "obsidian.read",
+        "obsidian.write",
     ])
 });
 
@@ -1628,7 +1645,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            63,
+            65,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

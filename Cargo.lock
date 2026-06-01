@@ -320,6 +320,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-obsidian"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-tool",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "aivyx-slack"
 version = "0.1.0"
 dependencies = [

@@ -21,6 +21,7 @@ members = [
     "crates/aivyx-google-oauth",
     "crates/aivyx-drive",
     "crates/aivyx-notion",
+    "crates/aivyx-obsidian",
 ]
 
 [workspace.package]
