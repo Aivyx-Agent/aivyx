@@ -5,7 +5,9 @@
 //! Per-tool modules ship in Tasks 3-9.
 
 pub mod get_page;
+pub mod list_database;
 pub mod search;
 
 pub use get_page::NotionGetPage;
+pub use list_database::NotionListDatabase;
 pub use search::NotionSearch;
