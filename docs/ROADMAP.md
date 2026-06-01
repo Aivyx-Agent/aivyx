@@ -3535,6 +3535,87 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 131 — n8n Workflow Automation Integration (Chapter F #7)
+
+**See [PHASE_131.md](PHASE_131.md).** Seventh Chapter F
+integration; first targeting a workflow-automation
+service. Operator-picked at the Phase 131 direction
+question (n8n bundled with the same posture as Phase
+130 Notion+Obsidian).
+
+**Substrate generalization:** introduces a fourth Chapter
+F substrate shape — REST API + bearer token + operator-
+configurable base URL (n8n is self-hosted, no
+`api.n8n.io` equivalent). Prior shapes: OAuth (gmail/
+calendar/drive), bearer-token-fixed-base (notion), no-API
+filesystem (obsidian).
+
+Phase 131 adds:
+
+- **`aivyx-n8n` binary crate** — REST API client against
+  `{operator-supplied base URL}/api/v1` with the n8n-
+  specific `X-N8N-API-KEY` header.
+- **Ten n8n tools** (Q1c non-Recommended over Q1a's
+  7-tool default):
+  - **Read (`n8n.read`):** `n8n.list_workflows`,
+    `n8n.get_workflow`, `n8n.list_executions`,
+    `n8n.get_execution`.
+  - **Trigger + lifecycle (`n8n.write`,
+    CEILING_TRUSTED):** `n8n.execute_workflow`,
+    `n8n.activate_workflow`,
+    `n8n.deactivate_workflow`.
+  - **CRUD (`n8n.write`, CEILING_TRUSTED):**
+    `n8n.create_workflow`, `n8n.update_workflow`,
+    `n8n.delete_workflow`. The CRUD trio is the
+    load-bearing-risky surface — workflow JSON is
+    complex, malformed updates can silently break
+    automations. Tests exercise required-field
+    validation; integration testing against a real
+    n8n instance is operator responsibility per Q4a.
+- **Two new capability bases:** `n8n.read`, `n8n.write`.
+- **A3 amendment:** KNOWN_BASES_COUNT 65 → 67.
+- **INSTALL.md walkthrough** with operator setup, the
+  workflow-CRUD-is-risky note, n8n version
+  compatibility flag, and the execute_workflow async
+  semantic (operators poll via get_execution).
+
+**Q-block — 2 Recommended + 1 non-Recommended:**
+- Q1c — 10 tools including workflow CRUD (non-
+  Recommended; operator-picked).
+- Q2a — `n8n_base_url` + `n8n_api_key` in config.toml
+  (Recommended).
+- Q4a — Operator-discretionary live verification
+  (Recommended).
+
+**Streak predictions — three of three HOLD anticipated.**
+DESIGN.md HOLD → 22; PRODUCT.md HOLD → 22;
+`aivyx-core/src/lib.rs` HOLD → 5 (Phase 130 ticked to 4;
+Phase 131 ticks to 5). Zero new workspace deps. Test
+count `+140` to `+200` — about half the size of Phase
+130's bundled Notion+Obsidian.
+
+**Honest scope risks at sign-off:**
+- Q1c's workflow CRUD is the load-bearing risk
+  (malformed PATCH can silently break automations).
+  PR-merge-time scope reduction (defer the 3 CRUD
+  tools to Phase 132+) is the escape hatch.
+- n8n version compatibility: targets n8n 1.x REST API;
+  bumps in a future substrate phase if n8n revs
+  breaking changes.
+- Self-hosted base URL hardening: operators may use
+  HTTP on localhost (fine) or public-internet HTTP
+  (leaks API key). INSTALL.md flags.
+- `execute_workflow` returns immediately; operators
+  must poll `get_execution` for results. Documented
+  in tool description.
+- **Auth_cli lift posture: second reinforcing data
+  point.** Phase 130 validated; Phase 131 reinforces.
+  Phase 132+ candidate.
+
+**Nineteenth consecutive deferral of the Channel
+Activation Milestone** if Phase 131 ships without
+taking it. Honest tracking continues.
+
 ## Phase 130 — Notion + Obsidian Knowledge-Management Bundle (Chapter F #5)
 
 **Frozen — see [PHASE_130.md](PHASE_130.md).** Largest Chapter F
