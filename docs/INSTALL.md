@@ -1070,6 +1070,174 @@ when:
 In both cases use `provider = "openai"` and set
 `OPENAI_BASE_URL` to the target endpoint.
 
+## Local LLM provider alternatives (Phase 133)
+
+Aivyx ships first-class support for **three local-LLM
+runtimes** — Ollama (default), `llama-server` from
+llama.cpp, and [Jan](https://jan.ai). Pick whichever
+fits your workflow; all three are documented as
+equal-status. Switching providers is a one-line
+`aivyx.toml` change, no rebuild required.
+
+### The three providers at a glance
+
+| Provider | License | UX shape | Default port | Model management | Phones home? |
+|---|---|---|---|---|---|
+| **Ollama** | MIT | CLI-first daemon | `:11434` | `ollama pull <model>` + Aivyx exposes `ollama.list/show/pull` as agent tools | Yes — update checks + telemetry (see [Ollama privacy posture](#ollama-privacy-posture) below) |
+| **`llama-server`** (llama.cpp) | MIT | Raw bare-metal | `:8080` | Manual GGUF download from HuggingFace | No — pure inference server, no outbound calls |
+| **[Jan](https://jan.ai)** | Apache 2.0 | Desktop GUI + API | `:1337` | GUI-driven model hub | No — explicitly no telemetry by default |
+
+### Picking among the three
+
+- **Use Ollama** when you want CLI-first model management
+  (`ollama pull qwen3:32b` is genuinely the smoothest
+  install UX for a new model), when Aivyx's
+  `ollama.list/show/pull` agent tools matter to your
+  workflow, or when you already have it installed and
+  see no reason to switch.
+- **Use `llama-server`** when you want raw bare-metal
+  control over llama.cpp options (`-ngl`, `-c`,
+  `--mlock`, etc.) without an Ollama wrapper translating
+  them, when you're building from source for a custom
+  hardware target, or when the no-telemetry posture
+  matters more than the model-management UX.
+- **Use Jan** when you want a polished desktop GUI for
+  model browsing/downloading without sacrificing the
+  OpenAI-compatible API surface, when the no-telemetry
+  posture matters and you don't want a CLI tool, or
+  when you're recommending Aivyx to a less technical
+  end user who would otherwise pick LM Studio
+  (proprietary).
+
+### `aivyx.toml` snippets
+
+**Ollama** (default; no change needed for existing
+operators):
+```toml
+[agent]
+provider = "ollama"
+model    = "qwen3:32b"
+```
+
+**`llama-server`** (start it separately first —
+`llama-server -m /path/to/model.gguf -c 32768`):
+```toml
+[agent]
+provider = "llamacpp"
+model    = "qwen3-32b"  # arbitrary string; llama-server ignores it
+
+[openai]
+base_url = "http://localhost:8080"  # override if you bound a custom port
+```
+
+**Jan** (open the Jan desktop app, enable "Local API
+Server" in settings):
+```toml
+[agent]
+provider = "jan"
+model    = "qwen2.5-7b-instruct"
+
+[openai]
+base_url = "http://localhost:1337/v1"  # override if you changed Jan's port
+```
+
+### Tradeoffs the matrix doesn't capture
+
+- **Model-family metadata.** Aivyx's textual tool-call
+  extractor (Phase 127) uses Ollama's `/api/show` to
+  detect qwen / phi / etc. and pick the right tool-call
+  parser. Neither `llama-server` nor Jan exposes
+  `/api/show` in the same shape — the extractor falls
+  through to heuristic detection on these providers,
+  which is less accurate. Models with non-standard
+  tool-call formats may need explicit per-model
+  configuration on llama-server / Jan.
+
+- **`ollama.list/show/pull` agent tools.** These three
+  Aivyx tools are Ollama-specific and not registered
+  for the other providers — `llama-server` has no
+  registry equivalent, and Jan's model hub lives in the
+  desktop GUI. Agents on the alternative providers
+  cannot autonomously discover or download models.
+
+- **Daemon-style operation.** `llama-server` and Ollama
+  both run as long-lived background processes. Jan runs
+  inside the desktop app — closing the app stops the
+  API server. For 24/7 daemon-style Aivyx
+  deployments (Telegram/Discord/Slack frontends), pick
+  Ollama or `llama-server`.
+
+### Ollama privacy posture
+
+Aivyx markets itself as a privacy-first local-agent
+platform, which puts Ollama's outbound network calls
+under scrutiny. Honest framing of what's known:
+
+- **Ollama's code is MIT-licensed and auditable**,
+  but the project does not publish a complete
+  enumeration of what the binary phones home for.
+  Community threads (e.g. ollama/ollama issue #2567,
+  #11442) have raised this repeatedly.
+- **Known outbound calls** include update checks
+  against Ollama's release server, model registry
+  pulls against `ollama.com`/`registry.ollama.ai`
+  when you `ollama pull`, and telemetry the binary
+  doesn't publicly enumerate.
+- **January 2026 incident.** A joint SentinelOne /
+  Censys investigation found **175,000 publicly-
+  exposed Ollama hosts across 130 countries** — most
+  bound to `0.0.0.0` without authentication, creating
+  governance gaps and prompt-injection proxy
+  potential. The default `OLLAMA_HOST` binding has
+  been a frequent source of accidental exposure.
+
+**Lockdown guidance** if you want to keep Ollama and
+minimize its outbound surface:
+
+1. **Force loopback binding.** Set
+   `OLLAMA_HOST=127.0.0.1:11434` in your shell rc
+   (or as a systemd `Environment=` line) so Ollama
+   refuses non-local connections regardless of what
+   the operator types.
+2. **Firewall outbound `:443` from the Ollama
+   process** if you don't intend to `ollama pull`
+   models. The update check and any telemetry land
+   here; blocking them at the firewall level breaks
+   `pull` (acceptable cost) but stops the project
+   from receiving signal it didn't earn.
+3. **Disable auto-update.** No documented config
+   knob today; the most robust approach is the
+   firewall block above.
+4. **Audit your specific deployment.** Run Ollama
+   behind a packet logger (tcpdump, OpenSnitch,
+   Little Snitch) during a representative Aivyx turn
+   and confirm what you see. The honest answer to
+   "what does Ollama send?" is **operator-verified,
+   not project-documented**.
+
+**Alternative posture: use `llama-server` or Jan
+instead.** Both are documented above; both have no
+outbound network calls by default. The trade-off is
+the loss of Ollama's `pull` UX and Aivyx's
+`ollama.list/show/pull` agent tools.
+
+### What Phase 133 deliberately doesn't ship
+
+- **No `llamacpp.list/show/pull` agent tools.**
+  `llama-server` has no model-management API; the
+  operator downloads GGUF files and loads them on
+  start.
+- **No `jan.list/show/pull` agent tools.** Jan's
+  model hub is GUI-driven; an agent-side API would
+  be a Jan upstream feature request, not Aivyx work.
+- **No embedded Rust-native inference.** Direction B
+  from the Phase 133 research note (mistral.rs /
+  Candle inside Aivyx as a Rust dependency, no
+  separate runtime) is the leading Phase 134+
+  candidate. Phase 133 ships the multi-provider
+  story first and gathers empirical signal before
+  committing to the bigger architectural shift.
+
 ### Phase 120 substrate uniformity
 
 The Phase 120 tool-name recovery substrate flows uniformly
