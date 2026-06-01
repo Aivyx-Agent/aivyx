@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 133 — Local LLM Provider Alternatives (`llama-server` + Jan)
 
-**See [PHASE_133.md](PHASE_133.md).** First multi-provider
+**Frozen — see [PHASE_133.md](PHASE_133.md).** First multi-provider
 phase since Phase 121 (which swapped Ollama's
 OpenAI-compat path for a native `/api/chat`
 adapter). Phase 133 widens Aivyx's local-LLM story

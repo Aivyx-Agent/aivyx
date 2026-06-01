@@ -258,7 +258,75 @@ After Phase 133, the candidates for Phase 134:
 
 ## Prediction vs reality
 
-_Populated at Phase 133 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 24; PRODUCT.md HOLD → 24;
-lib.rs HOLD → 7; test count delta `+10` to `+25`;
-zero new deps; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment; the
+  multi-provider extension lives entirely inside the
+  existing `ProviderKind` design. Streak:
+  23 → **24**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Multi-provider reinforces the
+  "privacy-first, local-capable" framing rather
+  than amending it. Streak: 23 → **24**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 133 work lives
+  in `aivyx-config` (the enum extension + parser)
+  and `aivyx-channel/src/bin/aivyx.rs` (dispatch
+  arms). Core untouched. Streak: 6 → **7**.
+
+**Test count delta: +7 — within the predicted
+`+10` to `+25` range, slightly below the lower
+bound.** Workspace lib tests 2966 → 2973.
+
+The minor undershoot reflects how clean the
+extension was — adding two enum variants to a
+seam already designed for "provider-specific
+defaults" required minimal new behaviour to test.
+Per-variant coverage: each new provider has its
+env-from + validate-without-key tests; LlamaCpp
+adds an extra round-trip-through-aliases test;
+plus the cross-cutting `default_context_window`
+guard test.
+
+**Zero new workspace dependencies** as predicted.
+
+**Zero clippy warnings** workspace-wide.
+
+### The five-call-site reality
+
+The open doc projected dispatch wiring in "three
+call sites." The actual count was **five**:
+1. The provider construction match in
+   `run_async` (Tasks 2-3 main change site).
+2. The banner display block (added per-provider
+   default-base-URL arms).
+3. The `--provider` CLI flag parser.
+4. The `ENV_PROVIDER` env-var parser.
+5. The `validate()` arm grouping local-LLM
+   providers under "API key never required."
+
+The two extra sites surfaced during Task 4 test
+runs — Task 4 was the right place to find them
+because the regression tests exercised each
+parser independently. Honest framing: the open
+doc underestimated the dispatch breadth by two
+sites, and the extra wiring took ~20% more
+diff than projected. Neither was a real risk.
+
+### Direction B becomes the leading Phase 134
+candidate
+
+Phase 133's multi-provider posture sets up the
+ergonomic question: is the "operator picks among
+three local-LLM runtimes" UX better than "Aivyx
+ships one batteries-included engine"? Direction B
+(embedded mistral.rs or Candle as a Rust crate)
+is the natural follow-up. Phase 133 ships the
+client/server multi-provider story; Phase 134+
+gathers empirical signal from real operators
+self-selecting among the three, then decides
+whether to ship Direction B.
+
+**Twenty-second consecutive deferral of the Channel
+Activation Milestone.** Honest tracking continues.
