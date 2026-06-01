@@ -952,6 +952,15 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
 pub struct AuditBridge<W: AuditWriter> {
     writer: W,
     on_error: Box<dyn Fn(AuditError) + Send + Sync>,
+    /// Audit L3 fix — count of `writer.append` failures the bridge
+    /// has seen, regardless of the configured `on_error` strategy.
+    /// Operators running a `with_error_handler` soft-fail policy
+    /// (log-and-continue) can read this counter via
+    /// [`failed_append_count`] to spot a degraded chain that the
+    /// custom handler would otherwise hide. Atomic so the read
+    /// path stays lock-free; `Relaxed` is sufficient — we're
+    /// counting events, not synchronising on them.
+    failed_appends: std::sync::atomic::AtomicU64,
 }
 
 impl<W: AuditWriter> AuditBridge<W> {
@@ -962,6 +971,7 @@ impl<W: AuditWriter> AuditBridge<W> {
         AuditBridge {
             writer,
             on_error: Box::new(|e| panic!("audit bridge: append failed: {e}")),
+            failed_appends: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -976,6 +986,7 @@ impl<W: AuditWriter> AuditBridge<W> {
         AuditBridge {
             writer,
             on_error: Box::new(on_error),
+            failed_appends: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -985,12 +996,38 @@ impl<W: AuditWriter> AuditBridge<W> {
     pub fn writer(&self) -> &W {
         &self.writer
     }
+
+    /// Total `writer.append` failures the bridge has observed since
+    /// construction. The bridge increments this *before* calling the
+    /// configured `on_error` handler, so the counter reflects every
+    /// failure — including ones swallowed by a soft-fail custom
+    /// handler.
+    ///
+    /// Audit L3 fix — surfaces silent audit-write failures so
+    /// operators running a `with_error_handler` log-and-continue
+    /// strategy can spot a degraded chain. A non-zero value here
+    /// means the HMAC chain is no longer a faithful record of the
+    /// turn's tool calls and the operator should investigate
+    /// (disk full, permissions changed, writer lock contention,
+    /// etc.).
+    pub fn failed_append_count(&self) -> u64 {
+        self.failed_appends.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl<W: AuditWriter + 'static> aivyx_core::AuditHook for AuditBridge<W> {
     fn on_event(&self, tag: aivyx_core::AuditTag) {
         let event: AuditEvent = tag.into();
         if let Err(e) = self.writer.append(event) {
+            // Audit L3 fix — increment *before* dispatching to the
+            // configured handler. The default `new` constructor's
+            // handler is `panic!`, so the counter only matters for
+            // soft-fail custom handlers; incrementing before the
+            // panic costs one atomic store and keeps a counter
+            // truthful in the (rare) case someone inspects the
+            // bridge inside a catch-unwind harness.
+            self.failed_appends
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             (self.on_error)(e);
         }
     }
@@ -2432,6 +2469,47 @@ mod tests {
             errors[0].contains("chain verification failed"),
             "expected AuditError::ChainBroken message, got {:?}",
             errors[0]
+        );
+    }
+
+    // Audit L3 regression — the bridge increments
+    // `failed_append_count` on every writer failure, even when
+    // a soft-fail `with_error_handler` swallows the error. This
+    // gives operators visibility into degraded audit chains
+    // that a custom handler would otherwise hide.
+    #[test]
+    fn audit_l3_failed_append_count_tracks_writer_failures() {
+        use aivyx_core::{AuditHook, AuditTag, ToolId};
+        use std::time::Duration;
+
+        let bridge = AuditBridge::with_error_handler(AlwaysBroken, |_e| {
+            // intentionally swallow — the counter must still tick
+        });
+
+        assert_eq!(bridge.failed_append_count(), 0, "fresh bridge has no failures");
+
+        let sample = || AuditTag::ToolCall {
+            turn_id: TurnId::new(),
+            tool_id: ToolId::new(),
+            scope_used: sample_scope(),
+            input_hash: [0u8; 32],
+            outcome: ToolOutcomeSummary::Completed {
+                verified: aivyx_core::VerificationSummary::NotApplicable,
+            },
+            duration: Duration::from_millis(1),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+
+        bridge.on_event(sample());
+        bridge.on_event(sample());
+        bridge.on_event(sample());
+
+        assert_eq!(
+            bridge.failed_append_count(),
+            3,
+            "every failure must increment the counter even though the \
+             custom handler swallowed the AuditError"
         );
     }
 }
