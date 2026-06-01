@@ -22,6 +22,7 @@ members = [
     "crates/aivyx-drive",
     "crates/aivyx-notion",
     "crates/aivyx-obsidian",
+    "crates/aivyx-n8n",
 ]
 
 [workspace.package]

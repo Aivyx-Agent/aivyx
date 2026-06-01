@@ -305,7 +305,39 @@ path; no new capability gate.)
 | Phase 130 | `obsidian.read` | Chapter F #6 — `obsidian.search`, `obsidian.get_note`, `obsidian.list_folder` against the operator's configured vault |
 | Phase 130 | `obsidian.write` | Chapter F #6 — `obsidian.create_note`, `obsidian.update_note`, `obsidian.delete_note` (Trusted-tier-only at the ceiling level, matching the Chapter F write-tool gating pattern) |
 
-### Current full enumeration after Phase 130 (65 bases)
+### Current enumeration after Phase 130 (65 bases — superseded by Phase 131 enumeration below)
+
+### Phase 131 addendum — Chapter F #7 n8n (2026-06-01)
+
+> *Added at Phase 131 Task 2 (n8n skeleton). Chapter F's
+> seventh integration — n8n workflow automation via the
+> `aivyx-n8n` third-party tool process. First Chapter F
+> integration with an **operator-supplied base URL**
+> (self-hosted n8n instances are the norm); the crate
+> constructs every request as
+> `{n8n_base_url}/api/v1/<resource>` and authenticates with
+> the n8n-specific `X-N8N-API-KEY` header (not Bearer). Per
+> Phase 131 Q1c (operator-picked over the Recommended
+> Q1b 7-tool default), ten tools ship: read surface
+> `n8n.list_workflows`, `n8n.get_workflow`,
+> `n8n.list_executions`, `n8n.get_execution`; lifecycle
+> writes `n8n.execute_workflow`, `n8n.activate_workflow`,
+> `n8n.deactivate_workflow`; and CRUD writes
+> `n8n.create_workflow`, `n8n.update_workflow`,
+> `n8n.delete_workflow`. The CRUD writes carry the
+> highest blast radius of any Chapter F surface to date —
+> a workflow definition can call arbitrary HTTP, mutate
+> the operator's other services, or schedule recurring
+> side effects — and ride the same Trusted-tier-only
+> ceiling that every other Chapter F write-base uses.
+> Two new bases gate the ten tools.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 131 | `n8n.read` | Chapter F #7 — `n8n.list_workflows`, `n8n.get_workflow`, `n8n.list_executions`, `n8n.get_execution` against the operator's self-hosted n8n instance |
+| Phase 131 | `n8n.write` | Chapter F #7 — `n8n.execute_workflow`, `n8n.activate_workflow`, `n8n.deactivate_workflow`, `n8n.create_workflow`, `n8n.update_workflow`, `n8n.delete_workflow` (Trusted-tier-only at the ceiling level, matching the Chapter F write-tool gating pattern; the CRUD trio carries definition-write blast radius that operators may want to attenuate further with role-level `capability_scopes`) |
+
+### Current full enumeration after Phase 131 (67 bases)
 
 Substrate-facing operator scopes (16):
 - `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
@@ -319,7 +351,7 @@ Channel / audit / config (5)
 
 Infrastructure (28)
 
-Third-party tool process scopes (16):
+Third-party tool process scopes (18):
 - Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
   `email.send`
 - Personal assistant tool bundle (Chapter G #1, Phase 125):
@@ -332,8 +364,10 @@ Third-party tool process scopes (16):
   `notion.write`
 - Obsidian (Chapter F #6, Phase 130 Task 10): `obsidian.read`,
   `obsidian.write`
+- n8n (Chapter F #7, Phase 131 Task 2): `n8n.read`,
+  `n8n.write`
 
-Total: 16 + 5 + 28 + 16 = 65.
+Total: 16 + 5 + 28 + 18 = 67.
 
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 

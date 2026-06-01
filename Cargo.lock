@@ -304,6 +304,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-n8n"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-tool",
+ "async-trait",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "aivyx-notion"
 version = "0.1.0"
 dependencies = [

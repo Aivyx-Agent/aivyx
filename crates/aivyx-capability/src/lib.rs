@@ -162,6 +162,24 @@ const KNOWN_BASES: &[&str] = &[
     //                    (Trusted-tier only by default).
     "obsidian.read",
     "obsidian.write",
+    // n8n (Phase 131 — Chapter F #7, aivyx-n8n
+    // third-party tool process). Two bases for the
+    // ten-tool surface (Q1c — operator picked over the
+    // Recommended Q1b 7-tool default; n8n.create_workflow,
+    // n8n.update_workflow, and n8n.delete_workflow ship
+    // with the same Trusted-gating policy as every other
+    // Chapter F write base):
+    //   n8n.read  — n8n.list_workflows, n8n.get_workflow,
+    //               n8n.list_executions, n8n.get_execution.
+    //   n8n.write — n8n.execute_workflow,
+    //               n8n.activate_workflow,
+    //               n8n.deactivate_workflow,
+    //               n8n.create_workflow,
+    //               n8n.update_workflow,
+    //               n8n.delete_workflow
+    //               (Trusted-tier only by default).
+    "n8n.read",
+    "n8n.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -831,6 +849,13 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // six-tool surface (Q2a); Trusted-only default.
         "obsidian.read",
         "obsidian.write",
+        // Phase 131 — n8n workflow-automation third-party
+        // tool process (Chapter F #7). Two bases for the
+        // ten-tool surface (Q1c, operator-picked over Q1b
+        // Recommended); Trusted-only default matching the
+        // Chapter F precedent for write-capable bases.
+        "n8n.read",
+        "n8n.write",
     ])
 });
 
@@ -1636,16 +1661,16 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_130_a3_addendum() {
+    fn known_bases_count_matches_phase_131_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 130) lists every entry.
-        // Phase 130 adds the Notion (this task) bases; the
-        // Obsidian bases land at Phase 130 Task 10.
+        // — the latest addendum (Phase 131) lists every entry.
+        // Phase 131 adds the n8n.read + n8n.write bases for
+        // the Chapter F #7 third-party tool process.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            65,
+            67,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
