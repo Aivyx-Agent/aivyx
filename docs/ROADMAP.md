@@ -3535,6 +3535,57 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 132 — `aivyx-auth-cli` Substrate Lift
+
+**See [PHASE_132.md](PHASE_132.md).** First substrate
+phase since Phase 129 (Google OAuth lift). Operator-
+picked at the Phase 131 direction question after the
+auth_cli posture reached three concrete data points
+(`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n`) all
+carrying near-identical slim non-OAuth auth_cli
+surfaces.
+
+**The lift:** ~1177 LoC of duplicated auth_cli code
+across the three crates collapses into a ~250 LoC
+`aivyx-auth-cli` substrate plus ~50 LoC of consumer
+adapters per crate. Net delta: ~-770 LoC.
+
+**Q-block — 2 Recommended picks:**
+- Q1a — shared-types-and-helpers granularity (over
+  full-trait `ServiceAuth` or hybrid).
+- Q2a — new crate `aivyx-auth-cli` (over adding to
+  `aivyx-tool`).
+
+**Surface (Task 2 ships):**
+- `BinaryMode { Help, Auth(AuthMode), IpcLoop }` /
+  `AuthMode { Status, Check }`.
+- `parse_cli_args(argv, binary_name)`.
+- `ConfigFileError { NotFound, Io, Parse }` — service-
+  specific "EmptyToken" / "NotAbsolute" stay on the
+  consumer side as a separate enum.
+- `default_config_path(service_subdir)`.
+- `load_toml<T>`.
+- `StatusReport` / `CheckReport` Display impls.
+
+**Three-of-three streak HOLDs predicted.** DESIGN.md →
+23, PRODUCT.md → 23, `aivyx-core/src/lib.rs` → 6.
+Zero new deps; net LoC negative; test count
+approximately neutral.
+
+**Honest scope risks:**
+- Three-consumer concurrent migration. Mitigation:
+  substrate first (Task 2), then one consumer at a
+  time (Tasks 3-5), each behind a green test run.
+- Test consolidation may surface inter-consumer
+  inconsistencies. Lift picks a single consistent
+  behaviour; outliers updated.
+- First-substrate-phase-since-129 ergonomics may
+  surface follow-on cleanup.
+
+**Twenty-first consecutive deferral of the Channel
+Activation Milestone** if Phase 132 ships without
+taking it.
+
 ## Phase 131 — n8n Workflow Automation Integration (Chapter F #7)
 
 **Frozen — see [PHASE_131.md](PHASE_131.md).** Seventh Chapter F
