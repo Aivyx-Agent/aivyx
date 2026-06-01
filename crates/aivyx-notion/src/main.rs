@@ -15,7 +15,9 @@ use aivyx_notion::auth_cli::{
     config_file::{default_config_path, load_config},
     status::{run_auth_check, run_auth_status},
 };
-use aivyx_notion::tools::{NotionGetPage, NotionListDatabase, NotionSearch};
+use aivyx_notion::tools::{
+    NotionCreatePage, NotionGetPage, NotionListDatabase, NotionSearch,
+};
 use aivyx_notion::{run_multi_tool_subprocess, NotionClient};
 
 #[tokio::main]
@@ -113,6 +115,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(NotionSearch::new(Arc::clone(&client))),
         Arc::new(NotionGetPage::new(Arc::clone(&client))),
         Arc::new(NotionListDatabase::new(Arc::clone(&client))),
+        Arc::new(NotionCreatePage::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-notion").await {
