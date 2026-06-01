@@ -259,18 +259,19 @@ impl Agent for ConcreteAgent {
                     extracted_from_text,
                 } => {
                     tool_calls_made += 1;
-                    let (observation, outcome) = self
-                        .run_tool_call(
-                            turn_id,
-                            tool_id,
-                            input,
-                            channel,
-                            &cancellation,
-                            &effective,
-                            auto_corrected_from,
-                            extracted_from_text,
-                        )
-                        .await;
+                    let env = TurnCallEnv {
+                        turn_id,
+                        channel,
+                        cancellation: &cancellation,
+                        effective: &effective,
+                    };
+                    let req = crate::planner::ToolCallRequest {
+                        tool_id,
+                        input,
+                        auto_corrected_from,
+                        extracted_from_text,
+                    };
+                    let (observation, outcome) = self.run_tool_call(&env, req).await;
                     observed.push(observation);
 
                     // Phase 35: escalation breaks the loop instead of
@@ -311,20 +312,15 @@ impl Agent for ConcreteAgent {
                     // could pre-emit a "dispatched" audit entry
                     // and then race-then-cancel safely, at the
                     // cost of two audit events per call.
+                    let env = TurnCallEnv {
+                        turn_id,
+                        channel,
+                        cancellation: &cancellation,
+                        effective: &effective,
+                    };
                     let futures: Vec<_> = batch
                         .into_iter()
-                        .map(|req| {
-                            self.run_tool_call(
-                                turn_id,
-                                req.tool_id,
-                                req.input,
-                                channel,
-                                &cancellation,
-                                &effective,
-                                req.auto_corrected_from,
-                                req.extracted_from_text,
-                            )
-                        })
+                        .map(|req| self.run_tool_call(&env, req))
                         .collect();
                     let results = join_all(futures).await;
 
@@ -444,6 +440,19 @@ enum LoopOutcome {
     },
 }
 
+/// Per-turn execution env shared across every `run_tool_call` in a
+/// single turn. Holds the immutable bindings the call site reads
+/// repeatedly (turn id, channel handle, cancellation token,
+/// effective capability set). The R1 audit refactor groups these
+/// into one struct so per-call dispatch takes two arguments — an
+/// env borrow and a per-call request — instead of eight.
+struct TurnCallEnv<'a> {
+    turn_id: TurnId,
+    channel: &'a dyn ChannelContext,
+    cancellation: &'a CancellationToken,
+    effective: &'a CapabilitySet,
+}
+
 impl ConcreteAgent {
     /// Execute one tool call: resolve the tool, compute its required
     /// scope via R1, scope-check, execute-or-deny, emit the matching
@@ -452,18 +461,28 @@ impl ConcreteAgent {
     /// planner's `observe_tool_outcome` callback). The observation is
     /// what the audit sees; the full outcome is what a smart planner
     /// (e.g. the LLM planner) needs to reason about next.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// R1 audit refactor — was 8 args; now takes a borrowed
+    /// `TurnCallEnv` (turn-scope) plus a `ToolCallRequest`
+    /// (per-call). Parallel batches share one `&TurnCallEnv` across
+    /// every concurrent future.
     async fn run_tool_call(
         &self,
-        turn_id: TurnId,
-        tool_id: ToolId,
-        input: serde_json::Value,
-        channel: &dyn ChannelContext,
-        cancellation: &CancellationToken,
-        effective: &CapabilitySet,
-        auto_corrected_from: Option<String>,
-        extracted_from_text: Option<String>,
+        env: &TurnCallEnv<'_>,
+        req: crate::planner::ToolCallRequest,
     ) -> (StepObservation, ToolOutcome) {
+        let TurnCallEnv {
+            turn_id,
+            channel,
+            cancellation,
+            effective,
+        } = *env;
+        let crate::planner::ToolCallRequest {
+            tool_id,
+            input,
+            auto_corrected_from,
+            extracted_from_text,
+        } = req;
         let Some(tool) = self.tools.get(tool_id) else {
             // Unknown tool — no scope check possible. This shouldn't happen
             // with a well-behaved planner; treat it as a failed step and
