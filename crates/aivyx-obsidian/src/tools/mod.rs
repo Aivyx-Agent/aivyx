@@ -3,6 +3,8 @@
 //!
 //! Phase 130 Q2a operator-picked surface (6 tools).
 
+pub mod get_note;
 pub mod search;
 
+pub use get_note::ObsidianGetNote;
 pub use search::ObsidianSearch;
