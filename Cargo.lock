@@ -349,6 +349,7 @@ dependencies = [
 name = "aivyx-obsidian"
 version = "0.1.0"
 dependencies = [
+ "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
  "aivyx-tool",

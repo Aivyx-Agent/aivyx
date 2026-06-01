@@ -20,6 +20,8 @@ path = "src/main.rs"
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 132 substrate — shared auth_cli.
+aivyx-auth-cli = { path = "../aivyx-auth-cli" }
 
 # Async runtime — vault ops use tokio::fs for async file
 # I/O. No HTTP client needed (Obsidian has no REST API).

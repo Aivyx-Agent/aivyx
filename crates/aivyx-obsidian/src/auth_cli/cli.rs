@@ -1,27 +1,18 @@
 //! CLI argument parsing for `aivyx-obsidian`.
+//!
+//! Thin wrapper over `aivyx_auth_cli` — Phase 132 lift.
+//! Adopts the substrate's `BinaryMode::Auth(AuthMode)`
+//! shape so Obsidian's CLI surface aligns with
+//! `aivyx-notion` and `aivyx-n8n`. The previous
+//! `check` shorthand (deprecated in favour of the
+//! explicit `auth check` form) is dropped.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinaryMode {
-    Help,
-    Check,
-    IpcLoop,
-}
+pub use aivyx_auth_cli::{AuthMode, BinaryMode};
+
+const BINARY_NAME: &str = "aivyx-obsidian";
 
 pub fn parse_cli_args_from(argv: &[String]) -> Result<BinaryMode, String> {
-    let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
-    match args.as_slice() {
-        [] => Ok(BinaryMode::IpcLoop),
-        ["help"] | ["--help"] | ["-h"] => Ok(BinaryMode::Help),
-        ["auth", "check"] | ["check"] => Ok(BinaryMode::Check),
-        ["auth"] => Err(
-            "`aivyx-obsidian auth` requires a subcommand; try `auth check`."
-                .to_string(),
-        ),
-        _ => Err(format!(
-            "unknown subcommand: {}. Run `aivyx-obsidian help` for usage.",
-            args.join(" ")
-        )),
-    }
+    aivyx_auth_cli::parse_cli_args(argv, BINARY_NAME)
 }
 
 pub fn help_text() -> &'static str {
@@ -31,8 +22,13 @@ USAGE:
     aivyx-obsidian [SUBCOMMAND]
 
 SUBCOMMANDS:
+    auth status    Check that config.toml exists, parses,
+                   and the vault_path field is a valid
+                   absolute path. Offline; no filesystem
+                   probe.
     auth check     Verify the configured vault_path exists,
-                   is a directory, and is readable.
+                   is a directory, and is readable. Hits the
+                   filesystem.
     help           Show this text.
 
 When run with no arguments, the binary enters IPC-loop mode
@@ -53,47 +49,10 @@ CONFIG FILE
 mod tests {
     use super::*;
 
-    fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["aivyx-obsidian".to_string()];
-        v.extend(rest.iter().map(|s| s.to_string()));
-        v
-    }
-
-    #[test]
-    fn no_args_means_ipc_loop() {
-        assert_eq!(parse_cli_args_from(&argv(&[])).unwrap(), BinaryMode::IpcLoop);
-    }
-
-    #[test]
-    fn help_variants_parse() {
-        for h in ["help", "--help", "-h"] {
-            assert_eq!(parse_cli_args_from(&argv(&[h])).unwrap(), BinaryMode::Help);
-        }
-    }
-
-    #[test]
-    fn check_parses_both_forms() {
-        assert_eq!(
-            parse_cli_args_from(&argv(&["auth", "check"])).unwrap(),
-            BinaryMode::Check
-        );
-        assert_eq!(
-            parse_cli_args_from(&argv(&["check"])).unwrap(),
-            BinaryMode::Check
-        );
-    }
-
-    #[test]
-    fn bare_auth_errors() {
-        let e = parse_cli_args_from(&argv(&["auth"])).expect_err("must error");
-        assert!(e.contains("subcommand"), "{e}");
-    }
-
-    #[test]
-    fn unknown_errors() {
-        let e = parse_cli_args_from(&argv(&["wat"])).expect_err("must error");
-        assert!(e.contains("unknown"), "{e}");
-    }
+    // Argument-parsing semantics are tested at the
+    // substrate level (`aivyx-auth-cli`). The tests here
+    // cover Obsidian-specific bits: help text contents
+    // and binary-name threading.
 
     #[test]
     fn help_text_mentions_vault_path_and_traversal_guard() {
@@ -101,5 +60,21 @@ mod tests {
         assert!(txt.contains("vault_path"));
         assert!(txt.contains("path-traversal guard"));
         assert!(txt.contains("absolute path"));
+    }
+
+    #[test]
+    fn help_text_distinguishes_status_from_check() {
+        let txt = help_text();
+        assert!(txt.contains("auth status"));
+        assert!(txt.contains("auth check"));
+        assert!(txt.contains("Offline"));
+        assert!(txt.contains("filesystem"));
+    }
+
+    #[test]
+    fn parse_cli_args_threads_binary_name_into_errors() {
+        let argv = vec!["aivyx-obsidian".to_string(), "wat".to_string()];
+        let e = parse_cli_args_from(&argv).expect_err("must error");
+        assert!(e.contains("aivyx-obsidian"), "{e}");
     }
 }

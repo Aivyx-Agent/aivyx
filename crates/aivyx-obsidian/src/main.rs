@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use aivyx_core::Tool;
 use aivyx_obsidian::auth_cli::{
-    check::run_auth_check,
-    cli::{help_text, parse_cli_args_from, BinaryMode},
+    cli::{help_text, parse_cli_args_from, AuthMode, BinaryMode},
     config_file::{default_config_path, load_config},
+    status::{run_auth_check, run_auth_status},
 };
 use aivyx_obsidian::tools::{ObsidianCreateNote, ObsidianDeleteNote, ObsidianGetNote, ObsidianListFolder, ObsidianSearch, ObsidianUpdateNote};
 use aivyx_obsidian::{run_multi_tool_subprocess, VaultClient};
@@ -32,24 +32,47 @@ async fn main() -> ExitCode {
             println!("{}", help_text());
             ExitCode::SUCCESS
         }
-        BinaryMode::Check => {
-            let config_path = match default_config_path() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("aivyx-obsidian auth check: {e}");
-                    return ExitCode::from(2);
-                }
-            };
-            let report = run_auth_check(&config_path);
-            let ok = report.vault_ok;
-            print!("{report}");
-            if ok {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
+        BinaryMode::Auth(AuthMode::Status) => run_status_cmd(),
+        BinaryMode::Auth(AuthMode::Check) => run_check_cmd(),
         BinaryMode::IpcLoop => run_ipc_loop().await,
+    }
+}
+
+fn run_status_cmd() -> ExitCode {
+    let config_path = match default_config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("aivyx-obsidian auth status: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match run_auth_status(&config_path) {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("aivyx-obsidian auth status: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_check_cmd() -> ExitCode {
+    let config_path = match default_config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("aivyx-obsidian auth check: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let report = run_auth_check(&config_path);
+    let ok = report.ok;
+    print!("{report}");
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
