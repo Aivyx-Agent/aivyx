@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 132 — `aivyx-auth-cli` Substrate Lift
 
-**See [PHASE_132.md](PHASE_132.md).** First substrate
+**Frozen — see [PHASE_132.md](PHASE_132.md).** First substrate
 phase since Phase 129 (Google OAuth lift). Operator-
 picked at the Phase 131 direction question after the
 auth_cli posture reached three concrete data points

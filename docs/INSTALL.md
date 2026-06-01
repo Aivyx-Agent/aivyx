@@ -2547,6 +2547,54 @@ writes only to workflow id `wf-1`, while bare
   returns a snapshot; long-running workflows must be
   polled.
 
+### Building a new Chapter F integration (Phase 132 substrate)
+
+After Phase 132 lifted the `auth_cli` shape into the
+shared `aivyx-auth-cli` crate, a new Chapter F
+third-party tool process picks up the substrate
+instead of reimplementing it. The substrate owns:
+
+- `BinaryMode { Help, Auth(AuthMode), IpcLoop }` and
+  `AuthMode { Status, Check }` — every consumer's
+  `auth <subcommand>` CLI surface.
+- `parse_cli_args(argv, binary_name)` — argument
+  parser threaded with the binary name so error
+  messages carry the correct `aivyx-<service>`
+  prefix.
+- `ConfigFileError { NotFound, Io, Parse }` — the
+  IO+parse layer. Service-specific validation errors
+  (e.g. "API key must be non-empty") live on the
+  consumer side as a separate enum that composes via
+  `#[error(transparent)] Substrate(...)`.
+- `default_config_path(service_subdir)` — computes
+  `$HOME/.aivyx/tool-processes/<subdir>/config.toml`.
+- `load_toml<T>` — generic TOML load.
+- `StatusReport` / `CheckReport` — Display-aware
+  report types with `ok` / `fail` constructors.
+
+A new integration's `auth_cli/` shrinks to:
+
+1. **`cli.rs`** (~50 LoC): re-export the substrate's
+   `BinaryMode` / `AuthMode`, define a per-service
+   `parse_cli_args_from(argv)` that calls
+   `aivyx_auth_cli::parse_cli_args(argv, "aivyx-<svc>")`,
+   and a service-specific `help_text()` string.
+2. **`config_file.rs`** (~80 LoC): a wrapper enum
+   `ConfigFileError { Substrate(...), <service-
+   specific variants> }` and a `load_config` that
+   calls `aivyx_auth_cli::load_toml` then runs
+   service-specific validation.
+3. **`status.rs`** (~80 LoC): `run_auth_status`
+   (offline, returns `Result<StatusReport, _>`) and
+   `run_auth_check` (online, returns `CheckReport`).
+
+Three working examples in the tree:
+[`aivyx-notion`](../crates/aivyx-notion/src/auth_cli/),
+[`aivyx-obsidian`](../crates/aivyx-obsidian/src/auth_cli/),
+[`aivyx-n8n`](../crates/aivyx-n8n/src/auth_cli/). Pick
+whichever shape (token-only / path-only / base-URL
+plus token) matches the new service.
+
 ## Operator-facing personal assistant capabilities (Chapter G)
 
 After Chapter F #1 (Gmail) shipped and the Phase 124 exit

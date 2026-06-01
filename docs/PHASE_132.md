@@ -226,8 +226,87 @@ After Phase 132, Phase 133 candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 132 exit. Predictions captured at
-sign-off: DESIGN.md HOLD → 23; PRODUCT.md HOLD → 23;
-lib.rs HOLD → 6; net LoC delta negative; zero new
-deps; zero clippy warnings; test count approximately
-neutral._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  22 → **23**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). P10/P11/P12 framing covers Chapter F
+  substrate work without revision. Streak: 22 → **23**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). The lift lives entirely
+  under the tool-process boundary. Streak: 5 → **6**.
+
+**Test count delta: +3 — landed within the
+"approximately neutral" prediction.** Workspace lib
+tests 2963 → 2966. Substrate added 19; the three
+consumers shed 16 total (notion 0, obsidian -3, n8n
+-5; cli-argument-parsing tests now live in the
+substrate). The net-positive result reflects that the
+substrate adds new coverage (binary-name threading,
+the type-mismatch case for `load_toml`) that none of
+the three consumers carried individually before the
+lift.
+
+**Zero new workspace dependencies** as predicted. The
+substrate uses serde + toml + thiserror, all already
+in the workspace.
+
+**Zero clippy warnings** workspace-wide.
+
+### LoC delta missed the prediction
+
+The open doc projected a net **-770 LoC** delta. The
+actual delta is **+325 LoC** (1177 → 1502 across the
+four auth_cli locations). Honest framing of the miss:
+
+- The substrate's own tests are ~270 LoC — coverage
+  the open doc undercounted in its sketch.
+- Each consumer's wrapper code (ConfigFileError
+  composition enum, `From` impls, default_config_path
+  shim, service-specific tests) adds ~10-15% over
+  what a naive "delete and re-import" would.
+- The substrate gained new coverage that wasn't in
+  any pre-lift consumer: binary-name threading
+  tests, `load_toml` type-mismatch tests, etc.
+
+**The lift's real wins are structural, not size-based.**
+
+- **Single source of truth for argument parsing.** A
+  future bug fix in the `auth <subcommand>` parser
+  lands in one place. Pre-lift, the same fix would
+  have needed three near-identical PRs.
+- **Consistent error shapes across consumers.** Every
+  consumer's `NotFound` / `Io` / `Parse` errors
+  produce identical wording. Operators reading
+  diagnostics across multiple Chapter F crates see
+  one error vocabulary instead of three.
+- **`BinaryMode` shape alignment.** Obsidian's pre-
+  lift CLI had a slightly different surface
+  (`Help | Check | IpcLoop` with `check` shorthand);
+  the migration aligned it with notion + n8n so
+  operators learning one tool's CLI know all three.
+- **Future Chapter F integrations start from the
+  substrate.** When Chapter F #8 (GitHub) lands, its
+  auth_cli/ is a ~50 LoC adapter — vs the ~400 LoC
+  per-service implementations Phase 130 + 131
+  shipped.
+
+### Auth_cli lift posture, locked
+
+Three data points (notion + obsidian + n8n) all
+migrated cleanly with the same wrapper shape. The
+substrate-lift-at-3-data-points heuristic is now an
+established pattern alongside the multi-tool-harness
+lift (Phase 128 at 2 data points). The threshold for
+the next lift candidate (whatever it is) gains
+empirical weight.
+
+### Twenty-first consecutive deferral of the Channel
+Activation Milestone
+
+Honest tracking continues. Phase 133 direction-after
+flags the milestone as the leading candidate; the
+deferral count's signal-strength is now in its 21st
+consecutive phase.
