@@ -22,6 +22,9 @@ path = "src/main.rs"
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Phase 132 substrate — shared auth_cli (BinaryMode,
+# ConfigFileError, StatusReport, CheckReport, etc.).
+aivyx-auth-cli = { path = "../aivyx-auth-cli" }
 
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
 async-trait = { workspace = true }

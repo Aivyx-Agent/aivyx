@@ -1,74 +1,41 @@
 //! `aivyx-notion auth status` + `auth check` operations.
 //!
-//! Two distinct commands:
-//!
-//! - **`status`** is offline — it just checks that the
-//!   config file exists and the token field is non-empty.
-//!   Fast; no network call.
-//! - **`check`** is online — it actively polls Notion's
-//!   `/users/me` endpoint to confirm the token has API
-//!   access. Surfaces a "token works" vs "token rejected"
-//!   distinction so operators can debug their setup.
+//! Thin wrappers around `aivyx_auth_cli::StatusReport` +
+//! `CheckReport` — Phase 132 lift. Service-specific
+//! bits (Notion's `/users/me` endpoint, the
+//! `NotShared` error variant handling, the bot name
+//! pulled from the response) live here.
 
 use std::path::Path;
+
+pub use aivyx_auth_cli::{CheckReport, StatusReport};
 
 use crate::auth_cli::config_file::{load_config, ConfigFileError};
 use crate::{NotionClient, NotionClientError};
 
-#[derive(Debug)]
-pub struct StatusReport {
-    pub config_path: std::path::PathBuf,
-    pub token_present: bool,
-}
+const BINARY_NAME: &str = "aivyx-notion";
 
-impl std::fmt::Display for StatusReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.token_present {
-            writeln!(
-                f,
-                "aivyx-notion auth status: OK\n  config: {:?}\n  token: present (non-empty)\n  next: run `aivyx-notion auth check` to verify the token has API access",
-                self.config_path
-            )
-        } else {
-            writeln!(
-                f,
-                "aivyx-notion auth status: token MISSING\n  config: {:?}\n  fix: write `notion_token = \"ntn_...\"` into the config file",
-                self.config_path
-            )
-        }
-    }
-}
-
-/// Offline status check — does the config file exist with
-/// a non-empty token? No network call.
+/// Offline status check — does the config file exist
+/// with a non-empty token? No network call.
 pub fn run_auth_status(config_path: &Path) -> Result<StatusReport, ConfigFileError> {
-    let cfg = load_config(config_path)?;
-    Ok(StatusReport {
-        config_path: config_path.to_path_buf(),
-        token_present: !cfg.notion_token.trim().is_empty(),
-    })
-}
-
-#[derive(Debug)]
-pub struct CheckReport {
-    pub token_works: bool,
-    pub message: String,
-}
-
-impl std::fmt::Display for CheckReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.token_works {
-            writeln!(f, "aivyx-notion auth check: OK — {}", self.message)
-        } else {
-            writeln!(f, "aivyx-notion auth check: FAIL — {}", self.message)
-        }
-    }
+    // load_config returns Ok only when the file exists,
+    // parses, and the token is non-empty (service-
+    // specific validation). The OK report's `detail`
+    // line points operators at the next step (`auth
+    // check`) so they see what to do without having to
+    // know the CLI surface.
+    let _cfg = load_config(config_path)?;
+    Ok(StatusReport::ok(
+        BINARY_NAME,
+        config_path.to_path_buf(),
+        "token: present (non-empty)\n  next: run `aivyx-notion auth check` to verify the token has API access",
+    ))
 }
 
 /// Online check — hits Notion's `/users/me` endpoint.
-/// Returns a populated `CheckReport` rather than a Result
-/// so the caller can render the outcome regardless of
-/// whether the token works.
+/// Returns a populated `CheckReport` rather than a
+/// `Result` so the caller can render the outcome
+/// regardless of whether the token works.
 pub async fn run_auth_check(client: &NotionClient) -> CheckReport {
     match client.get_json::<serde_json::Value>("/users/me", &[]).await {
         Ok(body) => {
@@ -83,28 +50,23 @@ pub async fn run_auth_check(client: &NotionClient) -> CheckReport {
                 .get("type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            CheckReport {
-                token_works: true,
-                message: format!(
-                    "token authenticated as {bot_type} `{name}`"
-                ),
-            }
+            CheckReport::ok(
+                BINARY_NAME,
+                format!("token authenticated as {bot_type} `{name}`"),
+            )
         }
-        Err(NotionClientError::Api { status: 401, .. }) => CheckReport {
-            token_works: false,
-            message: "token rejected (HTTP 401) — check that the token in config.toml is the current Integration Token from Notion's Integrations dashboard".to_string(),
-        },
-        Err(NotionClientError::NotShared(_)) => CheckReport {
-            token_works: true,
+        Err(NotionClientError::Api { status: 401, .. }) => CheckReport::fail(
+            BINARY_NAME,
+            "token rejected (HTTP 401) — check that the token in config.toml is the current Integration Token from Notion's Integrations dashboard",
+        ),
+        Err(NotionClientError::NotShared(_)) => CheckReport::ok(
+            BINARY_NAME,
             // /users/me doesn't depend on sharing, so this
             // shouldn't happen — but if it does, fall
             // through as a soft warning.
-            message: "token works for /users/me but Notion returned object_not_found — unusual; report this".to_string(),
-        },
-        Err(e) => CheckReport {
-            token_works: false,
-            message: format!("Notion API error: {e}"),
-        },
+            "token works for /users/me but Notion returned object_not_found — unusual; report this",
+        ),
+        Err(e) => CheckReport::fail(BINARY_NAME, format!("Notion API error: {e}")),
     }
 }
 
@@ -120,43 +82,36 @@ mod tests {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
         ));
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
         path
     }
 
+    // Display impls for StatusReport / CheckReport are
+    // tested in aivyx-auth-cli. These tests cover
+    // Notion-specific wiring: run_auth_status calls
+    // through to load_config and produces a populated
+    // OK report; the next-step hint mentions
+    // `aivyx-notion auth check`.
+
     #[test]
-    fn run_auth_status_reports_token_present_for_valid_config() {
+    fn run_auth_status_reports_ok_for_valid_config() {
         let path = tmpfile(r#"notion_token = "ntn_x""#);
         let report = run_auth_status(&path).expect("ok");
-        assert!(report.token_present);
+        assert!(report.ok);
+        let s = report.to_string();
+        assert!(s.contains("aivyx-notion auth status: OK"));
+        assert!(s.contains("aivyx-notion auth check"));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn status_report_display_includes_next_step_when_ok() {
-        let report = StatusReport {
-            config_path: "/tmp/x".into(),
-            token_present: true,
-        };
-        let s = report.to_string();
-        assert!(s.contains("OK"));
-        assert!(s.contains("aivyx-notion auth check"));
-    }
-
-    #[test]
-    fn check_report_display_distinguishes_ok_from_fail() {
-        let ok = CheckReport {
-            token_works: true,
-            message: "happy path".into(),
-        };
-        let fail = CheckReport {
-            token_works: false,
-            message: "sad path".into(),
-        };
-        assert!(ok.to_string().contains("OK"));
-        assert!(fail.to_string().contains("FAIL"));
+    fn run_auth_status_propagates_empty_token_failure() {
+        let path = tmpfile(r#"notion_token = "   ""#);
+        let e = run_auth_status(&path).expect_err("must error");
+        assert!(matches!(e, ConfigFileError::EmptyToken { .. }));
+        let _ = std::fs::remove_file(&path);
     }
 }

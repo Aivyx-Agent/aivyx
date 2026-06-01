@@ -81,7 +81,7 @@ async fn run_check_cmd() -> ExitCode {
     };
     let client = NotionClient::new(reqwest::Client::new(), config);
     let report = run_auth_check(&client).await;
-    let ok = report.token_works;
+    let ok = report.ok;
     print!("{report}");
     if ok {
         ExitCode::SUCCESS
