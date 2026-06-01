@@ -217,12 +217,8 @@ impl Agent for ConcreteAgent {
         let loop_outcome: LoopOutcome;
 
         loop {
-            if cancellation.is_cancelled() {
-                loop_outcome = if deadline_fired.load(Ordering::SeqCst) {
-                    LoopOutcome::TimedOut
-                } else {
-                    LoopOutcome::Cancelled
-                };
+            if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
+                loop_outcome = out;
                 break;
             }
             if steps >= MAX_STEPS_PER_TURN {
@@ -241,12 +237,8 @@ impl Agent for ConcreteAgent {
             // Completed outcome when the turn was actually
             // interrupted. We let the next loop iteration's top-of-
             // loop check handle the termination uniformly.
-            if cancellation.is_cancelled() {
-                loop_outcome = if deadline_fired.load(Ordering::SeqCst) {
-                    LoopOutcome::TimedOut
-                } else {
-                    LoopOutcome::Cancelled
-                };
+            if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
+                loop_outcome = out;
                 break;
             }
 
@@ -736,6 +728,25 @@ fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
         ToolOutcomeSummary::RequiresEscalation => "requires escalation",
         ToolOutcomeSummary::Failed => "failed",
     }
+}
+
+/// Audit R2 — classify a fired cancellation as either
+/// `TimedOut` (deadline task tripped the token) or
+/// `Cancelled` (channel-initiated). Returns `None` when the
+/// token is still live, letting the loop's two
+/// cancellation-check sites share one helper.
+fn classify_cancellation(
+    cancellation: &CancellationToken,
+    deadline_fired: &AtomicBool,
+) -> Option<LoopOutcome> {
+    if !cancellation.is_cancelled() {
+        return None;
+    }
+    Some(if deadline_fired.load(Ordering::SeqCst) {
+        LoopOutcome::TimedOut
+    } else {
+        LoopOutcome::Cancelled
+    })
 }
 
 fn sha256_array(bytes: &[u8]) -> [u8; 32] {
