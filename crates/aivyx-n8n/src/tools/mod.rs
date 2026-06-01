@@ -7,6 +7,7 @@
 pub mod activate_workflow;
 pub mod create_workflow;
 pub mod deactivate_workflow;
+pub mod delete_workflow;
 pub mod execute_workflow;
 pub mod get_execution;
 pub mod get_workflow;
@@ -17,6 +18,7 @@ pub mod update_workflow;
 pub use activate_workflow::N8nActivateWorkflow;
 pub use create_workflow::N8nCreateWorkflow;
 pub use deactivate_workflow::N8nDeactivateWorkflow;
+pub use delete_workflow::N8nDeleteWorkflow;
 pub use execute_workflow::N8nExecuteWorkflow;
 pub use get_execution::N8nGetExecution;
 pub use get_workflow::N8nGetWorkflow;
