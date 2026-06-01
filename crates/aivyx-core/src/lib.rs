@@ -436,6 +436,25 @@ pub enum ToolOutcome {
 /// conditions plus a `Failed` catch-all so `turn` can return `TurnOutcome`
 /// directly rather than `Result<TurnOutcome, _>` (the D3 contrarian choice:
 /// errors are part of what happened, not a wrapping failure).
+///
+/// ## `tool_calls_made` semantics (L2 audit clarification)
+///
+/// Every non-`Failed` variant carries a `tool_calls_made: usize` field.
+/// The counter is the number of tool calls the **planner dispatched**
+/// — including calls that bounced off the role allowlist
+/// (`ToolOutcome::NotInRole`), the capability scope gate
+/// (`ToolOutcome::Denied`), or schema validation
+/// (`ToolOutcome::Failed { detail: "input validation failed" }`).
+/// In other words: it counts planner activity, not tool execution.
+/// Each dispatched call appears as exactly one `AuditTag::ToolCall`
+/// entry in the audit chain, so a forensic walk of the chain
+/// produces the same count. Operators wanting a "calls that
+/// actually executed" figure can derive it by filtering audit
+/// `ToolCall` entries by `outcome != Denied && outcome != NotInRole`.
+///
+/// The naming is preserved (rather than renamed to
+/// `tool_calls_dispatched`) to avoid breaking every downstream
+/// telemetry consumer; the meaning is documented here.
 #[derive(Debug, Clone)]
 pub enum TurnOutcome {
     Completed {
