@@ -3535,6 +3535,66 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 133 — Local LLM Provider Alternatives (`llama-server` + Jan)
+
+**See [PHASE_133.md](PHASE_133.md).** First multi-provider
+phase since Phase 121 (which swapped Ollama's
+OpenAI-compat path for a native `/api/chat`
+adapter). Phase 133 widens Aivyx's local-LLM story
+from "Ollama only" to "Ollama as one option among
+first-class equals."
+
+**Direction A picked over Direction B at the
+direction question.** Two architectural directions
+emerged from the local-LLM research that preceded
+this phase: (A) incremental multi-provider — keep
+the client/server shape and add llama-server + Jan;
+(B) embedded Rust-native inference via mistral.rs
+or Candle, single-binary install. Direction A
+first; Direction B is the leading Phase 134+
+candidate.
+
+**Q-block — 3 Recommended:**
+- Q1b — llama-server + Jan, not just one. Two
+  providers cover two distinct UX axes (power-user
+  CLI vs GUI-first end user).
+- Q2a — Ollama privacy posture lands as an
+  INSTALL.md section (vs empirical tcpdump audit or
+  deferred phase).
+- Q3b — alternatives documented as equal-status;
+  Ollama stays default. Zero behaviour change for
+  existing operators.
+
+**Privacy posture motivation:** Ollama's binary
+makes outbound calls (update checks, telemetry) the
+project doesn't publicly enumerate. The January
+2026 SentinelOne/Censys investigation found 175,000
+publicly-exposed Ollama hosts across 130 countries
+— governance gaps + prompt-injection proxy
+potential. Aivyx markets itself as privacy-first
+local-agent; "Ollama only" is misaligned without
+honest caveats.
+
+**Three-of-three streak HOLDs predicted.** DESIGN.md
+→ 24, PRODUCT.md → 24, `aivyx-core/src/lib.rs` → 7.
+Zero new deps; test count `+10` to `+25` lib tests.
+
+**Honest scope risks:**
+- Default base URLs are upstream defaults; custom
+  ports need operator override.
+- llama-server / Jan don't expose `/api/show`
+  family metadata — textual extractor falls through
+  to heuristic detection.
+- `ollama.list/show/pull` agent tools are
+  Ollama-specific; alternatives use GUI / manual
+  download.
+- `default_context_window` for new providers is a
+  conservative placeholder (8000); config override
+  is the escape hatch.
+
+**Twenty-second consecutive deferral of the Channel
+Activation Milestone.**
+
 ## Phase 132 — `aivyx-auth-cli` Substrate Lift
 
 **Frozen — see [PHASE_132.md](PHASE_132.md).** First substrate
