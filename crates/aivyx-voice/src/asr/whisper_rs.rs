@@ -162,117 +162,15 @@ impl AsrEngine for WhisperRsEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pure-substrate helpers — directly unit-testable without
-// loading a model. The full transcribe() path requires a
-// real .bin file + valid audio sample; operator-side work.
-// ---------------------------------------------------------------------------
-
-/// Resample an f32 PCM buffer from `src_rate` to
-/// 16 kHz (Whisper's expected rate). Linear
-/// interpolation; quick + adequate for speech
-/// content. Phase 136+ could swap in a higher-fidelity
-/// resampler (`rubato`) if the channel loop surfaces
-/// quality issues.
-///
-/// `src_rate == 16_000` is a no-op fast path.
-pub fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
-    if src_rate == super::WHISPER_SAMPLE_RATE || samples.is_empty() {
-        return samples.to_vec();
-    }
-    let ratio = super::WHISPER_SAMPLE_RATE as f64 / src_rate as f64;
-    let out_len = ((samples.len() as f64) * ratio).round() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let src_idx_f = i as f64 / ratio;
-        let src_idx = src_idx_f as usize;
-        let frac = src_idx_f - src_idx as f64;
-        let a = samples[src_idx.min(samples.len() - 1)];
-        let b = samples[(src_idx + 1).min(samples.len() - 1)];
-        out.push(a + (b - a) * frac as f32);
-    }
-    out
-}
-
-/// Downmix a stereo interleaved f32 PCM buffer to
-/// mono by averaging L+R. Channel loop calls this
-/// only when the operator's input device delivered
-/// stereo; mono input is forwarded unchanged.
-pub fn stereo_to_mono(samples: &[f32]) -> Vec<f32> {
-    samples
-        .chunks_exact(2)
-        .map(|pair| (pair[0] + pair[1]) * 0.5)
-        .collect()
-}
+// Phase 136 — `resample_to_16k` and `downmix_to_mono`
+// were lifted from this module up to `asr/mod.rs` so
+// `audio_in.rs` (always-on, no engine feature gate)
+// can use them. They live there alongside the
+// `WHISPER_SAMPLE_RATE` constant.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resample_no_op_when_already_16k() {
-        let samples = vec![0.1, 0.2, 0.3, 0.4];
-        let out = resample_to_16k(&samples, 16_000);
-        assert_eq!(out, samples);
-    }
-
-    #[test]
-    fn resample_empty_input_returns_empty() {
-        let out = resample_to_16k(&[], 48_000);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn resample_48k_to_16k_reduces_length_by_three() {
-        // 48000 → 16000 ratio is 1/3. A buffer of 300 samples
-        // at 48 kHz should produce roughly 100 samples at 16 kHz.
-        let samples = vec![0.5f32; 300];
-        let out = resample_to_16k(&samples, 48_000);
-        // Allow rounding +/-1.
-        assert!(
-            (99..=101).contains(&out.len()),
-            "expected ~100 samples, got {}",
-            out.len(),
-        );
-        // Every output sample should be ~0.5 (constant signal).
-        for s in &out {
-            assert!((s - 0.5).abs() < 1e-6, "sample drift: {s}");
-        }
-    }
-
-    #[test]
-    fn resample_16k_to_8k_halves_length() {
-        // Going down by 2x.
-        let samples = vec![0.1f32; 200];
-        let out = resample_to_16k(&samples, 8_000);
-        // 8k → 16k is 2x; 200 samples becomes ~400.
-        assert!(
-            (399..=401).contains(&out.len()),
-            "expected ~400 samples, got {}",
-            out.len(),
-        );
-    }
-
-    #[test]
-    fn stereo_to_mono_averages_interleaved_pairs() {
-        let stereo = vec![1.0, 3.0, 2.0, 4.0, 0.0, 6.0];
-        let mono = stereo_to_mono(&stereo);
-        // (1+3)/2 = 2, (2+4)/2 = 3, (0+6)/2 = 3.
-        assert_eq!(mono, vec![2.0, 3.0, 3.0]);
-    }
-
-    #[test]
-    fn stereo_to_mono_drops_odd_trailing_sample() {
-        // chunks_exact(2) skips a lone trailing sample.
-        let stereo = vec![1.0, 3.0, 5.0];
-        let mono = stereo_to_mono(&stereo);
-        assert_eq!(mono, vec![2.0]);
-    }
-
-    #[test]
-    fn stereo_to_mono_empty_returns_empty() {
-        assert!(stereo_to_mono(&[]).is_empty());
-    }
 
     // --- Engine construction error paths -------------------------
 

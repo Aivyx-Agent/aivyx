@@ -98,6 +98,68 @@ pub struct AsrConfig {
 /// own constants.
 pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
+// ---------------------------------------------------------------------------
+// Substrate audio-format helpers — always available, no engine-feature gates.
+// Moved up from asr/whisper_rs.rs in Phase 136 because audio_in.rs needs
+// them and is always-on inside aivyx-voice.
+// ---------------------------------------------------------------------------
+
+/// Resample an f32 PCM buffer from `src_rate` to 16 kHz
+/// (Whisper's expected rate). Linear interpolation;
+/// quick + adequate for speech content. Phase 137+
+/// could swap in a higher-fidelity resampler
+/// (`rubato`) if the channel loop surfaces quality
+/// issues.
+///
+/// `src_rate == 16_000` is a no-op fast path.
+pub fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
+    if src_rate == WHISPER_SAMPLE_RATE || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = WHISPER_SAMPLE_RATE as f64 / src_rate as f64;
+    let out_len = ((samples.len() as f64) * ratio).round() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_idx_f = i as f64 / ratio;
+        let src_idx = src_idx_f as usize;
+        let frac = src_idx_f - src_idx as f64;
+        let a = samples[src_idx.min(samples.len() - 1)];
+        let b = samples[(src_idx + 1).min(samples.len() - 1)];
+        out.push(a + (b - a) * frac as f32);
+    }
+    out
+}
+
+/// Downmix interleaved multi-channel PCM to mono by
+/// averaging across channels per frame. `channels`
+/// = 1 → no-op fast path; `channels` = 2 → stereo
+/// L+R average; higher channel counts → average
+/// across all channels.
+pub fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+    let c = channels as usize;
+    samples
+        .chunks_exact(c)
+        .map(|frame| frame.iter().sum::<f32>() / (c as f32))
+        .collect()
+}
+
+/// Convenience: downmix to mono then resample to
+/// 16 kHz. The exact transform audio_in.rs applies
+/// before handing samples to the ASR engine; lifted
+/// to a single function so the channel loop calls
+/// once.
+pub fn stereo_to_mono_into_16k(
+    samples: &[f32],
+    src_rate: u32,
+    channels: u16,
+) -> Vec<f32> {
+    let mono = downmix_to_mono(samples, channels);
+    resample_to_16k(&mono, src_rate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +209,90 @@ beam_size = 5
         // variant cleanly — the channel loop branches on
         // it for the "prompt operator again" UX.
         assert!(matches!(e, AsrError::Empty));
+    }
+
+    // --- Substrate audio-format helpers ---------------
+
+    #[test]
+    fn resample_no_op_when_already_16k() {
+        let samples = vec![0.1, 0.2, 0.3, 0.4];
+        assert_eq!(resample_to_16k(&samples, 16_000), samples);
+    }
+
+    #[test]
+    fn resample_empty_input_returns_empty() {
+        assert!(resample_to_16k(&[], 48_000).is_empty());
+    }
+
+    #[test]
+    fn resample_48k_to_16k_reduces_length_by_three() {
+        let samples = vec![0.5f32; 300];
+        let out = resample_to_16k(&samples, 48_000);
+        assert!((99..=101).contains(&out.len()), "got {}", out.len());
+        for s in &out {
+            assert!((s - 0.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn resample_16k_to_8k_doubles_length() {
+        // 8k source → 16k target → 2x output length.
+        let samples = vec![0.1f32; 200];
+        let out = resample_to_16k(&samples, 8_000);
+        assert!((399..=401).contains(&out.len()), "got {}", out.len());
+    }
+
+    #[test]
+    fn downmix_mono_input_is_noop() {
+        let mono = vec![0.5, -0.5, 0.25];
+        assert_eq!(downmix_to_mono(&mono, 1), mono);
+    }
+
+    #[test]
+    fn downmix_stereo_averages_interleaved_frames() {
+        // L/R interleaved: (1+3)/2=2, (2+4)/2=3, (0+6)/2=3.
+        let stereo = vec![1.0, 3.0, 2.0, 4.0, 0.0, 6.0];
+        assert_eq!(downmix_to_mono(&stereo, 2), vec![2.0, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn downmix_5_1_averages_across_six_channels() {
+        // Two frames at 6 channels each. Frame 1: all
+        // 1.0 → average 1.0. Frame 2: 0,1,2,3,4,5 →
+        // average 2.5.
+        let surround = vec![
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, // frame 1
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, // frame 2
+        ];
+        assert_eq!(downmix_to_mono(&surround, 6), vec![1.0, 2.5]);
+    }
+
+    #[test]
+    fn downmix_drops_short_trailing_frame() {
+        // chunks_exact semantic.
+        let stereo = vec![1.0, 3.0, 5.0]; // 1.5 frames
+        assert_eq!(downmix_to_mono(&stereo, 2), vec![2.0]);
+    }
+
+    #[test]
+    fn stereo_to_mono_into_16k_composes_downmix_and_resample() {
+        // 8k stereo, 200 samples = 100 frames mono.
+        // Then 8k→16k 2x → ~200 samples.
+        let stereo_8k = vec![0.4f32; 200];
+        let out = stereo_to_mono_into_16k(&stereo_8k, 8_000, 2);
+        // 100 frames after downmix, doubled to ~200 after resample.
+        assert!(
+            (198..=202).contains(&out.len()),
+            "got {} samples (expected ~200)",
+            out.len(),
+        );
+    }
+
+    #[test]
+    fn stereo_to_mono_into_16k_native_format_is_passthrough() {
+        // 16k mono input — no conversion needed.
+        let mono_16k = vec![0.1f32; 1000];
+        let out = stereo_to_mono_into_16k(&mono_16k, 16_000, 1);
+        assert_eq!(out, mono_16k);
     }
 }
