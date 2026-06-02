@@ -56,6 +56,7 @@
 pub mod auth_cli;
 pub mod calendar_client;
 pub mod oauth;
+pub mod relative_time;
 pub mod tools;
 
 pub use calendar_client::{CalendarClient, CalendarClientError};

@@ -56,5 +56,11 @@ uuid = { workspace = true }
 
 thiserror = { workspace = true }
 
+# Phase 141 — relative-time formatting for
+# `calendar.upcoming` ("in 5 minutes", "in 3 hours").
+# Already a workspace dep; we just bring it into this
+# crate.
+chrono = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
