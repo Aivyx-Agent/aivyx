@@ -30,11 +30,13 @@
 //!   requires manual config; Phase 137+ candidate.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
 use crate::asr::stereo_to_mono_into_16k;
+use crate::silence_detector::{SilenceDetector, SilenceDetectorConfig};
 
 /// Errors `AudioIn` can surface.
 #[derive(Debug, Error)]
@@ -77,6 +79,12 @@ pub enum AudioInError {
 pub struct AudioIn {
     stream: cpal::Stream,
     buffer: Arc<Mutex<Vec<f32>>>,
+    /// Phase 139 — energy-threshold silence
+    /// detector. The cpal callbacks observe each
+    /// chunk after pushing to the capture buffer
+    /// so the PTT loop can poll silence dwell
+    /// without touching the buffer.
+    detector: Arc<Mutex<SilenceDetector>>,
     src_rate: u32,
     src_channels: u16,
 }
@@ -132,52 +140,79 @@ impl AudioIn {
         let stream_config: cpal::StreamConfig = config.into();
 
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-        let buffer_for_cb = Arc::clone(&buffer);
+        let detector: Arc<Mutex<SilenceDetector>> = Arc::new(Mutex::new(
+            SilenceDetector::new(SilenceDetectorConfig::for_sample_rate(src_rate)),
+        ));
         let err_fn = |e| eprintln!("audio input stream error: {e}");
 
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer_for_cb.lock() {
-                            buf.extend_from_slice(data);
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| AudioInError::StreamBuild(format!("f32: {e}")))?,
-            cpal::SampleFormat::I16 => device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer_for_cb.lock() {
-                            buf.extend(data.iter().map(|&s| {
-                                // Map i16 to f32 in [-1.0, 1.0].
-                                (s as f32) / (i16::MAX as f32)
-                            }));
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| AudioInError::StreamBuild(format!("i16: {e}")))?,
-            cpal::SampleFormat::U16 => device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer_for_cb.lock() {
-                            buf.extend(data.iter().map(|&s| {
-                                // Map u16 [0, 65535] to f32 [-1.0, 1.0].
-                                ((s as f32) / (u16::MAX as f32)) * 2.0 - 1.0
-                            }));
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| AudioInError::StreamBuild(format!("u16: {e}")))?,
+            cpal::SampleFormat::F32 => {
+                let buffer_for_cb = Arc::clone(&buffer);
+                let detector_for_cb = Arc::clone(&detector);
+                device
+                    .build_input_stream(
+                        &stream_config,
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            if let Ok(mut buf) = buffer_for_cb.lock() {
+                                buf.extend_from_slice(data);
+                            }
+                            if let Ok(mut det) = detector_for_cb.lock() {
+                                det.observe(data);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| AudioInError::StreamBuild(format!("f32: {e}")))?
+            }
+            cpal::SampleFormat::I16 => {
+                let buffer_for_cb = Arc::clone(&buffer);
+                let detector_for_cb = Arc::clone(&detector);
+                device
+                    .build_input_stream(
+                        &stream_config,
+                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                            // Convert once, then both consumers
+                            // see the same f32 slice.
+                            let converted: Vec<f32> = data
+                                .iter()
+                                .map(|&s| (s as f32) / (i16::MAX as f32))
+                                .collect();
+                            if let Ok(mut buf) = buffer_for_cb.lock() {
+                                buf.extend_from_slice(&converted);
+                            }
+                            if let Ok(mut det) = detector_for_cb.lock() {
+                                det.observe(&converted);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| AudioInError::StreamBuild(format!("i16: {e}")))?
+            }
+            cpal::SampleFormat::U16 => {
+                let buffer_for_cb = Arc::clone(&buffer);
+                let detector_for_cb = Arc::clone(&detector);
+                device
+                    .build_input_stream(
+                        &stream_config,
+                        move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                            let converted: Vec<f32> = data
+                                .iter()
+                                .map(|&s| ((s as f32) / (u16::MAX as f32)) * 2.0 - 1.0)
+                                .collect();
+                            if let Ok(mut buf) = buffer_for_cb.lock() {
+                                buf.extend_from_slice(&converted);
+                            }
+                            if let Ok(mut det) = detector_for_cb.lock() {
+                                det.observe(&converted);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| AudioInError::StreamBuild(format!("u16: {e}")))?
+            }
             other => {
                 return Err(AudioInError::UnsupportedFormat(format!("{other:?}")));
             }
@@ -186,15 +221,18 @@ impl AudioIn {
         Ok(AudioIn {
             stream,
             buffer,
+            detector,
             src_rate,
             src_channels,
         })
     }
 
-    /// Begin capturing. Clears the buffer so a fresh
+    /// Begin capturing. Clears the buffer and
+    /// resets the silence detector so a fresh
     /// recording starts from zero.
     pub fn start(&mut self) -> Result<(), AudioInError> {
         self.clear()?;
+        self.reset_detector()?;
         self.stream
             .play()
             .map_err(|e| AudioInError::StreamControl(format!("play: {e}")))
@@ -244,6 +282,41 @@ impl AudioIn {
     /// 2 = stereo, etc.). Surfaced for diagnostics.
     pub fn src_channels(&self) -> u16 {
         self.src_channels
+    }
+
+    /// Phase 139 — how long silence has been
+    /// sustained, per the energy-threshold
+    /// detector. The PTT loop polls this on a
+    /// ~100ms tick; when it exceeds the dwell
+    /// threshold AND `total_recorded` exceeds the
+    /// min-speech window, the loop stops capture.
+    pub fn silence_dwell(&self) -> Duration {
+        self.detector
+            .lock()
+            .map(|d| d.silence_dwell())
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Total duration captured since the most
+    /// recent `start()` (or `reset_detector()`).
+    pub fn total_recorded(&self) -> Duration {
+        self.detector
+            .lock()
+            .map(|d| d.total_recorded())
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Reset the detector's internal state. Called
+    /// automatically by `start()`; exposed so
+    /// callers can also do it explicitly when
+    /// reusing one AudioIn across many turns.
+    pub fn reset_detector(&mut self) -> Result<(), AudioInError> {
+        let mut det = self
+            .detector
+            .lock()
+            .map_err(|_| AudioInError::BufferPoisoned)?;
+        det.reset();
+        Ok(())
     }
 }
 
