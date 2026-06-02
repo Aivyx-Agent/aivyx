@@ -37,6 +37,35 @@ provider-ollama = [
     "dep:futures-util",
     "dep:bytes",
 ]
+# Phase 134 — Direction B: embedded Rust-native inference via
+# the `mistralrs` crate. CPU baseline; backend acceleration is
+# gated behind sibling features below (no backend gating on
+# this baseline = pure-Rust CPU build, which is what we want
+# as the minimal Aivyx-builds-anywhere posture). Pulls in the
+# mistralrs crate (substantial: ~candle + tokenizers + hf-hub
+# + the model architectures). Initial build estimated at
+# 5-10 min.
+provider-mistral-rs = [
+    "dep:mistralrs",
+    "dep:futures-util",
+]
+# Sibling backend gates — each forwards to the matching
+# mistralrs feature. The Aivyx-side names mirror the
+# Aivyx feature naming convention (`provider-mistral-rs-<backend>`)
+# rather than mistralrs's bare `cuda` / `metal` to avoid
+# colliding with any future Aivyx-side `cuda` feature.
+provider-mistral-rs-cuda = [
+    "provider-mistral-rs",
+    "mistralrs?/cuda",
+]
+provider-mistral-rs-metal = [
+    "provider-mistral-rs",
+    "mistralrs?/metal",
+]
+provider-mistral-rs-accelerate = [
+    "provider-mistral-rs",
+    "mistralrs?/accelerate",
+]
 
 [dependencies]
 # Protocol-only core — no dependency on aivyx-core. The LlmProvider
@@ -57,6 +86,14 @@ reqwest = { workspace = true, optional = true }
 secrecy = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+
+# Phase 134 — embedded inference via mistral.rs. Pinned to
+# `=0.8.*` per the open doc's pre-1.0 contract: mistralrs is
+# pre-1.0 semver, API may churn between minor versions;
+# Aivyx-side upgrades happen explicitly per-phase. Default-
+# featureless (we never want the dep to silently turn on
+# CUDA / Metal at the Aivyx feature layer).
+mistralrs = { version = "=0.8.*", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

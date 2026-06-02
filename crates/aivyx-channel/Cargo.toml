@@ -9,6 +9,26 @@ authors.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+default = []
+# Phase 134 — embedded Rust-native inference via mistral.rs. Opt-in
+# at the channel-crate level so the binary's `cargo build` doesn't
+# always pull in the substantial mistralrs dependency tree. The
+# feature forwards through to `aivyx-llm/provider-mistral-rs`.
+provider-mistral-rs = ["aivyx-llm/provider-mistral-rs"]
+provider-mistral-rs-cuda = ["aivyx-llm/provider-mistral-rs-cuda"]
+provider-mistral-rs-metal = ["aivyx-llm/provider-mistral-rs-metal"]
+provider-mistral-rs-accelerate = ["aivyx-llm/provider-mistral-rs-accelerate"]
+# Phase 134 — `recommended-providers` meta-feature. Pulls in the
+# embedded provider on top of the three already-enabled
+# out-of-process providers (Anthropic / OpenAI / Ollama, hard-wired
+# below). New users running
+# `cargo install --features recommended-providers aivyx` get a
+# single binary with every Phase 134 local-LLM story available.
+# Operators who want lean builds use `cargo install aivyx` (no
+# feature flag) and get Ollama-only.
+recommended-providers = ["provider-mistral-rs"]
+
 [dependencies]
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
