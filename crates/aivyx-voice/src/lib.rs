@@ -52,9 +52,15 @@ pub mod audio_in;
 pub mod audio_out;
 pub mod channel;
 pub mod session;
+pub mod silence_detector;
 pub mod tts;
 
 pub use audio_in::{AudioIn, AudioInError};
 pub use audio_out::{AudioOut, AudioOutError};
 pub use channel::{VoiceChannel, VoiceChannelConfig};
-pub use session::{run_one_voice_turn, run_push_to_talk_loop, VoiceSessionError, VoiceTurnResult};
+pub use session::{
+    run_one_voice_turn, run_one_voice_turn_streaming, run_push_to_talk_loop,
+    run_push_to_talk_loop_streaming, StreamingVoiceTurnResult, VoiceSessionError,
+    VoiceTurnResult,
+};
+pub use silence_detector::{SilenceDetector, SilenceDetectorConfig};
