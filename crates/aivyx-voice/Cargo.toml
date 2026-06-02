@@ -71,7 +71,11 @@ thiserror = { workspace = true }
 # transitively through other channels; pinning here for
 # stability. rodio sits on top of cpal for playback.
 cpal = "0.17"
-rodio = { version = "0.22", default-features = false }
+# rodio defaults pull in decoders (flac, mp3, mp4, vorbis, wav)
+# we don't need — Piper outputs PCM samples directly into a
+# SamplesBuffer. We need exactly the `playback` feature for
+# the cpal-backed output sink.
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
 
 # Phase 135 deliberately does NOT depend on a VAD library.
 # Push-to-talk MVP uses Enter-to-start + Enter-to-stop, no
