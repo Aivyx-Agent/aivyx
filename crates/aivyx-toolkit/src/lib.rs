@@ -55,6 +55,7 @@ pub use health_store::{
 };
 pub use task_store::{Task, TaskStatus, TaskStore, TaskStoreError};
 pub use tools::{
-    HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, TaskComplete,
-    TaskCreate, TaskDelete, TaskList, WebSearch,
+    BudgetRecord, BudgetSummaryTool, HealthCheckAdd, HealthCheckList,
+    HealthCheckRecentChanges, TaskComplete, TaskCreate, TaskDelete, TaskList,
+    WebSearch,
 };

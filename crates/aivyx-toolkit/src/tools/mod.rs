@@ -14,10 +14,12 @@
 //!   recent_changes` (`health.read` + `health.write` scopes;
 //!   wraps Task 5's polling-loop substrate).
 
+pub mod budget;
 pub mod health_check;
 pub mod tasks;
 pub mod web_search;
 
+pub use budget::{BudgetRecord, BudgetSummaryTool};
 pub use health_check::{HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges};
 pub use tasks::{TaskComplete, TaskCreate, TaskDelete, TaskList};
 pub use web_search::WebSearch;
