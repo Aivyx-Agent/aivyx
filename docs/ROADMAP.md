@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 137 — Voice Agent Feature Parity with Local
 
-**See [PHASE_137.md](PHASE_137.md).** Phase 136
+**Frozen — see [PHASE_137.md](PHASE_137.md).** Phase 136
 follow-on. Phase 135 shipped the voice substrate;
 Phase 136 wired the audio I/O loop end-to-end. But
 the binary's voice arm still constructs a *minimal*

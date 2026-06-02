@@ -1506,6 +1506,16 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 137 brought voice to full feature parity
+with the Local channel** — voice agents now get
+role overrides (Phase 30), per-turn Persona refresh
+(Phase 60), context window pruning (Phase 43),
+memory prune sinks (Phase 43 Task 4), auto-recall
+from memory (Phase 76), and the adaptive Persona +
+tool/skill relevance system prompt refiner (Phases
+79 + 117). What you can do in `--channel local` you
+can now do in `--channel voice`.
+
 **Phase 136 closed out Phase 135's audio-I/O
 deferral.** The push-to-talk loop now runs end-to-
 end:

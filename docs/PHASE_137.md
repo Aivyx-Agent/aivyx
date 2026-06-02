@@ -161,7 +161,99 @@ feature-equivalent. Phase 138+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 137 exit. Predictions at
-sign-off: DESIGN.md HOLD → 28; PRODUCT.md HOLD →
-28; lib.rs HOLD → 3; zero new deps; test count
-delta `+1` to `+5`; zero clippy warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  27 → **28**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 27 → **28**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 137 work in
+  `aivyx-channel/src/session.rs` (extraction) +
+  `aivyx-channel/src/bin/aivyx.rs` (voice arm
+  rewire). Continuing post-Phase-135 reset:
+  2 → **3**.
+
+**Test count delta: 0 — below predicted `+1` to
+`+5` range.** Workspace lib tests stayed at 3026.
+Honest framing: the refactor is pure (no new code
+paths, no surprising edge cases surfaced); all 734
+aivyx-channel lib tests continued to pass under
+the lift. Behaviour preservation was the
+correctness bar and the regression-guard tests
+already covered it.
+
+**Zero new workspace dependencies** as predicted.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `AgentStackSpec` + `build_agent_stack` public in
+  `aivyx-channel::session`. 67 lines of inline
+  construction lifted into a reusable helper.
+- `AgentStackSpec::from_session_config` bridge so
+  `run_session` materializes a spec from its
+  existing config and delegates.
+- Voice arm rewrite: inline minimal ConcreteAgent
+  → full `build_agent_stack` call with the same
+  6 rich features Local uses (role overrides,
+  prompt refresher, context window, prune sink,
+  recall context, system prompt refiner).
+- 734 aivyx-channel lib tests still pass — the
+  refactor is regression-free under the existing
+  coverage.
+
+**Bent honestly:**
+
+1. **Prompt-refresher closure duplicated between
+   Local and Voice arms.** Both arms construct
+   the same ~20-line closure independently
+   (refresher_profile + refresher_role_name +
+   refresher_role_prompt + refresher_shared +
+   refresher_catalog → assemble_session_prompt →
+   apply_ollama_prompt_strategy). A Phase 138+
+   helper could DRY this; the duplication is
+   acceptable for one channel adapter pair.
+
+2. **`build_agent_stack` is one-off helper.** Not
+   substrate-tier-locked. If Phase 138+ ships
+   more channel adapters (web, REST), we may
+   iterate the signature. Documented in the open
+   doc's honest-risk section.
+
+3. **Voice feature-parity is plumbing, not UX
+   validation.** The features now flow through;
+   whether the operator hears auto-recall
+   surfacing a related memory in a useful way is
+   operator UX testing — not Phase 137 work.
+
+### Direction after Phase 137
+
+Voice and Local are now functionally equivalent.
+Phase 138+ candidates:
+
+1. **Streaming TTS during LLM generation.** Pipe
+   text chunks from the planner into the TTS
+   engine on sentence boundaries so the operator
+   hears the first sentence while the LLM is
+   still generating. Significant latency win.
+2. **Voice activity detection** for trim-on-
+   silence push-to-talk (no more "press Enter
+   twice"). Adds the `silero` MIT/Apache crate.
+3. **Wake-word activation** ("Hey Aivyx") via
+   Porcupine or Silero-wakeword.
+4. **Multimodal output** — agent speaks
+   descriptions of images via vision-capable
+   LLMs.
+5. **whisper-cpp-plus rehabilitation** — close out
+   the Phase 135 Q2c deferral.
+6. **`build_agent_stack` substrate-tier promotion**
+   if Phase 138+ ships more channel adapters and
+   the helper's signature stabilizes across
+   them. Pure-substrate work; small scope.
+7. **Channel Activation Milestone** — still held
+   intentionally; 26th consecutive deferral at
+   Phase 137 exit.
