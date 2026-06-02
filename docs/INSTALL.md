@@ -1238,6 +1238,155 @@ the loss of Ollama's `pull` UX and Aivyx's
   story first and gathers empirical signal before
   committing to the bigger architectural shift.
 
+### Embedded Rust-native inference (Phase 134)
+
+Phase 134 ships **Direction B**: Aivyx can run a
+local LLM **inside its own process** by linking
+against the `mistralrs` crate as a Rust dependency.
+Zero outbound network calls during inference; no
+separate runtime server to install. Single-binary
+local-agent UX.
+
+#### Building Aivyx with the embedded provider
+
+```bash
+# Recommended for new users — pulls in the embedded
+# provider alongside Anthropic/OpenAI/Ollama:
+$ cargo install --features recommended-providers aivyx-channel
+
+# Lean build — Ollama-only, no mistralrs dependency.
+# Compiles fast; smallest release binary.
+$ cargo install aivyx-channel
+
+# Embedded provider with platform GPU acceleration —
+# pick exactly one per platform:
+$ cargo install --features aivyx-channel/provider-mistral-rs-cuda aivyx-channel       # NVIDIA
+$ cargo install --features aivyx-channel/provider-mistral-rs-metal aivyx-channel      # Apple Silicon
+$ cargo install --features aivyx-channel/provider-mistral-rs-accelerate aivyx-channel # Apple CPU
+```
+
+The embedded provider's pure-Rust CPU build requires
+**no C compiler, no CUDA toolkit, no Metal SDK**. The
+backend-acceleration features have prerequisites:
+
+| Backend | Feature | Build prerequisite | Runtime |
+|---|---|---|---|
+| CPU | `provider-mistral-rs` | None | Any platform |
+| CUDA | `provider-mistral-rs-cuda` | CUDA toolkit (>= 11.8) | NVIDIA GPU with CC >= 8.0 |
+| Metal | `provider-mistral-rs-metal` | macOS + Xcode | Apple Silicon |
+| Accelerate | `provider-mistral-rs-accelerate` | macOS + Xcode | Apple CPU |
+
+#### `aivyx.toml` snippet
+
+```toml
+[agent]
+provider = "mistralrs"
+model    = "qwen3-4b"  # display name; arbitrary string
+
+[mistralrs]
+# REQUIRED — absolute path to a GGUF file or directory
+# containing GGUF files.
+model_path = "/home/operator/models/Qwen3-4B-Q4_K_M.gguf"
+
+# Optional — when model_path is a directory, names the
+# specific file to load.
+# model_file = "qwen3-4b-q4_k_m.gguf"
+
+# Optional — chat template path. Omit to use the
+# template embedded in the GGUF (most modern
+# quantizations ship one).
+# chat_template_path = "/home/operator/templates/qwen3.json"
+
+# Optional — maximum sequence length. Omit to defer to
+# the model's declared max_seq_len.
+# max_seq_len = 32768
+```
+
+#### Recommended GGUF models
+
+Aivyx doesn't bundle any model — operators download
+the GGUF themselves and point `model_path` at it.
+Recommended starting points for the embedded provider:
+
+| Model | Size (Q4_K_M) | Min RAM | Use case | Download |
+|---|---|---|---|---|
+| **Qwen3-4B** | ~2.5GB | 6GB | Best general agent; strong tool calling | [HF: Qwen/Qwen3-4B-Instruct-GGUF](https://huggingface.co/Qwen) |
+| **Llama-3.2-3B-Instruct** | ~2.0GB | 5GB | Conservative default; well-tested | [HF: bartowski/Llama-3.2-3B-Instruct-GGUF](https://huggingface.co/bartowski) |
+| **Phi-4-mini-instruct** | ~2.4GB | 5GB | Microsoft tooling; XML tool-call format | [HF: microsoft/Phi-4-mini-instruct-gguf](https://huggingface.co/microsoft) |
+| **SmolLM2-1.7B-Instruct** | ~1.1GB | 3GB | Smallest practical agent; CPU-friendly | [HF: HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF](https://huggingface.co/HuggingFaceTB) |
+
+Operators with substantially more RAM and GPU VRAM can
+load 7B-14B models (Qwen3-14B, Llama-3.3-8B) for
+materially stronger reasoning at the cost of larger
+working sets.
+
+#### When to pick the embedded provider vs Ollama
+
+- **Pick embedded** when you want a single-binary
+  install with no separate runtime to manage, when
+  you want **zero outbound network calls during
+  inference** (the privacy end state), or when you're
+  recommending Aivyx to a less technical operator
+  who'd otherwise stall at "install Ollama first."
+- **Stick with Ollama** when you want `ollama
+  pull <model>` as your model-download UX, when
+  Aivyx's `ollama.list/show/pull` agent tools matter
+  to your workflow, or when you already have Ollama
+  installed and aren't motivated to rebuild Aivyx.
+
+#### Honest tradeoffs
+
+- **Build cost.** `--features
+  provider-mistral-rs` first build: ~5-10 minutes
+  (mistralrs is a substantial crate; subsequent
+  incremental builds are fast). CUDA variant adds
+  cuBLAS/cuDNN linking time.
+- **Binary size.** Release binary adds ~100-200MB on
+  the CPU variant. CUDA variant adds NVIDIA runtime
+  libraries.
+- **mistralrs is pre-1.0.** Pinned to `=0.8.*` in
+  Aivyx's Cargo.toml. Aivyx-side upgrades happen
+  explicitly per-phase.
+- **TLS stack.** mistralrs's transitive dependency
+  tree pulls in `aws-lc-rs` alongside Aivyx's
+  workspace `rustls`. Both stacks coexist; the slim
+  Ollama-only build keeps rustls-only as before.
+
+#### What Phase 134 deliberately doesn't ship
+
+- **Streaming text deltas.** Phase 134 issues
+  `send_chat_request` (full response in one shot)
+  rather than the streaming API; the operator sees
+  the assistant message arrive whole, not
+  token-by-token. mistralrs 0.8.1's `Stream<'a>`
+  borrows from the Model, which doesn't satisfy
+  Aivyx's `LlmStream` contract without a
+  self-referential struct or a mpsc-forwarding
+  spawned task — both deferred to Phase 135.
+- **Multimodal inputs.** Image / audio / video
+  content blocks are stripped to `[image]` /
+  similar placeholders. mistralrs supports them
+  natively; the bridge wiring is Phase 135+ work.
+- **Model-family probing.**
+  `LlmProvider::tool_call_family_hint` returns
+  `None` for embedded. Operators with non-default
+  tool-call formats (qwen3 XML, phi4 wrappers) rely
+  on the heuristic detection in Aivyx's textual
+  extractor or set `[mistralrs] family_hint = "..."`
+  in a future phase.
+- **`mistralrs.list/show/pull` agent tools.** Same
+  posture as llama-server / Jan — operator-driven
+  model download via `wget` or the HF CLI; no agent-
+  side autonomy.
+- **End-to-end hardware validation.** Phase 134
+  ships unit-tested conversion logic and a
+  compile-clean bridge. The "load a real GGUF on a
+  real machine and run a turn" validation needs
+  operator coordination on each backend (CPU on
+  Linux laptop, Metal on M-series Mac, CUDA on
+  NVIDIA box). Phase 135+ codifies operator-reported
+  empirical signal.
+
 ### Phase 120 substrate uniformity
 
 The Phase 120 tool-name recovery substrate flows uniformly
