@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 143 — Chapter G: Budget Tracking
+
+**See [PHASE_143.md](PHASE_143.md).** Pivot from calendar
+to another Phase 125 Chapter G #2 candidate. Adds
+`budget.record(amount, category, note?)` +
+`budget.summary(period?, since?, until?)` to the
+aivyx-toolkit harness. Persistence follows the existing
+task_store pattern: JSON at
+`~/.aivyx/tool-processes/toolkit/budget.json` with
+schema_version + 0600 perms + atomic write. Two new
+capability bases (budget.read / budget.write) Trusted-
+only by default like the rest of the toolkit. Zero new
+workspace deps.
+
 ## Phase 142 — `calendar.list_calendars` + Multi-Calendar `upcoming`
 
 **Frozen — see [PHASE_142.md](PHASE_142.md).** Phase 141 follow-on.
