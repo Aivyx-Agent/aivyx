@@ -121,6 +121,92 @@ pub struct TtsConfig {
 /// **Substrate code** — no async, no IO. Directly
 /// unit-testable. Used by the channel loop, but
 /// nothing engine-specific lives here.
+/// Streaming complement to [`chunk_into_sentences`].
+///
+/// Operates on a mutable buffer: pulls every
+/// **complete** sentence (terminated by `.` / `?` /
+/// `!` followed by whitespace) into the returned
+/// `Vec<String>`, and leaves any **partial trailing
+/// fragment** in the buffer so the next call —
+/// after more text has been appended — picks up
+/// where this one left off.
+///
+/// Phase 138's streaming-TTS path calls this from
+/// inside `VoiceChannel::stream_event` each time the
+/// agent emits a text chunk; complete sentences
+/// flush to the TTS engine immediately while the
+/// in-flight sentence keeps growing in the buffer.
+///
+/// Key behaviour differences from
+/// `chunk_into_sentences`:
+///
+/// - **EOF is not a sentence terminator.** A
+///   sentence is only complete when its terminator
+///   is followed by whitespace. Trailing fragments
+///   — terminated or not — remain in the buffer.
+///   The session driver's post-turn flush is the
+///   one place that treats EOF as a terminator (via
+///   a final `drain` of whatever's left).
+/// - **In-place buffer mutation.** Truncates the
+///   buffer in O(n) by shifting the leftover
+///   fragment to the front.
+///
+/// Same boundary semantics as `chunk_into_sentences`:
+/// decimals inside numbers (`3.14`) do not split,
+/// because the period isn't followed by whitespace.
+///
+/// **Substrate code** — no async, no IO. Directly
+/// unit-testable.
+pub fn drain_complete_sentences(buf: &mut String) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut consumed_up_to: usize = 0;
+    // Walk grapheme-naïvely via char_indices so we
+    // can record byte offsets and slice the
+    // remainder cleanly at the end.
+    let chars: Vec<(usize, char)> = buf.char_indices().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let (_, c) = chars[i];
+        current.push(c);
+        if matches!(c, '.' | '?' | '!') {
+            // Look at the next char (if any). We
+            // only flush when the next char is
+            // whitespace — EOF leaves the fragment
+            // in the buffer for the next call.
+            let next = chars.get(i + 1).map(|(_, ch)| *ch);
+            if let Some(n) = next {
+                if n.is_whitespace() {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        out.push(trimmed);
+                    }
+                    current.clear();
+                    // Consume the whitespace too.
+                    i += 1;
+                    consumed_up_to = chars
+                        .get(i + 1)
+                        .map(|(idx, _)| *idx)
+                        .unwrap_or(buf.len());
+                    i += 1;
+                    continue;
+                }
+            }
+            // No follower (EOF) or non-whitespace
+            // follower — keep accumulating. The
+            // fragment stays in `current`.
+        }
+        i += 1;
+    }
+    // Whatever didn't get flushed lives in the
+    // buffer for the next call. Truncate to the
+    // last fully-consumed prefix.
+    let leftover = buf[consumed_up_to..].to_string();
+    buf.clear();
+    buf.push_str(&leftover);
+    out
+}
+
 pub fn chunk_into_sentences(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -264,6 +350,123 @@ speaker_id = 0
             out,
             vec!["Spaced.".to_string(), "Out.".to_string()],
         );
+    }
+
+    // ----- drain_complete_sentences (streaming) -------------------------
+
+    #[test]
+    fn drain_empty_buffer_yields_nothing() {
+        let mut buf = String::new();
+        let out = drain_complete_sentences(&mut buf);
+        assert!(out.is_empty());
+        assert_eq!(buf, "");
+    }
+
+    #[test]
+    fn drain_partial_fragment_stays_buffered() {
+        // No terminator yet — nothing to flush, all
+        // stays in the buffer for the next call.
+        let mut buf = String::from("Hello there, this is in");
+        let out = drain_complete_sentences(&mut buf);
+        assert!(out.is_empty());
+        assert_eq!(buf, "Hello there, this is in");
+    }
+
+    #[test]
+    fn drain_complete_then_partial_flushes_complete_only() {
+        // First sentence is complete (period +
+        // whitespace boundary). Second is mid-word.
+        let mut buf = String::from("Sentence one. Sentence tw");
+        let out = drain_complete_sentences(&mut buf);
+        assert_eq!(out, vec!["Sentence one.".to_string()]);
+        assert_eq!(buf, "Sentence tw");
+    }
+
+    #[test]
+    fn drain_eof_terminator_is_not_flushed() {
+        // Period at EOF with no follower — the
+        // streaming form keeps it in the buffer
+        // (operator may append more text). Contrast
+        // with chunk_into_sentences which would flush.
+        let mut buf = String::from("Hello world.");
+        let out = drain_complete_sentences(&mut buf);
+        assert!(out.is_empty(), "EOF terminator must not flush");
+        assert_eq!(buf, "Hello world.");
+    }
+
+    #[test]
+    fn drain_multiple_complete_sentences_in_one_call() {
+        let mut buf = String::from("First. Second! Third? Fourth ");
+        let out = drain_complete_sentences(&mut buf);
+        assert_eq!(
+            out,
+            vec![
+                "First.".to_string(),
+                "Second!".to_string(),
+                "Third?".to_string(),
+            ],
+        );
+        // "Fourth " trails with no terminator yet.
+        assert_eq!(buf, "Fourth ");
+    }
+
+    #[test]
+    fn drain_decimal_in_number_does_not_break() {
+        let mut buf = String::from("Pi is 3.14 and that's it. ");
+        let out = drain_complete_sentences(&mut buf);
+        assert_eq!(out, vec!["Pi is 3.14 and that's it.".to_string()]);
+        assert_eq!(buf, "");
+    }
+
+    #[test]
+    fn drain_incremental_streaming_simulation() {
+        // The shape of how stream_event will use this:
+        // append chunk, drain, repeat.
+        let mut buf = String::new();
+        let mut all: Vec<String> = Vec::new();
+
+        // Chunk 1: partial first sentence.
+        buf.push_str("Hello there");
+        all.extend(drain_complete_sentences(&mut buf));
+        assert_eq!(buf, "Hello there");
+        assert!(all.is_empty());
+
+        // Chunk 2: completes first sentence + starts
+        // second.
+        buf.push_str(". How are ");
+        all.extend(drain_complete_sentences(&mut buf));
+        // "Hello there." flushes. "How are " trails.
+        assert_eq!(all, vec!["Hello there.".to_string()]);
+        assert_eq!(buf, "How are ");
+
+        // Chunk 3: completes the second + a full
+        // third in one go.
+        buf.push_str("you today? I'm great! Now ");
+        all.extend(drain_complete_sentences(&mut buf));
+        assert_eq!(
+            all,
+            vec![
+                "Hello there.".to_string(),
+                "How are you today?".to_string(),
+                "I'm great!".to_string(),
+            ],
+        );
+        assert_eq!(buf, "Now ");
+
+        // Chunk 4: only whitespace, no new sentence.
+        // Nothing flushes; buffer keeps growing.
+        buf.push_str("what");
+        all.extend(drain_complete_sentences(&mut buf));
+        assert_eq!(all.len(), 3, "no new flush");
+        assert_eq!(buf, "Now what");
+    }
+
+    #[test]
+    fn drain_newline_boundary_treated_as_whitespace() {
+        let mut buf = String::from("Line one.\nLine two ");
+        let out = drain_complete_sentences(&mut buf);
+        assert_eq!(out, vec!["Line one.".to_string()]);
+        assert_eq!(buf, "Line two ");
     }
 
     #[test]
