@@ -13,6 +13,7 @@ use aivyx_core::{
 };
 
 use crate::asr::AsrConfig;
+use crate::silence_detector::VoiceVadConfig;
 use crate::tts::TtsConfig;
 
 /// Phase 138 — type alias for the streaming text-
@@ -56,6 +57,12 @@ pub struct VoiceChannelConfig {
     /// inspection.
     #[serde(default)]
     pub capture_debug_path: Option<PathBuf>,
+    /// Phase 140 — operator-tunable VAD knobs.
+    /// Defaults match Phase 139's hardcoded
+    /// values so operators with no `[voice.vad]`
+    /// section get unchanged behavior.
+    #[serde(default)]
+    pub vad: VoiceVadConfig,
 }
 
 /// `ChannelContext` impl for voice I/O.
@@ -310,6 +317,34 @@ voice_path = "/models/en_US-amy-medium.onnx"
         assert_eq!(cfg.output_device.as_deref(), Some("Default"));
         assert!(cfg.asr.model_path.is_some());
         assert!(cfg.tts.voice_path.is_some());
+    }
+
+    #[test]
+    fn voice_channel_config_parses_vad_subsection() {
+        // Phase 140 — operators tune VAD by adding
+        // a `[voice.vad]` block. Verify the
+        // nesting works under the existing
+        // `VoiceChannelConfig` shape.
+        let toml = r#"
+asr_engine = "whisper-rs"
+tts_engine = "piper"
+
+[vad]
+threshold_rms = 0.02
+dwell_secs    = 2.5
+
+[asr]
+model_path = "/m/w.bin"
+
+[tts]
+voice_path = "/m/p.onnx"
+"#;
+        let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
+        assert!((cfg.vad.threshold_rms - 0.02).abs() < f32::EPSILON);
+        assert!((cfg.vad.dwell_secs - 2.5).abs() < f32::EPSILON);
+        // Untouched VAD fields default-match.
+        assert!((cfg.vad.min_speech_secs - 0.5).abs() < f32::EPSILON);
+        assert_eq!(cfg.vad.poll_interval_ms, 100);
     }
 
     #[test]

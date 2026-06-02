@@ -32,6 +32,107 @@
 
 use std::time::Duration;
 
+/// Phase 140 — operator-tunable VAD configuration
+/// surfaced as the `[voice.vad]` TOML section.
+/// Carries the user-facing knobs; the AudioIn
+/// constructor lowers it to a
+/// [`SilenceDetectorConfig`] once the device's
+/// negotiated sample rate is known.
+///
+/// All defaults match the Phase 139 hardcoded
+/// values so operators who don't write a
+/// `[voice.vad]` block get the same behavior
+/// they got at Phase 139 exit.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VoiceVadConfig {
+    /// RMS amplitude below which a frame counts
+    /// as silence. PCM samples are normalised to
+    /// `[-1.0, 1.0]` before reaching the
+    /// detector, so this is unitless on that
+    /// scale. Lower = stricter (more sensitive
+    /// to background noise); higher = more
+    /// tolerant. Default `0.01`.
+    #[serde(default = "default_threshold_rms")]
+    pub threshold_rms: f32,
+    /// Sustained-silence duration that triggers
+    /// auto-stop. Operator pauses for this long
+    /// → mic stops + dispatch. Default `1.5` s.
+    #[serde(default = "default_dwell_secs")]
+    pub dwell_secs: f32,
+    /// Minimum recording duration before
+    /// auto-stop can fire. Prevents instant
+    /// dispatch on startup-silence before the
+    /// operator has started talking. Default
+    /// `0.5` s.
+    #[serde(default = "default_min_speech_secs")]
+    pub min_speech_secs: f32,
+    /// Hard cap on a single recording. Protects
+    /// against a stuck mic that records forever.
+    /// Default `30.0` s.
+    #[serde(default = "default_max_capture_secs")]
+    pub max_capture_secs: f32,
+    /// Per-frame RMS window size. Smaller frames
+    /// = more responsive but noisier; larger =
+    /// stabler but laggier. Default `0.030` s
+    /// (30 ms) — common speech-processing
+    /// window.
+    #[serde(default = "default_frame_secs")]
+    pub frame_secs: f32,
+    /// PTT loop poll interval. The recording
+    /// loop wakes every `poll_interval_ms` to
+    /// check the detector state. Default `100`
+    /// ms.
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+}
+
+fn default_threshold_rms() -> f32 {
+    0.01
+}
+fn default_dwell_secs() -> f32 {
+    1.5
+}
+fn default_min_speech_secs() -> f32 {
+    0.5
+}
+fn default_max_capture_secs() -> f32 {
+    30.0
+}
+fn default_frame_secs() -> f32 {
+    0.030
+}
+fn default_poll_interval_ms() -> u64 {
+    100
+}
+
+impl Default for VoiceVadConfig {
+    fn default() -> Self {
+        VoiceVadConfig {
+            threshold_rms: default_threshold_rms(),
+            dwell_secs: default_dwell_secs(),
+            min_speech_secs: default_min_speech_secs(),
+            max_capture_secs: default_max_capture_secs(),
+            frame_secs: default_frame_secs(),
+            poll_interval_ms: default_poll_interval_ms(),
+        }
+    }
+}
+
+impl VoiceVadConfig {
+    /// Lower this config into the substrate-tier
+    /// [`SilenceDetectorConfig`] used by the
+    /// detector itself. The detector needs the
+    /// device's negotiated sample rate (passed
+    /// in) to compute frame sizes.
+    pub fn to_silence_detector_config(&self, sample_rate: u32) -> SilenceDetectorConfig {
+        SilenceDetectorConfig {
+            sample_rate,
+            frame_secs: self.frame_secs,
+            threshold_rms: self.threshold_rms,
+        }
+    }
+}
+
 /// Operator-tunable detector parameters. Phase 139
 /// hardcodes sensible defaults; a `[voice.vad]`
 /// TOML section is a Phase 140+ candidate if
@@ -316,6 +417,66 @@ mod tests {
         det.reset();
         assert_eq!(det.silence_dwell(), Duration::ZERO);
         assert_eq!(det.total_recorded(), Duration::ZERO);
+    }
+
+    // ---- Phase 140 — VoiceVadConfig TOML tests ----
+
+    #[test]
+    fn voice_vad_config_default_matches_phase_139_constants() {
+        let cfg = VoiceVadConfig::default();
+        assert!((cfg.threshold_rms - 0.01).abs() < f32::EPSILON);
+        assert!((cfg.dwell_secs - 1.5).abs() < f32::EPSILON);
+        assert!((cfg.min_speech_secs - 0.5).abs() < f32::EPSILON);
+        assert!((cfg.max_capture_secs - 30.0).abs() < f32::EPSILON);
+        assert!((cfg.frame_secs - 0.030).abs() < f32::EPSILON);
+        assert_eq!(cfg.poll_interval_ms, 100);
+    }
+
+    #[test]
+    fn voice_vad_config_full_toml_parses() {
+        let toml = r#"
+threshold_rms     = 0.02
+dwell_secs        = 2.0
+min_speech_secs   = 0.8
+max_capture_secs  = 60.0
+frame_secs        = 0.040
+poll_interval_ms  = 150
+"#;
+        let cfg: VoiceVadConfig = toml::from_str(toml).expect("parse full section");
+        assert!((cfg.threshold_rms - 0.02).abs() < f32::EPSILON);
+        assert!((cfg.dwell_secs - 2.0).abs() < f32::EPSILON);
+        assert!((cfg.min_speech_secs - 0.8).abs() < f32::EPSILON);
+        assert!((cfg.max_capture_secs - 60.0).abs() < f32::EPSILON);
+        assert!((cfg.frame_secs - 0.040).abs() < f32::EPSILON);
+        assert_eq!(cfg.poll_interval_ms, 150);
+    }
+
+    #[test]
+    fn voice_vad_config_partial_toml_uses_defaults() {
+        // Operator only tunes the threshold; other
+        // fields fall back to Phase 139 defaults.
+        let toml = r#"
+threshold_rms = 0.05
+"#;
+        let cfg: VoiceVadConfig = toml::from_str(toml).expect("parse partial");
+        assert!((cfg.threshold_rms - 0.05).abs() < f32::EPSILON);
+        // Untouched fields default-match.
+        assert!((cfg.dwell_secs - 1.5).abs() < f32::EPSILON);
+        assert!((cfg.min_speech_secs - 0.5).abs() < f32::EPSILON);
+        assert_eq!(cfg.poll_interval_ms, 100);
+    }
+
+    #[test]
+    fn voice_vad_config_lowers_to_silence_detector_config() {
+        let cfg = VoiceVadConfig {
+            threshold_rms: 0.02,
+            frame_secs: 0.040,
+            ..Default::default()
+        };
+        let sd = cfg.to_silence_detector_config(48_000);
+        assert_eq!(sd.sample_rate, 48_000);
+        assert!((sd.frame_secs - 0.040).abs() < f32::EPSILON);
+        assert!((sd.threshold_rms - 0.02).abs() < f32::EPSILON);
     }
 
     #[test]

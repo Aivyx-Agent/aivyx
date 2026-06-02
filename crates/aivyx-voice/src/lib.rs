@@ -63,4 +63,4 @@ pub use session::{
     run_push_to_talk_loop_streaming, StreamingVoiceTurnResult, VoiceSessionError,
     VoiceTurnResult,
 };
-pub use silence_detector::{SilenceDetector, SilenceDetectorConfig};
+pub use silence_detector::{SilenceDetector, SilenceDetectorConfig, VoiceVadConfig};

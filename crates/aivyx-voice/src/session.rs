@@ -992,6 +992,7 @@ mod tests {
             input_device: None,
             output_device: None,
             capture_debug_path: None,
+            vad: Default::default(),
         };
         assert_eq!(cfg.asr.beam_size, Some(5));
         assert_eq!(cfg.tts.speaker_id, Some(0));
