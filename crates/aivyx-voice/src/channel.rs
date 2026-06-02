@@ -15,6 +15,12 @@ use aivyx_core::{
 use crate::asr::AsrConfig;
 use crate::tts::TtsConfig;
 
+/// Phase 138 — type alias for the streaming text-
+/// chunk callback that [`VoiceChannel::set_text_sink`]
+/// installs. Pulled out so the field type doesn't
+/// trip clippy::type_complexity.
+type TextSinkFn = Box<dyn Fn(&str) + Send + Sync>;
+
 /// Operator-supplied config for the voice channel.
 /// Threaded through `[voice]` in `aivyx.toml`.
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -73,6 +79,16 @@ pub struct VoiceChannel {
     config: VoiceChannelConfig,
     token: Mutex<CancellationToken>,
     text_buffer: Mutex<String>,
+    /// Phase 138 — when `Some`, every text-chunk
+    /// `StreamEvent` fires this closure instead of
+    /// accumulating in `text_buffer`. The streaming
+    /// session driver registers a sink that drains
+    /// complete sentences into a `tokio::mpsc`
+    /// pipeline so the operator hears synthesized
+    /// audio while the LLM is still generating the
+    /// rest of the response. When `None`, Phase 137
+    /// behaviour (buffer-then-flush) is preserved.
+    text_sink: Mutex<Option<TextSinkFn>>,
 }
 
 impl VoiceChannel {
@@ -82,7 +98,32 @@ impl VoiceChannel {
             config,
             token: Mutex::new(CancellationToken::new()),
             text_buffer: Mutex::new(String::new()),
+            text_sink: Mutex::new(None),
         }
+    }
+
+    /// Install a text-chunk sink for the current
+    /// turn. When set, `stream_event` fires the
+    /// closure on every `StreamEvent::Text` chunk
+    /// instead of accumulating in `text_buffer`.
+    /// The streaming session driver uses this to
+    /// pipeline text into a sentence-boundary
+    /// drainer + TTS engine while the agent is
+    /// still streaming. Replaces any prior sink.
+    pub fn set_text_sink<F>(&self, sink: F)
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        let mut slot = self.text_sink.lock().expect("text_sink poisoned");
+        *slot = Some(Box::new(sink));
+    }
+
+    /// Remove the currently-installed text sink, if
+    /// any. After this, `stream_event` reverts to
+    /// the Phase 137 buffer-accumulation path.
+    pub fn clear_text_sink(&self) {
+        let mut slot = self.text_sink.lock().expect("text_sink poisoned");
+        *slot = None;
     }
 
     pub fn config(&self) -> &VoiceChannelConfig {
@@ -148,11 +189,42 @@ impl ChannelContext for VoiceChannel {
         // 136+ could surface tool activity via short
         // chimes or a separate channel.
         if let StreamEvent::Text(s) = event {
-            let mut buf = self
-                .text_buffer
-                .lock()
-                .map_err(|_| ChannelError::Send("text_buffer poisoned".to_string()))?;
-            buf.push_str(s);
+            // Phase 138 — if a streaming sink is
+            // installed, dispatch the chunk through
+            // it instead of buffering. The sink
+            // typically accumulates into its own
+            // partial-sentence buffer and forwards
+            // complete sentences to a TTS pipeline.
+            // The session driver clears the sink
+            // after the turn completes and flushes
+            // any leftover partial fragment.
+            //
+            // We hold the sink lock only long enough
+            // to read the Option + call the closure;
+            // we don't hold it across the call's
+            // body to avoid blocking concurrent
+            // stream_event invocations on the same
+            // channel (none today, but a posture
+            // we may want later).
+            let sink_present = {
+                let slot = self
+                    .text_sink
+                    .lock()
+                    .map_err(|_| ChannelError::Send("text_sink poisoned".to_string()))?;
+                if let Some(sink) = slot.as_ref() {
+                    sink(s);
+                    true
+                } else {
+                    false
+                }
+            };
+            if !sink_present {
+                let mut buf = self
+                    .text_buffer
+                    .lock()
+                    .map_err(|_| ChannelError::Send("text_buffer poisoned".to_string()))?;
+                buf.push_str(s);
+            }
         }
         Ok(())
     }
@@ -182,6 +254,7 @@ impl ChannelContext for VoiceChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn voice_channel_reports_correct_identity() {
@@ -300,6 +373,95 @@ voice_path = "/models/en_US-amy-medium.onnx"
             .await
             .unwrap();
         assert_eq!(ch.take_buffered_text(), "Second turn.");
+    }
+
+    // -------- Phase 138 — streaming text sink --------
+
+    #[tokio::test]
+    async fn text_sink_active_diverts_chunks_away_from_buffer() {
+        use std::sync::Mutex as StdMutex;
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        let captured: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let captured_for_sink = Arc::clone(&captured);
+        ch.set_text_sink(move |s| {
+            captured_for_sink
+                .lock()
+                .expect("captured")
+                .push(s.to_string());
+        });
+        ch.stream_event(StreamEvent::Text("Hello, ")).await.unwrap();
+        ch.stream_event(StreamEvent::Text("world.")).await.unwrap();
+        // Sink saw each chunk in order.
+        let got = captured.lock().unwrap().clone();
+        assert_eq!(got, vec!["Hello, ".to_string(), "world.".to_string()]);
+        // Buffer stayed empty — the sink intercepts.
+        assert_eq!(
+            ch.peek_buffered_text(),
+            "",
+            "active sink must not also buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_sink_cleared_reverts_to_buffer() {
+        use std::sync::Mutex as StdMutex;
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        let captured: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let captured_for_sink = Arc::clone(&captured);
+        ch.set_text_sink(move |s| {
+            captured_for_sink
+                .lock()
+                .expect("captured")
+                .push(s.to_string());
+        });
+        ch.stream_event(StreamEvent::Text("during streaming "))
+            .await
+            .unwrap();
+        // After the streaming turn ends, the driver
+        // clears the sink. Subsequent events fall
+        // back to buffer accumulation (Phase 137
+        // path).
+        ch.clear_text_sink();
+        ch.stream_event(StreamEvent::Text("after the turn"))
+            .await
+            .unwrap();
+        // Sink captured only the streaming-phase
+        // chunk.
+        assert_eq!(
+            captured.lock().unwrap().clone(),
+            vec!["during streaming ".to_string()],
+        );
+        // Buffer captured only the post-clear chunk.
+        assert_eq!(ch.peek_buffered_text(), "after the turn");
+    }
+
+    #[tokio::test]
+    async fn text_sink_replaces_prior_sink() {
+        use std::sync::Mutex as StdMutex;
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        let first: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let second: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let first_for_sink = Arc::clone(&first);
+        let second_for_sink = Arc::clone(&second);
+        ch.set_text_sink(move |s| {
+            first_for_sink.lock().unwrap().push(s.to_string());
+        });
+        ch.stream_event(StreamEvent::Text("for-first"))
+            .await
+            .unwrap();
+        // Replace the sink mid-flight (e.g. a
+        // hypothetical "swap engines" scenario).
+        ch.set_text_sink(move |s| {
+            second_for_sink.lock().unwrap().push(s.to_string());
+        });
+        ch.stream_event(StreamEvent::Text("for-second"))
+            .await
+            .unwrap();
+        assert_eq!(first.lock().unwrap().clone(), vec!["for-first".to_string()]);
+        assert_eq!(
+            second.lock().unwrap().clone(),
+            vec!["for-second".to_string()]
+        );
     }
 
     #[tokio::test]
