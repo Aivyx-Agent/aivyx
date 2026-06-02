@@ -496,14 +496,49 @@ where
 
     eprintln!();
     eprintln!("aivyx voice — push-to-talk REPL (streaming TTS + auto-stop)");
-    eprintln!("  Enter        : start recording (then pause to dispatch)");
-    eprintln!("  quit + Enter : exit");
+    eprintln!("  Enter           : start recording (then pause to dispatch)");
+    eprintln!("  Enter mid-record: abort the current capture");
+    eprintln!("  quit + Enter    : exit");
     eprintln!();
+
+    // Phase 140 — long-lived async stdin reader.
+    // Sends every line to the loop via an
+    // unbounded mpsc. The start-of-iteration
+    // prompt reads from it (replacing the
+    // synchronous read_stdin_line_trimmed for
+    // this loop variant) and the recording
+    // tokio::select! races it against the
+    // silence-detection poll so Enter mid-record
+    // aborts cleanly.
+    //
+    // The reader task lives until the loop
+    // returns; once we drop `line_rx`, the
+    // reader's send fails and the task exits.
+    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+    let _stdin_task = tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let stdin = tokio::io::stdin();
+        let mut reader = tokio::io::BufReader::new(stdin).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if line_tx.send(line.trim().to_string()).is_err() {
+                break;
+            }
+        }
+    });
 
     loop {
         eprint!("[voice] press Enter to record (or `quit`): ");
         let _ = std::io::Write::flush(&mut std::io::stderr());
-        let trimmed = read_stdin_line_trimmed();
+        let trimmed = match line_rx.recv().await {
+            Some(line) => line,
+            None => {
+                // Reader task exited unexpectedly
+                // (EOF on stdin, etc.) — treat as
+                // quit.
+                eprintln!("[voice] stdin closed, exiting.");
+                return Ok(());
+            }
+        };
         if trimmed == "quit" {
             eprintln!("[voice] exiting.");
             return Ok(());
@@ -529,22 +564,37 @@ where
             VoiceSessionError::AudioCapture(format!("start: {e}"))
         })?;
         eprintln!(
-            "[voice] recording at {} Hz / {} ch — pause for {:.1}s to dispatch.",
+            "[voice] recording at {} Hz / {} ch — pause for {:.1}s or press Enter to dispatch.",
             audio_in.src_rate(),
             audio_in.src_channels(),
             vad_cfg.dwell_secs,
         );
         let mut stopped_reason = "silence";
         loop {
-            tokio::time::sleep(poll_interval).await;
-            let total = audio_in.total_recorded();
-            let dwell = audio_in.silence_dwell();
-            if total >= max_capture {
-                stopped_reason = "max-capture";
-                break;
-            }
-            if total >= min_speech && dwell >= dwell_threshold {
-                break;
+            tokio::select! {
+                _ = tokio::time::sleep(poll_interval) => {
+                    let total = audio_in.total_recorded();
+                    let dwell = audio_in.silence_dwell();
+                    if total >= max_capture {
+                        stopped_reason = "max-capture";
+                        break;
+                    }
+                    if total >= min_speech && dwell >= dwell_threshold {
+                        break;
+                    }
+                }
+                line = line_rx.recv() => {
+                    // Operator pressed Enter
+                    // mid-recording (or stdin
+                    // closed). Either way → manual
+                    // stop. We dispatch whatever
+                    // samples we've collected.
+                    stopped_reason = match line {
+                        Some(_) => "manual",
+                        None => "stdin-closed",
+                    };
+                    break;
+                }
             }
         }
         audio_in.stop().map_err(|e| {
@@ -553,11 +603,25 @@ where
         let samples = audio_in.take_samples_for_whisper().map_err(|e| {
             VoiceSessionError::AudioCapture(format!("drain: {e}"))
         })?;
-        if stopped_reason == "max-capture" {
-            eprintln!(
-                "[voice] hit {:.0}s max-capture cap — dispatching what we have.",
-                vad_cfg.max_capture_secs,
-            );
+        match stopped_reason {
+            "max-capture" => {
+                eprintln!(
+                    "[voice] hit {:.0}s max-capture cap — dispatching what we have.",
+                    vad_cfg.max_capture_secs,
+                );
+            }
+            "manual" => {
+                if samples.is_empty() {
+                    eprintln!("[voice] aborted with no audio — skipping turn.");
+                } else {
+                    eprintln!("[voice] aborted by operator — dispatching partial.");
+                }
+            }
+            "stdin-closed" => {
+                eprintln!("[voice] stdin closed mid-recording, exiting.");
+                return Ok(());
+            }
+            _ => {} // "silence" — normal auto-stop, no extra log
         }
         drop(audio_in);
 
