@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 140 — Close Phase 139 Debt: TOML Config + Manual-Abort UX
 
-**See [PHASE_140.md](PHASE_140.md).** Phase 139 close-out.
+**Frozen — see [PHASE_140.md](PHASE_140.md).** Phase 139 close-out.
 Phase 139 shipped energy-threshold VAD with two
 documented debts: hardcoded thresholds (no operator
 tunability) and lost manual-abort affordance (can't

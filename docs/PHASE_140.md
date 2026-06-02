@@ -210,8 +210,150 @@ Phase 141+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 140 exit. Predictions at
-sign-off: DESIGN.md HOLD → 31; PRODUCT.md HOLD
-→ 31; lib.rs HOLD → 6; zero new deps; test
-count delta `+4` to `+8`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  30 → **31**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 30 → **31**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 140 work in
+  `aivyx-voice`. Continuing post-Phase-135 reset:
+  5 → **6**.
+
+**Test count delta: +5 — within predicted `+4`
+to `+8` range.** Workspace lib tests 3050 →
+3055. Per-module:
+- `silence_detector`: +4 (VoiceVadConfig default
+  matches Phase 139 constants, full TOML parses,
+  partial TOML uses defaults, lower-config
+  bridge to SilenceDetectorConfig).
+- `channel`: +1 (VoiceChannelConfig parses the
+  `[vad]` sub-section nested under `[voice]` —
+  the actual shape operators write).
+- `session`: 0 new tests for manual abort —
+  the substrate-tier streaming-driver tests
+  already covered the empty-ASR branch
+  (`run_one_voice_turn_streaming_empty_asr_returns_none`),
+  which is exactly the path manual-abort-with-
+  empty-samples takes; the tokio::select! race
+  itself is operator-validation tier (needs a
+  real mic + real keyboard).
+
+**Zero new workspace dependencies** as predicted.
+`tokio::io::stdin` + `tokio::sync::mpsc` were
+already in workspace; `tokio::io::AsyncBufReadExt`
+is reachable from existing `io-std` feature.
+
+**Zero clippy warnings** with default features.
+One transient catch during Task 3: removing
+SilenceDetectorConfig from audio_in.rs's
+imports surfaced an unused-import warning;
+fixed immediately in the same task.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `VoiceVadConfig` public in
+  `aivyx-voice::silence_detector` with per-field
+  serde defaults so partial sections work as
+  expected. All defaults match Phase 139's
+  hardcoded values byte-for-byte.
+- `VoiceChannelConfig.vad` field with
+  `#[serde(default)]` so operators with no
+  `[voice.vad]` block get unchanged behavior.
+- `AudioIn::new_with_vad_config` primary
+  constructor + `AudioIn::new` thin delegate
+  preserves Phase 139 behavior + existing
+  call sites.
+- Streaming PTT loop reads
+  `channel.config().vad` once at entry; binds
+  Duration values from it; threads them into
+  the polling loop. Hardcoded constants gone.
+- Long-lived async stdin reader task with
+  `mpsc::UnboundedSender<String>`; recording
+  loop uses `tokio::select!` to race silence
+  poll against line receive. Clean four-way
+  termination: silence, max-capture, manual
+  abort, stdin-closed.
+- 3055 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **No new tests for manual abort.** The
+   substrate-tier streaming-driver tests
+   already cover the empty-ASR branch that
+   manual-abort-with-empty-samples takes. The
+   `tokio::select!` race itself is operator-
+   validation tier (needs real keyboard + real
+   mic). Could add a stub-channel test that
+   simulates an Enter via the mpsc and verifies
+   the right termination path — Phase 141+
+   candidate if a regression surfaces.
+
+2. **TOML config has no validation.** Operators
+   setting `dwell_secs = -1.0` or
+   `threshold_rms = 100.0` get nonsense
+   behavior, not an error. Acceptable for an
+   operator-tooling knob; Phase 141+ could
+   add bounded-range validation if it surfaces
+   as a support burden.
+
+3. **VoiceVadConfig lives in
+   `silence_detector` module.** It's the only
+   user-facing-TOML struct in that module;
+   could argue it belongs in `channel.rs`
+   alongside `VoiceChannelConfig`. Kept in
+   `silence_detector` because it's the
+   logical pair of `SilenceDetectorConfig` and
+   the bridge method `to_silence_detector_config`
+   is naturally co-located. Minor; would move
+   if a refactor surfaces a cleaner module
+   layout.
+
+4. **Streaming-pipeline visibility not exposed
+   via config.** Operators can tune VAD but
+   not the sentence-buffering behavior of the
+   streaming TTS pipeline. Phase 141+
+   candidate if operators want per-sentence
+   artificial-pause inserts or similar
+   playback knobs.
+
+5. **macOS Send constraint still applies** —
+   Phase 138 carry-over; not Phase 140 work.
+
+### Direction after Phase 140
+
+After Phase 140, Phase 139's two largest debts
+close. Phase 141+ candidates:
+
+1. **Mid-synthesis abort UX** — drain the TTS
+   playback mpsc on Ctrl-C / Escape. Different
+   feature surface from Phase 140's recording-
+   side abort. Phase 138 carry-over.
+2. **Silero ONNX VAD** — drop-in replacement
+   when energy threshold isn't robust enough.
+3. **Streaming ASR** — Whisper partial-decode
+   for true-streaming transcription.
+4. **Wake-word activation** ("Hey Aivyx").
+5. **Multimodal output** — agent speaks image
+   descriptions via vision-capable LLMs.
+6. **macOS streaming variant** — `LocalSet`-
+   based consumer task.
+7. **Lock-free AudioIn detector** — atomic
+   counter pattern if measurement shows audio
+   glitches.
+8. **VAD config validation** — bounded-range
+   serde validation for the `[voice.vad]`
+   fields.
+9. **whisper-cpp-plus rehabilitation** —
+   Phase 135 Q2c close-out.
+10. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters ship.
+11. **Pivot from voice — Chapter G toolkit
+    expansion** (calendar reminders, budget
+    tracking, health.check.remove).
+12. **Channel Activation Milestone** — still
+    held intentionally; 29th consecutive
+    deferral at Phase 140 exit.

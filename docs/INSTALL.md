@@ -1506,6 +1506,38 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 140 closed Phase 139's debt: VAD is now
+operator-tunable via `[voice.vad]` TOML AND
+manual abort works again mid-recording.**
+
+Operator tuning via TOML:
+```toml
+[voice.vad]
+threshold_rms     = 0.01   # RMS silence cutoff (lower = stricter)
+dwell_secs        = 1.5    # pause to dispatch
+min_speech_secs   = 0.5    # ignore auto-stop before this
+max_capture_secs  = 30.0   # hard cap
+frame_secs        = 0.030  # per-frame RMS window
+poll_interval_ms  = 100    # PTT loop poll tick
+```
+
+All fields are optional; omitted fields take the
+defaults shown above (= Phase 139's hardcoded
+values). Operators in a quieter room with a
+sensitive mic can drop `threshold_rms` to 0.005;
+in a noisier room raise it to 0.02 or higher.
+Operators who want longer breath-pauses
+mid-utterance without auto-stop can raise
+`dwell_secs` to 2.5 or 3.0.
+
+Manual abort recovered: during recording, the
+operator can press Enter to stop mid-utterance.
+Whatever samples are captured at that point
+still dispatch to the agent (the operator may
+have started a thought worth completing).
+Aborting before any audio captures skips the
+turn with a heads-up.
+
 **Phase 139 added silence-detection auto-stop.**
 PTT no longer requires pressing Enter twice. The
 operator hits Enter once to start recording,
