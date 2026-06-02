@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 135 — Voice I/O: Talk to the Agent, Agent Talks Back
 
-**See [PHASE_135.md](PHASE_135.md).** First multimodal-
+**Frozen — see [PHASE_135.md](PHASE_135.md).** First multimodal-
 interaction phase. Aivyx has shipped text + image input
 through cloud LLMs since Phase 45, but operator-facing
 input has always been keyboard-only and agent output
