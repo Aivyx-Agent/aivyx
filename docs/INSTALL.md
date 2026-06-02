@@ -1506,6 +1506,26 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 138 collapsed voice latency with streaming
+TTS.** The agent's reply is pipelined through the
+TTS engine on sentence boundaries — the operator
+hears sentence one while the LLM is still
+generating sentence three. A long reply (~200
+words, ~15 seconds of synthesized audio) drops
+from ~15 seconds of dead silence-before-playback
+to roughly the latency of the first sentence
+(typically 1-2 seconds).
+
+How it works: a serial consumer task pulls
+sentences from a `tokio::mpsc` queue as the agent
+streams text; each sentence is synthesized and
+played in order. Any final partial sentence
+(text that didn't end with a trailing space) is
+flushed after the agent finishes. On Linux +
+Windows this works out-of-the-box; macOS may hit
+a Send-safety constraint and need the Phase 139+
+platform-aware variant.
+
 **Phase 137 brought voice to full feature parity
 with the Local channel** — voice agents now get
 role overrides (Phase 30), per-turn Persona refresh

@@ -222,7 +222,136 @@ Phase 139+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 138 exit. Predictions at
-sign-off: DESIGN.md HOLD → 29; PRODUCT.md HOLD →
-29; lib.rs HOLD → 4; zero new deps; test count
-delta `+8` to `+14`; zero clippy warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  28 → **29**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 28 → **29**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 138 work in
+  `aivyx-voice` + the binary's voice dispatch
+  arm. Continuing post-Phase-135 reset:
+  3 → **4**.
+
+**Test count delta: +14 — top of predicted `+8`
+to `+14` range.** Workspace lib tests 3026 → 3040.
+Per-module:
+- `drain_complete_sentences` substrate helper: +8
+  (empty, partial-fragment, complete-then-partial,
+  EOF-not-flushed, multiple-in-one-call, decimal-
+  not-broken, incremental-streaming-simulation,
+  newline-boundary).
+- `VoiceChannel::set_text_sink` / `clear_text_sink`:
+  +3 (sink active diverts from buffer, sink
+  cleared reverts to buffer, sink replacement).
+- `run_one_voice_turn_streaming`: +3 (in-order
+  sentence flush + leftover partial, empty agent
+  response, empty ASR short-circuit).
+
+**Zero new workspace dependencies** as predicted.
+`tokio::sync::mpsc` was already in use across the
+workspace.
+
+**Zero clippy warnings** with default features.
+One in-flight catch during Task 3: the
+`Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>`
+field tripped `clippy::type_complexity`. Fixed by
+factoring the inner type into a `TextSinkFn` alias
+— cleaner reading and easier to grep than an
+inline `#[allow(...)]`.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `drain_complete_sentences` substrate helper: 86
+  lines + 8 tests. Pure function, in-place buffer
+  truncation, streaming-correct semantics (EOF
+  doesn't terminate; whitespace-after-terminator
+  does).
+- `VoiceChannel` text-sink hook: lock held only
+  long enough to invoke the closure; sink-active
+  path bypasses the legacy `text_buffer` so the
+  two paths can't double-count. Phase 137
+  `run_one_voice_turn` behaviour preserved
+  byte-for-byte when no sink is installed.
+- `run_one_voice_turn_streaming` + the matching
+  push-to-talk loop variant. Serial consumer task
+  pattern eliminates synthesis-ordering races at
+  the cost of theoretical parallel TTS. Worth it.
+- Binary voice arm switched cleanly to the
+  streaming variant (one import + one call-site
+  rename + banner text update).
+- 3040 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Serial consumer task is the right design,
+   but it gives up parallel synthesis.** Two TTS
+   tasks racing could swap sentence ordering —
+   unacceptable for voice. The cost is that
+   sentence-N+1 can't synthesize while sentence-N
+   plays. In practice Piper inference is fast
+   enough that this rarely matters. If it ever
+   does, the fix is a small ordered-buffer
+   pattern (synthesize in parallel, dispatch to
+   audio_out in completion order via a counter).
+   Phase 139+ if measurement shows it matters.
+
+2. **macOS Send constraint surfaces here.** The
+   consumer task pattern requires `AudioOut` to
+   cross a `tokio::spawn` boundary. On Linux +
+   Windows that's fine. On macOS, `cpal::Stream`
+   is `!Send` — the build will fail. Phase 139+
+   candidate: a macOS variant that runs the
+   consumer on the main runtime thread (likely
+   `tokio::task::LocalSet`).
+
+3. **Mid-stream cancellation is approximate.**
+   If the operator cancels mid-generation,
+   sentences already queued in the mpsc are
+   synthesized + played anyway — the cancellation
+   token affects only the LLM provider. Phase
+   139+ could drain the mpsc on cancel.
+
+4. **No interactive abort during synthesis.** Once
+   a sentence is in the playback queue, no UX to
+   skip-ahead or interrupt. Phase 139+ candidate:
+   keyboard listener that drains the mpsc on
+   Ctrl-C / Escape.
+
+5. **`build_agent_stack` substrate-tier promotion
+   still deferred.** Phase 137 flagged it; Phase
+   138 deferred again to keep scope on streaming
+   TTS. Becomes worth doing when more channel
+   adapters ship.
+
+6. **whisper-cpp-plus still upstream-broken** —
+   Phase 135 Q2c deferral remains. Not Phase 138
+   work.
+
+### Direction after Phase 138
+
+Voice now hears low-latency. Phase 139+ candidates:
+
+1. **Voice activity detection** for trim-on-
+   silence push-to-talk (no more "press Enter
+   twice"). Adds the `silero` MIT/Apache crate.
+2. **Wake-word activation** ("Hey Aivyx") via
+   Porcupine or Silero-wakeword.
+3. **Multimodal output** — agent speaks
+   descriptions of images via vision-capable LLMs.
+4. **macOS streaming variant** that runs the
+   consumer task on the main runtime thread.
+5. **Mid-synthesis cancellation UX** — drain the
+   mpsc on Ctrl-C / Escape.
+6. **Parallel TTS with ordered dispatch** if
+   measurement shows serial-consumer latency.
+7. **whisper-cpp-plus rehabilitation** — Phase 135
+   Q2c close-out once upstream is unstuck.
+8. **`build_agent_stack` substrate-tier promotion**
+   if more channel adapters ship.
+9. **Channel Activation Milestone** — still held
+   intentionally; 27th consecutive deferral at
+   Phase 138 exit.

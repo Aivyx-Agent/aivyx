@@ -6172,11 +6172,11 @@ async fn run_async(
                 use aivyx_voice::asr::whisper_rs::WhisperRsEngine;
                 use aivyx_voice::tts::piper::{config_from_generic, PiperEngine};
                 use aivyx_voice::{
-                    run_push_to_talk_loop, VoiceChannel, VoiceChannelConfig,
+                    run_push_to_talk_loop_streaming, VoiceChannel, VoiceChannelConfig,
                 };
 
                 eprintln!(
-                    "aivyx {} — voice channel (Phase 136)\n\
+                    "aivyx {} — voice channel (Phase 138 streaming TTS)\n\
                      fs sandbox: {}\n\
                      audit: persistent ({} events verified from disk)",
                     env!("CARGO_PKG_VERSION"),
@@ -6293,7 +6293,7 @@ async fn run_async(
                 let asr_dyn: Arc<dyn aivyx_voice::asr::AsrEngine> = Arc::new(asr_engine);
                 let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> = Arc::new(tts_engine);
 
-                run_push_to_talk_loop(agent, channel, asr_dyn, tts_dyn)
+                run_push_to_talk_loop_streaming(agent, channel, asr_dyn, tts_dyn)
                     .await
                     .map_err(|e| format!("voice loop: {e}"))
             }

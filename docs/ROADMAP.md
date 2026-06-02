@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 138 — Streaming TTS During LLM Generation
 
-**See [PHASE_138.md](PHASE_138.md).** Phase 137 follow-on.
+**Frozen — see [PHASE_138.md](PHASE_138.md).** Phase 137 follow-on.
 Phase 137 gave voice feature parity with Local; Phase 138
 attacks the biggest remaining UX weakness — latency-to-
 first-audio. Today a long agent reply produces tens of
