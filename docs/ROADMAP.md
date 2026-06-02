@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 141 — Chapter G: `calendar.upcoming` Tool
+
+**See [PHASE_141.md](PHASE_141.md).** Pivot from voice
+after six consecutive voice phases (135-140). Phase 125's
+Chapter G #2 candidate list included calendar reminders;
+Phase 141 ships the read-side tool: `calendar.upcoming`
+surfaces imminent events with relative-time formatting
+("in 5 minutes", "in 2 hours") and an `is_imminent` flag
+(within 30 minutes). Builds on Phase 128's existing
+OAuth + calendar_client substrate; adds chrono dep to
+aivyx-calendar (already in workspace). Proactive
+reminder dispatch (agent-initiated, not user-asked) is
+a separate Phase 142+ architectural question.
+
 ## Phase 140 — Close Phase 139 Debt: TOML Config + Manual-Abort UX
 
 **Frozen — see [PHASE_140.md](PHASE_140.md).** Phase 139 close-out.
