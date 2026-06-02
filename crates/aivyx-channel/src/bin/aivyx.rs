@@ -6184,39 +6184,66 @@ async fn run_async(
                     verified_event_count,
                 );
 
-                // Build the agent stack inline. Phase 136
-                // ships the minimum viable voice agent;
+                // Phase 137 — build the agent stack via the
+                // shared `build_agent_stack` helper so the
+                // voice arm gets feature parity with Local:
                 // role overrides, recall context, memory
-                // prune sinks, etc. (the rich Local-channel
-                // features) are Phase 137+.
-                let provider_for_planner = Arc::clone(&provider);
-                let registry_for_planner = Arc::clone(&tools);
-                let planner_model = model.clone();
-                let planner_system = system_prompt.clone();
-                let planner_allowlist = tool_allowlist.clone();
-                let planner_factory = move || -> Box<dyn aivyx_core::TurnPlanner> {
-                    let cfg = aivyx_core::llm_planner::LlmPlannerConfig::new(
-                        planner_model.clone(),
-                    )
-                    .with_system_prompt(planner_system.clone())
-                    .with_max_tokens(DEFAULT_MAX_TOKENS)
-                    .with_tool_allowlist(planner_allowlist.clone());
-                    Box::new(aivyx_core::llm_planner::LlmPlanner::new(
-                        Arc::clone(&provider_for_planner),
-                        Arc::clone(&registry_for_planner),
-                        cfg,
-                    ))
+                // prune sinks, prompt refresher,
+                // system_prompt_refiner all flow through.
+                //
+                // The prompt_refresher closure mirrors the
+                // Local arm exactly (lines 5736-5760 in this
+                // file). A Phase 138+ candidate could DRY
+                // this up into a small helper.
+                let refresher_profile = profile.clone();
+                let refresher_role_name = active_role_name.clone();
+                let refresher_role_prompt =
+                    role_for_envelope.system_prompt.value.clone();
+                let refresher_shared = shared_persona.clone();
+                let refresher_catalog = prompt_tool_catalog.clone();
+                let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
+                    Arc::new(move || {
+                        let snap = refresher_shared
+                            .read()
+                            .expect("persona lock not poisoned at turn build");
+                        let assembled = aivyx_channel::assemble_session_prompt(
+                            &refresher_profile,
+                            Some(&*snap),
+                            &refresher_role_name,
+                            &refresher_role_prompt,
+                        );
+                        aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                            &assembled,
+                            &refresher_catalog,
+                            ollama_prompt_strategy,
+                        )
+                    });
+
+                let agent_spec = aivyx_channel::session::AgentStackSpec {
+                    model: model.clone(),
+                    system_prompt: system_prompt.clone(),
+                    max_tokens: DEFAULT_MAX_TOKENS,
+                    capabilities,
+                    tools,
+                    tool_allowlist,
+                    memory_topic_prefix,
+                    role_overrides: Some(shared_role_overrides.clone()),
+                    prompt_refresher: Some(prompt_refresher),
+                    context_window_tokens: Some(
+                        provider_kind.value.default_context_window(),
+                    ),
+                    prune_sink: Some(Arc::new(
+                        aivyx_channel::prune_sink::MemoryPruneSink::new(
+                            Arc::clone(&memory),
+                        ),
+                    )),
+                    context_provider: recall_context.clone(),
+                    system_prompt_refiner: system_prompt_refiner.clone(),
                 };
-                let agent: Arc<dyn Agent> = Arc::new(
-                    ConcreteAgent::new(
-                        AgentId::new(),
-                        capabilities,
-                        tools,
-                        audit,
-                        planner_factory,
-                    )
-                    .with_tool_allowlist(tool_allowlist)
-                    .with_memory_topic_prefix(memory_topic_prefix),
+                let agent = aivyx_channel::session::build_agent_stack(
+                    Arc::clone(&provider),
+                    Arc::clone(&audit),
+                    agent_spec,
                 );
 
                 // Build the voice channel + engines from
