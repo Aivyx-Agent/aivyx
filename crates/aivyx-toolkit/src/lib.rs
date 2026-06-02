@@ -36,6 +36,7 @@
 //! channel must grant individual bases via the role's
 //! `capability_scopes` per Phase 62 Q2(a).
 
+pub mod budget_store;
 pub mod config;
 pub mod harness;
 pub mod health_polling;
@@ -43,6 +44,9 @@ pub mod health_store;
 pub mod task_store;
 pub mod tools;
 
+pub use budget_store::{
+    BudgetEntry, BudgetStore, BudgetStoreError, BudgetSummary, CategoryTotal,
+};
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
 pub use health_polling::{probe, run_polling_loop, run_polling_tick};
