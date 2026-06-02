@@ -25,11 +25,19 @@ default = []
 # recommendation is `asr-whisper-rs` (mature, large community,
 # same engine that powers most Whisper projects globally).
 asr-whisper-rs = ["dep:whisper-rs"]
-# Phase 135 Q2c alternative — whisper-cpp-plus surfaces
-# real-time PCM streaming and built-in Silero VAD without the
-# manual wiring whisper-rs needs. Smaller community; younger
-# project. Tradeoffs documented in INSTALL.md.
-asr-whisper-cpp-plus = ["dep:whisper-cpp-plus"]
+# Phase 135 Q2c alternative — whisper-cpp-plus.
+#
+# **Scope-adjusted from Q2c sign-off.** The published
+# `whisper-cpp-plus = "0.1.4"` does not build against
+# current whisper.cpp (40 errors against
+# `whisper_full_params` struct shape — upstream-stale).
+# Phase 135 keeps the feature flag wired for future
+# re-enablement but does NOT depend on the broken crate;
+# enabling the feature compiles the stub module only.
+# Phase 136+ revisits when an upstream fix lands or
+# we swap to a different alternative binding
+# (rwhisper, whisper-stream-rs, etc.).
+asr-whisper-cpp-plus = []
 
 # TTS backends — only Piper for Phase 135. Higher-quality
 # alternatives (Kokoro, F5-TTS) lack mature Rust bindings and
@@ -72,7 +80,11 @@ rodio = { version = "0.22", default-features = false }
 
 # Optional ASR backends — see [features] above.
 whisper-rs = { version = "0.16", optional = true }
-whisper-cpp-plus = { version = "0.1", optional = true }
+# whisper-cpp-plus deliberately omitted — upstream
+# v0.1.4 doesn't build against current whisper.cpp.
+# See `asr/whisper_cpp_plus.rs` for the full
+# scope-adjustment rationale. Re-enable when an
+# upstream fix lands.
 
 # Optional TTS backend. piper1-rs requires ONNX runtime
 # headers at build time (`ONNX_RUNTIME_DIR`,
