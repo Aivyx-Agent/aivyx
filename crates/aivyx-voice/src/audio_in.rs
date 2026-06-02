@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
-use crate::asr::{stereo_to_mono_into_16k, WHISPER_SAMPLE_RATE};
+use crate::asr::stereo_to_mono_into_16k;
 
 /// Errors `AudioIn` can surface.
 #[derive(Debug, Error)]
@@ -95,8 +95,13 @@ impl AudioIn {
                     AudioInError::DeviceUnavailable(format!("enumerate inputs: {e}"))
                 })?;
                 for d in devices {
-                    if let Ok(n) = d.name()
-                        && n == name
+                    // cpal 0.17 deprecated `name()` in favor of
+                    // `description()`. We match on the
+                    // description so `[voice] input_device =
+                    // "USB Mic"` matches "USB Mic" exactly as
+                    // shown in cpal's enumeration output.
+                    if let Ok(desc) = d.description()
+                        && desc.name() == name
                     {
                         found = Some(d);
                         break;
@@ -244,14 +249,12 @@ impl AudioIn {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn whisper_sample_rate_constant_matches_asr_module() {
         // Sanity: the rate we resample to here is the
         // same rate the ASR module exports as its
         // canonical Whisper input rate.
-        assert_eq!(WHISPER_SAMPLE_RATE, 16_000);
+        assert_eq!(crate::asr::WHISPER_SAMPLE_RATE, 16_000);
     }
 
     // Note — full AudioIn construction tests would need
