@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 142 — `calendar.list_calendars` + Multi-Calendar `upcoming`
 
-**See [PHASE_142.md](PHASE_142.md).** Phase 141 follow-on.
+**Frozen — see [PHASE_142.md](PHASE_142.md).** Phase 141 follow-on.
 Phase 141 made calendar.upcoming ergonomic but on `primary`
 only. Real operators have 3-5 calendars (work, personal,
 shared, project). Phase 142 adds calendar.list_calendars so

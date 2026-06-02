@@ -216,8 +216,133 @@ operator calendars. Phase 143+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 142 exit. Predictions at
-sign-off: DESIGN.md HOLD → 33; PRODUCT.md HOLD
-→ 33; lib.rs HOLD → 8; zero new deps; test
-count delta `+6` to `+12`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  32 → **33**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 32 → **33**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 142 work in
+  `aivyx-calendar`. Continuing post-Phase-135
+  reset: 7 → **8**.
+
+**Test count delta: +12 — top of predicted `+6`
+to `+12` range.** Workspace lib tests 3075 →
+3087. Per-module:
+- `list_calendars`: +4 (calendar_summary
+  mapper — primary owner with extras dropped,
+  secondary writer with is_primary default,
+  freeBusyReader role, empty input defensive).
+- `upcoming`: +8 (legacy-id → singleton Vec,
+  calendar_ids array honored, both-rejected,
+  empty-array-rejected, blank-entry-rejected,
+  merge_sort orders by start, truncates to
+  cap, handles unparseable starts).
+
+**Zero new workspace dependencies** as
+predicted. `parse_event_time` promoted from
+`relative_time` private to `pub(crate)` for
+reuse in the sort key path.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `CalendarListCalendars` tool: stateless,
+  read-only, no pagination (most operators
+  have <50 calendars; Phase 143+ if needed).
+  Pure-substrate `calendar_summary` mapper
+  tested across 4 input shapes.
+- Multi-calendar `calendar.upcoming`: input
+  schema accepts `calendar_ids: [String]`,
+  `calendar_id: String`, neither (default), or
+  both (rejected as ambiguous). Internal
+  model normalizes to a single Vec<String>.
+- Sequential fan-out + `merge_sort_and_cap`
+  helper that sorts by parsed start time and
+  truncates to cap. Unparseable starts sort
+  to the end defensively.
+- Each event in output gains a `calendar_id`
+  field for traceability.
+- `parse_event_time` promoted to `pub(crate)`
+  in `relative_time` so both timestamp
+  consumers (relative phrase + sort key) share
+  one parser.
+- `main.rs` registers the new tool; surface
+  is now 7 tools.
+- 3087 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Sequential, not parallel.** A
+   `calendar_ids` list of 5 takes 5× single-
+   calendar latency. Acceptable for typical
+   operator (3-5 calendars, sub-second each).
+   `tokio::join_all` for parallel is a small
+   Phase 143+ change if measurement matters.
+
+2. **No cross-calendar dedup.** Events on
+   both personal + work (cross-invite case)
+   surface twice. If operators complain about
+   duplicate noise, Phase 143+ could dedupe
+   by title + start.
+
+3. **Per-calendar max_results.** Each calendar
+   query asks for the full max_results;
+   merged list can be up to N × max_results
+   before truncation. Tolerable over-fetch.
+   Phase 143+ could push down `max_results /
+   N` if it matters.
+
+4. **Mutually-exclusive shape requires
+   explicit reject.** `calendar_id` +
+   `calendar_ids` together returns a validation
+   error rather than silently picking one.
+   More verbose for the agent but
+   self-correcting (clear error message in the
+   ToolOutcome::Failed detail).
+
+5. **No paginated `list_calendars` call.**
+   Google's default page size is 100;
+   operators with 100+ calendars exist but
+   are rare. Phase 143+ if surfaces.
+
+6. **`access_role` raw passthrough.** Phase
+   142 doesn't translate Google's role strings
+   to capability booleans (`can_write` etc.).
+   The agent reads "owner"/"writer"/etc. and
+   reasons. Phase 143+ candidate.
+
+### Direction after Phase 142
+
+After Phase 142, the agent sees across every
+operator calendar. Phase 143+ candidates:
+
+1. **Parallel fan-out** via `tokio::join_all`
+   if measurement shows sequential latency
+   matters.
+2. **Cross-calendar dedup.**
+3. **Per-calendar capability mapping** (raw
+   access_role → can_write booleans).
+4. **Paginated `list_calendars`** for
+   operators with 100+ calendars.
+5. **Proactive reminder dispatch** — the big
+   architectural step.
+6. **Chapter G budget tracking.**
+7. **Chapter G health.check.remove + alert
+   dispatch.**
+8. **Voice continuation** — mid-synthesis
+   abort, Silero VAD, streaming ASR, wake-
+   word, multimodal output, macOS variant,
+   lock-free detector.
+9. **Relative-time localization.**
+10. **whisper-cpp-plus rehabilitation.**
+11. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters
+    ship.
+12. **Channel Activation Milestone** — still
+    held intentionally; 31st consecutive
+    deferral at Phase 142 exit.
