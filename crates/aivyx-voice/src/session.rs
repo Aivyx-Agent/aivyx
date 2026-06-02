@@ -482,14 +482,17 @@ where
 
     let input_device = channel.config().input_device.clone();
 
-    // Phase 139 — auto-stop thresholds. Hardcoded
-    // for now; a `[voice.vad]` TOML knob is a
-    // Phase 140+ candidate if operators hit
-    // tuning needs.
-    const DWELL_SECS: f32 = 1.5; // sustained silence → stop
-    const MIN_SPEECH_SECS: f32 = 0.5; // ignore auto-stop before this
-    const MAX_CAPTURE_SECS: f32 = 30.0; // hard cap to bound runaway recording
-    const POLL_INTERVAL_MS: u64 = 100;
+    // Phase 140 — auto-stop thresholds now sourced
+    // from `channel.config().vad`, operator-tunable
+    // via the `[voice.vad]` TOML section. Defaults
+    // match Phase 139's previously-hardcoded values
+    // so operators who don't set the section keep
+    // the same behavior.
+    let vad_cfg = channel.config().vad.clone();
+    let dwell_threshold = std::time::Duration::from_secs_f32(vad_cfg.dwell_secs);
+    let min_speech = std::time::Duration::from_secs_f32(vad_cfg.min_speech_secs);
+    let max_capture = std::time::Duration::from_secs_f32(vad_cfg.max_capture_secs);
+    let poll_interval = std::time::Duration::from_millis(vad_cfg.poll_interval_ms);
 
     eprintln!();
     eprintln!("aivyx voice — push-to-talk REPL (streaming TTS + auto-stop)");
@@ -518,9 +521,10 @@ where
         // thread and feeds both the capture buffer
         // and the silence detector in lockstep; we
         // just observe the detector state.
-        let mut audio_in = AudioIn::new(input_device.as_deref()).map_err(|e| {
-            VoiceSessionError::AudioDevice(format!("input: {e}"))
-        })?;
+        let mut audio_in =
+            AudioIn::new_with_vad_config(input_device.as_deref(), &vad_cfg).map_err(|e| {
+                VoiceSessionError::AudioDevice(format!("input: {e}"))
+            })?;
         audio_in.start().map_err(|e| {
             VoiceSessionError::AudioCapture(format!("start: {e}"))
         })?;
@@ -528,14 +532,11 @@ where
             "[voice] recording at {} Hz / {} ch — pause for {:.1}s to dispatch.",
             audio_in.src_rate(),
             audio_in.src_channels(),
-            DWELL_SECS,
+            vad_cfg.dwell_secs,
         );
-        let dwell_threshold = std::time::Duration::from_secs_f32(DWELL_SECS);
-        let min_speech = std::time::Duration::from_secs_f32(MIN_SPEECH_SECS);
-        let max_capture = std::time::Duration::from_secs_f32(MAX_CAPTURE_SECS);
         let mut stopped_reason = "silence";
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+            tokio::time::sleep(poll_interval).await;
             let total = audio_in.total_recorded();
             let dwell = audio_in.silence_dwell();
             if total >= max_capture {
@@ -554,7 +555,8 @@ where
         })?;
         if stopped_reason == "max-capture" {
             eprintln!(
-                "[voice] hit {MAX_CAPTURE_SECS:.0}s max-capture cap — dispatching what we have."
+                "[voice] hit {:.0}s max-capture cap — dispatching what we have.",
+                vad_cfg.max_capture_secs,
             );
         }
         drop(audio_in);

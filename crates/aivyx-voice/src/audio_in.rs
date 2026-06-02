@@ -36,7 +36,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
 use crate::asr::stereo_to_mono_into_16k;
-use crate::silence_detector::{SilenceDetector, SilenceDetectorConfig};
+use crate::silence_detector::{SilenceDetector, VoiceVadConfig};
 
 /// Errors `AudioIn` can surface.
 #[derive(Debug, Error)]
@@ -94,7 +94,29 @@ impl AudioIn {
     /// configured device or the system default. The
     /// stream is built but **not yet playing**; the
     /// caller invokes `start` to begin capture.
+    ///
+    /// Uses VAD defaults that match Phase 139's
+    /// hardcoded values. For operator-tunable
+    /// thresholds via `[voice.vad]` TOML, use
+    /// [`AudioIn::new_with_vad_config`].
     pub fn new(device_name: Option<&str>) -> Result<Self, AudioInError> {
+        Self::new_with_vad_config(device_name, &VoiceVadConfig::default())
+    }
+
+    /// Phase 140 — operator-tunable variant of
+    /// [`new`]. Build the input stream and the
+    /// silence detector against the supplied
+    /// [`VoiceVadConfig`]. The detector's
+    /// sample-rate field is overridden from the
+    /// device's negotiated rate (whatever cpal
+    /// gave us) so frame sizing is always
+    /// correct; everything else (threshold,
+    /// frame width) honors the operator's
+    /// config.
+    pub fn new_with_vad_config(
+        device_name: Option<&str>,
+        vad: &VoiceVadConfig,
+    ) -> Result<Self, AudioInError> {
         let host = cpal::default_host();
         let device = match device_name {
             Some(name) => {
@@ -140,9 +162,9 @@ impl AudioIn {
         let stream_config: cpal::StreamConfig = config.into();
 
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-        let detector: Arc<Mutex<SilenceDetector>> = Arc::new(Mutex::new(
-            SilenceDetector::new(SilenceDetectorConfig::for_sample_rate(src_rate)),
-        ));
+        let detector_config = vad.to_silence_detector_config(src_rate);
+        let detector: Arc<Mutex<SilenceDetector>> =
+            Arc::new(Mutex::new(SilenceDetector::new(detector_config)));
         let err_fn = |e| eprintln!("audio input stream error: {e}");
 
         let stream = match sample_format {
