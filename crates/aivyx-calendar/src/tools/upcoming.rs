@@ -46,7 +46,7 @@ use aivyx_capability::Scope;
 use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 use crate::calendar_client::SharedCalendarClient;
-use crate::relative_time::{format_relative_time, is_imminent};
+use crate::relative_time::{format_relative_time, is_imminent, parse_event_time};
 
 const MAX_RESULTS_CAP: u64 = 250;
 const DEFAULT_MAX_RESULTS: u64 = 50;
@@ -86,23 +86,31 @@ impl Tool for CalendarUpcoming {
 
     fn description(&self) -> &str {
         "List Google Calendar events starting within \
-         the next N hours. Input is a JSON object \
-         with optional `window_hours` (default 24, \
-         capped at 720 = 30 days), `calendar_id` \
-         (default `\"primary\"`), and `max_results` \
-         (default 50, capped at 250). Returns a JSON \
-         object with an `events` array, a `now` \
-         timestamp, and the `window_hours` actually \
-         used. Each event has the same shape as \
-         `calendar.list_events` plus two extra \
-         fields: `starts_in_human` (e.g. \"in 15 \
-         minutes\", \"tomorrow\") and `is_imminent` \
-         (true if the event starts within 30 \
-         minutes). Use this when the operator asks \
-         \"what's coming up\" / \"do I have \
-         anything today\" / similar; use \
-         `calendar.list_events` for arbitrary time \
-         ranges."
+         the next N hours, optionally across multiple \
+         calendars. Input is a JSON object with: \
+         optional `window_hours` (default 24, capped \
+         at 720 = 30 days); optional `calendar_ids` \
+         (array of calendar IDs to query — Phase \
+         142 multi-calendar shape) OR optional \
+         `calendar_id` (single ID, Phase 141 \
+         legacy shape — default `\"primary\"`); and \
+         optional `max_results` (default 50, capped \
+         at 250). When `calendar_ids` has multiple \
+         entries, queries are sequential and the \
+         merged event list is sorted by start \
+         time before the max_results cap is \
+         applied. Returns a JSON object with an \
+         `events` array, a `now` timestamp, and \
+         the `window_hours` actually used. Each \
+         event has the same shape as \
+         `calendar.list_events` plus three Phase \
+         141/142 fields: `starts_in_human` \
+         (e.g. \"in 15 minutes\", \"tomorrow\"), \
+         `is_imminent` (true if the event starts \
+         within 30 minutes), and `calendar_id` \
+         (which calendar it came from). Pair with \
+         `calendar.list_calendars` for the agent \
+         to discover what calendar IDs exist."
     }
 
     fn input_schema(&self) -> &Value {
@@ -129,41 +137,54 @@ impl Tool for CalendarUpcoming {
         let now = Utc::now();
         let window = chrono::Duration::hours(parsed.window_hours as i64);
         let time_max = now + window;
+        let time_min_rfc = now.to_rfc3339();
+        let time_max_rfc = time_max.to_rfc3339();
 
-        let path = format!(
-            "/calendars/{}/events",
-            super::list_events_urlencode(&parsed.calendar_id)
-        );
-        let query: Vec<(&str, String)> = vec![
-            ("maxResults", parsed.max_results.to_string()),
-            ("singleEvents", "true".to_string()),
-            ("orderBy", "startTime".to_string()),
-            ("timeMin", now.to_rfc3339()),
-            ("timeMax", time_max.to_rfc3339()),
-        ];
+        // Phase 142 — sequential fan-out over the
+        // requested calendars. Each per-calendar
+        // result is enriched with the source
+        // calendar_id then merged into one Vec
+        // sorted by start time. Cap applied
+        // post-merge so cross-calendar density
+        // is preserved.
+        let mut merged: Vec<Value> = Vec::new();
+        for calendar_id in &parsed.calendar_ids {
+            let path = format!(
+                "/calendars/{}/events",
+                super::list_events_urlencode(calendar_id)
+            );
+            let query: Vec<(&str, String)> = vec![
+                ("maxResults", parsed.max_results.to_string()),
+                ("singleEvents", "true".to_string()),
+                ("orderBy", "startTime".to_string()),
+                ("timeMin", time_min_rfc.clone()),
+                ("timeMax", time_max_rfc.clone()),
+            ];
 
-        let body: Value = match self.client.get_json(&path, &query).await {
-            Ok(v) => v,
-            Err(e) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("calendar.upcoming: API call failed: {e}"),
-                });
+            let body: Value = match self.client.get_json(&path, &query).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "calendar.upcoming: API call failed for \
+                             calendar {calendar_id:?}: {e}"
+                        ),
+                    });
+                }
+            };
+
+            if let Some(items) = body.get("items").and_then(|v| v.as_array()) {
+                for raw in items {
+                    merged.push(enrich_event(raw, now, calendar_id));
+                }
             }
-        };
+        }
 
-        let events: Vec<Value> = body
-            .get("items")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .map(|e| enrich_event(e, now))
-                    .collect()
-            })
-            .unwrap_or_default();
+        merge_sort_and_cap(&mut merged, parsed.max_results as usize);
 
         let output = json!({
-            "events": events,
+            "events": merged,
             "now": now.to_rfc3339(),
             "window_hours": parsed.window_hours,
         });
@@ -175,12 +196,38 @@ impl Tool for CalendarUpcoming {
     }
 }
 
-/// Build the shared event summary, then attach the
-/// two Phase 141 fields. Pure substrate (apart
-/// from the relative_time bridge); unit-tested
-/// via the existing relative_time tests + the
-/// per-event tests below.
-fn enrich_event(event: &Value, now: DateTime<Utc>) -> Value {
+/// Sort the merged event list by start time
+/// (events without a parseable start go to the
+/// end), then truncate to `cap`.
+fn merge_sort_and_cap(events: &mut Vec<Value>, cap: usize) {
+    events.sort_by(|a, b| {
+        let a_key = sort_key(a);
+        let b_key = sort_key(b);
+        match (a_key, b_key) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+    if events.len() > cap {
+        events.truncate(cap);
+    }
+}
+
+fn sort_key(event: &Value) -> Option<DateTime<Utc>> {
+    let start = event.get("start").and_then(|v| v.as_str())?;
+    parse_event_time(start)
+}
+
+/// Build the shared event summary, then attach
+/// the Phase 141 relative-time fields and the
+/// Phase 142 `calendar_id` traceability field.
+/// Pure substrate (apart from the relative_time
+/// bridge); unit-tested via the existing
+/// relative_time tests + the per-event tests
+/// below.
+fn enrich_event(event: &Value, now: DateTime<Utc>, calendar_id: &str) -> Value {
     let mut summary = super::event_summary(event);
     let start_str = summary
         .get("start")
@@ -190,6 +237,7 @@ fn enrich_event(event: &Value, now: DateTime<Utc>) -> Value {
     let imminent = is_imminent(start_str, now, IMMINENT_THRESHOLD_SECS);
     summary["starts_in_human"] = Value::String(starts_in_human);
     summary["is_imminent"] = Value::Bool(imminent);
+    summary["calendar_id"] = Value::String(calendar_id.to_string());
     summary
 }
 
@@ -205,13 +253,18 @@ fn input_schema() -> Value {
             },
             "calendar_id": {
                 "type": "string",
-                "description": "Calendar identifier (default \"primary\")"
+                "description": "Single calendar identifier (legacy Phase 141 shape; default \"primary\"). Mutually exclusive with calendar_ids."
+            },
+            "calendar_ids": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Multiple calendar identifiers to fan-out and merge (Phase 142). Mutually exclusive with calendar_id."
             },
             "max_results": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_RESULTS_CAP,
-                "description": "Cap on events returned (default 50, max 250)"
+                "description": "Cap on events returned post-merge (default 50, max 250)"
             }
         },
         "additionalProperties": false
@@ -221,7 +274,11 @@ fn input_schema() -> Value {
 #[derive(Debug)]
 struct ParsedInput {
     window_hours: u64,
-    calendar_id: String,
+    /// Phase 142 — every input shape normalizes
+    /// to this Vec. Single-calendar callers get
+    /// a length-1 Vec; multi-calendar callers get
+    /// whatever they passed in.
+    calendar_ids: Vec<String>,
     max_results: u64,
 }
 
@@ -241,17 +298,62 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
     }
     let window_hours = window_hours.min(MAX_WINDOW_HOURS);
 
-    let calendar_id = match obj.get("calendar_id") {
-        None => DEFAULT_CALENDAR_ID.to_string(),
-        Some(v) => v
-            .as_str()
-            .ok_or_else(|| "`calendar_id` must be a string".to_string())?
-            .trim()
-            .to_string(),
+    // Phase 142 — three input shapes:
+    // 1. calendar_ids array → use as-is.
+    // 2. calendar_id string → wrap to single-
+    //    item Vec (Phase 141 legacy path).
+    // 3. neither → default ["primary"].
+    // 4. both → reject as ambiguous.
+    let has_ids = obj.contains_key("calendar_ids");
+    let has_id = obj.contains_key("calendar_id");
+    let calendar_ids: Vec<String> = match (has_ids, has_id) {
+        (true, true) => {
+            return Err(
+                "specify either `calendar_id` (single, legacy) or \
+                 `calendar_ids` (array, multi), not both"
+                    .to_string(),
+            );
+        }
+        (true, false) => {
+            let arr = obj
+                .get("calendar_ids")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "`calendar_ids` must be an array of strings".to_string())?;
+            let mut out: Vec<String> = Vec::with_capacity(arr.len());
+            for item in arr {
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| {
+                        "`calendar_ids[]` entries must be strings".to_string()
+                    })?
+                    .trim()
+                    .to_string();
+                if s.is_empty() {
+                    return Err(
+                        "`calendar_ids[]` entries must not be empty".to_string()
+                    );
+                }
+                out.push(s);
+            }
+            if out.is_empty() {
+                return Err("`calendar_ids` must not be empty".to_string());
+            }
+            out
+        }
+        (false, true) => {
+            let s = obj
+                .get("calendar_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "`calendar_id` must be a string".to_string())?
+                .trim()
+                .to_string();
+            if s.is_empty() {
+                return Err("`calendar_id` must not be empty".to_string());
+            }
+            vec![s]
+        }
+        (false, false) => vec![DEFAULT_CALENDAR_ID.to_string()],
     };
-    if calendar_id.is_empty() {
-        return Err("`calendar_id` must not be empty".to_string());
-    }
 
     let max_results = match obj.get("max_results") {
         None => DEFAULT_MAX_RESULTS,
@@ -266,7 +368,7 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
 
     Ok(ParsedInput {
         window_hours,
-        calendar_id,
+        calendar_ids,
         max_results,
     })
 }
@@ -289,7 +391,7 @@ mod tests {
     fn parse_default_input_uses_defaults() {
         let parsed = parse_input(&json!({})).unwrap();
         assert_eq!(parsed.window_hours, 24);
-        assert_eq!(parsed.calendar_id, "primary");
+        assert_eq!(parsed.calendar_ids, vec!["primary".to_string()]);
         assert_eq!(parsed.max_results, 50);
     }
 
@@ -325,10 +427,118 @@ mod tests {
         assert!(err.contains("must not be empty"), "{err}");
     }
 
+    // ---- Phase 142 — multi-calendar parsing ----
+
     #[test]
-    fn enrich_attaches_relative_time_and_imminent_flag() {
-        // Event 15 minutes ahead → "in 15 minutes",
-        // imminent=true.
+    fn parse_legacy_calendar_id_normalizes_to_singleton_vec() {
+        let parsed = parse_input(&json!({ "calendar_id": "work@x.com" })).unwrap();
+        assert_eq!(parsed.calendar_ids, vec!["work@x.com".to_string()]);
+    }
+
+    #[test]
+    fn parse_calendar_ids_array_used_as_is() {
+        let parsed = parse_input(&json!({
+            "calendar_ids": ["primary", "work@x.com", "shared@y.com"],
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.calendar_ids,
+            vec![
+                "primary".to_string(),
+                "work@x.com".to_string(),
+                "shared@y.com".to_string()
+            ],
+        );
+    }
+
+    #[test]
+    fn parse_both_calendar_id_and_calendar_ids_rejected() {
+        let err = parse_input(&json!({
+            "calendar_id": "primary",
+            "calendar_ids": ["primary"],
+        }))
+        .unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn parse_empty_calendar_ids_array_rejected() {
+        let err = parse_input(&json!({ "calendar_ids": [] })).unwrap_err();
+        assert!(err.contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn parse_blank_entry_in_calendar_ids_rejected() {
+        let err = parse_input(&json!({ "calendar_ids": ["primary", "  "] })).unwrap_err();
+        assert!(err.contains("must not be empty"), "{err}");
+    }
+
+    // ---- Phase 142 — merge + sort + cap ----
+
+    #[test]
+    fn merge_sort_orders_by_start_time_across_calendars() {
+        // Three events: middle one is earliest,
+        // last one is latest. After sort the
+        // order must be (earliest, middle,
+        // latest).
+        let mut events = vec![
+            json!({
+                "id": "b",
+                "start": at_offset(20 * 60),
+                "calendar_id": "personal",
+            }),
+            json!({
+                "id": "a",
+                "start": at_offset(5 * 60),
+                "calendar_id": "work",
+            }),
+            json!({
+                "id": "c",
+                "start": at_offset(60 * 60),
+                "calendar_id": "shared",
+            }),
+        ];
+        merge_sort_and_cap(&mut events, 10);
+        assert_eq!(events[0]["id"], json!("a"));
+        assert_eq!(events[1]["id"], json!("b"));
+        assert_eq!(events[2]["id"], json!("c"));
+    }
+
+    #[test]
+    fn merge_sort_truncates_to_cap() {
+        let mut events: Vec<Value> = (0..10)
+            .map(|i| {
+                json!({
+                    "id": format!("evt-{i}"),
+                    "start": at_offset((i as i64) * 600),
+                })
+            })
+            .collect();
+        merge_sort_and_cap(&mut events, 3);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0]["id"], json!("evt-0"));
+        assert_eq!(events[1]["id"], json!("evt-1"));
+        assert_eq!(events[2]["id"], json!("evt-2"));
+    }
+
+    #[test]
+    fn merge_sort_handles_unparseable_start_by_pushing_to_end() {
+        let mut events = vec![
+            json!({"id": "a", "start": "garbage"}),
+            json!({"id": "b", "start": at_offset(60)}),
+            json!({"id": "c", "start": null}),
+        ];
+        merge_sort_and_cap(&mut events, 10);
+        // Parseable event comes first; the two
+        // unparseable ones fall to the end in
+        // stable relative order.
+        assert_eq!(events[0]["id"], json!("b"));
+    }
+
+    // ---- enrichment with calendar_id tag ----
+
+    #[test]
+    fn enrich_attaches_relative_time_imminent_and_calendar_id() {
         let event = json!({
             "id": "evt-1",
             "summary": "Standup",
@@ -337,13 +547,15 @@ mod tests {
             "location": "Conf A",
             "attendees": [{"email": "a@x"}, {"email": "b@x"}],
         });
-        let enriched = enrich_event(&event, now_fixed());
+        let enriched = enrich_event(&event, now_fixed(), "work@x.com");
         assert_eq!(enriched["id"], json!("evt-1"));
         assert_eq!(enriched["summary"], json!("Standup"));
         assert_eq!(enriched["location"], json!("Conf A"));
         assert_eq!(enriched["attendee_count"], json!(2));
         assert_eq!(enriched["starts_in_human"], json!("in 15 minutes"));
         assert_eq!(enriched["is_imminent"], json!(true));
+        // Phase 142 — calendar_id traceability.
+        assert_eq!(enriched["calendar_id"], json!("work@x.com"));
     }
 
     #[test]
@@ -354,7 +566,7 @@ mod tests {
             "start": { "dateTime": at_offset(72 * 3600) },
             "end":   { "dateTime": at_offset(73 * 3600) },
         });
-        let enriched = enrich_event(&event, now_fixed());
+        let enriched = enrich_event(&event, now_fixed(), "primary");
         assert_eq!(enriched["starts_in_human"], json!("in 3 days"));
         assert_eq!(enriched["is_imminent"], json!(false));
     }
@@ -367,9 +579,7 @@ mod tests {
             "start": { "date": "2026-06-10" },
             "end":   { "date": "2026-06-11" },
         });
-        let enriched = enrich_event(&event, now_fixed());
-        // 6.5 days out → integer-day-truncates to
-        // "in 6 days".
+        let enriched = enrich_event(&event, now_fixed(), "primary");
         assert_eq!(enriched["starts_in_human"], json!("in 6 days"));
         assert_eq!(enriched["is_imminent"], json!(false));
     }

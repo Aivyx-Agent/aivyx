@@ -44,7 +44,13 @@ use chrono::{DateTime, Utc};
 /// Returns `None` if the string can't be parsed —
 /// the caller falls back to omitting the relative-
 /// time fields.
-fn parse_event_time(s: &str) -> Option<DateTime<Utc>> {
+///
+/// `pub(crate)` since Phase 142 — Phase 142's
+/// multi-calendar `calendar.upcoming` reuses this
+/// to compute sort keys for the merged event
+/// list, so all timestamps land in one
+/// timezone-normalized total ordering.
+pub(crate) fn parse_event_time(s: &str) -> Option<DateTime<Utc>> {
     // Try RFC 3339 first (the dateTime case from
     // flatten_timestamp).
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
