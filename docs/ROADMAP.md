@@ -3535,6 +3535,73 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 135 — Voice I/O: Talk to the Agent, Agent Talks Back
+
+**See [PHASE_135.md](PHASE_135.md).** First multimodal-
+interaction phase. Aivyx has shipped text + image input
+through cloud LLMs since Phase 45, but operator-facing
+input has always been keyboard-only and agent output
+text-only. Phase 135 changes that: the operator speaks
+to the agent through their microphone; the agent
+speaks back through the speakers. End-to-end voice
+loop, fully local — Whisper STT + Piper TTS both run
+in-process via Rust bindings (`whisper-rs`,
+`piper1-rs`), zero outbound network calls during
+inference.
+
+**Direct operator request:** "Talk to the agent and
+the agent talks back instead of just text on screen."
+Voice is the next UX axis Aivyx covers.
+
+**Q-block — 3 Recommended + 1 non-Recommended:**
+- Q1a — new `aivyx-voice` crate (Chapter-F-style
+  optional channel adapter; feature-gated through
+  aivyx-channel; zero binary-size impact when
+  unused).
+- Q2c (non-Recommended) — both `whisper-rs`
+  (default) and `whisper-cpp-plus` (alternative)
+  ship as STT engine options. Doubles test
+  surface; mirrors the Phase 133 multi-provider
+  pattern.
+- Q3a — Piper via `piper1-rs` for TTS. CPU-friendly,
+  real-time on Raspberry Pi class hardware,
+  Apache 2.0, 50+ voices across 30+ languages.
+- Q4a — push-to-talk MVP. Operator presses Enter
+  to start/stop recording. Wake-word activation
+  ("Hey Aivyx") + always-listening with VAD trim
+  are Phase 136+.
+
+**Streak predictions — two HOLDs + one break:**
+- DESIGN.md HOLD → 26 (no contract amendment).
+- PRODUCT.md HOLD → 26 (voice is natural extension
+  of "AI personal assistant").
+- **`aivyx-core/src/lib.rs` streak breaks at 8 and
+  resets to 1.** The new `ChannelPlatform::Voice`
+  variant lives where every existing platform
+  variant lives. Honest break over uglier
+  workaround.
+
+**Three new workspace dependencies behind opt-in
+gates:** `cpal` + `rodio` + `voice_activity_detector`
+always-on inside `aivyx-voice`; `whisper-rs`,
+`piper1-rs`, `whisper-cpp-plus` per-engine optional.
+
+**Honest scope risks:**
+- Real audio I/O testing is operator work; unit
+  tests cover conversion logic only.
+- Q2c doubles the ASR test surface.
+- ONNX runtime build-time prereq (per
+  piper1-rs).
+- Whisper model size (150MB-1.5GB) and Piper
+  voice model size (~20-50MB).
+- No streaming TTS during LLM generation
+  (Phase 136+).
+- No multimodal output yet.
+
+**Twenty-fourth consecutive deferral of the
+Channel Activation Milestone** — per operator
+framing, intentional hold.
+
 ## Phase 134 — Direction B: Embedded Rust-Native Inference (`mistral.rs`)
 
 **Frozen — see [PHASE_134.md](PHASE_134.md).** Largest
