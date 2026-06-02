@@ -64,6 +64,13 @@ pub mod openai;
 #[cfg(feature = "provider-ollama")]
 pub mod ollama;
 
+// Phase 134 — embedded Rust-native inference. Gated by
+// `provider-mistral-rs`; the backend-specific Cargo features
+// (`provider-mistral-rs-cuda`, etc.) all imply this baseline so
+// `cfg(feature = "provider-mistral-rs")` is sufficient here.
+#[cfg(feature = "provider-mistral-rs")]
+pub mod mistral_rs;
+
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
 /// `/v1/embeddings` client whose `base_url` can point at the
