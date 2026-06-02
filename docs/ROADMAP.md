@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 141 — Chapter G: `calendar.upcoming` Tool
 
-**See [PHASE_141.md](PHASE_141.md).** Pivot from voice
+**Frozen — see [PHASE_141.md](PHASE_141.md).** Pivot from voice
 after six consecutive voice phases (135-140). Phase 125's
 Chapter G #2 candidate list included calendar reminders;
 Phase 141 ships the read-side tool: `calendar.upcoming`

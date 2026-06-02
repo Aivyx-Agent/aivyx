@@ -2496,6 +2496,7 @@ handshake:
 | `calendar.create_event` | `calendar.write` | Create a new event; required `summary`/`start`/`end`, optional attendees/location/etc. Trusted-tier-only by default. |
 | `calendar.update_event` | `calendar.write` | Partial-patch an existing event by ID. Only fields you supply are changed; everything else is preserved. Trusted-tier-only. |
 | `calendar.delete_event` | `calendar.write` | Delete an event by ID. Idempotent — already-deleted events succeed with `was_already_deleted: true`. Trusted-tier-only. |
+| `calendar.upcoming` | `calendar.read` | **Phase 141.** Surface imminent events with relative-time enrichment. Input `{window_hours? default 24, calendar_id?, max_results?}`. Each event has the `list_events` shape plus `starts_in_human` ("in 15 minutes", "tomorrow") and `is_imminent` (true if starts within 30 minutes). LLM-ergonomic shape for "what's coming up" / "do I have anything today" prompts. |
 
 #### Per-role capability grants
 

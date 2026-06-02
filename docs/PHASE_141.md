@@ -208,8 +208,145 @@ upcoming events. Phase 142+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 141 exit. Predictions at
-sign-off: DESIGN.md HOLD → 32; PRODUCT.md HOLD
-→ 32; lib.rs HOLD → 7; zero new deps; test
-count delta `+8` to `+15`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  31 → **32**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 31 → **32**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 141 work in
+  `aivyx-calendar`. Continuing post-Phase-135
+  reset: 6 → **7**.
+
+**Test count delta: +20 — over predicted `+8`
+to `+15` range.** Workspace lib tests 3055 →
+3075. Per-module:
+- `relative_time`: +11 (unparseable, within-a-
+  minute, future minutes/hours/tomorrow/days,
+  past mirror, all-day date format, imminent
+  inside/outside threshold, imminent on
+  unparseable).
+- `tools::upcoming`: +9 (default input, explicit
+  window, window cap, max_results cap, zero
+  window rejected, empty calendar_id rejected,
+  enrich attaches fields, far-future not
+  imminent, all-day enrichment).
+
+Higher-than-predicted because the substrate
+nature of relative_time encouraged exhaustive
+unit tests of every phrase range; the
+tool-input parsing also rendered all the
+validation branches as their own tests
+(matches the per-tool test density of the
+other five calendar tools).
+
+**Zero new workspace dependencies** as
+predicted. `chrono` was already a workspace
+dep; aivyx-calendar adds it as a crate dep,
+not introducing a new workspace dep.
+
+**Zero clippy warnings** with default features.
+Two transient catches during Task 3:
+1. `event_summary` test import broke when the
+   helper moved to the parent module; fixed
+   with `use super::super::event_summary`.
+2. Unused `flatten_timestamp` import in the
+   same fix; removed.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `relative_time` substrate module: 11 unit
+  tests with deterministic `now` fixtures
+  covering every phrase range and the
+  is_imminent flag math. Pure substrate, no
+  external state.
+- `event_summary` + `flatten_timestamp`
+  promoted to `tools/mod.rs` as `pub(crate)`.
+  `list_events.rs` now uses the shared
+  versions; output-stability across read-side
+  tools is single-sourced.
+- `CalendarUpcoming` tool: 9 per-tool tests
+  + integration through the Tool trait;
+  same Google API path as `list_events`,
+  same auth substrate, same output shape
+  plus two enrichment fields.
+- `main.rs` registers the new tool alongside
+  the existing five.
+- INSTALL.md voice tool table gains a Phase
+  141 row.
+- 3075 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **No proactive reminders.** Phase 141 ships
+   the read tool only. Truly proactive
+   ("agent pings before next meeting") needs
+   a scheduled-event runner — separate
+   architecture. Phase 142+.
+
+2. **English-only phrase output.** "in 5
+   minutes" / "tomorrow" are baked English.
+   The agent paraphrases in any language but
+   substrate is English. Phase 142+
+   localization candidate if operator
+   demand surfaces.
+
+3. **`is_imminent` threshold hardcoded at 30
+   min.** Phase 142+ if operators want
+   per-call tuning or env-var override.
+
+4. **Code-share via promotion, not
+   abstraction.** `event_summary` /
+   `flatten_timestamp` are `pub(crate)`
+   helpers, not a trait. If a future read-
+   tool needs different output fields, it
+   builds its own. Acceptable for two
+   call-sites.
+
+5. **DST + "tomorrow at 9am" semantics
+   deferred.** Phase 141 says "in 18 hours"
+   (UTC delta from now), not "tomorrow at
+   9am". Simpler and unambiguous; phase
+   142+ could surface zone-aware phrases
+   if useful.
+
+6. **Test count overshot prediction.** +20 vs
+   predicted +8 to +15. Substrate exhaustive-
+   testing posture (every phrase range, every
+   input-validation branch) explains the
+   delta. Honest, not padding.
+
+### Direction after Phase 141
+
+After Phase 141, the agent can surface
+upcoming events naturally. Phase 142+
+candidates:
+
+1. **Proactive reminder dispatch** —
+   scheduled-event runner that fires
+   reminders on its own. Big architectural
+   step.
+2. **Chapter G budget tracking** —
+   `budget.record` + `budget.summary`.
+3. **Chapter G health.check.remove + alert
+   dispatch.**
+4. **`calendar.list_calendars`** — secondary
+   calendar enumeration.
+5. **Voice continuation** — mid-synthesis
+   abort, Silero VAD, streaming ASR,
+   wake-word, multimodal output, macOS
+   variant, lock-free detector, VAD config
+   validation.
+6. **Relative-time localization** if
+   operators speak other languages
+   primarily.
+7. **whisper-cpp-plus rehabilitation.**
+8. **`build_agent_stack` substrate-tier
+   promotion** if more channel adapters
+   ship.
+9. **Channel Activation Milestone** — still
+   held intentionally; 30th consecutive
+   deferral at Phase 141 exit.

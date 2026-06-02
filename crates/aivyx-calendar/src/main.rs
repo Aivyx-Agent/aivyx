@@ -22,7 +22,7 @@ use aivyx_calendar::auth_cli::{
 use aivyx_calendar::oauth::{load_tokens, storage::default_token_path};
 use aivyx_calendar::tools::{
     CalendarCreateEvent, CalendarDeleteEvent, CalendarGetEvent, CalendarListEvents,
-    CalendarUpdateEvent,
+    CalendarUpcoming, CalendarUpdateEvent,
 };
 use aivyx_calendar::{run_multi_tool_subprocess, CalendarClient};
 use aivyx_core::Tool;
@@ -171,14 +171,18 @@ async fn run_ipc_loop() -> ExitCode {
         token_path,
     ));
 
-    // Phase 128 Q3b — full five-tool surface (list / get /
-    // create / update / delete).
+    // Phase 128 Q3b — five-tool surface (list / get /
+    // create / update / delete). Phase 141 adds a sixth
+    // read-side tool: calendar.upcoming, the LLM-
+    // ergonomic shape for "what's coming up in the next
+    // N hours" queries.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(CalendarListEvents::new(Arc::clone(&client))),
         Arc::new(CalendarGetEvent::new(Arc::clone(&client))),
         Arc::new(CalendarCreateEvent::new(Arc::clone(&client))),
         Arc::new(CalendarUpdateEvent::new(Arc::clone(&client))),
         Arc::new(CalendarDeleteEvent::new(Arc::clone(&client))),
+        Arc::new(CalendarUpcoming::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-calendar").await {
