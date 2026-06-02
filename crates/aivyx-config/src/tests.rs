@@ -2874,6 +2874,187 @@ fn jan_validate_does_not_require_api_key() {
 }
 
 // ------------------------------------------------------------------
+// Phase 134 — ProviderKind::MistralRs regression tests
+// ------------------------------------------------------------------
+
+#[test]
+fn mistralrs_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "mistralrs");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::MistralRs);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn mistralrs_provider_serde_aliases_parse() {
+    for alias in ["mistralrs", "mistral-rs", "mistral_rs"] {
+        let env = EnvScope::new();
+        let tmp = TempDir::new(&format!("mistralrs-toml-{alias}"));
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            format!(
+                r#"
+[agent]
+provider = "{alias}"
+model = "qwen3-4b-q4_k_m.gguf"
+"#
+            ),
+        )
+        .unwrap();
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        };
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+        assert_eq!(
+            cfg.provider.value,
+            ProviderKind::MistralRs,
+            "alias {alias:?} must deserialize to MistralRs",
+        );
+        drop(env);
+    }
+}
+
+#[test]
+fn mistralrs_validate_requires_model_path() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "mistralrs");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let err = cfg.validate(&opts).expect_err("missing model_path must fail");
+    match err {
+        ConfigError::Missing { field } => {
+            assert_eq!(field, "mistralrs.model_path");
+        }
+        other => panic!("expected Missing(mistralrs.model_path), got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn mistralrs_validate_passes_with_model_path() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mistralrs-passes");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "mistralrs"
+model = "qwen3-4b"
+
+[mistralrs]
+model_path = "/models/qwen3-4b-q4_k_m.gguf"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: true,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts).expect("mistralrs + model_path must pass");
+    assert_eq!(
+        cfg.mistralrs_options.model_path.as_deref(),
+        Some(std::path::Path::new("/models/qwen3-4b-q4_k_m.gguf")),
+    );
+    drop(env);
+}
+
+#[test]
+fn mistralrs_options_full_section_round_trip() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mistralrs-full");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "mistralrs"
+model = "qwen3"
+
+[mistralrs]
+model_path = "/models/qwen3-dir"
+model_file = "qwen3-4b-q4_k_m.gguf"
+chat_template_path = "/templates/qwen3.json"
+max_seq_len = 32768
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let mr = &cfg.mistralrs_options;
+    assert_eq!(
+        mr.model_path.as_deref(),
+        Some(std::path::Path::new("/models/qwen3-dir"))
+    );
+    assert_eq!(mr.model_file.as_deref(), Some("qwen3-4b-q4_k_m.gguf"));
+    assert_eq!(
+        mr.chat_template_path.as_deref(),
+        Some(std::path::Path::new("/templates/qwen3.json"))
+    );
+    assert_eq!(mr.max_seq_len, Some(32768));
+    drop(env);
+}
+
+#[test]
+fn provider_kind_mistralrs_is_in_process_and_not_openai_compat() {
+    // Phase 134 distinct posture: in-process, not
+    // OpenAI-compatible at the wire level.
+    assert!(ProviderKind::MistralRs.is_in_process());
+    assert!(!ProviderKind::MistralRs.is_openai_compatible());
+    // Other providers are not in-process.
+    assert!(!ProviderKind::Ollama.is_in_process());
+    assert!(!ProviderKind::LlamaCpp.is_in_process());
+    assert!(!ProviderKind::Jan.is_in_process());
+    assert!(!ProviderKind::Anthropic.is_in_process());
+    assert!(!ProviderKind::OpenAi.is_in_process());
+}
+
+#[test]
+fn mistralrs_default_context_window_matches_other_local_providers() {
+    assert_eq!(ProviderKind::MistralRs.default_context_window(), 8_000);
+}
+
+#[test]
+fn mistralrs_display_canonical_form() {
+    assert_eq!(ProviderKind::MistralRs.to_string(), "mistralrs");
+}
+
+// ------------------------------------------------------------------
 // [daemon] web_ui / web_ui_port — Phase 39
 // ------------------------------------------------------------------
 
