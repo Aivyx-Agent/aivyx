@@ -3535,6 +3535,56 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 134 — Direction B: Embedded Rust-Native Inference (`mistral.rs`)
+
+**See [PHASE_134.md](PHASE_134.md).** Largest
+architectural phase since Phase 121. Phase 133 set
+up the question — three first-class out-of-process
+providers; now what? Phase 134 answers: **Aivyx can
+embed a Rust-native LLM engine and ship as a single
+batteries-included binary**, by linking against
+`mistralrs` as a Rust dependency.
+
+**Privacy-end-state.** Embedded inference has zero
+outbound network calls. Operator loads a local
+GGUF file, model runs in-process. Strongest
+possible privacy posture short of air-gapping
+the machine.
+
+**Q-block — 1 Recommended + 2 non-Recommended:**
+- Q1c — opt-in feature flag bundled in a
+  `recommended-providers` meta-feature. One-line
+  install for new users; lean builds preserved via
+  `--no-default-features`.
+- Q2c — CPU + Metal + CUDA in one phase. Triples
+  the test matrix; each backend gates behind its
+  own Cargo feature.
+- Q3a — document recommended GGUF models, don't
+  bundle. Strongest privacy posture; clearest
+  operator consent.
+
+**Three-of-three streak HOLDs predicted.**
+DESIGN.md → 25, PRODUCT.md → 25,
+`aivyx-core/src/lib.rs` → 8. **One** new workspace
+dep (mistralrs, behind opt-in gate). Test count
+`+15` to `+35`.
+
+**Honest scope risks at sign-off:**
+- Compile time will balloon with `--features
+  provider-mistral-rs` (5-10 min initial build).
+- Release binary size adds 100-200MB on the CPU
+  variant.
+- CUDA backend needs the CUDA toolkit; Metal
+  needs macOS.
+- `mistralrs` is pre-1.0 — pinned to
+  `=0.8.*`; upgrade-by-Aivyx-version contract.
+- Per-model tool-call format detection may
+  behave differently under embedded vs Ollama
+  (Phase 135+ empirical validation).
+
+**Twenty-third consecutive deferral of the Channel
+Activation Milestone.**
+
 ## Phase 133 — Local LLM Provider Alternatives (`llama-server` + Jan)
 
 **Frozen — see [PHASE_133.md](PHASE_133.md).** First multi-provider
