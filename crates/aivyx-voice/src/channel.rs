@@ -52,18 +52,27 @@ pub struct VoiceChannelConfig {
     pub capture_debug_path: Option<PathBuf>,
 }
 
-/// `ChannelContext` impl for voice I/O. Phase 135 ships
-/// the trait surface + identity bits; the push-to-talk
-/// dispatch loop is wired in Task 5.
+/// `ChannelContext` impl for voice I/O.
+///
+/// Holds three pieces of per-channel state:
+/// 1. `session` — stable `SessionId` across all turns
+///    in this voice session.
+/// 2. `token` — per-turn cancellation token; rotated
+///    before each `agent.turn` call so a previous
+///    turn's timeout / cancel does not pre-cancel
+///    turn N+1 (same pattern the four daemon-side
+///    stubs use post-audit-C1+H1).
+/// 3. `text_buffer` — accumulates `StreamEvent::Text`
+///    chunks emitted during the in-flight turn. The
+///    session driver reads + clears this buffer
+///    after `agent.turn` returns, then chunks the
+///    accumulated text into sentences for TTS
+///    synthesis.
 pub struct VoiceChannel {
     session: SessionId,
     config: VoiceChannelConfig,
-    /// Rotated per turn so a previous turn's
-    /// timeout / `/cancel` does not pre-cancel turn
-    /// N+1. Same pattern the four daemon-side stubs
-    /// (Telegram / Discord / Slack / Web) use post-
-    /// audit-C1+H1.
     token: Mutex<CancellationToken>,
+    text_buffer: Mutex<String>,
 }
 
 impl VoiceChannel {
@@ -72,11 +81,33 @@ impl VoiceChannel {
             session: SessionId::new(),
             config,
             token: Mutex::new(CancellationToken::new()),
+            text_buffer: Mutex::new(String::new()),
         }
     }
 
     pub fn config(&self) -> &VoiceChannelConfig {
         &self.config
+    }
+
+    /// Drain the buffered turn text and reset the
+    /// buffer to empty. Called by the session driver
+    /// immediately after `agent.turn` returns; the
+    /// returned string is passed to
+    /// `chunk_into_sentences` then to the TTS engine.
+    pub fn take_buffered_text(&self) -> String {
+        let mut buf = self.text_buffer.lock().expect("text_buffer poisoned");
+        std::mem::take(&mut *buf)
+    }
+
+    /// Read the buffered turn text without clearing it.
+    /// Test-only — production code uses
+    /// [`take_buffered_text`].
+    #[cfg(test)]
+    pub fn peek_buffered_text(&self) -> String {
+        self.text_buffer
+            .lock()
+            .expect("text_buffer poisoned")
+            .clone()
     }
 }
 
@@ -103,17 +134,34 @@ impl ChannelContext for VoiceChannel {
         self.session
     }
 
-    async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
-        // Phase 135 Task 2 — placeholder. Task 5 wires
-        // text-chunk buffering + sentence-boundary
-        // chunking + TTS dispatch.
+    async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
+        // Phase 135 Task 5 — buffer text-chunk events so
+        // the session driver can synthesize the full
+        // response after `agent.turn` returns.
+        //
+        // We deliberately ignore non-text events
+        // (ToolCallStarted, ToolCallFinished, Status,
+        // ToolOutput, Attachment): voice doesn't have a
+        // good way to speak "tool call: fs.read" inline.
+        // The operator hears the agent's natural
+        // response; tool calls happen silently. Phase
+        // 136+ could surface tool activity via short
+        // chimes or a separate channel.
+        if let StreamEvent::Text(s) = event {
+            let mut buf = self
+                .text_buffer
+                .lock()
+                .map_err(|_| ChannelError::Send("text_buffer poisoned".to_string()))?;
+            buf.push_str(s);
+        }
         Ok(())
     }
 
     async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
-        // Phase 135 Task 2 — placeholder. Task 5 emits
-        // a closing audio signal so the operator hears
-        // the turn ended.
+        // No-op for the voice channel. The session
+        // driver handles post-turn synthesis +
+        // playback after this returns, reading the
+        // buffered text via `take_buffered_text`.
         Ok(())
     }
 
@@ -199,5 +247,78 @@ voice_path = "/models/en_US-amy-medium.onnx"
         assert!(cfg.input_device.is_none());
         assert!(cfg.output_device.is_none());
         assert!(cfg.capture_debug_path.is_none());
+    }
+
+    // -------- text buffering for the turn loop --------
+
+    #[tokio::test]
+    async fn stream_event_text_accumulates_in_buffer() {
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        ch.stream_event(StreamEvent::Text("Hello, ")).await.unwrap();
+        ch.stream_event(StreamEvent::Text("world.")).await.unwrap();
+        assert_eq!(ch.peek_buffered_text(), "Hello, world.");
+    }
+
+    #[tokio::test]
+    async fn stream_event_ignores_non_text_variants() {
+        use aivyx_core::ToolId;
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        let tool_id = ToolId::new();
+        let empty_input = serde_json::json!({});
+        ch.stream_event(StreamEvent::ToolCallStarted {
+            tool: tool_id,
+            tool_name: "fs.read",
+            input: &empty_input,
+        })
+        .await
+        .unwrap();
+        ch.stream_event(StreamEvent::Status("thinking..."))
+            .await
+            .unwrap();
+        assert_eq!(
+            ch.peek_buffered_text(),
+            "",
+            "non-text stream events must not pollute the TTS buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn take_buffered_text_drains_and_resets() {
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        ch.stream_event(StreamEvent::Text("First turn response."))
+            .await
+            .unwrap();
+        let first = ch.take_buffered_text();
+        assert_eq!(first, "First turn response.");
+        assert_eq!(
+            ch.peek_buffered_text(),
+            "",
+            "buffer must be empty after take"
+        );
+        // Next turn fills it again from a clean state.
+        ch.stream_event(StreamEvent::Text("Second turn."))
+            .await
+            .unwrap();
+        assert_eq!(ch.take_buffered_text(), "Second turn.");
+    }
+
+    #[tokio::test]
+    async fn finalize_does_not_drain_buffer() {
+        // The session driver — not finalize — drains
+        // the buffer so the driver can synthesize the
+        // full response after agent.turn returns. If
+        // finalize drained, the driver would see empty.
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        ch.stream_event(StreamEvent::Text("Buffered response."))
+            .await
+            .unwrap();
+        ch.finalize(&TurnOutcome::Completed {
+            final_message: "Buffered response.".to_string(),
+            tool_calls_made: 0,
+            duration: std::time::Duration::from_secs(1),
+        })
+        .await
+        .unwrap();
+        assert_eq!(ch.peek_buffered_text(), "Buffered response.");
     }
 }
