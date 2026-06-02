@@ -1387,6 +1387,173 @@ working sets.
   NVIDIA box). Phase 135+ codifies operator-reported
   empirical signal.
 
+## Voice channel: talk to the agent, agent talks back (Phase 135)
+
+Phase 135 ships **voice I/O** — Aivyx's eighth
+channel adapter. The operator speaks into the
+microphone; Whisper transcribes; the agent runs the
+turn; Piper synthesizes the response; the operator
+hears it through the speakers. **Everything runs
+in-process on the operator's machine; zero outbound
+network calls during inference.** Same local-privacy
+posture as Phase 134's embedded LLM, extended end-
+to-end.
+
+### Building with the voice channel
+
+```bash
+# Recommended one-liner — voice channel with the
+# bundled whisper-rs (STT) + Piper (TTS) engines:
+$ cargo install --features channel-voice-full aivyx-channel
+
+# Bare voice channel (no engines). Useful for
+# Phase 136+ when wiring an alternative engine
+# yourself:
+$ cargo install --features channel-voice aivyx-channel
+
+# Lean build — no voice channel. Existing operators
+# see zero binary-size impact.
+$ cargo install aivyx-channel
+```
+
+### Build prerequisites
+
+| Component | What it needs | Per-OS install |
+|---|---|---|
+| `whisper-rs` (STT) | C++ compiler | usually pre-installed; Linux: `apt install build-essential` |
+| `piper1-rs` (TTS) | ONNX runtime headers | Linux: `apt install libonnxruntime-dev`; macOS: `brew install onnxruntime`; Windows: download from [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) and set `ONNX_RUNTIME_DIR` |
+| `piper1-rs` (runtime) | espeak-ng data dir | Linux: `apt install espeak-ng-data`; macOS: `brew install espeak-ng`; Windows: download from [espeak-ng releases](https://github.com/espeak-ng/espeak-ng/releases) |
+| `cpal` + `rodio` | OS audio API | always installed (ALSA / PipeWire / CoreAudio / WASAPI come with the OS) |
+
+### `aivyx.toml` snippet
+
+```toml
+[agent]
+provider = "ollama"  # or "mistralrs" / "openai" / etc.
+model    = "qwen3:32b"
+
+[voice]
+# Pick the ASR engine — currently "whisper-rs" is the
+# only working option. Phase 136+ may add
+# whisper-cpp-plus once upstream is unstuck (see
+# Phase 135 exit doc).
+asr_engine = "whisper-rs"
+
+# Pick the TTS engine — currently "piper".
+tts_engine = "piper"
+
+# Optional cpal input/output device override. Empty
+# = system default.
+# input_device = "USB Mic"
+# output_device = "Default"
+
+[voice.asr]
+# REQUIRED — absolute path to a Whisper .bin model.
+model_path = "/home/operator/models/ggml-base.en.bin"
+# Optional — language code. Defaults to "en". Use
+# "auto" for automatic detection.
+language = "en"
+# Optional — beam search width. Higher = more
+# accurate, slower. Defaults to 5.
+beam_size = 5
+
+[voice.tts]
+# REQUIRED — absolute path to a Piper .onnx voice
+# model. Piper expects a matching .onnx.json config
+# to live next to it.
+voice_path = "/home/operator/voices/en_US-amy-medium.onnx"
+# Optional — speaker id for multi-speaker voices.
+# Defaults to 0.
+speaker_id = 0
+```
+
+### Recommended models
+
+#### Whisper STT models
+
+| Model | Size (Q5_1) | RAM | Languages | When to pick |
+|---|---|---|---|---|
+| **whisper-base.en** | ~150MB | ~500MB | English only | Recommended starting point. Good accuracy, fast. |
+| **whisper-base** | ~150MB | ~500MB | 99 languages | Multilingual operators. |
+| **whisper-small.en** | ~500MB | ~1.2GB | English only | Materially better accuracy than base; still real-time on CPU. |
+| **whisper-medium.en** | ~1.5GB | ~2.7GB | English only | Highest accuracy at reasonable speed; needs a beefier CPU. |
+
+Download from [HuggingFace ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/main):
+```bash
+$ wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+```
+
+#### Piper TTS voices
+
+| Voice | Quality | Size | Note |
+|---|---|---|---|
+| **en_US-amy-medium** | Medium | ~63MB | Female, neutral US English. Most common default. |
+| **en_US-ryan-medium** | Medium | ~63MB | Male, neutral US English. |
+| **en_US-lessac-medium** | Medium | ~63MB | Female, news-anchor style. |
+| **en_GB-northern_english_male-medium** | Medium | ~63MB | Male, Northern English accent. |
+
+Piper voices are organized by language code + speaker name + quality tier. Browse the [Piper voices catalog](https://github.com/rhasspy/piper/blob/master/VOICES.md) for 30+ other languages.
+
+Download a voice (one `.onnx` + one `.onnx.json` file):
+```bash
+$ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
+$ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+```
+
+### Running it
+
+```bash
+$ aivyx --channel voice
+```
+
+**Phase 135 reality:** the binary will surface an
+actionable error when you do this:
+
+> aivyx voice: Phase 135 ships the substrate (ASR,
+> TTS, channel) end-to-end-unit-tested, but the
+> cpal + rodio audio I/O loop is operator-validation
+> work. Build a push-to-talk driver against
+> `aivyx_voice::run_one_voice_turn(agent, channel,
+> asr, tts, captured_audio)` locally; Phase 136+
+> ships the loop here.
+
+The substrate seam `aivyx_voice::run_one_voice_turn`
+is fully wired and unit-tested with stub engines.
+Operators with cpal/rodio experience can build a
+push-to-talk driver against it in ~100 lines; the
+wiring sketch is documented inline in
+`aivyx-voice/src/session.rs::run_push_to_talk_loop`.
+Phase 136+ ships the loop body.
+
+### What Phase 135 deliberately doesn't ship
+
+- **The cpal + rodio audio I/O loop.** Real mic
+  capture + speaker playback is operator-validation
+  work; the substrate seam is complete and unit-
+  tested. Phase 136+ candidate.
+- **whisper-cpp-plus alternative ASR engine.** The
+  Q2c sign-off picked both engines, but published
+  `whisper-cpp-plus = "0.1.4"` doesn't build
+  against current whisper.cpp (40 errors against
+  `whisper_full_params` struct shape). Feature flag
+  is wired for future re-enablement; stub module
+  documents the deferral.
+- **Streaming TTS during LLM generation.** Phase
+  135 buffers the agent's full response, then chunks
+  into sentences for synthesis. Streaming
+  pipelined-with-LLM is Phase 136+.
+- **Wake-word activation.** "Hey Aivyx" style
+  always-on listening is Phase 136+ (would add
+  Porcupine or Silero-wakeword as a new dep).
+- **Voice activity detection.** Silero VAD for
+  trim-on-silence push-to-talk is Phase 136+
+  (we'd need to pick a non-GPL Rust binding; the
+  `silero` and `voice_activity_detector` crates are
+  candidates).
+- **Multimodal output.** Spoken descriptions of
+  images (via the LLM's vision capability) are
+  Phase 136+; voice in Phase 135 is text-only.
+
 ### Phase 120 substrate uniformity
 
 The Phase 120 tool-name recovery substrate flows uniformly
