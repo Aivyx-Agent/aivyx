@@ -1056,6 +1056,13 @@ fn print_config_banner(config: &AivyxConfig) {
                 "http://localhost:1337/v1",
             );
         }
+    } else if config.provider.value.is_in_process() {
+        // Phase 134 — MistralRs runs in-process; no base URL.
+        // Surface the model path instead so the operator can
+        // confirm at-a-glance which GGUF will be loaded.
+        if let Some(path) = &config.mistralrs_options.model_path {
+            eprintln!("  model_path        = {path:?} ([mistralrs])");
+        }
     }
     eprintln!(
         "  model             = {:?} ({})",
@@ -2894,10 +2901,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     // serde alias attribute on the enum.
                     "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
                     "jan" => ProviderKind::Jan,
+                    // Phase 134 — embedded mistralrs.
+                    "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
                     other => {
                         return Err(format!(
                             "unrecognized provider `{other}`. \
-                             Supported: anthropic, openai, ollama, llamacpp, jan"
+                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs"
                         ));
                     }
                 });
@@ -3322,6 +3331,10 @@ async fn run_async(
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
         tool_name_auto_correct_threshold: config_tool_name_auto_correct_threshold,
+        // Phase 134 — [mistralrs] embedded-provider config. Only
+        // referenced when `provider = "mistralrs"`; for any other
+        // provider the field is bound and ignored.
+        mistralrs_options: config_mistralrs_options,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -3558,6 +3571,51 @@ async fn run_async(
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build Jan provider: {e}"))?;
             Arc::new(p)
+        }
+        ProviderKind::MistralRs => {
+            // Phase 134 — Direction B: embedded Rust-native
+            // inference. Only available when Aivyx was built with
+            // `--features provider-mistral-rs`; without the
+            // feature, this arm surfaces an actionable error
+            // pointing the operator at the build flag.
+            #[cfg(feature = "provider-mistral-rs")]
+            {
+                use aivyx_llm::mistral_rs::{MistralRsConfig, MistralRsProvider};
+                let opts = &config_mistralrs_options;
+                let model_path = opts.model_path.as_ref().ok_or_else(|| {
+                    "MistralRs provider selected but [mistralrs] model_path is missing. \
+                     Set `model_path = \"/abs/path/to/model.gguf\"` in aivyx.toml."
+                        .to_string()
+                })?;
+                let mut mr_cfg = MistralRsConfig::new(model_path.clone());
+                if let Some(f) = &opts.model_file {
+                    mr_cfg = mr_cfg.with_model_file(f.clone());
+                }
+                if let Some(t) = &opts.chat_template_path {
+                    mr_cfg = mr_cfg.with_chat_template(t.clone());
+                }
+                if let Some(n) = opts.max_seq_len {
+                    mr_cfg = mr_cfg.with_max_seq_len(n);
+                }
+                let p = MistralRsProvider::new(mr_cfg).await.map_err(|e| {
+                    format!("failed to build mistralrs provider: {e}")
+                })?;
+                Arc::new(p)
+            }
+            #[cfg(not(feature = "provider-mistral-rs"))]
+            {
+                // Suppress dead-binding warning for the field we
+                // pattern-bound earlier.
+                let _ = &config_mistralrs_options;
+                return Err(
+                    "MistralRs provider selected but this Aivyx binary was built \
+                     without the `provider-mistral-rs` feature. \
+                     Rebuild with `cargo install --features recommended-providers aivyx` \
+                     (or `--features provider-mistral-rs` for the lean variant) \
+                     to enable embedded inference."
+                        .to_string(),
+                );
+            }
         }
     };
 

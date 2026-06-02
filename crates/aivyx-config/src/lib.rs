@@ -244,6 +244,15 @@ pub enum ProviderKind {
     LlamaCpp,
     /// Phase 133 — Jan's local API server over OpenAI-compat.
     Jan,
+    /// Phase 134 — Direction B: embedded Rust-native inference
+    /// via the `mistralrs` crate compiled into the Aivyx binary.
+    /// Distinct from the other local-LLM providers in that there
+    /// is **no HTTP wire protocol** — the model loads in-process
+    /// and `chat_stream` invokes the engine directly. The
+    /// [`mistralrs`] config section carries the GGUF model path
+    /// and tuning parameters.
+    #[serde(alias = "mistralrs", alias = "mistral-rs", alias = "mistral_rs")]
+    MistralRs,
 }
 
 impl ProviderKind {
@@ -261,6 +270,18 @@ impl ProviderKind {
                 | ProviderKind::LlamaCpp
                 | ProviderKind::Jan
         )
+        // Phase 134 — MistralRs is intentionally NOT in this set.
+        // It has no HTTP wire protocol; the model runs in-process.
+        // Callers branching on this method (banner display, api-key
+        // requirement) treat MistralRs as a distinct "in-process"
+        // category.
+    }
+
+    /// Phase 134 — `true` if this provider runs the model in
+    /// **this same OS process**. Currently just MistralRs; future
+    /// embedded engines (Candle direct, etc.) join this category.
+    pub fn is_in_process(&self) -> bool {
+        matches!(self, ProviderKind::MistralRs)
     }
 
     /// Default context window size in tokens for this provider.
@@ -276,6 +297,11 @@ impl ProviderKind {
             // routinely load larger-context models (Qwen 32B at
             // 32k, etc.) and override via config.
             ProviderKind::Ollama | ProviderKind::LlamaCpp | ProviderKind::Jan => 8_000,
+            // Phase 134 — same conservative posture as the other
+            // local-LLM providers. The actual context depends on
+            // the loaded GGUF's metadata; mistralrs honors the
+            // model's declared max_seq_len at load time.
+            ProviderKind::MistralRs => 8_000,
         }
     }
 }
@@ -288,6 +314,7 @@ impl std::fmt::Display for ProviderKind {
             ProviderKind::Ollama => f.write_str("ollama"),
             ProviderKind::LlamaCpp => f.write_str("llamacpp"),
             ProviderKind::Jan => f.write_str("jan"),
+            ProviderKind::MistralRs => f.write_str("mistralrs"),
         }
     }
 }
@@ -708,6 +735,13 @@ pub struct AivyxConfig {
     /// `aivyx_llm::ollama::OllamaOptions` at provider-construction
     /// time.
     pub ollama_options: OllamaOptions,
+    /// Phase 134 — `[mistralrs]` operator-configured options
+    /// for the embedded Rust-native provider. All fields
+    /// `Option`-typed; `model_path` is required when
+    /// `provider = "mistralrs"` and validated at
+    /// session-construction time. Empty when the operator
+    /// uses a different provider.
+    pub mistralrs_options: MistralRsOptions,
     /// Phase 122 Task 5 — `[ollama.prompt_strategies]` operator
     /// override map for per-family prompt-assembly strategy.
     /// Keyed on family strings matching [`detect_model_family`]
@@ -2726,6 +2760,10 @@ struct RawToml {
     /// generation options.
     #[serde(default)]
     ollama: RawOllama,
+    /// Phase 134 — `[mistralrs]` config section for the
+    /// embedded Rust-native provider.
+    #[serde(default)]
+    mistralrs: MistralRsOptions,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -3628,6 +3666,31 @@ struct RawProviders {
 /// fields `Option`-typed; absent fields decode as `None` and
 /// the loader propagates `None` so Ollama's per-model defaults
 /// apply. Absent section → all-`None` → default-constructed
+/// Phase 134 — `[mistralrs]` config section for the embedded
+/// Rust-native provider. Carries the GGUF model path + tuning
+/// knobs. Empty when the operator uses a different provider.
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct MistralRsOptions {
+    /// Absolute path to either a directory containing GGUF
+    /// file(s) or a single GGUF file. Required when
+    /// `provider = "mistralrs"`.
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
+    /// When `model_path` is a directory, names the specific
+    /// GGUF file to load. Ignored when `model_path` is a file.
+    #[serde(default)]
+    pub model_file: Option<String>,
+    /// Optional path to a chat-template JSON file. When `None`,
+    /// mistralrs uses the chat template embedded in the GGUF
+    /// (which most modern quantizations ship).
+    #[serde(default)]
+    pub chat_template_path: Option<PathBuf>,
+    /// Optional maximum sequence length. When `None`, defers to
+    /// the model's declared `max_seq_len`.
+    #[serde(default)]
+    pub max_seq_len: Option<usize>,
+}
+
 /// `OllamaOptions`.
 #[derive(Debug, Default, Deserialize)]
 struct RawOllama {
@@ -3817,12 +3880,15 @@ impl AivyxConfig {
                     // env + TOML + CLI all parse the same set.
                     "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
                     "jan" => ProviderKind::Jan,
+                    // Phase 134 — same alias set as the serde
+                    // attribute on the enum.
+                    "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
                     other => {
                         return Err(ConfigError::Invalid {
                             field: "provider",
                             reason: format!(
                                 "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai, ollama, llamacpp, jan"
+                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs"
                             ),
                         });
                     }
@@ -4230,6 +4296,10 @@ impl AivyxConfig {
             repeat_last_n: toml.ollama.repeat_last_n,
             seed: toml.ollama.seed,
         };
+        // Phase 134 — [mistralrs] options pass through to the
+        // embedded provider. Validation (model_path required when
+        // provider = mistralrs) happens in `validate()` below.
+        let mistralrs_options = toml.mistralrs.clone();
 
         // Phase 122 Task 5 — [ollama.prompt_strategies] operator
         // per-family overrides. Each value parses through
@@ -5179,6 +5249,7 @@ impl AivyxConfig {
             persona_auto_propose,
             tool_relevance,
             ollama_options,
+            mistralrs_options,
             ollama_prompt_strategies,
             tool_name_auto_correct_threshold,
             roles,
@@ -5401,15 +5472,29 @@ impl AivyxConfig {
                         });
                     }
                 }
-                ProviderKind::Ollama | ProviderKind::LlamaCpp | ProviderKind::Jan => {
+                ProviderKind::Ollama
+                | ProviderKind::LlamaCpp
+                | ProviderKind::Jan
+                | ProviderKind::MistralRs => {
                     // Local-LLM providers do not require an API key —
                     // they run locally and ignore the Authorization
-                    // header. The key is accepted if present
-                    // (forwarded to the OpenAI provider) but never
-                    // required. Phase 133 extended this arm to
-                    // llama-server and Jan; same posture as Ollama.
+                    // header. Phase 133 added LlamaCpp + Jan; Phase
+                    // 134 adds MistralRs (in-process, no wire
+                    // protocol at all, so the question doesn't
+                    // arise).
                 }
             }
+        }
+        // Phase 134 — when the operator selects MistralRs, the
+        // `[mistralrs] model_path` field is required. We validate
+        // here (not at deserialize time) so the error is operator-
+        // facing and points at the right config field.
+        if self.provider.value == ProviderKind::MistralRs
+            && self.mistralrs_options.model_path.is_none()
+        {
+            return Err(ConfigError::Missing {
+                field: "mistralrs.model_path",
+            });
         }
         if opts.require_telegram_token {
             match self.telegram.as_ref().and_then(|t| t.token.as_ref()) {
