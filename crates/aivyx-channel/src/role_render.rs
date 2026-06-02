@@ -89,6 +89,12 @@ pub enum ChannelKind {
     /// on destructive tools (`shell.exec`, `fs.delete`)
     /// symmetrically.
     Slack,
+    /// Phase 135 — Voice I/O channel. Operator speaks
+    /// through the microphone; agent speaks back through
+    /// the speakers. Same `Trusted` tier posture as
+    /// `Local` — voice runs in-process on the operator's
+    /// own machine; the audio loop never leaves the host.
+    Voice,
 }
 
 /// Construct the display-time backcompat floor for the given
@@ -203,6 +209,7 @@ pub fn render_role_envelope(
             ChannelKind::Telegram => "telegram",
             ChannelKind::Discord => "discord",
             ChannelKind::Slack => "slack",
+            ChannelKind::Voice => "voice",
         }
     )
     .unwrap();

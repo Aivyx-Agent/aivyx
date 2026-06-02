@@ -229,7 +229,11 @@ fn build_shell_exec_for_channel(
     fs_root: &std::path::Path,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
-        ChannelKind::Local => {
+        // Phase 135 — Voice runs in-process on the
+        // operator's machine and shares the Local
+        // (Trusted) tier posture. shell.exec is
+        // registered identically.
+        ChannelKind::Local | ChannelKind::Voice => {
             let shell = ShellExecToolConfig::new(fs_root.to_path_buf())
                 .build()
                 .map_err(|e| format!("failed to build shell.exec tool: {e}"))?;
@@ -274,7 +278,9 @@ fn build_fs_delete_for_channel(
     fs_root: &std::path::Path,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
-        ChannelKind::Local => {
+        // Phase 135 — Voice shares the Local Trusted
+        // tier; fs.delete is registered identically.
+        ChannelKind::Local | ChannelKind::Voice => {
             let tool = FsDeleteToolConfig::new(fs_root.to_path_buf())
                 .build()
                 .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
@@ -2843,7 +2849,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local`, `telegram`, `discord`, or `slack`"
+                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, or `voice`"
                         .to_string()
                 })?;
                 channel = match value.as_str() {
@@ -2853,10 +2859,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     "discord" => ChannelKind::Discord,
                     // Phase 108 — Slack adapter parse arm.
                     "slack" => ChannelKind::Slack,
+                    // Phase 135 — Voice channel parse arm.
+                    "voice" => ChannelKind::Voice,
                     other => {
                         return Err(format!(
                             "unrecognized channel `{other}`. \
-                             Supported: local, telegram, discord, slack"
+                             Supported: local, telegram, discord, slack, voice"
                         ));
                     }
                 };
@@ -6128,6 +6136,71 @@ async fn run_async(
             )
             .await
             .map(|_report| ())
+        }
+        // Phase 135 — Voice channel dispatch. The
+        // substrate (aivyx-voice crate) is feature-
+        // gated through aivyx-channel; without the
+        // feature, this arm surfaces an actionable
+        // error pointing the operator at the right
+        // `cargo install --features` invocation.
+        // With the feature, the arm constructs the
+        // VoiceChannel and calls into the substrate's
+        // push-to-talk loop driver, which in Phase
+        // 135 returns a documented "loop not yet
+        // implemented" error (real audio I/O wiring
+        // is operator-validation work — see
+        // PHASE_135.md). The arm is structured so
+        // Phase 136+ replaces the inner call with the
+        // real cpal + rodio loop without changing
+        // the dispatch shape.
+        ChannelKind::Voice => {
+            #[cfg(feature = "channel-voice")]
+            {
+                // Suppress unused-variable warnings on
+                // the heavyweight state we don't yet
+                // pass into the (currently-stub) loop.
+                let _ = (
+                    &model,
+                    &system_prompt,
+                    &capabilities,
+                    &tools,
+                    &storage,
+                    &tool_allowlist,
+                    &memory_topic_prefix,
+                    &provider,
+                    &audit,
+                );
+                eprintln!(
+                    "aivyx {} — voice channel (Phase 135)\n\
+                     fs sandbox: {}\n\
+                     memory: live (recall persists across restarts)\n\
+                     audit: persistent ({} events verified from disk)",
+                    env!("CARGO_PKG_VERSION"),
+                    canonical_root.display(),
+                    verified_event_count,
+                );
+                Err(
+                    "aivyx voice: Phase 135 ships the substrate (ASR, TTS, channel) \
+                     end-to-end-unit-tested, but the cpal + rodio audio I/O loop is \
+                     operator-validation work. Build a push-to-talk driver against \
+                     `aivyx_voice::run_one_voice_turn(agent, channel, asr, tts, captured_audio)` \
+                     locally; Phase 136+ ships the loop here. See \
+                     docs/PHASE_135.md + docs/INSTALL.md for the wiring sketch."
+                        .to_string(),
+                )
+            }
+            #[cfg(not(feature = "channel-voice"))]
+            {
+                Err(
+                    "aivyx voice: this binary was built without the `channel-voice` \
+                     feature. Rebuild with `cargo install --features \
+                     aivyx-channel/channel-voice aivyx-channel` (and the engine \
+                     features `asr-whisper-rs` + `tts-piper`, typically grouped \
+                     via the `recommended-voice` meta-feature). See \
+                     docs/INSTALL.md Phase 135 voice section."
+                        .to_string(),
+                )
+            }
         }
     }
 }

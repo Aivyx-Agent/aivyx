@@ -134,6 +134,7 @@ dependencies = [
  "aivyx-storage",
  "aivyx-telegram",
  "aivyx-tool",
+ "aivyx-voice",
  "async-trait",
  "base64 0.22.1",
  "chrono",

@@ -29,7 +29,22 @@ provider-mistral-rs-accelerate = ["aivyx-llm/provider-mistral-rs-accelerate"]
 # feature flag) and get Ollama-only.
 recommended-providers = ["provider-mistral-rs"]
 
+# Phase 135 — voice channel feature. Opt-in like the
+# embedded LLM provider; pulls in the aivyx-voice crate
+# (cpal + rodio + optional whisper-rs / piper1-rs
+# behind aivyx-voice's own feature flags).
+channel-voice = ["dep:aivyx-voice"]
+# Convenience: bundle the recommended ASR + TTS engines
+# (whisper-rs + Piper) on top of the bare voice channel.
+# `cargo install --features channel-voice-full aivyx-channel`
+# is the one-liner install. Operators on lean builds use
+# `--features channel-voice` alone and wire their own
+# engine (Phase 136+ alternative engine candidate).
+channel-voice-full = ["channel-voice", "aivyx-voice/recommended-voice"]
+
 [dependencies]
+# Phase 135 — voice channel optional dep.
+aivyx-voice = { path = "../aivyx-voice", optional = true }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
 # Phase 14 Task 1 — `aivyx-config` promoted from binary-only to a

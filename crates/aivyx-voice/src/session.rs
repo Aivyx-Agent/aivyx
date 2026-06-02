@@ -48,6 +48,24 @@ pub enum VoiceSessionError {
     /// TTS engine error.
     #[error("TTS error: {0}")]
     Tts(#[from] TtsError),
+
+    /// Phase 135 — the integration layer for the
+    /// audio I/O loop (cpal mic capture + rodio
+    /// playback) is not yet implemented. The
+    /// substrate seam `run_one_voice_turn` is
+    /// complete and unit-tested; operators with
+    /// audio I/O experience can build the loop
+    /// against it locally. Phase 136+ ships the
+    /// loop here.
+    #[error(
+        "Phase 135 ships the voice substrate but the cpal/rodio audio I/O loop \
+         is operator-validation work. The substrate seam \
+         `aivyx_voice::run_one_voice_turn(agent, channel, asr, tts, captured_audio)` \
+         is complete and unit-tested; build the mic-capture + speaker-playback wrapper \
+         against it locally. See PHASE_135.md + INSTALL.md voice section for the \
+         wiring sketch."
+    )]
+    LoopNotYetImplemented,
 }
 
 /// One iteration of the push-to-talk loop.
@@ -191,12 +209,7 @@ where
     // operators surface this through Phase 136+ work
     // once the audio integration is validated.
     let _ = Duration::from_secs(0);
-    todo!(
-        "Phase 135 — `run_push_to_talk_loop` body is operator-validation work. \
-         The substrate-tier `run_one_voice_turn` is fully wired and unit-tested; \
-         operators integrate cpal + rodio against it locally. See PHASE_135.md \
-         + INSTALL.md voice section for the wiring sketch."
-    );
+    Err(VoiceSessionError::LoopNotYetImplemented)
 }
 
 #[cfg(test)]
