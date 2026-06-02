@@ -30,6 +30,7 @@
 pub mod create_event;
 pub mod delete_event;
 pub mod get_event;
+pub mod list_calendars;
 pub mod list_events;
 pub mod update_event;
 pub mod upcoming;
@@ -37,6 +38,7 @@ pub mod upcoming;
 pub use create_event::CalendarCreateEvent;
 pub use delete_event::CalendarDeleteEvent;
 pub use get_event::CalendarGetEvent;
+pub use list_calendars::CalendarListCalendars;
 pub use list_events::CalendarListEvents;
 pub use upcoming::CalendarUpcoming;
 pub use update_event::CalendarUpdateEvent;
