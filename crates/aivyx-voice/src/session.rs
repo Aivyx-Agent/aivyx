@@ -10,14 +10,15 @@
 //! validation lands as feedback against this
 //! skeleton.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aivyx_core::{Agent, Message};
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 use crate::asr::{AsrEngine, AsrError};
 use crate::channel::VoiceChannel;
-use crate::tts::{chunk_into_sentences, TtsEngine, TtsError};
+use crate::tts::{chunk_into_sentences, drain_complete_sentences, TtsEngine, TtsError};
 
 /// Errors the push-to-talk session driver can surface.
 #[derive(Debug, Error)]
@@ -281,6 +282,333 @@ where
     }
 }
 
+/// Phase 138 — streaming variant of
+/// [`run_one_voice_turn`].
+///
+/// Instead of waiting for the whole agent reply
+/// before synthesizing, this version drains
+/// complete sentences from the streaming text
+/// pipeline as they arrive and pushes them
+/// (one at a time, in order) into `sentence_tx`.
+/// A separate consumer task (owned by
+/// [`run_push_to_talk_loop_streaming`]) pulls
+/// sentences from the matching receiver, calls
+/// `tts.synthesize`, and queues the audio for
+/// playback — all while the LLM is still
+/// generating later sentences.
+///
+/// After `agent.turn` completes, any leftover
+/// partial sentence (text that arrived but didn't
+/// terminate before the agent stopped emitting)
+/// is flushed as one final entry. This handles
+/// the common case where the agent's last sentence
+/// ends at EOF without a trailing space.
+///
+/// The caller is responsible for:
+/// - Owning the `sentence_rx` and consuming it
+///   (typically a `tokio::spawn`'d consumer task).
+/// - Dropping `sentence_tx` after this returns so
+///   the consumer's `recv().await` returns `None`
+///   and the consumer can exit cleanly.
+pub async fn run_one_voice_turn_streaming<A>(
+    agent: &Arc<A>,
+    channel: &Arc<VoiceChannel>,
+    asr: &dyn AsrEngine,
+    captured_audio: &[f32],
+    sentence_tx: mpsc::UnboundedSender<String>,
+) -> Result<Option<StreamingVoiceTurnResult>, VoiceSessionError>
+where
+    A: Agent + ?Sized + 'static,
+{
+    // Step 1 — transcribe.
+    let transcribed = match asr.transcribe(captured_audio).await {
+        Ok(text) => text,
+        Err(AsrError::Empty) => return Ok(None),
+        Err(e) => return Err(VoiceSessionError::Asr(e)),
+    };
+
+    // Step 2 — install the streaming sink. The
+    // sink holds its own partial-sentence buffer
+    // (separate from VoiceChannel's text_buffer,
+    // which is for the non-streaming path) and a
+    // mirror of the full assembled response so we
+    // can surface `response_text` post-turn.
+    use aivyx_core::ChannelContext;
+    let _drained_prior = channel.take_buffered_text();
+    channel.reset_cancellation();
+
+    let pending: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let assembled: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    {
+        let pending = Arc::clone(&pending);
+        let assembled = Arc::clone(&assembled);
+        let tx = sentence_tx.clone();
+        channel.set_text_sink(move |chunk: &str| {
+            // Mirror into the full-response buffer
+            // unconditionally — even fragments
+            // count toward what the agent "said".
+            {
+                let mut a = assembled.lock().expect("assembled poisoned");
+                a.push_str(chunk);
+            }
+            // Drain complete sentences and forward.
+            let mut p = pending.lock().expect("pending poisoned");
+            p.push_str(chunk);
+            for s in drain_complete_sentences(&mut p) {
+                // If the receiver has been dropped
+                // (consumer task panicked or
+                // exited), forwarding fails — the
+                // sink can't do anything useful
+                // about it, so we drop the chunk.
+                // The agent.turn keeps running;
+                // the operator hears whatever
+                // already made it into playback.
+                let _ = tx.send(s);
+            }
+        });
+    }
+
+    // Step 3 — dispatch the turn. As text chunks
+    // arrive, the sink fires + drains sentences +
+    // forwards to the consumer.
+    let message = Message::text(channel.session_id(), transcribed.clone());
+    let outcome = agent.turn(message, channel.as_ref()).await;
+
+    // Step 4 — unhook the sink. Anything still in
+    // the pending buffer is the agent's final
+    // partial sentence; flush it as one final
+    // entry so playback isn't missing the tail.
+    channel.clear_text_sink();
+    let leftover = {
+        let mut p = pending.lock().expect("pending poisoned");
+        std::mem::take(&mut *p)
+    };
+    let leftover_trimmed = leftover.trim().to_string();
+    if !leftover_trimmed.is_empty() {
+        let _ = sentence_tx.send(leftover_trimmed);
+    }
+
+    let response_text = assembled.lock().expect("assembled poisoned").clone();
+    Ok(Some(StreamingVoiceTurnResult {
+        transcribed,
+        response_text,
+        outcome,
+    }))
+}
+
+/// Result of one streaming push-to-talk iteration.
+///
+/// Unlike [`VoiceTurnResult`], there are no
+/// `audio_chunks` — the streaming consumer task
+/// has already synthesized + played each sentence
+/// as it arrived. The caller uses `response_text`
+/// for diagnostic logging or audit only.
+#[derive(Debug)]
+pub struct StreamingVoiceTurnResult {
+    /// What the operator said (Whisper output).
+    pub transcribed: String,
+    /// What the agent replied — the full assembled
+    /// text reconstructed from streaming chunks.
+    /// Diagnostic only; audio playback already
+    /// happened.
+    pub response_text: String,
+    /// The full `TurnOutcome` from the agent.
+    pub outcome: aivyx_core::TurnOutcome,
+}
+
+/// Phase 138 — streaming push-to-talk loop.
+///
+/// Like [`run_push_to_talk_loop`] but pipelines
+/// the LLM stream into TTS on sentence boundaries.
+/// The operator hears sentence one of the agent's
+/// reply while the LLM is still generating later
+/// sentences — typically a 5-10x latency-to-first-
+/// audio win on long replies.
+///
+/// ## Loop shape
+///
+/// Same prompt/record/dispatch shape as the
+/// non-streaming variant. Per iteration:
+///
+/// 1. Prompt + record (synchronous prelude).
+/// 2. Create a fresh `tokio::mpsc::UnboundedChannel`
+///    for sentences.
+/// 3. Spawn a **serial consumer task** that loops
+///    on `sentence_rx.recv().await`, synthesizes
+///    each sentence with `tts.synthesize`, and
+///    plays via a per-iteration `AudioOut`.
+/// 4. Dispatch to [`run_one_voice_turn_streaming`].
+///    As the agent emits text chunks, complete
+///    sentences flush to the consumer; the
+///    consumer synthesizes + plays them in order.
+/// 5. After the turn returns, drop the
+///    `sentence_tx` so the consumer's recv()
+///    returns `None`; await the consumer task
+///    so playback drains before the next
+///    iteration prompts.
+/// 6. Loop.
+///
+/// ## Why serial consumer
+///
+/// Tempting to spawn one TTS task per sentence
+/// for parallelism, but synthesis would race with
+/// playback ordering. A serial consumer guarantees
+/// in-order playback at the cost of theoretical
+/// parallel synthesis. In practice Piper inference
+/// is fast enough that synthesis-of-sentence-N+1
+/// rarely happens before playback of
+/// sentence-N has begun.
+///
+/// ## Send constraints
+///
+/// `AudioOut` on Linux + Windows is `Send` and
+/// crosses the `tokio::spawn` boundary cleanly.
+/// On macOS, `cpal::Stream` is `!Send` — the
+/// consumer task on that platform will fail to
+/// compile. Phase 139+ candidate: a macOS-specific
+/// variant that runs the consumer on the main
+/// runtime thread.
+pub async fn run_push_to_talk_loop_streaming<A>(
+    agent: Arc<A>,
+    channel: Arc<VoiceChannel>,
+    asr: Arc<dyn AsrEngine>,
+    tts: Arc<dyn TtsEngine>,
+) -> Result<(), VoiceSessionError>
+where
+    A: Agent + ?Sized + 'static,
+{
+    use crate::audio_in::AudioIn;
+    use crate::audio_out::AudioOut;
+
+    let input_device = channel.config().input_device.clone();
+
+    eprintln!();
+    eprintln!("aivyx voice — push-to-talk REPL (streaming TTS)");
+    eprintln!("  Enter        : start recording (then Enter again to stop)");
+    eprintln!("  quit + Enter : exit");
+    eprintln!();
+
+    loop {
+        eprint!("[voice] press Enter to record (or `quit`): ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let trimmed = read_stdin_line_trimmed();
+        if trimmed == "quit" {
+            eprintln!("[voice] exiting.");
+            return Ok(());
+        }
+
+        // ----- Capture phase (synchronous, scoped) -----
+        let samples = {
+            let mut audio_in = AudioIn::new(input_device.as_deref()).map_err(|e| {
+                VoiceSessionError::AudioDevice(format!("input: {e}"))
+            })?;
+            audio_in.start().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("start: {e}"))
+            })?;
+            eprintln!(
+                "[voice] recording at {} Hz / {} ch — press Enter to stop.",
+                audio_in.src_rate(),
+                audio_in.src_channels(),
+            );
+            let _ = read_stdin_line_trimmed();
+            audio_in.stop().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("stop: {e}"))
+            })?;
+            audio_in.take_samples_for_whisper().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("drain: {e}"))
+            })?
+        };
+
+        if samples.is_empty() {
+            eprintln!("[voice] no audio captured — try again.");
+            continue;
+        }
+
+        // ----- Streaming pipeline setup -----
+        // sentence_tx feeds the consumer task;
+        // sentence_rx pulls one sentence at a
+        // time and synthesizes + plays serially.
+        let (sentence_tx, mut sentence_rx) = mpsc::unbounded_channel::<String>();
+        let tts_for_consumer = Arc::clone(&tts);
+        let consumer = tokio::spawn(async move {
+            let audio_out = match AudioOut::new() {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(VoiceSessionError::AudioDevice(format!(
+                        "output: {e}"
+                    )));
+                }
+            };
+            while let Some(sentence) = sentence_rx.recv().await {
+                match tts_for_consumer.synthesize(&sentence).await {
+                    Ok(audio) if !audio.is_empty() => {
+                        if let Err(e) = audio_out.play_audio(&audio) {
+                            return Err(VoiceSessionError::AudioPlayback(format!(
+                                "queue: {e}"
+                            )));
+                        }
+                    }
+                    Ok(_) => {} // empty synthesis — skip
+                    Err(TtsError::Input(_)) => {
+                        // Empty-after-trim — skip silently.
+                    }
+                    Err(e) => return Err(VoiceSessionError::Tts(e)),
+                }
+            }
+            audio_out.sleep_until_empty();
+            Ok::<(), VoiceSessionError>(())
+        });
+
+        // ----- Turn dispatch (streaming) -----
+        let turn = match run_one_voice_turn_streaming(
+            &agent,
+            &channel,
+            asr.as_ref(),
+            &samples,
+            sentence_tx,
+        )
+        .await
+        {
+            Ok(Some(t)) => Some(t),
+            Ok(None) => {
+                eprintln!("[voice] (no speech detected, try again)");
+                // The sentence_tx is already dropped
+                // (moved into the call) — the
+                // consumer drains and exits.
+                let _ = consumer.await;
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[voice] error: {e}");
+                let _ = consumer.await;
+                continue;
+            }
+        };
+
+        // Wait for the consumer to finish playback
+        // before re-prompting. By this point
+        // sentence_tx has been dropped (it was
+        // moved into run_one_voice_turn_streaming
+        // and out of scope), so recv() will return
+        // None once the queue drains.
+        match consumer.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                eprintln!("[voice] playback error: {e}");
+                continue;
+            }
+            Err(join_err) => {
+                eprintln!("[voice] consumer task panicked: {join_err}");
+                continue;
+            }
+        }
+
+        if let Some(t) = turn {
+            eprintln!("[voice] you said: {}", t.transcribed);
+        }
+    }
+}
+
 /// Read one line from stdin, blocking until the
 /// user hits Enter, and return it trimmed of
 /// surrounding whitespace. Errors from stdin
@@ -476,6 +804,115 @@ mod tests {
         // The fresh agent reply landed alone — the
         // stale text was drained.
         assert_eq!(result.response_text, "Fresh reply.");
+    }
+
+    // -------- Phase 138 — streaming variant --------
+
+    #[tokio::test]
+    async fn run_one_voice_turn_streaming_flushes_sentences_in_order() {
+        // Agent emits the reply across multiple
+        // text chunks, with sentence terminators
+        // landing in the middle of chunks (the
+        // real-world shape). The streaming driver
+        // must forward complete sentences to the
+        // consumer in order; the final partial
+        // sentence (no trailing space) must flush
+        // as a leftover after agent.turn returns.
+        let agent = agent_replying(vec![
+            "Hello there",       // partial
+            ". How are you",     // completes 1, starts 2 (partial)
+            " today? I'm",       // completes 2, starts 3 (partial)
+            " great! Bye now",   // completes 3, starts 4 (partial — leftover)
+        ]);
+        let ch = channel();
+        let asr = StubAsr::ok("hi");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let collected: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected_for_task = Arc::clone(&collected);
+        let consumer = tokio::spawn(async move {
+            while let Some(s) = rx.recv().await {
+                collected_for_task.lock().unwrap().push(s);
+            }
+        });
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 1000], tx)
+            .await
+            .unwrap()
+            .expect("non-empty transcription");
+        consumer.await.unwrap();
+
+        let got = collected.lock().unwrap().clone();
+        assert_eq!(
+            got,
+            vec![
+                "Hello there.".to_string(),
+                "How are you today?".to_string(),
+                "I'm great!".to_string(),
+                "Bye now".to_string(), // leftover partial
+            ],
+            "streaming consumer must see sentences in order, plus the final partial fragment as leftover",
+        );
+        assert_eq!(result.transcribed, "hi");
+        assert_eq!(
+            result.response_text, "Hello there. How are you today? I'm great! Bye now",
+            "response_text mirrors the full assembled text",
+        );
+    }
+
+    #[tokio::test]
+    async fn run_one_voice_turn_streaming_empty_response_yields_no_sentences() {
+        // Agent emits no text. The streaming
+        // pipeline never forwards anything; the
+        // consumer's rx closes empty.
+        let agent = agent_replying(vec![]);
+        let ch = channel();
+        let asr = StubAsr::ok("status");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let collected: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected_for_task = Arc::clone(&collected);
+        let consumer = tokio::spawn(async move {
+            while let Some(s) = rx.recv().await {
+                collected_for_task.lock().unwrap().push(s);
+            }
+        });
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx)
+            .await
+            .unwrap()
+            .expect("non-empty transcription");
+        consumer.await.unwrap();
+
+        assert!(
+            collected.lock().unwrap().is_empty(),
+            "no text chunks → no sentences forwarded"
+        );
+        assert_eq!(result.response_text, "");
+    }
+
+    #[tokio::test]
+    async fn run_one_voice_turn_streaming_empty_asr_returns_none() {
+        // Same as the non-streaming variant: an
+        // empty ASR transcription short-circuits
+        // and the streaming pipeline is never
+        // installed.
+        let agent = agent_replying(vec!["should not be reached"]);
+        let ch = channel();
+        let asr = StubAsr::empty();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let collected: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected_for_task = Arc::clone(&collected);
+        let consumer = tokio::spawn(async move {
+            while let Some(s) = rx.recv().await {
+                collected_for_task.lock().unwrap().push(s);
+            }
+        });
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx)
+            .await
+            .unwrap();
+        consumer.await.unwrap();
+        assert!(result.is_none());
+        assert!(collected.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
