@@ -11,7 +11,6 @@
 //! skeleton.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use aivyx_core::{Agent, Message};
 use thiserror::Error;
@@ -163,53 +162,155 @@ pub struct VoiceTurnResult {
     pub outcome: aivyx_core::TurnOutcome,
 }
 
-/// Full push-to-talk loop entry point. **Phase 135
-/// scope cap:** this function is the integration
-/// target but its real-audio-I/O body is operator-
-/// validation work (cpal stream opening, mic
-/// capture, rodio playback). Phase 135 ships the
-/// signature + a documented skeleton; concrete
-/// audio wiring is the operator's local-machine
-/// validation work.
+/// Full push-to-talk loop entry point.
 ///
-/// Returns when the operator types `quit` or Ctrl-C
-/// at the prompt, or when an unrecoverable
-/// hardware error fires.
+/// Phase 136 closed out Phase 135's audio-I/O
+/// deferral: this function now drives the
+/// interactive loop end-to-end.
+///
+/// ## Loop shape
+///
+/// 1. Print prompt: "Press Enter to start
+///    recording, Enter again to stop. Type 'quit'
+///    to exit."
+/// 2. Block on stdin until the operator hits Enter
+///    (or types `quit`).
+/// 3. Open a cpal input stream against the
+///    configured (or default) mic device.
+/// 4. Block on stdin until the operator hits Enter
+///    again — this is the "stop recording" signal.
+/// 5. Stop the stream and drain the captured
+///    samples (resampled + downmixed to 16 kHz mono
+///    via the substrate helpers).
+/// 6. Hand off to the substrate seam
+///    [`run_one_voice_turn`]. Empty transcription
+///    re-prompts; agent / engine errors surface to
+///    the operator and loop continues.
+/// 7. For each per-sentence audio chunk, queue it
+///    on a rodio sink; wait for the queue to
+///    drain.
+/// 8. Loop.
+///
+/// ## Threading notes
+///
+/// `cpal::Stream` is `!Send` on macOS, so the
+/// `AudioIn` / `AudioOut` handles are deliberately
+/// scoped to the synchronous prelude/postlude of
+/// each iteration — they never cross an `.await`
+/// point. The agent turn dispatch + TTS synthesis
+/// happen between handle lifetimes, which keeps the
+/// macOS build happy.
+///
+/// `std::io::stdin().read_line` blocks the tokio
+/// worker briefly per prompt. Acceptable for an
+/// interactive REPL where nothing else needs
+/// attention; identical posture to LocalChannel's
+/// REPL loop.
 pub async fn run_push_to_talk_loop<A>(
-    _agent: Arc<A>,
-    _channel: Arc<VoiceChannel>,
-    _asr: Arc<dyn AsrEngine>,
-    _tts: Arc<dyn TtsEngine>,
+    agent: Arc<A>,
+    channel: Arc<VoiceChannel>,
+    asr: Arc<dyn AsrEngine>,
+    tts: Arc<dyn TtsEngine>,
 ) -> Result<(), VoiceSessionError>
 where
     A: Agent + ?Sized + 'static,
 {
-    // Phase 135 — skeleton. The full wiring is:
-    //
-    // loop {
-    //     1. eprintln!("Press Enter to start recording,
-    //        Enter again to stop. Type 'quit' to exit.");
-    //     2. block on stdin line read; on "quit" → break.
-    //     3. Open cpal input stream with the operator's
-    //        configured device (or default). Build PCM
-    //        f32 sample collector behind Arc<Mutex<Vec<f32>>>;
-    //        cpal callback pushes samples.
-    //     4. Wait for second Enter → stop the stream.
-    //     5. Resample + downmix via the helpers in
-    //        asr::whisper_rs (resample_to_16k +
-    //        stereo_to_mono).
-    //     6. Call run_one_voice_turn(...).
-    //     7. For each audio chunk in the result,
-    //        rodio::Sink::append with a SamplesBuffer at
-    //        chunk.sample_rate. sink.sleep_until_end()
-    //        to wait for playback.
-    // }
-    //
-    // The skeleton intentionally panics if invoked —
-    // operators surface this through Phase 136+ work
-    // once the audio integration is validated.
-    let _ = Duration::from_secs(0);
-    Err(VoiceSessionError::LoopNotYetImplemented)
+    use crate::audio_in::AudioIn;
+    use crate::audio_out::AudioOut;
+
+    let input_device = channel.config().input_device.clone();
+
+    eprintln!();
+    eprintln!("aivyx voice — push-to-talk REPL");
+    eprintln!("  Enter        : start recording (then Enter again to stop)");
+    eprintln!("  quit + Enter : exit");
+    eprintln!();
+
+    loop {
+        eprint!("[voice] press Enter to record (or `quit`): ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let trimmed = read_stdin_line_trimmed();
+        if trimmed == "quit" {
+            eprintln!("[voice] exiting.");
+            return Ok(());
+        }
+
+        // ----- Capture phase (synchronous, scoped) -----
+        let samples = {
+            let mut audio_in = AudioIn::new(input_device.as_deref()).map_err(|e| {
+                VoiceSessionError::AudioDevice(format!("input: {e}"))
+            })?;
+            audio_in.start().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("start: {e}"))
+            })?;
+            eprintln!(
+                "[voice] recording at {} Hz / {} ch — press Enter to stop.",
+                audio_in.src_rate(),
+                audio_in.src_channels(),
+            );
+            let _ = read_stdin_line_trimmed();
+            audio_in.stop().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("stop: {e}"))
+            })?;
+            audio_in.take_samples_for_whisper().map_err(|e| {
+                VoiceSessionError::AudioCapture(format!("drain: {e}"))
+            })?
+        };
+
+        if samples.is_empty() {
+            eprintln!("[voice] no audio captured — try again.");
+            continue;
+        }
+
+        // ----- Turn dispatch (async; no audio handles live) -----
+        let turn = match run_one_voice_turn(
+            &agent,
+            &channel,
+            asr.as_ref(),
+            tts.as_ref(),
+            &samples,
+        )
+        .await
+        {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                eprintln!("[voice] (no speech detected, try again)");
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[voice] error: {e}");
+                continue;
+            }
+        };
+        eprintln!("[voice] you said: {}", turn.transcribed);
+
+        // ----- Playback phase (synchronous, scoped) -----
+        if !turn.audio_chunks.is_empty() {
+            let audio_out = AudioOut::new().map_err(|e| {
+                VoiceSessionError::AudioDevice(format!("output: {e}"))
+            })?;
+            for chunk in &turn.audio_chunks {
+                audio_out.play_audio(chunk).map_err(|e| {
+                    VoiceSessionError::AudioPlayback(format!("queue: {e}"))
+                })?;
+            }
+            audio_out.sleep_until_empty();
+        }
+    }
+}
+
+/// Read one line from stdin, blocking until the
+/// user hits Enter, and return it trimmed of
+/// surrounding whitespace. Errors from stdin
+/// (closed pipe, etc.) collapse to an empty string;
+/// the caller treats that the same as `quit`.
+fn read_stdin_line_trimmed() -> String {
+    let mut buf = String::new();
+    match std::io::stdin().read_line(&mut buf) {
+        Ok(0) => "quit".to_string(), // EOF — treat as quit
+        Ok(_) => buf.trim().to_string(),
+        Err(_) => "quit".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -305,7 +406,7 @@ mod tests {
             aivyx_core::TurnOutcome::Completed {
                 final_message: self.reply_chunks.concat(),
                 tool_calls_made: 0,
-                duration: Duration::from_millis(1),
+                duration: std::time::Duration::from_millis(1),
             }
         }
     }
