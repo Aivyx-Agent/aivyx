@@ -742,6 +742,10 @@ pub struct AivyxConfig {
     /// session-construction time. Empty when the operator
     /// uses a different provider.
     pub mistralrs_options: MistralRsOptions,
+    /// Phase 135 — `[voice]` operator-configured options
+    /// for the voice channel adapter. Empty when the
+    /// operator doesn't run `--channel voice`.
+    pub voice_options: VoiceOptions,
     /// Phase 122 Task 5 — `[ollama.prompt_strategies]` operator
     /// override map for per-family prompt-assembly strategy.
     /// Keyed on family strings matching [`detect_model_family`]
@@ -2764,6 +2768,10 @@ struct RawToml {
     /// embedded Rust-native provider.
     #[serde(default)]
     mistralrs: MistralRsOptions,
+    /// Phase 135 — `[voice]` config section for the
+    /// voice channel adapter.
+    #[serde(default)]
+    voice: VoiceOptions,
     #[serde(default)]
     aivyx: RawAivyx,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
@@ -3667,6 +3675,59 @@ struct RawProviders {
 /// the loader propagates `None` so Ollama's per-model defaults
 /// apply. Absent section → all-`None` → default-constructed
 /// Phase 134 — `[mistralrs]` config section for the embedded
+/// Phase 135 — `[voice]` config section for the voice
+/// channel adapter. Carries the ASR + TTS model paths
+/// and per-engine knobs; empty when the operator
+/// doesn't run `--channel voice`.
+///
+/// Phase 136 wires the real push-to-talk loop against
+/// these fields. The aivyx-voice crate has its own
+/// richer `VoiceChannelConfig` type the binary
+/// converts to at session-construction time; the
+/// fields below are the minimum surface that has to
+/// round-trip through TOML.
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct VoiceOptions {
+    /// `"whisper-rs"` (default) or `"whisper-cpp-plus"`
+    /// (Phase 135 Q2c alternative; currently a
+    /// stub-only feature flag).
+    #[serde(default)]
+    pub asr_engine: Option<String>,
+    /// Currently `"piper"` (the only Phase 135 TTS
+    /// engine).
+    #[serde(default)]
+    pub tts_engine: Option<String>,
+    /// Absolute path to the Whisper `.bin` model.
+    /// Required when `--channel voice`.
+    #[serde(default)]
+    pub asr_model_path: Option<PathBuf>,
+    /// ASR language code (`"en"`, `"auto"`, etc.).
+    #[serde(default)]
+    pub asr_language: Option<String>,
+    /// ASR beam search width. Higher = more accurate,
+    /// slower. Defaults to 5.
+    #[serde(default)]
+    pub asr_beam_size: Option<usize>,
+    /// Absolute path to the Piper `.onnx` voice
+    /// model. Required when `--channel voice`.
+    #[serde(default)]
+    pub tts_voice_path: Option<PathBuf>,
+    /// Absolute path to espeak-ng's data directory
+    /// (Piper's phonemizer). Linux default is
+    /// `/usr/share/espeak-ng-data`; macOS via Homebrew
+    /// is `/opt/homebrew/share/espeak-ng-data`.
+    #[serde(default)]
+    pub tts_espeak_data_path: Option<PathBuf>,
+    /// Optional cpal input device name override.
+    #[serde(default)]
+    pub input_device: Option<String>,
+    /// Optional cpal output device name override.
+    /// Phase 137+ candidate — rodio's device-by-name
+    /// API differs from cpal's.
+    #[serde(default)]
+    pub output_device: Option<String>,
+}
+
 /// Rust-native provider. Carries the GGUF model path + tuning
 /// knobs. Empty when the operator uses a different provider.
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -4300,6 +4361,12 @@ impl AivyxConfig {
         // embedded provider. Validation (model_path required when
         // provider = mistralrs) happens in `validate()` below.
         let mistralrs_options = toml.mistralrs.clone();
+        // Phase 135 — [voice] options pass through to the voice
+        // channel adapter. No validation here; the binary's
+        // ChannelKind::Voice dispatch arm validates required
+        // fields at session-construction time so the operator-
+        // facing error names the right field.
+        let voice_options = toml.voice.clone();
 
         // Phase 122 Task 5 — [ollama.prompt_strategies] operator
         // per-family overrides. Each value parses through
@@ -5250,6 +5317,7 @@ impl AivyxConfig {
             tool_relevance,
             ollama_options,
             mistralrs_options,
+            voice_options,
             ollama_prompt_strategies,
             tool_name_auto_correct_threshold,
             roles,

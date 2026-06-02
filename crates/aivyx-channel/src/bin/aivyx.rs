@@ -3343,6 +3343,10 @@ async fn run_async(
         // referenced when `provider = "mistralrs"`; for any other
         // provider the field is bound and ignored.
         mistralrs_options: config_mistralrs_options,
+        // Phase 135 — [voice] section. Bound here so the
+        // ChannelKind::Voice dispatch arm reads the operator's
+        // ASR + TTS paths.
+        voice_options: config_voice_options,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6154,50 +6158,128 @@ async fn run_async(
         // real cpal + rodio loop without changing
         // the dispatch shape.
         ChannelKind::Voice => {
-            #[cfg(feature = "channel-voice")]
+            // `channel-voice-full` (defined in this crate's
+            // Cargo.toml) bundles `channel-voice` plus the
+            // engines via `aivyx-voice/recommended-voice`, so
+            // gating on it transitively guarantees both
+            // `asr-whisper-rs` and `tts-piper` are compiled.
+            // The lean `channel-voice` alone pulls in the
+            // substrate without engines — useful for Phase 137+
+            // alternative-engine wiring; not enough for the
+            // binary's default loop here.
+            #[cfg(feature = "channel-voice-full")]
             {
-                // Suppress unused-variable warnings on
-                // the heavyweight state we don't yet
-                // pass into the (currently-stub) loop.
-                let _ = (
-                    &model,
-                    &system_prompt,
-                    &capabilities,
-                    &tools,
-                    &storage,
-                    &tool_allowlist,
-                    &memory_topic_prefix,
-                    &provider,
-                    &audit,
-                );
+                use aivyx_voice::asr::whisper_rs::WhisperRsEngine;
+                use aivyx_voice::tts::piper::{config_from_generic, PiperEngine};
+                use aivyx_voice::{
+                    run_push_to_talk_loop, VoiceChannel, VoiceChannelConfig,
+                };
+
                 eprintln!(
-                    "aivyx {} — voice channel (Phase 135)\n\
+                    "aivyx {} — voice channel (Phase 136)\n\
                      fs sandbox: {}\n\
-                     memory: live (recall persists across restarts)\n\
                      audit: persistent ({} events verified from disk)",
                     env!("CARGO_PKG_VERSION"),
                     canonical_root.display(),
                     verified_event_count,
                 );
-                Err(
-                    "aivyx voice: Phase 135 ships the substrate (ASR, TTS, channel) \
-                     end-to-end-unit-tested, but the cpal + rodio audio I/O loop is \
-                     operator-validation work. Build a push-to-talk driver against \
-                     `aivyx_voice::run_one_voice_turn(agent, channel, asr, tts, captured_audio)` \
-                     locally; Phase 136+ ships the loop here. See \
-                     docs/PHASE_135.md + docs/INSTALL.md for the wiring sketch."
-                        .to_string(),
-                )
+
+                // Build the agent stack inline. Phase 136
+                // ships the minimum viable voice agent;
+                // role overrides, recall context, memory
+                // prune sinks, etc. (the rich Local-channel
+                // features) are Phase 137+.
+                let provider_for_planner = Arc::clone(&provider);
+                let registry_for_planner = Arc::clone(&tools);
+                let planner_model = model.clone();
+                let planner_system = system_prompt.clone();
+                let planner_allowlist = tool_allowlist.clone();
+                let planner_factory = move || -> Box<dyn aivyx_core::TurnPlanner> {
+                    let cfg = aivyx_core::llm_planner::LlmPlannerConfig::new(
+                        planner_model.clone(),
+                    )
+                    .with_system_prompt(planner_system.clone())
+                    .with_max_tokens(DEFAULT_MAX_TOKENS)
+                    .with_tool_allowlist(planner_allowlist.clone());
+                    Box::new(aivyx_core::llm_planner::LlmPlanner::new(
+                        Arc::clone(&provider_for_planner),
+                        Arc::clone(&registry_for_planner),
+                        cfg,
+                    ))
+                };
+                let agent: Arc<dyn Agent> = Arc::new(
+                    ConcreteAgent::new(
+                        AgentId::new(),
+                        capabilities,
+                        tools,
+                        audit,
+                        planner_factory,
+                    )
+                    .with_tool_allowlist(tool_allowlist)
+                    .with_memory_topic_prefix(memory_topic_prefix),
+                );
+
+                // Build the voice channel + engines from
+                // [voice] config.
+                let v = &config_voice_options;
+                let asr_cfg = aivyx_voice::asr::AsrConfig {
+                    model_path: v.asr_model_path.clone(),
+                    language: v.asr_language.clone(),
+                    beam_size: v.asr_beam_size,
+                };
+                let asr_engine = WhisperRsEngine::new(asr_cfg).map_err(|e| {
+                    format!("voice: build WhisperRsEngine: {e}")
+                })?;
+                let tts_cfg = aivyx_voice::tts::TtsConfig {
+                    voice_path: v.tts_voice_path.clone(),
+                    speaker_id: None,
+                };
+                let espeak_path = v.tts_espeak_data_path.clone().ok_or_else(|| {
+                    "voice: [voice] tts_espeak_data_path is required for Piper TTS. \
+                     Linux: `/usr/share/espeak-ng-data` (apt install espeak-ng-data). \
+                     macOS: `/opt/homebrew/share/espeak-ng-data` (brew install espeak-ng)."
+                        .to_string()
+                })?;
+                let piper_cfg = config_from_generic(&tts_cfg, espeak_path)
+                    .map_err(|e| format!("voice: build PiperEngine config: {e}"))?;
+                let tts_engine = PiperEngine::new(piper_cfg).map_err(|e| {
+                    format!("voice: build PiperEngine: {e}")
+                })?;
+                let channel_cfg = VoiceChannelConfig {
+                    asr_engine: v.asr_engine.clone(),
+                    tts_engine: v.tts_engine.clone(),
+                    asr: aivyx_voice::asr::AsrConfig {
+                        model_path: v.asr_model_path.clone(),
+                        language: v.asr_language.clone(),
+                        beam_size: v.asr_beam_size,
+                    },
+                    tts: aivyx_voice::tts::TtsConfig {
+                        voice_path: v.tts_voice_path.clone(),
+                        speaker_id: None,
+                    },
+                    input_device: v.input_device.clone(),
+                    output_device: v.output_device.clone(),
+                    capture_debug_path: None,
+                };
+                let channel = Arc::new(VoiceChannel::new(channel_cfg));
+
+                let asr_dyn: Arc<dyn aivyx_voice::asr::AsrEngine> = Arc::new(asr_engine);
+                let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> = Arc::new(tts_engine);
+
+                run_push_to_talk_loop(agent, channel, asr_dyn, tts_dyn)
+                    .await
+                    .map_err(|e| format!("voice loop: {e}"))
             }
-            #[cfg(not(feature = "channel-voice"))]
+            #[cfg(not(feature = "channel-voice-full"))]
             {
+                let _ = &config_voice_options;
                 Err(
-                    "aivyx voice: this binary was built without the `channel-voice` \
-                     feature. Rebuild with `cargo install --features \
-                     aivyx-channel/channel-voice aivyx-channel` (and the engine \
-                     features `asr-whisper-rs` + `tts-piper`, typically grouped \
-                     via the `recommended-voice` meta-feature). See \
-                     docs/INSTALL.md Phase 135 voice section."
+                    "aivyx voice: this binary was built without the `channel-voice-full` \
+                     feature (which bundles channel-voice + whisper-rs ASR + Piper TTS). \
+                     Rebuild with `cargo install --features \
+                     aivyx-channel/channel-voice-full aivyx-channel`. See INSTALL.md \
+                     Phase 135 voice section for prerequisites (ONNX runtime,
+                     espeak-ng) and Phase 136 for the integrated loop."
                         .to_string(),
                 )
             }
