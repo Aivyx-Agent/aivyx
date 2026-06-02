@@ -104,6 +104,19 @@ const KNOWN_BASES: &[&str] = &[
     "task.write",
     "health.read",
     "health.write",
+    // Phase 143 — Chapter G #2 (budget tracking,
+    // aivyx-toolkit). Read+write split matches the
+    // task.* / health.* shape:
+    //   budget.read  — budget.summary.
+    //   budget.write — budget.record.
+    // Trusted-only default at the ceiling (personal-
+    // finance data shouldn't leak through remote
+    // channels without explicit operator grant —
+    // same gating pattern as email.* / notify.send /
+    // every other Chapter F/G third-party-tool-
+    // process surface).
+    "budget.read",
+    "budget.write",
     // Calendar (Phase 128 — Chapter F #2, aivyx-calendar
     // third-party tool process). Two bases for the
     // five-tool surface (Q3b operator-picked):
@@ -824,6 +837,14 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "task.write",
         "health.read",
         "health.write",
+        // Phase 143 — Chapter G budget tracking.
+        // Same Trusted-only default as task.* /
+        // health.* / etc.; operators who want
+        // narrow access from a remote channel can
+        // grant individual bases via a role's
+        // `capability_scopes`.
+        "budget.read",
+        "budget.write",
         // Phase 128 — Google Calendar third-party tool
         // process (Chapter F #2). Two bases for the
         // five-tool surface (Q3b); Trusted-only default
@@ -1661,18 +1682,30 @@ mod tests {
     /// this test just keeps the operator-readable inventory
     /// honest.
     #[test]
-    fn known_bases_count_matches_phase_131_a3_addendum() {
+    fn known_bases_count_matches_phase_143_a3_addendum() {
         // See `docs/amendments/2026-04-17-capability-taxonomy-growth.md`
-        // — the latest addendum (Phase 131) lists every entry.
-        // Phase 131 adds the n8n.read + n8n.write bases for
-        // the Chapter F #7 third-party tool process.
+        // — the latest addendum (Phase 143) lists every entry.
+        // Phase 143 adds the budget.read + budget.write bases
+        // for the Chapter G #2 third-party tool process
+        // (aivyx-toolkit budget tracking — `budget.summary`
+        // and `budget.record`).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            67,
+            69,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
+    }
+
+    #[test]
+    fn budget_read_and_write_bases_parse() {
+        // Phase 143 — both new bases parse via
+        // Scope::parse exactly as their siblings do.
+        let r = Scope::parse("budget.read").expect("budget.read");
+        assert_eq!(r.base(), "budget.read");
+        let w = Scope::parse("budget.write").expect("budget.write");
+        assert_eq!(w.base(), "budget.write");
     }
 }

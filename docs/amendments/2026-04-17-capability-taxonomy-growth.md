@@ -369,6 +369,60 @@ Third-party tool process scopes (18):
 
 Total: 16 + 5 + 28 + 18 = 67.
 
+## Phase 143 addendum — Chapter G #2 budget tracking (2026-06-03)
+
+> *Added at Phase 143 exit. Chapter G's second
+> bundled capability after Phase 125's web.search +
+> task.* + health.* surface. The aivyx-toolkit
+> harness gains two budget-tracking tools surfacing
+> a JSON-persisted entry store at
+> `~/.aivyx/tool-processes/toolkit/budget.json`:
+> reads via `budget.summary` (aggregate totals +
+> by-category breakdown over a period); writes via
+> `budget.record` (single new entry append). Two
+> new capability bases gate the pair, sharing the
+> read/write split the task.* and health.* siblings
+> already use.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 143 | `budget.read` | Chapter G #2 — `budget.summary` (aggregate totals + by-category breakdown). |
+| Phase 143 | `budget.write` | Chapter G #2 — `budget.record` (single-entry append; Trusted-tier-only at the ceiling level matching the rest of the toolkit + Chapter F gating). |
+
+### Current full enumeration after Phase 143 (69 bases)
+
+Substrate-facing operator scopes (16):
+- `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`
+- `net.fetch`, `net.post`, `net.dns`
+- `shell.exec`, `shell.spawn`
+- `llm.call`, `llm.embed`
+- `memory.read`, `memory.write`, `memory.forget`, `memory.gc`
+- `git.read`
+
+Channel / audit / config (5)
+
+Infrastructure (28)
+
+Third-party tool process scopes (20):
+- Email (Chapter F #1, Phase 123): `email.read`, `email.write`,
+  `email.send`
+- Personal assistant tool bundle (Chapter G #1, Phase 125):
+  `web.search`, `task.read`, `task.write`, `health.read`,
+  `health.write`
+- Calendar (Chapter F #2, Phase 128): `calendar.read`,
+  `calendar.write`
+- Drive (Chapter F #3, Phase 129): `drive.read`, `drive.write`
+- Notion (Chapter F #5, Phase 130 Task 2): `notion.read`,
+  `notion.write`
+- Obsidian (Chapter F #6, Phase 130 Task 10): `obsidian.read`,
+  `obsidian.write`
+- n8n (Chapter F #7, Phase 131 Task 2): `n8n.read`,
+  `n8n.write`
+- Budget tracking (Chapter G #2, Phase 143): `budget.read`,
+  `budget.write`
+
+Total: 16 + 5 + 28 + 20 = 69.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —
