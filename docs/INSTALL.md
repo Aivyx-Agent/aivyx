@@ -1506,38 +1506,61 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
-**Phase 135 reality:** the binary will surface an
-actionable error when you do this:
+**Phase 136 closed out Phase 135's audio-I/O
+deferral.** The push-to-talk loop now runs end-to-
+end:
 
-> aivyx voice: Phase 135 ships the substrate (ASR,
-> TTS, channel) end-to-end-unit-tested, but the
-> cpal + rodio audio I/O loop is operator-validation
-> work. Build a push-to-talk driver against
-> `aivyx_voice::run_one_voice_turn(agent, channel,
-> asr, tts, captured_audio)` locally; Phase 136+
-> ships the loop here.
+1. Aivyx prints `[voice] press Enter to record (or
+   \`quit\`)`.
+2. Operator hits Enter → cpal opens the configured
+   mic, starts capturing.
+3. Operator speaks; hits Enter again to stop.
+4. Whisper transcribes the captured PCM.
+5. Aivyx prints `[voice] you said: <transcript>`,
+   dispatches the agent turn.
+6. As the agent streams text back, Aivyx buffers it.
+7. On turn completion, Aivyx chunks the response at
+   sentence boundaries; Piper synthesizes each
+   sentence to PCM; rodio queues them on the
+   speakers.
+8. Aivyx waits for playback to finish, then loops.
 
-The substrate seam `aivyx_voice::run_one_voice_turn`
-is fully wired and unit-tested with stub engines.
-Operators with cpal/rodio experience can build a
-push-to-talk driver against it in ~100 lines; the
-wiring sketch is documented inline in
-`aivyx-voice/src/session.rs::run_push_to_talk_loop`.
-Phase 136+ ships the loop body.
+**Operator validation is still where end-to-end
+audio gets stress-tested.** The substrate is unit-
+tested with stub agent / ASR / TTS engines; the
+real-mic + real-speaker path needs an operator on
+hardware with mic + speakers + the model files
+downloaded. If you hit issues, the most common
+shapes are:
 
-### What Phase 135 deliberately doesn't ship
+- **No input device:** OS audio passthrough disabled
+  (Linux containers, WSL without PulseAudio bridge).
+  Errors as
+  `audio device error: input: no default input
+  device — check OS audio settings`.
+- **espeak-ng-data not found:** Piper init fails
+  at engine construction. Errors as
+  `failed to build PiperEngine: voice_path is not
+  valid UTF-8` or similar; double-check
+  `[voice] tts_espeak_data_path`.
+- **Whisper model wrong format:** `whisper-rs`
+  surfaces this from the `.bin` parse. Errors as
+  `failed to build WhisperRsEngine: ASR model load
+  failed: ...`.
 
-- **The cpal + rodio audio I/O loop.** Real mic
-  capture + speaker playback is operator-validation
-  work; the substrate seam is complete and unit-
-  tested. Phase 136+ candidate.
+### What Phase 135 / 136 deliberately don't ship
+
+- ~~**The cpal + rodio audio I/O loop.**~~ **Shipped
+  in Phase 136.** See "Running it" above.
 - **whisper-cpp-plus alternative ASR engine.** The
   Q2c sign-off picked both engines, but published
   `whisper-cpp-plus = "0.1.4"` doesn't build
   against current whisper.cpp (40 errors against
   `whisper_full_params` struct shape). Feature flag
   is wired for future re-enablement; stub module
-  documents the deferral.
+  documents the deferral. Phase 137+ revisits when
+  upstream is unstuck or we swap to a different
+  binding.
 - **Streaming TTS during LLM generation.** Phase
   135 buffers the agent's full response, then chunks
   into sentences for synthesis. Streaming

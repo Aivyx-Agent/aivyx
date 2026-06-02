@@ -189,7 +189,127 @@ Voice now works. Phase 137+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 136 exit. Predictions at sign-
-off: DESIGN.md HOLD → 27; PRODUCT.md HOLD → 27;
-lib.rs HOLD → 2; zero new deps; test count delta
-`+5` to `+15`; zero clippy warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  26 → **27**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 26 → **27**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 136 work in
+  `aivyx-voice` + `aivyx-config` (new `[voice]`
+  section) + `aivyx-channel`'s binary dispatch.
+  Continuing the post-Phase-135 reset: 1 → **2**.
+
+**Test count delta: +13 — slightly over the
+predicted `+5` to `+15` range.** Workspace lib
+tests 3013 → 3026. Per-module:
+- Substrate audio-format helpers (lifted from
+  asr/whisper_rs.rs to asr/mod.rs, gained
+  multi-channel downmix tests): +9.
+- audio_in.rs: +1 (WHISPER_SAMPLE_RATE sanity).
+- audio_out.rs: +2 (error variant context +
+  invalid-buffer message).
+- session.rs: +1 (run_one_voice_turn full-loop
+  test gained a sentence-boundary assertion).
+
+**Zero new workspace dependencies** as predicted —
+cpal + rodio were already in `aivyx-voice` from
+Phase 135. One Cargo.toml fix during Task 3:
+rodio's `default-features = false` gave us
+nothing (no playback). Switched to
+`default-features = false, features = ["playback"]`
+— what we actually want for cpal-backed output.
+
+**Zero clippy warnings** with default features
+and with `--features aivyx-channel/channel-voice`.
+The full `channel-voice-full` path requires ONNX
+runtime + espeak-ng on the build machine (operator
+prereq); not validated locally.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `audio_in.rs` cpal mic capture: AudioIn wraps the
+  cpal Stream with start/stop/clear/
+  take_samples_for_whisper. Handles F32/I16/U16
+  natively; exotic formats error with actionable
+  messages.
+- `audio_out.rs` rodio speaker playback: AudioOut
+  wraps a Player over the system default sink.
+  play_audio queues a SamplesBuffer at the
+  chunk's declared rate; sleep_until_empty waits.
+- Substrate audio-format helpers (resample_to_16k,
+  downmix_to_mono, stereo_to_mono_into_16k)
+  lifted up from the feature-gated asr/whisper_rs
+  module to asr/mod.rs so audio_in (always-on)
+  can use them without forcing the engine flag.
+- `run_push_to_talk_loop` body: stdin-driven
+  push-to-talk loop with cpal capture scoped
+  outside the await window (keeps cpal::Stream's
+  `!Send` on macOS happy).
+- `[voice]` section in aivyx-config + binary
+  Voice dispatch arm + `channel-voice-full` meta-
+  feature.
+
+**Bent honestly:**
+
+1. **`channel-voice-full` is the only fully-
+   working binary gate.** The lean `channel-voice`
+   feature compiles the substrate but can't drive
+   the loop because the engines themselves are
+   per-feature gated inside aivyx-voice. Cargo's
+   `feature = "dep/sub"` syntax doesn't accept
+   transitive feature checks, so the cleanest
+   substitute is the combined meta-feature.
+   Documented in the dispatch arm's cfg gate
+   comments.
+
+2. **Voice agent is minimal vs Local's REPL.**
+   Phase 136 ships the basic voice agent
+   (ConcreteAgent + planner + tools + audit).
+   Phase 137+ candidates: role overrides, recall
+   context, memory prune sinks, prompt
+   refresher — the rich Local-channel features.
+   Operators get the basic voice experience now;
+   feature parity follows.
+
+3. **`LoopNotYetImplemented` variant removed.**
+   The Task 4 commit message claimed it was gone
+   but it was still in the enum; a follow-up
+   cleanup commit actually removed it. Honest
+   cleanup over deferred-debt.
+
+4. **Three of clippy lints surfaced post-Task-2
+   commit** (unused imports + deprecated
+   cpal::Device::name + DeviceDescription field
+   access). All fixed in a follow-up commit;
+   honest signal that the cpal 0.17 API moved
+   under us between research and implementation.
+
+### Direction after Phase 136
+
+Voice works. Phase 137+ candidates:
+
+1. **Voice agent feature parity with Local.** Role
+   overrides, recall context, memory prune sinks,
+   prompt refresher. Significant binary
+   refactoring (likely extract a common
+   `build_agent_stack` helper).
+2. **Streaming TTS during LLM generation.** Pipeline
+   text chunks from the planner into the TTS engine
+   on sentence boundaries — operator hears the
+   first sentence while the LLM is still
+   generating.
+3. **Wake-word activation** ("Hey Aivyx") via
+   Porcupine or Silero-wakeword.
+4. **Voice activity detection** for trim-on-silence
+   push-to-talk (no more "press Enter twice").
+5. **Multimodal output** — agent speaks descriptions
+   of images.
+6. **whisper-cpp-plus rehabilitation** — close out
+   the Phase 135 Q2c deferral.
+7. **Channel Activation Milestone** — still held
+   intentionally; 25th consecutive deferral at
+   Phase 136 exit.

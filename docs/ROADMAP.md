@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 136 — Voice Audio I/O Loop: Close-Out
 
-**See [PHASE_136.md](PHASE_136.md).** Phase 135
+**Frozen — see [PHASE_136.md](PHASE_136.md).** Phase 135
 close-out. Phase 135 shipped the voice substrate
 (ASR + TTS adapters, channel impl, session seam)
 but deferred the cpal + rodio audio I/O loop body

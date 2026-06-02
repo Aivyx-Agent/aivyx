@@ -193,7 +193,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 133 | Frozen | [PHASE_133.md](PHASE_133.md) | `0b8811c`  |
 | Phase 134 | Frozen | [PHASE_134.md](PHASE_134.md) | `f290caa`  |
 | Phase 135 | Frozen | [PHASE_135.md](PHASE_135.md) | `7fdadbd`  |
-| Phase 136 | Open   | [PHASE_136.md](PHASE_136.md) | —          |
+| Phase 136 | Frozen | [PHASE_136.md](PHASE_136.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
