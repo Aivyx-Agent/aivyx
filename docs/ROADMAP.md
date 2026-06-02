@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 139 — Voice Activity Detection (Energy Threshold)
+
+**See [PHASE_139.md](PHASE_139.md).** Phase 138 follow-on.
+Phase 138 collapsed voice latency-to-first-audio with
+streaming TTS; Phase 139 attacks the next UX irritant
+in PTT: operator currently presses Enter twice (start +
+stop). Phase 139 replaces the second Enter with
+energy-threshold voice activity detection — operator
+speaks, stops, mic auto-stops on detected silence.
+Pure-substrate RMS-over-window detector + AudioIn
+integration + tokio::time::sleep poll loop. Zero new
+workspace dependencies; ML VAD (silero) deferred to
+Phase 140+ if operators hit noisy environments.
+
 ## Phase 138 — Streaming TTS During LLM Generation
 
 **Frozen — see [PHASE_138.md](PHASE_138.md).** Phase 137 follow-on.
