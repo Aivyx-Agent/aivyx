@@ -54,9 +54,15 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aivyx_capability::CapabilitySet;
+// `LlmPlanner` + `LlmPlannerConfig` + `Agent` were used by the
+// inline agent-stack construction Phase 137 lifted into
+// `build_agent_stack`; they stay imported there (qualified
+// imports inside the helper) and no longer need to be visible
+// in `run_session`'s scope. `ConcreteAgent` + `AgentId` remain
+// imported because `build_agent_stack` is in the same module.
 use aivyx_core::{
-    agent::ConcreteAgent, llm_planner::LlmPlanner, planner::ToolRegistry, Agent, AgentId,
-    AuditHook, ChannelContext, LlmPlannerConfig, Message, TurnOutcome,
+    agent::ConcreteAgent, planner::ToolRegistry, AgentId, AuditHook, ChannelContext,
+    Message, TurnOutcome,
 };
 use aivyx_llm::LlmProvider;
 use aivyx_storage::{KeyDomain, Storage};
@@ -170,6 +176,151 @@ pub struct SessionConfig {
     pub prompt_refresher: Option<Arc<dyn Fn() -> String + Send + Sync>>,
 }
 
+/// Phase 137 — agent-stack construction inputs.
+///
+/// The subset of [`SessionConfig`] fields that
+/// `build_agent_stack` reads, lifted out of the
+/// REPL-specific surface so non-REPL channel
+/// adapters (Phase 137's voice loop;
+/// Phase 138+ web / REST) can construct the same
+/// agent stack without going through `run_session`.
+///
+/// Field-for-field a subset of `SessionConfig`. The
+/// REPL extras (`prompt`, `banner`, `storage`) live
+/// on `SessionConfig` only because they're
+/// REPL-specific; agent construction doesn't need
+/// them.
+pub struct AgentStackSpec {
+    pub model: String,
+    pub system_prompt: String,
+    pub max_tokens: u32,
+    pub capabilities: CapabilitySet,
+    pub tools: Arc<ToolRegistry>,
+    pub tool_allowlist: Option<std::collections::BTreeSet<String>>,
+    pub memory_topic_prefix: Option<String>,
+    pub role_overrides: Option<crate::role_overrides::SharedRoleOverrides>,
+    pub context_window_tokens: Option<usize>,
+    pub prune_sink: Option<Arc<dyn aivyx_core::llm_planner::PruneSink>>,
+    pub context_provider:
+        Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>>,
+    pub system_prompt_refiner:
+        Option<Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>>,
+    pub prompt_refresher: Option<Arc<dyn Fn() -> String + Send + Sync>>,
+}
+
+impl AgentStackSpec {
+    /// Lift the agent-relevant fields out of a
+    /// `SessionConfig`. The Local-channel REPL calls
+    /// this internally; non-REPL channels (voice,
+    /// future web/REST) build the spec directly.
+    pub fn from_session_config(c: &SessionConfig) -> Self {
+        AgentStackSpec {
+            model: c.model.clone(),
+            system_prompt: c.system_prompt.clone(),
+            max_tokens: c.max_tokens,
+            capabilities: c.capabilities.clone(),
+            tools: Arc::clone(&c.tools),
+            tool_allowlist: c.tool_allowlist.clone(),
+            memory_topic_prefix: c.memory_topic_prefix.clone(),
+            role_overrides: c.role_overrides.clone(),
+            context_window_tokens: c.context_window_tokens,
+            prune_sink: c.prune_sink.clone(),
+            context_provider: c.context_provider.clone(),
+            system_prompt_refiner: c.system_prompt_refiner.clone(),
+            prompt_refresher: c.prompt_refresher.clone(),
+        }
+    }
+}
+
+/// Phase 137 — build the agent stack from a provider,
+/// audit hook, and [`AgentStackSpec`].
+///
+/// Returns an `Arc<dyn Agent>` ready for any channel
+/// adapter to drive — `run_session` for the REPL,
+/// `aivyx_voice::run_push_to_talk_loop` for voice,
+/// future web/REST adapters likewise.
+///
+/// The planner factory closure captures the
+/// provider, registry, prompt refresher, and role
+/// overrides by `Arc`; each turn the closure
+/// clones the planner config, applies the optional
+/// per-turn mutations (system prompt refresh, role
+/// override allowlist mutations), and constructs a
+/// fresh `LlmPlanner`. Per-turn cost is one config
+/// clone and one Arc clone of each captured value.
+pub fn build_agent_stack(
+    provider: Arc<dyn aivyx_llm::LlmProvider>,
+    audit: Arc<dyn aivyx_core::AuditHook>,
+    spec: AgentStackSpec,
+) -> Arc<dyn aivyx_core::Agent> {
+    use aivyx_core::llm_planner::{LlmPlanner, LlmPlannerConfig};
+
+    let AgentStackSpec {
+        model,
+        system_prompt,
+        max_tokens,
+        capabilities,
+        tools,
+        tool_allowlist,
+        memory_topic_prefix,
+        role_overrides,
+        context_window_tokens,
+        prune_sink,
+        context_provider,
+        system_prompt_refiner,
+        prompt_refresher,
+    } = spec;
+
+    let provider_for_factory = Arc::clone(&provider);
+    let registry_for_factory = Arc::clone(&tools);
+    let mut planner_config = LlmPlannerConfig::new(model)
+        .with_system_prompt(system_prompt)
+        .with_max_tokens(max_tokens)
+        .with_tool_allowlist(tool_allowlist.clone());
+    if let Some(cw) = context_window_tokens {
+        planner_config = planner_config.with_context_window(cw);
+    }
+    if let Some(sink) = prune_sink {
+        planner_config = planner_config.with_prune_sink(sink);
+    }
+    if let Some(provider) = context_provider {
+        planner_config = planner_config.with_context_provider(provider);
+    }
+    if let Some(refiner) = system_prompt_refiner {
+        planner_config = planner_config.with_system_prompt_refiner(refiner);
+    }
+    let role_overrides_for_factory = role_overrides;
+    let prompt_refresher_for_factory = prompt_refresher;
+
+    let agent = ConcreteAgent::new(
+        AgentId::new(),
+        capabilities,
+        tools,
+        audit,
+        move || {
+            let mut cfg = planner_config.clone();
+            if let Some(ref refresher) = prompt_refresher_for_factory {
+                cfg.system_prompt = Some(refresher());
+            }
+            if let Some(ref shared) = role_overrides_for_factory
+                && let Ok(overrides) = shared.read()
+                && !overrides.is_empty()
+            {
+                crate::role_overrides::apply_to_planner_config(&overrides, &mut cfg);
+            }
+            Box::new(LlmPlanner::new(
+                Arc::clone(&provider_for_factory),
+                Arc::clone(&registry_for_factory),
+                cfg,
+            ))
+        },
+    )
+    .with_tool_allowlist(tool_allowlist)
+    .with_memory_topic_prefix(memory_topic_prefix);
+
+    Arc::new(agent)
+}
+
 /// Summary of what the session did, returned after EOF.
 #[derive(Debug, Clone)]
 pub struct SessionReport {
@@ -216,72 +367,15 @@ where
     W: Write + Send + 'static,
 {
     // ---- Agent stack --------------------------------------------------
-    // Registry comes from the caller. The binary registers the Phase 4
-    // filesystem tools here; the Phase 3 chat-only regression test
-    // passes an empty registry so its assertions stay stable.
-    let registry = config.tools;
-    let storage = config.storage;
-
-    // Planner factory — fresh planner per turn. Captures the provider
-    // Arc, the registry Arc, and a planner config by value (cloned
-    // per-turn; `LlmPlannerConfig` is small).
-    let provider_for_factory = Arc::clone(&provider);
-    let registry_for_factory = Arc::clone(&registry);
-    let mut planner_config = LlmPlannerConfig::new(config.model)
-        .with_system_prompt(config.system_prompt)
-        .with_max_tokens(config.max_tokens)
-        .with_tool_allowlist(config.tool_allowlist.clone());
-    if let Some(cw) = config.context_window_tokens {
-        planner_config = planner_config.with_context_window(cw);
-    }
-    if let Some(sink) = config.prune_sink {
-        planner_config = planner_config.with_prune_sink(sink);
-    }
-    if let Some(provider) = config.context_provider {
-        planner_config = planner_config.with_context_provider(provider);
-    }
-    if let Some(refiner) = config.system_prompt_refiner {
-        planner_config =
-            planner_config.with_system_prompt_refiner(refiner);
-    }
-    let role_overrides_for_factory = config.role_overrides.clone();
-    // Phase 60 — per-turn Persona refresh. When `prompt_refresher`
-    // is `Some`, the factory closure invokes it on each turn to
-    // rebuild the system prompt; otherwise the static config baked
-    // at session-build time is used. Approved Persona deltas
-    // applied mid-session take effect on the next turn via this
-    // path, closing the Phase 59 Q5(a) hot-reload deferral.
-    let prompt_refresher_for_factory = config.prompt_refresher.clone();
-
-    let agent = ConcreteAgent::new(
-        AgentId::new(),
-        config.capabilities,
-        registry,
-        audit,
-        move || {
-            let mut cfg = planner_config.clone();
-            if let Some(ref refresher) = prompt_refresher_for_factory {
-                cfg.system_prompt = Some(refresher());
-            }
-            if let Some(ref shared) = role_overrides_for_factory {
-                if let Ok(overrides) = shared.read() {
-                    if !overrides.is_empty() {
-                        crate::role_overrides::apply_to_planner_config(
-                            &overrides,
-                            &mut cfg,
-                        );
-                    }
-                }
-            }
-            Box::new(LlmPlanner::new(
-                Arc::clone(&provider_for_factory),
-                Arc::clone(&registry_for_factory),
-                cfg,
-            ))
-        },
-    )
-    .with_tool_allowlist(config.tool_allowlist)
-    .with_memory_topic_prefix(config.memory_topic_prefix);
+    //
+    // Phase 137 — the construction logic that was previously inline
+    // here lives in `build_agent_stack` so non-REPL channels (voice,
+    // future web/REST) can reuse it. The REPL-specific extras
+    // (storage handle for the session marker, banner, prompt
+    // string) stay below.
+    let storage = Arc::clone(&config.storage);
+    let agent_spec = AgentStackSpec::from_session_config(&config);
+    let agent = build_agent_stack(provider, Arc::clone(&audit), agent_spec);
 
     // ---- Session marker (Phase 5 task 4) -----------------------------
     //
