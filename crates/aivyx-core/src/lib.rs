@@ -205,6 +205,12 @@ pub enum ChannelPlatform {
     Email,
     /// HTTP API, not bound locally
     Rest,
+    /// Phase 135 — Voice I/O channel. Operator speaks
+    /// through the microphone (Whisper STT); agent
+    /// responds through the speakers (Piper TTS).
+    /// In-process on the operator's machine —
+    /// trust posture matches `Local`.
+    Voice,
 }
 
 // ---------------------------------------------------------------------------

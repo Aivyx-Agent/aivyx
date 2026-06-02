@@ -1,0 +1,86 @@
+[package]
+name = "aivyx-voice"
+description = "Voice I/O channel (mic ASR + speaker TTS) for the Aivyx agent (Phase 135)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[features]
+# Default is empty so `cargo check -p aivyx-voice` builds the
+# trait surfaces + conversion substrate cleanly without
+# requiring system-level prereqs (whisper.cpp build chain,
+# ONNX runtime headers). Operators opt into engines explicitly
+# via the per-engine features below, or use the
+# `recommended-voice` meta-feature on `aivyx-channel` for the
+# one-liner install.
+default = []
+
+# ASR backends — pick exactly one for a meaningful build. Both
+# features can be enabled simultaneously; the operator picks
+# at runtime via the [voice] config section. Default
+# recommendation is `asr-whisper-rs` (mature, large community,
+# same engine that powers most Whisper projects globally).
+asr-whisper-rs = ["dep:whisper-rs"]
+# Phase 135 Q2c alternative — whisper-cpp-plus surfaces
+# real-time PCM streaming and built-in Silero VAD without the
+# manual wiring whisper-rs needs. Smaller community; younger
+# project. Tradeoffs documented in INSTALL.md.
+asr-whisper-cpp-plus = ["dep:whisper-cpp-plus"]
+
+# TTS backends — only Piper for Phase 135. Higher-quality
+# alternatives (Kokoro, F5-TTS) lack mature Rust bindings and
+# are Phase 136+ candidates. piper1-rs's build script
+# requires ONNX runtime headers; see INSTALL.md.
+tts-piper = ["dep:piper1-rs"]
+
+# Convenience meta-feature: the recommended voice loop
+# (whisper-rs STT + Piper TTS). `cargo install` users pull
+# this through `aivyx-channel/channel-voice-full` rather than
+# enabling it directly.
+recommended-voice = ["asr-whisper-rs", "tts-piper"]
+
+[dependencies]
+# Aivyx substrate.
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async + trait infrastructure.
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-std"] }
+tokio-util = { workspace = true }
+
+# Config + error handling.
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Audio I/O — always on inside aivyx-voice. cpal is the
+# pure-Rust cross-platform audio library Aivyx already uses
+# transitively through other channels; pinning here for
+# stability. rodio sits on top of cpal for playback.
+cpal = "0.17"
+rodio = { version = "0.22", default-features = false }
+
+# Phase 135 deliberately does NOT depend on a VAD library.
+# Push-to-talk MVP uses Enter-to-start + Enter-to-stop, no
+# silence detection needed. Phase 136+ continuous-listening
+# mode will add Silero VAD (likely `silero` crate, MIT/Apache).
+
+# Optional ASR backends — see [features] above.
+whisper-rs = { version = "0.16", optional = true }
+whisper-cpp-plus = { version = "0.1", optional = true }
+
+# Optional TTS backend. piper1-rs requires ONNX runtime
+# headers at build time (`ONNX_RUNTIME_DIR`,
+# `ONNX_INCLUDE_PATH`); see INSTALL.md for per-OS setup.
+piper1-rs = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+# Used by config-deserialization tests to verify the
+# `[voice]` section round-trips through TOML.
+toml = "0.8"

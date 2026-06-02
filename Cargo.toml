@@ -24,6 +24,7 @@ members = [
     "crates/aivyx-obsidian",
     "crates/aivyx-n8n",
     "crates/aivyx-auth-cli",
+    "crates/aivyx-voice",
 ]
 
 [workspace.package]
