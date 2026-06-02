@@ -286,8 +286,115 @@ After Phase 134, the candidates for Phase 135:
 
 ## Prediction vs reality
 
-_Populated at Phase 134 exit. Predictions at
-sign-off: DESIGN.md HOLD → 25; PRODUCT.md
-HOLD → 25; lib.rs HOLD → 8; **one** new
-workspace dep (mistralrs); test count delta
-`+15` to `+35`; zero clippy warnings._
+**Three-of-three streak predictions correct.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). The embedded provider plugged into the
+  existing `LlmProvider` trait seam unchanged; D1
+  (turn loop) didn't move; D4 (capability
+  taxonomy) didn't move. Streak: 24 → **25**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Direction B is the natural extension
+  of "privacy-first, local-LLM capable." Streak:
+  24 → **25**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 134 work in
+  `aivyx-llm/mistral_rs/`, `aivyx-config`, and the
+  binary dispatch. Core untouched. Streak:
+  7 → **8**.
+
+**Test count delta: +16 — within predicted `+15` to
+`+35` range.** Workspace lib tests 2965 → 2981. Per-
+crate: aivyx-llm +8 (5 conversion-layer tests, 3
+stream-emission tests); aivyx-config +8 (env+TOML
+parse for the three aliases, validate model_path
+required, full section round-trip, is_in_process /
+is_openai_compatible distinction, default context
+window, Display).
+
+**One new workspace dependency** as predicted:
+`mistralrs = "=0.8.*"`, optional, gated behind
+`provider-mistral-rs`. All other transitive deps
+(candle, hf-hub, tokenizers, aws-lc-rs, …) flow
+through it.
+
+**Zero clippy warnings** with default features and
+with `--features aivyx-channel/provider-mistral-rs`.
+`--all-features` fails in the upstream `objc2` crate
+under the Metal backend feature — platform-gated by
+design, expected, not regression.
+
+### What landed cleanly + what bent
+
+**Cleanly:** feature flag scaffolding through both
+aivyx-llm and aivyx-channel;
+`recommended-providers` meta-feature;
+`ProviderKind::MistralRs` end-to-end through config +
+binary dispatch + tests; conversion-layer unit
+tests; build verification on cached deps
+(~30s check, ~60s full).
+
+**Bent honestly:**
+- **Non-streaming MVP.** mistralrs 0.8.1's
+  `Stream<'a>` borrows from the Model with a
+  lifetime, which doesn't satisfy Aivyx's
+  `LlmStream` contract (`Send + 'static`) without
+  a new dep (`ouroboros`) or architectural work
+  (mpsc-forwarding spawned task). Phase 134 ships
+  `send_chat_request` (full response in one shot)
+  and surfaces it as one TextChunk + one StepEnd.
+  Streaming-text-deltas is Phase 135 work.
+- **API-shape mismatches between mistralrs's
+  master-branch examples and 0.8.1.** Three
+  differences caught at compile time:
+  `Function` has no `strict` field;
+  `ToolCallResponse` requires an `index` field;
+  `CalledFunction`'s name/arguments are direct
+  `String` (not Option). All fixed in convert.rs.
+  Honest signal: pre-1.0 mistralrs APIs do churn;
+  the `=0.8.*` pin is load-bearing.
+- **`--all-features` workspace clippy fails in
+  upstream objc2.** Platform-gated by design.
+
+### TLS-stack collision flagged honestly
+
+mistralrs's transitive deps pull in `aws-lc-rs`
+alongside the workspace's `rustls`. The workspace
+had a documented rustls-only policy (see the
+jsonschema feature-disable comment in root
+Cargo.toml). Phase 134's embedded provider relaxes
+that for opt-in builds: the slim Ollama-only build
+keeps rustls-only; the recommended-providers build
+carries both stacks. Operators who care about lean
+TLS posture use `cargo install aivyx-channel`
+(no features) unchanged.
+
+### Direction after Phase 134
+
+Candidates for Phase 135:
+
+1. **Channel Activation Milestone.** 23rd
+   consecutive deferral. Four local-LLM providers
+   shipped + Direction B done → the milestone work
+   is the standout missing piece. Strongest
+   signal yet.
+2. **Streaming text deltas for the embedded
+   provider.** Build the mpsc-forwarding spawned-
+   task shim that closes the `Stream<'a>` →
+   `LlmStream + Send + 'static` gap. Focused
+   substrate; small scope; high operator UX
+   payoff.
+3. **End-to-end hardware validation.** Operator
+   coordination across CPU/Metal/CUDA. Codify
+   reported empirical signal — which models +
+   backends actually deliver the agentic-quality
+   bar Aivyx targets.
+4. **Multimodal bridging.** Wire
+   `ContentBlock::ImageBase64` through to
+   mistralrs's native image content blocks.
+
+**Twenty-third consecutive deferral of the Channel
+Activation Milestone.** The signal-strength has
+crossed the "genuinely should consider next"
+threshold.
+

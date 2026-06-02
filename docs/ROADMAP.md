@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 134 — Direction B: Embedded Rust-Native Inference (`mistral.rs`)
 
-**See [PHASE_134.md](PHASE_134.md).** Largest
+**Frozen — see [PHASE_134.md](PHASE_134.md).** Largest
 architectural phase since Phase 121. Phase 133 set
 up the question — three first-class out-of-process
 providers; now what? Phase 134 answers: **Aivyx can
