@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 142 — `calendar.list_calendars` + Multi-Calendar `upcoming`
+
+**See [PHASE_142.md](PHASE_142.md).** Phase 141 follow-on.
+Phase 141 made calendar.upcoming ergonomic but on `primary`
+only. Real operators have 3-5 calendars (work, personal,
+shared, project). Phase 142 adds calendar.list_calendars so
+the agent can discover them, and extends calendar.upcoming
+to accept calendar_ids: [String] with sequential fan-out +
+sorted merge. Pure substrate plumbing on top of Phase 128's
+existing client + Phase 141's promoted helpers; zero new
+workspace deps.
+
 ## Phase 141 — Chapter G: `calendar.upcoming` Tool
 
 **Frozen — see [PHASE_141.md](PHASE_141.md).** Pivot from voice
