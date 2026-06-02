@@ -32,12 +32,72 @@ pub mod delete_event;
 pub mod get_event;
 pub mod list_events;
 pub mod update_event;
+pub mod upcoming;
 
 pub use create_event::CalendarCreateEvent;
 pub use delete_event::CalendarDeleteEvent;
 pub use get_event::CalendarGetEvent;
 pub use list_events::CalendarListEvents;
+pub use upcoming::CalendarUpcoming;
 pub use update_event::CalendarUpdateEvent;
+
+// ---------------------------------------------------------------------------
+// Phase 141 — shared event-shape helpers.
+//
+// Lifted from list_events.rs so the new
+// calendar.upcoming tool (which surfaces the same
+// `{id, summary, start, end, location,
+// attendee_count}` shape, then enriches it with
+// relative-time fields) can reuse them. Read-side
+// calendar tools that surface event lists should
+// reuse these for output stability across tools.
+
+use serde_json::{json, Value};
+
+/// Pull a stable snake-case summary out of one
+/// Google Calendar event JSON value. Designed for
+/// LLM consumption: every field is either present
+/// and typed, or null — never silently missing.
+/// `start` and `end` flatten the Google
+/// `{date, dateTime, timeZone}` shape via
+/// [`flatten_timestamp`].
+pub(crate) fn event_summary(event: &Value) -> Value {
+    let id = event.get("id").cloned().unwrap_or(Value::Null);
+    let summary = event.get("summary").cloned().unwrap_or(Value::Null);
+    let start = flatten_timestamp(event.get("start"));
+    let end = flatten_timestamp(event.get("end"));
+    let location = event.get("location").cloned().unwrap_or(Value::Null);
+    let attendee_count = event
+        .get("attendees")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u64)
+        .unwrap_or(0);
+    json!({
+        "id": id,
+        "summary": summary,
+        "start": start,
+        "end": end,
+        "location": location,
+        "attendee_count": attendee_count,
+    })
+}
+
+/// `{date, dateTime, timeZone}` → either the
+/// dateTime string (preferred — full RFC 3339
+/// with timezone offset), or the date string
+/// (for all-day events), or null.
+pub(crate) fn flatten_timestamp(slot: Option<&Value>) -> Value {
+    let Some(obj) = slot else {
+        return Value::Null;
+    };
+    if let Some(dt) = obj.get("dateTime").and_then(|v| v.as_str()) {
+        return Value::String(dt.to_string());
+    }
+    if let Some(d) = obj.get("date").and_then(|v| v.as_str()) {
+        return Value::String(d.to_string());
+    }
+    Value::Null
+}
 
 /// Minimal URL path-segment encoding shared across the
 /// calendar tools. Calendar IDs (and event IDs) may

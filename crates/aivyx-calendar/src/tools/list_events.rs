@@ -148,7 +148,7 @@ impl Tool for CalendarListEvents {
         let events: Vec<Value> = body
             .get("items")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(event_summary).collect())
+            .map(|arr| arr.iter().map(super::event_summary).collect())
             .unwrap_or_default();
         let next_page_token = body
             .get("nextPageToken")
@@ -172,56 +172,9 @@ impl Tool for CalendarListEvents {
     }
 }
 
-/// Pull a stable snake-case summary out of one Google
-/// Calendar event JSON value. Designed for LLM consumption:
-/// every field is either present and typed, or null —
-/// never silently missing. `start` and `end` flatten the
-/// Google `{date, dateTime, timeZone}` shape to whichever
-/// timestamp string is present (dateTime wins; falls back
-/// to date for all-day events).
-fn event_summary(event: &Value) -> Value {
-    let id = event
-        .get("id")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let summary = event
-        .get("summary")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let start = flatten_timestamp(event.get("start"));
-    let end = flatten_timestamp(event.get("end"));
-    let location = event
-        .get("location")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let attendee_count = event
-        .get("attendees")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len() as u64)
-        .unwrap_or(0);
-    json!({
-        "id": id,
-        "summary": summary,
-        "start": start,
-        "end": end,
-        "location": location,
-        "attendee_count": attendee_count,
-    })
-}
-
-/// `{date, dateTime, timeZone}` → either the dateTime
-/// string (preferred — full RFC 3339 with timezone offset),
-/// or the date string (for all-day events), or null.
-fn flatten_timestamp(slot: Option<&Value>) -> Value {
-    let Some(obj) = slot else { return Value::Null };
-    if let Some(dt) = obj.get("dateTime").and_then(|v| v.as_str()) {
-        return Value::String(dt.to_string());
-    }
-    if let Some(d) = obj.get("date").and_then(|v| v.as_str()) {
-        return Value::String(d.to_string());
-    }
-    Value::Null
-}
+// `event_summary` + `flatten_timestamp` lifted
+// to `super` in Phase 141 so `calendar.upcoming`
+// can reuse them. See `tools/mod.rs`.
 
 #[derive(Debug)]
 struct ParsedInput {
@@ -331,6 +284,7 @@ fn input_schema() -> Value {
 
 #[cfg(test)]
 mod tests {
+    use super::super::event_summary;
     use super::*;
 
     #[test]
