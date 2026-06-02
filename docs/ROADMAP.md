@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 140 — Close Phase 139 Debt: TOML Config + Manual-Abort UX
+
+**See [PHASE_140.md](PHASE_140.md).** Phase 139 close-out.
+Phase 139 shipped energy-threshold VAD with two
+documented debts: hardcoded thresholds (no operator
+tunability) and lost manual-abort affordance (can't
+cancel mid-recording). Phase 140 closes both in one
+phase: `[voice.vad]` TOML section with defaults table,
+plus a long-lived stdin reader task that races the
+silence detector via tokio::select! so Enter
+mid-recording aborts cleanly. Zero new workspace deps;
+tokio::io::stdin + serde already in workspace.
+
 ## Phase 139 — Voice Activity Detection (Energy Threshold)
 
 **Frozen — see [PHASE_139.md](PHASE_139.md).** Phase 138 follow-on.
