@@ -1506,6 +1506,30 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 139 added silence-detection auto-stop.**
+PTT no longer requires pressing Enter twice. The
+operator hits Enter once to start recording,
+speaks, then pauses — the mic auto-stops after
+1.5 seconds of detected silence (RMS below
+threshold) and dispatches the turn. A 0.5s
+minimum-speech gate prevents instant auto-stop
+before the operator has started talking; a 30s
+hard cap protects against a stuck mic recording
+forever.
+
+Thresholds are hardcoded in Phase 139 (frame
+30ms, RMS 0.01, dwell 1.5s, min-speech 0.5s,
+max-capture 30s). Operators in noisy
+environments may need ML VAD (Phase 140+
+candidate) or a `[voice.vad]` TOML knob (also
+Phase 140+ if demand surfaces).
+
+The trade-off vs Phase 138: no manual abort
+mid-recording. If the operator wants to abandon
+a half-spoken message, they need to wait 1.5s in
+silence (which dispatches a partial-transcription
+turn).
+
 **Phase 138 collapsed voice latency with streaming
 TTS.** The agent's reply is pipelined through the
 TTS engine on sentence boundaries — the operator

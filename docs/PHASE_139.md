@@ -227,8 +227,155 @@ stop. Phase 140+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 139 exit. Predictions at
-sign-off: DESIGN.md HOLD → 30; PRODUCT.md HOLD
-→ 30; lib.rs HOLD → 5; zero new deps; test
-count delta `+7` to `+10`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  29 → **30**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 29 → **30**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 139 work in
+  `aivyx-voice`. Continuing post-Phase-135
+  reset: 4 → **5**.
+
+**Test count delta: +10 — top of predicted `+7`
+to `+10` range.** Workspace lib tests 3040 →
+3050. Per-module:
+- `silence_detector` substrate: +10 (config
+  default sanity, empty observe, sub-frame
+  partial, complete silent frame, loud frame
+  resets counter, silence-speech-silence,
+  sub-threshold noise, above-threshold loud,
+  reset clears state, frame_rms math).
+- AudioIn: 0 new tests — the existing
+  WHISPER_SAMPLE_RATE sanity is the only
+  non-hardware test, and AudioIn's new
+  silence_dwell/total_recorded/reset_detector
+  accessors are exercised end-to-end by the
+  PTT loop (operator-validation tier; no
+  CI-tier audio device).
+
+**Zero new workspace dependencies** as predicted.
+Energy-threshold detection is pure-Rust math:
+sum-of-squares per frame, threshold check,
+counter arithmetic.
+
+**Zero clippy warnings** with default features
+and with `--features aivyx-channel/channel-voice`.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `SilenceDetector` + `SilenceDetectorConfig`
+  public in `aivyx-voice::silence_detector`.
+  Pure substrate; frame-RMS sliding-window
+  implementation; resets-fresh on the
+  silence-speech-silence sequence (operator
+  mid-utterance pause case).
+- AudioIn cpal callbacks (f32/i16/u16) observe
+  samples through the detector under a
+  separate mutex from the capture buffer. The
+  i16/u16 paths convert once and share the
+  f32-normalized slice between both consumers
+  — no duplicate format conversion.
+- `AudioIn::silence_dwell` /
+  `AudioIn::total_recorded` /
+  `AudioIn::reset_detector` accessors.
+  `start()` calls reset_detector automatically.
+- PTT loop replaces second Enter prompt with a
+  `tokio::time::sleep` poll loop:
+  - Auto-stop on `dwell >= 1.5s` AND
+    `total >= 0.5s`.
+  - Hard cap at 30s with a heads-up message.
+  - 100ms poll tick.
+- AudioIn still never crosses an `.await`
+  boundary; the poll loop awaits sleep
+  between non-async accessor calls. macOS
+  Send constraint posture from Phase 136
+  preserved.
+
+**Bent honestly:**
+
+1. **Phase 138's "press Enter to abort" goes
+   away.** Replaced by "pause 1.5s to
+   dispatch". Operators who want to abandon a
+   half-spoken message must wait for the
+   dwell window then accept the
+   partial-transcription turn. Phase 140+
+   candidate: a separate stdin-listener task
+   that races the silence detector via a
+   manual-abort mpsc.
+
+2. **Threshold hardcoded.** Quiet rooms work
+   well with the default 0.01 RMS threshold;
+   noisy ones may need either raising it (more
+   tolerant of background) or switching to ML
+   VAD. A `[voice.vad]` TOML knob is
+   straightforward to add once operator
+   pressure surfaces.
+
+3. **Cpal callback locks two mutexes per
+   chunk.** Audio threads prefer lock-free
+   state; at ~10ms chunk intervals and ~100ms
+   polling rare contention is unlikely in
+   practice, but a lock-free atomic-counter
+   variant is a Phase 140+ candidate if
+   measurement shows audio glitches under
+   load.
+
+4. **No AudioIn unit tests for the new
+   accessors.** Like the existing
+   WHISPER_SAMPLE_RATE sanity, the
+   silence-detection wiring needs a real cpal
+   device to exercise. The substrate-tier
+   `SilenceDetector` tests are exhaustive (10
+   tests covering every state transition)
+   and the AudioIn glue is straightforward
+   delegation. Operator-validation tier.
+
+5. **macOS Send constraint still applies** —
+   Phase 138 carry-over; not Phase 139 work.
+
+### Direction after Phase 139
+
+Voice now loops hands-free. Phase 140+
+candidates:
+
+1. **`[voice.vad]` TOML config** — operator-
+   tunable threshold + dwell + min-speech +
+   max-capture knobs. Small substrate work;
+   first thing to ship if operators hit
+   environment-specific tuning needs.
+2. **Mid-recording manual-abort UX** — separate
+   stdin listener task that races against the
+   silence detector via mpsc.
+3. **Silero ONNX VAD** — drop-in replacement
+   when energy threshold isn't robust enough.
+   Adds ONNX runtime prereq.
+4. **Mid-synthesis abort UX** — drain the TTS
+   mpsc on Ctrl-C / Escape (Phase 138
+   carry-over).
+5. **Streaming ASR** — Whisper partial-decode
+   mode for true-streaming transcription. Big
+   scope; multi-phase.
+6. **Wake-word activation** ("Hey Aivyx") via
+   Porcupine or Silero-wakeword. Builds on
+   VAD substrate but adds always-on listening
+   privacy posture.
+7. **Multimodal output** — agent speaks image
+   descriptions via vision-capable LLMs.
+8. **macOS streaming variant** — `LocalSet`-
+   based consumer task.
+9. **Lock-free AudioIn detector** — atomic
+   counter pattern if measurement shows audio
+   glitches.
+10. **whisper-cpp-plus rehabilitation** —
+    Phase 135 Q2c close-out once upstream is
+    unstuck.
+11. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters
+    ship.
+12. **Channel Activation Milestone** — still
+    held intentionally; 28th consecutive
+    deferral at Phase 139 exit.

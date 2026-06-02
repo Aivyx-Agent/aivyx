@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 139 — Voice Activity Detection (Energy Threshold)
 
-**See [PHASE_139.md](PHASE_139.md).** Phase 138 follow-on.
+**Frozen — see [PHASE_139.md](PHASE_139.md).** Phase 138 follow-on.
 Phase 138 collapsed voice latency-to-first-audio with
 streaming TTS; Phase 139 attacks the next UX irritant
 in PTT: operator currently presses Enter twice (start +
