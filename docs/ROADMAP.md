@@ -3535,6 +3535,40 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 136 — Voice Audio I/O Loop: Close-Out
+
+**See [PHASE_136.md](PHASE_136.md).** Phase 135
+close-out. Phase 135 shipped the voice substrate
+(ASR + TTS adapters, channel impl, session seam)
+but deferred the cpal + rodio audio I/O loop body
+as operator-validation work. Phase 136 fills it in
+so voice **actually works end-to-end** the moment
+the binary is built with the right features.
+
+**Smallest scope possible.** The substrate seam
+(`run_one_voice_turn`) is fully wired and
+unit-tested. Phase 136 implements exactly two
+pieces: cpal mic capture and rodio speaker
+playback, plus the surrounding stdin /
+Enter-driven prompt loop.
+
+**Three-of-three streak HOLDs predicted.**
+DESIGN.md → 27, PRODUCT.md → 27,
+`aivyx-core/src/lib.rs` → 2 (continuing the
+post-Phase-135 reset).
+
+**Zero new workspace dependencies** — cpal +
+rodio already in `aivyx-voice` from Phase 135.
+
+**Same hardware-validation posture as Phases
+134 + 135.** Bridge code compiles cleanly +
+unit-tested helpers; real-mic + real-speaker
+validation is operator work.
+
+**Twenty-fifth consecutive deferral of the
+Channel Activation Milestone** — intentional
+hold per operator framing.
+
 ## Phase 135 — Voice I/O: Talk to the Agent, Agent Talks Back
 
 **Frozen — see [PHASE_135.md](PHASE_135.md).** First multimodal-
