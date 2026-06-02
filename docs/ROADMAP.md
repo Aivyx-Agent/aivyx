@@ -3535,6 +3535,34 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 137 — Voice Agent Feature Parity with Local
+
+**See [PHASE_137.md](PHASE_137.md).** Phase 136
+follow-on. Phase 135 shipped the voice substrate;
+Phase 136 wired the audio I/O loop end-to-end. But
+the binary's voice arm still constructs a *minimal*
+ConcreteAgent — no role overrides, no recall
+context, no memory prune sinks, no prompt refresher.
+Phase 137 extracts the agent-stack-construction
+logic from `run_session` into a reusable
+`build_agent_stack(provider, audit, spec)` helper
+so the voice arm gains feature parity with Local.
+
+**Smallest scope possible.** ~67 lines of session.rs
+already encapsulate every feature voice is missing;
+extracting them into the helper is a pure refactor
+behind a Local-channel-tests regression boundary.
+
+**Three-of-three streak HOLDs predicted.**
+DESIGN.md → 28, PRODUCT.md → 28,
+`aivyx-core/src/lib.rs` → 3.
+
+**Zero new workspace dependencies.**
+
+**Twenty-sixth consecutive deferral of the Channel
+Activation Milestone** — intentional hold per
+operator framing.
+
 ## Phase 136 — Voice Audio I/O Loop: Close-Out
 
 **Frozen — see [PHASE_136.md](PHASE_136.md).** Phase 135
