@@ -3535,6 +3535,21 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 138 — Streaming TTS During LLM Generation
+
+**See [PHASE_138.md](PHASE_138.md).** Phase 137 follow-on.
+Phase 137 gave voice feature parity with Local; Phase 138
+attacks the biggest remaining UX weakness — latency-to-
+first-audio. Today a long agent reply produces tens of
+seconds of silence before any playback. Phase 138
+pipelines the LLM stream into the TTS engine on sentence
+boundaries: operator hears sentence one while the LLM is
+still generating sentence three. Adds a
+`drain_complete_sentences` substrate helper, a text-sink
+hook on `VoiceChannel`, and a streaming session driver
+with a serial mpsc-driven playback consumer task. Zero
+new workspace dependencies; tokio mpsc already in use.
+
 ## Phase 137 — Voice Agent Feature Parity with Local
 
 **Frozen — see [PHASE_137.md](PHASE_137.md).** Phase 136
