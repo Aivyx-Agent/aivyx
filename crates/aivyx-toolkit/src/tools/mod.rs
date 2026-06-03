@@ -20,6 +20,8 @@ pub mod tasks;
 pub mod web_search;
 
 pub use budget::{BudgetDelete, BudgetRecord, BudgetSummaryTool, BudgetUpdate};
-pub use health_check::{HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges};
+pub use health_check::{
+    HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,
+};
 pub use tasks::{TaskComplete, TaskCreate, TaskDelete, TaskList};
 pub use web_search::WebSearch;

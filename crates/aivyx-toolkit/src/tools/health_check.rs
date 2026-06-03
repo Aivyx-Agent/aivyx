@@ -2,18 +2,14 @@
 //! the polling-loop substrate from [`crate::health_polling`]
 //! and the storage substrate from [`crate::health_store`].
 //!
-//! Phase 125 Task 6. Two scopes:
+//! Phase 125 Task 6 + Phase 147. Two scopes:
 //! - `health.write` for `health.check.add` (registers a new
-//!   URL watcher).
+//!   URL watcher) and `health.check.remove` (Phase 147 —
+//!   idempotent removal).
 //! - `health.read` for `health.check.list` (current state of
 //!   every watcher) and `health.check.recent_changes` (state
 //!   transitions in a window for agent-side alert
 //!   composition).
-//!
-//! `health.check.remove` is **deferred** to a follow-on
-//! phase per the Phase 125 open doc — operators can manually
-//! edit `~/.aivyx/tool-processes/toolkit/health.json` to
-//! drop a watcher until the proper remove tool ships.
 //!
 //! ## Alert composition pattern (operator-side recipe)
 //!
@@ -47,6 +43,8 @@ use aivyx_core::{
 };
 
 use crate::health_store::{HealthStore, Transition, Watcher, WatcherState};
+// Phase 147 — health.check.remove uses
+// HealthStore::remove_watcher.
 
 /// Hard cap on the `window_minutes` parameter to
 /// `health.check.recent_changes`. 1440 = 24h; longer windows
@@ -354,6 +352,89 @@ fn recent_changes_schema() -> Value {
                 "description": "Look back this many minutes for transitions. Default 60; capped at 1440 (24h)."
             }
         },
+        "additionalProperties": false
+    })
+}
+
+// =====================================================================
+// health.check.remove — Phase 147
+// =====================================================================
+
+pub struct HealthCheckRemove {
+    id: ToolId,
+    schema: Value,
+    store: Arc<HealthStore>,
+}
+
+impl HealthCheckRemove {
+    pub fn new(store: Arc<HealthStore>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: remove_schema(),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for HealthCheckRemove {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "health.check.remove"
+    }
+    fn description(&self) -> &str {
+        "Remove a registered URL watcher by name. \
+         Idempotent — removing a missing name \
+         succeeds with `was_already_removed: true` \
+         rather than erroring (same posture as \
+         `calendar.delete_event` and \
+         `budget.delete`). Input: `{name: string}`. \
+         Returns `{name, was_already_removed}`. \
+         The watcher's state (last_check_at, \
+         last_ok, etc.) is cleared along with the \
+         registration; a future re-add of the same \
+         name starts fresh. Scope: `health.write`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("health.write")
+            .expect("health.write must parse — it is in KNOWN_BASES from Phase 125")
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let name = match required_string(&input, "name") {
+            Ok(s) => s,
+            Err(reason) => {
+                return failed(self.id, format!("health.check.remove: {reason}"));
+            }
+        };
+        match self.store.remove_watcher(&name).await {
+            Ok(outcome) => ToolOutcome::Completed {
+                output: json!({
+                    "name": outcome.name,
+                    "was_already_removed": outcome.was_already_removed,
+                }),
+                verified: Verification::Verified,
+            },
+            Err(e) => failed(self.id, format!("health.check.remove: {e}")),
+        }
+    }
+}
+
+fn remove_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name of the watcher to remove. Idempotent if no match."
+            }
+        },
+        "required": ["name"],
         "additionalProperties": false
     })
 }
@@ -687,5 +768,27 @@ mod tests {
         let s = recent_changes_schema();
         assert_eq!(s["properties"]["window_minutes"]["maximum"], 1440);
         assert_eq!(s["properties"]["window_minutes"]["default"], 60);
+    }
+
+    // ---- Phase 147 — health.check.remove ----
+
+    #[test]
+    fn remove_schema_requires_name() {
+        let s = remove_schema();
+        assert_eq!(s["required"][0], "name");
+        assert_eq!(s["properties"]["name"]["type"], "string");
+        assert_eq!(s["properties"]["name"]["minLength"], 1);
+    }
+
+    #[test]
+    fn remove_input_extracts_name() {
+        let name = required_string(&json!({"name": "site-x"}), "name").unwrap();
+        assert_eq!(name, "site-x");
+    }
+
+    #[test]
+    fn remove_input_rejects_missing_name() {
+        let err = required_string(&json!({}), "name").unwrap_err();
+        assert!(err.contains("name"), "{err}");
     }
 }
