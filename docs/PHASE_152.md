@@ -234,8 +234,155 @@ debts close. Phase 153+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 152 exit. Predictions at
-sign-off: DESIGN.md HOLD → 43; PRODUCT.md HOLD
-→ 43; lib.rs HOLD → 18; zero new deps; test
-count delta `+6` to `+12`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  42 → **43**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 42 → **43**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 152 work in
+  `aivyx-voice`. Continuing post-Phase-135
+  reset: 17 → **18**.
+
+**Test count delta: +12 — within predicted `+6`
+to `+12` range.** Workspace lib tests 3214 →
+3226. Per-module:
+- `silence_detector` (validate): +12 (default
+  passes, negative/oversize threshold_rms,
+  zero/oversize frame_secs, zero dwell_secs,
+  negative min_speech_secs, oversize
+  max_capture_secs, zero poll_interval_ms, NaN
+  threshold_rms, Infinity max_capture_secs,
+  tuned-config-within-bounds).
+- `session` (aggressive abort + partial-text):
+  0 new tests — both deliverables are
+  operator-validation tier (need real keyboard
+  + mic + audio device). The signature change
+  to `run_one_voice_turn_streaming` is
+  regression-tested by the 3 existing tests
+  continuing to pass with the updated call
+  shape.
+
+**Zero new workspace dependencies** as
+predicted.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `VoiceVadConfig::validate()` with 6 bounded-
+  range checks + NaN/Infinity defensive
+  posture. Called from
+  `run_push_to_talk_loop_streaming` at
+  function entry; surfaces as
+  `VoiceSessionError::AudioDevice` so the
+  daemon presents it as a configuration
+  problem.
+- Aggressive abort: consumer's abort arm just
+  returns. AudioOut drops; cpal::Stream drops;
+  audio dies within OS buffer time. The
+  existing `AudioOut::stop_playback` method
+  stays for any non-abort caller wanting
+  graceful behavior.
+- Partial-text preservation:
+  `run_one_voice_turn_streaming` takes
+  `Arc<Mutex<String>>` for `assembled`. The
+  streaming PTT loop owns + clones it; the
+  abort path reads `partial_text` after the
+  select! resolves and surfaces "agent had
+  said: ..." in both AbortedContinue and
+  AbortedQuit paths.
+- 3 existing test callers updated to pass the
+  new `assembled` parameter; all 86
+  aivyx-voice lib tests pass.
+- INSTALL.md voice section gains a Phase 152
+  paragraph above the existing 138/139/140/146
+  blocks documenting all three close-outs +
+  the VAD bounds table.
+
+**Bent honestly:**
+
+1. **Aggressive abort changes observable
+   behavior.** Operators used to "I press
+   Enter, current word finishes, silence" now
+   hear "I press Enter, silence." Most will
+   prefer this. Some may not. Phase 153+
+   config knob if surfaces.
+
+2. **Partial-text capture is whatever the
+   planner emitted before cancellation.** If
+   the LLM was mid-token when the
+   cancel_inflight propagated, the captured
+   text ends at the last completed
+   `stream_event::Text` chunk. Operator-
+   facing behavior is "the agent had said up
+   to the abort"; that's typically what they
+   want.
+
+3. **`assembled` parameter is a breaking API
+   change to `run_one_voice_turn_streaming`.**
+   Three test callers updated. Documented in
+   the function-level comment so future
+   consumers see the rationale.
+
+4. **No new tests for the abort behavior
+   itself.** Operator-validation tier (real
+   keyboard + mic + audio device required).
+   Substrate-tier regression coverage comes
+   from the 3 existing streaming-turn tests
+   continuing to pass under the new
+   signature.
+
+5. **VAD validation runs at PTT loop entry
+   only.** A future Phase 153+ tool that
+   uses `VoiceVadConfig` without going
+   through the PTT loop would skip the
+   check. Acceptable; PTT loop is the only
+   consumer today.
+
+6. **Bounds table is opinionated.** The
+   chosen ranges work for typical operator
+   setups but may exclude legitimate edge
+   cases (very long dwell, sub-millisecond
+   poll). Operators hitting bounds can file
+   a feedback note; bounds are easy to widen.
+
+### Direction after Phase 152
+
+After Phase 152, the three voice carry-overs
+clear. Phase 153+ candidates:
+
+1. **Voice abort UX knob** (graceful vs
+   aggressive) if operators want the
+   pre-Phase-152 behavior back.
+2. **Silero ONNX VAD.**
+3. **Streaming ASR.**
+4. **Wake-word activation.**
+5. **Multimodal output.**
+6. **macOS streaming variant.**
+7. **Lock-free AudioIn detector.**
+8. **Calendar fuzzy dedup.**
+9. **Calendar max_concurrent knob.**
+10. **Calendar writable_only filter.**
+11. **access_role deprecation.**
+12. **Budget category migration tool.**
+13. **Budget currency / rust_decimal.**
+14. **Multi-category trend breakdown.**
+15. **Trend smoothing / moving average.**
+16. **Bulk budget operations.**
+17. **Recursive folder filter on drive
+    recent_*.**
+18. **drive_id parameter on drive recent_*.**
+19. **Drive Activity API.**
+20. **Proactive reminder dispatch.**
+21. **Relative-time localization.**
+22. **whisper-cpp-plus rehabilitation.**
+23. **`build_agent_stack` substrate-tier
+    promotion.**
+24. **Channel Activation Milestone** —
+    still held intentionally; 41st
+    consecutive deferral at Phase 152
+    exit.

@@ -1506,6 +1506,43 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 152 closed three voice carry-overs in
+one bundle.**
+
+1. **Aggressive abort.** The mid-synthesis abort
+   keybind (Enter during a reply) now stops audio
+   instantly (within OS audio buffer time —
+   typically ~10ms) instead of letting the
+   currently-playing word finish naturally. Sharper
+   UX; the trade-off is no graceful tail.
+
+2. **Partial-text preservation on abort.** When
+   the operator aborts mid-reply, the agent's
+   partial response (whatever it had emitted
+   through `stream_event` before cancellation)
+   is now surfaced as `[voice] agent had said:
+   ...` instead of silently lost. The agent can
+   include this in subsequent reasoning or
+   audit; the operator sees what was said up to
+   the abort.
+
+3. **VAD config bounded-range validation.**
+   `[voice.vad]` config fields are now checked
+   at PTT loop entry. Out-of-range values
+   (negative `threshold_rms`, zero `dwell_secs`,
+   `max_capture_secs` > 1 hour, etc.) surface as
+   a configuration error rather than silently
+   producing nonsense behavior. The full bounds
+   table:
+   - `threshold_rms` ∈ `[0.0, 10.0]`
+   - `frame_secs` ∈ `(0.0, 1.0]`
+   - `dwell_secs` ∈ `(0.0, 60.0]`
+   - `min_speech_secs` ∈ `[0.0, 60.0]`
+   - `max_capture_secs` ∈ `(0.0, 3600.0]`
+   - `poll_interval_ms` ∈ `[1, 5000]`
+   Operators with valid configs (including
+   Phase 139's defaults) are unaffected.
+
 **Phase 146 closed Phase 138's longest-running
 voice debt: mid-synthesis abort UX.** Operator
 can now press Enter (or the Enter key on

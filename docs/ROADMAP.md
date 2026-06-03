@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 152 — Voice Carry-Overs Bundle
 
-**See [PHASE_152.md](PHASE_152.md).** Pivot back to voice
+**Frozen — see [PHASE_152.md](PHASE_152.md).** Pivot back to voice
 after 5 non-voice phases. Closes three voice honest-debts
 in one phase: aggressive abort (drop cpal stream for
 instant silence instead of rodio clear+sleep_until_end,
