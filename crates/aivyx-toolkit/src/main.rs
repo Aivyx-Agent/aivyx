@@ -15,16 +15,11 @@
 //!    ToolShutdown).
 //! 5. Register all 15 tools into a single
 //!    `Vec<Arc<dyn Tool>>` and hand to
-//!    `run_multi_tool_subprocess`. (Phase 125
-//!    shipped 8; Phase 143 added budget.record +
-//!    budget.summary; Phase 144 added budget.update +
-//!    budget.delete reaching CRUD parity; Phase 147
-//!    added health.check.remove closing the Phase
-//!    125 Chapter G #2 candidate list; Phase 149
-//!    added budget.trend for month-over-month
-//!    delta queries; Phase 150 added budget.categories
-//!    + silent case-fold normalization +
-//!    category_suggestion enrichment.)
+//!    `run_multi_tool_subprocess`. Phase 125
+//!    shipped 8 tools; Phases 143, 144, 147,
+//!    149, 150 expanded the surface with
+//!    budget CRUD + trend + categories +
+//!    health.check.remove.
 //!
 //! Operator-facing failure modes are surfaced at startup
 //! (missing config file, $HOME unset, etc) with operator-
