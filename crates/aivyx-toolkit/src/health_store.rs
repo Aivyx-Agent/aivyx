@@ -115,6 +115,19 @@ pub struct Watcher {
     pub expect_status: u16,
 }
 
+/// Phase 147 — outcome of a
+/// [`HealthStore::remove_watcher`] call.
+/// Idempotent shape: same as
+/// `calendar.delete_event` and `budget.delete`
+/// so the agent can paraphrase
+/// "already removed" vs "removed just now"
+/// uniformly across delete-style tools.
+#[derive(Debug, Clone)]
+pub struct RemoveOutcome {
+    pub name: String,
+    pub was_already_removed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct WatcherState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,6 +242,40 @@ impl HealthStore {
         guard.states.insert(name, WatcherState::default());
         save_to_disk(&self.path, &guard).await?;
         Ok(watcher)
+    }
+
+    /// Phase 147 — remove a watcher by name.
+    /// Idempotent: returns
+    /// `was_already_removed: true` when no
+    /// watcher matched, matching
+    /// `calendar.delete_event` +
+    /// `budget.delete` posture so the agent
+    /// doesn't have to special-case missing
+    /// names. Removes both the watcher entry
+    /// and its state-map entry to keep the
+    /// two parallel structures in sync.
+    /// Persists to disk only on actual change.
+    pub async fn remove_watcher(
+        &self,
+        name: &str,
+    ) -> Result<RemoveOutcome, HealthStoreError> {
+        let mut guard = self.inner.lock().await;
+        let pos = guard.watchers.iter().position(|w| w.name == name);
+        match pos {
+            Some(idx) => {
+                guard.watchers.remove(idx);
+                guard.states.remove(name);
+                save_to_disk(&self.path, &guard).await?;
+                Ok(RemoveOutcome {
+                    name: name.to_string(),
+                    was_already_removed: false,
+                })
+            }
+            None => Ok(RemoveOutcome {
+                name: name.to_string(),
+                was_already_removed: true,
+            }),
+        }
     }
 
     /// Snapshot of every registered watcher + its current
@@ -912,5 +959,129 @@ mod tests {
             ring[TRANSITION_RING_BUFFER_CAP - 1].watcher_name,
             format!("w-{}", TRANSITION_RING_BUFFER_CAP + 4),
         );
+    }
+
+    // ---- Phase 147 — remove_watcher ----------------------
+
+    #[tokio::test]
+    async fn remove_watcher_present_returns_was_already_removed_false() {
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        let store = HealthStore::open(path.clone()).await.expect("open");
+        store
+            .add_watcher(
+                "site-x".to_string(),
+                "https://x.example.com/".to_string(),
+                300,
+                200,
+            )
+            .await
+            .expect("add");
+        let outcome = store.remove_watcher("site-x").await.expect("remove");
+        assert_eq!(outcome.name, "site-x");
+        assert!(!outcome.was_already_removed);
+        // Verify it's gone via list.
+        let watchers = store.list_watchers().await;
+        assert!(watchers.is_empty(), "watcher must be gone after remove");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remove_watcher_missing_is_idempotent() {
+        let dir = scratch_dir();
+        let store = HealthStore::open(dir.join("health.json"))
+            .await
+            .expect("open");
+        let outcome = store
+            .remove_watcher("never-existed")
+            .await
+            .expect("remove");
+        assert_eq!(outcome.name, "never-existed");
+        assert!(
+            outcome.was_already_removed,
+            "missing name must surface as was_already_removed = true"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remove_watcher_persists_across_reopen() {
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        {
+            let store = HealthStore::open(path.clone()).await.expect("open");
+            store
+                .add_watcher(
+                    "alpha".to_string(),
+                    "https://a.example.com/".to_string(),
+                    300,
+                    200,
+                )
+                .await
+                .expect("add alpha");
+            store
+                .add_watcher(
+                    "beta".to_string(),
+                    "https://b.example.com/".to_string(),
+                    300,
+                    200,
+                )
+                .await
+                .expect("add beta");
+            store.remove_watcher("alpha").await.expect("remove alpha");
+        }
+        // Re-open and verify only beta survives.
+        let reopened = HealthStore::open(path.clone()).await.expect("reopen");
+        let watchers = reopened.list_watchers().await;
+        assert_eq!(watchers.len(), 1);
+        assert_eq!(watchers[0].0.name, "beta");
+        // Second remove of alpha — idempotent.
+        let outcome = reopened
+            .remove_watcher("alpha")
+            .await
+            .expect("idempotent remove");
+        assert!(outcome.was_already_removed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remove_watcher_cleans_state_map_in_sync() {
+        // Phase 147 regression boundary — the
+        // watchers Vec and states HashMap are
+        // parallel structures. Remove must clean
+        // BOTH; an orphaned state entry would
+        // leak memory + survive re-add as
+        // recovered state.
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        let store = HealthStore::open(path.clone()).await.expect("open");
+        store
+            .add_watcher(
+                "site-y".to_string(),
+                "https://y.example.com/".to_string(),
+                300,
+                200,
+            )
+            .await
+            .expect("add");
+        store.remove_watcher("site-y").await.expect("remove");
+        // Re-add the same name; it should start
+        // fresh (not pick up a stale state).
+        let re_added = store
+            .add_watcher(
+                "site-y".to_string(),
+                "https://y.example.com/".to_string(),
+                300,
+                200,
+            )
+            .await
+            .expect("re-add");
+        assert_eq!(re_added.name, "site-y");
+        let watchers = store.list_watchers().await;
+        assert_eq!(watchers.len(), 1);
+        // Fresh state — never checked.
+        assert!(watchers[0].1.last_check_at.is_none());
+        assert!(!watchers[0].1.last_ok);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -53,7 +53,8 @@ pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
 pub use health_polling::{probe, run_polling_loop, run_polling_tick};
 pub use health_store::{
-    HealthStore, HealthStoreError, ProbeOutcome, Transition, Watcher, WatcherState,
+    HealthStore, HealthStoreError, ProbeOutcome, RemoveOutcome, Transition, Watcher,
+    WatcherState,
 };
 pub use task_store::{Task, TaskStatus, TaskStore, TaskStoreError};
 pub use tools::{
