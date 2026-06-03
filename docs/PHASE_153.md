@@ -233,8 +233,132 @@ clear. Phase 154+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 153 exit. Predictions at
-sign-off: DESIGN.md HOLD → 44; PRODUCT.md HOLD
-→ 44; lib.rs HOLD → 19; zero new deps; test
-count delta `+10` to `+16`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  43 → **44**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 43 → **44**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 153 work in
+  `aivyx-drive`. Continuing post-Phase-135 reset:
+  18 → **19**.
+
+**Test count delta: +13 — within predicted `+10`
+to `+16` range.** Workspace lib tests 3226 →
+3239. Per-module:
+- `recent_files` (input parsing): +6 (default
+  recursive/drive_id, drive_id extract, null
+  drive_id, empty drive_id, recursive flag,
+  composable drive_id+folder+recursive).
+- `recent_changes` (input parsing): +3 (default,
+  drive_id extract, recursive flag — leaner
+  because the q-string substrate is shared).
+- `tools/mod.rs` (compose + caps): +4 (empty
+  → "", single → Phase 148 shape, multiple OR-
+  joined, caps pin to 5/100).
+
+**Zero new workspace dependencies** as predicted.
+
+**Zero clippy warnings** with default features.
+One transient catch during Task 2: the
+`recursive` field on ParsedInput was parsed but
+not yet consumed (Task 3 wires it). Resolved
+with `#[allow(dead_code)]` + Phase-153-Task-3
+forward-pointer comment; annotation removed in
+Task 3 when the field is consumed.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `drive_id` parameter on both recent_* tools.
+  When present: corpora=drive + driveId +
+  includeItemsFromAllDrives + supportsAllDrives
+  per Google's shared-drives spec. Composable
+  with parent_folder_id + recursive.
+- `walk_folder_tree` BFS substrate with
+  hardcoded caps (max_depth=5, max_folders=100).
+  On cap-hit returns partial list +
+  caller-detect via len comparison.
+- `compose_recursive_parent_clause` pure helper
+  for OR-joining `'<id>' in parents` clauses.
+- Both `build_owned_recent_q` and
+  `build_recent_changes_q` refactored to
+  accept a pre-composed `parent_clause:
+  Option<&str>` instead of a single folder ID.
+  Single-folder + recursive paths use the same
+  helper.
+- recent_* execute() match block dispatches on
+  (parent_folder_id, recursive): None, Some-
+  non-recursive, Some-recursive. Stderr
+  heads-up when the walk hits the folder cap.
+- 195 aivyx-drive lib tests pass; workspace
+  clippy clean.
+
+**Bent honestly:**
+
+1. **walk_folder_tree latency on 100-folder
+   trees ~30-60s sequential.** Phase 154+
+   parallel via tokio::join_all candidate.
+
+2. **max_depth=5 and max_folders=100 hardcoded.**
+   Phase 154+ tunability if surfaces.
+
+3. **Recursive q-clause length ~5kB for 100
+   folders.** Google's q DSL has a length
+   limit (not client-enforced). Operators
+   hitting it see a Drive API error.
+
+4. **recursive flag silently ignored when
+   parent_folder_id absent.** Documented in
+   the tool description.
+
+5. **walk_folder_tree happens against operator's
+   default corpus, not drive_id scope.** If the
+   operator wants "recursive recent in this
+   Team Drive's /Projects folder," the walk
+   needs to be scoped — Phase 154+ candidate.
+
+6. **No tests for walk_folder_tree itself.**
+   Needs a mock client or live Drive
+   (operator-validation tier). The pure
+   helpers around it (compose, caps) are
+   exhaustively tested.
+
+### Direction after Phase 153
+
+After Phase 153, Phase 148's two honest-debts
+clear. Phase 154+ candidates:
+
+1. **Parallel walk_folder_tree** via
+   `tokio::join_all` if 100-folder latency
+   surfaces.
+2. **Recursive walk within `drive_id`
+   scope.**
+3. **Operator-tunable recursive caps.**
+4. **Voice abort UX knob.**
+5. **Silero ONNX VAD.**
+6. **Streaming ASR.**
+7. **Wake-word activation.**
+8. **Multimodal output.**
+9. **macOS streaming variant.**
+10. **Lock-free AudioIn detector.**
+11. **Calendar fuzzy dedup.**
+12. **Calendar max_concurrent knob.**
+13. **Calendar writable_only filter.**
+14. **access_role deprecation.**
+15. **Budget category migration tool.**
+16. **Budget currency / rust_decimal.**
+17. **Multi-category trend breakdown.**
+18. **Trend smoothing / moving average.**
+19. **Bulk budget operations.**
+20. **Drive Activity API.**
+21. **Proactive reminder dispatch.**
+22. **Relative-time localization.**
+23. **whisper-cpp-plus rehabilitation.**
+24. **`build_agent_stack` substrate-tier
+    promotion.**
+25. **Channel Activation Milestone** —
+    still held intentionally; 42nd
+    consecutive deferral at Phase 153 exit.

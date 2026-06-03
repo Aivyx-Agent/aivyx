@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 153 — Drive: `recent_*` Close-Out Bundle
 
-**See [PHASE_153.md](PHASE_153.md).** Phase 148 close-out
+**Frozen — see [PHASE_153.md](PHASE_153.md).** Phase 148 close-out
 deferred 5 phases. Closes two drive honest-debts in one
 phase: drive_id parameter on drive.recent_files +
 drive.recent_changes for Team-Drive-scoped recent
