@@ -131,6 +131,88 @@ impl VoiceVadConfig {
             threshold_rms: self.threshold_rms,
         }
     }
+
+    /// Phase 152 — reject out-of-range field
+    /// values at the boundary so the runtime
+    /// doesn't have to special-case nonsense
+    /// later. Caller (the PTT loop) runs this
+    /// at function entry and surfaces the
+    /// error to the operator as a configuration
+    /// problem rather than silently using the
+    /// nonsense values.
+    ///
+    /// Bounds chosen for the typical operator
+    /// setup:
+    /// - `threshold_rms`: `[0.0, 10.0]`. Audio
+    ///   normalized to ±1.0 means a "true" RMS
+    ///   over 1.0 is impossible; the upper
+    ///   bound is room for future scaling
+    ///   changes. Negative is meaningless.
+    /// - `frame_secs`: `(0.0, 1.0]`. Zero
+    ///   frames don't exist; a 1-second frame
+    ///   is already a generous upper bound for
+    ///   speech processing (real-world: 10-50
+    ///   ms).
+    /// - `dwell_secs`: `(0.0, 60.0]`. Zero
+    ///   dwell would auto-stop instantly on
+    ///   any silent frame. 60 seconds is the
+    ///   "I left for coffee" operator
+    ///   threshold.
+    /// - `min_speech_secs`: `[0.0, 60.0]`.
+    ///   Zero is acceptable (auto-stop right
+    ///   away if dwell hits). Upper bound
+    ///   matches dwell_secs.
+    /// - `max_capture_secs`: `(0.0, 3600.0]`.
+    ///   Hour-long capture is the operator-
+    ///   leaves-recording-running edge case.
+    /// - `poll_interval_ms`: `[1, 5000]`.
+    ///   Zero would CPU-spin; 5 seconds is
+    ///   already unreasonably laggy.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(0.0..=10.0).contains(&self.threshold_rms) {
+            return Err(format!(
+                "[voice.vad] threshold_rms must be in [0.0, 10.0]; got {}",
+                self.threshold_rms,
+            ));
+        }
+        if !(self.frame_secs > 0.0 && self.frame_secs <= 1.0) {
+            return Err(format!(
+                "[voice.vad] frame_secs must be in (0.0, 1.0]; got {}",
+                self.frame_secs,
+            ));
+        }
+        if !(self.dwell_secs > 0.0 && self.dwell_secs <= 60.0) {
+            return Err(format!(
+                "[voice.vad] dwell_secs must be in (0.0, 60.0]; got {}",
+                self.dwell_secs,
+            ));
+        }
+        if !(0.0..=60.0).contains(&self.min_speech_secs) {
+            return Err(format!(
+                "[voice.vad] min_speech_secs must be in [0.0, 60.0]; got {}",
+                self.min_speech_secs,
+            ));
+        }
+        if !(self.max_capture_secs > 0.0 && self.max_capture_secs <= 3600.0) {
+            return Err(format!(
+                "[voice.vad] max_capture_secs must be in (0.0, 3600.0]; got {}",
+                self.max_capture_secs,
+            ));
+        }
+        if !(1..=5000).contains(&self.poll_interval_ms) {
+            return Err(format!(
+                "[voice.vad] poll_interval_ms must be in [1, 5000]; got {}",
+                self.poll_interval_ms,
+            ));
+        }
+        // Also reject NaN/infinity at any field
+        // — partial-cmp above catches NaN
+        // (NaN compares false against everything,
+        // so the range check fails). Infinity in
+        // dwell/max_capture_secs is caught by
+        // the upper-bound clause.
+        Ok(())
+    }
 }
 
 /// Operator-tunable detector parameters. Phase 139
@@ -477,6 +559,129 @@ threshold_rms = 0.05
         assert_eq!(sd.sample_rate, 48_000);
         assert!((sd.frame_secs - 0.040).abs() < f32::EPSILON);
         assert!((sd.threshold_rms - 0.02).abs() < f32::EPSILON);
+    }
+
+    // ---- Phase 152 — VoiceVadConfig::validate ----
+
+    #[test]
+    fn validate_default_config_passes() {
+        // Phase 139's defaults must continue to
+        // pass validation — that's the regression
+        // boundary.
+        assert!(VoiceVadConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_negative_threshold_rms_rejected() {
+        let cfg = VoiceVadConfig {
+            threshold_rms: -0.01,
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("threshold_rms"), "{err}");
+    }
+
+    #[test]
+    fn validate_oversize_threshold_rms_rejected() {
+        let cfg = VoiceVadConfig {
+            threshold_rms: 100.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_zero_frame_secs_rejected() {
+        let cfg = VoiceVadConfig {
+            frame_secs: 0.0,
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("frame_secs"), "{err}");
+    }
+
+    #[test]
+    fn validate_oversize_frame_secs_rejected() {
+        let cfg = VoiceVadConfig {
+            frame_secs: 2.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_zero_dwell_secs_rejected() {
+        let cfg = VoiceVadConfig {
+            dwell_secs: 0.0,
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("dwell_secs"), "{err}");
+    }
+
+    #[test]
+    fn validate_negative_min_speech_secs_rejected() {
+        let cfg = VoiceVadConfig {
+            min_speech_secs: -1.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_oversize_max_capture_secs_rejected() {
+        let cfg = VoiceVadConfig {
+            max_capture_secs: 999_999.0,
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("max_capture_secs"), "{err}");
+    }
+
+    #[test]
+    fn validate_zero_poll_interval_ms_rejected() {
+        let cfg = VoiceVadConfig {
+            poll_interval_ms: 0,
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("poll_interval_ms"), "{err}");
+    }
+
+    #[test]
+    fn validate_nan_threshold_rms_rejected() {
+        // NaN compares false against everything,
+        // so the [0.0, 10.0] range check catches
+        // it.
+        let cfg = VoiceVadConfig {
+            threshold_rms: f32::NAN,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_infinity_max_capture_rejected() {
+        let cfg = VoiceVadConfig {
+            max_capture_secs: f32::INFINITY,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_tuned_config_within_bounds_passes() {
+        // Real operator-tuned values:
+        // noisy room with longer pauses.
+        let cfg = VoiceVadConfig {
+            threshold_rms: 0.03,
+            frame_secs: 0.050,
+            dwell_secs: 2.5,
+            min_speech_secs: 1.0,
+            max_capture_secs: 120.0,
+            poll_interval_ms: 200,
+        };
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

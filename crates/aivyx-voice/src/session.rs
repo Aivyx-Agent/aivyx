@@ -489,6 +489,14 @@ where
     // so operators who don't set the section keep
     // the same behavior.
     let vad_cfg = channel.config().vad.clone();
+    // Phase 152 — reject out-of-range VAD config
+    // values at function entry rather than
+    // silently using nonsense values at runtime.
+    if let Err(reason) = vad_cfg.validate() {
+        return Err(VoiceSessionError::AudioDevice(format!(
+            "configuration: {reason}"
+        )));
+    }
     let dwell_threshold = std::time::Duration::from_secs_f32(vad_cfg.dwell_secs);
     let min_speech = std::time::Duration::from_secs_f32(vad_cfg.min_speech_secs);
     let max_capture = std::time::Duration::from_secs_f32(vad_cfg.max_capture_secs);
