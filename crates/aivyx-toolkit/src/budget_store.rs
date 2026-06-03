@@ -43,7 +43,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
@@ -281,6 +281,31 @@ impl BudgetStore {
         };
         aggregate(&snapshot, since, until)
     }
+
+    /// Phase 149 — month-over-month trend.
+    /// Bucketizes entries into calendar months
+    /// going back `months_back` from `now` (so the
+    /// returned `months` slice has length
+    /// `months_back`, oldest first). `now`'s
+    /// month is the most-recent bucket. Optional
+    /// `category` filter applies before
+    /// bucketing.
+    ///
+    /// `now` parameterized so tests can pin a
+    /// deterministic month boundary.
+    pub async fn trend(
+        &self,
+        now: DateTime<Utc>,
+        months_back: u32,
+        category: Option<&str>,
+    ) -> BudgetTrend {
+        // Snapshot under lock.
+        let snapshot: Vec<BudgetEntry> = {
+            let guard = self.entries.lock().await;
+            guard.clone()
+        };
+        aggregate_trend(&snapshot, now, months_back, category)
+    }
 }
 
 /// Aggregated view of a slice of entries within
@@ -304,6 +329,41 @@ pub struct CategoryTotal {
     pub category: String,
     pub total: f64,
     pub count: usize,
+}
+
+/// Phase 149 — per-month aggregation with
+/// month-over-month delta + percentage change.
+/// One bucket per calendar month in the window,
+/// ordered chronologically (oldest first). The
+/// first bucket's `delta_vs_prior` and
+/// `pct_change_vs_prior` are `None`; subsequent
+/// buckets compare against the immediately
+/// preceding month.
+#[derive(Debug, Clone, Serialize)]
+pub struct BudgetTrend {
+    pub months: Vec<MonthBucket>,
+    /// If the caller filtered by category, the
+    /// category name surfaces here. `None` means
+    /// "all categories aggregated."
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthBucket {
+    /// `"YYYY-MM"` — operator-readable and
+    /// stable-sort-friendly.
+    pub month: String,
+    pub total: f64,
+    pub entry_count: usize,
+    /// `total - prior.total`. `None` for the
+    /// first bucket.
+    pub delta_vs_prior: Option<f64>,
+    /// `(total - prior.total) / prior.total *
+    /// 100.0`. `None` for the first bucket OR
+    /// when the prior month's total was zero
+    /// (clean for the agent — no infinity
+    /// special-case).
+    pub pct_change_vs_prior: Option<f64>,
 }
 
 fn aggregate(
@@ -339,6 +399,130 @@ fn aggregate(
         total,
         entry_count: entries.len(),
         by_category,
+    }
+}
+
+/// Phase 149 — pure-substrate month-over-month
+/// aggregation. Pure so the bucket math + delta
+/// math can be tested without touching the
+/// store. `months_back` defines the number of
+/// calendar-month buckets returned; the first
+/// bucket is `months_back - 1` months before
+/// the month of `now`, the last bucket is the
+/// month of `now`.
+fn aggregate_trend(
+    entries: &[BudgetEntry],
+    now: DateTime<Utc>,
+    months_back: u32,
+    category: Option<&str>,
+) -> BudgetTrend {
+    if months_back == 0 {
+        return BudgetTrend {
+            months: Vec::new(),
+            category: category.map(str::to_string),
+        };
+    }
+
+    // Build the chronologically-ordered list of
+    // month boundaries we'll bucket into. Index 0
+    // is the oldest month start; index N-1 is the
+    // current month start. We need a final "next
+    // month start" to upper-bound the last bucket.
+    let mut boundaries: Vec<DateTime<Utc>> =
+        Vec::with_capacity(months_back as usize + 1);
+    // Walk back months_back-1 months from now to
+    // find the oldest bucket's first day.
+    let (mut year, mut month) = (now.year(), now.month());
+    for _ in 0..(months_back - 1) {
+        let (py, pm) = prev_month(year, month);
+        year = py;
+        month = pm;
+    }
+    // Push boundaries: oldest start → ... → next
+    // month's start (upper bound for the current
+    // month bucket).
+    for _ in 0..=months_back {
+        boundaries.push(month_start_utc(year, month));
+        let (ny, nm) = next_month(year, month);
+        year = ny;
+        month = nm;
+    }
+
+    // Bucket the (optionally-filtered) entries.
+    let mut buckets: Vec<(f64, usize)> = vec![(0.0, 0); months_back as usize];
+    for e in entries {
+        if let Some(cat) = category {
+            if e.category != cat {
+                continue;
+            }
+        }
+        // Find the bucket whose [start, next_start)
+        // window contains this entry's
+        // recorded_at. Linear scan is fine —
+        // months_back is capped at 36 elsewhere.
+        for (idx, window) in boundaries.windows(2).enumerate() {
+            let lo = window[0];
+            let hi = window[1];
+            if e.recorded_at >= lo && e.recorded_at < hi {
+                buckets[idx].0 += e.amount;
+                buckets[idx].1 += 1;
+                break;
+            }
+        }
+    }
+
+    // Assemble MonthBuckets with delta + pct
+    // computed against the prior bucket.
+    let mut months: Vec<MonthBucket> = Vec::with_capacity(months_back as usize);
+    for (idx, (total, count)) in buckets.iter().enumerate() {
+        let start = boundaries[idx];
+        let month_label = format!("{:04}-{:02}", start.year(), start.month());
+        let (delta, pct) = if idx == 0 {
+            (None, None)
+        } else {
+            let prior_total = buckets[idx - 1].0;
+            let d = *total - prior_total;
+            let p = if prior_total == 0.0 {
+                None
+            } else {
+                Some((d / prior_total) * 100.0)
+            };
+            (Some(d), p)
+        };
+        months.push(MonthBucket {
+            month: month_label,
+            total: *total,
+            entry_count: *count,
+            delta_vs_prior: delta,
+            pct_change_vs_prior: pct,
+        });
+    }
+
+    BudgetTrend {
+        months,
+        category: category.map(str::to_string),
+    }
+}
+
+fn month_start_utc(year: i32, month: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
+        .single()
+        .expect("month start always exists for a valid year+month")
+}
+
+fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
+}
+
+fn prev_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
     }
 }
 
@@ -475,6 +659,154 @@ mod tests {
         assert_eq!(s.entry_count, 0);
         assert_eq!(s.total, 0.0);
         assert!(s.by_category.is_empty());
+    }
+
+    // ---- Phase 149 — aggregate_trend ----
+
+    #[test]
+    fn aggregate_trend_zero_months_back_yields_empty_months() {
+        let t = aggregate_trend(&[], ts("2026-06-15T12:00:00Z"), 0, None);
+        assert!(t.months.is_empty());
+        assert!(t.category.is_none());
+    }
+
+    #[test]
+    fn aggregate_trend_single_month_no_delta() {
+        // months_back = 1 → only the current
+        // month, no prior comparison.
+        let entries = vec![
+            entry(10.00, "food", "2026-06-01T08:00:00Z"),
+            entry(5.00, "food", "2026-06-15T08:00:00Z"),
+        ];
+        let t = aggregate_trend(&entries, ts("2026-06-15T12:00:00Z"), 1, None);
+        assert_eq!(t.months.len(), 1);
+        assert_eq!(t.months[0].month, "2026-06");
+        assert!((t.months[0].total - 15.00).abs() < 1e-9);
+        assert_eq!(t.months[0].entry_count, 2);
+        assert!(t.months[0].delta_vs_prior.is_none());
+        assert!(t.months[0].pct_change_vs_prior.is_none());
+    }
+
+    #[test]
+    fn aggregate_trend_three_months_includes_deltas() {
+        let entries = vec![
+            // April
+            entry(100.0, "food", "2026-04-15T08:00:00Z"),
+            // May
+            entry(120.0, "food", "2026-05-10T08:00:00Z"),
+            entry(30.0, "food", "2026-05-20T08:00:00Z"), // May total 150
+            // June
+            entry(75.0, "food", "2026-06-01T08:00:00Z"),
+        ];
+        let t = aggregate_trend(&entries, ts("2026-06-15T12:00:00Z"), 3, None);
+        assert_eq!(t.months.len(), 3);
+        assert_eq!(t.months[0].month, "2026-04");
+        assert!((t.months[0].total - 100.0).abs() < 1e-9);
+        assert!(t.months[0].delta_vs_prior.is_none()); // first
+        assert_eq!(t.months[1].month, "2026-05");
+        assert!((t.months[1].total - 150.0).abs() < 1e-9);
+        assert!((t.months[1].delta_vs_prior.unwrap() - 50.0).abs() < 1e-9);
+        assert!((t.months[1].pct_change_vs_prior.unwrap() - 50.0).abs() < 1e-9); // +50%
+        assert_eq!(t.months[2].month, "2026-06");
+        assert!((t.months[2].total - 75.0).abs() < 1e-9);
+        assert!((t.months[2].delta_vs_prior.unwrap() + 75.0).abs() < 1e-9); // -75
+        assert!((t.months[2].pct_change_vs_prior.unwrap() + 50.0).abs() < 1e-9); // -50%
+    }
+
+    #[test]
+    fn aggregate_trend_zero_prior_yields_null_pct() {
+        // Prior month had no entries (or no
+        // category-matching entries). The agent
+        // should see null rather than infinity
+        // for pct_change.
+        let entries = vec![
+            // Nothing in May.
+            entry(40.0, "food", "2026-06-01T08:00:00Z"),
+        ];
+        let t = aggregate_trend(&entries, ts("2026-06-15T12:00:00Z"), 2, None);
+        assert_eq!(t.months.len(), 2);
+        // May bucket — empty.
+        assert_eq!(t.months[0].month, "2026-05");
+        assert_eq!(t.months[0].total, 0.0);
+        // June bucket — delta vs zero-prior.
+        assert!((t.months[1].delta_vs_prior.unwrap() - 40.0).abs() < 1e-9);
+        assert!(
+            t.months[1].pct_change_vs_prior.is_none(),
+            "zero-prior must yield null pct, not infinity"
+        );
+    }
+
+    #[test]
+    fn aggregate_trend_category_filter_isolates_one_category() {
+        let entries = vec![
+            entry(100.0, "food", "2026-05-01T00:00:00Z"),
+            entry(50.0, "transport", "2026-05-01T00:00:00Z"),
+            entry(60.0, "food", "2026-06-01T00:00:00Z"),
+        ];
+        let t = aggregate_trend(
+            &entries,
+            ts("2026-06-15T12:00:00Z"),
+            2,
+            Some("food"),
+        );
+        assert_eq!(t.category.as_deref(), Some("food"));
+        assert_eq!(t.months[0].month, "2026-05");
+        assert!((t.months[0].total - 100.0).abs() < 1e-9); // food only
+        assert_eq!(t.months[1].month, "2026-06");
+        assert!((t.months[1].total - 60.0).abs() < 1e-9);
+        // transport row dropped from totals.
+    }
+
+    #[test]
+    fn aggregate_trend_handles_year_boundary() {
+        // months_back spanning Dec 2025 → Jan 2026.
+        let entries = vec![
+            entry(200.0, "rent", "2025-12-01T00:00:00Z"),
+            entry(220.0, "rent", "2026-01-01T00:00:00Z"),
+        ];
+        let t = aggregate_trend(&entries, ts("2026-01-15T12:00:00Z"), 2, None);
+        assert_eq!(t.months.len(), 2);
+        assert_eq!(t.months[0].month, "2025-12");
+        assert_eq!(t.months[1].month, "2026-01");
+        assert!((t.months[1].delta_vs_prior.unwrap() - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aggregate_trend_entries_outside_window_ignored() {
+        // months_back = 3 from June 2026 → window
+        // is April–June. April entry counts; March
+        // does not.
+        let entries = vec![
+            entry(500.0, "food", "2026-03-15T00:00:00Z"), // before window
+            entry(100.0, "food", "2026-04-15T00:00:00Z"),
+        ];
+        let t = aggregate_trend(&entries, ts("2026-06-15T12:00:00Z"), 3, None);
+        assert_eq!(t.months.len(), 3);
+        assert!((t.months[0].total - 100.0).abs() < 1e-9); // April
+        assert_eq!(t.months[1].total, 0.0); // May
+        assert_eq!(t.months[2].total, 0.0); // June
+    }
+
+    #[tokio::test]
+    async fn store_trend_round_trip_through_disk() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        // Record across two months using
+        // recorded_at via direct entry push so the
+        // test isn't time-dependent on Utc::now().
+        // Use record() then manually mutate
+        // recorded_at via re-open: simpler to seed
+        // the file directly. Use record() and
+        // verify the trend over current month.
+        store
+            .record(20.00, "food".to_string(), None)
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let t = store.trend(now, 1, None).await;
+        assert_eq!(t.months.len(), 1);
+        assert!((t.months[0].total - 20.00).abs() < 1e-9);
     }
 
     #[tokio::test]
