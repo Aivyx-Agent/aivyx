@@ -13,7 +13,7 @@
 //! 4. Spawn the health polling loop in a background tokio
 //!    task (tokio aborts it when main returns on
 //!    ToolShutdown).
-//! 5. Register all 14 tools into a single
+//! 5. Register all 15 tools into a single
 //!    `Vec<Arc<dyn Tool>>` and hand to
 //!    `run_multi_tool_subprocess`. (Phase 125
 //!    shipped 8; Phase 143 added budget.record +
@@ -22,7 +22,9 @@
 //!    added health.check.remove closing the Phase
 //!    125 Chapter G #2 candidate list; Phase 149
 //!    added budget.trend for month-over-month
-//!    delta queries.)
+//!    delta queries; Phase 150 added budget.categories
+//!    + silent case-fold normalization +
+//!    category_suggestion enrichment.)
 //!
 //! Operator-facing failure modes are surfaced at startup
 //! (missing config file, $HOME unset, etc) with operator-
@@ -39,9 +41,10 @@ use aivyx_toolkit::health_polling::run_polling_loop;
 use aivyx_toolkit::health_store::HealthStore;
 use aivyx_toolkit::task_store::TaskStore;
 use aivyx_toolkit::tools::{
-    BudgetDelete, BudgetRecord, BudgetSummaryTool, BudgetTrendTool, BudgetUpdate,
-    HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,
-    TaskComplete, TaskCreate, TaskDelete, TaskList, WebSearch,
+    BudgetCategoriesTool, BudgetDelete, BudgetRecord, BudgetSummaryTool,
+    BudgetTrendTool, BudgetUpdate, HealthCheckAdd, HealthCheckList,
+    HealthCheckRecentChanges, HealthCheckRemove, TaskComplete, TaskCreate, TaskDelete,
+    TaskList, WebSearch,
 };
 use aivyx_toolkit::{run_multi_tool_subprocess, ToolkitConfig};
 
@@ -132,11 +135,16 @@ async fn main() -> ExitCode {
         // (record + summary). Phase 144 reaches CRUD
         // parity with update + delete. Phase 149 adds
         // trend for month-over-month delta queries.
+        // Phase 150 adds categories enumeration +
+        // silent case-fold normalization +
+        // category_suggestion enrichment on record/
+        // update outputs.
         Arc::new(BudgetRecord::new(Arc::clone(&budget_store))),
         Arc::new(BudgetSummaryTool::new(Arc::clone(&budget_store))),
         Arc::new(BudgetUpdate::new(Arc::clone(&budget_store))),
         Arc::new(BudgetDelete::new(Arc::clone(&budget_store))),
         Arc::new(BudgetTrendTool::new(Arc::clone(&budget_store))),
+        Arc::new(BudgetCategoriesTool::new(Arc::clone(&budget_store))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-toolkit").await {

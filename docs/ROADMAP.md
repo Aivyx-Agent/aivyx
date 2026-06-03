@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 150 — Budget: Category Whitelist + Case-Fold + Suggest-Existing
 
-**See [PHASE_150.md](PHASE_150.md).** Phase 143
+**Frozen — see [PHASE_150.md](PHASE_150.md).** Phase 143
 longest-standing honest-debt close-out (carried 6
 phases). Free-text categories from Phase 143 meant
 "Food" / "food" / "fod" were three different categories;

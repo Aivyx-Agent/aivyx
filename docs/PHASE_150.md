@@ -213,8 +213,140 @@ canonical. Phase 151+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 150 exit. Predictions at
-sign-off: DESIGN.md HOLD → 41; PRODUCT.md HOLD
-→ 41; lib.rs HOLD → 16; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  40 → **41**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 40 → **41**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 150 work in
+  `aivyx-toolkit`. Continuing post-Phase-135
+  reset: 15 → **16**.
+
+**Test count delta: +13 — within predicted `+8`
+to `+14` range.** Workspace lib tests 3188 →
+3201. Per-module:
+- `budget_store`: +13 (normalize 5 cases +
+  Levenshtein empty/identical/known-edits 3+2+5
+  cases overlapping → 6 tests + suggest 5
+  variants + record + update normalize + known_
+  categories dedupe = 13 budget_store tests).
+- `tools::budget`: 0 new tests — substrate
+  exhaustively covers the suggestion logic;
+  tool-layer enrichment is straightforward
+  plumbing (operator-validation tier for the
+  end-to-end "did you mean" UX).
+
+**Zero new workspace dependencies** as
+predicted. Levenshtein implemented as ~25 lines
+of pure Rust DP.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `normalize_category(input)` pure function
+  (lowercase + trim).
+- `suggest_category(input, known)` pure
+  function backed by classic Levenshtein DP.
+  Returns None for exact match, None for
+  too-distant (> 2), Some(closest) within
+  threshold.
+- `BudgetStore::known_categories()` BTreeSet
+  dedup + ascending-sort snapshot.
+- `record` and `update` apply
+  `normalize_category` on the category-handling
+  path. Legacy entries unchanged.
+- `BudgetCategoriesTool` registered, harness
+  14 → 15 tools.
+- `BudgetRecord` + `BudgetUpdate` tool outputs
+  gain `category_suggestion` field — computed
+  pre-record/pre-update against the existing
+  known list, so self-matching is impossible.
+- INSTALL.md updated with the new tool docs +
+  normalization posture documentation.
+- 3201 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Legacy entries unchanged.** Pre-Phase 150
+   "Food"/"FOOD" variants surface in
+   `budget.categories` alongside the canonical
+   "food". Phase 151+ candidate: bulk
+   `budget.normalize` to retroactively
+   case-fold legacy entries (operator-decided
+   not silent).
+
+2. **Levenshtein is character-level, not
+   semantic.** "food" vs "foods" is distance 1
+   (a suggestion fires); "groceries" vs "food"
+   distance 9 (no suggestion). The agent reads
+   the raw suggestion + paraphrases — it can
+   downgrade clearly-bad suggestions in its
+   own response.
+
+3. **No suggestion threshold tunability.**
+   Distance ≤ 2 is hardcoded. Phase 151+ if
+   operators in many-short-categories
+   environments hit false positives.
+
+4. **No tool-level tests for the
+   `category_suggestion` enrichment.** Tool
+   layer is plumbing over the exhaustively-
+   tested substrate; an integration test
+   simulating the record-then-output shape
+   would mostly exercise serde_json semantics.
+   Operator-validation tier for the end-to-end
+   UX flow.
+
+5. **No suggestion against empty store.** The
+   first record on an empty store can't
+   suggest anything (known is empty). The
+   first entry sets the canonical form.
+
+6. **Tool struct named `BudgetCategoriesTool`**
+   not `BudgetCategories` — maintains the
+   `BudgetSomethingTool` pattern from Phases
+   143 + 149 even though there's no
+   `BudgetCategories` substrate struct here.
+   Tool-name consistency wins.
+
+### Direction after Phase 150
+
+After Phase 150, budget categories are canonical
+for new entries. Phase 151+ candidates:
+
+1. **Budget category migration tool** — bulk
+   `budget.normalize` for legacy entries.
+2. **Budget currency / rust_decimal** — Phase
+   143 #3 honest-debt.
+3. **Multi-category trend breakdown.**
+4. **Trend smoothing / moving average.**
+5. **Bulk budget operations.**
+6. **Recursive folder filter on drive
+   recent_*.**
+7. **drive_id parameter on drive recent_*.**
+8. **Drive Activity API.**
+9. **Aggressive voice abort.**
+10. **Partial-text preservation on voice
+    abort.**
+11. **Silero ONNX VAD.**
+12. **Streaming ASR.**
+13. **Wake-word activation.**
+14. **Multimodal output.**
+15. **macOS streaming variant.**
+16. **Lock-free AudioIn detector.**
+17. **VAD config validation.**
+18. **Proactive reminder dispatch.**
+19. **Phase 142 calendar debt cleanup.**
+20. **Relative-time localization.**
+21. **whisper-cpp-plus rehabilitation.**
+22. **`build_agent_stack` substrate-tier
+    promotion.**
+23. **Channel Activation Milestone** —
+    still held intentionally; 39th
+    consecutive deferral at Phase 150
+    exit.

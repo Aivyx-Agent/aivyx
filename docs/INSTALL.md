@@ -3251,7 +3251,7 @@ a single `aivyx-toolkit` binary**:
 | Web search | `web.search` | `web.search` |
 | TODO tracking | `task.create`, `task.list`, `task.complete`, `task.delete` | `task.read` / `task.write` |
 | Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes`, `health.check.remove` (Phase 147) | `health.read` / `health.write` |
-| Budget tracking (Phase 143 + 144 + 149) | `budget.record`, `budget.summary`, `budget.update`, `budget.delete`, `budget.trend` | `budget.read` / `budget.write` |
+| Budget tracking (Phase 143 + 144 + 149 + 150) | `budget.record`, `budget.summary`, `budget.update`, `budget.delete`, `budget.trend`, `budget.categories` | `budget.read` / `budget.write` |
 
 All seven scopes ship in `aivyx-capability::CEILING_TRUSTED`
 ONLY by default. SemiTrusted and Untrusted roles get zero
@@ -3380,6 +3380,12 @@ Example: "Actually that lunch was fifteen, not twelve." → agent calls `budget.
 **`budget.trend`** (Phase 149) — `{months_back?, category?}` → `{months: [{month, total, entry_count, delta_vs_prior, pct_change_vs_prior}], category, months_back}`. Returns one bucket per calendar month, oldest-first, ending with the current month-in-progress. `months_back` defaults to 6, capped at 36 (three years). Optional `category` filter scopes all buckets to one category. `delta_vs_prior` and `pct_change_vs_prior` are `null` for the first month (no prior to compare against) AND when the prior month's total was zero (clean `null` rather than infinity). Calendar months — `months_back: 6` from June returns Jan-June, not the last 180 days. Scope: `budget.read`.
 
 Example: "Is my food spending up this quarter?" → agent calls `budget.trend {months_back: 3, category: "food"}` and paraphrases the trend ("you spent +15% in May vs April, then -8% in June"). Or "How am I doing overall this year so far?" → agent calls `budget.trend {months_back: 6}` (no category) and surfaces the change-over-time story.
+
+**`budget.categories`** (Phase 150) — no input → `{categories: [string]}`. Returns every unique category present in the budget store, sorted ascending. Used by the agent to answer "what categories have I used" or to confirm an unfamiliar category before recording.
+
+**Phase 150 — category normalization + suggestion.** New entries recorded via `budget.record` (and category updates via `budget.update`) are silently case-folded + whitespace-trimmed to a canonical lowercase form: "Food" / "FOOD" / "  food  " all become `"food"`. Legacy entries recorded pre-Phase 150 stay as-recorded — operators can manually `budget.update` them if canonical consistency matters.
+
+Both `budget.record` and `budget.update` now surface an optional `category_suggestion` field in their output. When the operator's category input is Levenshtein-distance ≤ 2 from an existing category (e.g. "fod" vs "food"), the suggestion appears as the matched existing string. The operator's chosen category is still recorded — the suggestion is a paraphrasable hint, not auto-correction. The agent decides whether to surface "did you mean food?" to the operator.
 
 Phase 144 scope cap: no category whitelist, no currency field, no bulk update/delete. Mistakes are now fully recoverable through the tool surface (no need to edit JSON directly). Phase 145+ candidates if other gaps surface.
 
