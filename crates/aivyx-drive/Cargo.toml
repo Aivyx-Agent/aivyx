@@ -39,5 +39,14 @@ toml = "0.8"
 uuid = { workspace = true }
 thiserror = { workspace = true }
 
+# Phase 145 — drive.recent_files +
+# drive.recent_changes compose `modifiedTime >
+# '<RFC3339>'` query strings against an
+# operator-supplied time window. chrono handles
+# the window arithmetic + RFC 3339 serialization.
+# Already a workspace dep; we just bring it into
+# this crate.
+chrono = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
