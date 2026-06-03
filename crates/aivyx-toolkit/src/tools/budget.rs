@@ -33,6 +33,7 @@ use aivyx_core::{
 };
 
 use crate::budget_store::BudgetStore;
+use crate::budget_store::BudgetStoreError;
 
 // =====================================================================
 // budget.record
@@ -386,6 +387,272 @@ fn day_start(t: DateTime<Utc>) -> DateTime<Utc> {
     Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).expect("00:00 valid"))
 }
 
+// =====================================================================
+// budget.update — Phase 144
+// =====================================================================
+
+pub struct BudgetUpdate {
+    id: ToolId,
+    schema: Value,
+    store: Arc<BudgetStore>,
+}
+
+impl BudgetUpdate {
+    pub fn new(store: Arc<BudgetStore>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: update_schema(),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for BudgetUpdate {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "budget.update"
+    }
+    fn description(&self) -> &str {
+        "Update an existing budget entry by id. \
+         Partial update: only the fields you \
+         supply change. Input: `{id: string \
+         (required), amount?: number, category?: \
+         string, note?: string|null}`. For \
+         `note`, JSON `null` explicitly clears \
+         the note; omitting the key leaves it \
+         unchanged (standard JSON-PATCH \
+         semantics). Returns the updated entry. \
+         Errors with NotFound if no entry has the \
+         given id. Scope: `budget.write`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("budget.write").expect(
+            "budget.write must parse — it is in KNOWN_BASES from Phase 143",
+        )
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let parsed = match parse_update_input(&input) {
+            Ok(p) => p,
+            Err(reason) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("budget.update: {reason}"),
+                });
+            }
+        };
+        let result = self
+            .store
+            .update(&parsed.id, parsed.amount, parsed.category, parsed.note)
+            .await;
+        match result {
+            Ok(entry) => ToolOutcome::Completed {
+                output: json!({
+                    "id": entry.id,
+                    "amount": entry.amount,
+                    "category": entry.category,
+                    "note": entry.note,
+                    "recorded_at": entry.recorded_at.to_rfc3339(),
+                }),
+                verified: Verification::Verified,
+            },
+            Err(BudgetStoreError::NotFound(id)) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("budget.update: no entry with id {id:?}"),
+            }),
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("budget.update: {e}"),
+            }),
+        }
+    }
+}
+
+fn update_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "amount": { "type": "number" },
+            "category": { "type": "string" },
+            "note": { "type": ["string", "null"], "description": "Null explicitly clears; absent key leaves unchanged" }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+#[derive(Debug)]
+struct UpdateInput {
+    id: String,
+    amount: Option<f64>,
+    category: Option<String>,
+    note: Option<Option<String>>,
+}
+
+fn parse_update_input(input: &Value) -> Result<UpdateInput, String> {
+    let obj = input
+        .as_object()
+        .ok_or_else(|| "input must be a JSON object".to_string())?;
+    let id = obj
+        .get("id")
+        .ok_or_else(|| "`id` is required".to_string())?
+        .as_str()
+        .ok_or_else(|| "`id` must be a string".to_string())?
+        .to_string();
+    if id.is_empty() {
+        return Err("`id` must not be empty".to_string());
+    }
+    let amount = match obj.get("amount") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64()
+                .ok_or_else(|| "`amount` must be a number".to_string())?,
+        ),
+    };
+    let category = match obj.get("category") {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .ok_or_else(|| "`category` must be a string".to_string())?
+                .to_string(),
+        ),
+    };
+    // Phase 144 — JSON null vs absent-key
+    // distinguished here. Absent → leave alone
+    // (Option::None on the outer); null →
+    // explicit clear (Some(None) on the outer);
+    // string → Some(Some(s)) on the outer.
+    let note = if obj.contains_key("note") {
+        let v = obj.get("note").expect("contains_key just succeeded");
+        if v.is_null() {
+            Some(None)
+        } else {
+            Some(Some(
+                v.as_str()
+                    .ok_or_else(|| {
+                        "`note` must be a string or null".to_string()
+                    })?
+                    .to_string(),
+            ))
+        }
+    } else {
+        None
+    };
+    Ok(UpdateInput {
+        id,
+        amount,
+        category,
+        note,
+    })
+}
+
+// =====================================================================
+// budget.delete — Phase 144
+// =====================================================================
+
+pub struct BudgetDelete {
+    id: ToolId,
+    schema: Value,
+    store: Arc<BudgetStore>,
+}
+
+impl BudgetDelete {
+    pub fn new(store: Arc<BudgetStore>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: delete_schema(),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for BudgetDelete {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "budget.delete"
+    }
+    fn description(&self) -> &str {
+        "Delete a budget entry by id. Idempotent — \
+         deleting a missing id succeeds with \
+         `was_already_deleted: true` rather than \
+         erroring. Same posture as \
+         `calendar.delete_event`. Input: \
+         `{id: string}`. Returns `{id, \
+         was_already_deleted}`. Scope: \
+         `budget.write`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("budget.write").expect(
+            "budget.write must parse — it is in KNOWN_BASES from Phase 143",
+        )
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let id = match parse_delete_input(&input) {
+            Ok(id) => id,
+            Err(reason) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("budget.delete: {reason}"),
+                });
+            }
+        };
+        match self.store.delete(&id).await {
+            Ok(outcome) => ToolOutcome::Completed {
+                output: json!({
+                    "id": outcome.id,
+                    "was_already_deleted": outcome.was_already_deleted,
+                }),
+                verified: Verification::Verified,
+            },
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("budget.delete: {e}"),
+            }),
+        }
+    }
+}
+
+fn delete_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+fn parse_delete_input(input: &Value) -> Result<String, String> {
+    let obj = input
+        .as_object()
+        .ok_or_else(|| "input must be a JSON object".to_string())?;
+    let id = obj
+        .get("id")
+        .ok_or_else(|| "`id` is required".to_string())?
+        .as_str()
+        .ok_or_else(|| "`id` must be a string".to_string())?
+        .to_string();
+    if id.is_empty() {
+        return Err("`id` must not be empty".to_string());
+    }
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,5 +781,77 @@ mod tests {
         let now = ts("2026-06-03T12:00:00Z");
         let err = parse_summary_input(&json!({"period": "last_week"}), now).unwrap_err();
         assert!(err.contains("unknown period"), "{err}");
+    }
+
+    // ---- Phase 144 — update + delete input parsing ----
+
+    #[test]
+    fn update_input_id_only_leaves_all_fields_unchanged() {
+        let parsed = parse_update_input(&json!({ "id": "abc" })).unwrap();
+        assert_eq!(parsed.id, "abc");
+        assert!(parsed.amount.is_none());
+        assert!(parsed.category.is_none());
+        assert!(parsed.note.is_none());
+    }
+
+    #[test]
+    fn update_input_amount_and_category_replace() {
+        let parsed = parse_update_input(&json!({
+            "id": "abc",
+            "amount": 7.50,
+            "category": "transport",
+        }))
+        .unwrap();
+        assert_eq!(parsed.amount, Some(7.50));
+        assert_eq!(parsed.category, Some("transport".to_string()));
+        // note absent → leave unchanged.
+        assert!(parsed.note.is_none());
+    }
+
+    #[test]
+    fn update_input_note_string_means_replace() {
+        let parsed = parse_update_input(&json!({
+            "id": "abc",
+            "note": "new note",
+        }))
+        .unwrap();
+        // Some(Some("new note")) — "explicit
+        // replace".
+        assert_eq!(parsed.note, Some(Some("new note".to_string())));
+    }
+
+    #[test]
+    fn update_input_note_null_means_explicit_clear() {
+        let parsed = parse_update_input(&json!({
+            "id": "abc",
+            "note": null,
+        }))
+        .unwrap();
+        // Some(None) — "explicit clear".
+        assert_eq!(parsed.note, Some(None));
+    }
+
+    #[test]
+    fn update_input_missing_id_rejected() {
+        let err = parse_update_input(&json!({ "amount": 5.0 })).unwrap_err();
+        assert!(err.contains("`id`"), "{err}");
+    }
+
+    #[test]
+    fn update_input_empty_id_rejected() {
+        let err = parse_update_input(&json!({ "id": "" })).unwrap_err();
+        assert!(err.contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn delete_input_simple_id() {
+        let id = parse_delete_input(&json!({ "id": "abc-123" })).unwrap();
+        assert_eq!(id, "abc-123");
+    }
+
+    #[test]
+    fn delete_input_missing_id_rejected() {
+        let err = parse_delete_input(&json!({})).unwrap_err();
+        assert!(err.contains("`id`"), "{err}");
     }
 }
