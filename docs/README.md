@@ -200,7 +200,8 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 140 | Frozen | [PHASE_140.md](PHASE_140.md) | `45ff66e`  |
 | Phase 141 | Frozen | [PHASE_141.md](PHASE_141.md) | `a7e0440`  |
 | Phase 142 | Frozen | [PHASE_142.md](PHASE_142.md) | `d46b43c`  |
-| Phase 143 | Frozen | [PHASE_143.md](PHASE_143.md) | —          |
+| Phase 143 | Frozen | [PHASE_143.md](PHASE_143.md) | `182021d`  |
+| Phase 144 | Open   | [PHASE_144.md](PHASE_144.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

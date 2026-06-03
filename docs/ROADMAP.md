@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 144 — Close Phase 143 Debt: budget.update + budget.delete + secure_io extract
+
+**See [PHASE_144.md](PHASE_144.md).** Phase 143 close-out.
+Phase 143 shipped budget.record + budget.summary but
+without edit/delete tools and with save_to_disk +
+create_dir_all_secure + write_secure duplicated across
+task_store and budget_store. Phase 144 closes both
+debts in one phase: budget.update + budget.delete reach
+CRUD parity with task.* and calendar.*; secure_io
+extract folds three shared helpers into one module.
+Pure substrate work; zero new workspace deps.
+
 ## Phase 143 — Chapter G: Budget Tracking
 
 **Frozen — see [PHASE_143.md](PHASE_143.md).** Pivot from calendar
