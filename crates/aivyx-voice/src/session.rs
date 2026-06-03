@@ -388,7 +388,23 @@ where
     // Step 3 — dispatch the turn. As text chunks
     // arrive, the sink fires + drains sentences +
     // forwards to the consumer.
-    let message = Message::text(channel.session_id(), transcribed.clone());
+    //
+    // Phase 154 — if the operator queued an image
+    // via `/image <path>` at the start-of-iteration
+    // prompt, fold it into the Message as
+    // text_with_image so the vision-capable LLM
+    // sees both the transcribed prompt and the
+    // image bytes. Otherwise fall back to the
+    // text-only Message::text shape.
+    let message = match channel.take_pending_image() {
+        Some((media_type, data)) => Message::text_with_image(
+            channel.session_id(),
+            transcribed.clone(),
+            media_type,
+            data,
+        ),
+        None => Message::text(channel.session_id(), transcribed.clone()),
+    };
     let outcome = agent.turn(message, channel.as_ref()).await;
 
     // Step 4 — unhook the sink. Anything still in
@@ -553,7 +569,7 @@ where
     });
 
     loop {
-        eprint!("[voice] press Enter to record (or `quit`): ");
+        eprint!("[voice] press Enter to record (or `quit`, `/image <path>`): ");
         let _ = std::io::Write::flush(&mut std::io::stderr());
         let trimmed = match line_rx.recv().await {
             Some(line) => line,
@@ -568,6 +584,31 @@ where
         if trimmed == "quit" {
             eprintln!("[voice] exiting.");
             return Ok(());
+        }
+        // Phase 154 — `/image <path>` queues an
+        // image for the next recording iteration.
+        // Operator types this instead of pressing
+        // Enter; the loop loads the file +
+        // infers media type from extension +
+        // populates channel.pending_image, then
+        // re-prompts for Enter (or another
+        // command).
+        if let Some(path) = trimmed.strip_prefix("/image ") {
+            match load_image_for_attach(path.trim()) {
+                Ok((media_type, data)) => {
+                    eprintln!(
+                        "[voice] image queued: {} ({} bytes, {})",
+                        path.trim(),
+                        data.len(),
+                        media_type,
+                    );
+                    channel.set_pending_image(media_type, data);
+                }
+                Err(reason) => {
+                    eprintln!("[voice] image attach failed: {reason}");
+                }
+            }
+            continue;
         }
 
         // ----- Capture phase — async polling for auto-stop -----
@@ -868,6 +909,53 @@ fn read_stdin_line_trimmed() -> String {
     }
 }
 
+/// Phase 154 — load + media-type-classify an
+/// image file for attach. Returns the inferred
+/// media type + the raw bytes on success;
+/// operator-readable error string on any
+/// failure (unknown extension, file not found,
+/// IO error, empty file).
+fn load_image_for_attach(path: &str) -> Result<(String, Vec<u8>), String> {
+    if path.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+    let media_type = infer_image_media_type(path)?;
+    let data = std::fs::read(path)
+        .map_err(|e| format!("read {path:?}: {e}"))?;
+    if data.is_empty() {
+        return Err(format!("file {path:?} is empty"));
+    }
+    Ok((media_type.to_string(), data))
+}
+
+/// Phase 154 — infer the image media type
+/// from a file's extension. Pure substrate;
+/// returns the canonical `image/<format>` MIME
+/// string on a known extension, or a clear
+/// error otherwise.
+///
+/// Phase 154 MVP covers the four
+/// operator-typical formats (PNG, JPEG, GIF,
+/// WebP). PDF/SVG/TIFF/etc. error out — Phase
+/// 155+ candidate if surfaces.
+fn infer_image_media_type(path: &str) -> Result<&'static str, String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .ok_or_else(|| format!("no file extension in path {path:?}"))?;
+    match ext.as_str() {
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "gif" => Ok("image/gif"),
+        "webp" => Ok("image/webp"),
+        other => Err(format!(
+            "unsupported image extension {other:?}; \
+             Phase 154 supports png / jpg / jpeg / gif / webp"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,6 +963,53 @@ mod tests {
     use crate::channel::VoiceChannelConfig;
     use crate::tts::{TtsAudio, TtsConfig};
     use async_trait::async_trait;
+
+    // ---- Phase 154 — image media type inference + load ----
+
+    #[test]
+    fn infer_image_media_type_png() {
+        assert_eq!(infer_image_media_type("foo.png").unwrap(), "image/png");
+        assert_eq!(infer_image_media_type("/abs/path/IMG.PNG").unwrap(), "image/png");
+    }
+
+    #[test]
+    fn infer_image_media_type_jpeg_variants() {
+        assert_eq!(infer_image_media_type("a.jpg").unwrap(), "image/jpeg");
+        assert_eq!(infer_image_media_type("b.jpeg").unwrap(), "image/jpeg");
+        assert_eq!(infer_image_media_type("C.JPG").unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn infer_image_media_type_gif_and_webp() {
+        assert_eq!(infer_image_media_type("a.gif").unwrap(), "image/gif");
+        assert_eq!(infer_image_media_type("b.webp").unwrap(), "image/webp");
+    }
+
+    #[test]
+    fn infer_image_media_type_unsupported_extension_rejects() {
+        let err = infer_image_media_type("a.pdf").unwrap_err();
+        assert!(err.contains("unsupported"), "{err}");
+        let err = infer_image_media_type("a.svg").unwrap_err();
+        assert!(err.contains("unsupported"), "{err}");
+    }
+
+    #[test]
+    fn infer_image_media_type_no_extension_rejects() {
+        let err = infer_image_media_type("README").unwrap_err();
+        assert!(err.contains("no file extension"), "{err}");
+    }
+
+    #[test]
+    fn load_image_empty_path_rejected() {
+        let err = load_image_for_attach("").unwrap_err();
+        assert!(err.contains("path must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn load_image_missing_file_rejected() {
+        let err = load_image_for_attach("/nonexistent/file.png").unwrap_err();
+        assert!(err.contains("read"), "{err}");
+    }
 
     // Test fixtures: stub ASR + TTS engines that
     // return scripted output, so `run_one_voice_turn`
