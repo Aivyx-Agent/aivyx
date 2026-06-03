@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 147 — Chapter G: `health.check.remove`
+
+**See [PHASE_147.md](PHASE_147.md).** Phase 125 final
+candidate close-out. Phase 125 framed three Chapter G #2
+candidates: calendar reminders (✓ 141-142), budget
+tracking (✓ 143-144), and health.check.remove + alert
+dispatch (this phase ships .remove; alert dispatch
+intentionally held with Channel Activation). Pure
+addition: HealthStore::remove_watcher substrate +
+health.check.remove tool. Idempotent shape matching
+budget.delete and calendar.delete_event. Zero new
+workspace deps.
+
 ## Phase 146 — Voice Mid-Synthesis Abort UX
 
 **Frozen — see [PHASE_146.md](PHASE_146.md).** Phase 138 close-out
