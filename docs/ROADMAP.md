@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 154 — Multimodal: Image Attachment via Voice
+
+**See [PHASE_154.md](PHASE_154.md).** New feature surface
+after 3 debt-close phases (151-153). Wires existing
+MessageContent::Mixed shape into the voice channel:
+operator types `/image <path>` at the PTT prompt instead
+of pressing Enter; image loads + media-type-infers + queues
+on the channel; next recording iteration's Message includes
+the image. Vision-capable LLM (Qwen-VL via mistral.rs /
+Ollama / Anthropic Claude-Vision) describes via TTS.
+Zero new workspace deps; substrate already in place.
+
 ## Phase 153 — Drive: `recent_*` Close-Out Bundle
 
 **Frozen — see [PHASE_153.md](PHASE_153.md).** Phase 148 close-out
