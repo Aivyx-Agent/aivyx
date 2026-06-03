@@ -653,6 +653,165 @@ fn parse_delete_input(input: &Value) -> Result<String, String> {
     Ok(id)
 }
 
+// =====================================================================
+// budget.trend — Phase 149
+// =====================================================================
+
+const DEFAULT_MONTHS_BACK: u32 = 6;
+const MAX_MONTHS_BACK: u32 = 36;
+
+pub struct BudgetTrendTool {
+    id: ToolId,
+    schema: Value,
+    store: Arc<BudgetStore>,
+}
+
+impl BudgetTrendTool {
+    pub fn new(store: Arc<BudgetStore>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: trend_schema(),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for BudgetTrendTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "budget.trend"
+    }
+    fn description(&self) -> &str {
+        "Month-over-month trend of budget \
+         entries. Input: `{months_back?: \
+         integer (default 6, capped at 36), \
+         category?: string (optional — when \
+         supplied, only entries with this \
+         category are counted)}`. Returns \
+         `{months: [{month, total, entry_count, \
+         delta_vs_prior, pct_change_vs_prior}], \
+         category, months_back}` where months \
+         is ordered oldest-first. \
+         `delta_vs_prior` and \
+         `pct_change_vs_prior` are null for the \
+         first month (no prior to compare) AND \
+         when the prior month's total was zero \
+         (clean null rather than infinity). \
+         Calendar months — `months_back: 6` \
+         from June means Jan-June, not last 180 \
+         days. Scope: `budget.read`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("budget.read")
+            .expect("budget.read must parse — it is in KNOWN_BASES from Phase 143")
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let parsed = match parse_trend_input(&input) {
+            Ok(p) => p,
+            Err(reason) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("budget.trend: {reason}"),
+                });
+            }
+        };
+        let now = Utc::now();
+        let trend = self
+            .store
+            .trend(now, parsed.months_back, parsed.category.as_deref())
+            .await;
+        let months: Vec<Value> = trend
+            .months
+            .iter()
+            .map(|m| {
+                json!({
+                    "month": m.month,
+                    "total": m.total,
+                    "entry_count": m.entry_count,
+                    "delta_vs_prior": m.delta_vs_prior,
+                    "pct_change_vs_prior": m.pct_change_vs_prior,
+                })
+            })
+            .collect();
+        ToolOutcome::Completed {
+            output: json!({
+                "months": months,
+                "category": trend.category,
+                "months_back": parsed.months_back,
+            }),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+fn trend_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "months_back": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_MONTHS_BACK,
+                "description": "Number of calendar-month buckets to return ending with the current month. Default 6, capped at 36."
+            },
+            "category": {
+                "type": "string",
+                "description": "Optional category filter — when supplied, only entries with this category are counted in each bucket."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+#[derive(Debug)]
+struct TrendInput {
+    months_back: u32,
+    category: Option<String>,
+}
+
+fn parse_trend_input(input: &Value) -> Result<TrendInput, String> {
+    let obj = input
+        .as_object()
+        .ok_or_else(|| "input must be a JSON object".to_string())?;
+    let months_back = match obj.get("months_back") {
+        None => DEFAULT_MONTHS_BACK,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| "`months_back` must be a positive integer".to_string())?
+            as u32,
+    };
+    if months_back == 0 {
+        return Err("`months_back` must be >= 1".to_string());
+    }
+    let months_back = months_back.min(MAX_MONTHS_BACK);
+    let category = match obj.get("category") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "`category` must be a string".to_string())?
+                .trim()
+                .to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+    };
+    Ok(TrendInput {
+        months_back,
+        category,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,5 +1012,50 @@ mod tests {
     fn delete_input_missing_id_rejected() {
         let err = parse_delete_input(&json!({})).unwrap_err();
         assert!(err.contains("`id`"), "{err}");
+    }
+
+    // ---- Phase 149 — trend input parsing ----
+
+    #[test]
+    fn trend_input_defaults_to_six_months_no_category() {
+        let p = parse_trend_input(&json!({})).unwrap();
+        assert_eq!(p.months_back, 6);
+        assert!(p.category.is_none());
+    }
+
+    #[test]
+    fn trend_input_explicit_months_back_honored() {
+        let p = parse_trend_input(&json!({"months_back": 12})).unwrap();
+        assert_eq!(p.months_back, 12);
+    }
+
+    #[test]
+    fn trend_input_clamps_months_back_at_36() {
+        let p = parse_trend_input(&json!({"months_back": 9999})).unwrap();
+        assert_eq!(p.months_back, 36);
+    }
+
+    #[test]
+    fn trend_input_rejects_zero_months_back() {
+        let err = parse_trend_input(&json!({"months_back": 0})).unwrap_err();
+        assert!(err.contains(">= 1"), "{err}");
+    }
+
+    #[test]
+    fn trend_input_category_filter_extracted() {
+        let p = parse_trend_input(&json!({"category": "food"})).unwrap();
+        assert_eq!(p.category.as_deref(), Some("food"));
+    }
+
+    #[test]
+    fn trend_input_empty_category_string_is_none() {
+        let p = parse_trend_input(&json!({"category": "  "})).unwrap();
+        assert!(p.category.is_none());
+    }
+
+    #[test]
+    fn trend_input_null_category_is_none() {
+        let p = parse_trend_input(&json!({"category": null})).unwrap();
+        assert!(p.category.is_none());
     }
 }
