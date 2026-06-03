@@ -72,12 +72,20 @@ impl Tool for CalendarListCalendars {
          operator has access to. Takes no \
          arguments. Returns a JSON object with a \
          `calendars` array of \
-         `{id, summary, is_primary, access_role}` \
-         entries. `access_role` is one of \
-         \"owner\", \"writer\", \"reader\", or \
+         `{id, summary, is_primary, access_role, \
+         can_read, can_write}` entries. \
+         `access_role` is one of \"owner\", \
+         \"writer\", \"reader\", or \
          \"freeBusyReader\" — passes through \
-         from Google's API verbatim. Use this \
-         once per conversation to learn which \
+         from Google's API verbatim. Phase 151 \
+         derived booleans: `can_read` is true for \
+         owner/writer/reader (the calendars whose \
+         event content is visible); `can_write` \
+         is true for owner/writer. \
+         `freeBusyReader` calendars are both \
+         false (free/busy times are visible but \
+         event details aren't). Use this once \
+         per conversation to learn which \
          calendar IDs exist, then pass specific \
          IDs to `calendar.upcoming` (via \
          `calendar_ids`) or `calendar.list_events` \
@@ -137,7 +145,15 @@ impl Tool for CalendarListCalendars {
 /// exactly the fields the agent needs to make
 /// follow-up tool calls (id), explain itself
 /// (summary), and reason about permissions
-/// (is_primary, access_role).
+/// (is_primary, access_role, can_read,
+/// can_write).
+///
+/// Phase 151 adds `can_read` + `can_write`
+/// booleans derived from `access_role`. The
+/// raw `access_role` string still surfaces
+/// alongside; the new fields are purely
+/// additive so existing consumers don't
+/// break.
 pub(crate) fn calendar_summary(cal: &Value) -> Value {
     let id = cal.get("id").cloned().unwrap_or(Value::Null);
     let summary = cal.get("summary").cloned().unwrap_or(Value::Null);
@@ -149,12 +165,41 @@ pub(crate) fn calendar_summary(cal: &Value) -> Value {
         .get("accessRole")
         .cloned()
         .unwrap_or(Value::Null);
+    let (can_read, can_write) = capability_from_access_role(
+        access_role.as_str().unwrap_or(""),
+    );
     json!({
         "id": id,
         "summary": summary,
         "is_primary": is_primary,
         "access_role": access_role,
+        "can_read": can_read,
+        "can_write": can_write,
     })
+}
+
+/// Phase 151 — map Google Calendar's
+/// `accessRole` string to the operator-facing
+/// `(can_read, can_write)` boolean pair the
+/// agent can reason about directly.
+///
+/// Mapping:
+/// - `owner` / `writer` → can_write = true.
+/// - `owner` / `writer` / `reader` →
+///   can_read = true (read event content).
+/// - `freeBusyReader` → both false (can read
+///   busy times but not event content; the
+///   semantic of "read events" is the latter
+///   for the agent's purposes).
+/// - Anything else / null → both false
+///   (conservative; better to under-promise).
+pub(crate) fn capability_from_access_role(role: &str) -> (bool, bool) {
+    match role {
+        "owner" | "writer" => (true, true),
+        "reader" => (true, false),
+        // freeBusyReader and unknowns: both false.
+        _ => (false, false),
+    }
 }
 
 fn input_schema() -> Value {
@@ -183,6 +228,9 @@ mod tests {
         assert_eq!(got["summary"], json!("Personal"));
         assert_eq!(got["is_primary"], json!(true));
         assert_eq!(got["access_role"], json!("owner"));
+        // Phase 151 — owner gets full caps.
+        assert_eq!(got["can_read"], json!(true));
+        assert_eq!(got["can_write"], json!(true));
         // Fields not in the output shape don't
         // appear.
         assert!(got.get("backgroundColor").is_none());
@@ -232,5 +280,92 @@ mod tests {
         assert_eq!(got["summary"], Value::Null);
         assert_eq!(got["is_primary"], json!(false));
         assert_eq!(got["access_role"], Value::Null);
+        // Phase 151 — null access_role conserves
+        // to both-false caps.
+        assert_eq!(got["can_read"], json!(false));
+        assert_eq!(got["can_write"], json!(false));
+    }
+
+    // ---- Phase 151 — capability_from_access_role ----
+
+    #[test]
+    fn capability_owner_grants_read_and_write() {
+        let (r, w) = capability_from_access_role("owner");
+        assert!(r);
+        assert!(w);
+    }
+
+    #[test]
+    fn capability_writer_grants_read_and_write() {
+        let (r, w) = capability_from_access_role("writer");
+        assert!(r);
+        assert!(w);
+    }
+
+    #[test]
+    fn capability_reader_grants_read_only() {
+        let (r, w) = capability_from_access_role("reader");
+        assert!(r);
+        assert!(!w);
+    }
+
+    #[test]
+    fn capability_free_busy_reader_grants_neither() {
+        // Read free/busy times only; can't see
+        // event content. Phase 151 semantic
+        // choice: "can_read = false" because
+        // "read events" semantically means
+        // "read event content" not "read busy
+        // times."
+        let (r, w) = capability_from_access_role("freeBusyReader");
+        assert!(!r);
+        assert!(!w);
+    }
+
+    #[test]
+    fn capability_unknown_role_grants_neither() {
+        // Conservative posture for forward-compat
+        // — better to under-promise than over-
+        // promise on an unrecognized role.
+        let (r, w) = capability_from_access_role("supersecret-future-role");
+        assert!(!r);
+        assert!(!w);
+    }
+
+    #[test]
+    fn capability_empty_string_grants_neither() {
+        let (r, w) = capability_from_access_role("");
+        assert!(!r);
+        assert!(!w);
+    }
+
+    #[test]
+    fn calendar_summary_writer_is_full_caps() {
+        // Phase 151 — exercise the writer path
+        // end-to-end through calendar_summary
+        // (the test above covers owner; this
+        // one covers writer for completeness).
+        let raw = json!({
+            "id": "team@example.com",
+            "summary": "Team Calendar",
+            "accessRole": "writer",
+        });
+        let got = calendar_summary(&raw);
+        assert_eq!(got["access_role"], json!("writer"));
+        assert_eq!(got["can_read"], json!(true));
+        assert_eq!(got["can_write"], json!(true));
+    }
+
+    #[test]
+    fn calendar_summary_reader_is_read_only_caps() {
+        let raw = json!({
+            "id": "shared@example.com",
+            "summary": "Shared Read-Only",
+            "accessRole": "reader",
+        });
+        let got = calendar_summary(&raw);
+        assert_eq!(got["access_role"], json!("reader"));
+        assert_eq!(got["can_read"], json!(true));
+        assert_eq!(got["can_write"], json!(false));
     }
 }
