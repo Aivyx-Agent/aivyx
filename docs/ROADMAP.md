@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 153 — Drive: `recent_*` Close-Out Bundle
+
+**See [PHASE_153.md](PHASE_153.md).** Phase 148 close-out
+deferred 5 phases. Closes two drive honest-debts in one
+phase: drive_id parameter on drive.recent_files +
+drive.recent_changes for Team-Drive-scoped recent
+queries (corpora=drive + driveId + includeItemsFromAllDrives),
+recursive parent_folder_id filter via
+walk_folder_tree BFS (max_depth 5, max_folders 100).
+Symmetric to Phase 151's calendar bundle + Phase 152's
+voice bundle pattern. Zero new workspace deps.
+
 ## Phase 152 — Voice Carry-Overs Bundle
 
 **Frozen — see [PHASE_152.md](PHASE_152.md).** Pivot back to voice
