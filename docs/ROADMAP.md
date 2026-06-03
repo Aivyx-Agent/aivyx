@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 145 — Drive: `recent_files` + `recent_changes`
+
+**See [PHASE_145.md](PHASE_145.md).** Pivot from toolkit
+after four consecutive Chapter F/G phases (141-144).
+Drive's 7-tool surface has been quiet since Phase 129;
+Phase 145 adds the LLM-ergonomic shape that mirrors
+Phase 141's calendar.upcoming pattern. Two tools for
+two cognitive shapes: drive.recent_files (owned files,
+last N days, "what I worked on") and
+drive.recent_changes (any accessible files, last N
+hours, "what changed in my Drive"). Both reuse Phase
+129's pub(crate) file_summary helper; zero new
+workspace deps.
+
 ## Phase 144 — Close Phase 143 Debt: budget.update + budget.delete + secure_io extract
 
 **Frozen — see [PHASE_144.md](PHASE_144.md).** Phase 143 close-out.
