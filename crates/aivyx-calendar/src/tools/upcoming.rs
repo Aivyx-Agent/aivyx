@@ -605,6 +605,93 @@ mod tests {
         assert_eq!(events[0]["id"], json!("b"));
     }
 
+    // ---- Phase 151 — cross-calendar dedup ----
+
+    #[test]
+    fn dedup_no_duplicates_returns_unchanged() {
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": at_offset(60)}),
+            json!({"id": "b", "summary": "Review", "start": at_offset(120)}),
+        ];
+        let got = dedup_events(events);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn dedup_exact_duplicate_keeps_first() {
+        // Same event surfaces on both primary
+        // and work calendars (cross-invite case).
+        let start = at_offset(60);
+        let events = vec![
+            json!({
+                "id": "personal-copy",
+                "summary": "Team standup",
+                "start": start,
+                "calendar_id": "primary",
+            }),
+            json!({
+                "id": "work-copy",
+                "summary": "Team standup",
+                "start": start,
+                "calendar_id": "work@example.com",
+            }),
+        ];
+        let got = dedup_events(events);
+        assert_eq!(got.len(), 1);
+        // First occurrence wins → the primary
+        // calendar's copy survives, work's
+        // copy drops.
+        assert_eq!(got[0]["id"], json!("personal-copy"));
+        assert_eq!(got[0]["calendar_id"], json!("primary"));
+    }
+
+    #[test]
+    fn dedup_differ_by_summary_kept_both() {
+        let start = at_offset(60);
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": start}),
+            json!({"id": "b", "summary": "Review", "start": start}),
+        ];
+        let got = dedup_events(events);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn dedup_differ_by_start_kept_both() {
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": at_offset(60)}),
+            json!({"id": "b", "summary": "Standup", "start": at_offset(120)}),
+        ];
+        let got = dedup_events(events);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn dedup_null_summary_is_handled_defensively() {
+        // Two events with null summaries +
+        // identical starts collapse to one
+        // (their key is ("", "...")). This is
+        // the documented honest behavior;
+        // operators should never see this
+        // in practice since Google always
+        // surfaces a summary, but we don't
+        // panic on malformed inputs.
+        let start = at_offset(60);
+        let events = vec![
+            json!({"id": "a", "summary": null, "start": start}),
+            json!({"id": "b", "summary": null, "start": start}),
+        ];
+        let got = dedup_events(events);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn dedup_empty_input_returns_empty() {
+        let got = dedup_events(Vec::new());
+        assert!(got.is_empty());
+    }
+
     // ---- enrichment with calendar_id tag ----
 
     #[test]
