@@ -68,6 +68,19 @@ pub enum BudgetStoreError {
     BadAmount(f64),
     #[error("`category` must not be empty")]
     EmptyCategory,
+    #[error("budget entry with id {0:?} not found")]
+    NotFound(String),
+}
+
+/// Outcome of a [`BudgetStore::delete`] call.
+/// Surfaced verbatim through the
+/// `budget.delete` tool's output so the agent
+/// can paraphrase "already removed" vs "removed
+/// just now" if useful.
+#[derive(Debug, Clone)]
+pub struct DeleteOutcome {
+    pub id: String,
+    pub was_already_deleted: bool,
 }
 
 /// A single budget entry. Operator records an
@@ -170,6 +183,81 @@ impl BudgetStore {
         guard.push(entry.clone());
         save_to_disk(&self.path, &guard).await?;
         Ok(entry)
+    }
+
+    /// Phase 144 — partial update. Each `Option`
+    /// arg either replaces the corresponding field
+    /// or leaves it unchanged. The double-Option
+    /// on `note` distinguishes "explicitly clear"
+    /// (`Some(None)`) from "leave alone" (`None`).
+    /// Returns the updated entry, or
+    /// [`BudgetStoreError::NotFound`] when no
+    /// entry matches the id.
+    pub async fn update(
+        &self,
+        id: &str,
+        amount: Option<f64>,
+        category: Option<String>,
+        note: Option<Option<String>>,
+    ) -> Result<BudgetEntry, BudgetStoreError> {
+        if let Some(a) = amount {
+            if !a.is_finite() {
+                return Err(BudgetStoreError::BadAmount(a));
+            }
+        }
+        let normalized_category = match category {
+            None => None,
+            Some(c) => {
+                let trimmed = c.trim().to_string();
+                if trimmed.is_empty() {
+                    return Err(BudgetStoreError::EmptyCategory);
+                }
+                Some(trimmed)
+            }
+        };
+        let mut guard = self.entries.lock().await;
+        let pos = guard
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or_else(|| BudgetStoreError::NotFound(id.to_string()))?;
+        if let Some(a) = amount {
+            guard[pos].amount = a;
+        }
+        if let Some(c) = normalized_category {
+            guard[pos].category = c;
+        }
+        if let Some(new_note) = note {
+            guard[pos].note =
+                new_note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        }
+        let updated = guard[pos].clone();
+        save_to_disk(&self.path, &guard).await?;
+        Ok(updated)
+    }
+
+    /// Phase 144 — idempotent delete. Returns
+    /// `was_already_deleted: true` when no entry
+    /// matched the id; matches
+    /// calendar.delete_event's posture so the
+    /// agent doesn't have to special-case
+    /// already-removed entries.
+    pub async fn delete(&self, id: &str) -> Result<DeleteOutcome, BudgetStoreError> {
+        let mut guard = self.entries.lock().await;
+        let pos = guard.iter().position(|e| e.id == id);
+        match pos {
+            Some(idx) => {
+                guard.remove(idx);
+                save_to_disk(&self.path, &guard).await?;
+                Ok(DeleteOutcome {
+                    id: id.to_string(),
+                    was_already_deleted: false,
+                })
+            }
+            None => Ok(DeleteOutcome {
+                id: id.to_string(),
+                was_already_deleted: true,
+            }),
+        }
     }
 
     /// Aggregate entries within `[since, until)`
@@ -480,6 +568,179 @@ mod tests {
             .await;
         assert_eq!(s.entry_count, 0);
         assert_eq!(s.total, 0.0);
+    }
+
+    // ---- Phase 144 — update + delete ----
+
+    #[tokio::test]
+    async fn update_partial_amount_only_leaves_category_and_note_unchanged() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(10.00, "food".to_string(), Some("lunch".to_string()))
+            .await
+            .unwrap();
+        let updated = store
+            .update(&e.id, Some(12.50), None, None)
+            .await
+            .unwrap();
+        assert!((updated.amount - 12.50).abs() < 1e-9);
+        assert_eq!(updated.category, "food");
+        assert_eq!(updated.note, Some("lunch".to_string()));
+    }
+
+    #[tokio::test]
+    async fn update_explicit_none_note_clears_note() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(5.00, "snacks".to_string(), Some("desk grazing".to_string()))
+            .await
+            .unwrap();
+        // Phase 144 — `Some(None)` is the
+        // "explicitly clear" signal at the
+        // substrate layer.
+        let updated = store
+            .update(&e.id, None, None, Some(None))
+            .await
+            .unwrap();
+        assert_eq!(updated.note, None);
+    }
+
+    #[tokio::test]
+    async fn update_some_note_replaces_existing() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(5.00, "snacks".to_string(), Some("old".to_string()))
+            .await
+            .unwrap();
+        let updated = store
+            .update(&e.id, None, None, Some(Some("new".to_string())))
+            .await
+            .unwrap();
+        assert_eq!(updated.note, Some("new".to_string()));
+    }
+
+    #[tokio::test]
+    async fn update_missing_id_returns_not_found() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let err = store
+            .update("does-not-exist", Some(1.0), None, None)
+            .await
+            .unwrap_err();
+        match err {
+            BudgetStoreError::NotFound(id) => assert_eq!(id, "does-not-exist"),
+            other => panic!("expected NotFound; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_rejects_non_finite_amount() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(5.00, "snacks".to_string(), None)
+            .await
+            .unwrap();
+        let err = store
+            .update(&e.id, Some(f64::INFINITY), None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BudgetStoreError::BadAmount(_)));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_blank_category() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(5.00, "snacks".to_string(), None)
+            .await
+            .unwrap();
+        let err = store
+            .update(&e.id, None, Some("   ".to_string()), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BudgetStoreError::EmptyCategory));
+    }
+
+    #[tokio::test]
+    async fn delete_present_entry_removes_it() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let e = store
+            .record(5.00, "snacks".to_string(), None)
+            .await
+            .unwrap();
+        let outcome = store.delete(&e.id).await.unwrap();
+        assert_eq!(outcome.id, e.id);
+        assert!(!outcome.was_already_deleted);
+        // Verify it's gone via summary.
+        let s = store
+            .summary(ts("2020-01-01T00:00:00Z"), ts("2030-01-01T00:00:00Z"))
+            .await;
+        assert_eq!(s.entry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_entry_is_idempotent() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let outcome = store.delete("never-existed").await.unwrap();
+        assert_eq!(outcome.id, "never-existed");
+        assert!(
+            outcome.was_already_deleted,
+            "missing id must surface as was_already_deleted = true"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_then_delete_persists_across_reopen() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let id_alpha: String;
+        let id_beta: String;
+        {
+            let store = BudgetStore::open(path.clone()).await.unwrap();
+            let alpha = store
+                .record(10.00, "alpha".to_string(), None)
+                .await
+                .unwrap();
+            let beta = store
+                .record(20.00, "beta".to_string(), None)
+                .await
+                .unwrap();
+            id_alpha = alpha.id;
+            id_beta = beta.id;
+            // Update alpha; delete beta.
+            store
+                .update(&id_alpha, Some(15.00), None, None)
+                .await
+                .unwrap();
+            store.delete(&id_beta).await.unwrap();
+        }
+        // Re-open and verify both changes survived.
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let s = store
+            .summary(ts("2020-01-01T00:00:00Z"), ts("2030-01-01T00:00:00Z"))
+            .await;
+        assert_eq!(s.entry_count, 1);
+        assert!((s.total - 15.00).abs() < 1e-9);
+        assert_eq!(s.by_category[0].category, "alpha");
+        // Beta is gone; second delete still
+        // idempotent.
+        let outcome = store.delete(&id_beta).await.unwrap();
+        assert!(outcome.was_already_deleted);
     }
 
     #[tokio::test]

@@ -47,6 +47,7 @@ pub mod tools;
 
 pub use budget_store::{
     BudgetEntry, BudgetStore, BudgetStoreError, BudgetSummary, CategoryTotal,
+    DeleteOutcome,
 };
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
