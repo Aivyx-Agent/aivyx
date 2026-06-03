@@ -120,11 +120,50 @@ impl Tool for DriveRecentFiles {
         };
 
         let now = Utc::now();
-        let base_q = build_owned_recent_q(
-            now,
-            parsed.window_days,
+        // Phase 153 — compose the parent clause.
+        // Single-folder: `'<id>' in parents`.
+        // Recursive: walk the tree first, then
+        // OR-join all folder IDs.
+        let parent_clause: Option<String> = match (
             parsed.parent_folder_id.as_deref(),
-        );
+            parsed.recursive,
+        ) {
+            (None, _) => None,
+            (Some(pf), false) => {
+                Some(super::compose_recursive_parent_clause(&[pf.to_string()]))
+            }
+            (Some(pf), true) => {
+                match super::walk_folder_tree(
+                    &self.client,
+                    pf,
+                    super::RECURSIVE_MAX_DEPTH,
+                    super::RECURSIVE_MAX_FOLDERS,
+                )
+                .await
+                {
+                    Ok(folder_ids) => {
+                        if folder_ids.len() >= super::RECURSIVE_MAX_FOLDERS {
+                            eprintln!(
+                                "drive.recent_files: recursive folder walk hit \
+                                 max_folders={} cap; results may miss \
+                                 deeper subtrees",
+                                super::RECURSIVE_MAX_FOLDERS
+                            );
+                        }
+                        Some(super::compose_recursive_parent_clause(&folder_ids))
+                    }
+                    Err(e) => {
+                        return ToolOutcome::Failed(AivyxError::Tool {
+                            tool: self.id,
+                            detail: format!(
+                                "drive.recent_files: recursive walk from {pf:?} failed: {e}"
+                            ),
+                        });
+                    }
+                }
+            }
+        };
+        let base_q = build_owned_recent_q(now, parsed.window_days, parent_clause.as_deref());
         let q_string = build_q_string(Some(&base_q), parsed.include_trashed);
         let max_results_str = parsed.max_results.to_string();
         let mut query: Vec<(&str, String)> = vec![
@@ -191,23 +230,26 @@ impl Tool for DriveRecentFiles {
 /// deterministic timestamp and assert the exact
 /// string.
 ///
-/// Phase 148 — optional `parent_folder_id`
-/// argument appends `'<id>' in parents` to scope
-/// results to direct children only (Drive's q
-/// DSL doesn't natively support recursive
-/// folder filtering).
+/// Phase 148 — optional `parent_clause` appends
+/// scope filtering (direct children).
+/// Phase 153 — the clause is now a pre-composed
+/// string (`'<id>' in parents` for single-folder,
+/// or `'<id>' in parents or '<id>' in parents`
+/// for recursive). The execute() builds it via
+/// [`super::compose_recursive_parent_clause`] so
+/// this helper stays pure / single-purpose.
 pub(crate) fn build_owned_recent_q(
     now: DateTime<Utc>,
     window_days: u64,
-    parent_folder_id: Option<&str>,
+    parent_clause: Option<&str>,
 ) -> String {
     let since = now - chrono::Duration::days(window_days as i64);
     let mut q = format!(
         "'me' in owners and modifiedTime > '{}'",
         since.to_rfc3339()
     );
-    if let Some(folder) = parent_folder_id {
-        q.push_str(&format!(" and '{}' in parents", folder));
+    if let Some(clause) = parent_clause {
+        q.push_str(&format!(" and ({})", clause));
     }
     q
 }
@@ -255,11 +297,6 @@ struct ParsedInput {
     max_results: u64,
     include_trashed: bool,
     parent_folder_id: Option<String>,
-    // Phase 153 Task 3 wires this into the q
-    // clause via walk_folder_tree. Parsed in
-    // Task 2 so the schema + tests land
-    // together; consumed in Task 3.
-    #[allow(dead_code)]
     recursive: bool,
     drive_id: Option<String>,
 }
@@ -451,7 +488,15 @@ mod tests {
 
     #[test]
     fn build_owned_recent_q_appends_folder_clause_when_provided() {
-        let q = build_owned_recent_q(now_fixed(), 7, Some("0AAfolder123"));
+        // Phase 153 — helper now takes a pre-
+        // composed clause. Single-folder test
+        // passes the same shape compose_recursive_parent_clause
+        // would produce for one folder.
+        let q = build_owned_recent_q(
+            now_fixed(),
+            7,
+            Some("'0AAfolder123' in parents"),
+        );
         assert!(q.contains("'me' in owners"), "{q}");
         assert!(q.contains("modifiedTime > '"), "{q}");
         assert!(q.contains("'0AAfolder123' in parents"), "{q}");

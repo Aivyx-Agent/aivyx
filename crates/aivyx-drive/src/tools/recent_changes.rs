@@ -123,11 +123,48 @@ impl Tool for DriveRecentChanges {
         };
 
         let now = Utc::now();
-        let base_q = build_recent_changes_q(
-            now,
-            parsed.window_hours,
+        // Phase 153 — compose parent clause; see
+        // recent_files.rs for the matching shape.
+        let parent_clause: Option<String> = match (
             parsed.parent_folder_id.as_deref(),
-        );
+            parsed.recursive,
+        ) {
+            (None, _) => None,
+            (Some(pf), false) => {
+                Some(super::compose_recursive_parent_clause(&[pf.to_string()]))
+            }
+            (Some(pf), true) => {
+                match super::walk_folder_tree(
+                    &self.client,
+                    pf,
+                    super::RECURSIVE_MAX_DEPTH,
+                    super::RECURSIVE_MAX_FOLDERS,
+                )
+                .await
+                {
+                    Ok(folder_ids) => {
+                        if folder_ids.len() >= super::RECURSIVE_MAX_FOLDERS {
+                            eprintln!(
+                                "drive.recent_changes: recursive folder walk hit \
+                                 max_folders={} cap; results may miss deeper subtrees",
+                                super::RECURSIVE_MAX_FOLDERS
+                            );
+                        }
+                        Some(super::compose_recursive_parent_clause(&folder_ids))
+                    }
+                    Err(e) => {
+                        return ToolOutcome::Failed(AivyxError::Tool {
+                            tool: self.id,
+                            detail: format!(
+                                "drive.recent_changes: recursive walk from {pf:?} failed: {e}"
+                            ),
+                        });
+                    }
+                }
+            }
+        };
+        let base_q =
+            build_recent_changes_q(now, parsed.window_hours, parent_clause.as_deref());
         let q_string = build_q_string(Some(&base_q), parsed.include_trashed);
         let max_results_str = parsed.max_results.to_string();
         let mut query: Vec<(&str, String)> = vec![
@@ -185,19 +222,21 @@ impl Tool for DriveRecentChanges {
 /// deterministic timestamp and assert the exact
 /// string.
 ///
-/// Phase 148 — optional `parent_folder_id`
-/// argument appends `'<id>' in parents` to scope
-/// results to direct children only (mirrors the
-/// recent_files signature).
+/// Phase 148 — optional `parent_clause` appends
+/// scope filtering. Phase 153 widens the
+/// signature to accept a pre-composed clause
+/// string so both single-folder and recursive
+/// (`'<id>' in parents or ...`) shapes go through
+/// the same path.
 pub(crate) fn build_recent_changes_q(
     now: DateTime<Utc>,
     window_hours: u64,
-    parent_folder_id: Option<&str>,
+    parent_clause: Option<&str>,
 ) -> String {
     let since = now - chrono::Duration::hours(window_hours as i64);
     let mut q = format!("modifiedTime > '{}'", since.to_rfc3339());
-    if let Some(folder) = parent_folder_id {
-        q.push_str(&format!(" and '{}' in parents", folder));
+    if let Some(clause) = parent_clause {
+        q.push_str(&format!(" and ({})", clause));
     }
     q
 }
@@ -245,8 +284,6 @@ struct ParsedInput {
     max_results: u64,
     include_trashed: bool,
     parent_folder_id: Option<String>,
-    // Phase 153 Task 3 wires this in.
-    #[allow(dead_code)]
     recursive: bool,
     drive_id: Option<String>,
 }
@@ -427,7 +464,13 @@ mod tests {
 
     #[test]
     fn build_recent_changes_q_appends_folder_clause_when_provided() {
-        let q = build_recent_changes_q(now_fixed(), 24, Some("0AAfolder123"));
+        // Phase 153 — helper now takes a pre-
+        // composed clause.
+        let q = build_recent_changes_q(
+            now_fixed(),
+            24,
+            Some("'0AAfolder123' in parents"),
+        );
         assert!(q.contains("modifiedTime > '"), "{q}");
         assert!(q.contains("'0AAfolder123' in parents"), "{q}");
         assert!(!q.contains("owners"), "still no owner filter: {q}");
