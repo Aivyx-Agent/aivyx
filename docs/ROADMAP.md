@@ -3535,6 +3535,16 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 151 — Calendar: Phase 142 Debt Cleanup Bundle
+
+**See [PHASE_151.md](PHASE_151.md).** Phase 142 close-out
+deferred 9 phases. Closes three calendar honest-debts in
+one phase: sequential→parallel fan-out via join_all on
+multi-calendar upcoming, cross-calendar event dedup by
+(title, start) key, access_role→can_read/can_write
+boolean mapping on list_calendars output. Symmetric to
+Phase 148's drive cleanup. Zero new workspace deps.
+
 ## Phase 150 — Budget: Category Whitelist + Case-Fold + Suggest-Existing
 
 **Frozen — see [PHASE_150.md](PHASE_150.md).** Phase 143
