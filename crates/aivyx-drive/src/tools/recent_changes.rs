@@ -135,6 +135,15 @@ impl Tool for DriveRecentChanges {
             ("fields", FILES_LIST_FIELDS.to_string()),
             ("orderBy", "modifiedTime desc".to_string()),
         ];
+        // Phase 153 — scope to a Shared Drive
+        // when drive_id is supplied. Same 4-param
+        // shape recent_files uses.
+        if let Some(ref drive_id) = parsed.drive_id {
+            query.push(("corpora", "drive".to_string()));
+            query.push(("driveId", drive_id.clone()));
+            query.push(("includeItemsFromAllDrives", "true".to_string()));
+            query.push(("supportsAllDrives", "true".to_string()));
+        }
         if let Some(ref q) = q_string {
             query.push(("q", q.clone()));
         }
@@ -215,7 +224,15 @@ fn input_schema() -> Value {
             },
             "parent_folder_id": {
                 "type": "string",
-                "description": "Scope results to direct children of this folder (not recursive)"
+                "description": "Scope results to direct children of this folder (not recursive unless `recursive: true`)"
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": "Phase 153 — when true and parent_folder_id is set, walks the folder tree (max_depth 5, max_folders 100) and matches files anywhere under the root. Default false."
+            },
+            "drive_id": {
+                "type": "string",
+                "description": "Phase 153 — scope results to a specific Shared Drive (Team Drive). Pair with `drive.list_drives` to discover IDs. Composable with parent_folder_id and recursive."
             }
         },
         "additionalProperties": false
@@ -228,6 +245,10 @@ struct ParsedInput {
     max_results: u64,
     include_trashed: bool,
     parent_folder_id: Option<String>,
+    // Phase 153 Task 3 wires this in.
+    #[allow(dead_code)]
+    recursive: bool,
+    drive_id: Option<String>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -283,11 +304,36 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         }
     };
 
+    let recursive = match obj.get("recursive") {
+        None => false,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| "`recursive` must be a boolean".to_string())?,
+    };
+
+    let drive_id = match obj.get("drive_id") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "`drive_id` must be a string".to_string())?
+                .trim()
+                .to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+    };
+
     Ok(ParsedInput {
         window_hours,
         max_results,
         include_trashed,
         parent_folder_id,
+        recursive,
+        drive_id,
     })
 }
 
@@ -403,5 +449,26 @@ mod tests {
     fn parse_input_rejects_parent_folder_id_with_quote() {
         let err = parse_input(&json!({"parent_folder_id": "0AA'inject"})).unwrap_err();
         assert!(err.contains("single quotes"), "{err}");
+    }
+
+    // ---- Phase 153 — drive_id + recursive ----
+
+    #[test]
+    fn parse_default_recursive_is_false_and_drive_id_none() {
+        let p = parse_input(&json!({})).unwrap();
+        assert!(!p.recursive);
+        assert!(p.drive_id.is_none());
+    }
+
+    #[test]
+    fn parse_input_extracts_drive_id() {
+        let p = parse_input(&json!({"drive_id": "0AAteamdrive"})).unwrap();
+        assert_eq!(p.drive_id.as_deref(), Some("0AAteamdrive"));
+    }
+
+    #[test]
+    fn parse_input_recursive_flag_honored() {
+        let p = parse_input(&json!({"recursive": true})).unwrap();
+        assert!(p.recursive);
     }
 }
