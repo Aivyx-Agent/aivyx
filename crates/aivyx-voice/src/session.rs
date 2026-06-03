@@ -316,10 +316,26 @@ pub async fn run_one_voice_turn_streaming<A>(
     asr: &dyn AsrEngine,
     captured_audio: &[f32],
     sentence_tx: mpsc::UnboundedSender<String>,
+    assembled: Arc<Mutex<String>>,
 ) -> Result<Option<StreamingVoiceTurnResult>, VoiceSessionError>
 where
     A: Agent + ?Sized + 'static,
 {
+    // Phase 152 — `assembled` is owned by the
+    // caller now (was internal Arc in
+    // Phase 138-151). The streaming PTT loop
+    // holds a clone of this Arc so it can read
+    // the partial response_text in the
+    // mid-synthesis-abort path, when this
+    // function's future is dropped before
+    // returning normally.
+    //
+    // Tests + non-loop callers pass a fresh
+    // `Arc::new(Mutex::new(String::new()))` and
+    // discard their clone post-call — no
+    // behavioral difference from the pre-152
+    // shape.
+
     // Step 1 — transcribe.
     let transcribed = match asr.transcribe(captured_audio).await {
         Ok(text) => text,
@@ -330,15 +346,16 @@ where
     // Step 2 — install the streaming sink. The
     // sink holds its own partial-sentence buffer
     // (separate from VoiceChannel's text_buffer,
-    // which is for the non-streaming path) and a
-    // mirror of the full assembled response so we
-    // can surface `response_text` post-turn.
+    // which is for the non-streaming path); it
+    // writes the full assembled response to the
+    // externally-owned `assembled` Arc so
+    // callers can read it post-turn (or
+    // post-abort).
     use aivyx_core::ChannelContext;
     let _drained_prior = channel.take_buffered_text();
     channel.reset_cancellation();
 
     let pending: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let assembled: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     {
         let pending = Arc::clone(&pending);
         let assembled = Arc::clone(&assembled);
@@ -658,6 +675,17 @@ where
         let (sentence_tx, mut sentence_rx) = mpsc::unbounded_channel::<String>();
         let (abort_tx, mut abort_rx) = mpsc::channel::<()>(1);
         let tts_for_consumer = Arc::clone(&tts);
+        // Phase 152 — assembled text Arc owned by
+        // the loop; cloned into the streaming-turn
+        // call. On normal completion the function
+        // returns the assembled text in the
+        // result; on abort the function's future
+        // drops without returning, but the loop's
+        // Arc clone keeps the partial text alive
+        // so we can surface "you said: ..." even
+        // on interrupted replies.
+        let turn_assembled: Arc<Mutex<String>> =
+            Arc::new(Mutex::new(String::new()));
         let consumer = tokio::spawn(async move {
             let audio_out = match AudioOut::new() {
                 Ok(out) => out,
@@ -670,14 +698,22 @@ where
             loop {
                 tokio::select! {
                     biased;
-                    // Phase 146 — abort signal
-                    // wins over new sentences.
-                    // Stop playback immediately
-                    // and exit; the consumer's
-                    // AudioOut drops on return,
-                    // releasing the cpal stream.
+                    // Phase 152 — aggressive
+                    // abort: don't call
+                    // stop_playback (which uses
+                    // rodio's Player::clear that
+                    // calls sleep_until_end and
+                    // lets the current sample
+                    // finish before silence).
+                    // Just return — AudioOut
+                    // drops on return, the cpal
+                    // Stream inside it drops,
+                    // audio output dies within
+                    // OS buffer time (typically
+                    // ~10ms instead of the
+                    // remainder-of-current-word
+                    // latency Phase 146 had).
                     _ = abort_rx.recv() => {
-                        audio_out.stop_playback();
                         return Ok::<(), VoiceSessionError>(());
                     }
                     maybe_sentence = sentence_rx.recv() => {
@@ -731,6 +767,7 @@ where
                 asr.as_ref(),
                 &samples,
                 sentence_tx,
+                Arc::clone(&turn_assembled),
             ) => {
                 match result {
                     Ok(t) => TurnResolution::Completed(t),
@@ -740,6 +777,13 @@ where
             line = line_rx.recv() => {
                 use aivyx_core::ChannelContext;
                 channel.cancel_inflight();
+                // Phase 152 — clear the channel's
+                // text sink so its references to
+                // the assembled Arc drop. We then
+                // own the only live clone of the
+                // assembled Arc and can read it
+                // freely below.
+                channel.clear_text_sink();
                 let _ = abort_tx.send(()).await;
                 let raw = line.unwrap_or_default();
                 if raw == "quit" {
@@ -749,6 +793,13 @@ where
                 }
             }
         };
+
+        // Phase 152 — read the assembled partial
+        // text for use in the abort paths.
+        let partial_text: String = turn_assembled
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default();
 
         match resolution {
             TurnResolution::Completed(Some(t)) => {
@@ -780,10 +831,22 @@ where
             }
             TurnResolution::AbortedContinue => {
                 eprintln!("[voice] aborted by operator — stopped agent + playback.");
+                if !partial_text.trim().is_empty() {
+                    eprintln!(
+                        "[voice] agent had said: {}",
+                        partial_text.trim()
+                    );
+                }
                 let _ = consumer.await;
             }
             TurnResolution::AbortedQuit => {
                 eprintln!("[voice] aborted by operator + exiting.");
+                if !partial_text.trim().is_empty() {
+                    eprintln!(
+                        "[voice] agent had said: {}",
+                        partial_text.trim()
+                    );
+                }
                 let _ = consumer.await;
                 return Ok(());
             }
@@ -1017,7 +1080,8 @@ mod tests {
                 collected_for_task.lock().unwrap().push(s);
             }
         });
-        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 1000], tx)
+        let assembled = Arc::new(std::sync::Mutex::new(String::new()));
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 1000], tx, assembled)
             .await
             .unwrap()
             .expect("non-empty transcription");
@@ -1058,7 +1122,8 @@ mod tests {
                 collected_for_task.lock().unwrap().push(s);
             }
         });
-        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx)
+        let assembled = Arc::new(std::sync::Mutex::new(String::new()));
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx, assembled)
             .await
             .unwrap()
             .expect("non-empty transcription");
@@ -1089,7 +1154,8 @@ mod tests {
                 collected_for_task.lock().unwrap().push(s);
             }
         });
-        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx)
+        let assembled = Arc::new(std::sync::Mutex::new(String::new()));
+        let result = run_one_voice_turn_streaming(&agent, &ch, &asr, &[0.0; 100], tx, assembled)
             .await
             .unwrap();
         consumer.await.unwrap();
