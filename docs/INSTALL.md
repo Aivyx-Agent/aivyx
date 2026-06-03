@@ -1506,6 +1506,32 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 146 closed Phase 138's longest-running
+voice debt: mid-synthesis abort UX.** Operator
+can now press Enter (or the Enter key on
+"quit") *while the agent is replying* to:
+- Cancel the agent's in-flight LLM call.
+- Halt all queued TTS playback immediately.
+- Iterate back to the recording prompt (Enter)
+  or exit the REPL ("quit" + Enter).
+
+Symmetric to Phase 140's recording-side abort.
+Four total keybinds:
+- Enter             — start recording.
+- Enter mid-record  — stop capture + dispatch
+  partial.
+- Enter mid-reply   — abort agent + playback.
+- `quit` + Enter    — exit (any time).
+
+Honest scope: the currently-playing audio
+sample may finish its current ~50-100ms chunk
+before silence (rodio Player::clear semantics).
+For typical sentence-length playback the
+operator may hear the rest of the current word
+before silence. Aggressive abort via dropping
+the cpal stream entirely is a Phase 147+
+candidate.
+
 **Phase 140 closed Phase 139's debt: VAD is now
 operator-tunable via `[voice.vad]` TOML AND
 manual abort works again mid-recording.**

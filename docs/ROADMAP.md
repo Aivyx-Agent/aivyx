@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 146 — Voice Mid-Synthesis Abort UX
 
-**See [PHASE_146.md](PHASE_146.md).** Phase 138 close-out
+**Frozen — see [PHASE_146.md](PHASE_146.md).** Phase 138 close-out
 deferred 7 phases. Phase 138 shipped streaming TTS and
 called out mid-synthesis abort UX as honest-debt; every
 subsequent voice phase carried it without resolution.
