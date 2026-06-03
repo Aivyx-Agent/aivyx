@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 145 — Drive: `recent_files` + `recent_changes`
 
-**See [PHASE_145.md](PHASE_145.md).** Pivot from toolkit
+**Frozen — see [PHASE_145.md](PHASE_145.md).** Pivot from toolkit
 after four consecutive Chapter F/G phases (141-144).
 Drive's 7-tool surface has been quiet since Phase 129;
 Phase 145 adds the LLM-ergonomic shape that mirrors

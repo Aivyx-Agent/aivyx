@@ -213,8 +213,139 @@ LLM-ergonomic pattern. Phase 146+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 145 exit. Predictions at
-sign-off: DESIGN.md HOLD → 36; PRODUCT.md HOLD
-→ 36; lib.rs HOLD → 11; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  35 → **36**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 35 → **36**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 145 work in
+  `aivyx-drive`. Continuing post-Phase-135 reset:
+  10 → **11**.
+
+**Test count delta: +21 — over predicted `+8` to
+`+14` range.** Workspace lib tests 3131 → 3152.
+Per-module:
+- `recent_files`: +11 (default + explicit
+  window/results + clamps × 2 + zero rejected
+  + trashed + q includes me-clause + 1-day +
+  365-day arithmetic + trashed wrap + passthrough).
+- `recent_changes`: +10 (same shape minus the
+  me-clause assertion, with a key negative test
+  that q does NOT include owner filter — the
+  regression boundary between the two tools).
+
+Same substrate-exhaustive posture as Phases 141 /
+143 / 144 — every input permutation + window
+arithmetic boundary gets its own test. Honest,
+not padding.
+
+**Zero new workspace dependencies** as predicted.
+`chrono` already a workspace dep; aivyx-drive
+adds crate dep only (mirroring Phase 141's
+aivyx-calendar pattern).
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- Two new tools sharing one architectural
+  pattern: compose a `base_q` string with
+  `format!("modifiedTime > '{}'", since)` and
+  optional owners clause; pass through
+  `build_q_string` for the standard
+  `trashed = false and (...)` wrapping; sort
+  by modifiedTime desc.
+- `build_owned_recent_q` and
+  `build_recent_changes_q` are pure substrate
+  with parameterized `now` — deterministic
+  arithmetic tests for 1 hour / 1 day /
+  365 days / 30 days windows.
+- Both tools reuse Phase 129's pub(crate)
+  `file_summary` and `build_q_string` from
+  `search.rs` — output stability across
+  read-side Drive tools is single-sourced.
+- `chrono` added to aivyx-drive matching
+  Phase 141's aivyx-calendar pattern.
+- main.rs registers both; Drive surface 7 →
+  9 tools.
+- INSTALL.md drive section gains rows for
+  both new tools with cognitive-shape
+  language ("what did I work on" vs "what
+  changed").
+- 3152 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **`'me' in owners` is heuristic.** Misses
+   files the operator collaborates on without
+   owning. Phase 146+ Drive Activity API
+   candidate.
+
+2. **No `q` parameter on either tool.**
+   Operators wanting "recent files of type X"
+   compose `drive.search` themselves. Phase
+   146+ candidate if it surfaces.
+
+3. **No `parent_folder_id` filter.** Operators
+   wanting "recent files in /Projects/Aivyx"
+   compose `drive.search` themselves. Phase
+   146+ candidate.
+
+4. **No pagination.** Both tools cap at the
+   max_results value without surfacing
+   `next_page_token` consumption strategy.
+   The token IS surfaced in output but the
+   agent doesn't have a follow-up tool to
+   paginate further; operators hitting the
+   cap should widen `max_results` or narrow
+   the window.
+
+5. **Sequential output not date-bucketed.**
+   The agent sees a flat list sorted by
+   modifiedTime desc. Phase 146+ could group
+   by day for the "today" / "yesterday" /
+   "this week" narrative shape.
+
+6. **Test count overshot prediction.** +21
+   vs predicted +8 to +14. Same substrate-
+   exhaustive posture as the preceding 4
+   phases. Honest, not padding.
+
+### Direction after Phase 145
+
+After Phase 145, Drive matches calendar's
+LLM-ergonomic pattern. Phase 146+ candidates:
+
+1. **Drive Activity API** — true edit history
+   not just ownership.
+2. **`parent_folder_id` filter** on recent_*.
+3. **`drive.list_drives`** — shared drives
+   enumeration.
+4. **Category whitelist + case-fold for
+   budget.**
+5. **Currency field for budget.**
+6. **`budget.trend`** — month-over-month.
+7. **rust_decimal for budget amounts.**
+8. **Bulk budget operations.**
+9. **Chapter G health.check.remove + alert
+   dispatch.**
+10. **Proactive reminder dispatch.**
+11. **Phase 142 debt cleanup** — calendar
+    parallel fan-out, dedup, capability
+    mapping.
+12. **Voice continuation** — mid-synthesis
+    abort, Silero VAD, streaming ASR,
+    wake-word, multimodal output, macOS
+    variant, lock-free detector.
+13. **Relative-time localization.**
+14. **whisper-cpp-plus rehabilitation.**
+15. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters
+    ship.
+16. **Channel Activation Milestone** — still
+    held intentionally; 34th consecutive
+    deferral at Phase 145 exit.

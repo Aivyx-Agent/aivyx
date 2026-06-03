@@ -21,7 +21,8 @@ use aivyx_drive::auth_cli::{
 };
 use aivyx_drive::tools::{
     DriveCreateFolder, DriveDeleteFile, DriveDownloadFile, DriveGetMetadata,
-    DriveListFolder, DriveSearch, DriveUploadFile,
+    DriveListFolder, DriveRecentChanges, DriveRecentFiles, DriveSearch,
+    DriveUploadFile,
 };
 use aivyx_drive::{
     default_token_path, load_tokens, run_multi_tool_subprocess, DriveClient,
@@ -153,9 +154,11 @@ async fn run_ipc_loop() -> ExitCode {
 
     // Phase 129 Q2b — seven-tool surface (search /
     // get_metadata / list_folder / create_folder /
-    // download / upload / delete). Tasks 4-10 populate
-    // this vector incrementally; Task 4 adds search.
-    // Phase 129 Q2b — full seven-tool surface.
+    // download / upload / delete). Phase 145 adds two
+    // LLM-ergonomic shapes that mirror Phase 141's
+    // calendar.upcoming pattern: drive.recent_files
+    // (owned, last N days) + drive.recent_changes
+    // (any owner, last N hours).
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(DriveSearch::new(Arc::clone(&client))),
         Arc::new(DriveGetMetadata::new(Arc::clone(&client))),
@@ -164,6 +167,8 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(DriveDownloadFile::new(Arc::clone(&client))),
         Arc::new(DriveUploadFile::new(Arc::clone(&client))),
         Arc::new(DriveDeleteFile::new(Arc::clone(&client))),
+        Arc::new(DriveRecentFiles::new(Arc::clone(&client))),
+        Arc::new(DriveRecentChanges::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-drive").await {

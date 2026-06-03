@@ -2667,6 +2667,8 @@ at handshake:
 | `drive.download_file` | `drive.read` | Fetch file content as base64. 10 MB inline cap; above the cap returns metadata-only with `content_truncated: true`. Google-native types (Docs/Sheets/Slides) use the export endpoint. |
 | `drive.upload_file` | `drive.write` | Create a new file with content. Multipart upload; 10 MB cap. Trusted-tier-only. |
 | `drive.delete_file` | `drive.write` | Permanently delete a file or folder. Idempotent on already-deleted (returns `was_already_deleted: true`). Trusted-tier-only. NOTE: this is permanent delete, not move-to-trash. |
+| `drive.recent_files` | `drive.read` | **Phase 145.** Operator-owned files modified in the last N days. Input `{window_days? default 7 (max 365), max_results? default 25 (max 100), include_trashed? default false}`. Returns `{files: [...], next_page_token, window_days}` sorted by modifiedTime desc. Cognitive shape: "what did I work on this week." |
+| `drive.recent_changes` | `drive.read` | **Phase 145.** Any accessible file modified in the last N hours. Input `{window_hours? default 24 (max 720 = 30 days), max_results? default 25 (max 100), include_trashed? default false}`. No owner filter — surfaces collaborator edits and shared docs. Cognitive shape: "what changed in my Drive today." |
 
 #### Per-role capability grants
 
