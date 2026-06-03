@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 150 — Budget: Category Whitelist + Case-Fold + Suggest-Existing
+
+**See [PHASE_150.md](PHASE_150.md).** Phase 143
+longest-standing honest-debt close-out (carried 6
+phases). Free-text categories from Phase 143 meant
+"Food" / "food" / "fod" were three different categories;
+Phase 150 case-folds new entries to canonical
+lowercase + trimmed form, surfaces a `category_suggestion`
+("did you mean food") in record/update output when
+the input is Levenshtein-distance ≤ 2 from an
+existing category, and adds a `budget.categories`
+tool returning the unique sorted category list.
+Pure substrate; zero new workspace deps.
+
 ## Phase 149 — Budget: `budget.trend` (Month-Over-Month Deltas)
 
 **Frozen — see [PHASE_149.md](PHASE_149.md).** Phase 143 #4
