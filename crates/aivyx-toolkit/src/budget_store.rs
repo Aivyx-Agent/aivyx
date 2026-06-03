@@ -254,7 +254,16 @@ fn aggregate(
     }
 }
 
-// ---------- on-disk plumbing (mirrors task_store) -----------
+// ---------- on-disk plumbing -----------
+//
+// Phase 144 — the OS-level primitives
+// (create_dir_all_secure, write_secure,
+// with_tmp_suffix) moved to
+// `crate::secure_io` so the same helpers cover
+// every JSON store. This wrapper handles the
+// `StoredEntries` payload serialization +
+// surfaces store-specific errors with the right
+// path context.
 
 async fn save_to_disk(
     path: &Path,
@@ -271,7 +280,7 @@ async fn save_to_disk(
         })?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            create_dir_all_secure(parent)
+            crate::secure_io::create_dir_all_secure(parent)
                 .await
                 .map_err(|source| BudgetStoreError::Io {
                     path: parent.to_path_buf(),
@@ -279,8 +288,8 @@ async fn save_to_disk(
                 })?;
         }
     }
-    let tmp_path = with_tmp_suffix(path);
-    write_secure(&tmp_path, body.as_bytes())
+    let tmp_path = crate::secure_io::with_tmp_suffix(path);
+    crate::secure_io::write_secure(&tmp_path, body.as_bytes())
         .await
         .map_err(|source| BudgetStoreError::Io {
             path: tmp_path.clone(),
@@ -292,34 +301,6 @@ async fn save_to_disk(
             path: path.to_path_buf(),
             source,
         })?;
-    Ok(())
-}
-
-fn with_tmp_suffix(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
-}
-
-async fn create_dir_all_secure(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o700);
-        fs::set_permissions(dir, perms).await?;
-    }
-    Ok(())
-}
-
-async fn write_secure(path: &Path, body: &[u8]) -> io::Result<()> {
-    fs::write(path, body).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        fs::set_permissions(path, perms).await?;
-    }
     Ok(())
 }
 

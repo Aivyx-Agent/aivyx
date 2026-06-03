@@ -41,6 +41,7 @@ pub mod config;
 pub mod harness;
 pub mod health_polling;
 pub mod health_store;
+pub mod secure_io;
 pub mod task_store;
 pub mod tools;
 

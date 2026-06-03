@@ -247,6 +247,11 @@ pub fn parse_due_date(raw: &str) -> Result<DateTime<Utc>, TaskStoreError> {
         .map_err(|_| TaskStoreError::BadDueDate(raw.to_string()))
 }
 
+// Phase 144 — the OS-level primitives moved to
+// `crate::secure_io`. This `save_to_disk` wraps
+// the shared helpers with `StoredTasks` payload
+// serialization + store-specific error context.
+
 async fn save_to_disk(path: &Path, tasks: &[Task]) -> Result<(), TaskStoreError> {
     let stored = StoredTasks {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -258,7 +263,7 @@ async fn save_to_disk(path: &Path, tasks: &[Task]) -> Result<(), TaskStoreError>
     })?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            create_dir_all_secure(parent)
+            crate::secure_io::create_dir_all_secure(parent)
                 .await
                 .map_err(|source| TaskStoreError::Io {
                     path: parent.to_path_buf(),
@@ -266,8 +271,8 @@ async fn save_to_disk(path: &Path, tasks: &[Task]) -> Result<(), TaskStoreError>
                 })?;
         }
     }
-    let tmp_path = with_tmp_suffix(path);
-    write_secure(&tmp_path, body.as_bytes())
+    let tmp_path = crate::secure_io::with_tmp_suffix(path);
+    crate::secure_io::write_secure(&tmp_path, body.as_bytes())
         .await
         .map_err(|source| TaskStoreError::Io {
             path: tmp_path.clone(),
@@ -280,44 +285,6 @@ async fn save_to_disk(path: &Path, tasks: &[Task]) -> Result<(), TaskStoreError>
             source,
         })?;
     Ok(())
-}
-
-fn with_tmp_suffix(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
-}
-
-async fn create_dir_all_secure(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o700);
-        fs::set_permissions(dir, perms).await?;
-    }
-    Ok(())
-}
-
-async fn write_secure(path: &Path, body: &[u8]) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use tokio::io::AsyncWriteExt;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .await?;
-        file.write_all(body).await?;
-        file.sync_all().await?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, body).await
-    }
 }
 
 #[cfg(test)]
@@ -548,7 +515,7 @@ mod tests {
         let path = dir.join("tasks.json");
         let store = TaskStore::open(path.clone()).await.expect("open");
         store.create("atomic".to_string(), None, None).await.unwrap();
-        let tmp = with_tmp_suffix(&path);
+        let tmp = crate::secure_io::with_tmp_suffix(&path);
         assert!(!tmp.exists(), ".tmp must be renamed away");
         assert!(path.exists());
         std::fs::remove_dir_all(&dir).ok();
