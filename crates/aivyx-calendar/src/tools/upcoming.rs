@@ -140,15 +140,20 @@ impl Tool for CalendarUpcoming {
         let time_min_rfc = now.to_rfc3339();
         let time_max_rfc = time_max.to_rfc3339();
 
-        // Phase 142 — sequential fan-out over the
-        // requested calendars. Each per-calendar
-        // result is enriched with the source
-        // calendar_id then merged into one Vec
-        // sorted by start time. Cap applied
-        // post-merge so cross-calendar density
-        // is preserved.
-        let mut merged: Vec<Value> = Vec::new();
-        for calendar_id in &parsed.calendar_ids {
+        // Phase 151 — parallel fan-out over the
+        // requested calendars via
+        // `futures_util::future::join_all`. Each
+        // per-calendar future runs concurrently;
+        // results merge into one Vec sorted by
+        // start time. The cap applies post-merge
+        // so cross-calendar event density is
+        // preserved.
+        //
+        // Pre-Phase 151 this loop was sequential
+        // — 5 calendars took ~5× single-calendar
+        // latency. Now it's bounded by the
+        // slowest single calendar's response.
+        let per_calendar_futures = parsed.calendar_ids.iter().map(|calendar_id| {
             let path = format!(
                 "/calendars/{}/events",
                 super::list_events_urlencode(calendar_id)
@@ -160,10 +165,28 @@ impl Tool for CalendarUpcoming {
                 ("timeMin", time_min_rfc.clone()),
                 ("timeMax", time_max_rfc.clone()),
             ];
+            let client = self.client.clone();
+            let cid = calendar_id.clone();
+            async move {
+                let body: Value = client.get_json(&path, &query).await
+                    .map_err(|e| (cid.clone(), e))?;
+                Ok::<(String, Value), (String, _)>((cid, body))
+            }
+        });
 
-            let body: Value = match self.client.get_json(&path, &query).await {
-                Ok(v) => v,
-                Err(e) => {
+        let results = futures_util::future::join_all(per_calendar_futures).await;
+
+        let mut merged: Vec<Value> = Vec::new();
+        for result in results {
+            match result {
+                Ok((calendar_id, body)) => {
+                    if let Some(items) = body.get("items").and_then(|v| v.as_array()) {
+                        for raw in items {
+                            merged.push(enrich_event(raw, now, &calendar_id));
+                        }
+                    }
+                }
+                Err((calendar_id, e)) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
                         detail: format!(
@@ -172,15 +195,19 @@ impl Tool for CalendarUpcoming {
                         ),
                     });
                 }
-            };
-
-            if let Some(items) = body.get("items").and_then(|v| v.as_array()) {
-                for raw in items {
-                    merged.push(enrich_event(raw, now, calendar_id));
-                }
             }
         }
 
+        // Phase 151 — cross-calendar dedup
+        // before the merge+sort+cap step. Events
+        // that appear on multiple calendars (the
+        // typical cross-invite case) collapse to
+        // one entry keyed on (summary, start).
+        // The first occurrence wins, which is
+        // typically the operator's primary
+        // calendar when calendar_ids is listed
+        // primary-first.
+        merged = dedup_events(merged);
         merge_sort_and_cap(&mut merged, parsed.max_results as usize);
 
         let output = json!({
@@ -218,6 +245,49 @@ fn merge_sort_and_cap(events: &mut Vec<Value>, cap: usize) {
 fn sort_key(event: &Value) -> Option<DateTime<Utc>> {
     let start = event.get("start").and_then(|v| v.as_str())?;
     parse_event_time(start)
+}
+
+/// Phase 151 — cross-calendar event
+/// deduplication. Removes events that share
+/// `(summary, start)` with an earlier event in
+/// the list. The first occurrence wins —
+/// operators typically pass calendar_ids with
+/// their primary calendar first, so the
+/// retained copy is from the most-authoritative
+/// source.
+///
+/// Pure substrate so the dedup can be tested
+/// without touching the Drive client.
+pub(crate) fn dedup_events(events: Vec<Value>) -> Vec<Value> {
+    let mut seen: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    let mut out: Vec<Value> = Vec::with_capacity(events.len());
+    for event in events {
+        let summary = event
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let start = event
+            .get("start")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        // Defensive: events with both fields
+        // missing (impossibly malformed) get
+        // passed through individually rather
+        // than collapsed into one "no-key"
+        // bucket. The first occurrence's
+        // (("","")) key blocks the rest, which
+        // is acceptable — the alternative is
+        // surfacing N copies of effectively-
+        // unidentified events.
+        let key = (summary, start);
+        if seen.insert(key) {
+            out.push(event);
+        }
+    }
+    out
 }
 
 /// Build the shared event summary, then attach

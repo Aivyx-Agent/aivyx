@@ -62,5 +62,10 @@ thiserror = { workspace = true }
 # crate.
 chrono = { workspace = true }
 
+# Phase 151 — `futures_util::future::join_all` for the
+# multi-calendar parallel fan-out in `calendar.upcoming`.
+# Already a workspace dep.
+futures-util = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
