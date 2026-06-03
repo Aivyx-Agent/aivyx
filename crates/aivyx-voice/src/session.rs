@@ -496,9 +496,10 @@ where
 
     eprintln!();
     eprintln!("aivyx voice — push-to-talk REPL (streaming TTS + auto-stop)");
-    eprintln!("  Enter           : start recording (then pause to dispatch)");
-    eprintln!("  Enter mid-record: abort the current capture");
-    eprintln!("  quit + Enter    : exit");
+    eprintln!("  Enter             : start recording (then pause to dispatch)");
+    eprintln!("  Enter mid-record  : abort the current capture");
+    eprintln!("  Enter mid-reply   : abort the agent + playback");
+    eprintln!("  quit + Enter      : exit (works at any time, including mid-reply)");
     eprintln!();
 
     // Phase 140 — long-lived async stdin reader.
@@ -630,11 +631,24 @@ where
             continue;
         }
 
+        // Phase 146 — drain any stale Enter
+        // presses that landed between the end of
+        // the recording phase and the start of
+        // synthesis. Otherwise a rapid double-
+        // Enter during recording would auto-abort
+        // the synthesis.
+        while line_rx.try_recv().is_ok() {}
+
         // ----- Streaming pipeline setup -----
         // sentence_tx feeds the consumer task;
         // sentence_rx pulls one sentence at a
         // time and synthesizes + plays serially.
+        // Phase 146 — abort_tx/abort_rx pair lets
+        // the loop signal the consumer "stop
+        // immediately, don't drain" when the
+        // operator interrupts mid-synthesis.
         let (sentence_tx, mut sentence_rx) = mpsc::unbounded_channel::<String>();
+        let (abort_tx, mut abort_rx) = mpsc::channel::<()>(1);
         let tts_for_consumer = Arc::clone(&tts);
         let consumer = tokio::spawn(async move {
             let audio_out = match AudioOut::new() {
@@ -645,72 +659,126 @@ where
                     )));
                 }
             };
-            while let Some(sentence) = sentence_rx.recv().await {
-                match tts_for_consumer.synthesize(&sentence).await {
-                    Ok(audio) if !audio.is_empty() => {
-                        if let Err(e) = audio_out.play_audio(&audio) {
-                            return Err(VoiceSessionError::AudioPlayback(format!(
-                                "queue: {e}"
-                            )));
+            loop {
+                tokio::select! {
+                    biased;
+                    // Phase 146 — abort signal
+                    // wins over new sentences.
+                    // Stop playback immediately
+                    // and exit; the consumer's
+                    // AudioOut drops on return,
+                    // releasing the cpal stream.
+                    _ = abort_rx.recv() => {
+                        audio_out.stop_playback();
+                        return Ok::<(), VoiceSessionError>(());
+                    }
+                    maybe_sentence = sentence_rx.recv() => {
+                        match maybe_sentence {
+                            None => break,
+                            Some(sentence) => {
+                                match tts_for_consumer.synthesize(&sentence).await {
+                                    Ok(audio) if !audio.is_empty() => {
+                                        if let Err(e) = audio_out.play_audio(&audio) {
+                                            return Err(VoiceSessionError::AudioPlayback(
+                                                format!("queue: {e}"),
+                                            ));
+                                        }
+                                    }
+                                    Ok(_) => {} // empty synthesis — skip
+                                    Err(TtsError::Input(_)) => {
+                                        // Empty-after-trim — skip silently.
+                                    }
+                                    Err(e) => return Err(VoiceSessionError::Tts(e)),
+                                }
+                            }
                         }
                     }
-                    Ok(_) => {} // empty synthesis — skip
-                    Err(TtsError::Input(_)) => {
-                        // Empty-after-trim — skip silently.
-                    }
-                    Err(e) => return Err(VoiceSessionError::Tts(e)),
                 }
             }
             audio_out.sleep_until_empty();
             Ok::<(), VoiceSessionError>(())
         });
 
-        // ----- Turn dispatch (streaming) -----
-        let turn = match run_one_voice_turn_streaming(
-            &agent,
-            &channel,
-            asr.as_ref(),
-            &samples,
-            sentence_tx,
-        )
-        .await
-        {
-            Ok(Some(t)) => Some(t),
-            Ok(None) => {
-                eprintln!("[voice] (no speech detected, try again)");
-                // The sentence_tx is already dropped
-                // (moved into the call) — the
-                // consumer drains and exits.
-                let _ = consumer.await;
-                continue;
+        // ----- Turn dispatch (streaming) with
+        // ----- mid-synthesis abort race
+        //
+        // Phase 146 — race the streaming turn
+        // future against `line_rx.recv()`. If
+        // the operator presses Enter (or
+        // anything that lands as a stdin line)
+        // before the turn completes, we cancel
+        // the agent + signal the consumer to
+        // stop playback + iterate or quit.
+        enum TurnResolution {
+            Completed(Option<StreamingVoiceTurnResult>),
+            Failed(VoiceSessionError),
+            AbortedContinue,
+            AbortedQuit,
+        }
+
+        let resolution = tokio::select! {
+            result = run_one_voice_turn_streaming(
+                &agent,
+                &channel,
+                asr.as_ref(),
+                &samples,
+                sentence_tx,
+            ) => {
+                match result {
+                    Ok(t) => TurnResolution::Completed(t),
+                    Err(e) => TurnResolution::Failed(e),
+                }
             }
-            Err(e) => {
-                eprintln!("[voice] error: {e}");
-                let _ = consumer.await;
-                continue;
+            line = line_rx.recv() => {
+                use aivyx_core::ChannelContext;
+                channel.cancel_inflight();
+                let _ = abort_tx.send(()).await;
+                let raw = line.unwrap_or_default();
+                if raw == "quit" {
+                    TurnResolution::AbortedQuit
+                } else {
+                    TurnResolution::AbortedContinue
+                }
             }
         };
 
-        // Wait for the consumer to finish playback
-        // before re-prompting. By this point
-        // sentence_tx has been dropped (it was
-        // moved into run_one_voice_turn_streaming
-        // and out of scope), so recv() will return
-        // None once the queue drains.
-        match consumer.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                eprintln!("[voice] playback error: {e}");
-                continue;
+        match resolution {
+            TurnResolution::Completed(Some(t)) => {
+                // Wait for the consumer to finish
+                // playback before re-prompting. By
+                // this point sentence_tx has been
+                // dropped (moved into the streaming
+                // turn) so the consumer's
+                // sentence_rx will close and the
+                // task naturally winds down.
+                match consumer.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        eprintln!("[voice] playback error: {e}");
+                    }
+                    Err(join_err) => {
+                        eprintln!("[voice] consumer task panicked: {join_err}");
+                    }
+                }
+                eprintln!("[voice] you said: {}", t.transcribed);
             }
-            Err(join_err) => {
-                eprintln!("[voice] consumer task panicked: {join_err}");
-                continue;
+            TurnResolution::Completed(None) => {
+                eprintln!("[voice] (no speech detected, try again)");
+                let _ = consumer.await;
             }
-        }
-
-        if let Some(t) = turn {
-            eprintln!("[voice] you said: {}", t.transcribed);
+            TurnResolution::Failed(e) => {
+                eprintln!("[voice] error: {e}");
+                let _ = consumer.await;
+            }
+            TurnResolution::AbortedContinue => {
+                eprintln!("[voice] aborted by operator — stopped agent + playback.");
+                let _ = consumer.await;
+            }
+            TurnResolution::AbortedQuit => {
+                eprintln!("[voice] aborted by operator + exiting.");
+                let _ = consumer.await;
+                return Ok(());
+            }
         }
     }
 }
