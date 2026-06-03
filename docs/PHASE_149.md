@@ -209,8 +209,141 @@ tracking. Phase 150+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 149 exit. Predictions at
-sign-off: DESIGN.md HOLD → 40; PRODUCT.md HOLD
-→ 40; lib.rs HOLD → 15; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  39 → **40**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 39 → **40**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 149 work in
+  `aivyx-toolkit`. Continuing post-Phase-135
+  reset: 14 → **15**.
+
+**Test count delta: +15 — over predicted `+8`
+to `+14` range.** Workspace lib tests 3173 →
+3188. Per-module:
+- `budget_store`: +8 (aggregate_trend: zero
+  months_back → empty, single month no delta,
+  three months with deltas + pct math, zero-
+  prior → null pct regression boundary,
+  category filter, year boundary, entries
+  outside window ignored, plus store-level
+  trend round-trip through disk).
+- `tools::budget`: +7 (trend_input: default,
+  explicit months_back, clamp at 36, reject
+  zero, category extracted, empty category →
+  None, null category → None).
+
+Same substrate-exhaustive pattern as the
+preceding integration phases. Honest, not
+padding.
+
+**Zero new workspace dependencies** as
+predicted.
+
+**Zero clippy warnings** with default features.
+One naming friction surfaced during Task 3:
+the substrate `BudgetTrend` struct and the new
+tool struct collided. Resolved by renaming the
+tool to `BudgetTrendTool`, matching Phase 143's
+`BudgetSummary`/`BudgetSummaryTool` pattern.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `BudgetStore::trend(now, months_back,
+  category)` substrate method.
+- Pure `aggregate_trend` helper with
+  parameterized `now` for deterministic tests
+  — bucket math, delta math, pct math all
+  testable without a real clock.
+- Two pure-substrate helpers extracted:
+  `next_month` and `prev_month` for year-
+  boundary-safe arithmetic.
+- `BudgetTrend` + `MonthBucket` re-exported
+  from lib.rs.
+- `BudgetTrendTool` registered in
+  `tools/mod.rs`, re-exported from lib.rs.
+- main.rs registers the tool; harness 13 →
+  14 tools.
+- INSTALL.md budget block updated with
+  budget.trend docs + two example operator
+  prompts.
+- 3188 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Calendar months, not rolling.** Phase
+   149 explicit posture; documented in tool
+   description.
+
+2. **No moving-average or smoothing.** Raw
+   monthly totals + deltas only. Phase 150+
+   candidate.
+
+3. **No multi-category breakdown.** One
+   category filter per call. Phase 150+
+   candidate.
+
+4. **Zero-prior → null pct** rather than
+   infinity or +100%. Clean for the agent;
+   pinned by a regression test.
+
+5. **f64 precision unchanged.** Phase 143's
+   honest-debt about f64-vs-decimal stays.
+
+6. **months_back cap at 36.** Operators
+   wanting longer windows hit the cap; raise
+   if surfaces.
+
+7. **Tool struct named `BudgetTrendTool`**
+   not `BudgetTrend`, matching the
+   `BudgetSummary`/`BudgetSummaryTool`
+   pattern. The substrate struct gets the
+   "clean" name; the tool wraps it.
+
+8. **Test count overshoot** (+15 vs predicted
+   +8 to +14). Same substrate-exhaustive
+   honest pattern; the year-boundary edge
+   case + zero-prior regression boundary
+   warranted dedicated tests.
+
+### Direction after Phase 149
+
+After Phase 149, budget has 5 tools (record,
+summary, update, delete, trend) — full
+operator-facing surface for personal-finance
+tracking. Phase 150+ candidates:
+
+1. **Category whitelist + case-fold for
+   budget** — Phase 143 #2 honest-debt.
+2. **Budget currency / rust_decimal.**
+3. **Multi-category trend breakdown.**
+4. **Trend smoothing / moving average.**
+5. **Bulk budget operations.**
+6. **Recursive folder filter on drive
+   recent_*.**
+7. **drive_id parameter on drive recent_*.**
+8. **Drive Activity API.**
+9. **Aggressive voice abort.**
+10. **Partial-text preservation on voice
+    abort.**
+11. **Silero ONNX VAD.**
+12. **Streaming ASR.**
+13. **Wake-word activation.**
+14. **Multimodal output.**
+15. **macOS streaming variant.**
+16. **Lock-free AudioIn detector.**
+17. **VAD config validation.**
+18. **Proactive reminder dispatch.**
+19. **Phase 142 calendar debt cleanup.**
+20. **Relative-time localization.**
+21. **whisper-cpp-plus rehabilitation.**
+22. **`build_agent_stack` substrate-tier
+    promotion.**
+23. **Channel Activation Milestone** —
+    still held intentionally; 38th
+    consecutive deferral at Phase 149
+    exit.

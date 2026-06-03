@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 149 — Budget: `budget.trend` (Month-Over-Month Deltas)
 
-**See [PHASE_149.md](PHASE_149.md).** Phase 143 #4
+**Frozen — see [PHASE_149.md](PHASE_149.md).** Phase 143 #4
 honest-debt close-out. Pivot from drive/calendar
 after four consecutive debt-closure phases (146-148):
 Phase 149 ships genuinely new operator-facing
