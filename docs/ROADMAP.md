@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 151 — Calendar: Phase 142 Debt Cleanup Bundle
 
-**See [PHASE_151.md](PHASE_151.md).** Phase 142 close-out
+**Frozen — see [PHASE_151.md](PHASE_151.md).** Phase 142 close-out
 deferred 9 phases. Closes three calendar honest-debts in
 one phase: sequential→parallel fan-out via join_all on
 multi-calendar upcoming, cross-calendar event dedup by

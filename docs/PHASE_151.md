@@ -224,8 +224,159 @@ fully cleared. Phase 152+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 151 exit. Predictions at
-sign-off: DESIGN.md HOLD → 42; PRODUCT.md HOLD
-→ 42; lib.rs HOLD → 17; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  41 → **42**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 41 → **42**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 151 work in
+  `aivyx-calendar`. Continuing post-Phase-135
+  reset: 16 → **17**.
+
+**Test count delta: +14 — top of predicted `+8`
+to `+14` range.** Workspace lib tests 3200 →
+3214. Per-module:
+- `upcoming` (dedup substrate): +6 (no
+  duplicates unchanged, exact-duplicate keeps
+  first, differ-by-summary kept, differ-by-
+  start kept, null-summary defensive, empty
+  input).
+- `list_calendars` (capability mapping): +8
+  (owner / writer / reader / freeBusyReader /
+  unknown / empty-string capability_from_access_role
+  tests + writer-end-to-end + reader-end-to-end
+  through calendar_summary).
+
+**Zero new workspace dependencies** as
+predicted. `futures-util` was already a
+workspace dep; aivyx-calendar adds it as a
+crate dep (matching Phase 141 + 145's chrono
+pattern).
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- Sequential `for calendar_id in
+  parsed.calendar_ids` → `join_all` over a
+  Vec of per-calendar futures. Latency
+  collapses from sum-of-per-calendar-times
+  to slowest-single-calendar.
+- Per-calendar future Result type
+  `Result<(String, Value), (String, _)>`
+  preserves calendar_id identity through
+  both success and error paths.
+- `dedup_events` pure substrate function +
+  6 tests covering every distinguishing
+  key case.
+- `capability_from_access_role` pure
+  substrate + 6 unit tests covering every
+  documented role + forward-compat unknown
+  role + empty-string defensive case.
+- Existing `calendar_summary` tests
+  extended with can_read/can_write
+  assertions; new tests cover writer +
+  reader end-to-end through the mapper.
+- INSTALL.md calendar tool table rows
+  updated for both upcoming + list_calendars
+  with Phase 151 enrichment notes.
+- 3214 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Parallel fan-out increases peak API
+   load.** 5 calendars previously made 5
+   sequential requests over ~2-5s; parallel
+   makes 5 simultaneous requests in ~500ms.
+   Google's rate limits are high enough this
+   is fine in practice. Phase 152+
+   max_concurrent knob if heavy-use operators
+   surface 429s.
+
+2. **Dedup is exact `(summary, start)` match.**
+   "Standup" vs "Standup — team A" won't
+   dedupe even at the same start. Phase 152+
+   fuzzy dedup candidate.
+
+3. **Dedup keeps first occurrence.** Operators
+   typically pass calendar_ids primary-first;
+   the retained copy is the primary's. If
+   passed work-first, the work copy wins.
+   Documented; operator-decided.
+
+4. **`access_role` raw still surfaced.**
+   can_read/can_write are additive. Existing
+   consumers reading access_role keep
+   working. Phase 152+ could deprecate the
+   raw field if usage stabilizes.
+
+5. **`freeBusyReader → (false, false)` is
+   a semantic choice.** Operators technically
+   read free/busy times for those calendars;
+   we chose to surface "can_read=false"
+   because "read events" semantically means
+   "read event content," not "read busy
+   times." Pinned by a regression-boundary
+   test.
+
+6. **No combined upcoming + capability
+   pre-filter.** If the operator asks
+   "what's coming up on writable calendars,"
+   the agent makes two tool calls
+   (list_calendars to find can_write IDs,
+   then upcoming with those). Phase 152+
+   could add a writable-only filter on
+   upcoming if surfaces.
+
+7. **Test count at top of predicted range.**
+   +14 exactly, not the substrate-exhaustive
+   overshoot pattern that's been
+   characteristic of recent phases. Honest
+   — capability mapping has limited input
+   cases (4 documented roles + 1 unknown +
+   1 empty = 6 substrate tests + 2 end-to-end).
+
+### Direction after Phase 151
+
+After Phase 151, Phase 142's three honest-debts
+fully clear. Phase 152+ candidates:
+
+1. **Calendar fuzzy dedup** — normalized
+   title + approximate time window.
+2. **Calendar `max_concurrent` knob** for
+   rate-limited operators.
+3. **Calendar `writable_only` filter on
+   upcoming.**
+4. **`access_role` deprecation** in favor of
+   can_read/can_write if usage stabilizes.
+5. **Budget category migration tool.**
+6. **Budget currency / rust_decimal.**
+7. **Multi-category trend breakdown.**
+8. **Trend smoothing / moving average.**
+9. **Bulk budget operations.**
+10. **Recursive folder filter on drive
+    recent_*.**
+11. **drive_id parameter on drive recent_*.**
+12. **Drive Activity API.**
+13. **Aggressive voice abort.**
+14. **Partial-text preservation on voice
+    abort.**
+15. **Silero ONNX VAD.**
+16. **Streaming ASR.**
+17. **Wake-word activation.**
+18. **Multimodal output.**
+19. **macOS streaming variant.**
+20. **Lock-free AudioIn detector.**
+21. **VAD config validation.**
+22. **Proactive reminder dispatch.**
+23. **Relative-time localization.**
+24. **whisper-cpp-plus rehabilitation.**
+25. **`build_agent_stack` substrate-tier
+    promotion.**
+26. **Channel Activation Milestone** —
+    still held intentionally; 40th
+    consecutive deferral at Phase 151 exit.
