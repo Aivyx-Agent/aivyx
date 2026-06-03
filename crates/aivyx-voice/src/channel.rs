@@ -96,6 +96,15 @@ pub struct VoiceChannel {
     /// rest of the response. When `None`, Phase 137
     /// behaviour (buffer-then-flush) is preserved.
     text_sink: Mutex<Option<TextSinkFn>>,
+    /// Phase 154 — operator-attached image for
+    /// the next turn. The PTT loop's `/image
+    /// <path>` command populates this; the
+    /// streaming turn driver consumes via
+    /// [`take_pending_image`] when constructing
+    /// the Message, so the agent sees a
+    /// text+image mixed message instead of
+    /// text-only.
+    pending_image: Mutex<Option<(String, Vec<u8>)>>,
 }
 
 impl VoiceChannel {
@@ -106,6 +115,7 @@ impl VoiceChannel {
             token: Mutex::new(CancellationToken::new()),
             text_buffer: Mutex::new(String::new()),
             text_sink: Mutex::new(None),
+            pending_image: Mutex::new(None),
         }
     }
 
@@ -131,6 +141,32 @@ impl VoiceChannel {
     pub fn clear_text_sink(&self) {
         let mut slot = self.text_sink.lock().expect("text_sink poisoned");
         *slot = None;
+    }
+
+    /// Phase 154 — queue an image for the
+    /// next turn. The PTT loop's `/image
+    /// <path>` command calls this after
+    /// loading the file + inferring the media
+    /// type. Subsequent calls replace the
+    /// queued image; the agent only ever sees
+    /// one image per turn.
+    pub fn set_pending_image(&self, media_type: String, data: Vec<u8>) {
+        let mut slot = self.pending_image.lock().expect("pending_image poisoned");
+        *slot = Some((media_type, data));
+    }
+
+    /// Phase 154 — consume the queued image
+    /// if any. The streaming turn driver calls
+    /// this once when building the Message; on
+    /// `Some(...)` it constructs
+    /// `Message::text_with_image`, on `None`
+    /// the usual `Message::text`. The slot is
+    /// cleared by this call so a subsequent
+    /// turn doesn't accidentally re-send the
+    /// same image.
+    pub fn take_pending_image(&self) -> Option<(String, Vec<u8>)> {
+        let mut slot = self.pending_image.lock().expect("pending_image poisoned");
+        slot.take()
     }
 
     pub fn config(&self) -> &VoiceChannelConfig {
@@ -517,5 +553,38 @@ voice_path = "/m/p.onnx"
         .await
         .unwrap();
         assert_eq!(ch.peek_buffered_text(), "Buffered response.");
+    }
+
+    // ---- Phase 154 — pending_image ----
+
+    #[test]
+    fn pending_image_take_when_empty_returns_none() {
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        assert!(ch.take_pending_image().is_none());
+    }
+
+    #[test]
+    fn pending_image_set_then_take_round_trip() {
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        ch.set_pending_image("image/png".to_string(), vec![1, 2, 3, 4]);
+        let taken = ch.take_pending_image().expect("some");
+        assert_eq!(taken.0, "image/png");
+        assert_eq!(taken.1, vec![1, 2, 3, 4]);
+        // Subsequent take returns None — the slot
+        // was cleared.
+        assert!(ch.take_pending_image().is_none());
+    }
+
+    #[test]
+    fn pending_image_set_replaces_prior() {
+        // Operator types /image foo.png then
+        // /image bar.png before recording — the
+        // second replaces the first.
+        let ch = VoiceChannel::new(VoiceChannelConfig::default());
+        ch.set_pending_image("image/png".to_string(), vec![1]);
+        ch.set_pending_image("image/jpeg".to_string(), vec![2, 3]);
+        let taken = ch.take_pending_image().expect("some");
+        assert_eq!(taken.0, "image/jpeg");
+        assert_eq!(taken.1, vec![2, 3]);
     }
 }
