@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 148 — Drive: `list_drives` + `parent_folder_id` Filter
+
+**See [PHASE_148.md](PHASE_148.md).** Phase 145 close-out.
+Phase 145 shipped drive.recent_files +
+drive.recent_changes but called out two specific
+honest-debts: no parent_folder_id filter (operators
+went back to drive.search for folder-scoped queries)
+and no drive.list_drives (shared/Team Drives invisible
+to the agent). Phase 148 closes both. Symmetric to
+Phase 142's calendar debt cleanup pattern. Drive
+surface 9 → 10 tools; zero new workspace deps.
+
 ## Phase 147 — Chapter G: `health.check.remove`
 
 **Frozen — see [PHASE_147.md](PHASE_147.md).** Phase 125 final
