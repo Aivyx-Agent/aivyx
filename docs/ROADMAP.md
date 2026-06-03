@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 146 — Voice Mid-Synthesis Abort UX
+
+**See [PHASE_146.md](PHASE_146.md).** Phase 138 close-out
+deferred 7 phases. Phase 138 shipped streaming TTS and
+called out mid-synthesis abort UX as honest-debt; every
+subsequent voice phase carried it without resolution.
+Phase 146 closes it: tokio::select! races the streaming
+turn future against line_rx.recv() during synthesis; on
+Enter, signals the consumer task to call a new
+AudioOut::stop_playback() + cancels the agent via the
+existing channel cancellation token. Pure substrate
+refactor; zero new workspace deps.
+
 ## Phase 145 — Drive: `recent_files` + `recent_changes`
 
 **Frozen — see [PHASE_145.md](PHASE_145.md).** Pivot from toolkit
