@@ -84,14 +84,18 @@ impl Tool for DriveRecentFiles {
          Input is a JSON object with optional \
          `window_days` (default 7, capped at 365), \
          `max_results` (default 25, capped at 100), \
-         and `include_trashed` (default false). \
-         Returns `{files: [...], next_page_token}` \
-         sorted by modifiedTime descending — most \
-         recent first. The cognitive shape is \
-         \"what did I work on this week\"; for \
-         broader queries (collaborator activity, \
-         shared-with-me files), use \
-         `drive.recent_changes` or `drive.search`."
+         `include_trashed` (default false), and \
+         `parent_folder_id` (optional — when \
+         supplied, scopes results to direct children \
+         of that folder only; not recursive). \
+         Returns `{files: [...], next_page_token, \
+         window_days}` sorted by modifiedTime \
+         descending — most recent first. The \
+         cognitive shape is \"what did I work on \
+         this week\"; for broader queries \
+         (collaborator activity, shared-with-me \
+         files), use `drive.recent_changes` or \
+         `drive.search`."
     }
 
     fn input_schema(&self) -> &Value {
@@ -116,7 +120,11 @@ impl Tool for DriveRecentFiles {
         };
 
         let now = Utc::now();
-        let base_q = build_owned_recent_q(now, parsed.window_days);
+        let base_q = build_owned_recent_q(
+            now,
+            parsed.window_days,
+            parsed.parent_folder_id.as_deref(),
+        );
         let q_string = build_q_string(Some(&base_q), parsed.include_trashed);
         let max_results_str = parsed.max_results.to_string();
         let mut query: Vec<(&str, String)> = vec![
@@ -159,16 +167,31 @@ impl Tool for DriveRecentFiles {
     }
 }
 
-/// Compose the `q` clause for owned-files-modified-
-/// recently. Pure substrate — `now` is parameterized
-/// so unit tests can pin a deterministic timestamp
-/// and assert the exact string.
-pub(crate) fn build_owned_recent_q(now: DateTime<Utc>, window_days: u64) -> String {
+/// Compose the `q` clause for owned-files-
+/// modified-recently. Pure substrate — `now` is
+/// parameterized so unit tests can pin a
+/// deterministic timestamp and assert the exact
+/// string.
+///
+/// Phase 148 — optional `parent_folder_id`
+/// argument appends `'<id>' in parents` to scope
+/// results to direct children only (Drive's q
+/// DSL doesn't natively support recursive
+/// folder filtering).
+pub(crate) fn build_owned_recent_q(
+    now: DateTime<Utc>,
+    window_days: u64,
+    parent_folder_id: Option<&str>,
+) -> String {
     let since = now - chrono::Duration::days(window_days as i64);
-    format!(
+    let mut q = format!(
         "'me' in owners and modifiedTime > '{}'",
         since.to_rfc3339()
-    )
+    );
+    if let Some(folder) = parent_folder_id {
+        q.push_str(&format!(" and '{}' in parents", folder));
+    }
+    q
 }
 
 fn input_schema() -> Value {
@@ -190,6 +213,10 @@ fn input_schema() -> Value {
             "include_trashed": {
                 "type": "boolean",
                 "description": "Include files in Trash (default false)"
+            },
+            "parent_folder_id": {
+                "type": "string",
+                "description": "Scope results to direct children of this folder (not recursive)"
             }
         },
         "additionalProperties": false
@@ -201,6 +228,7 @@ struct ParsedInput {
     window_days: u64,
     max_results: u64,
     include_trashed: bool,
+    parent_folder_id: Option<String>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -236,10 +264,37 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
             .ok_or_else(|| "`include_trashed` must be a boolean".to_string())?,
     };
 
+    let parent_folder_id = match obj.get("parent_folder_id") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "`parent_folder_id` must be a string".to_string())?
+                .trim()
+                .to_string();
+            if s.is_empty() {
+                None
+            } else if s.contains('\'') {
+                // Drive's q DSL uses single
+                // quotes to delimit values;
+                // embedded quotes would break
+                // the composed query. Reject
+                // at parse time so the error is
+                // clean.
+                return Err(
+                    "`parent_folder_id` must not contain single quotes".to_string(),
+                );
+            } else {
+                Some(s)
+            }
+        }
+    };
+
     Ok(ParsedInput {
         window_days,
         max_results,
         include_trashed,
+        parent_folder_id,
     })
 }
 
@@ -298,26 +353,26 @@ mod tests {
     #[test]
     fn build_owned_recent_q_includes_me_clause_and_rfc3339_window() {
         // 7 days before 2026-06-03 noon UTC = 2026-05-27 noon UTC.
-        let q = build_owned_recent_q(now_fixed(), 7);
+        let q = build_owned_recent_q(now_fixed(), 7, None);
         assert!(q.contains("'me' in owners"), "{q}");
         assert!(q.contains("modifiedTime > '2026-05-27T12:00:00"), "{q}");
     }
 
     #[test]
     fn build_owned_recent_q_one_day_window() {
-        let q = build_owned_recent_q(now_fixed(), 1);
+        let q = build_owned_recent_q(now_fixed(), 1, None);
         assert!(q.contains("modifiedTime > '2026-06-02T12:00:00"), "{q}");
     }
 
     #[test]
     fn build_owned_recent_q_year_window() {
-        let q = build_owned_recent_q(now_fixed(), 365);
+        let q = build_owned_recent_q(now_fixed(), 365, None);
         assert!(q.contains("modifiedTime > '2025-06-03T12:00:00"), "{q}");
     }
 
     #[test]
     fn build_q_string_wraps_with_trashed_clause_when_excluded() {
-        let base = build_owned_recent_q(now_fixed(), 7);
+        let base = build_owned_recent_q(now_fixed(), 7, None);
         let wrapped = build_q_string(Some(&base), false).expect("some");
         // standard `build_q_string` prepends
         // `trashed = false and (...)` for the
@@ -328,9 +383,49 @@ mod tests {
 
     #[test]
     fn build_q_string_passes_through_when_trashed_included() {
-        let base = build_owned_recent_q(now_fixed(), 7);
+        let base = build_owned_recent_q(now_fixed(), 7, None);
         let q = build_q_string(Some(&base), true).expect("some");
         assert!(!q.contains("trashed = false"), "{q}");
         assert!(q.contains("'me' in owners"), "{q}");
+    }
+
+    // ---- Phase 148 — parent_folder_id filter ----
+
+    #[test]
+    fn build_owned_recent_q_appends_folder_clause_when_provided() {
+        let q = build_owned_recent_q(now_fixed(), 7, Some("0AAfolder123"));
+        assert!(q.contains("'me' in owners"), "{q}");
+        assert!(q.contains("modifiedTime > '"), "{q}");
+        assert!(q.contains("'0AAfolder123' in parents"), "{q}");
+    }
+
+    #[test]
+    fn build_owned_recent_q_omits_folder_clause_when_none() {
+        let q = build_owned_recent_q(now_fixed(), 7, None);
+        assert!(!q.contains("in parents"), "{q}");
+    }
+
+    #[test]
+    fn parse_input_extracts_parent_folder_id() {
+        let p = parse_input(&json!({"parent_folder_id": "0AAfolder123"})).unwrap();
+        assert_eq!(p.parent_folder_id.as_deref(), Some("0AAfolder123"));
+    }
+
+    #[test]
+    fn parse_input_null_parent_folder_id_is_none() {
+        let p = parse_input(&json!({"parent_folder_id": null})).unwrap();
+        assert!(p.parent_folder_id.is_none());
+    }
+
+    #[test]
+    fn parse_input_empty_string_parent_folder_id_is_none() {
+        let p = parse_input(&json!({"parent_folder_id": "   "})).unwrap();
+        assert!(p.parent_folder_id.is_none());
+    }
+
+    #[test]
+    fn parse_input_rejects_parent_folder_id_with_quote() {
+        let err = parse_input(&json!({"parent_folder_id": "0AA'inject"})).unwrap_err();
+        assert!(err.contains("single quotes"), "{err}");
     }
 }
