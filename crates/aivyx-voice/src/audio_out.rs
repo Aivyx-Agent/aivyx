@@ -108,6 +108,30 @@ impl AudioOut {
     pub fn sleep_until_empty(&self) {
         self.player.sleep_until_end();
     }
+
+    /// Phase 146 — drop every queued source and
+    /// pause the player. Used by the streaming
+    /// PTT loop's mid-synthesis abort path: when
+    /// the operator presses Enter during the
+    /// agent's reply, the consumer task that
+    /// owns this AudioOut calls
+    /// `stop_playback()` then exits, dropping
+    /// the AudioOut entirely (which releases
+    /// the cpal stream).
+    ///
+    /// Note: rodio's `Player::clear` drops
+    /// queued sources + pauses, but the
+    /// currently-playing sample may finish its
+    /// current chunk before silence. For typical
+    /// sentence-length playback (1-3s) the
+    /// operator may hear the rest of the
+    /// current word before silence. Documented
+    /// in PHASE_146 honest-risks; Phase 147+
+    /// candidate for aggressive abort via
+    /// dropping the cpal stream directly.
+    pub fn stop_playback(&self) {
+        self.player.clear();
+    }
 }
 
 #[cfg(test)]
