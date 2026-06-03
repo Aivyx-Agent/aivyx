@@ -3249,7 +3249,7 @@ a single `aivyx-toolkit` binary**:
 |---|---|---|
 | Web search | `web.search` | `web.search` |
 | TODO tracking | `task.create`, `task.list`, `task.complete`, `task.delete` | `task.read` / `task.write` |
-| Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes` | `health.read` / `health.write` |
+| Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes`, `health.check.remove` (Phase 147) | `health.read` / `health.write` |
 | Budget tracking (Phase 143 + 144) | `budget.record`, `budget.summary`, `budget.update`, `budget.delete` | `budget.read` / `budget.write` |
 
 All seven scopes ship in `aivyx-capability::CEILING_TRUSTED`
@@ -3354,6 +3354,8 @@ capability_scopes = [
 **`health.check.list`** — `{}` → `{watchers: [{name, url, ..., last_check_at?, last_status_code?, last_ok}]}`. Optional fields omitted on just-registered watchers.
 
 **`health.check.recent_changes`** — `{window_minutes?}` → `{changes: [{watcher_name, transitioned_at, from_ok, to_ok, status_code?}], count}`. Empty `changes` means "all stable in window."
+
+**`health.check.remove`** (Phase 147) — `{name}` → `{name, was_already_removed}`. Idempotent — removing a missing name succeeds with `was_already_removed: true` rather than erroring (same posture as `calendar.delete_event` and `budget.delete`). Both the watcher registration AND its state (last_check_at, last_ok, etc.) are cleared; a future re-add of the same name starts fresh. Scope: `health.write`. **Phase 147 closes the Phase 125 Chapter G #2 candidate list** (calendar reminders → Phases 141-142, budget tracking → Phases 143-144, health.check.remove → Phase 147; alert dispatch intentionally held alongside Channel Activation).
 
 #### Budget tracking (Phase 143)
 

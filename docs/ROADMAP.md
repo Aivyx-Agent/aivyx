@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 147 — Chapter G: `health.check.remove`
 
-**See [PHASE_147.md](PHASE_147.md).** Phase 125 final
+**Frozen — see [PHASE_147.md](PHASE_147.md).** Phase 125 final
 candidate close-out. Phase 125 framed three Chapter G #2
 candidates: calendar reminders (✓ 141-142), budget
 tracking (✓ 143-144), and health.check.remove + alert
