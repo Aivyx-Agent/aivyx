@@ -209,8 +209,142 @@ post-Phase-142 LLM-ergonomic shape. Phase
 
 ## Prediction vs reality
 
-_Populated at Phase 148 exit. Predictions at
-sign-off: DESIGN.md HOLD → 39; PRODUCT.md HOLD
-→ 39; lib.rs HOLD → 14; zero new deps; test
-count delta `+6` to `+12`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  38 → **39**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 38 → **39**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 148 work in
+  `aivyx-drive`. Continuing post-Phase-135 reset:
+  13 → **14**.
+
+**Test count delta: +16 — over predicted `+6`
+to `+12` range.** Workspace lib tests 3159 →
+3175. Per-module:
+- `list_drives`: +4 (drive_summary maps full
+  entry with extras dropped, sparse entry
+  defensive null, empty entry, schema has no
+  required args).
+- `recent_files`: +6 (q appends folder clause,
+  q omits folder when None, parse extracts
+  folder, parse null → None, parse
+  empty/whitespace → None, parse rejects
+  single-quote).
+- `recent_changes`: +6 (q appends folder clause
+  + still no owner regression, q omits folder
+  when None, parse extracts folder, parse
+  rejects single-quote, + the existing
+  build_recent_changes_q tests gained their
+  third argument).
+
+Same substrate-exhaustive testing pattern as
+Phases 141 / 143-145 / 147. Honest, not
+padding.
+
+**Zero new workspace dependencies** as predicted.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `DriveListDrives` stateless tool with
+  pure-substrate `drive_summary` mapper.
+  Renames Google's `createdTime` to canonical
+  `created_at`; extras (kind, colorRgb)
+  dropped.
+- Both recent_* helpers gained a third
+  `parent_folder_id: Option<&str>` parameter
+  with consistent behaviour: append
+  `'<id>' in parents` when present, omit
+  otherwise.
+- Quote-injection guard: parse_input rejects
+  any parent_folder_id containing a single
+  quote (Drive's q DSL delimiter). Clean
+  parse-time error rather than a malformed
+  composed query.
+- Tools/mod.rs + main.rs register the new
+  tool; Drive harness 9 → 10 tools.
+- INSTALL.md drive section updated for both
+  list_drives + the parent_folder_id mention
+  on recent_*.
+- 3175 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **`parent_folder_id` is not recursive.**
+   Drive's q DSL's `'<id>' in parents` matches
+   direct children only. Operators wanting
+   whole-subtree queries combine
+   `drive.list_folder` recursively or hand-write
+   a `drive.search` query. Phase 149+
+   candidate for a recursive flag.
+
+2. **Quote-injection guard is conservative.**
+   We reject ANY single-quote, not just
+   unescaped ones. Folder IDs Google returns
+   never contain quotes, so this is a
+   defensive parse-time filter that never
+   fires in practice. Same posture as
+   `calendar.list_events_urlencode`.
+
+3. **No `drive_id` on recent_*.** Both recent
+   tools still query the operator's default
+   corpus (My Drive + accessible shared
+   files). For Team-Drive-scoped queries
+   operators combine `drive.list_drives` +
+   `drive.search` with `corpora=drive`.
+   Phase 149+ candidate.
+
+4. **No paginated list_drives.** Most
+   operators have <100 shared drives;
+   pagination is Phase 149+ if 100+-drive
+   operators surface.
+
+5. **Test count overshot prediction.** +16 vs
+   predicted +6 to +12. Same substrate-
+   exhaustive posture as preceding phases.
+   Honest pattern.
+
+### Direction after Phase 148
+
+After Phase 148, Drive matches calendar's
+post-Phase-142 LLM-ergonomic shape (modulo
+parallel fan-out + dedup, which calendar
+itself still owes). Phase 149+ candidates:
+
+1. **Recursive folder filter** on recent_*.
+2. **`drive_id` parameter on recent_*** for
+   Team-Drive-scoped queries.
+3. **Multi-folder filter.**
+4. **Paginated list_drives.**
+5. **Drive Activity API.**
+6. **Aggressive voice abort.**
+7. **Partial-text preservation on voice
+   abort.**
+8. **Silero ONNX VAD.**
+9. **Streaming ASR.**
+10. **Wake-word activation.**
+11. **Multimodal output.**
+12. **macOS streaming variant.**
+13. **Lock-free AudioIn detector.**
+14. **VAD config validation.**
+15. **Category whitelist for budget.**
+16. **Budget currency / rust_decimal.**
+17. **`budget.trend`.**
+18. **Bulk budget operations.**
+19. **Proactive reminder dispatch.**
+20. **Phase 142 debt cleanup** — calendar
+    parallel fan-out + dedup + capability
+    mapping (still outstanding).
+21. **Relative-time localization.**
+22. **whisper-cpp-plus rehabilitation.**
+23. **`build_agent_stack` substrate-tier
+    promotion.**
+24. **Channel Activation Milestone** —
+    still held intentionally; 37th
+    consecutive deferral at Phase 148
+    exit.

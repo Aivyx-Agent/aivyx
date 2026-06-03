@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 148 — Drive: `list_drives` + `parent_folder_id` Filter
 
-**See [PHASE_148.md](PHASE_148.md).** Phase 145 close-out.
+**Frozen — see [PHASE_148.md](PHASE_148.md).** Phase 145 close-out.
 Phase 145 shipped drive.recent_files +
 drive.recent_changes but called out two specific
 honest-debts: no parent_folder_id filter (operators
