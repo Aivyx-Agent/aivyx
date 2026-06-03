@@ -221,9 +221,9 @@ post-Phase-142 LLM-ergonomic shape. Phase
   `aivyx-drive`. Continuing post-Phase-135 reset:
   13 → **14**.
 
-**Test count delta: +16 — over predicted `+6`
+**Test count delta: +14 — over predicted `+6`
 to `+12` range.** Workspace lib tests 3159 →
-3175. Per-module:
+3173. Per-module:
 - `list_drives`: +4 (drive_summary maps full
   entry with extras dropped, sparse entry
   defensive null, empty entry, schema has no
@@ -233,16 +233,22 @@ to `+12` range.** Workspace lib tests 3159 →
   folder, parse null → None, parse
   empty/whitespace → None, parse rejects
   single-quote).
-- `recent_changes`: +6 (q appends folder clause
-  + still no owner regression, q omits folder
-  when None, parse extracts folder, parse
-  rejects single-quote, + the existing
-  build_recent_changes_q tests gained their
-  third argument).
+- `recent_changes`: +4 (q appends folder clause
+  + regression-guard "still no owner filter",
+  q omits folder when None, parse extracts
+  folder, parse rejects single-quote — the
+  existing build_recent_changes_q tests gained
+  their third argument as zero-cost
+  refactors rather than new tests).
 
 Same substrate-exhaustive testing pattern as
-Phases 141 / 143-145 / 147. Honest, not
-padding.
+Phases 141 / 143-145 / 147. Honest pattern;
+sister-tool tests are leaner because the
+folder clause logic is identical between
+recent_files and recent_changes so the
+recent_files exhaustive coverage doubles as
+recent_changes coverage for the shared
+arithmetic.
 
 **Zero new workspace dependencies** as predicted.
 
