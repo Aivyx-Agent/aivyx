@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 144 — Close Phase 143 Debt: budget.update + budget.delete + secure_io extract
 
-**See [PHASE_144.md](PHASE_144.md).** Phase 143 close-out.
+**Frozen — see [PHASE_144.md](PHASE_144.md).** Phase 143 close-out.
 Phase 143 shipped budget.record + budget.summary but
 without edit/delete tools and with save_to_disk +
 create_dir_all_secure + write_secure duplicated across

@@ -216,8 +216,135 @@ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 144 exit. Predictions at
-sign-off: DESIGN.md HOLD → 35; PRODUCT.md HOLD
-→ 35; lib.rs HOLD → 10; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  34 → **35**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 34 → **35**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 144 work in
+  `aivyx-toolkit`. Continuing post-Phase-135
+  reset: 9 → **10**.
+
+**Test count delta: +22 — over predicted `+8`
+to `+14` range.** Workspace lib tests 3109 →
+3131. Per-module:
+- `secure_io`: +5 (with_tmp_suffix × 2 +
+  write_secure 0600 + write_secure overwrite +
+  create_dir_all_secure 0700).
+- `budget_store`: +9 (update partial-amount,
+  Some(None) clear, Some(Some) replace, missing
+  id NotFound, non-finite amount, blank
+  category, delete present, delete missing
+  idempotent, update+delete round-trip).
+- `tools::budget`: +8 (update id-only, amount+
+  category replace, note string, note null,
+  missing id, empty id, delete id, delete
+  missing).
+
+Same over-predict pattern as Phases 141 + 143 —
+substrate-exhaustive testing of every input
+permutation. Honest, not padding.
+
+**Zero new workspace dependencies** as predicted.
+
+**Zero clippy warnings** with default features.
+One transient catch during Task 2: unused
+`OpenOptionsExt` import in secure_io (tokio's
+`OpenOptions::mode` works without the trait
+extension); fixed immediately.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `secure_io` shared module: 3 helpers public,
+  task_store + budget_store both delegate. The
+  budget_store Phase 143 copy was upgraded from
+  set-perms-after-write to TOCTOU-safe O_CREAT
+  with mode — uniform stronger posture across
+  every store.
+- `BudgetStore::update`: double-Option for
+  partial-update + explicit-clear semantics on
+  `note`. New `BudgetStoreError::NotFound`
+  variant.
+- `BudgetStore::delete`: idempotent;
+  `DeleteOutcome { id, was_already_deleted }`
+  matches `calendar.delete_event` posture.
+- `BudgetUpdate` + `BudgetDelete` tools: JSON
+  null vs absent-key correctly mapped to
+  `Some(None)` vs `None` at the substrate
+  boundary; documented in tool description.
+- main.rs registers both; toolkit harness 10 →
+  12 tools.
+- INSTALL.md budget block updated with both
+  new tools + recovery-flow examples.
+- 3131 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Test count overshot prediction.** +22 vs
+   +8 to +14. Same substrate-exhaustive
+   posture as Phases 141 + 143; not padding.
+
+2. **save_to_disk wrappers still per-store.**
+   The OS-level primitives lifted to
+   secure_io, but the StoredTasks /
+   StoredEntries serialization + per-store
+   error context stayed in their respective
+   modules. Acceptable; the duplicated
+   substrate code is gone, the per-store
+   payload typing stays where it has to.
+
+3. **Double-Option ergonomics on
+   BudgetStore::update**. `Option<Option<T>>`
+   is the cleanest substrate representation
+   but reads heavily at call sites. Inline
+   docs explain the semantics; tool layer
+   maps JSON null vs absent-key cleanly so
+   the agent doesn't have to think about it.
+
+4. **No bulk-update / bulk-delete.** Per-id
+   only. Phase 145+ candidate.
+
+5. **Tools still have no category whitelist.**
+   Phase 143's #2 honest-bend stays open;
+   Phase 145+ candidate.
+
+6. **f64 / no currency.** Phase 143 honest-
+   debts that Phase 144 doesn't address.
+   Standalone Phase 145+ candidates.
+
+### Direction after Phase 144
+
+After Phase 144, budget tracking reaches CRUD
+parity with task.* and calendar.*. Phase 145+
+candidates:
+
+1. **Category whitelist + case-fold +
+   suggest-existing** — Phase 143's #2 bend.
+2. **Currency field per entry.**
+3. **`budget.trend`** — month-over-month deltas.
+4. **rust_decimal switch** for amounts.
+5. **Bulk-update / bulk-delete tools.**
+6. **Chapter G health.check.remove + alert
+   dispatch** — Phase 125 final candidate.
+7. **Proactive reminder dispatch** — the big
+   architectural step.
+8. **Phase 142 debt cleanup** — calendar
+   parallel fan-out, dedup, capability
+   mapping.
+9. **Voice continuation** — mid-synthesis
+   abort, Silero VAD, streaming ASR,
+   wake-word, multimodal output, macOS
+   variant, lock-free detector.
+10. **Drive tool expansion.**
+11. **Relative-time localization.**
+12. **whisper-cpp-plus rehabilitation.**
+13. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters
+    ship.
+14. **Channel Activation Milestone** — still
+    held intentionally; 33rd consecutive
+    deferral at Phase 144 exit.

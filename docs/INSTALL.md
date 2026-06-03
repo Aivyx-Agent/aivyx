@@ -3222,7 +3222,7 @@ a single `aivyx-toolkit` binary**:
 | Web search | `web.search` | `web.search` |
 | TODO tracking | `task.create`, `task.list`, `task.complete`, `task.delete` | `task.read` / `task.write` |
 | Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes` | `health.read` / `health.write` |
-| Budget tracking (Phase 143) | `budget.record`, `budget.summary` | `budget.read` / `budget.write` |
+| Budget tracking (Phase 143 + 144) | `budget.record`, `budget.summary`, `budget.update`, `budget.delete` | `budget.read` / `budget.write` |
 
 All seven scopes ship in `aivyx-capability::CEILING_TRUSTED`
 ONLY by default. SemiTrusted and Untrusted roles get zero
@@ -3340,7 +3340,13 @@ substrate posture as the task store.
 
 Example operator prompt: "Lunch was twelve dollars, food category." → agent calls `budget.record {amount: 12.00, category: "food", note: "lunch"}`. Then: "How much did I spend this week?" → agent calls `budget.summary {period: "this_week"}` and paraphrases the result.
 
-Phase 143 scope cap: no edit/delete tools, no category whitelist, no currency field. Mistakes are operator-recoverable by editing the JSON directly. Phase 144+ candidates if mistakes routine.
+**`budget.update`** (Phase 144) — `{id, amount?, category?, note?}` → updated entry. Partial update: only the fields you supply change. For `note`, JSON `null` explicitly clears the note; omitting the key leaves it unchanged (standard JSON-PATCH semantics). Errors if the id doesn't match an existing entry. Scope: `budget.write`.
+
+**`budget.delete`** (Phase 144) — `{id}` → `{id, was_already_deleted}`. Idempotent — deleting a missing id succeeds with `was_already_deleted: true` rather than erroring. Same posture as `calendar.delete_event`. Scope: `budget.write`.
+
+Example: "Actually that lunch was fifteen, not twelve." → agent calls `budget.update {id: "<entry-id-from-record-output>", amount: 15.00}`. Or: "Delete that snacks entry from yesterday." → agent calls `budget.summary` to find it, then `budget.delete {id: ...}`.
+
+Phase 144 scope cap: no category whitelist, no currency field, no bulk update/delete. Mistakes are now fully recoverable through the tool surface (no need to edit JSON directly). Phase 145+ candidates if other gaps surface.
 
 #### Health-monitoring alert composition recipe
 
