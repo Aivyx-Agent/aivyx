@@ -20,7 +20,8 @@ pub mod tasks;
 pub mod web_search;
 
 pub use budget::{
-    BudgetDelete, BudgetRecord, BudgetSummaryTool, BudgetTrendTool, BudgetUpdate,
+    BudgetCategoriesTool, BudgetDelete, BudgetRecord, BudgetSummaryTool,
+    BudgetTrendTool, BudgetUpdate,
 };
 pub use health_check::{
     HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,

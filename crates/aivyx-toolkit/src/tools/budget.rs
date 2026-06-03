@@ -32,8 +32,7 @@ use aivyx_core::{
     AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification,
 };
 
-use crate::budget_store::BudgetStore;
-use crate::budget_store::BudgetStoreError;
+use crate::budget_store::{suggest_category, BudgetStore, BudgetStoreError};
 
 // =====================================================================
 // budget.record
@@ -92,6 +91,14 @@ impl Tool for BudgetRecord {
                 });
             }
         };
+        // Phase 150 — compute category suggestion
+        // against the pre-record known list. This
+        // happens BEFORE the record call so the
+        // operator's chosen category is matched
+        // against the existing categories (not
+        // self-matched after insertion).
+        let known = self.store.known_categories().await;
+        let category_suggestion = suggest_category(&parsed.category, &known);
         let entry = match self
             .store
             .record(parsed.amount, parsed.category, parsed.note)
@@ -112,6 +119,7 @@ impl Tool for BudgetRecord {
                 "category": entry.category,
                 "note": entry.note,
                 "recorded_at": entry.recorded_at.to_rfc3339(),
+                "category_suggestion": category_suggestion,
             }),
             verified: Verification::Verified,
         }
@@ -447,6 +455,18 @@ impl Tool for BudgetUpdate {
                 });
             }
         };
+        // Phase 150 — compute category
+        // suggestion against pre-update known
+        // list if the operator supplied a new
+        // category. Skipped when the category
+        // field is None (operator only changed
+        // amount/note).
+        let category_suggestion = if let Some(ref cat) = parsed.category {
+            let known = self.store.known_categories().await;
+            suggest_category(cat, &known)
+        } else {
+            None
+        };
         let result = self
             .store
             .update(&parsed.id, parsed.amount, parsed.category, parsed.note)
@@ -459,6 +479,7 @@ impl Tool for BudgetUpdate {
                     "category": entry.category,
                     "note": entry.note,
                     "recorded_at": entry.recorded_at.to_rfc3339(),
+                    "category_suggestion": category_suggestion,
                 }),
                 verified: Verification::Verified,
             },
@@ -809,6 +830,77 @@ fn parse_trend_input(input: &Value) -> Result<TrendInput, String> {
     Ok(TrendInput {
         months_back,
         category,
+    })
+}
+
+// =====================================================================
+// budget.categories — Phase 150
+// =====================================================================
+
+pub struct BudgetCategoriesTool {
+    id: ToolId,
+    schema: Value,
+    store: Arc<BudgetStore>,
+}
+
+impl BudgetCategoriesTool {
+    pub fn new(store: Arc<BudgetStore>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: categories_schema(),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for BudgetCategoriesTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "budget.categories"
+    }
+    fn description(&self) -> &str {
+        "List every unique category present in \
+         the budget store, sorted ascending. \
+         Takes no arguments. Returns \
+         `{categories: [string]}`. New entries \
+         (recorded via `budget.record` from \
+         Phase 150 onward) are case-folded and \
+         trimmed at record time, so the typical \
+         list is canonical lowercase. Legacy \
+         entries (recorded pre-Phase 150) may \
+         surface non-normalized variants — the \
+         operator can `budget.update` them to \
+         canonicalize. The agent uses this list \
+         to answer \"what categories have I \
+         used\" and to confirm category names \
+         before recording an entry whose category \
+         is unfamiliar. Scope: `budget.read`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("budget.read")
+            .expect("budget.read must parse — it is in KNOWN_BASES from Phase 143")
+    }
+
+    async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let categories = self.store.known_categories().await;
+        ToolOutcome::Completed {
+            output: json!({ "categories": categories }),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+fn categories_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
     })
 }
 
