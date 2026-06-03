@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 149 — Budget: `budget.trend` (Month-Over-Month Deltas)
+
+**See [PHASE_149.md](PHASE_149.md).** Phase 143 #4
+honest-debt close-out. Pivot from drive/calendar
+after four consecutive debt-closure phases (146-148):
+Phase 149 ships genuinely new operator-facing
+capability. budget.trend(months_back?, category?)
+returns per-month totals + delta vs prior month +
+percentage change so the agent can answer "is my food
+spending up this quarter" naturally. Pure substrate
+aggregation over existing entries. Toolkit harness
+13 → 14 tools. Zero new workspace deps.
+
 ## Phase 148 — Drive: `list_drives` + `parent_folder_id` Filter
 
 **Frozen — see [PHASE_148.md](PHASE_148.md).** Phase 145 close-out.
