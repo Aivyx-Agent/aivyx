@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 143 — Chapter G: Budget Tracking
 
-**See [PHASE_143.md](PHASE_143.md).** Pivot from calendar
+**Frozen — see [PHASE_143.md](PHASE_143.md).** Pivot from calendar
 to another Phase 125 Chapter G #2 candidate. Adds
 `budget.record(amount, category, note?)` +
 `budget.summary(period?, since?, until?)` to the

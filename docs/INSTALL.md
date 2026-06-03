@@ -3222,8 +3222,9 @@ a single `aivyx-toolkit` binary**:
 | Web search | `web.search` | `web.search` |
 | TODO tracking | `task.create`, `task.list`, `task.complete`, `task.delete` | `task.read` / `task.write` |
 | Health monitoring | `health.check.add`, `health.check.list`, `health.check.recent_changes` | `health.read` / `health.write` |
+| Budget tracking (Phase 143) | `budget.record`, `budget.summary` | `budget.read` / `budget.write` |
 
-All five scopes ship in `aivyx-capability::CEILING_TRUSTED`
+All seven scopes ship in `aivyx-capability::CEILING_TRUSTED`
 ONLY by default. SemiTrusted and Untrusted roles get zero
 toolkit scopes by default (same gating as `shell.exec` /
 `notify.send` / `email.*` per Phase 62 Q2(a)). Operators who
@@ -3325,6 +3326,21 @@ capability_scopes = [
 **`health.check.list`** — `{}` → `{watchers: [{name, url, ..., last_check_at?, last_status_code?, last_ok}]}`. Optional fields omitted on just-registered watchers.
 
 **`health.check.recent_changes`** — `{window_minutes?}` → `{changes: [{watcher_name, transitioned_at, from_ok, to_ok, status_code?}], count}`. Empty `changes` means "all stable in window."
+
+#### Budget tracking (Phase 143)
+
+Two tools sharing a JSON-persisted entry store at
+`~/.aivyx/tool-processes/toolkit/budget.json`
+(0600 perms, atomic write-then-rename). Same
+substrate posture as the task store.
+
+**`budget.record`** — `{amount, category, note?}` → `{id, amount, category, note, recorded_at}`. `amount` is unitless f64 (positive = expense, negative = income/refund). `category` is free-text. Scope: `budget.write`.
+
+**`budget.summary`** — `{period?, since?, until?}` → `{period, since, until, total, entry_count, by_category: [{category, total, count}]}`. `period` is one of `today` / `this_week` (default; ISO week Monday-Sunday) / `this_month` (calendar month) / `this_year` (calendar year) / `all_time`. Explicit `since` / `until` (RFC 3339) override the period bounds — use these for rolling windows like "last 7 days". `by_category` sorted descending by total, ties broken alphabetically. Scope: `budget.read`.
+
+Example operator prompt: "Lunch was twelve dollars, food category." → agent calls `budget.record {amount: 12.00, category: "food", note: "lunch"}`. Then: "How much did I spend this week?" → agent calls `budget.summary {period: "this_week"}` and paraphrases the result.
+
+Phase 143 scope cap: no edit/delete tools, no category whitelist, no currency field. Mistakes are operator-recoverable by editing the JSON directly. Phase 144+ candidates if mistakes routine.
 
 #### Health-monitoring alert composition recipe
 

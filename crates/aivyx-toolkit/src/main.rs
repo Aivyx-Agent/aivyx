@@ -13,9 +13,11 @@
 //! 4. Spawn the health polling loop in a background tokio
 //!    task (tokio aborts it when main returns on
 //!    ToolShutdown).
-//! 5. Register all 8 tools into a single
+//! 5. Register all 10 tools into a single
 //!    `Vec<Arc<dyn Tool>>` and hand to
-//!    `run_multi_tool_subprocess`.
+//!    `run_multi_tool_subprocess`. (Phase 125
+//!    shipped 8; Phase 143 added budget.record +
+//!    budget.summary.)
 //!
 //! Operator-facing failure modes are surfaced at startup
 //! (missing config file, $HOME unset, etc) with operator-
@@ -26,13 +28,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use aivyx_core::Tool;
+use aivyx_toolkit::budget_store::BudgetStore;
 use aivyx_toolkit::config::{default_config_path, default_state_dir, load_config};
 use aivyx_toolkit::health_polling::run_polling_loop;
 use aivyx_toolkit::health_store::HealthStore;
 use aivyx_toolkit::task_store::TaskStore;
 use aivyx_toolkit::tools::{
-    HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, TaskComplete, TaskCreate,
-    TaskDelete, TaskList, WebSearch,
+    BudgetRecord, BudgetSummaryTool, HealthCheckAdd, HealthCheckList,
+    HealthCheckRecentChanges, TaskComplete, TaskCreate, TaskDelete, TaskList,
+    WebSearch,
 };
 use aivyx_toolkit::{run_multi_tool_subprocess, ToolkitConfig};
 
@@ -75,6 +79,13 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let budget_store = match BudgetStore::open(state_dir.join("budget.json")).await {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            eprintln!("aivyx-toolkit: failed to open budget store: {e}");
+            return ExitCode::from(2);
+        }
+    };
 
     // Shared HTTP client for web.search and the health
     // polling loop. Brave's API + arbitrary watcher URLs are
@@ -110,6 +121,9 @@ async fn main() -> ExitCode {
         Arc::new(HealthCheckAdd::new(Arc::clone(&health_store))),
         Arc::new(HealthCheckList::new(Arc::clone(&health_store))),
         Arc::new(HealthCheckRecentChanges::new(Arc::clone(&health_store))),
+        // Phase 143 — Chapter G #2 budget tracking.
+        Arc::new(BudgetRecord::new(Arc::clone(&budget_store))),
+        Arc::new(BudgetSummaryTool::new(Arc::clone(&budget_store))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-toolkit").await {

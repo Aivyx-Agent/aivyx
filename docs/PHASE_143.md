@@ -238,8 +238,157 @@ spending. Phase 144+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 143 exit. Predictions at
-sign-off: DESIGN.md HOLD → 34; PRODUCT.md HOLD
-→ 34; lib.rs HOLD → 9; zero new deps; test
-count delta `+10` to `+18`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  33 → **34**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 33 → **34**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 143 work in
+  `aivyx-capability` (KNOWN_BASES + ceiling
+  defaults) + `aivyx-toolkit` (store + tools +
+  binary). Core untouched. Continuing
+  post-Phase-135 reset: 8 → **9**.
+
+**Test count delta: +22 — over predicted `+10`
+to `+18` range.** Workspace lib tests 3087 →
+3109. Per-module:
+- `aivyx-capability`: +1 (budget bases parse
+  via Scope::parse; plus the count-pin test
+  bumped 67 → 69).
+- `budget_store`: +9 (aggregate × 3 +
+  record/summary round-trip + persist-across-
+  reopen + non-finite-amount + blank-category +
+  out-of-window + schema-too-new).
+- `tools::budget`: +12 (record parse × 4 +
+  summary period × 6 + override + reject ×
+  2).
+
+Overshot the predicted range honestly: each
+period (today/this_week/this_month/this_year)
+got its own deterministic-now test plus a
+December-rollover edge case + an unknown-period
+reject + an inverted-window reject. The
+substrate exhaustive-testing posture from
+Phase 141 carried over.
+
+**Zero new workspace dependencies** as
+predicted. chrono + serde + uuid already in
+toolkit; budget_store's tests use the existing
+`scratch_dir()` pattern from task_store
+(PID + atomic counter under TMPDIR) — no
+tempfile crate added.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `budget.read` + `budget.write` capability
+  bases registered + Trusted-only defaults +
+  A3 addendum updated (67 → 69 bases).
+- `BudgetStore` substrate: open / record /
+  summary. 0600 perms, atomic write-then-rename,
+  schema_version: 1 forward-compat.
+- Pure `aggregate()` helper enabling unit-test
+  coverage of the by-category sort + tie-break +
+  empty-input edge cases without touching the
+  store.
+- `BudgetRecord` + `BudgetSummaryTool` tools
+  registered in the toolkit harness. Capability
+  scopes wired through `required_scope`.
+- Period semantics: today / this_week (ISO) /
+  this_month (calendar) / this_year (calendar)
+  / all_time, with deterministic-now testing.
+- Explicit since/until override period bounds
+  for rolling windows.
+- `main.rs` opens the budget store + registers
+  the two tools alongside the existing eight.
+  10-tool toolkit harness (was 8).
+- INSTALL.md toolkit section gains a
+  Phase 143 row + per-tool docs + example
+  operator prompts.
+- 3109 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **No edit / delete tools.** Phase 143 ships
+   record + summary only. Mistakes are
+   operator-recoverable by editing the JSON
+   directly. Phase 144+ for `budget.update` /
+   `budget.delete` if mistakes are routine.
+
+2. **Categories free-text.** No whitelist, no
+   case-fold, no fuzzy-match. "food" /
+   "Food" / "fod" are three categories.
+   Acceptable for MVP; agent can paraphrase
+   operator input to bias toward
+   already-used categories.
+
+3. **f64 for money.** Standard finance
+   practice prefers decimal types. For
+   personal-budget scale the precision
+   loss is invisible; rust_decimal switch
+   deferred.
+
+4. **No currency.** Operator's mental
+   model is local currency; multi-currency
+   support is Phase 144+ if it surfaces.
+
+5. **Period definitions are calendar-based,
+   not rolling.** "this_week" = ISO week, not
+   "last 7 days". Rolling windows require
+   explicit since/until. Documented in the
+   tool description.
+
+6. **save_to_disk + create_dir_all_secure +
+   write_secure duplicated from task_store.**
+   Two copies now; extraction to a shared
+   `aivyx-toolkit::secure_io` module is a
+   Phase 144+ candidate when a third store
+   would surface drift risk. Currently the
+   duplication is intentional — substrate
+   stability over premature abstraction.
+
+7. **Test count overshot prediction.** +22 vs
+   predicted +10 to +18. Same honest
+   substrate-exhaustive posture as Phase 141.
+   Each period gets its own deterministic-now
+   test + a December-rollover edge case.
+
+### Direction after Phase 143
+
+After Phase 143, the agent records + summarizes
+spending. Phase 144+ candidates:
+
+1. **`budget.update` + `budget.delete`** —
+   fix-typo tools. Small.
+2. **Category whitelist + case-fold +
+   suggest-existing-category.**
+3. **Currency field per entry.**
+4. **`budget.trend`** — month-over-month
+   deltas.
+5. **rust_decimal switch** for amounts.
+6. **Extract `secure_io` shared module** when a
+   third store surfaces.
+7. **Chapter G health.check.remove + alert
+   dispatch** — Phase 125 final candidate.
+8. **Proactive reminder dispatch** — the big
+   architectural step.
+9. **Phase 142 debt cleanup** — parallel
+   fan-out, dedup, capability mapping.
+10. **Voice continuation** — mid-synthesis
+    abort, Silero VAD, streaming ASR,
+    wake-word, multimodal output, macOS
+    variant, lock-free detector.
+11. **Drive tool expansion.**
+12. **Relative-time localization.**
+13. **whisper-cpp-plus rehabilitation.**
+14. **`build_agent_stack` substrate-tier
+    promotion** if more channel adapters
+    ship.
+15. **Channel Activation Milestone** — still
+    held intentionally; 32nd consecutive
+    deferral at Phase 143 exit.
