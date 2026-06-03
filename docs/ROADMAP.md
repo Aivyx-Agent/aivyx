@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 152 — Voice Carry-Overs Bundle
+
+**See [PHASE_152.md](PHASE_152.md).** Pivot back to voice
+after 5 non-voice phases. Closes three voice honest-debts
+in one phase: aggressive abort (drop cpal stream for
+instant silence instead of rodio clear+sleep_until_end,
+Phase 146 #1), partial-text preservation on abort
+(surface assembled response_text in abort path, Phase
+146 #2), VAD config bounded-range validation (reject
+nonsense values at PTT loop entry, Phase 140 carry-over).
+Symmetric to Phase 151's calendar debt-cleanup bundle
+pattern. Zero new workspace deps.
+
 ## Phase 151 — Calendar: Phase 142 Debt Cleanup Bundle
 
 **Frozen — see [PHASE_151.md](PHASE_151.md).** Phase 142 close-out
