@@ -39,7 +39,7 @@
 //! installs (same posture as task_store and
 //! Gmail's token file).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -119,6 +119,95 @@ pub struct BudgetStore {
     entries: Mutex<Vec<BudgetEntry>>,
 }
 
+// =====================================================================
+// Phase 150 — category canonicalization + suggestion
+// =====================================================================
+
+/// Phase 150 — canonical form for a budget
+/// category string: lowercase + trim. Pure
+/// substrate.
+///
+/// `"Food"` → `"food"`. `" FOOD "` → `"food"`.
+/// `""` → `""` (caller decides whether empty is
+/// valid — `record` already rejects empty
+/// categories with `BudgetStoreError::EmptyCategory`).
+pub fn normalize_category(input: &str) -> String {
+    input.trim().to_lowercase()
+}
+
+/// Phase 150 — fuzzy-match a category input
+/// against a slice of known categories using
+/// Levenshtein distance. Returns the closest
+/// known category when:
+/// - The distance is `>= 1` (exact match yields
+///   `None` — there's nothing to suggest).
+/// - The distance is `<= 2` (the documented
+///   "close-typo" window).
+///
+/// Comparison happens in normalized form so
+/// "Food" and "fod" yield "food" if "food"
+/// is known. Pure substrate.
+pub fn suggest_category(input: &str, known: &[String]) -> Option<String> {
+    let normalized_input = normalize_category(input);
+    if normalized_input.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &String)> = None;
+    for candidate in known {
+        let normalized_candidate = normalize_category(candidate);
+        if normalized_candidate.is_empty() {
+            continue;
+        }
+        let d = levenshtein(&normalized_input, &normalized_candidate);
+        if d == 0 {
+            // Exact match — nothing to suggest.
+            return None;
+        }
+        if d <= 2 {
+            match best {
+                None => best = Some((d, candidate)),
+                Some((bd, _)) if d < bd => best = Some((d, candidate)),
+                _ => {}
+            }
+        }
+    }
+    best.map(|(_, c)| c.clone())
+}
+
+/// Levenshtein distance between two strings —
+/// classic two-row dynamic programming. Pure
+/// function; no allocations beyond the two
+/// O(min(len_a, len_b)) row buffers.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let n = a_chars.len();
+    let m = b_chars.len();
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut curr: Vec<usize> = vec![0; m + 1];
+    for i in 1..=n {
+        curr[0] = i;
+        for j in 1..=m {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j] + 1) // deletion
+                .min(curr[j - 1] + 1) // insertion
+                .min(prev[j - 1] + cost); // substitution
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[m]
+}
+
 impl BudgetStore {
     /// Open the store at `path`. Loads the file
     /// if it exists; initializes with an empty
@@ -168,7 +257,12 @@ impl BudgetStore {
         if !amount.is_finite() {
             return Err(BudgetStoreError::BadAmount(amount));
         }
-        let category = category.trim().to_string();
+        // Phase 150 — silent case-fold + trim.
+        // "Food" → "food"; "  FOOD  " → "food".
+        // Legacy entries (recorded pre-Phase 150)
+        // stay as-recorded; only NEW entries are
+        // normalized.
+        let category = normalize_category(&category);
         if category.is_empty() {
             return Err(BudgetStoreError::EmptyCategory);
         }
@@ -208,11 +302,16 @@ impl BudgetStore {
         let normalized_category = match category {
             None => None,
             Some(c) => {
-                let trimmed = c.trim().to_string();
-                if trimmed.is_empty() {
+                // Phase 150 — silent case-fold +
+                // trim. Same posture as `record`:
+                // updated entries get the canonical
+                // form even if the operator typed
+                // "Food".
+                let normalized = normalize_category(&c);
+                if normalized.is_empty() {
                     return Err(BudgetStoreError::EmptyCategory);
                 }
-                Some(trimmed)
+                Some(normalized)
             }
         };
         let mut guard = self.entries.lock().await;
@@ -305,6 +404,21 @@ impl BudgetStore {
             guard.clone()
         };
         aggregate_trend(&snapshot, now, months_back, category)
+    }
+
+    /// Phase 150 — unique sorted list of every
+    /// category present in the store. Legacy
+    /// entries (pre-Phase 150) may surface
+    /// non-normalized variants here ("Food" vs
+    /// "food"); new entries are always
+    /// pre-normalized via `record` / `update`.
+    /// Sorted ascending for stable LLM
+    /// consumption.
+    pub async fn known_categories(&self) -> Vec<String> {
+        let guard = self.entries.lock().await;
+        let set: BTreeSet<String> =
+            guard.iter().map(|e| e.category.clone()).collect();
+        set.into_iter().collect()
     }
 }
 
@@ -807,6 +921,150 @@ mod tests {
         let t = store.trend(now, 1, None).await;
         assert_eq!(t.months.len(), 1);
         assert!((t.months[0].total - 20.00).abs() < 1e-9);
+    }
+
+    // ---- Phase 150 — normalize / Levenshtein / suggest ----
+
+    #[test]
+    fn normalize_category_lowercases_and_trims() {
+        assert_eq!(normalize_category("Food"), "food");
+        assert_eq!(normalize_category("FOOD"), "food");
+        assert_eq!(normalize_category("  food  "), "food");
+        assert_eq!(normalize_category("  Eating Out  "), "eating out");
+        assert_eq!(normalize_category(""), "");
+        assert_eq!(normalize_category("   "), "");
+    }
+
+    #[test]
+    fn levenshtein_handles_empty_inputs() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("food", ""), 4);
+        assert_eq!(levenshtein("", "food"), 4);
+    }
+
+    #[test]
+    fn levenshtein_identical_strings_yield_zero() {
+        assert_eq!(levenshtein("food", "food"), 0);
+        assert_eq!(levenshtein("a", "a"), 0);
+    }
+
+    #[test]
+    fn levenshtein_known_edit_distances() {
+        // One substitution.
+        assert_eq!(levenshtein("food", "good"), 1);
+        // One deletion.
+        assert_eq!(levenshtein("food", "fod"), 1);
+        // One insertion.
+        assert_eq!(levenshtein("foo", "food"), 1);
+        // Two edits (delete + substitute).
+        assert_eq!(levenshtein("food", "f"), 3);
+        // Completely different short strings.
+        assert_eq!(levenshtein("foo", "bar"), 3);
+    }
+
+    #[test]
+    fn suggest_category_returns_none_for_exact_match() {
+        let known = vec!["food".to_string(), "transport".to_string()];
+        assert!(suggest_category("food", &known).is_none());
+        // Exact match after normalization.
+        assert!(suggest_category("Food", &known).is_none());
+    }
+
+    #[test]
+    fn suggest_category_returns_closest_within_distance_two() {
+        let known = vec!["food".to_string(), "transport".to_string()];
+        // "fod" → "food" (distance 1).
+        assert_eq!(
+            suggest_category("fod", &known),
+            Some("food".to_string())
+        );
+        // "transprt" → "transport" (distance 1).
+        assert_eq!(
+            suggest_category("transprt", &known),
+            Some("transport".to_string())
+        );
+        // "foof" → "food" (distance 1).
+        assert_eq!(
+            suggest_category("foof", &known),
+            Some("food".to_string())
+        );
+    }
+
+    #[test]
+    fn suggest_category_returns_none_for_too_distant() {
+        let known = vec!["food".to_string(), "transport".to_string()];
+        // "groceries" is far from both (>2).
+        assert!(suggest_category("groceries", &known).is_none());
+    }
+
+    #[test]
+    fn suggest_category_returns_closest_when_multiple_within_threshold() {
+        // "food" distance 1, "good" distance 2 → pick
+        // food (closer).
+        let known = vec!["food".to_string(), "good".to_string()];
+        assert_eq!(
+            suggest_category("fod", &known),
+            Some("food".to_string())
+        );
+    }
+
+    #[test]
+    fn suggest_category_returns_none_for_empty_input() {
+        let known = vec!["food".to_string()];
+        assert!(suggest_category("", &known).is_none());
+        assert!(suggest_category("   ", &known).is_none());
+    }
+
+    #[tokio::test]
+    async fn record_normalizes_category_to_lowercase() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let entry = store
+            .record(10.00, "Food".to_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(entry.category, "food", "category should be normalized");
+    }
+
+    #[tokio::test]
+    async fn update_normalizes_category_to_lowercase() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        let entry = store
+            .record(10.00, "food".to_string(), None)
+            .await
+            .unwrap();
+        let updated = store
+            .update(&entry.id, None, Some("Transport".to_string()), None)
+            .await
+            .unwrap();
+        assert_eq!(updated.category, "transport");
+    }
+
+    #[tokio::test]
+    async fn known_categories_dedupes_and_sorts() {
+        let dir = scratch_dir();
+        let path = dir.join("budget.json");
+        let store = BudgetStore::open(path.clone()).await.unwrap();
+        store
+            .record(10.00, "Transport".to_string(), None)
+            .await
+            .unwrap();
+        store
+            .record(15.00, "food".to_string(), None)
+            .await
+            .unwrap();
+        store
+            .record(20.00, "Food".to_string(), None) // normalizes to "food"
+            .await
+            .unwrap();
+        let got = store.known_categories().await;
+        // Three records but two unique
+        // post-normalization categories,
+        // ascending.
+        assert_eq!(got, vec!["food".to_string(), "transport".to_string()]);
     }
 
     #[tokio::test]

@@ -46,8 +46,8 @@ pub mod task_store;
 pub mod tools;
 
 pub use budget_store::{
-    BudgetEntry, BudgetStore, BudgetStoreError, BudgetSummary, BudgetTrend,
-    CategoryTotal, DeleteOutcome, MonthBucket,
+    normalize_category, suggest_category, BudgetEntry, BudgetStore, BudgetStoreError,
+    BudgetSummary, BudgetTrend, CategoryTotal, DeleteOutcome, MonthBucket,
 };
 pub use config::{ConfigFileError, ToolkitConfig};
 pub use harness::{run_multi_tool_subprocess, HarnessError};
