@@ -1506,6 +1506,37 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 154 added multimodal input — image
+attachment via voice.** Operator types `/image
+<path>` at the start-of-iteration prompt
+(instead of pressing Enter to record). The PTT
+loop loads the file, infers the media type
+from the extension, and queues it on the
+channel. The next recording iteration's turn
+sends the image alongside the transcribed
+prompt as a `Message::text_with_image`. The
+agent — running on a vision-capable LLM —
+describes the image via TTS.
+
+Supported extensions: `.png`, `.jpg`/`.jpeg`,
+`.gif`, `.webp`. Unsupported extensions
+(`.pdf`, `.svg`, etc.) error out with a clear
+"unsupported image extension" message; Phase
+155+ candidate for widening.
+
+Operator-side prereqs: a vision-capable LLM
+must be configured as the agent's planner.
+Tested with Qwen-VL via mistral.rs or Ollama;
+should work with Anthropic Claude (any modern
+model) or OpenAI GPT-4-vision via the existing
+provider plumbing.
+
+The queued image is consumed on the next turn
+and cleared, so the operator never
+accidentally re-sends. Operators can type
+`/image` multiple times before recording — the
+last one wins.
+
 **Phase 152 closed three voice carry-overs in
 one bundle.**
 

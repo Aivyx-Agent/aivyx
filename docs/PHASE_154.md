@@ -234,8 +234,145 @@ images via voice. Phase 155+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 154 exit. Predictions at
-sign-off: DESIGN.md HOLD → 45; PRODUCT.md HOLD
-→ 45; lib.rs HOLD → 20; zero new deps; test
-count delta `+5` to `+10`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  44 → **45**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 44 → **45**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 154 work in
+  `aivyx-voice`. Continuing post-Phase-135
+  reset: 19 → **20**.
+
+**Test count delta: +10 — top of predicted `+5`
+to `+10` range.** Workspace lib tests 3239 →
+3249. Per-module:
+- `channel`: +3 (take-when-empty, set+take
+  round-trip, set replaces prior).
+- `session`: +7 (infer_image_media_type for
+  png/jpeg-variants/gif+webp, unsupported-ext
+  rejected, no-ext rejected, load_image empty
+  path rejected, load_image missing file
+  rejected).
+
+**Zero new workspace dependencies** as
+predicted.
+
+**Zero clippy warnings** with default features.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- `VoiceChannel::set_pending_image` +
+  `take_pending_image` substrate methods +
+  `pending_image: Mutex<Option<(String,
+  Vec<u8>)>>` field.
+- `set_pending_image` replaces any prior queued
+  image (operator double-set behavior
+  documented + regression-tested).
+- `take_pending_image` clears the slot
+  atomically so subsequent turns don't re-send.
+- `infer_image_media_type` pure substrate with
+  case-insensitive extension matching for 4
+  formats (png, jpg/jpeg, gif, webp).
+- `load_image_for_attach` composes
+  empty-path-check + extension-inference +
+  file-read + non-empty check.
+- Voice loop's start-of-iteration prompt
+  recognizes `/image <path>` and dispatches to
+  the helpers. Banner prompt text updated to
+  mention the command.
+- `run_one_voice_turn_streaming` consumes
+  pending_image via match block; falls back
+  to text-only Message on None — Phase 138-
+  153 behaviour preserved when no image
+  queued.
+- INSTALL.md voice section gains a Phase 154
+  paragraph above the Phase 152 block
+  documenting the command, supported formats,
+  operator-side vision-LLM prereq + tested
+  model list.
+- 3249 workspace lib tests pass; clippy clean.
+
+**Bent honestly:**
+
+1. **Operator-validation tier for end-to-end
+   LLM round-trip.** The plumbing
+   (image → set_pending_image → take →
+   Message::text_with_image → agent.turn →
+   provider) is structurally correct and
+   substrate-tested. Whether a real Qwen-VL
+   accurately describes the image is operator-
+   side validation. Documented in INSTALL.
+
+2. **4 image media types only.** PNG, JPEG,
+   GIF, WebP. Phase 155+ candidate for PDF /
+   SVG / TIFF / etc. if surfaces.
+
+3. **No client-side size cap.** A 50MB PNG
+   gets accepted at attach time; the LLM
+   provider may surface its own size error.
+   Phase 155+ candidate for client-side
+   guardrail.
+
+4. **`/image` only at start-of-iteration.**
+   Operator can't attach mid-recording or
+   mid-reply. Phase 155+ command-surface
+   widening candidate.
+
+5. **One image per turn.** Multi-image queue
+   (Vec<(String, Vec<u8>)>) is Phase 155+ if
+   operators want it.
+
+6. **No URL or clipboard source.** Path-only.
+   Phase 155+ if surfaces.
+
+7. **No new tests for the end-to-end Message
+   construction.** Operator-validation tier;
+   the substrate helpers are exhaustively
+   covered (7 unit tests on the inference +
+   load helpers + 3 on the channel
+   pending_image methods).
+
+### Direction after Phase 154
+
+After Phase 154, the agent can describe
+images via voice. Phase 155+ candidates:
+
+1. **PDF / SVG / TIFF media type support.**
+2. **Client-side image size cap.**
+3. **Mid-recording or mid-reply /image
+   command.**
+4. **Multi-image queue.**
+5. **URL-based image source.**
+6. **Clipboard-based image source.**
+7. **Parallel walk_folder_tree.**
+8. **Recursive walk within drive_id scope.**
+9. **Operator-tunable recursive caps.**
+10. **Voice abort UX knob.**
+11. **Silero ONNX VAD.**
+12. **Streaming ASR.**
+13. **Wake-word activation.**
+14. **macOS streaming variant.**
+15. **Lock-free AudioIn detector.**
+16. **Calendar fuzzy dedup.**
+17. **Calendar max_concurrent knob.**
+18. **Calendar writable_only filter.**
+19. **access_role deprecation.**
+20. **Budget category migration tool.**
+21. **Budget currency / rust_decimal.**
+22. **Multi-category trend breakdown.**
+23. **Trend smoothing / moving average.**
+24. **Bulk budget operations.**
+25. **Drive Activity API.**
+26. **Proactive reminder dispatch.**
+27. **Relative-time localization.**
+28. **whisper-cpp-plus rehabilitation.**
+29. **`build_agent_stack` substrate-tier
+    promotion.**
+30. **Channel Activation Milestone** —
+    still held intentionally; 43rd
+    consecutive deferral at Phase 154
+    exit.

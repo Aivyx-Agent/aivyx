@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 154 — Multimodal: Image Attachment via Voice
 
-**See [PHASE_154.md](PHASE_154.md).** New feature surface
+**Frozen — see [PHASE_154.md](PHASE_154.md).** New feature surface
 after 3 debt-close phases (151-153). Wires existing
 MessageContent::Mixed shape into the voice channel:
 operator types `/image <path>` at the PTT prompt instead
