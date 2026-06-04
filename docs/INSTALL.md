@@ -1506,17 +1506,44 @@ $ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/med
 $ aivyx --channel voice
 ```
 
+**Phase 156 closed Phase 154's three honest-
+debts in one bundle:**
+
+- **Multi-image queue.** Operator can type
+  `/image foo.png` then `/image bar.png` then
+  `/image baz.jpg` before recording — all
+  three attach to the next turn as
+  `MessageContent::Mixed`. Pre-156 the second
+  command replaced the first.
+- **URL source.** `/image <path-or-url>` —
+  when the argument starts with `http://` or
+  `https://`, the loop fetches via reqwest +
+  infers media type from the response's
+  `Content-Type` header (falling back to
+  URL-path extension if the header is
+  absent). Operator can attach any public
+  image URL without manual download. URL
+  fetch has no auth + no timeout in Phase
+  156 — those are Phase 157+ candidates.
+- **Client-side 10MB size cap.** Files or URL
+  responses exceeding 10MB are rejected at
+  attach time with a clear "max allowed is
+  10485760 bytes (10 MB)" message. Matches
+  Phase 129's Drive `CONTENT_INLINE_CAP_BYTES`
+  for cross-substrate consistency.
+
 **Phase 154 added multimodal input — image
 attachment via voice.** Operator types `/image
-<path>` at the start-of-iteration prompt
+<path-or-url>` at the start-of-iteration prompt
 (instead of pressing Enter to record). The PTT
-loop loads the file, infers the media type
-from the extension, and queues it on the
-channel. The next recording iteration's turn
-sends the image alongside the transcribed
-prompt as a `Message::text_with_image`. The
+loop loads the file or fetches the URL, infers
+the media type, and queues it on the channel.
+The next recording iteration's turn sends the
+image(s) alongside the transcribed prompt as
+either `Message::text_with_image` (single) or
+`MessageContent::Mixed` (multi-image). The
 agent — running on a vision-capable LLM —
-describes the image via TTS.
+describes the image(s) via TTS.
 
 Supported extensions: `.png`, `.jpg`/`.jpeg`,
 `.gif`, `.webp`. Unsupported extensions

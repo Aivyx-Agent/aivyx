@@ -224,8 +224,147 @@ matures. Phase 157+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 156 exit. Predictions at
-sign-off: DESIGN.md HOLD → 47; PRODUCT.md HOLD
-→ 47; lib.rs HOLD → 22; zero new deps; test
-count delta `+5` to `+12`; zero clippy
-warnings._
+**Three-of-three streak HOLDs as predicted.**
+
+- **DESIGN.md** — HELD as predicted (`62dabbdd…`
+  unchanged). No contract amendment. Streak:
+  46 → **47**.
+- **PRODUCT.md** — HELD as predicted (`467ba59a…`
+  unchanged). Streak: 46 → **47**.
+- **`aivyx-core/src/lib.rs`** — HELD as predicted
+  (`4f9b8c81…` unchanged). All Phase 156 work in
+  `aivyx-voice`. Continuing post-Phase-135
+  reset: 21 → **22**.
+
+**Test count delta: +7 — within predicted `+5`
+to `+12` range.** Workspace lib tests 3264 →
+3271. Per-module:
+- `channel` (pending_images Vec): the 3 Phase
+  154 tests were renamed + modified for the Vec
+  shape, and 1 net new test landed
+  (phase_156_append_accumulates_multiple). Net
+  delta: +1 (one new test; the others are
+  in-place rewrites).
+- `session` (size cap + URL substrate): +6
+  (max_image_size_cap regression-pin,
+  load_image_oversized_rejected, is_url
+  detection, media_type_from_content_type with
+  4 supported formats + parameter stripping +
+  unsupported-format None,
+  infer_image_media_type_for_url_path strips
+  ?query and #fragment).
+
+**Zero new workspace dependencies** as
+predicted. `reqwest` added as aivyx-voice
+crate dep (matching Phase 141's chrono +
+aivyx-calendar pattern).
+
+**Zero clippy warnings** with default features.
+One transient doc-lazy-continuation catch on
+the fetch_image_url docstring: a line starting
+with "+ infer media type..." parsed as a list
+bullet. Reworded as prose.
+
+### What landed cleanly + what bent
+
+**Cleanly:**
+- VoiceChannel `pending_image: Mutex<Option<>>`
+  becomes `pending_images: Mutex<Vec<>>`.
+  Methods rename: set_pending_image →
+  append_pending_image; take_pending_image →
+  take_pending_images.
+- run_one_voice_turn_streaming Message
+  construction: empty Vec → Message::text;
+  length 1 → Message::text_with_image;
+  length 2+ → MessageContent::Mixed direct
+  build with one ContentPart::Text + N
+  ContentPart::Image entries.
+- MAX_IMAGE_SIZE_BYTES = 10MB const,
+  enforced in load_image_for_attach.
+- URL detection via is_url substrate.
+- URL fetch via reqwest::get with
+  Content-Type header parsing
+  (media_type_from_content_type) and
+  URL-extension fallback
+  (infer_image_media_type_for_url_path).
+- 103 aivyx-voice lib tests pass; workspace
+  clippy clean.
+
+**Bent honestly:**
+
+1. **API rename: set/take → append/take.**
+   Phase 154's methods are gone. No external
+   callers today; tests + loop call site
+   updated.
+
+2. **URL fetch has no auth.** Only public URLs
+   (or those reqwest can reach via
+   pre-configured outbound network). Phase
+   157+ candidate.
+
+3. **URL fetch has no timeout.** Operator
+   attempting a slow URL can hang the PTT
+   loop. Phase 157+ candidate for
+   configurable timeout.
+
+4. **No HEAD pre-fetch for size check.**
+   Oversized URLs pull the full body before
+   the cap fires. Phase 157+ optimization.
+
+5. **Content-Type header trusted.** No magic-
+   byte validation; the LLM provider may
+   surface its own error downstream.
+
+6. **No live HTTP tests.** Operator-validation
+   tier; the substrate (is_url +
+   media_type_from_content_type + URL-path
+   inference) is exhaustively tested.
+
+7. **Two existing load_image tests converted
+   to async.** load_image_for_attach is now
+   async since it awaits fetch_image_url on
+   the URL branch.
+
+### Direction after Phase 156
+
+After Phase 156, Phase 154's three honest-
+debts clear. Phase 157+ candidates:
+
+1. **Operator-tunable image size cap.**
+2. **URL fetch timeout.**
+3. **HEAD pre-fetch for size check.**
+4. **Authenticated URL fetch.**
+5. **PDF / SVG / TIFF media type support.**
+6. **Mid-recording or mid-reply /image
+   command.**
+7. **Clipboard-based image source.**
+8. **Sliding-window fuzzy time** for
+   adjacent-bucket merging.
+9. **calendarList session caching.**
+10. **min_concurrent knob.**
+11. **Parallel walk_folder_tree.**
+12. **Recursive walk within drive_id
+    scope.**
+13. **Operator-tunable recursive caps.**
+14. **Voice abort UX knob.**
+15. **Silero ONNX VAD.**
+16. **Streaming ASR.**
+17. **Wake-word activation.**
+18. **macOS streaming variant.**
+19. **Lock-free AudioIn detector.**
+20. **access_role deprecation.**
+21. **Budget category migration tool.**
+22. **Budget currency / rust_decimal.**
+23. **Multi-category trend breakdown.**
+24. **Trend smoothing / moving average.**
+25. **Bulk budget operations.**
+26. **Drive Activity API.**
+27. **Proactive reminder dispatch.**
+28. **Relative-time localization.**
+29. **whisper-cpp-plus rehabilitation.**
+30. **`build_agent_stack` substrate-tier
+    promotion.**
+31. **Channel Activation Milestone** —
+    still held intentionally; 45th
+    consecutive deferral at Phase 156
+    exit.

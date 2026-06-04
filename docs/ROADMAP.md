@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 156 — Multimodal Close-Out Bundle (Multi-Image + URL Source + Size Cap)
 
-**See [PHASE_156.md](PHASE_156.md).** Phase 154 close-out
+**Frozen — see [PHASE_156.md](PHASE_156.md).** Phase 154 close-out
 deferred 2 phases. Three multimodal honest-debts in one
 phase: multi-image queue (Vec<(media_type, data)>), URL
 source via reqwest (operator types `/image https://...`
