@@ -155,6 +155,26 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
         return Err(LlmError::UnknownModel(String::new()));
     }
 
+    // Phase 164 — pre-flight guard: document
+    // content blocks require Claude 3.5+.
+    // Detect from the request shape + model
+    // string; surface a clear client-side
+    // error instead of letting the API return
+    // a 400.
+    if request_has_document_block(request)
+        && !model_supports_documents(request.model)
+    {
+        return Err(LlmError::Config(format!(
+            "Anthropic model {model:?} does not support document blocks; \
+             document content blocks (e.g. PDFs) require Claude 3.5 or newer \
+             (claude-3-5-*, claude-3-7-*, claude-opus-4-*, claude-sonnet-4-*, \
+             claude-haiku-4-*, or a newer-prefix variant). Pick a supported \
+             model in your aivyx.toml or attach the document to a model that \
+             accepts it.",
+            model = request.model
+        )));
+    }
+
     let messages: Vec<Value> = merge_consecutive_tool_results(
         request
             .messages
@@ -193,6 +213,49 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
     }
 
     Ok(body)
+}
+
+/// Phase 164 — true iff any `LlmMessage::User`
+/// in the request carries at least one
+/// `ContentBlock::DocumentBase64`. Pure
+/// substrate so the guard can be tested
+/// without going through `build_request_body`.
+fn request_has_document_block(request: &LlmRequest<'_>) -> bool {
+    request.messages.iter().any(|msg| match msg {
+        LlmMessage::User { content } => {
+            content.iter().any(|b| b.is_document())
+        }
+        _ => false,
+    })
+}
+
+/// Phase 164 — true iff `model` names an
+/// Anthropic model that supports document
+/// content blocks. Detection is by hyphenated
+/// prefix:
+///
+/// - `claude-3-5-*` (e.g. claude-3-5-sonnet-20240620)
+/// - `claude-3-7-*` (forward-compat for a 3.7 release)
+/// - `claude-opus-4-*`, `claude-sonnet-4-*`,
+///   `claude-haiku-4-*` (Claude 4 family
+///   shipped 2025-2026)
+///
+/// Hand-maintained list. A new variant with a
+/// different prefix shape fails closed until
+/// the substrate adds the prefix; the operator
+/// sees a clear pre-flight error and the fix
+/// is one line here.
+fn model_supports_documents(model: &str) -> bool {
+    const SUPPORTED_PREFIXES: &[&str] = &[
+        "claude-3-5-",
+        "claude-3-7-",
+        "claude-opus-4-",
+        "claude-sonnet-4-",
+        "claude-haiku-4-",
+    ];
+    SUPPORTED_PREFIXES
+        .iter()
+        .any(|p| model.starts_with(p))
 }
 
 fn anthropic_message(msg: &LlmMessage) -> Result<Value, LlmError> {
@@ -1094,5 +1157,113 @@ mod tests {
         let blocks = v["content"].as_array().expect("array");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "document");
+    }
+
+    // ---- Phase 164 — model-version guard ----
+
+    #[test]
+    fn model_supports_documents_accepts_claude_3_5_family() {
+        assert!(model_supports_documents("claude-3-5-sonnet-20240620"));
+        assert!(model_supports_documents("claude-3-5-haiku-20241022"));
+    }
+
+    #[test]
+    fn model_supports_documents_accepts_claude_4_family() {
+        assert!(model_supports_documents("claude-opus-4-7"));
+        assert!(model_supports_documents("claude-sonnet-4-6"));
+        assert!(model_supports_documents("claude-haiku-4-5-20251001"));
+    }
+
+    #[test]
+    fn model_supports_documents_rejects_claude_3_legacy() {
+        // Claude 3 (without -5) didn't have
+        // document blocks. Operators on those
+        // models get fail-closed pre-flight.
+        assert!(!model_supports_documents("claude-3-opus-20240229"));
+        assert!(!model_supports_documents("claude-3-sonnet-20240229"));
+        assert!(!model_supports_documents("claude-3-haiku-20240307"));
+    }
+
+    #[test]
+    fn model_supports_documents_rejects_unknown_prefix() {
+        // Fail-closed for unfamiliar names.
+        assert!(!model_supports_documents(""));
+        assert!(!model_supports_documents("claude-2"));
+        assert!(!model_supports_documents("gpt-4"));
+        assert!(!model_supports_documents("claude-5-future-variant"));
+    }
+
+    #[test]
+    fn build_request_body_rejects_document_on_legacy_model() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data: "JVBE".to_string(),
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-3-opus-20240229",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        let err = build_request_body(&req).unwrap_err();
+        match err {
+            LlmError::Config(msg) => {
+                assert!(msg.contains("does not support document blocks"));
+                assert!(msg.contains("claude-3-opus"));
+            }
+            other => panic!("expected Config error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_request_body_accepts_document_on_supported_model() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data: "JVBE".to_string(),
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        let body = build_request_body(&req).expect("ok");
+        assert_eq!(body["model"], "claude-haiku-4-5-20251001");
+        // Request still contains the document
+        // block — passes through to the API.
+        let user_msg = &body["messages"][0];
+        assert_eq!(user_msg["content"][0]["type"], "document");
+    }
+
+    #[test]
+    fn build_request_body_text_only_unaffected_on_legacy_model() {
+        // Sanity: the guard fires ONLY when
+        // documents are present. Text-only
+        // requests on legacy models pass through
+        // (those models just don't get
+        // documents, not nothing).
+        use crate::{LlmMessage, LlmRequest};
+        let msgs = [LlmMessage::user_text("hello")];
+        let req = LlmRequest {
+            model: "claude-3-opus-20240229",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        assert!(build_request_body(&req).is_ok());
     }
 }
