@@ -63,6 +63,14 @@ pub struct VoiceChannelConfig {
     /// section get unchanged behavior.
     #[serde(default)]
     pub vad: VoiceVadConfig,
+    /// Phase 161 — operator-tunable `/image`
+    /// attach knobs. Defaults match Phase 156's
+    /// hardcoded values (10MB cap, 30s URL
+    /// timeout, HEAD pre-fetch enabled) so
+    /// operators with no `[voice.image]`
+    /// section get unchanged behavior.
+    #[serde(default)]
+    pub image: crate::session::VoiceImageConfig,
 }
 
 /// `ChannelContext` impl for voice I/O.

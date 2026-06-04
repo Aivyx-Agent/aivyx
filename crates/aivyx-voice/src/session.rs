@@ -618,7 +618,8 @@ where
         // re-prompts for Enter (or another
         // command).
         if let Some(path_or_url) = trimmed.strip_prefix("/image ") {
-            match load_image_for_attach(path_or_url.trim()).await {
+            let image_cfg = &channel.config().image;
+            match load_image_for_attach(path_or_url.trim(), image_cfg).await {
                 Ok((media_type, data)) => {
                     eprintln!(
                         "[voice] image queued: {} ({} bytes, {})",
@@ -933,13 +934,83 @@ fn read_stdin_line_trimmed() -> String {
     }
 }
 
-/// Phase 156 — client-side size cap on
+/// Phase 156 — default client-side size cap on
 /// queued images. Matches the existing Drive
 /// inline cap from Phase 129
 /// (`CONTENT_INLINE_CAP_BYTES`) so the agent
 /// sees consistent size limits across
-/// substrates.
-const MAX_IMAGE_SIZE_BYTES: usize = 10 * 1024 * 1024;
+/// substrates. Phase 161 promotes this from a
+/// hardcoded constant to the default of
+/// `VoiceImageConfig::size_cap_mb`.
+pub const DEFAULT_IMAGE_SIZE_CAP_MB: usize = 10;
+
+/// Phase 161 — operator-tunable knobs for
+/// `/image` attach. Threaded into
+/// `load_image_for_attach` from the session
+/// driver via
+/// [`crate::channel::VoiceChannelConfig::image`].
+///
+/// Deserialized from
+/// ```toml
+/// [voice.image]
+/// size_cap_mb = 10
+/// url_timeout_secs = 30
+/// head_precheck = true
+/// ```
+/// All three fields default to the Phase 156
+/// behavior (10MB cap, 30s timeout, HEAD
+/// pre-check enabled) so operators with no
+/// `[voice.image]` block see unchanged behavior.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VoiceImageConfig {
+    /// Maximum image size in megabytes.
+    /// Default 10. No upper bound — operator
+    /// trust.
+    #[serde(default = "VoiceImageConfig::default_size_cap_mb")]
+    pub size_cap_mb: usize,
+    /// URL-fetch request timeout in seconds.
+    /// Default 30. Per-request (full body),
+    /// not per-byte. Phase 162+ candidate for
+    /// a stalled-read timeout.
+    #[serde(default = "VoiceImageConfig::default_url_timeout_secs")]
+    pub url_timeout_secs: u64,
+    /// Whether to issue a HEAD request before
+    /// the GET so Content-Length can be
+    /// size-checked before download. Default
+    /// true. Operators with HEAD-hostile
+    /// origins set false.
+    #[serde(default = "VoiceImageConfig::default_head_precheck")]
+    pub head_precheck: bool,
+}
+
+impl Default for VoiceImageConfig {
+    fn default() -> Self {
+        Self {
+            size_cap_mb: Self::default_size_cap_mb(),
+            url_timeout_secs: Self::default_url_timeout_secs(),
+            head_precheck: Self::default_head_precheck(),
+        }
+    }
+}
+
+impl VoiceImageConfig {
+    fn default_size_cap_mb() -> usize {
+        DEFAULT_IMAGE_SIZE_CAP_MB
+    }
+    fn default_url_timeout_secs() -> u64 {
+        30
+    }
+    fn default_head_precheck() -> bool {
+        true
+    }
+    /// Bytes-form of `size_cap_mb` for the
+    /// substrate-tier comparisons in
+    /// `load_image_for_attach` and
+    /// `fetch_image_url`.
+    pub fn size_cap_bytes(&self) -> usize {
+        self.size_cap_mb.saturating_mul(1024 * 1024)
+    }
+}
 
 /// Phase 154 — load + media-type-classify an
 /// image for attach. Returns the inferred
@@ -949,20 +1020,27 @@ const MAX_IMAGE_SIZE_BYTES: usize = 10 * 1024 * 1024;
 /// IO error, empty file, oversized file).
 ///
 /// Phase 156:
-/// - Enforces `MAX_IMAGE_SIZE_BYTES` after read.
+/// - Enforces the size cap (Phase 161-tunable)
+///   after read.
 /// - When `path_or_url` starts with `http://`
 ///   or `https://`, fetches via reqwest. Infers
 ///   media type from `Content-Type` header
 ///   (falling back to extension if header is
 ///   absent or unrecognized).
+///
+/// Phase 161:
+/// - Accepts `&VoiceImageConfig` for the size
+///   cap (Task 2), URL timeout (Task 3), and
+///   HEAD pre-fetch toggle (Task 4).
 async fn load_image_for_attach(
     path_or_url: &str,
+    cfg: &VoiceImageConfig,
 ) -> Result<(String, Vec<u8>), String> {
     if path_or_url.is_empty() {
         return Err("path must not be empty".to_string());
     }
     if is_url(path_or_url) {
-        return fetch_image_url(path_or_url).await;
+        return fetch_image_url(path_or_url, cfg).await;
     }
     let media_type = infer_image_media_type(path_or_url)?;
     let data = std::fs::read(path_or_url)
@@ -970,12 +1048,13 @@ async fn load_image_for_attach(
     if data.is_empty() {
         return Err(format!("file {path_or_url:?} is empty"));
     }
-    if data.len() > MAX_IMAGE_SIZE_BYTES {
+    let cap = cfg.size_cap_bytes();
+    if data.len() > cap {
         return Err(format!(
             "file {path_or_url:?} is {} bytes; max allowed is {} bytes ({} MB)",
             data.len(),
-            MAX_IMAGE_SIZE_BYTES,
-            MAX_IMAGE_SIZE_BYTES / (1024 * 1024),
+            cap,
+            cfg.size_cap_mb,
         ));
     }
     Ok((media_type.to_string(), data))
@@ -993,11 +1072,39 @@ fn is_url(s: &str) -> bool {
 /// header. Falls back to extension inference
 /// on the URL's path component when the header
 /// is absent or doesn't match a supported
-/// image type. Enforces `MAX_IMAGE_SIZE_BYTES`
-/// post-fetch (Phase 157+ candidate: HEAD
-/// pre-fetch for size check).
-async fn fetch_image_url(url: &str) -> Result<(String, Vec<u8>), String> {
-    let resp = reqwest::get(url)
+/// image type.
+///
+/// Phase 161:
+/// - Builds a `reqwest::Client` with
+///   `cfg.url_timeout_secs` applied so a slow
+///   URL no longer hangs the session
+///   indefinitely (Task 3).
+/// - When `cfg.head_precheck` is true, issues
+///   a HEAD before the GET; refuses with a
+///   clear error when Content-Length exceeds
+///   the cap. Falls through to GET when HEAD
+///   fails or Content-Length is absent (Task
+///   4).
+/// - Enforces the operator-tunable
+///   `cfg.size_cap_bytes()` post-fetch in
+///   addition to the HEAD pre-check (Task 2).
+async fn fetch_image_url(
+    url: &str,
+    cfg: &VoiceImageConfig,
+) -> Result<(String, Vec<u8>), String> {
+    let cap = cfg.size_cap_bytes();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(cfg.url_timeout_secs))
+        .build()
+        .map_err(|e| format!("build reqwest client: {e}"))?;
+    if cfg.head_precheck {
+        if let Some(reason) = head_precheck_size(&client, url, cap).await? {
+            return Err(reason);
+        }
+    }
+    let resp = client
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("fetch {url:?}: {e}"))?;
     let header_ct = resp
@@ -1013,12 +1120,12 @@ async fn fetch_image_url(url: &str) -> Result<(String, Vec<u8>), String> {
     if bytes.is_empty() {
         return Err(format!("url {url:?} returned empty body"));
     }
-    if bytes.len() > MAX_IMAGE_SIZE_BYTES {
+    if bytes.len() > cap {
         return Err(format!(
             "url {url:?} returned {} bytes; max allowed is {} bytes ({} MB)",
             bytes.len(),
-            MAX_IMAGE_SIZE_BYTES,
-            MAX_IMAGE_SIZE_BYTES / (1024 * 1024),
+            cap,
+            cfg.size_cap_mb,
         ));
     }
     let media_type = media_type_from_content_type(header_ct.as_deref())
@@ -1032,6 +1139,60 @@ async fn fetch_image_url(url: &str) -> Result<(String, Vec<u8>), String> {
             )
         })?;
     Ok((media_type.to_string(), bytes))
+}
+
+/// Phase 161 — HEAD pre-fetch for size check.
+/// Returns:
+/// - `Ok(None)` when the pre-check passed (or
+///   the server didn't give us a usable
+///   `Content-Length`) — caller falls through
+///   to GET.
+/// - `Ok(Some(reason))` when Content-Length
+///   exceeded the cap — caller surfaces the
+///   reason and skips the GET.
+/// - `Err(_)` only for fatal transport errors;
+///   we deliberately fall through on HTTP 405
+///   ("Method Not Allowed", common for static
+///   CDNs) so HEAD-hostile origins still
+///   work.
+async fn head_precheck_size(
+    client: &reqwest::Client,
+    url: &str,
+    cap: usize,
+) -> Result<Option<String>, String> {
+    let resp = match client.head(url).send().await {
+        Ok(r) => r,
+        // Transport failure on HEAD: don't
+        // block the GET attempt; some networks
+        // proxy GET fine but reject HEAD.
+        Err(_) => return Ok(None),
+    };
+    if !resp.status().is_success() {
+        // 405 / 403 / 5xx on HEAD — fall
+        // through. The GET will surface a
+        // proper error if the URL is truly
+        // broken.
+        return Ok(None);
+    }
+    let Some(len_header) = resp.headers().get(reqwest::header::CONTENT_LENGTH)
+    else {
+        return Ok(None);
+    };
+    let Some(len_str) = len_header.to_str().ok() else {
+        return Ok(None);
+    };
+    let Ok(len) = len_str.parse::<usize>() else {
+        return Ok(None);
+    };
+    if len > cap {
+        let cap_mb = cap / (1024 * 1024);
+        Ok(Some(format!(
+            "url {url:?} advertises {len} bytes via Content-Length; \
+             max allowed is {cap} bytes ({cap_mb} MB) — refused before download"
+        )))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Phase 156 — Map an HTTP `Content-Type`
@@ -1142,13 +1303,15 @@ mod tests {
 
     #[tokio::test]
     async fn load_image_empty_path_rejected() {
-        let err = load_image_for_attach("").await.unwrap_err();
+        let cfg = VoiceImageConfig::default();
+        let err = load_image_for_attach("", &cfg).await.unwrap_err();
         assert!(err.contains("path must not be empty"), "{err}");
     }
 
     #[tokio::test]
     async fn load_image_missing_file_rejected() {
-        let err = load_image_for_attach("/nonexistent/file.png")
+        let cfg = VoiceImageConfig::default();
+        let err = load_image_for_attach("/nonexistent/file.png", &cfg)
             .await
             .unwrap_err();
         assert!(err.contains("read"), "{err}");
@@ -1157,11 +1320,14 @@ mod tests {
     // ---- Phase 156 — size cap + URL substrate ----
 
     #[test]
-    fn max_image_size_cap_is_ten_megabytes() {
-        // Pin the cap so future tasks (or the
-        // INSTALL.md doc) stay in sync. Same as
-        // Phase 129's Drive inline cap.
-        assert_eq!(MAX_IMAGE_SIZE_BYTES, 10 * 1024 * 1024);
+    fn default_image_size_cap_is_ten_megabytes() {
+        // Pin the default. Same as Phase 129's
+        // Drive inline cap. Phase 161 promoted
+        // this from a hardcoded constant to the
+        // default of `VoiceImageConfig::size_cap_mb`.
+        assert_eq!(DEFAULT_IMAGE_SIZE_CAP_MB, 10);
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.size_cap_bytes(), 10 * 1024 * 1024);
     }
 
     #[tokio::test]
@@ -1169,10 +1335,94 @@ mod tests {
         // Write a 10MB + 1 byte file and verify
         // load_image_for_attach rejects it with
         // a clear error.
+        let cfg = VoiceImageConfig::default();
         let tmp = std::env::temp_dir().join("phase156-oversized.png");
-        let oversized = vec![0u8; MAX_IMAGE_SIZE_BYTES + 1];
+        let oversized = vec![0u8; cfg.size_cap_bytes() + 1];
         std::fs::write(&tmp, &oversized).expect("write tmp");
-        let err = load_image_for_attach(tmp.to_str().expect("utf8"))
+        let err = load_image_for_attach(tmp.to_str().expect("utf8"), &cfg)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("max allowed"),
+            "expected size-cap error, got: {err}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    // ---- Phase 161 — VoiceImageConfig knobs ----
+
+    #[test]
+    fn voice_image_config_defaults_match_phase_156_behavior() {
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.size_cap_mb, 10);
+        assert_eq!(cfg.url_timeout_secs, 30);
+        assert!(cfg.head_precheck);
+    }
+
+    #[test]
+    fn voice_image_config_size_cap_bytes_scales_correctly() {
+        let cfg = VoiceImageConfig {
+            size_cap_mb: 5,
+            url_timeout_secs: 30,
+            head_precheck: true,
+        };
+        assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_from_full_section() {
+        let toml = r#"
+size_cap_mb = 25
+url_timeout_secs = 60
+head_precheck = false
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.size_cap_mb, 25);
+        assert_eq!(cfg.url_timeout_secs, 60);
+        assert!(!cfg.head_precheck);
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_partial_with_defaults() {
+        let toml = r#"
+size_cap_mb = 50
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.size_cap_mb, 50);
+        // Untouched defaults preserved.
+        assert_eq!(cfg.url_timeout_secs, 30);
+        assert!(cfg.head_precheck);
+    }
+
+    #[test]
+    fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
+        // An operator setting an absurd cap like
+        // u32::MAX MB shouldn't overflow the
+        // bytes computation — saturate at
+        // usize::MAX instead. Documented as
+        // "no upper bound — operator trust"
+        // in the open doc.
+        let cfg = VoiceImageConfig {
+            size_cap_mb: usize::MAX,
+            url_timeout_secs: 30,
+            head_precheck: true,
+        };
+        assert_eq!(cfg.size_cap_bytes(), usize::MAX);
+    }
+
+    #[tokio::test]
+    async fn load_image_honors_operator_size_cap_below_default() {
+        // Write a 6-byte file and verify a
+        // 5-byte cap rejects it (sub-default
+        // operator-tighter cap).
+        let cfg = VoiceImageConfig {
+            size_cap_mb: 0, // 0 MB = 0 bytes
+            url_timeout_secs: 30,
+            head_precheck: true,
+        };
+        let tmp = std::env::temp_dir().join("phase161-tightcap.png");
+        std::fs::write(&tmp, b"abc").expect("write tmp");
+        let err = load_image_for_attach(tmp.to_str().expect("utf8"), &cfg)
             .await
             .unwrap_err();
         assert!(
@@ -1594,6 +1844,7 @@ mod tests {
             output_device: None,
             capture_debug_path: None,
             vad: Default::default(),
+            image: Default::default(),
         };
         assert_eq!(cfg.asr.beam_size, Some(5));
         assert_eq!(cfg.tts.speaker_id, Some(0));
