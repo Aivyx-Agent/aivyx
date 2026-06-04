@@ -3535,6 +3535,22 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 163 — `ContentPart::Document` for PDF Routing
+
+**See [PHASE_163.md](PHASE_163.md).** First DESIGN.md
+amendment in 54 phases (A13 under
+`docs/amendments/`). Phase 162's just-shipped
+honest-debt: PDFs flow through
+`ContentPart::Image` and Anthropic returns 400.
+Phase 163 adds a `Document` variant across the
+content-block stack (aivyx-core, aivyx-llm, four
+provider modules, aivyx-voice routing) so PDFs
+route as document blocks at the Anthropic API
+and skip-and-warn on providers that don't
+support them. Multi-crate touch; DESIGN.md and
+`aivyx-core/src/lib.rs` streaks both reset.
+Zero new workspace deps.
+
 ## Phase 162 — Phase 156 + 161 Stragglers (PDF/SVG/TIFF + Authenticated URL Fetch)
 
 **Frozen — see [PHASE_162.md](PHASE_162.md).** Phase 156's last
