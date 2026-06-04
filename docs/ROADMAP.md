@@ -3535,6 +3535,22 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 166 — Small Carry-Overs Bundle (PDF Page Cap Knob + URL Retry + Drive Walk Floor)
+
+**See [PHASE_166.md](PHASE_166.md).** Three small
+substrate carry-overs from three different
+phases: Phase 165's hardcoded
+`ANTHROPIC_PDF_PAGE_CAP` becomes a config knob
+with env-var fallback (`AnthropicConfig::
+pdf_page_cap`); Phase 161's URL fetch gains
+retry-on-transient-timeout via
+`VoiceImageConfig::url_retry_count` +
+`url_retry_backoff_ms` with exponential
+backoff; Phase 160's drive walk gains a
+`walk_min_concurrent` floor companion mirroring
+Phase 158's calendar pattern. Touches three
+different crates. Zero new workspace deps.
+
 ## Phase 165 — Multimodal Stragglers Bundle (Office Formats + Per-URL Headers + PDF Page Cap)
 
 **Frozen — see [PHASE_165.md](PHASE_165.md).** Three multimodal
