@@ -342,61 +342,151 @@ fn sort_key(event: &Value) -> Option<DateTime<Utc>> {
 /// Phase 151 — cross-calendar event
 /// deduplication. Removes events that share
 /// `(summary, start)` with an earlier event in
-/// the list. The first occurrence wins —
-/// operators typically pass calendar_ids with
-/// their primary calendar first, so the
-/// retained copy is from the most-authoritative
-/// source.
+/// the list. The first occurrence (by original
+/// input order) wins — operators typically pass
+/// calendar_ids with their primary calendar
+/// first, so the retained copy is from the
+/// most-authoritative source.
 ///
 /// Pure substrate so the dedup can be tested
 /// without touching the Drive client.
 ///
 /// Phase 155 — `fuzzy` toggle. When true (the
-/// post-155 default), the key is the
-/// `(normalize_summary, bucket_start)` pair:
-///   `normalize_summary` is `trim().to_lowercase()`;
-///   `bucket_start` is the event's start time
-///   truncated to a 5-minute boundary.
-/// When false (the Phase 151 behavior), the key
-/// is the raw `(summary, start)` pair.
+/// post-155 default), summaries normalize via
+/// `normalize_summary` (trim+lowercase) and
+/// start times bucket to 5-minute boundaries.
+///
+/// Phase 158 — sliding-window adjacency merge
+/// (only when `fuzzy=true`). Events sharing a
+/// normalized summary are grouped, each group
+/// sorted by start time, then swept: any pair
+/// of consecutive starts within ±5 minutes
+/// collapses into a cluster. Within a cluster,
+/// the event with the smallest original input
+/// index wins. Output is re-sorted by original
+/// input index so cross-calendar ordering
+/// matches Phase 151 semantics.
 pub(crate) fn dedup_events(events: Vec<Value>, fuzzy: bool) -> Vec<Value> {
-    let mut seen: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
-    let mut out: Vec<Value> = Vec::with_capacity(events.len());
-    for event in events {
-        let raw_summary = event
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let raw_start = event
-            .get("start")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let (summary_key, start_key) = if fuzzy {
-            (
-                normalize_summary(&raw_summary),
-                bucket_start_5min(&raw_start),
-            )
-        } else {
-            (raw_summary, raw_start)
-        };
-        // Defensive: events with both fields
-        // missing (impossibly malformed) get
-        // passed through individually rather
-        // than collapsed into one "no-key"
-        // bucket. The first occurrence's
-        // (("","")) key blocks the rest, which
-        // is acceptable — the alternative is
-        // surfacing N copies of effectively-
-        // unidentified events.
-        let key = (summary_key, start_key);
-        if seen.insert(key) {
-            out.push(event);
+    if !fuzzy {
+        // Phase 151 exact-key dedup, unchanged.
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut out: Vec<Value> = Vec::with_capacity(events.len());
+        for event in events {
+            let raw_summary = event
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_start = event
+                .get("start")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if seen.insert((raw_summary, raw_start)) {
+                out.push(event);
+            }
         }
+        return out;
     }
-    out
+
+    sliding_window_dedup(events)
+}
+
+/// Phase 158 — sliding-window adjacency merge
+/// for fuzzy dedup. Pure substrate so the merge
+/// can be exhaustively tested without live API.
+fn sliding_window_dedup(events: Vec<Value>) -> Vec<Value> {
+    // Pair each event with original index and
+    // pre-compute the merge keys.
+    #[derive(Clone)]
+    struct Tagged {
+        index: usize,
+        summary_key: String,
+        // None means unparseable start —
+        // event sits alone in its own cluster.
+        start_dt: Option<chrono::DateTime<chrono::Utc>>,
+        raw_start: String,
+        event: Value,
+    }
+
+    let mut tagged: Vec<Tagged> = events
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let raw_summary = event
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_start = event
+                .get("start")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let start_dt = parse_event_time(&raw_start);
+            Tagged {
+                index,
+                summary_key: normalize_summary(&raw_summary),
+                start_dt,
+                raw_start,
+                event,
+            }
+        })
+        .collect();
+
+    // Sort by (summary_key, start_dt). Unparseable
+    // starts sort last within the summary group
+    // and each becomes its own cluster.
+    tagged.sort_by(|a, b| {
+        a.summary_key
+            .cmp(&b.summary_key)
+            .then_with(|| match (a.start_dt, b.start_dt) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.raw_start.cmp(&b.raw_start),
+            })
+    });
+
+    // Sweep: cluster boundary is summary change,
+    // unparseable start, or consecutive gap > 5
+    // minutes. Within each cluster, pick the
+    // tagged with the smallest original index.
+    let bucket_seconds: i64 = 300;
+    let mut kept: Vec<Tagged> = Vec::with_capacity(tagged.len());
+    let mut iter = tagged.into_iter().peekable();
+    while let Some(first) = iter.next() {
+        let mut cluster: Vec<Tagged> = vec![first];
+        loop {
+            let last = cluster.last().unwrap();
+            let Some(prev_dt) = last.start_dt else {
+                break; // unparseable: cluster closes after itself
+            };
+            let Some(next) = iter.peek() else { break };
+            if next.summary_key != last.summary_key {
+                break;
+            }
+            let Some(next_dt) = next.start_dt else {
+                break;
+            };
+            let gap = next_dt.signed_duration_since(prev_dt).num_seconds().abs();
+            if gap < bucket_seconds {
+                cluster.push(iter.next().unwrap());
+            } else {
+                break;
+            }
+        }
+        let winner = cluster
+            .into_iter()
+            .min_by_key(|t| t.index)
+            .expect("cluster always has at least one element");
+        kept.push(winner);
+    }
+
+    // Restore original input order.
+    kept.sort_by_key(|t| t.index);
+    kept.into_iter().map(|t| t.event).collect()
 }
 
 /// Phase 155 — fuzzy summary normalization:
@@ -408,30 +498,6 @@ pub(crate) fn dedup_events(events: Vec<Value>, fuzzy: bool) -> Vec<Value> {
 /// suffixes keep their distinctions.
 pub(crate) fn normalize_summary(summary: &str) -> String {
     summary.trim().to_lowercase()
-}
-
-/// Phase 155 — bucket an RFC 3339 start time
-/// to a 5-minute boundary, so events at
-/// `10:00:00` and `10:01:30` dedupe against
-/// each other. Events at `9:59` and `10:00`
-/// fall in different buckets (9:55 vs 10:00 —
-/// adjacent-bucket merging is Phase 156+
-/// candidate).
-///
-/// On unparseable input, returns the raw
-/// string — so two unparseable events with
-/// identical strings still match. Defensive
-/// posture; in practice Google always returns
-/// parseable timestamps.
-pub(crate) fn bucket_start_5min(start: &str) -> String {
-    let Some(dt) = parse_event_time(start) else {
-        return start.to_string();
-    };
-    let unix = dt.timestamp();
-    let bucketed = (unix / 300) * 300;
-    let bucketed_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(bucketed, 0)
-        .unwrap_or(dt);
-    bucketed_dt.to_rfc3339()
 }
 
 /// Build the shared event summary, then attach
@@ -915,24 +981,6 @@ mod tests {
     }
 
     #[test]
-    fn bucket_start_5min_truncates_to_boundary() {
-        let b = bucket_start_5min("2026-06-04T10:00:00+00:00");
-        assert!(b.contains("10:00:00"), "{b}");
-        let b = bucket_start_5min("2026-06-04T10:01:30+00:00");
-        assert!(b.contains("10:00:00"), "{b}");
-        let b = bucket_start_5min("2026-06-04T10:04:59+00:00");
-        assert!(b.contains("10:00:00"), "{b}");
-        let b = bucket_start_5min("2026-06-04T10:05:00+00:00");
-        assert!(b.contains("10:05:00"), "{b}");
-    }
-
-    #[test]
-    fn bucket_start_5min_returns_raw_on_unparseable() {
-        let b = bucket_start_5min("not-a-timestamp");
-        assert_eq!(b, "not-a-timestamp");
-    }
-
-    #[test]
     fn dedup_fuzzy_identical_normalized_titles_dedupe() {
         let start = at_offset(60);
         let events = vec![
@@ -977,6 +1025,102 @@ mod tests {
         let events = vec![
             json!({"id": "a", "summary": "Standup", "start": start.clone()}),
             json!({"id": "b", "summary": "Standup — Team A", "start": start}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 2);
+    }
+
+    // ---- Phase 158 — sliding-window dedup ----
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_merges_adjacent_buckets() {
+        // 10:04 + 10:06 — under Phase 155 bucket
+        // flooring these fell in 10:00 and 10:05
+        // buckets (kept separate). Under Phase
+        // 158 sliding-window they're 2 min apart
+        // — adjacency merges.
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:04:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "2026-06-04T10:06:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_chain_merges_three_events() {
+        // 10:00, 10:04, 10:08 — consecutive gaps
+        // are 4 min and 4 min. Chain folds all
+        // three into one cluster.
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:00:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "2026-06-04T10:04:00+00:00"}),
+            json!({"id": "c", "summary": "Standup", "start": "2026-06-04T10:08:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_chain_breaks_at_5min_gap() {
+        // 10:00, 10:04 (merge), then 10:10 — gap
+        // 6 min from 10:04 → new cluster.
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:00:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "2026-06-04T10:04:00+00:00"}),
+            json!({"id": "c", "summary": "Standup", "start": "2026-06-04T10:10:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 2);
+        let ids: Vec<&str> = got
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_lowest_input_index_wins_regardless_of_time() {
+        // Primary calendar (index 0) lists event
+        // at 10:06; secondary (index 1) lists at
+        // 10:04. Sliding-window merges them; the
+        // primary's entry wins on lower input
+        // index even though it's later in time.
+        let events = vec![
+            json!({"id": "primary", "summary": "Standup", "start": "2026-06-04T10:06:00+00:00"}),
+            json!({"id": "secondary", "summary": "Standup", "start": "2026-06-04T10:04:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("primary"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_preserves_input_order() {
+        // Two separate events in reverse time
+        // order get sorted internally for the
+        // sweep, but output preserves input
+        // order (matches Phase 151 semantics).
+        let events = vec![
+            json!({"id": "a", "summary": "Late", "start": "2026-06-04T15:00:00+00:00"}),
+            json!({"id": "b", "summary": "Early", "start": "2026-06-04T09:00:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0]["id"], json!("a"));
+        assert_eq!(got[1]["id"], json!("b"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_sliding_window_unparseable_start_stays_alone() {
+        // Unparseable start can't participate in
+        // adjacency merge — stays in its own
+        // cluster regardless of summary match.
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:00:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "not-a-time"}),
         ];
         let got = dedup_events(events, true);
         assert_eq!(got.len(), 2);
