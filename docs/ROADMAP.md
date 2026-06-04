@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 163 — `ContentPart::Document` for PDF Routing
 
-**See [PHASE_163.md](PHASE_163.md).** First DESIGN.md
+**Frozen — see [PHASE_163.md](PHASE_163.md).** First DESIGN.md
 amendment in 54 phases (A13 under
 `docs/amendments/`). Phase 162's just-shipped
 honest-debt: PDFs flow through

@@ -213,6 +213,15 @@ pub enum MessageContent {
 }
 ```
 
+> **Multimodal extension** — the actual `MessageContent` /
+> `ContentPart` enums in `aivyx-core` carry `Image` and
+> `Document` variants alongside `Text`. The `Image` variant
+> landed during the multimodal MVP work; the `Document`
+> variant is governed by
+> [`docs/amendments/2026-06-04-content-part-document.md`](docs/amendments/2026-06-04-content-part-document.md)
+> (A13) so PDFs route to provider-specific document content
+> blocks rather than image blocks.
+
 ### ChannelContext — the delivery surface
 
 ```rust

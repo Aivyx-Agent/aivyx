@@ -237,8 +237,61 @@ Anthropic. Phase 164+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 163 exit. Predictions at
-sign-off: DESIGN.md RESET (amendment A13);
-PRODUCT.md HOLD → 54; `aivyx-core/src/lib.rs`
-RESET; zero new deps; test count delta
-`+15` to `+30`; zero clippy warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md RESET (amendment A13) | Reset; new amendment reference added to the multimodal MVP block | ✅ (as predicted) |
+| PRODUCT.md HOLD → 54 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` RESET | Reset; Document variants added | ✅ (as predicted) |
+| Zero new workspace deps | All work used existing primitives (base64, serde_json, reqwest::header) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean throughout | ✅ |
+| Test count delta `+15` to `+30` | `+19` (aivyx-core +3, aivyx-llm +6, aivyx-voice +6, anthropic feature +2, openai/ollama/mistral_rs +0 — provider tests are skip-and-warn paths and would require live HTTP) | ✅ (within band) |
+| Task plan: 5 tasks | 4 commits (Tasks 2 + 3 collapsed because the variant fan-out forced all match sites to update in one go) | ⚠️ |
+
+All five exit criteria met. PDF document
+routing works end-to-end on Anthropic; the
+three other providers skip-and-warn cleanly.
+
+### What landed beyond the open
+
+Nothing functional beyond the open. Two
+process notes worth recording:
+
+**Tasks 2 + 3 collapsed.** Adding a variant to
+`ContentBlock` forced exhaustivity errors at
+every match site in core and across the four
+provider modules. Splitting Task 2 (core
+variants) from Task 3 (llm variant + provider
+mappings) would have meant landing a midpoint
+commit with non-exhaustive match errors and
+the build broken. Same posture as Phase 161
+collapsed its Task 2 + Task 3.
+
+**Multi-image / single-image path collapsed.**
+Phase 156's `Message::text_with_image`
+shortcut (for the 1-image case) is no longer
+reachable from `aivyx-voice` after Task 4 —
+the new routing logic always builds Mixed so
+the per-attachment classification (Image vs.
+Document) is uniform. The `text_with_image`
+constructor is still public in `aivyx-core`
+for other consumers; voice just doesn't
+exercise it anymore. Removing it from core
+would be a Phase 164+ cleanup; for now the
+dead-from-voice code is harmless.
+
+### Amendment A13 — first DESIGN.md amendment in 54 phases
+
+A12 landed at Phase 109. Phase 163's
+amendment is the first in 54 phases. The
+discipline held: `docs/amendments/` got the
+new file, DESIGN.md's "Multimodal extension"
+note references it, the amendment file
+itself documents the "what changed / design
+decisions / what this does not change /
+implementing phase" sections per the
+existing convention.
+
+### Fifty-second deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

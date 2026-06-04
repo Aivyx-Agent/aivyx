@@ -1567,14 +1567,28 @@ lose access.
 shipped png / jpg / jpeg / gif / webp. Phase 162
 extends with **pdf** (`application/pdf`), **svg**
 (`image/svg+xml`), and **tif / tiff**
-(`image/tiff`). The downstream LLM provider
-decides whether to accept each type as image-
-block content — PDFs in particular typically
-require a separate document-block code path
-(carried in a Phase 163+ candidate for core's
-`ContentPart` enum). The voice substrate passes
-the media_type through opaquely; a provider
-rejection surfaces as a per-attach error.
+(`image/tiff`).
+
+**Phase 163 (amendment A13) — PDF document
+routing.** PDFs no longer surface as image
+blocks. The voice substrate routes
+`application/pdf` through
+`ContentPart::Document`, which the Anthropic
+provider emits as a native document content
+block (Claude 3.5+). On OpenAI / Ollama /
+mistral_rs, document blocks are dropped with a
+one-line warning to stderr (those providers
+don't have a document content block in their
+chat APIs — OpenAI has a separate Files API
+flow). See
+[`docs/amendments/2026-06-04-content-part-document.md`](amendments/2026-06-04-content-part-document.md)
+for the contract change.
+
+SVG and TIFF still route as image blocks; most
+vision LLMs reject them, and the rejection
+surfaces as a per-attach error from the
+provider. The voice substrate doesn't try to
+guess which providers accept which formats.
 
 **Phase 162 security note for `url_headers`:**
 The TOML config file is the only place these
