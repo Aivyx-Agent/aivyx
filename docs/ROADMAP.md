@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 157 — Drive Recursive Walk Close-Out Bundle
+
+**See [PHASE_157.md](PHASE_157.md).** Phase 153 close-out
+deferred 4 phases. Three drive honest-debts in one
+phase: parallel walk_folder_tree via level-BFS +
+join_all, drive_id scope on the recursive walk
+(corpora=drive + driveId + includeItemsFromAllDrives +
+supportsAllDrives threaded through), operator-tunable
+recursive_max_depth (cap 20) + recursive_max_folders
+(cap 1000) input knobs. Symmetric to Phase 148/151/
+152/153/155/156 close-out cadence. futures-util added
+to aivyx-drive as crate dep; zero new workspace deps.
+
 ## Phase 156 — Multimodal Close-Out Bundle (Multi-Image + URL Source + Size Cap)
 
 **Frozen — see [PHASE_156.md](PHASE_156.md).** Phase 154 close-out
