@@ -3535,6 +3535,22 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 164 — Phase 163 Cleanups (Anthropic Model Guard + DOCX Inference)
+
+**See [PHASE_164.md](PHASE_164.md).** Phase 163 just-
+shipped follow-ons (two-debt bundle; smaller than
+the typical three). Anthropic provider gains a
+pre-flight model-version guard so document blocks
+on pre-Claude-3.5 models surface a clear client-
+side error instead of a 400 from the API. DOCX
+extension + MIME inference lands and routes via
+the Phase 163 `Document` variant; provider
+rejection on Anthropic surfaces same-posture as
+SVG/TIFF. Phase 163's named "remove dead
+Message::text_with_image" sub-task dropped
+honestly — Telegram + channel still call it.
+Zero new workspace deps.
+
 ## Phase 163 — `ContentPart::Document` for PDF Routing
 
 **Frozen — see [PHASE_163.md](PHASE_163.md).** First DESIGN.md
