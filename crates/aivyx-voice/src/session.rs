@@ -981,6 +981,20 @@ pub struct VoiceImageConfig {
     /// origins set false.
     #[serde(default = "VoiceImageConfig::default_head_precheck")]
     pub head_precheck: bool,
+    /// Phase 162 — operator-supplied HTTP
+    /// headers attached to every `/image <url>`
+    /// fetch (both HEAD and GET). Useful for
+    /// Authorization / Cookie / Origin against
+    /// authenticated origins. Defaults to an
+    /// empty map (no headers) so existing
+    /// behavior is preserved. Configured via:
+    /// ```toml
+    /// [voice.image.url_headers]
+    /// Authorization = "Bearer xxx"
+    /// Cookie        = "session=yyy"
+    /// ```
+    #[serde(default)]
+    pub url_headers: std::collections::HashMap<String, String>,
 }
 
 impl Default for VoiceImageConfig {
@@ -989,6 +1003,7 @@ impl Default for VoiceImageConfig {
             size_cap_mb: Self::default_size_cap_mb(),
             url_timeout_secs: Self::default_url_timeout_secs(),
             head_precheck: Self::default_head_precheck(),
+            url_headers: std::collections::HashMap::new(),
         }
     }
 }
@@ -1097,13 +1112,17 @@ async fn fetch_image_url(
         .timeout(std::time::Duration::from_secs(cfg.url_timeout_secs))
         .build()
         .map_err(|e| format!("build reqwest client: {e}"))?;
+    let header_map = build_header_map(&cfg.url_headers)?;
     if cfg.head_precheck {
-        if let Some(reason) = head_precheck_size(&client, url, cap).await? {
+        if let Some(reason) =
+            head_precheck_size(&client, url, cap, &header_map).await?
+        {
             return Err(reason);
         }
     }
     let resp = client
         .get(url)
+        .headers(header_map.clone())
         .send()
         .await
         .map_err(|e| format!("fetch {url:?}: {e}"))?;
@@ -1159,8 +1178,9 @@ async fn head_precheck_size(
     client: &reqwest::Client,
     url: &str,
     cap: usize,
+    headers: &reqwest::header::HeaderMap,
 ) -> Result<Option<String>, String> {
-    let resp = match client.head(url).send().await {
+    let resp = match client.head(url).headers(headers.clone()).send().await {
         Ok(r) => r,
         // Transport failure on HEAD: don't
         // block the GET attempt; some networks
@@ -1193,6 +1213,29 @@ async fn head_precheck_size(
     } else {
         Ok(None)
     }
+}
+
+/// Phase 162 — build a `reqwest::header::HeaderMap`
+/// from the operator's `[voice.image.url_headers]`
+/// TOML table. Surfaces `InvalidHeaderName` and
+/// `InvalidHeaderValue` errors as plain strings
+/// so the caller can attach them to the
+/// per-attach error message. Returns an empty
+/// map (cheap clone) when the operator supplied
+/// no headers.
+fn build_header_map(
+    raw: &std::collections::HashMap<String, String>,
+) -> Result<reqwest::header::HeaderMap, String> {
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    let mut out = HeaderMap::with_capacity(raw.len());
+    for (name, value) in raw {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| format!("invalid header name {name:?}: {e}"))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|e| format!("invalid value for header {name:?}: {e}"))?;
+        out.insert(header_name, header_value);
+    }
+    Ok(out)
 }
 
 /// Phase 156 — Map an HTTP `Content-Type`
@@ -1448,6 +1491,9 @@ mod tests {
         assert_eq!(cfg.size_cap_mb, 10);
         assert_eq!(cfg.url_timeout_secs, 30);
         assert!(cfg.head_precheck);
+        // Phase 162 — url_headers defaults to
+        // empty map.
+        assert!(cfg.url_headers.is_empty());
     }
 
     #[test]
@@ -1456,6 +1502,7 @@ mod tests {
             size_cap_mb: 5,
             url_timeout_secs: 30,
             head_precheck: true,
+            url_headers: Default::default(),
         };
         assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
     }
@@ -1483,6 +1530,75 @@ size_cap_mb = 50
         // Untouched defaults preserved.
         assert_eq!(cfg.url_timeout_secs, 30);
         assert!(cfg.head_precheck);
+        assert!(cfg.url_headers.is_empty());
+    }
+
+    // ---- Phase 162 — url_headers + build_header_map ----
+
+    #[test]
+    fn voice_image_config_deserializes_url_headers_block() {
+        let toml = r#"
+size_cap_mb = 10
+
+[url_headers]
+Authorization = "Bearer xyz"
+"X-Origin" = "aivyx-test"
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.url_headers.len(), 2);
+        assert_eq!(
+            cfg.url_headers.get("Authorization").map(String::as_str),
+            Some("Bearer xyz")
+        );
+        assert_eq!(
+            cfg.url_headers.get("X-Origin").map(String::as_str),
+            Some("aivyx-test")
+        );
+    }
+
+    #[test]
+    fn build_header_map_empty_returns_empty() {
+        let map = std::collections::HashMap::new();
+        let hm = build_header_map(&map).expect("ok on empty");
+        assert!(hm.is_empty());
+    }
+
+    #[test]
+    fn build_header_map_populates_authorization_and_custom_headers() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("Authorization".to_string(), "Bearer abc".to_string());
+        map.insert("X-Custom".to_string(), "hello".to_string());
+        let hm = build_header_map(&map).expect("ok");
+        assert_eq!(hm.len(), 2);
+        assert_eq!(
+            hm.get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer abc")
+        );
+        assert_eq!(
+            hm.get("x-custom").and_then(|v| v.to_str().ok()),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn build_header_map_rejects_invalid_header_name() {
+        let mut map = std::collections::HashMap::new();
+        // Header names can't contain spaces or
+        // non-token characters.
+        map.insert("Bad Header Name".to_string(), "x".to_string());
+        let err = build_header_map(&map).unwrap_err();
+        assert!(err.contains("invalid header name"), "{err}");
+    }
+
+    #[test]
+    fn build_header_map_rejects_invalid_header_value() {
+        let mut map = std::collections::HashMap::new();
+        // Newlines aren't allowed in header
+        // values per HTTP/1.1.
+        map.insert("X-Bad".to_string(), "first\r\nInjected: yes".to_string());
+        let err = build_header_map(&map).unwrap_err();
+        assert!(err.contains("invalid value for header"), "{err}");
     }
 
     #[test]
@@ -1497,6 +1613,7 @@ size_cap_mb = 50
             size_cap_mb: usize::MAX,
             url_timeout_secs: 30,
             head_precheck: true,
+            url_headers: Default::default(),
         };
         assert_eq!(cfg.size_cap_bytes(), usize::MAX);
     }
@@ -1510,6 +1627,7 @@ size_cap_mb = 50
             size_cap_mb: 0, // 0 MB = 0 bytes
             url_timeout_secs: 30,
             head_precheck: true,
+            url_headers: Default::default(),
         };
         let tmp = std::env::temp_dir().join("phase161-tightcap.png");
         std::fs::write(&tmp, b"abc").expect("write tmp");
