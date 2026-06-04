@@ -3535,6 +3535,21 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 159 — Drive Activity API: `drive.recent_activity`
+
+**See [PHASE_159.md](PHASE_159.md).** Twice-deferred
+Recommended pivot. New `drive.recent_activity` tool
+backed by the Drive Activity API (separate googleapis
+subdomain, separate OAuth scope). Answers "who did
+what to my files" — actor / action / target /
+timestamp envelope — where Phase 145's `recent_*`
+tools only answer "what files moved." Substrate adds
+`drive.activity.readonly` scope to
+`DEFAULT_DRIVE_SCOPES`, a `DRIVE_ACTIVITY_API_BASE`
+constant, and a `post_json_activity` client helper.
+Operators with existing tokens re-run
+`aivyx-drive auth init` once. Zero new workspace deps.
+
 ## Phase 158 — Calendar Follow-Ons Bundle (Sliding-Window Dedup + calendarList Cache + min_concurrent)
 
 **Frozen — see [PHASE_158.md](PHASE_158.md).** Phase 155 close-out
