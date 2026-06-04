@@ -404,23 +404,26 @@ where
     let pending_imgs = channel.take_pending_images();
     let message = if pending_imgs.is_empty() {
         Message::text(channel.session_id(), transcribed.clone())
-    } else if pending_imgs.len() == 1 {
-        let (media_type, data) =
-            pending_imgs.into_iter().next().expect("len 1");
-        Message::text_with_image(
-            channel.session_id(),
-            transcribed.clone(),
-            media_type,
-            data,
-        )
     } else {
+        // Phase 163 / amendment A13 — any pending
+        // image whose media_type is a document
+        // type (currently just application/pdf)
+        // routes through ContentPart::Document
+        // instead of ContentPart::Image. Mixed
+        // is the only shape that supports text +
+        // document together, so we always build
+        // Mixed when there's at least one pending
+        // image (Phase 156's single-image shortcut
+        // is no longer reachable without a media-
+        // type check; collapsing into one path
+        // keeps the routing logic local).
         use aivyx_core::{ContentPart, MessageContent, MessageId};
         use std::time::SystemTime;
         let mut parts: Vec<ContentPart> =
             Vec::with_capacity(pending_imgs.len() + 1);
         parts.push(ContentPart::Text(transcribed.clone()));
         for (media_type, data) in pending_imgs {
-            parts.push(ContentPart::Image { media_type, data });
+            parts.push(content_part_for_attachment(media_type, data));
         }
         Message {
             id: MessageId::new(),
@@ -1215,6 +1218,44 @@ async fn head_precheck_size(
     }
 }
 
+/// Phase 163 / amendment A13 — pick the right
+/// `ContentPart` variant for a pending
+/// attachment based on its media_type.
+/// Document media types route to
+/// `ContentPart::Document` (so the LLM provider
+/// sees a document content block); everything
+/// else routes to `ContentPart::Image`.
+///
+/// Document-classified types:
+/// - `application/pdf`
+///
+/// Image-classified types (default):
+/// - `image/png`, `image/jpeg`, `image/gif`,
+///   `image/webp`, `image/svg+xml`,
+///   `image/tiff` — and any unknown media_type
+///   that lands here, since the LLM provider
+///   surfaces its own error if the type is
+///   unsupported.
+fn content_part_for_attachment(
+    media_type: String,
+    data: Vec<u8>,
+) -> aivyx_core::ContentPart {
+    if is_document_media_type(&media_type) {
+        aivyx_core::ContentPart::Document { media_type, data }
+    } else {
+        aivyx_core::ContentPart::Image { media_type, data }
+    }
+}
+
+/// Phase 163 / amendment A13 — true iff the
+/// media_type names a document-block-eligible
+/// type. Pure substrate so the classification
+/// can be tested without building a full
+/// Message.
+fn is_document_media_type(media_type: &str) -> bool {
+    matches!(media_type, "application/pdf")
+}
+
 /// Phase 162 — build a `reqwest::header::HeaderMap`
 /// from the operator's `[voice.image.url_headers]`
 /// TOML table. Surfaces `InvalidHeaderName` and
@@ -1599,6 +1640,79 @@ Authorization = "Bearer xyz"
         map.insert("X-Bad".to_string(), "first\r\nInjected: yes".to_string());
         let err = build_header_map(&map).unwrap_err();
         assert!(err.contains("invalid value for header"), "{err}");
+    }
+
+    // ---- Phase 163 / Amendment A13 — Document routing ----
+
+    #[test]
+    fn is_document_media_type_classifies_pdf() {
+        assert!(is_document_media_type("application/pdf"));
+    }
+
+    #[test]
+    fn is_document_media_type_classifies_images_as_non_document() {
+        assert!(!is_document_media_type("image/png"));
+        assert!(!is_document_media_type("image/jpeg"));
+        assert!(!is_document_media_type("image/gif"));
+        assert!(!is_document_media_type("image/webp"));
+        assert!(!is_document_media_type("image/svg+xml"));
+        assert!(!is_document_media_type("image/tiff"));
+    }
+
+    #[test]
+    fn is_document_media_type_unknown_returns_false_default_image_routing() {
+        // Unknown types route as Image — the
+        // provider surfaces its own error if it
+        // can't handle them.
+        assert!(!is_document_media_type("application/octet-stream"));
+        assert!(!is_document_media_type(""));
+    }
+
+    #[test]
+    fn content_part_for_attachment_routes_pdf_to_document() {
+        let part = content_part_for_attachment(
+            "application/pdf".to_string(),
+            vec![0x25, 0x50, 0x44, 0x46],
+        );
+        match part {
+            aivyx_core::ContentPart::Document { media_type, data } => {
+                assert_eq!(media_type, "application/pdf");
+                assert_eq!(data, vec![0x25, 0x50, 0x44, 0x46]);
+            }
+            other => panic!("expected Document for PDF, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn content_part_for_attachment_routes_image_to_image() {
+        let part = content_part_for_attachment(
+            "image/png".to_string(),
+            vec![0x89, 0x50, 0x4E, 0x47],
+        );
+        match part {
+            aivyx_core::ContentPart::Image { media_type, data } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, vec![0x89, 0x50, 0x4E, 0x47]);
+            }
+            other => panic!("expected Image for PNG, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn content_part_for_attachment_routes_svg_as_image_not_document() {
+        // SVG is visual content, not a document.
+        // Even though most LLM providers reject
+        // it, the voice substrate classifies it
+        // as Image so it goes through the image
+        // provider path.
+        let part = content_part_for_attachment(
+            "image/svg+xml".to_string(),
+            b"<svg></svg>".to_vec(),
+        );
+        assert!(matches!(
+            part,
+            aivyx_core::ContentPart::Image { .. }
+        ));
     }
 
     #[test]
