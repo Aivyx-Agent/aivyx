@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 155 — Calendar: Small Follow-Ons Bundle
+
+**See [PHASE_155.md](PHASE_155.md).** Phase 151 follow-on
+deferred 4 phases. Three small close-outs in one phase:
+fuzzy dedup (normalize summary + 5-min time bucket;
+`fuzzy_dedup` knob defaults true), writable_only filter
+on calendar.upcoming (internal list_calendars round-trip
++ access_role intersection), max_concurrent knob on
+parallel fan-out (tokio::sync::Semaphore throttle for
+rate-limited operators). Symmetric to Phase 148/151/152/153
+close-out pattern. Zero new workspace deps.
+
 ## Phase 154 — Multimodal: Image Attachment via Voice
 
 **Frozen — see [PHASE_154.md](PHASE_154.md).** New feature surface
