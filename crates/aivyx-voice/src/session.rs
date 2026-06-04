@@ -617,12 +617,12 @@ where
         // populates channel.pending_image, then
         // re-prompts for Enter (or another
         // command).
-        if let Some(path) = trimmed.strip_prefix("/image ") {
-            match load_image_for_attach(path.trim()) {
+        if let Some(path_or_url) = trimmed.strip_prefix("/image ") {
+            match load_image_for_attach(path_or_url.trim()).await {
                 Ok((media_type, data)) => {
                     eprintln!(
                         "[voice] image queued: {} ({} bytes, {})",
-                        path.trim(),
+                        path_or_url.trim(),
                         data.len(),
                         media_type,
                     );
@@ -942,33 +942,131 @@ fn read_stdin_line_trimmed() -> String {
 const MAX_IMAGE_SIZE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Phase 154 — load + media-type-classify an
-/// image file for attach. Returns the inferred
+/// image for attach. Returns the inferred
 /// media type + the raw bytes on success;
 /// operator-readable error string on any
 /// failure (unknown extension, file not found,
 /// IO error, empty file, oversized file).
 ///
-/// Phase 156 enforces `MAX_IMAGE_SIZE_BYTES`
-/// after read. URL-based source lands in Task 3.
-fn load_image_for_attach(path: &str) -> Result<(String, Vec<u8>), String> {
-    if path.is_empty() {
+/// Phase 156:
+/// - Enforces `MAX_IMAGE_SIZE_BYTES` after read.
+/// - When `path_or_url` starts with `http://`
+///   or `https://`, fetches via reqwest. Infers
+///   media type from `Content-Type` header
+///   (falling back to extension if header is
+///   absent or unrecognized).
+async fn load_image_for_attach(
+    path_or_url: &str,
+) -> Result<(String, Vec<u8>), String> {
+    if path_or_url.is_empty() {
         return Err("path must not be empty".to_string());
     }
-    let media_type = infer_image_media_type(path)?;
-    let data = std::fs::read(path)
-        .map_err(|e| format!("read {path:?}: {e}"))?;
+    if is_url(path_or_url) {
+        return fetch_image_url(path_or_url).await;
+    }
+    let media_type = infer_image_media_type(path_or_url)?;
+    let data = std::fs::read(path_or_url)
+        .map_err(|e| format!("read {path_or_url:?}: {e}"))?;
     if data.is_empty() {
-        return Err(format!("file {path:?} is empty"));
+        return Err(format!("file {path_or_url:?} is empty"));
     }
     if data.len() > MAX_IMAGE_SIZE_BYTES {
         return Err(format!(
-            "file {path:?} is {} bytes; max allowed is {} bytes ({} MB)",
+            "file {path_or_url:?} is {} bytes; max allowed is {} bytes ({} MB)",
             data.len(),
             MAX_IMAGE_SIZE_BYTES,
             MAX_IMAGE_SIZE_BYTES / (1024 * 1024),
         ));
     }
     Ok((media_type.to_string(), data))
+}
+
+/// Phase 156 — substrate URL detection. Returns
+/// true when the operator's `/image` argument
+/// is `http://` or `https://` prefixed.
+fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Phase 156 — fetch an image URL via reqwest
+/// and infer media type from `Content-Type`
+/// header. Falls back to extension inference
+/// on the URL's path component when the header
+/// is absent or doesn't match a supported
+/// image type. Enforces `MAX_IMAGE_SIZE_BYTES`
+/// post-fetch (Phase 157+ candidate: HEAD
+/// pre-fetch for size check).
+async fn fetch_image_url(url: &str) -> Result<(String, Vec<u8>), String> {
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| format!("fetch {url:?}: {e}"))?;
+    let header_ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("read {url:?} body: {e}"))?
+        .to_vec();
+    if bytes.is_empty() {
+        return Err(format!("url {url:?} returned empty body"));
+    }
+    if bytes.len() > MAX_IMAGE_SIZE_BYTES {
+        return Err(format!(
+            "url {url:?} returned {} bytes; max allowed is {} bytes ({} MB)",
+            bytes.len(),
+            MAX_IMAGE_SIZE_BYTES,
+            MAX_IMAGE_SIZE_BYTES / (1024 * 1024),
+        ));
+    }
+    let media_type = media_type_from_content_type(header_ct.as_deref())
+        .or_else(|| infer_image_media_type_for_url_path(url))
+        .ok_or_else(|| {
+            format!(
+                "url {url:?} response has no recognizable image media type \
+                 (Content-Type header missing/unsupported AND URL path lacks \
+                 a supported extension); Phase 156 supports png / jpg / jpeg \
+                 / gif / webp"
+            )
+        })?;
+    Ok((media_type.to_string(), bytes))
+}
+
+/// Phase 156 — Map an HTTP `Content-Type`
+/// header value to a canonical image media type
+/// when it matches one of Phase 154's four
+/// supported formats. Returns `None` otherwise
+/// (caller falls back to URL-extension
+/// inference).
+fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
+    let raw = ct?;
+    // Header may include "; charset=..." or
+    // similar parameters; strip after the first
+    // semicolon.
+    let base = raw.split(';').next().unwrap_or(raw).trim().to_ascii_lowercase();
+    match base.as_str() {
+        "image/png" => Some("image/png"),
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/gif" => Some("image/gif"),
+        "image/webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Phase 156 — Extension-fallback for URL paths.
+/// Strips query string + fragment + then calls
+/// `infer_image_media_type` on the remaining
+/// path. Returns None (rather than Result) so
+/// `fetch_image_url` can compose this with the
+/// Content-Type path cleanly.
+fn infer_image_media_type_for_url_path(url: &str) -> Option<&'static str> {
+    let path = url
+        .split(&['?', '#'][..])
+        .next()
+        .unwrap_or(url);
+    infer_image_media_type(path).ok()
 }
 
 /// Phase 154 — infer the image media type
@@ -1042,19 +1140,21 @@ mod tests {
         assert!(err.contains("no file extension"), "{err}");
     }
 
-    #[test]
-    fn load_image_empty_path_rejected() {
-        let err = load_image_for_attach("").unwrap_err();
+    #[tokio::test]
+    async fn load_image_empty_path_rejected() {
+        let err = load_image_for_attach("").await.unwrap_err();
         assert!(err.contains("path must not be empty"), "{err}");
     }
 
-    #[test]
-    fn load_image_missing_file_rejected() {
-        let err = load_image_for_attach("/nonexistent/file.png").unwrap_err();
+    #[tokio::test]
+    async fn load_image_missing_file_rejected() {
+        let err = load_image_for_attach("/nonexistent/file.png")
+            .await
+            .unwrap_err();
         assert!(err.contains("read"), "{err}");
     }
 
-    // ---- Phase 156 — size cap + multi-image ----
+    // ---- Phase 156 — size cap + URL substrate ----
 
     #[test]
     fn max_image_size_cap_is_ten_megabytes() {
@@ -1072,13 +1172,101 @@ mod tests {
         let tmp = std::env::temp_dir().join("phase156-oversized.png");
         let oversized = vec![0u8; MAX_IMAGE_SIZE_BYTES + 1];
         std::fs::write(&tmp, &oversized).expect("write tmp");
-        let err =
-            load_image_for_attach(tmp.to_str().expect("utf8")).unwrap_err();
+        let err = load_image_for_attach(tmp.to_str().expect("utf8"))
+            .await
+            .unwrap_err();
         assert!(
             err.contains("max allowed"),
             "expected size-cap error, got: {err}"
         );
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn is_url_recognizes_http_and_https() {
+        assert!(is_url("http://example.com/foo.png"));
+        assert!(is_url("https://example.com/foo.png"));
+        assert!(!is_url("/abs/path/file.png"));
+        assert!(!is_url("relative/path.png"));
+        assert!(!is_url("foo.png"));
+        // ftp and file are URLs but Phase 156
+        // doesn't support them — they fall
+        // through to the file-path branch
+        // which fails on the unknown extension.
+        assert!(!is_url("ftp://example.com/foo.png"));
+    }
+
+    #[test]
+    fn media_type_from_content_type_recognized_image_formats() {
+        assert_eq!(
+            media_type_from_content_type(Some("image/png")),
+            Some("image/png")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("image/jpeg")),
+            Some("image/jpeg")
+        );
+        // Some servers return "image/jpg"; map
+        // to canonical "image/jpeg".
+        assert_eq!(
+            media_type_from_content_type(Some("image/jpg")),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("image/gif")),
+            Some("image/gif")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("image/webp")),
+            Some("image/webp")
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_strips_parameters() {
+        // Servers may return "image/png;
+        // charset=binary" or similar.
+        assert_eq!(
+            media_type_from_content_type(Some("image/png; charset=binary")),
+            Some("image/png")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("  Image/PNG  ; extra=ignored")),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_unsupported_returns_none() {
+        assert!(media_type_from_content_type(Some("image/svg+xml")).is_none());
+        assert!(media_type_from_content_type(Some("application/pdf")).is_none());
+        assert!(media_type_from_content_type(Some("text/html")).is_none());
+        assert!(media_type_from_content_type(None).is_none());
+    }
+
+    #[test]
+    fn infer_image_media_type_for_url_path_strips_query_string() {
+        // Path is foo.png?signature=abc → strip
+        // the ?... part, infer from foo.png.
+        assert_eq!(
+            infer_image_media_type_for_url_path(
+                "https://cdn.example.com/foo.png?signature=abc"
+            ),
+            Some("image/png")
+        );
+        // Also strips fragment.
+        assert_eq!(
+            infer_image_media_type_for_url_path(
+                "https://cdn.example.com/photo.jpg#meta"
+            ),
+            Some("image/jpeg")
+        );
+        // No extension → None (caller falls
+        // back).
+        assert!(infer_image_media_type_for_url_path(
+            "https://cdn.example.com/some-opaque-id"
+        )
+        .is_none());
     }
 
     // Test fixtures: stub ASR + TTS engines that

@@ -66,6 +66,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
+# Phase 156 — `/image <url>` source. reqwest
+# already a workspace dep via aivyx-llm /
+# aivyx-toolkit / etc.; aivyx-voice adds as a
+# crate dep (matching Phase 141's chrono
+# pattern for aivyx-calendar).
+reqwest = { workspace = true }
+
 # Audio I/O — always on inside aivyx-voice. cpal is the
 # pure-Rust cross-platform audio library Aivyx already uses
 # transitively through other channels; pinning here for
