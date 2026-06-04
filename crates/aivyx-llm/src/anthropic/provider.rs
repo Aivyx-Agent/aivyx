@@ -175,6 +175,26 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
         )));
     }
 
+    // Phase 165 — best-effort PDF page-count
+    // cap. Byte-scans each PDF document block
+    // for `/Type /Page` markers and refuses if
+    // the count exceeds the cap. Honest limit:
+    // misses pages inside compressed object
+    // streams (modern PDFs commonly use
+    // FlateDecode), so the false-negative case
+    // falls through to Anthropic's own
+    // page-count enforcement.
+    if let Some(over_cap) = first_pdf_over_page_cap(request)? {
+        return Err(LlmError::Config(format!(
+            "PDF document block exceeds Anthropic's page cap: counted at \
+             least {count} pages via best-effort byte-scan; max allowed is \
+             {cap}. Compressed-stream PDFs may evade this client-side check; \
+             Anthropic's server-side cap will enforce as well.",
+            count = over_cap.count,
+            cap = ANTHROPIC_PDF_PAGE_CAP,
+        )));
+    }
+
     let messages: Vec<Value> = merge_consecutive_tool_results(
         request
             .messages
@@ -213,6 +233,130 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
     }
 
     Ok(body)
+}
+
+/// Phase 165 — Anthropic's documented per-
+/// document page cap. Hardcoded; operators with
+/// custom plans that allow more pages can't
+/// override (Phase 166+ candidate for a TOML
+/// knob).
+pub(crate) const ANTHROPIC_PDF_PAGE_CAP: usize = 100;
+
+/// Phase 165 — best-effort PDF page count via
+/// byte-scan. Honest limit: misses pages inside
+/// compressed object streams (FlateDecode-
+/// wrapped xref + object streams in modern
+/// PDFs). For uncompressed PDFs the count is
+/// accurate; for compressed PDFs it
+/// under-counts, which produces a false
+/// negative (cap doesn't fire). Never
+/// over-counts.
+///
+/// Detection: looks for `/Type` whitespace
+/// `/Page` followed by a non-`s` byte so
+/// `/Pages` (the parent node) is excluded.
+pub(crate) fn count_pdf_pages_best_effort(bytes: &[u8]) -> usize {
+    let needle = b"/Page";
+    let mut count = 0usize;
+    let mut i = 0usize;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            // Reject `/Pages` (the parent
+            // node).
+            let after = bytes.get(i + needle.len()).copied();
+            if after != Some(b's') {
+                // Look back for the `/Type`
+                // marker (with intervening
+                // whitespace) so we count
+                // actual page-object headers,
+                // not arbitrary `/Page`
+                // references. We allow up to
+                // 16 bytes of leading text in
+                // case the PDF uses pretty
+                // formatting.
+                let back_start = i.saturating_sub(20);
+                let prefix = &bytes[back_start..i];
+                if has_type_marker(prefix) {
+                    count += 1;
+                }
+            }
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn has_type_marker(prefix: &[u8]) -> bool {
+    // Scan for `/Type` allowing trailing
+    // whitespace before the `/Page` we just
+    // matched. The page-object header is
+    // typically `/Type /Page` or `/Type/Page`
+    // depending on PDF formatting.
+    let marker = b"/Type";
+    if prefix.len() < marker.len() {
+        return false;
+    }
+    for start in 0..=(prefix.len() - marker.len()) {
+        if &prefix[start..start + marker.len()] == marker {
+            // Everything between `/Type` and
+            // the matched `/Page` must be
+            // whitespace.
+            let between = &prefix[start + marker.len()..];
+            if between.iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Phase 165 — describes a single PDF document
+/// block that exceeded the page cap. Pure
+/// substrate so the pre-flight check can be
+/// tested without going through
+/// `build_request_body`.
+struct OverCapPdf {
+    count: usize,
+}
+
+/// Phase 165 — scan the request for the first
+/// PDF document block whose best-effort page
+/// count exceeds the cap. Returns `Ok(None)`
+/// when all PDFs are within the cap (or there
+/// are no PDFs); `Ok(Some(OverCapPdf))` when
+/// one exceeds. base64 decode error surfaces as
+/// `LlmError::Parse` since the data block is
+/// invalid input.
+fn first_pdf_over_page_cap(
+    request: &LlmRequest<'_>,
+) -> Result<Option<OverCapPdf>, LlmError> {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    for msg in request.messages.iter() {
+        let LlmMessage::User { content } = msg else {
+            continue;
+        };
+        for block in content {
+            let ContentBlock::DocumentBase64 { media_type, data } = block else {
+                continue;
+            };
+            if media_type != "application/pdf" {
+                continue;
+            }
+            let bytes = engine.decode(data).map_err(|e| {
+                LlmError::Parse(format!(
+                    "PDF document block has invalid base64: {e}"
+                ))
+            })?;
+            let count = count_pdf_pages_best_effort(&bytes);
+            if count > ANTHROPIC_PDF_PAGE_CAP {
+                return Ok(Some(OverCapPdf { count }));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Phase 164 — true iff any `LlmMessage::User`
@@ -1258,6 +1402,193 @@ mod tests {
         let msgs = [LlmMessage::user_text("hello")];
         let req = LlmRequest {
             model: "claude-3-opus-20240229",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        assert!(build_request_body(&req).is_ok());
+    }
+
+    // ---- Phase 165 — PDF page-count cap ----
+
+    #[test]
+    fn page_cap_pinned_to_one_hundred() {
+        // Regression pin so a future widening
+        // of the cap notices the impact on the
+        // INSTALL.md doc + the operator-visible
+        // error message.
+        assert_eq!(ANTHROPIC_PDF_PAGE_CAP, 100);
+    }
+
+    #[test]
+    fn count_pdf_pages_zero_on_empty_input() {
+        assert_eq!(count_pdf_pages_best_effort(b""), 0);
+    }
+
+    #[test]
+    fn count_pdf_pages_zero_on_unrelated_bytes() {
+        // Random bytes with no /Type /Page
+        // markers.
+        assert_eq!(count_pdf_pages_best_effort(b"hello world"), 0);
+    }
+
+    #[test]
+    fn count_pdf_pages_counts_three_uncompressed_pages() {
+        // A simplified uncompressed PDF body
+        // with three /Type /Page page-object
+        // headers. The byte-scan should count
+        // all three.
+        let body = b"\
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+%%EOF";
+        assert_eq!(count_pdf_pages_best_effort(body), 3);
+    }
+
+    #[test]
+    fn count_pdf_pages_does_not_count_pages_parent_node() {
+        // `/Type /Pages` is the parent node,
+        // NOT a page. The byte-scan excludes it
+        // via the trailing-`s` check.
+        let body = b"<< /Type /Pages /Count 1 >>";
+        assert_eq!(count_pdf_pages_best_effort(body), 0);
+    }
+
+    #[test]
+    fn count_pdf_pages_counts_compact_form() {
+        // PDFs sometimes pack the type marker
+        // tightly: `/Type/Page` with no space.
+        // The matcher's whitespace-between
+        // check uses `.all()` which is
+        // vacuously true for empty slices, so
+        // the compact form is correctly
+        // counted.
+        let compact = b"<< /Type/Page /Parent 0 0 R >>";
+        assert_eq!(count_pdf_pages_best_effort(compact), 1);
+    }
+
+    #[test]
+    fn build_request_body_rejects_pdf_over_cap_on_supported_model() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+        use base64::Engine;
+
+        // Construct a fake "PDF" with 101 page-
+        // object headers — over the 100-page
+        // cap.
+        let mut body = b"%PDF-1.4\n".to_vec();
+        for i in 0..101 {
+            body.extend_from_slice(
+                format!("{i} 0 obj << /Type /Page /Parent 0 0 R >> endobj\n").as_bytes(),
+            );
+        }
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(&body);
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data,
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        let err = build_request_body(&req).unwrap_err();
+        match err {
+            LlmError::Config(msg) => {
+                assert!(msg.contains("page cap"), "{msg}");
+                assert!(msg.contains("101"), "{msg}");
+            }
+            other => panic!("expected Config error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_request_body_accepts_pdf_at_exact_cap() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+        use base64::Engine;
+
+        // 100-page PDF — exactly at the cap.
+        // Should pass (cap is exclusive of the
+        // boundary: counts > ANTHROPIC_PDF_PAGE_CAP
+        // are rejected, == is accepted).
+        let mut body = b"%PDF-1.4\n".to_vec();
+        for i in 0..100 {
+            body.extend_from_slice(
+                format!("{i} 0 obj << /Type /Page /Parent 0 0 R >> endobj\n").as_bytes(),
+            );
+        }
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(&body);
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data,
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        assert!(build_request_body(&req).is_ok());
+    }
+
+    #[test]
+    fn build_request_body_rejects_invalid_base64_pdf() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data: "not valid base64 @!#$".to_string(),
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        let err = build_request_body(&req).unwrap_err();
+        assert!(matches!(err, LlmError::Parse(_)));
+    }
+
+    #[test]
+    fn build_request_body_ignores_page_cap_for_non_pdf_documents() {
+        // A DOCX document block doesn't go
+        // through the PDF page-count scanner;
+        // it just rides through to the API
+        // (which will likely return 400, but
+        // that's the provider's concern).
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(b"PK\x03\x04 fake docx");
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type:
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        .to_string(),
+                data,
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
             messages: &msgs,
             tools: &[],
             system: None,
