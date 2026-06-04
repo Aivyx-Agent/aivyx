@@ -21,8 +21,8 @@ use aivyx_drive::auth_cli::{
 };
 use aivyx_drive::tools::{
     DriveCreateFolder, DriveDeleteFile, DriveDownloadFile, DriveGetMetadata,
-    DriveListDrives, DriveListFolder, DriveRecentChanges, DriveRecentFiles,
-    DriveSearch, DriveUploadFile,
+    DriveListDrives, DriveListFolder, DriveRecentActivity, DriveRecentChanges,
+    DriveRecentFiles, DriveSearch, DriveUploadFile,
 };
 use aivyx_drive::{
     default_token_path, load_tokens, run_multi_tool_subprocess, DriveClient,
@@ -171,6 +171,8 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(DriveRecentFiles::new(Arc::clone(&client))),
         Arc::new(DriveRecentChanges::new(Arc::clone(&client))),
         Arc::new(DriveListDrives::new(Arc::clone(&client))),
+        // Phase 159 — drive.recent_activity (Drive Activity API).
+        Arc::new(DriveRecentActivity::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-drive").await {

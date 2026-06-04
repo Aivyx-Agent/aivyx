@@ -24,6 +24,7 @@ pub use download_file::DriveDownloadFile;
 pub use get_metadata::DriveGetMetadata;
 pub use list_drives::DriveListDrives;
 pub use list_folder::DriveListFolder;
+pub use recent_activity::DriveRecentActivity;
 pub use recent_changes::DriveRecentChanges;
 pub use recent_files::DriveRecentFiles;
 pub use search::DriveSearch;
