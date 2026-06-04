@@ -620,13 +620,51 @@ where
         // populates channel.pending_image, then
         // re-prompts for Enter (or another
         // command).
-        if let Some(path_or_url) = trimmed.strip_prefix("/image ") {
-            let image_cfg = &channel.config().image;
-            match load_image_for_attach(path_or_url.trim(), image_cfg).await {
+        if let Some(rest) = trimmed.strip_prefix("/image ") {
+            let global_cfg = &channel.config().image;
+            let (path_or_url, preset_name) = match parse_image_command_args(rest.trim()) {
+                Ok(parts) => parts,
+                Err(reason) => {
+                    eprintln!("[voice] /image: {reason}");
+                    continue;
+                }
+            };
+
+            // Phase 165 — resolve --headers <preset> to a
+            // concrete HashMap by cloning the global cfg
+            // and swapping in the preset's url_headers.
+            // When no preset specified, use the global
+            // cfg as-is.
+            let effective_cfg;
+            let cfg_ref: &VoiceImageConfig = match preset_name {
+                None => global_cfg,
+                Some(name) => match global_cfg.url_header_presets.get(name) {
+                    Some(preset) => {
+                        effective_cfg = VoiceImageConfig {
+                            url_headers: preset.clone(),
+                            ..global_cfg.clone()
+                        };
+                        &effective_cfg
+                    }
+                    None => {
+                        eprintln!(
+                            "[voice] /image: unknown header preset {name:?}; \
+                             available presets: {:?}",
+                            global_cfg
+                                .url_header_presets
+                                .keys()
+                                .collect::<Vec<_>>()
+                        );
+                        continue;
+                    }
+                },
+            };
+
+            match load_image_for_attach(path_or_url, cfg_ref).await {
                 Ok((media_type, data)) => {
                     eprintln!(
                         "[voice] image queued: {} ({} bytes, {})",
-                        path_or_url.trim(),
+                        path_or_url,
                         data.len(),
                         media_type,
                     );
@@ -998,6 +1036,25 @@ pub struct VoiceImageConfig {
     /// ```
     #[serde(default)]
     pub url_headers: std::collections::HashMap<String, String>,
+    /// Phase 165 — named per-URL header
+    /// presets. Operator runs
+    /// `/image <url> --headers <preset-name>`
+    /// to select a specific bundle instead of
+    /// the global `url_headers` map.
+    /// Configured via:
+    /// ```toml
+    /// [voice.image.url_header_presets.work]
+    /// Authorization = "Bearer work-token"
+    ///
+    /// [voice.image.url_header_presets.personal]
+    /// Cookie = "session=personal"
+    /// ```
+    /// Defaults to empty map; operators with
+    /// no presets continue to use the global
+    /// `url_headers` block.
+    #[serde(default)]
+    pub url_header_presets:
+        std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 impl Default for VoiceImageConfig {
@@ -1007,6 +1064,7 @@ impl Default for VoiceImageConfig {
             url_timeout_secs: Self::default_url_timeout_secs(),
             head_precheck: Self::default_head_precheck(),
             url_headers: std::collections::HashMap::new(),
+            url_header_presets: std::collections::HashMap::new(),
         }
     }
 }
@@ -1215,6 +1273,62 @@ async fn head_precheck_size(
         )))
     } else {
         Ok(None)
+    }
+}
+
+/// Phase 165 — parse the `/image` command's
+/// argument string into `(path_or_url,
+/// optional preset_name)`. Accepted shapes:
+/// - `foo.png` → (`"foo.png"`, None)
+/// - `https://x.com/a.png` → (URL, None)
+/// - `foo.png --headers work` →
+///   (`"foo.png"`, Some(`"work"`))
+/// - `https://x.com --headers personal` →
+///   (URL, Some(`"personal"`))
+///
+/// Rejected shapes:
+/// - empty input → "path must not be empty"
+/// - `--headers` without name → "missing
+///   preset name"
+/// - `--headers` first then path → ambiguous;
+///   keep the parser strict (rejected) to
+///   avoid silently mis-routing
+pub(crate) fn parse_image_command_args(
+    rest: &str,
+) -> Result<(&str, Option<&str>), String> {
+    if rest.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+    // Find the first occurrence of " --headers
+    // " (with spaces) so we don't accidentally
+    // split a URL containing the literal
+    // string.
+    let flag = " --headers ";
+    if let Some(pos) = rest.find(flag) {
+        let path = rest[..pos].trim();
+        let preset = rest[pos + flag.len()..].trim();
+        if path.is_empty() {
+            return Err("path must not be empty before --headers".to_string());
+        }
+        if preset.is_empty() {
+            return Err(
+                "--headers requires a preset name (e.g. `--headers work`)"
+                    .to_string(),
+            );
+        }
+        if preset.contains(char::is_whitespace) {
+            return Err(format!(
+                "--headers preset name must not contain whitespace; got {preset:?}"
+            ));
+        }
+        Ok((path, Some(preset)))
+    } else if rest.ends_with(" --headers") || rest == "--headers" {
+        Err(
+            "--headers requires a preset name (e.g. `--headers work`)"
+                .to_string(),
+        )
+    } else {
+        Ok((rest, None))
     }
 }
 
@@ -1610,6 +1724,7 @@ mod tests {
             url_timeout_secs: 30,
             head_precheck: true,
             url_headers: Default::default(),
+            url_header_presets: Default::default(),
         };
         assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
     }
@@ -1946,6 +2061,95 @@ Authorization = "Bearer xyz"
         }
     }
 
+    // ---- Phase 165 — parse_image_command_args ----
+
+    #[test]
+    fn parse_image_args_plain_path() {
+        let (path, preset) =
+            parse_image_command_args("foo.png").expect("ok");
+        assert_eq!(path, "foo.png");
+        assert_eq!(preset, None);
+    }
+
+    #[test]
+    fn parse_image_args_plain_url() {
+        let (path, preset) =
+            parse_image_command_args("https://example.com/a.png")
+                .expect("ok");
+        assert_eq!(path, "https://example.com/a.png");
+        assert_eq!(preset, None);
+    }
+
+    #[test]
+    fn parse_image_args_path_with_preset() {
+        let (path, preset) =
+            parse_image_command_args("foo.png --headers work").expect("ok");
+        assert_eq!(path, "foo.png");
+        assert_eq!(preset, Some("work"));
+    }
+
+    #[test]
+    fn parse_image_args_url_with_preset() {
+        let (path, preset) =
+            parse_image_command_args("https://example.com/a.png --headers personal")
+                .expect("ok");
+        assert_eq!(path, "https://example.com/a.png");
+        assert_eq!(preset, Some("personal"));
+    }
+
+    #[test]
+    fn parse_image_args_empty_rejected() {
+        let err = parse_image_command_args("").unwrap_err();
+        assert!(err.contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn parse_image_args_missing_preset_name_rejected() {
+        let err = parse_image_command_args("foo.png --headers")
+            .unwrap_err();
+        assert!(err.contains("preset name"), "{err}");
+    }
+
+    #[test]
+    fn parse_image_args_preset_with_whitespace_rejected() {
+        let err =
+            parse_image_command_args("foo.png --headers two words")
+                .unwrap_err();
+        assert!(err.contains("whitespace"), "{err}");
+    }
+
+    #[test]
+    fn parse_image_args_just_flag_rejected() {
+        let err = parse_image_command_args("--headers").unwrap_err();
+        assert!(err.contains("preset name"), "{err}");
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_url_header_presets() {
+        let toml = r#"
+size_cap_mb = 10
+
+[url_header_presets.work]
+Authorization = "Bearer work-token"
+
+[url_header_presets.personal]
+Cookie = "session=personal"
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.url_header_presets.len(), 2);
+        let work = cfg.url_header_presets.get("work").expect("work preset");
+        assert_eq!(work.get("Authorization").map(String::as_str), Some("Bearer work-token"));
+        let personal =
+            cfg.url_header_presets.get("personal").expect("personal preset");
+        assert_eq!(personal.get("Cookie").map(String::as_str), Some("session=personal"));
+    }
+
+    #[test]
+    fn voice_image_config_url_header_presets_default_empty() {
+        let cfg = VoiceImageConfig::default();
+        assert!(cfg.url_header_presets.is_empty());
+    }
+
     #[test]
     fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
         // An operator setting an absurd cap like
@@ -1959,6 +2163,7 @@ Authorization = "Bearer xyz"
             url_timeout_secs: 30,
             head_precheck: true,
             url_headers: Default::default(),
+            url_header_presets: Default::default(),
         };
         assert_eq!(cfg.size_cap_bytes(), usize::MAX);
     }
@@ -1973,6 +2178,7 @@ Authorization = "Bearer xyz"
             url_timeout_secs: 30,
             head_precheck: true,
             url_headers: Default::default(),
+            url_header_presets: Default::default(),
         };
         let tmp = std::env::temp_dir().join("phase161-tightcap.png");
         std::fs::write(&tmp, b"abc").expect("write tmp");
