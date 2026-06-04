@@ -146,6 +146,7 @@ impl Tool for DriveRecentChanges {
                     max_depth,
                     max_folders,
                     parsed.drive_id.as_deref(),
+                    None, // Phase 160 Task 3 wires the operator input.
                 )
                 .await
                 {

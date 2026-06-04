@@ -73,6 +73,16 @@ pub(crate) const RECURSIVE_MAX_FOLDERS: usize = 100;
 /// Team Drive instead of the operator's My
 /// Drive.
 ///
+/// Phase 160 — Optional `max_concurrent`
+/// throttle. When supplied, each per-folder
+/// future acquires a permit from a
+/// `tokio::sync::Semaphore` before issuing its
+/// query, so at most N requests run
+/// simultaneously regardless of level width.
+/// When None, permits are issued equal to the
+/// current level's width (equivalent to
+/// pre-Phase-160 unlimited fan-out).
+///
 /// Hard caps (operator-tunable in Phase 157 via
 /// recent_* input fields):
 /// `max_depth` levels of descent;
@@ -88,6 +98,7 @@ pub(crate) async fn walk_folder_tree(
     max_depth: usize,
     max_folders: usize,
     drive_id: Option<&str>,
+    max_concurrent: Option<usize>,
 ) -> Result<Vec<String>, crate::drive_client::DriveClientError> {
     let mut visited: Vec<String> = vec![root_folder_id.to_string()];
     let mut current_level: Vec<String> = vec![root_folder_id.to_string()];
@@ -96,15 +107,28 @@ pub(crate) async fn walk_folder_tree(
         if visited.len() >= max_folders || current_level.is_empty() {
             break;
         }
+        // Phase 160 — semaphore throttle. When
+        // None, permits = current_level.len()
+        // (every future can hold a permit at
+        // once — equivalent to unlimited).
+        let permits = max_concurrent.unwrap_or(current_level.len()).max(1);
+        let semaphore =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
         // Fire all per-folder children-queries
-        // in this level concurrently. Each
+        // in this level concurrently, each
+        // gated on permit acquisition. Each
         // future returns the Vec of child folder
         // IDs (or an error).
         let futures = current_level.iter().map(|folder_id| {
             let client = client.clone();
             let folder_id = folder_id.clone();
             let drive_id = drive_id.map(str::to_string);
+            let semaphore = std::sync::Arc::clone(&semaphore);
             async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .expect("semaphore not closed");
                 children_of(&client, &folder_id, drive_id.as_deref()).await
             }
         });
@@ -268,5 +292,45 @@ mod shared_tests {
         // Pin the cap so future tasks (or operator-facing
         // INSTALL.md) stay in sync with the constant.
         assert_eq!(CONTENT_INLINE_CAP_BYTES, 10_485_760);
+    }
+
+    // ---- Phase 160 — walk_folder_tree permits ----
+
+    fn permits_for_level(
+        level_width: usize,
+        max_concurrent: Option<usize>,
+    ) -> usize {
+        // Mirrors the permits calculation inside
+        // walk_folder_tree. Direct-computation
+        // test so the invariant is locked
+        // without a live HTTP round trip.
+        max_concurrent.unwrap_or(level_width).max(1)
+    }
+
+    #[test]
+    fn walk_permits_default_to_unlimited_when_none() {
+        // None = pre-Phase-160 behavior: permits
+        // = level width.
+        assert_eq!(permits_for_level(8, None), 8);
+        assert_eq!(permits_for_level(50, None), 50);
+    }
+
+    #[test]
+    fn walk_permits_throttle_caps_when_set() {
+        // Operator throttle clamps fan-out.
+        assert_eq!(permits_for_level(50, Some(4)), 4);
+        assert_eq!(permits_for_level(2, Some(4)), 4);
+    }
+
+    #[test]
+    fn walk_permits_floor_one_on_empty_level() {
+        // Defensive: semaphore can't be
+        // initialized with 0 permits. An empty
+        // current_level would short-circuit
+        // before the semaphore is built, but the
+        // `.max(1)` invariant keeps the floor
+        // explicit.
+        assert_eq!(permits_for_level(0, None), 1);
+        assert_eq!(permits_for_level(0, Some(0)), 1);
     }
 }
