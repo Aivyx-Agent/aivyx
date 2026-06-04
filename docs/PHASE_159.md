@@ -216,8 +216,64 @@ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 159 exit. Predictions at
-sign-off: DESIGN.md HOLD → 50; PRODUCT.md HOLD
-→ 50; lib.rs HOLD → 25; zero new deps; test
-count delta `+10` to `+18`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 50 | Untouched | ✅ |
+| PRODUCT.md HOLD → 50 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 25 | Untouched | ✅ |
+| Zero new workspace deps | All Activity-API work used existing primitives (reqwest, serde_json, chrono) already in workspace + crate manifest | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (after one `manual_contains` and one unused `DateTime` import handled mid-task) | ✅ |
+| Test count delta `+10` to `+18` | `+19` (209 → 228 in `cargo test -p aivyx-drive --lib`) | ⚠️ (over by 1; see correction note below) |
+
+All five exit criteria met. New tool surface:
+
+1. **Substrate** (Task 2, commit `1c93538`).
+   `DEFAULT_DRIVE_SCOPES` gains
+   `drive.activity.readonly`;
+   `DRIVE_ACTIVITY_API_BASE` pinned to
+   `https://driveactivity.googleapis.com/v2`;
+   `post_json_activity` helper on
+   `DriveClient`.
+2. **Tool module** (Task 3, commit `9d28cda`).
+   `tools/recent_activity.rs` with the input
+   schema, parse_input, execute (POST to
+   `/activity:query`), and a pure-substrate
+   `shape_activity` projection. 16 tests cover
+   the input layer + every Activity API
+   response variant we touch.
+3. **Harness registration** (Task 4, commit
+   `f25aaf1`). `pub use` re-export in
+   `tools/mod.rs` + entry in `main.rs` tools
+   Vec. No tool-count regression test exists
+   in `aivyx-drive`; nothing to bump.
+
+### Test count delta correction
+
+Open doc band was `+10` to `+18`. Actual delta
+is `+19` — over by 1:
+
+- Task 2: +3 (activity base separate-subdomain
+  assertion, two scope-presence regressions).
+- Task 3: +16 (tool-name pin + 6 input-parse + 9
+  shape_activity substrate cases).
+- Task 4: 0 (purely registration; no new
+  tests).
+
+The 16 shape_activity cases were one over what
+the open doc had budgeted — the actor variant
+matrix (knownUser / deletedUser / unknownUser /
+anonymous / system / administrator /
+impersonation) deserved one extra direct test
+that the open band hadn't accounted for.
+Honest correction.
+
+### What landed beyond the open
+
+Nothing functional beyond the open. The over-band
+test count is the only deviation, called out
+above.
+
+### Forty-eighth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold. Recorded
+for the record.

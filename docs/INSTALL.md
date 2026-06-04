@@ -2739,6 +2739,17 @@ configured (recommended):**
 5. **Run `aivyx-drive auth init`** to grant the Drive
    scope.
 
+   **Phase 159 — re-auth required for existing operators.**
+   `DEFAULT_DRIVE_SCOPES` now includes
+   `auth/drive.activity.readonly` (for the new
+   `drive.recent_activity` tool). Operators upgrading
+   from a pre-Phase-159 install must re-run
+   `aivyx-drive auth init` once so Google grants the
+   new scope; pre-existing tokens stay valid for the
+   other Drive tools but `drive.recent_activity` will
+   surface a 403 / "insufficient permissions" until
+   the re-auth completes.
+
 **Path B / C** — follow the Gmail or Calendar setup
 substituting Drive throughout.
 
@@ -2791,6 +2802,7 @@ at handshake:
 | `drive.recent_files` | `drive.read` | **Phase 145 + 148 + 153 + 157.** Operator-owned files modified in the last N days. Input `{window_days? default 7 (max 365), max_results? default 25 (max 100), include_trashed? default false, parent_folder_id? (Phase 148 — direct children unless `recursive: true`), recursive? (Phase 153 — walks parent_folder_id's subtree, level-parallel BFS via Phase 157, default max_depth 5 / max_folders 100), recursive_max_depth? (Phase 157 — override default depth; upper bound 20), recursive_max_folders? (Phase 157 — override default folder cap; upper bound 1000), drive_id? (Phase 153 — scopes to a specific Shared Drive; Phase 157 — also threads through the recursive walk's child-folder queries)}`. Returns `{files: [...], next_page_token, window_days}` sorted by modifiedTime desc. Cognitive shape: "what did I work on this week." |
 | `drive.recent_changes` | `drive.read` | **Phase 145 + 148 + 153 + 157.** Any accessible file modified in the last N hours. Input `{window_hours? default 24 (max 720 = 30 days), max_results? default 25 (max 100), include_trashed? default false, parent_folder_id?, recursive? (Phase 153 — same tree-walk semantics as drive.recent_files; Phase 157 — level-parallel), recursive_max_depth? (Phase 157 — upper bound 20), recursive_max_folders? (Phase 157 — upper bound 1000), drive_id? (Phase 153 — scopes to a specific Shared Drive; Phase 157 — also threads through the recursive walk)}`. No owner filter — surfaces collaborator edits and shared docs. Cognitive shape: "what changed in my Drive today." |
 | `drive.list_drives` | `drive.read` | **Phase 148.** Enumerate the Shared Drives (formerly Team Drives) the operator is a member of. No arguments. Returns `{drives: [{id, name, created_at}]}`. Use this once per conversation so the agent knows which shared drive IDs exist; pass specific IDs to `drive.search` via its query DSL (`'<drive_id>' in parents` + `corpora=drive`). Mirrors `calendar.list_calendars` from Phase 142. |
+| `drive.recent_activity` | `drive.read` | **Phase 159.** Recent activity events on Drive items visible to the operator — who edited, who shared, who renamed, who commented. Backed by the Drive Activity API (separate googleapis subdomain, separate `drive.activity.readonly` OAuth scope). Input `{window_hours? default 24 (max 720 = 30 days), max_results? default 25 (max 100)}`. Returns `{activities: [{timestamp, action_type, target_title, target_id, actor_email}], count, window_hours}`. Distinct from `drive.recent_changes`: one record per *event* (an edit, a rename, a comment), not one record per *file*. Consolidation strategy hardcoded to `legacy` (matches the Drive UI activity feed). Re-auth required on first install after Phase 159 — see the auth init section above. |
 
 #### Per-role capability grants
 

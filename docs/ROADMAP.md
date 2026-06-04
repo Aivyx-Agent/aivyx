@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 159 — Drive Activity API: `drive.recent_activity`
 
-**See [PHASE_159.md](PHASE_159.md).** Twice-deferred
+**Frozen — see [PHASE_159.md](PHASE_159.md).** Twice-deferred
 Recommended pivot. New `drive.recent_activity` tool
 backed by the Drive Activity API (separate googleapis
 subdomain, separate OAuth scope). Answers "who did
