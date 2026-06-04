@@ -1,0 +1,570 @@
+//! `drive.recent_activity` — recent activity on
+//! Google Drive items visible to the operator.
+//!
+//! Phase 159 — Drive Activity API tool. Where
+//! `drive.recent_changes` answers "what *files*
+//! moved" (a single record per file with the
+//! latest modifiedTime), this tool answers
+//! "*what happened* to files": who edited, who
+//! shared, who renamed, who commented. Multiple
+//! activities per file surface as multiple
+//! records.
+//!
+//! ## API call
+//!
+//! Single POST to
+//! `https://driveactivity.googleapis.com/v2/activity:query`
+//! with body:
+//!
+//! ```json
+//! {
+//!   "consolidationStrategy": {"legacy": {}},
+//!   "filter": "time >= \"<RFC3339>\"",
+//!   "pageSize": <max_results>
+//! }
+//! ```
+//!
+//! Consolidation strategy is hardcoded to
+//! `legacy` (matches Google Drive's "Activity"
+//! UI feed). Phase 160+ candidate to make this
+//! a knob.
+//!
+//! ## Output shape
+//!
+//! Each activity reduces to a flat envelope:
+//! `{timestamp, action_type, target_title,
+//! target_id, actor_email}`. Multi-action /
+//! multi-actor / multi-target activities collapse
+//! to their first-element representation — an
+//! honest substrate loss for LLM ergonomics.
+
+use async_trait::async_trait;
+use chrono::{Duration, Utc};
+use serde_json::{json, Value};
+
+use aivyx_capability::Scope;
+use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
+
+use crate::drive_client::SharedDriveClient;
+
+const MAX_RESULTS_CAP: u64 = 100;
+const DEFAULT_MAX_RESULTS: u64 = 25;
+const DEFAULT_WINDOW_HOURS: u64 = 24;
+const MAX_WINDOW_HOURS: u64 = 24 * 30; // 30 days
+
+pub struct DriveRecentActivity {
+    id: ToolId,
+    schema: Value,
+    client: SharedDriveClient,
+}
+
+impl DriveRecentActivity {
+    pub fn new(client: SharedDriveClient) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: input_schema(),
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for DriveRecentActivity {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "drive.recent_activity"
+    }
+
+    fn description(&self) -> &str {
+        "List recent activity (who did what to which file) \
+         on Google Drive items visible to the operator. \
+         Uses the Drive Activity API \
+         (driveactivity.googleapis.com) — distinct from \
+         `drive.recent_changes`, which only surfaces \
+         modifiedTime per file. This tool surfaces \
+         individual events: edits, creates, renames, \
+         moves, deletes, comments, permission changes. \
+         Input is a JSON object with optional \
+         `window_hours` (default 24, capped at 720 = 30 \
+         days) and `max_results` (default 25, capped at \
+         100). Returns `{activities: [...], count}` \
+         where each entry has `timestamp`, `action_type`, \
+         `target_title`, `target_id`, `actor_email`. \
+         Requires the `drive.activity.readonly` OAuth \
+         scope — operators upgrading from a pre-Phase-159 \
+         install must re-run `aivyx-drive auth init`."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("drive.read").expect(
+            "drive.read must parse — it is in KNOWN_BASES from Phase 129",
+        )
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let parsed = match parse_input(&input) {
+            Ok(p) => p,
+            Err(reason) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("drive.recent_activity: {reason}"),
+                });
+            }
+        };
+
+        let now = Utc::now();
+        let window_start = now - Duration::hours(parsed.window_hours as i64);
+        let filter = format!("time >= \"{}\"", window_start.to_rfc3339());
+
+        let body = json!({
+            "consolidationStrategy": {"legacy": {}},
+            "filter": filter,
+            "pageSize": parsed.max_results,
+        });
+
+        let response: Value =
+            match self.client.post_json_activity("/activity:query", &body).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "drive.recent_activity: Activity API query failed: {e}"
+                        ),
+                    });
+                }
+            };
+
+        let raw_activities: Vec<Value> = response
+            .get("activities")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let shaped: Vec<Value> = raw_activities
+            .iter()
+            .map(shape_activity)
+            .collect();
+
+        let output = json!({
+            "activities": shaped,
+            "count": raw_activities.len(),
+            "window_hours": parsed.window_hours,
+        });
+
+        ToolOutcome::Completed {
+            output,
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+fn input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "window_hours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720,
+                "description": "Time window in hours back from now. Default 24, capped at 720 (30 days)."
+            },
+            "max_results": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "Maximum activities to return. Default 25, capped at 100."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+#[derive(Debug)]
+struct ParsedInput {
+    window_hours: u64,
+    max_results: u64,
+}
+
+fn parse_input(input: &Value) -> Result<ParsedInput, String> {
+    let obj = input
+        .as_object()
+        .ok_or_else(|| "input must be a JSON object".to_string())?;
+
+    let window_hours = match obj.get("window_hours") {
+        None => DEFAULT_WINDOW_HOURS,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| "`window_hours` must be a positive integer".to_string())?,
+    };
+    if window_hours == 0 {
+        return Err("`window_hours` must be >= 1".to_string());
+    }
+    let window_hours = window_hours.min(MAX_WINDOW_HOURS);
+
+    let max_results = match obj.get("max_results") {
+        None => DEFAULT_MAX_RESULTS,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| "`max_results` must be a positive integer".to_string())?,
+    };
+    if max_results == 0 {
+        return Err("`max_results` must be >= 1".to_string());
+    }
+    let max_results = max_results.min(MAX_RESULTS_CAP);
+
+    Ok(ParsedInput {
+        window_hours,
+        max_results,
+    })
+}
+
+/// Phase 159 — shape a raw Activity API entry
+/// into the flat agent-ergonomic envelope. Pure
+/// substrate so the projection can be tested
+/// without live HTTP.
+///
+/// Strategy: pick the first action / actor /
+/// target. Multi-element activities lose detail
+/// — operator-visible loss documented in the
+/// open doc's honest scope risks.
+pub(crate) fn shape_activity(raw: &Value) -> Value {
+    let timestamp = extract_timestamp(raw);
+    let action_type = extract_action_type(raw);
+    let (target_title, target_id) = extract_target(raw);
+    let actor_email = extract_actor_email(raw);
+
+    json!({
+        "timestamp": timestamp,
+        "action_type": action_type,
+        "target_title": target_title,
+        "target_id": target_id,
+        "actor_email": actor_email,
+    })
+}
+
+fn extract_timestamp(raw: &Value) -> String {
+    // Single-point activities use top-level
+    // `timestamp`. Multi-point use `timeRange`
+    // with `startTime` / `endTime`; we pick
+    // endTime as the "this latest happened" time
+    // for UI sanity.
+    if let Some(ts) = raw.get("timestamp").and_then(|v| v.as_str()) {
+        return ts.to_string();
+    }
+    if let Some(end) = raw
+        .get("timeRange")
+        .and_then(|v| v.get("endTime"))
+        .and_then(|v| v.as_str())
+    {
+        return end.to_string();
+    }
+    String::new()
+}
+
+fn extract_action_type(raw: &Value) -> String {
+    // `primaryActionDetail` is a oneof with
+    // single-key variants:
+    //   {"edit": {...}}
+    //   {"create": {"new": {...}}}
+    //   {"rename": {"oldTitle": ..., "newTitle": ...}}
+    //   {"delete": {"type": "..."}}
+    //   {"move": {"addedParents": ..., "removedParents": ...}}
+    //   {"comment": {"post": {...}}}
+    //   {"permissionChange": {...}}
+    //   {"restore": {...}}
+    //   {"reference": {...}}
+    // We pick the first key as the type label.
+    let Some(detail) = raw.get("primaryActionDetail").and_then(|v| v.as_object())
+    else {
+        return "unknown".to_string();
+    };
+    detail
+        .keys()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn extract_target(raw: &Value) -> (String, String) {
+    let Some(targets) = raw.get("targets").and_then(|v| v.as_array()) else {
+        return (String::new(), String::new());
+    };
+    let Some(first) = targets.first() else {
+        return (String::new(), String::new());
+    };
+    let Some(item) = first.get("driveItem") else {
+        return (String::new(), String::new());
+    };
+    let title = item
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let id = item
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (title, id)
+}
+
+fn extract_actor_email(raw: &Value) -> String {
+    // `actors` is an array of:
+    //   {"user": {"knownUser": {"personName": ..., "isCurrentUser": ...}}}
+    //   {"user": {"deletedUser": {}}}
+    //   {"user": {"unknownUser": {}}}
+    //   {"anonymous": {}}
+    //   {"impersonation": {...}}
+    //   {"system": {...}}
+    //   {"administrator": {...}}
+    // The personName field is a People API
+    // resource name (e.g. "people/123"); the
+    // Activity API doesn't surface the raw email
+    // directly. We fall back to descriptive
+    // labels for the non-knownUser variants.
+    let Some(actors) = raw.get("actors").and_then(|v| v.as_array()) else {
+        return "unknown".to_string();
+    };
+    let Some(first) = actors.first() else {
+        return "unknown".to_string();
+    };
+    if let Some(user) = first.get("user") {
+        if let Some(known) = user.get("knownUser") {
+            if let Some(name) =
+                known.get("personName").and_then(|v| v.as_str())
+            {
+                return name.to_string();
+            }
+            return "known user".to_string();
+        }
+        if user.get("deletedUser").is_some() {
+            return "deleted user".to_string();
+        }
+        if user.get("unknownUser").is_some() {
+            return "unknown user".to_string();
+        }
+    }
+    if first.get("anonymous").is_some() {
+        return "anonymous".to_string();
+    }
+    if first.get("system").is_some() {
+        return "system".to_string();
+    }
+    if first.get("administrator").is_some() {
+        return "administrator".to_string();
+    }
+    if first.get("impersonation").is_some() {
+        return "impersonation".to_string();
+    }
+    "unknown".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_name_is_canonical() {
+        // Construct a tool via a make-believe
+        // client so we can read the name without
+        // touching the network.
+        let client = make_test_client();
+        let tool = DriveRecentActivity::new(client);
+        assert_eq!(tool.name(), "drive.recent_activity");
+    }
+
+    fn make_test_client() -> SharedDriveClient {
+        use crate::drive_client::DriveClient;
+        use aivyx_google_oauth::{OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        Arc::new(DriveClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ))
+    }
+
+    // ---- input parsing ----
+
+    #[test]
+    fn parse_defaults_to_24_hours_25_results() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.window_hours, 24);
+        assert_eq!(p.max_results, 25);
+    }
+
+    #[test]
+    fn parse_honors_explicit_window_and_results() {
+        let p = parse_input(&json!({
+            "window_hours": 72,
+            "max_results": 50,
+        }))
+        .unwrap();
+        assert_eq!(p.window_hours, 72);
+        assert_eq!(p.max_results, 50);
+    }
+
+    #[test]
+    fn parse_clamps_window_to_thirty_days() {
+        let p = parse_input(&json!({"window_hours": 9999})).unwrap();
+        assert_eq!(p.window_hours, 24 * 30);
+    }
+
+    #[test]
+    fn parse_clamps_max_results_to_one_hundred() {
+        let p = parse_input(&json!({"max_results": 9999})).unwrap();
+        assert_eq!(p.max_results, 100);
+    }
+
+    #[test]
+    fn parse_zero_window_rejected() {
+        let err = parse_input(&json!({"window_hours": 0})).unwrap_err();
+        assert!(err.contains(">= 1"), "{err}");
+    }
+
+    #[test]
+    fn parse_zero_max_results_rejected() {
+        let err = parse_input(&json!({"max_results": 0})).unwrap_err();
+        assert!(err.contains(">= 1"), "{err}");
+    }
+
+    // ---- shape_activity substrate ----
+
+    #[test]
+    fn shape_edit_activity_with_known_user_actor() {
+        let raw = json!({
+            "primaryActionDetail": {"edit": {}},
+            "timestamp": "2026-06-04T10:00:00Z",
+            "actors": [{"user": {"knownUser": {"personName": "people/123"}}}],
+            "targets": [{"driveItem": {"name": "items/abc", "title": "Q2 plan"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["timestamp"], json!("2026-06-04T10:00:00Z"));
+        assert_eq!(shaped["action_type"], json!("edit"));
+        assert_eq!(shaped["target_title"], json!("Q2 plan"));
+        assert_eq!(shaped["target_id"], json!("items/abc"));
+        assert_eq!(shaped["actor_email"], json!("people/123"));
+    }
+
+    #[test]
+    fn shape_create_activity_with_anonymous_actor() {
+        let raw = json!({
+            "primaryActionDetail": {"create": {"new": {}}},
+            "timestamp": "2026-06-04T11:00:00Z",
+            "actors": [{"anonymous": {}}],
+            "targets": [{"driveItem": {"name": "items/new1", "title": "Untitled"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["action_type"], json!("create"));
+        assert_eq!(shaped["actor_email"], json!("anonymous"));
+    }
+
+    #[test]
+    fn shape_rename_activity_picks_first_action_type() {
+        let raw = json!({
+            "primaryActionDetail": {"rename": {"oldTitle": "Old", "newTitle": "New"}},
+            "timestamp": "2026-06-04T12:00:00Z",
+            "actors": [{"user": {"knownUser": {"personName": "people/xyz"}}}],
+            "targets": [{"driveItem": {"name": "items/r", "title": "New"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["action_type"], json!("rename"));
+        assert_eq!(shaped["target_title"], json!("New"));
+    }
+
+    #[test]
+    fn shape_activity_falls_back_to_time_range_end() {
+        let raw = json!({
+            "primaryActionDetail": {"edit": {}},
+            "timeRange": {
+                "startTime": "2026-06-04T09:00:00Z",
+                "endTime": "2026-06-04T10:30:00Z",
+            },
+            "actors": [{"user": {"knownUser": {"personName": "people/a"}}}],
+            "targets": [{"driveItem": {"name": "items/x", "title": "T"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["timestamp"], json!("2026-06-04T10:30:00Z"));
+    }
+
+    #[test]
+    fn shape_activity_with_deleted_user_actor() {
+        let raw = json!({
+            "primaryActionDetail": {"delete": {"type": "TRASH"}},
+            "timestamp": "2026-06-04T13:00:00Z",
+            "actors": [{"user": {"deletedUser": {}}}],
+            "targets": [{"driveItem": {"name": "items/d", "title": "Old doc"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["action_type"], json!("delete"));
+        assert_eq!(shaped["actor_email"], json!("deleted user"));
+    }
+
+    #[test]
+    fn shape_activity_missing_targets_yields_empty_target() {
+        let raw = json!({
+            "primaryActionDetail": {"edit": {}},
+            "timestamp": "2026-06-04T14:00:00Z",
+            "actors": [{"user": {"knownUser": {"personName": "people/a"}}}],
+            "targets": [],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["target_title"], json!(""));
+        assert_eq!(shaped["target_id"], json!(""));
+    }
+
+    #[test]
+    fn shape_activity_missing_action_detail_yields_unknown() {
+        let raw = json!({
+            "timestamp": "2026-06-04T15:00:00Z",
+            "actors": [{"user": {"knownUser": {"personName": "people/a"}}}],
+            "targets": [{"driveItem": {"name": "items/x", "title": "X"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["action_type"], json!("unknown"));
+    }
+
+    #[test]
+    fn shape_activity_system_actor() {
+        let raw = json!({
+            "primaryActionDetail": {"permissionChange": {}},
+            "timestamp": "2026-06-04T16:00:00Z",
+            "actors": [{"system": {}}],
+            "targets": [{"driveItem": {"name": "items/p", "title": "Doc"}}],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["action_type"], json!("permissionChange"));
+        assert_eq!(shaped["actor_email"], json!("system"));
+    }
+
+    #[test]
+    fn shape_multi_target_activity_collapses_to_first() {
+        let raw = json!({
+            "primaryActionDetail": {"move": {}},
+            "timestamp": "2026-06-04T17:00:00Z",
+            "actors": [{"user": {"knownUser": {"personName": "people/a"}}}],
+            "targets": [
+                {"driveItem": {"name": "items/first", "title": "First"}},
+                {"driveItem": {"name": "items/second", "title": "Second"}},
+            ],
+        });
+        let shaped = shape_activity(&raw);
+        assert_eq!(shaped["target_title"], json!("First"));
+        assert_eq!(shaped["target_id"], json!("items/first"));
+    }
+}

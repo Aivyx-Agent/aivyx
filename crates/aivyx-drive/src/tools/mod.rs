@@ -12,6 +12,7 @@ pub mod download_file;
 pub mod get_metadata;
 pub mod list_drives;
 pub mod list_folder;
+pub mod recent_activity;
 pub mod recent_changes;
 pub mod recent_files;
 pub mod search;
