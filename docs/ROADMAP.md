@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 164 — Phase 163 Cleanups (Anthropic Model Guard + DOCX Inference)
 
-**See [PHASE_164.md](PHASE_164.md).** Phase 163 just-
+**Frozen — see [PHASE_164.md](PHASE_164.md).** Phase 163 just-
 shipped follow-ons (two-debt bundle; smaller than
 the typical three). Anthropic provider gains a
 pre-flight model-version guard so document blocks

@@ -221,7 +221,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 161 | Frozen | [PHASE_161.md](PHASE_161.md) | `7d8c293`  |
 | Phase 162 | Frozen | [PHASE_162.md](PHASE_162.md) | `82bc141`  |
 | Phase 163 | Frozen | [PHASE_163.md](PHASE_163.md) | `d7b7c24`  |
-| Phase 164 | Open   | [PHASE_164.md](PHASE_164.md) | —          |
+| Phase 164 | Frozen | [PHASE_164.md](PHASE_164.md) | _pending_  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

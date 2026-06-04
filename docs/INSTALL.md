@@ -1584,6 +1584,35 @@ flow). See
 [`docs/amendments/2026-06-04-content-part-document.md`](amendments/2026-06-04-content-part-document.md)
 for the contract change.
 
+**Phase 164 — Anthropic document model-version
+guard.** When operators attach a document block
+and their configured Anthropic model is pre-
+Claude-3.5, the substrate refuses client-side
+with a clear `LlmError::Config` ("model 'X'
+does not support document blocks; document
+content blocks require Claude 3.5 or newer") —
+no API call. Supported prefixes:
+`claude-3-5-*`, `claude-3-7-*`,
+`claude-opus-4-*`, `claude-sonnet-4-*`,
+`claude-haiku-4-*`. New variants released after
+Phase 164 with a different prefix fail-closed
+until the substrate adds the prefix (the fix
+is a one-line PR).
+
+**Phase 164 — DOCX inference.** Files with
+`.docx` extension or `application/vnd.
+openxmlformats-officedocument.
+wordprocessingml.document` /
+`application/msword` Content-Type now route
+through the `Document` variant. Anthropic's
+document blocks accept PDF only as of writing;
+DOCX attached to Anthropic surfaces as a 400
+from the API (same posture as SVG/TIFF in
+image blocks). The inference surface lands so
+that when provider support widens — or
+operators switch providers — no voice-side
+work is needed.
+
 SVG and TIFF still route as image blocks; most
 vision LLMs reject them, and the rejection
 surfaces as a per-attach error from the

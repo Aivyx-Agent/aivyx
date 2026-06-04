@@ -217,8 +217,49 @@ clear (modulo the dropped cleanup). Phase
 
 ## Prediction vs reality
 
-_Populated at Phase 164 exit. Predictions at
-sign-off: DESIGN.md HOLD → 1; PRODUCT.md HOLD
-→ 55; lib.rs HOLD → 1; zero new deps; test
-count delta `+6` to `+12`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 1 | Untouched | ✅ |
+| PRODUCT.md HOLD → 55 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 1 | Untouched | ✅ |
+| Zero new workspace deps | Pure string-matching against existing values | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+6` to `+12` | `+12` (Anthropic provider +7, aivyx-voice +5) | ✅ (top of band) |
+
+All five exit criteria met. Phase 163's two
+named carry-overs closed:
+
+1. **Anthropic document model-version guard**
+   (Task 2, commit `5ac16b9`). Pre-Claude-3.5
+   models surface `LlmError::Config` with a
+   clear "model X does not support document
+   blocks" message before the API call.
+2. **DOCX media type inference** (Task 3,
+   commit `a32772a`). `.docx` extension +
+   modern/legacy MIMEs route through the
+   Phase 163 `Document` variant.
+
+The third named carry-over from Phase 163
+("remove dead `Message::text_with_image`")
+was dropped honestly during the open doc —
+Telegram + channel + daemon_server still call
+it; only voice's call site went away.
+
+### What landed beyond the open
+
+Nothing. Test count landed exactly at the
+top of the predicted `+6..+12` band.
+
+### Phase 163 honest-debt status
+
+Two of three named carry-overs closed; one
+dropped after honest inspection. Phase 164's
+own named carry-overs (PDF page-count cap,
+DOC / RTF / ODT / pptx / xlsx inference,
+streaming document blocks) feed the Phase
+165+ candidate list.
+
+### Fifty-third deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.
