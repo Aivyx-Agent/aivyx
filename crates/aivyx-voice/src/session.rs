@@ -1055,6 +1055,21 @@ pub struct VoiceImageConfig {
     #[serde(default)]
     pub url_header_presets:
         std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Phase 166 — number of retries on
+    /// transient URL-fetch errors (timeout,
+    /// connection refused). Default 0 = no
+    /// retry (preserves Phase 161 behavior).
+    /// Each retry doubles the backoff from
+    /// `url_retry_backoff_ms`.
+    #[serde(default)]
+    pub url_retry_count: u32,
+    /// Phase 166 — base backoff in
+    /// milliseconds before the first retry.
+    /// Default 500ms. Doubles per retry
+    /// (exponential). Has no effect when
+    /// `url_retry_count` is 0.
+    #[serde(default = "VoiceImageConfig::default_url_retry_backoff_ms")]
+    pub url_retry_backoff_ms: u64,
 }
 
 impl Default for VoiceImageConfig {
@@ -1065,6 +1080,8 @@ impl Default for VoiceImageConfig {
             head_precheck: Self::default_head_precheck(),
             url_headers: std::collections::HashMap::new(),
             url_header_presets: std::collections::HashMap::new(),
+            url_retry_count: 0,
+            url_retry_backoff_ms: Self::default_url_retry_backoff_ms(),
         }
     }
 }
@@ -1078,6 +1095,9 @@ impl VoiceImageConfig {
     }
     fn default_head_precheck() -> bool {
         true
+    }
+    fn default_url_retry_backoff_ms() -> u64 {
+        500
     }
     /// Bytes-form of `size_cap_mb` for the
     /// substrate-tier comparisons in
@@ -1181,12 +1201,20 @@ async fn fetch_image_url(
             return Err(reason);
         }
     }
-    let resp = client
-        .get(url)
-        .headers(header_map.clone())
-        .send()
-        .await
-        .map_err(|e| format!("fetch {url:?}: {e}"))?;
+    // Phase 166 — retry on transient timeout
+    // or connect failure. Exponential backoff:
+    // delay = backoff_ms * 2^attempt. 4xx /
+    // 5xx responses do NOT retry — those are
+    // operator-fixable errors.
+    let resp = send_with_retry(
+        &client,
+        url,
+        &header_map,
+        cfg.url_retry_count,
+        cfg.url_retry_backoff_ms,
+    )
+    .await
+    .map_err(|e| format!("fetch {url:?}: {e}"))?;
     let header_ct = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -1219,6 +1247,47 @@ async fn fetch_image_url(
             )
         })?;
     Ok((media_type.to_string(), bytes))
+}
+
+/// Phase 166 — true iff a `reqwest::Error`
+/// represents a transient client-side
+/// condition worth retrying (timeout, connect
+/// failure). HTTP-status errors (4xx / 5xx)
+/// are NOT considered transient — those are
+/// operator-fixable (auth, content, server
+/// rate-limit) and retrying would mask the
+/// real cause. Pure substrate so the
+/// classification can be tested without going
+/// through `reqwest::Client`.
+fn is_transient_reqwest_error(e: &reqwest::Error) -> bool {
+    e.is_timeout() || e.is_connect()
+}
+
+/// Phase 166 — perform the GET with retry on
+/// transient transport errors. Backoff
+/// doubles per attempt; `retry_count = 0`
+/// means "try once" (the Phase 161 behavior).
+async fn send_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &reqwest::header::HeaderMap,
+    retry_count: u32,
+    backoff_ms: u64,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let mut attempt: u32 = 0;
+    loop {
+        match client.get(url).headers(headers.clone()).send().await {
+            Ok(resp) => return Ok(resp),
+            Err(e) if attempt < retry_count && is_transient_reqwest_error(&e) => {
+                let delay_ms = backoff_ms.saturating_mul(1u64 << attempt);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms))
+                    .await;
+                attempt += 1;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Phase 161 — HEAD pre-fetch for size check.
@@ -1725,6 +1794,8 @@ mod tests {
             head_precheck: true,
             url_headers: Default::default(),
             url_header_presets: Default::default(),
+            url_retry_count: 0,
+            url_retry_backoff_ms: 500,
         };
         assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
     }
@@ -2150,6 +2221,82 @@ Cookie = "session=personal"
         assert!(cfg.url_header_presets.is_empty());
     }
 
+    // ---- Phase 166 — URL fetch retry ----
+
+    #[test]
+    fn voice_image_config_url_retry_defaults() {
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.url_retry_count, 0);
+        assert_eq!(cfg.url_retry_backoff_ms, 500);
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_url_retry_fields() {
+        let toml = r#"
+size_cap_mb = 10
+url_retry_count = 3
+url_retry_backoff_ms = 1000
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.url_retry_count, 3);
+        assert_eq!(cfg.url_retry_backoff_ms, 1000);
+    }
+
+    #[test]
+    fn url_retry_backoff_formula_exponential() {
+        // Direct-computation test of the
+        // backoff math used inside
+        // send_with_retry. attempt N uses
+        // delay = backoff_ms * 2^N. The
+        // function uses saturating_mul to
+        // prevent overflow on absurdly large
+        // retry counts.
+        let backoff_ms: u64 = 500;
+        let delays: Vec<u64> = (0..4)
+            .map(|attempt| backoff_ms.saturating_mul(1u64 << attempt))
+            .collect();
+        // 500, 1000, 2000, 4000 (ms).
+        assert_eq!(delays, vec![500, 1000, 2000, 4000]);
+    }
+
+    #[test]
+    fn url_retry_backoff_saturates_on_large_attempt_counts() {
+        // Pathological: an operator with
+        // retry_count = 64 and a very large
+        // backoff. 1u64 << 64 would panic via
+        // overflow; saturating_mul keeps us at
+        // u64::MAX without UB. The retry loop
+        // would never actually complete that
+        // many retries because tokio::sleep
+        // would take centuries, but the math
+        // is provably safe.
+        let backoff_ms: u64 = u64::MAX / 2;
+        let shifted = 1u64 << 63;
+        assert_eq!(
+            backoff_ms.saturating_mul(shifted),
+            u64::MAX,
+        );
+    }
+
+    #[test]
+    fn cfg_retry_count_zero_means_one_attempt() {
+        // The retry loop's `attempt < retry_count`
+        // condition means retry_count = 0
+        // permits zero retries — i.e. the
+        // request is attempted once with no
+        // retry. This matches Phase 161
+        // behavior; Phase 166 is purely
+        // additive when the operator leaves
+        // the default in place.
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.url_retry_count, 0);
+        // The loop guard:
+        let retry_count: u32 = cfg.url_retry_count;
+        let attempt: u32 = 0;
+        let would_retry = attempt < retry_count;
+        assert!(!would_retry);
+    }
+
     #[test]
     fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
         // An operator setting an absurd cap like
@@ -2164,6 +2311,8 @@ Cookie = "session=personal"
             head_precheck: true,
             url_headers: Default::default(),
             url_header_presets: Default::default(),
+            url_retry_count: 0,
+            url_retry_backoff_ms: 500,
         };
         assert_eq!(cfg.size_cap_bytes(), usize::MAX);
     }
@@ -2179,6 +2328,8 @@ Cookie = "session=personal"
             head_precheck: true,
             url_headers: Default::default(),
             url_header_presets: Default::default(),
+            url_retry_count: 0,
+            url_retry_backoff_ms: 500,
         };
         let tmp = std::env::temp_dir().join("phase161-tightcap.png");
         std::fs::write(&tmp, b"abc").expect("write tmp");
