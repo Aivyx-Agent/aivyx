@@ -1197,10 +1197,18 @@ async fn head_precheck_size(
 
 /// Phase 156 — Map an HTTP `Content-Type`
 /// header value to a canonical image media type
-/// when it matches one of Phase 154's four
-/// supported formats. Returns `None` otherwise
-/// (caller falls back to URL-extension
-/// inference).
+/// when it matches one of the supported formats.
+/// Returns `None` otherwise (caller falls back
+/// to URL-extension inference).
+///
+/// Phase 162 — adds `application/pdf`,
+/// `image/svg+xml`, `image/tiff`. Honest scope
+/// risk: the downstream LLM provider may reject
+/// these as image-block content (PDFs typically
+/// route through document blocks, SVG/TIFF
+/// support varies). Phase 162 passes the
+/// media_type through opaquely and lets the
+/// provider's response surface the error.
 fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
     let raw = ct?;
     // Header may include "; charset=..." or
@@ -1212,6 +1220,10 @@ fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
         "image/jpeg" | "image/jpg" => Some("image/jpeg"),
         "image/gif" => Some("image/gif"),
         "image/webp" => Some("image/webp"),
+        // Phase 162 additions.
+        "application/pdf" => Some("application/pdf"),
+        "image/svg+xml" | "image/svg" => Some("image/svg+xml"),
+        "image/tiff" | "image/tif" => Some("image/tiff"),
         _ => None,
     }
 }
@@ -1236,10 +1248,14 @@ fn infer_image_media_type_for_url_path(url: &str) -> Option<&'static str> {
 /// string on a known extension, or a clear
 /// error otherwise.
 ///
-/// Phase 154 MVP covers the four
+/// Phase 154 MVP covered the four
 /// operator-typical formats (PNG, JPEG, GIF,
-/// WebP). PDF/SVG/TIFF/etc. error out — Phase
-/// 155+ candidate if surfaces.
+/// WebP). Phase 162 extends with PDF / SVG /
+/// TIFF — note that the downstream LLM
+/// provider may reject the non-image
+/// formats as image-block content (PDFs in
+/// particular typically route through
+/// document blocks, not image blocks).
 fn infer_image_media_type(path: &str) -> Result<&'static str, String> {
     let ext = std::path::Path::new(path)
         .extension()
@@ -1251,9 +1267,13 @@ fn infer_image_media_type(path: &str) -> Result<&'static str, String> {
         "jpg" | "jpeg" => Ok("image/jpeg"),
         "gif" => Ok("image/gif"),
         "webp" => Ok("image/webp"),
+        // Phase 162 additions.
+        "pdf" => Ok("application/pdf"),
+        "svg" => Ok("image/svg+xml"),
+        "tif" | "tiff" => Ok("image/tiff"),
         other => Err(format!(
             "unsupported image extension {other:?}; \
-             Phase 154 supports png / jpg / jpeg / gif / webp"
+             supported: png / jpg / jpeg / gif / webp / pdf / svg / tif / tiff"
         )),
     }
 }
@@ -1287,12 +1307,83 @@ mod tests {
         assert_eq!(infer_image_media_type("b.webp").unwrap(), "image/webp");
     }
 
+    // ---- Phase 162 — PDF / SVG / TIFF support ----
+
     #[test]
-    fn infer_image_media_type_unsupported_extension_rejects() {
-        let err = infer_image_media_type("a.pdf").unwrap_err();
+    fn infer_image_media_type_pdf() {
+        assert_eq!(
+            infer_image_media_type("doc.pdf").unwrap(),
+            "application/pdf"
+        );
+        assert_eq!(
+            infer_image_media_type("/abs/path/FILE.PDF").unwrap(),
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn infer_image_media_type_svg() {
+        assert_eq!(
+            infer_image_media_type("diagram.svg").unwrap(),
+            "image/svg+xml"
+        );
+    }
+
+    #[test]
+    fn infer_image_media_type_tiff_variants() {
+        assert_eq!(infer_image_media_type("a.tif").unwrap(), "image/tiff");
+        assert_eq!(infer_image_media_type("b.tiff").unwrap(), "image/tiff");
+        assert_eq!(infer_image_media_type("C.TIFF").unwrap(), "image/tiff");
+    }
+
+    #[test]
+    fn infer_image_media_type_truly_unsupported_extension_rejects() {
+        // .heic / .bmp / .ico are not in Phase
+        // 162's set; rejection error lists the
+        // supported types.
+        let err = infer_image_media_type("a.heic").unwrap_err();
         assert!(err.contains("unsupported"), "{err}");
-        let err = infer_image_media_type("a.svg").unwrap_err();
-        assert!(err.contains("unsupported"), "{err}");
+        assert!(err.contains("pdf"), "{err}");
+        assert!(err.contains("svg"), "{err}");
+    }
+
+    #[test]
+    fn media_type_from_content_type_pdf() {
+        assert_eq!(
+            media_type_from_content_type(Some("application/pdf")),
+            Some("application/pdf")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("APPLICATION/PDF; charset=binary")),
+            Some("application/pdf")
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_svg_xml_and_legacy() {
+        assert_eq!(
+            media_type_from_content_type(Some("image/svg+xml")),
+            Some("image/svg+xml")
+        );
+        // Some old servers respond `image/svg`
+        // without the `+xml`; we normalize to
+        // the canonical form.
+        assert_eq!(
+            media_type_from_content_type(Some("image/svg")),
+            Some("image/svg+xml")
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_tiff_and_tif() {
+        assert_eq!(
+            media_type_from_content_type(Some("image/tiff")),
+            Some("image/tiff")
+        );
+        assert_eq!(
+            media_type_from_content_type(Some("image/tif")),
+            Some("image/tiff")
+        );
     }
 
     #[test]
@@ -1488,9 +1579,13 @@ size_cap_mb = 50
 
     #[test]
     fn media_type_from_content_type_unsupported_returns_none() {
-        assert!(media_type_from_content_type(Some("image/svg+xml")).is_none());
-        assert!(media_type_from_content_type(Some("application/pdf")).is_none());
+        // Phase 162 — `image/svg+xml` and
+        // `application/pdf` are now supported.
+        // Truly unsupported types like text/html
+        // and image/bmp still return None.
         assert!(media_type_from_content_type(Some("text/html")).is_none());
+        assert!(media_type_from_content_type(Some("image/bmp")).is_none());
+        assert!(media_type_from_content_type(Some("image/heic")).is_none());
         assert!(media_type_from_content_type(None).is_none());
     }
 
