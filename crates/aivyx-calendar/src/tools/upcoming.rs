@@ -150,15 +150,13 @@ impl Tool for CalendarUpcoming {
         // When operator didn't (calendar_ids
         // defaulted to ["primary"]), replace
         // with the full set of writable ids.
+        //
+        // Phase 158 — 5-minute session cache
+        // sits behind `writable_calendar_ids` on
+        // the client; subsequent calls in the
+        // same session skip the round trip.
         if parsed.writable_only {
-            let body: Value = match self
-                .client
-                .get_json(
-                    "/users/me/calendarList",
-                    &[("fields", "items(id,accessRole)".to_string())],
-                )
-                .await
-            {
+            let writable_ids = match self.client.writable_calendar_ids().await {
                 Ok(v) => v,
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
@@ -169,26 +167,8 @@ impl Tool for CalendarUpcoming {
                     });
                 }
             };
-            let writable_set: std::collections::HashSet<String> = body
-                .get("items")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter(|cal| {
-                            let role = cal
-                                .get("accessRole")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            role == "owner" || role == "writer"
-                        })
-                        .filter_map(|cal| {
-                            cal.get("id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let writable_set: std::collections::HashSet<String> =
+                writable_ids.into_iter().collect();
 
             if parsed.calendar_ids_explicit {
                 parsed.calendar_ids.retain(|id| writable_set.contains(id));

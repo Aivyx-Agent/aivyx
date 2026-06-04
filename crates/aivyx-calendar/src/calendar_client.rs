@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
@@ -66,7 +67,29 @@ pub struct CalendarClient {
     tokens: Arc<Mutex<TokenSet>>,
     token_path: PathBuf,
     token_endpoint: String,
+    /// Phase 158 — session cache of writable
+    /// calendar IDs for `calendar.upcoming`'s
+    /// `writable_only: true` path. None until the
+    /// first writable_only call; afterwards holds
+    /// `(populated_at, ids)`. TTL is enforced at
+    /// read time; the cache never grows beyond a
+    /// single tuple (one operator per process).
+    writable_calendars_cache: WritableCalendarsCache,
 }
+
+/// Phase 158 — type alias for the writable-
+/// calendars cache cell. Keeps the
+/// `CalendarClient` field signature readable and
+/// keeps clippy's `type_complexity` lint happy.
+type WritableCalendarsCache = Arc<Mutex<Option<(Instant, Vec<String>)>>>;
+
+/// Phase 158 — TTL for the writable_calendars
+/// cache. 5 minutes is long enough that a
+/// multi-tool-call session amortizes the round
+/// trip and short enough that an operator who
+/// gains a new calendar mid-session waits at
+/// most one TTL window before it surfaces.
+pub const WRITABLE_CALENDARS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 impl CalendarClient {
     /// Build a `CalendarClient` from the operator-loaded
@@ -86,6 +109,7 @@ impl CalendarClient {
             tokens: Arc::new(Mutex::new(tokens)),
             token_path,
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
+            writable_calendars_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -105,6 +129,7 @@ impl CalendarClient {
             tokens: Arc::new(Mutex::new(tokens)),
             token_path,
             token_endpoint: token_endpoint.into(),
+            writable_calendars_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -198,6 +223,100 @@ impl CalendarClient {
         decode_response(resp).await
     }
 
+    /// Phase 158 — fetch the operator's writable
+    /// calendar IDs, using a 5-minute session
+    /// cache. On a cache hit, returns the cached
+    /// list with no API round trip. On a cache
+    /// miss (or expiry), GETs
+    /// `/users/me/calendarList`, filters to
+    /// `owner` and `writer` access roles,
+    /// caches, returns.
+    ///
+    /// The cache lives on the client so multiple
+    /// `calendar.upcoming` calls in the same
+    /// session share it. Other tools that
+    /// internally need the writable set can call
+    /// this helper too; the substrate stays
+    /// consistent.
+    pub async fn writable_calendar_ids(
+        &self,
+    ) -> Result<Vec<String>, CalendarClientError> {
+        {
+            let guard = self.writable_calendars_cache.lock().await;
+            if let Some((populated_at, ref ids)) = *guard {
+                if populated_at.elapsed() < WRITABLE_CALENDARS_CACHE_TTL {
+                    return Ok(ids.clone());
+                }
+            }
+        }
+        let body: Value = self
+            .get_json(
+                "/users/me/calendarList",
+                &[("fields", "items(id,accessRole)".to_string())],
+            )
+            .await?;
+        let ids: Vec<String> = body
+            .get("items")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|cal| {
+                        let role = cal
+                            .get("accessRole")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        role == "owner" || role == "writer"
+                    })
+                    .filter_map(|cal| {
+                        cal.get("id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut guard = self.writable_calendars_cache.lock().await;
+        *guard = Some((Instant::now(), ids.clone()));
+        Ok(ids)
+    }
+
+    /// Test-only: peek at the writable-calendars
+    /// cache. Returns `(populated_at_elapsed,
+    /// ids)` if populated, None if empty.
+    #[cfg(test)]
+    pub async fn writable_calendars_cache_peek(
+        &self,
+    ) -> Option<(Duration, Vec<String>)> {
+        let guard = self.writable_calendars_cache.lock().await;
+        guard.as_ref().map(|(at, ids)| (at.elapsed(), ids.clone()))
+    }
+
+    /// Test-only: pre-populate the writable-
+    /// calendars cache so the
+    /// `writable_calendar_ids` substrate logic can
+    /// be tested without a live HTTP round trip.
+    #[cfg(test)]
+    pub async fn writable_calendars_cache_seed(
+        &self,
+        ids: Vec<String>,
+    ) {
+        let mut guard = self.writable_calendars_cache.lock().await;
+        *guard = Some((Instant::now(), ids));
+    }
+
+    /// Test-only: pre-populate with a custom
+    /// `populated_at` Instant so cache-expiry
+    /// tests can run without sleeping.
+    #[cfg(test)]
+    pub async fn writable_calendars_cache_seed_at(
+        &self,
+        populated_at: Instant,
+        ids: Vec<String>,
+    ) {
+        let mut guard = self.writable_calendars_cache.lock().await;
+        *guard = Some((populated_at, ids));
+    }
+
     /// Internal helper: DELETE `path`. Per-task code uses
     /// this for delete operations. Returns the raw status
     /// code so the caller can distinguish 204 (success)
@@ -280,5 +399,106 @@ mod tests {
         };
         let rendered = e.to_string();
         assert!(rendered.contains("404"));
+    }
+
+    // ---- Phase 158 — writable_calendars cache ----
+
+    fn make_client() -> CalendarClient {
+        CalendarClient::new(
+            Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            PathBuf::from("/tmp/unused"),
+        )
+    }
+
+    #[test]
+    fn writable_calendars_cache_ttl_pins_to_five_minutes() {
+        // Regression pin — if a future phase
+        // makes this operator-tunable, the
+        // INSTALL.md row + open doc need to
+        // track.
+        assert_eq!(WRITABLE_CALENDARS_CACHE_TTL, Duration::from_secs(300));
+    }
+
+    #[tokio::test]
+    async fn writable_calendars_cache_starts_empty() {
+        let client = make_client();
+        assert!(client.writable_calendars_cache_peek().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn writable_calendars_cache_seed_populates_peek() {
+        let client = make_client();
+        client
+            .writable_calendars_cache_seed(vec![
+                "primary".to_string(),
+                "team@example.com".to_string(),
+            ])
+            .await;
+        let peeked = client.writable_calendars_cache_peek().await.unwrap();
+        assert_eq!(peeked.1, vec!["primary", "team@example.com"]);
+        assert!(peeked.0 < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn writable_calendars_cache_hit_skips_round_trip() {
+        // Seed with a known list, then call
+        // writable_calendar_ids — it should hit
+        // the cache and never reach the network
+        // (which would fail because the test
+        // token endpoint is bogus).
+        let client = make_client();
+        let canned =
+            vec!["primary".to_string(), "team@example.com".to_string()];
+        client
+            .writable_calendars_cache_seed(canned.clone())
+            .await;
+        let ids = client.writable_calendar_ids().await.unwrap();
+        assert_eq!(ids, canned);
+    }
+
+    #[tokio::test]
+    async fn writable_calendars_cache_expiry_falls_through_to_fetch() {
+        // Seed with a populated_at well in the
+        // past so the TTL window has expired.
+        // writable_calendar_ids will fall through
+        // to the network fetch — which we expect
+        // to fail because the test token endpoint
+        // isn't running. The point is verifying
+        // the cache-expiry branch is taken (vs.
+        // returning the stale cached value).
+        let client = make_client();
+        let stale_at = Instant::now()
+            .checked_sub(Duration::from_secs(600))
+            .expect("Instant arithmetic should succeed in test");
+        client
+            .writable_calendars_cache_seed_at(
+                stale_at,
+                vec!["stale@example.com".to_string()],
+            )
+            .await;
+        let result = client.writable_calendar_ids().await;
+        // We don't assert success — the test
+        // env can't reach the live endpoint. We
+        // assert the cache was NOT returned: if
+        // the stale entry had been served, we'd
+        // see Ok(["stale@example.com"]). Any
+        // other outcome (Err, or a different
+        // Ok) proves the expiry branch fired.
+        match result {
+            Ok(ids) => assert_ne!(
+                ids,
+                vec!["stale@example.com".to_string()],
+                "stale cache served past TTL"
+            ),
+            Err(_) => { /* expected: network unreachable */ }
+        }
     }
 }
