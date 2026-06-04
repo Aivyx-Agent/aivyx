@@ -51,6 +51,16 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub struct AnthropicConfig {
     pub api_key: SecretString,
     pub base_url: Option<String>,
+    /// Phase 166 — operator-tunable cap on PDF
+    /// page count for document content blocks.
+    /// Defaults to [`ANTHROPIC_PDF_PAGE_CAP`]
+    /// (100, matching Anthropic's documented
+    /// per-document cap). Operators with custom
+    /// plans override either via
+    /// [`with_pdf_page_cap`] or the env-var
+    /// `AIVYX_ANTHROPIC_PDF_PAGE_CAP` checked
+    /// in [`AnthropicConfig::new`].
+    pub pdf_page_cap: usize,
 }
 
 impl AnthropicConfig {
@@ -58,12 +68,36 @@ impl AnthropicConfig {
         AnthropicConfig {
             api_key: api_key.into(),
             base_url: None,
+            pdf_page_cap: pdf_page_cap_from_env_or_default(),
         }
     }
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
         self
+    }
+
+    /// Phase 166 — override the per-document
+    /// PDF page cap. Takes precedence over the
+    /// env-var fallback set in
+    /// [`AnthropicConfig::new`].
+    pub fn with_pdf_page_cap(mut self, cap: usize) -> Self {
+        self.pdf_page_cap = cap;
+        self
+    }
+}
+
+/// Phase 166 — read the env-var override for
+/// the PDF page cap or fall back to the
+/// constant default. Pure substrate so the
+/// env-var resolution can be tested.
+fn pdf_page_cap_from_env_or_default() -> usize {
+    match std::env::var("AIVYX_ANTHROPIC_PDF_PAGE_CAP") {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => n,
+            _ => ANTHROPIC_PDF_PAGE_CAP,
+        },
+        Err(_) => ANTHROPIC_PDF_PAGE_CAP,
     }
 }
 
@@ -112,7 +146,7 @@ impl LlmProvider for AnthropicProvider {
         request: LlmRequest<'_>,
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        let body = build_request_body(&request)?;
+        let body = build_request_body(&request, self.config.pdf_page_cap)?;
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| LlmError::Parse(format!("request serialization: {e}")))?;
 
@@ -150,7 +184,10 @@ impl LlmProvider for AnthropicProvider {
 // Request-body construction
 // ---------------------------------------------------------------------------
 
-fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
+fn build_request_body(
+    request: &LlmRequest<'_>,
+    pdf_page_cap: usize,
+) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
     }
@@ -184,14 +221,19 @@ fn build_request_body(request: &LlmRequest<'_>) -> Result<Value, LlmError> {
     // FlateDecode), so the false-negative case
     // falls through to Anthropic's own
     // page-count enforcement.
-    if let Some(over_cap) = first_pdf_over_page_cap(request)? {
+    //
+    // Phase 166 — the cap is now operator-
+    // tunable via `AnthropicConfig::pdf_page_cap`
+    // (env-var fallback
+    // `AIVYX_ANTHROPIC_PDF_PAGE_CAP`).
+    if let Some(over_cap) = first_pdf_over_page_cap(request, pdf_page_cap)? {
         return Err(LlmError::Config(format!(
-            "PDF document block exceeds Anthropic's page cap: counted at \
-             least {count} pages via best-effort byte-scan; max allowed is \
-             {cap}. Compressed-stream PDFs may evade this client-side check; \
-             Anthropic's server-side cap will enforce as well.",
+            "PDF document block exceeds the configured Anthropic page cap: \
+             counted at least {count} pages via best-effort byte-scan; max \
+             allowed is {pdf_page_cap}. Compressed-stream PDFs may evade \
+             this client-side check; Anthropic's server-side cap will \
+             enforce as well.",
             count = over_cap.count,
-            cap = ANTHROPIC_PDF_PAGE_CAP,
         )));
     }
 
@@ -331,6 +373,7 @@ struct OverCapPdf {
 /// invalid input.
 fn first_pdf_over_page_cap(
     request: &LlmRequest<'_>,
+    cap: usize,
 ) -> Result<Option<OverCapPdf>, LlmError> {
     use base64::Engine;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -351,7 +394,7 @@ fn first_pdf_over_page_cap(
                 ))
             })?;
             let count = count_pdf_pages_best_effort(&bytes);
-            if count > ANTHROPIC_PDF_PAGE_CAP {
+            if count > cap {
                 return Ok(Some(OverCapPdf { count }));
             }
         }
@@ -1355,7 +1398,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        let err = build_request_body(&req).unwrap_err();
+        let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         match err {
             LlmError::Config(msg) => {
                 assert!(msg.contains("does not support document blocks"));
@@ -1383,7 +1426,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        let body = build_request_body(&req).expect("ok");
+        let body = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).expect("ok");
         assert_eq!(body["model"], "claude-haiku-4-5-20251001");
         // Request still contains the document
         // block — passes through to the API.
@@ -1408,7 +1451,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        assert!(build_request_body(&req).is_ok());
+        assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }
 
     // ---- Phase 165 — PDF page-count cap ----
@@ -1503,7 +1546,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        let err = build_request_body(&req).unwrap_err();
+        let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         match err {
             LlmError::Config(msg) => {
                 assert!(msg.contains("page cap"), "{msg}");
@@ -1544,7 +1587,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        assert!(build_request_body(&req).is_ok());
+        assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }
 
     #[test]
@@ -1565,8 +1608,137 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        let err = build_request_body(&req).unwrap_err();
+        let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         assert!(matches!(err, LlmError::Parse(_)));
+    }
+
+    // ---- Phase 166 — pdf_page_cap config knob ----
+
+    #[test]
+    fn pdf_page_cap_default_matches_constant() {
+        let cfg = AnthropicConfig::new(SecretString::from("k"));
+        assert_eq!(cfg.pdf_page_cap, ANTHROPIC_PDF_PAGE_CAP);
+    }
+
+    #[test]
+    fn pdf_page_cap_builder_overrides_default() {
+        let cfg = AnthropicConfig::new(SecretString::from("k"))
+            .with_pdf_page_cap(200);
+        assert_eq!(cfg.pdf_page_cap, 200);
+    }
+
+    #[test]
+    fn pdf_page_cap_env_var_overrides_default() {
+        // Run in a serialized helper since
+        // env-var manipulation isn't thread-
+        // safe across `cargo test` parallelism.
+        // We use a small unique-suffix dance:
+        // set, check, unset.
+        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        // SAFETY (test-only): no other test in
+        // this module reads or writes this env
+        // var; clippy::env_var hazard is
+        // acceptable in tests.
+        unsafe { std::env::set_var(key, "250") };
+        let result = pdf_page_cap_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(result, 250);
+    }
+
+    #[test]
+    fn pdf_page_cap_env_var_invalid_falls_back_to_default() {
+        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        unsafe { std::env::set_var(key, "not a number") };
+        let result = pdf_page_cap_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(result, ANTHROPIC_PDF_PAGE_CAP);
+    }
+
+    #[test]
+    fn pdf_page_cap_env_var_zero_falls_back_to_default() {
+        // Zero is not a sensible cap — caller
+        // would never be able to attach a PDF.
+        // Treat as invalid; fall back to
+        // default.
+        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        unsafe { std::env::set_var(key, "0") };
+        let result = pdf_page_cap_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(result, ANTHROPIC_PDF_PAGE_CAP);
+    }
+
+    #[test]
+    fn build_request_body_honors_higher_custom_cap() {
+        // A 150-page PDF would fail at the
+        // 100-page default cap; with cap=200
+        // it passes.
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+        use base64::Engine;
+        let mut body = b"%PDF-1.4\n".to_vec();
+        for i in 0..150 {
+            body.extend_from_slice(
+                format!("{i} 0 obj << /Type /Page /Parent 0 0 R >> endobj\n")
+                    .as_bytes(),
+            );
+        }
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(&body);
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data,
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        // Default cap → rejected.
+        assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_err());
+        // Custom higher cap → accepted.
+        assert!(build_request_body(&req, 200).is_ok());
+    }
+
+    #[test]
+    fn build_request_body_error_message_uses_configured_cap() {
+        use crate::{ContentBlock, LlmMessage, LlmRequest};
+        use base64::Engine;
+        let mut body = b"%PDF-1.4\n".to_vec();
+        for i in 0..60 {
+            body.extend_from_slice(
+                format!("{i} 0 obj << /Type /Page /Parent 0 0 R >> endobj\n")
+                    .as_bytes(),
+            );
+        }
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(&body);
+        let msgs = [LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data,
+            }],
+        }];
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            messages: &msgs,
+            tools: &[],
+            system: None,
+            max_tokens: 100,
+            temperature: None,
+        };
+        // Cap of 50 → over by 10.
+        let err = build_request_body(&req, 50).unwrap_err();
+        match err {
+            LlmError::Config(msg) => {
+                assert!(msg.contains("60"), "{msg}");
+                assert!(msg.contains("50"), "{msg}");
+            }
+            other => panic!("expected Config error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1595,6 +1767,6 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         };
-        assert!(build_request_body(&req).is_ok());
+        assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }
 }
