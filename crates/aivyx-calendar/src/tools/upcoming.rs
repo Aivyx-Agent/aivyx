@@ -215,10 +215,20 @@ impl Tool for CalendarUpcoming {
         // calendar_ids.len() permits, which is
         // equivalent to unlimited (every future
         // can hold a permit at once).
-        let permits = parsed
+        //
+        // Phase 158 — min_concurrent floor.
+        // permits = clamp(calendar_count,
+        //                 min_concurrent_or_1,
+        //                 max_concurrent_or_unbounded).
+        // min ≤ max already validated at parse
+        // time.
+        let default_permits = parsed.calendar_ids.len().max(1);
+        let ceiling = parsed
             .max_concurrent
             .map(|n| n as usize)
-            .unwrap_or(parsed.calendar_ids.len().max(1));
+            .unwrap_or(default_permits);
+        let floor = parsed.min_concurrent.map(|n| n as usize).unwrap_or(1);
+        let permits = default_permits.min(ceiling).max(floor);
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
         let per_calendar_futures = parsed.calendar_ids.iter().map(|calendar_id| {
             let path = format!(
@@ -538,6 +548,12 @@ fn input_schema() -> Value {
                 "type": "integer",
                 "minimum": 1,
                 "description": "Phase 155 — throttle the parallel fan-out so at most N per-calendar requests run simultaneously. Default unlimited (every requested calendar's request fires at once). Useful for rate-limited operators hitting 429s."
+            },
+            "min_concurrent": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16,
+                "description": "Phase 158 — floor on the parallel fan-out's semaphore permit count. Composes with `max_concurrent` as a clamp: permits = clamp(calendar_count, min_concurrent, max_concurrent). When both are supplied, min ≤ max is validated at parse time. Upper bound 16. Useful when the operator wants to guarantee a parallelism floor even if a follow-on phase changes the default."
             }
         },
         "additionalProperties": false
@@ -571,6 +587,9 @@ struct ParsedInput {
     /// Phase 155 — concurrent-request cap for
     /// the parallel fan-out. None = unlimited.
     max_concurrent: Option<u32>,
+    /// Phase 158 — floor on the parallel fan-out's
+    /// semaphore permit count. None = no floor.
+    min_concurrent: Option<u32>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -684,6 +703,32 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         }
     };
 
+    let min_concurrent = match obj.get("min_concurrent") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| "`min_concurrent` must be a positive integer".to_string())?;
+            if n == 0 {
+                return Err("`min_concurrent` must be >= 1".to_string());
+            }
+            if n > 16 {
+                return Err(format!(
+                    "`min_concurrent` must be <= 16; got {n}"
+                ));
+            }
+            Some(n as u32)
+        }
+    };
+
+    if let (Some(min), Some(max)) = (min_concurrent, max_concurrent) {
+        if min > max {
+            return Err(format!(
+                "`min_concurrent` ({min}) must be <= `max_concurrent` ({max})"
+            ));
+        }
+    }
+
     // Phase 155 — true iff operator supplied an
     // explicit calendar_id or calendar_ids.
     let calendar_ids_explicit = has_ids || has_id;
@@ -696,6 +741,7 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         fuzzy_dedup,
         writable_only,
         max_concurrent,
+        min_concurrent,
     })
 }
 
@@ -1148,6 +1194,101 @@ mod tests {
     fn max_concurrent_zero_rejected() {
         let err = parse_input(&json!({"max_concurrent": 0})).unwrap_err();
         assert!(err.contains(">= 1"), "{err}");
+    }
+
+    // ---- Phase 158 — min_concurrent ----
+
+    #[test]
+    fn min_concurrent_default_none() {
+        let parsed = parse_input(&json!({})).unwrap();
+        assert!(parsed.min_concurrent.is_none());
+    }
+
+    #[test]
+    fn min_concurrent_honored() {
+        let parsed = parse_input(&json!({"min_concurrent": 4})).unwrap();
+        assert_eq!(parsed.min_concurrent, Some(4));
+    }
+
+    #[test]
+    fn min_concurrent_zero_rejected() {
+        let err = parse_input(&json!({"min_concurrent": 0})).unwrap_err();
+        assert!(err.contains(">= 1"), "{err}");
+    }
+
+    #[test]
+    fn min_concurrent_over_cap_rejected() {
+        let err =
+            parse_input(&json!({"min_concurrent": 99})).unwrap_err();
+        assert!(err.contains("<= 16"), "{err}");
+    }
+
+    #[test]
+    fn min_concurrent_greater_than_max_concurrent_rejected() {
+        let err = parse_input(&json!({
+            "min_concurrent": 8,
+            "max_concurrent": 4,
+        }))
+        .unwrap_err();
+        assert!(err.contains("min_concurrent"));
+        assert!(err.contains("max_concurrent"));
+        assert!(err.contains("(8)"));
+        assert!(err.contains("(4)"));
+    }
+
+    #[test]
+    fn min_equal_to_max_concurrent_accepted() {
+        let parsed = parse_input(&json!({
+            "min_concurrent": 4,
+            "max_concurrent": 4,
+        }))
+        .unwrap();
+        assert_eq!(parsed.min_concurrent, Some(4));
+        assert_eq!(parsed.max_concurrent, Some(4));
+    }
+
+    #[test]
+    fn permits_clamp_floor_lifts_below_default() {
+        // calendar_count = 2, min = 4 → floor
+        // wins; permits = 4. Verified via direct
+        // computation since the runtime permit
+        // value is not surfaced in ParsedInput.
+        let calendar_count: usize = 2;
+        let max: Option<u32> = None;
+        let min: Option<u32> = Some(4);
+        let default_permits = calendar_count.max(1);
+        let ceiling = max.map(|n| n as usize).unwrap_or(default_permits);
+        let floor = min.map(|n| n as usize).unwrap_or(1);
+        let permits = default_permits.min(ceiling).max(floor);
+        assert_eq!(permits, 4);
+    }
+
+    #[test]
+    fn permits_clamp_ceiling_caps_above_default() {
+        // calendar_count = 10, max = 3 → ceiling
+        // wins; permits = 3.
+        let calendar_count: usize = 10;
+        let max: Option<u32> = Some(3);
+        let min: Option<u32> = None;
+        let default_permits = calendar_count.max(1);
+        let ceiling = max.map(|n| n as usize).unwrap_or(default_permits);
+        let floor = min.map(|n| n as usize).unwrap_or(1);
+        let permits = default_permits.min(ceiling).max(floor);
+        assert_eq!(permits, 3);
+    }
+
+    #[test]
+    fn permits_clamp_default_used_when_no_knobs() {
+        // calendar_count = 5, no min/max →
+        // permits = 5.
+        let calendar_count: usize = 5;
+        let max: Option<u32> = None;
+        let min: Option<u32> = None;
+        let default_permits = calendar_count.max(1);
+        let ceiling = max.map(|n| n as usize).unwrap_or(default_permits);
+        let floor = min.map(|n| n as usize).unwrap_or(1);
+        let permits = default_permits.min(ceiling).max(floor);
+        assert_eq!(permits, 5);
     }
 
     #[test]
