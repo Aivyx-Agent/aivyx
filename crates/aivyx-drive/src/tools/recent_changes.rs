@@ -134,21 +134,27 @@ impl Tool for DriveRecentChanges {
                 Some(super::compose_recursive_parent_clause(&[pf.to_string()]))
             }
             (Some(pf), true) => {
+                let max_depth = parsed
+                    .recursive_max_depth
+                    .unwrap_or(super::RECURSIVE_MAX_DEPTH);
+                let max_folders = parsed
+                    .recursive_max_folders
+                    .unwrap_or(super::RECURSIVE_MAX_FOLDERS);
                 match super::walk_folder_tree(
                     &self.client,
                     pf,
-                    super::RECURSIVE_MAX_DEPTH,
-                    super::RECURSIVE_MAX_FOLDERS,
+                    max_depth,
+                    max_folders,
                     parsed.drive_id.as_deref(),
                 )
                 .await
                 {
                     Ok(folder_ids) => {
-                        if folder_ids.len() >= super::RECURSIVE_MAX_FOLDERS {
+                        if folder_ids.len() >= max_folders {
                             eprintln!(
                                 "drive.recent_changes: recursive folder walk hit \
                                  max_folders={} cap; results may miss deeper subtrees",
-                                super::RECURSIVE_MAX_FOLDERS
+                                max_folders
                             );
                         }
                         Some(super::compose_recursive_parent_clause(&folder_ids))
@@ -273,6 +279,18 @@ fn input_schema() -> Value {
             "drive_id": {
                 "type": "string",
                 "description": "Phase 153 — scope results to a specific Shared Drive (Team Drive). Pair with `drive.list_drives` to discover IDs. Composable with parent_folder_id and recursive."
+            },
+            "recursive_max_depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "description": "Phase 157 — override the default recursive walk depth cap. Default 5; upper bound 20."
+            },
+            "recursive_max_folders": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "description": "Phase 157 — override the default recursive walk folder cap. Default 100; upper bound 1000."
             }
         },
         "additionalProperties": false
@@ -287,6 +305,8 @@ struct ParsedInput {
     parent_folder_id: Option<String>,
     recursive: bool,
     drive_id: Option<String>,
+    recursive_max_depth: Option<usize>,
+    recursive_max_folders: Option<usize>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -365,6 +385,17 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         }
     };
 
+    let recursive_max_depth = super::recent_files::parse_recursive_cap(
+        obj.get("recursive_max_depth"),
+        "recursive_max_depth",
+        20,
+    )?;
+    let recursive_max_folders = super::recent_files::parse_recursive_cap(
+        obj.get("recursive_max_folders"),
+        "recursive_max_folders",
+        1000,
+    )?;
+
     Ok(ParsedInput {
         window_hours,
         max_results,
@@ -372,6 +403,8 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         parent_folder_id,
         recursive,
         drive_id,
+        recursive_max_depth,
+        recursive_max_folders,
     })
 }
 
@@ -514,5 +547,37 @@ mod tests {
     fn parse_input_recursive_flag_honored() {
         let p = parse_input(&json!({"recursive": true})).unwrap();
         assert!(p.recursive);
+    }
+
+    // ---- Phase 157 — tunable recursive caps ----
+
+    #[test]
+    fn parse_input_recursive_max_depth_honored() {
+        let p = parse_input(&json!({"recursive_max_depth": 7})).unwrap();
+        assert_eq!(p.recursive_max_depth, Some(7));
+        assert_eq!(p.recursive_max_folders, None);
+    }
+
+    #[test]
+    fn parse_input_recursive_max_folders_honored() {
+        let p = parse_input(&json!({"recursive_max_folders": 500})).unwrap();
+        assert_eq!(p.recursive_max_folders, Some(500));
+        assert_eq!(p.recursive_max_depth, None);
+    }
+
+    #[test]
+    fn parse_input_recursive_max_depth_over_cap_rejected() {
+        let err =
+            parse_input(&json!({"recursive_max_depth": 99})).unwrap_err();
+        assert!(err.contains("recursive_max_depth"));
+        assert!(err.contains("<= 20"));
+    }
+
+    #[test]
+    fn parse_input_recursive_max_folders_over_cap_rejected() {
+        let err =
+            parse_input(&json!({"recursive_max_folders": 9999})).unwrap_err();
+        assert!(err.contains("recursive_max_folders"));
+        assert!(err.contains("<= 1000"));
     }
 }
