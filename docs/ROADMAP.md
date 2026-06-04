@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 162 — Phase 156 + 161 Stragglers (PDF/SVG/TIFF + Authenticated URL Fetch)
 
-**See [PHASE_162.md](PHASE_162.md).** Phase 156's last
+**Frozen — see [PHASE_162.md](PHASE_162.md).** Phase 156's last
 two carry-overs. PDF/SVG/TIFF media type inference
 extends `infer_image_media_type` and
 `media_type_from_content_type` (the downstream

@@ -224,8 +224,58 @@ ledger reaches zero. Phase 163+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 162 exit. Predictions at
-sign-off: DESIGN.md HOLD → 53; PRODUCT.md HOLD
-→ 53; lib.rs HOLD → 28; zero new deps; test
-count delta `+6` to `+12`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 53 | Untouched | ✅ |
+| PRODUCT.md HOLD → 53 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 28 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives (reqwest::header, stdlib HashMap) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+6` to `+12` | `+11` (109 → 120 in `cargo test -p aivyx-voice --lib`) | ✅ (within band) |
+
+All five exit criteria met. Phase 156's debt
+ledger reaches zero:
+
+1. **PDF / SVG / TIFF support** (Task 2,
+   commit `1c48ef4`).
+   `infer_image_media_type` and
+   `media_type_from_content_type` recognize
+   `.pdf` / `application/pdf`, `.svg` /
+   `image/svg+xml` / `image/svg` (legacy), and
+   `.tif` / `.tiff` / `image/tiff` /
+   `image/tif`. The substrate passes types
+   through opaquely; the LLM provider decides
+   acceptance.
+2. **Authenticated URL fetch** (Task 3, commit
+   `3a76110`).
+   `VoiceImageConfig.url_headers` (HashMap)
+   threads through to both the HEAD pre-check
+   and the GET. Header name / value validation
+   delegates to `reqwest::header`'s
+   `from_bytes` / `from_str` with explicit
+   error surfaces (operator sees "invalid
+   header name \"Bad Name\": ..." rather than
+   a panic).
+
+### What landed beyond the open
+
+Nothing. Test count landed cleanly inside the
+predicted band (`+11` vs `+6..+12`).
+
+### Phase 156 honest-debt status — all clear
+
+The Phase 156 exit doc named five honest-debts.
+Phase 161 closed three (size cap tunable, URL
+timeout, HEAD pre-fetch). Phase 162 closes the
+remaining two. Phase 156's ledger is now zero.
+
+The new carry-overs surfaced in Phase 162's
+honest-scope-risks section (PDF document-block
+plumbing in core, per-URL header overrides,
+secret-store integration for url_headers) feed
+the Phase 163+ candidate list.
+
+### Fifty-first deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

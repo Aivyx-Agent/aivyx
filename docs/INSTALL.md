@@ -1530,9 +1530,12 @@ debts in one bundle:**
   `CONTENT_INLINE_CAP_BYTES` for cross-
   substrate consistency.
 
-**Phase 161 closed Phase 156's three honest-
-debts in one bundle — all operator-tunable via
-the new `[voice.image]` TOML block:**
+**Phase 161 + 162 closed Phase 156's full debt
+ledger.** Phase 161 brought operator-tunable
+knobs to size cap, URL timeout, and HEAD pre-
+fetch; Phase 162 added PDF / SVG / TIFF support
+and authenticated URL fetch via a TOML header
+map.
 
 ```toml
 [voice.image]
@@ -1540,16 +1543,53 @@ size_cap_mb       = 10     # Default 10. Replaces the hardcoded MAX_IMAGE_SIZE_B
 url_timeout_secs  = 30     # Default 30. Per-request timeout on `/image <url>` fetches.
 head_precheck     = true   # Default true. Refuses over-cap URLs before download
                            # when Content-Length is advertised.
+
+# Phase 162 — operator-supplied HTTP headers applied to both the
+# HEAD pre-check and the GET when fetching `/image <url>`. Each
+# `key = "value"` entry becomes one HTTP header. Defaults to empty;
+# unauthenticated URLs work without this block.
+[voice.image.url_headers]
+Authorization = "Bearer xxx"
+Cookie        = "session=yyy"
+Origin        = "https://example.com"
 ```
 
-All three fields have defaults that match Phase
-156 behavior, so operators with no
-`[voice.image]` section see unchanged behavior.
-The HEAD pre-check falls through to GET on 405
-Method Not Allowed, on chunked-transfer
-responses (no Content-Length), and on HEAD
-transport failures — operators with HEAD-
-hostile origins don't lose access.
+All fields have defaults that match Phase 156
+behavior, so operators with no `[voice.image]`
+section see unchanged behavior. The HEAD pre-
+check falls through to GET on 405 Method Not
+Allowed, on chunked-transfer responses (no
+Content-Length), and on HEAD transport failures
+— operators with HEAD-hostile origins don't
+lose access.
+
+**Phase 162 supported image types:** Phase 156
+shipped png / jpg / jpeg / gif / webp. Phase 162
+extends with **pdf** (`application/pdf`), **svg**
+(`image/svg+xml`), and **tif / tiff**
+(`image/tiff`). The downstream LLM provider
+decides whether to accept each type as image-
+block content — PDFs in particular typically
+require a separate document-block code path
+(carried in a Phase 163+ candidate for core's
+`ContentPart` enum). The voice substrate passes
+the media_type through opaquely; a provider
+rejection surfaces as a per-attach error.
+
+**Phase 162 security note for `url_headers`:**
+The TOML config file is the only place these
+credentials live. If your `aivyx.toml` ends up
+checked into version control or world-readable,
+the bearer tokens / cookies leak. Standard
+hygiene applies:
+
+```bash
+chmod 600 ~/.config/aivyx/aivyx.toml
+```
+
+Phase 165+ candidate for a secret-store
+integration so `url_headers` can reference an
+OS keychain entry instead of inline plaintext.
 
 **Phase 154 added multimodal input — image
 attachment via voice.** Operator types `/image
