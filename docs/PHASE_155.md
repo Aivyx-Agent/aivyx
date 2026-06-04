@@ -256,9 +256,9 @@ debts clear. Phase 156+ candidates:
   `aivyx-calendar`. Continuing post-Phase-135
   reset: 20 → **21**.
 
-**Test count delta: +14 — top of predicted `+8`
-to `+14` range.** Workspace lib tests 3249 →
-3263. Per-module:
+**Test count delta: +15 — one over predicted
+`+8` to `+14` range.** Workspace lib tests
+3249 → 3264. Per-module:
 - `upcoming` (fuzzy dedup): +8 (normalize_summary
   cases, bucket_start_5min boundary truncation,
   bucket_start_5min unparseable defensive,
@@ -268,10 +268,17 @@ to `+14` range.** Workspace lib tests 3249 →
   kept both, fuzzy_dedup default true + false
   honored).
 - `upcoming` (writable_only + max_concurrent):
-  +6 (writable_only default false, honored,
+  +7 (writable_only default false, honored,
   max_concurrent default None, honored, zero
   rejected, calendar_ids_explicit tracks
-  operator choice).
+  operator choice across three input shapes
+  — that test fans out into three internal
+  asserts but counts as one).
+
+Honest framing: 7 tests in the writable_only +
+max_concurrent block rather than 6. One-off
+from the +14 upper bound; same substrate-
+exhaustive posture as preceding phases.
 
 **Zero new workspace dependencies** as predicted.
 `tokio::sync::Semaphore` was already available
