@@ -54,69 +54,119 @@ pub(crate) const RECURSIVE_MAX_FOLDERS: usize = 100;
 /// the `'<id>' in parents or ...` q-clause
 /// expansion.
 ///
-/// Hard caps:
-/// - `max_depth` levels of descent. Phase 153
-///   uses [`RECURSIVE_MAX_DEPTH`] = 5.
-/// - `max_folders` total folders returned. Phase
-///   153 uses [`RECURSIVE_MAX_FOLDERS`] = 100.
+/// Phase 157 — Level-parallel BFS. At each
+/// depth, all per-folder children-queries fire
+/// concurrently via
+/// `futures_util::future::join_all`, then
+/// results merge, then the next level fires.
+/// Latency is now bounded by the slowest
+/// single-level fan-out instead of the sum of
+/// per-folder sequential queries.
 ///
-/// On cap-hit (either bound) the walk stops
-/// early and returns the partial list — no
-/// error. Callers can detect "we hit the cap"
-/// by comparing the returned length to
+/// Phase 157 — Optional `drive_id` scope. When
+/// supplied, each per-folder query adds the
+/// shared-drives parameters (corpora=drive +
+/// driveId + includeItemsFromAllDrives +
+/// supportsAllDrives) so the walk traverses a
+/// Team Drive instead of the operator's My
+/// Drive.
+///
+/// Hard caps (operator-tunable in Phase 157 via
+/// recent_* input fields):
+/// `max_depth` levels of descent;
+/// `max_folders` total folders returned. On
+/// cap-hit (either bound) the walk stops early
+/// and returns the partial list — no error.
+/// Callers can detect "we hit the cap" by
+/// comparing the returned length to
 /// `max_folders`.
 pub(crate) async fn walk_folder_tree(
     client: &crate::drive_client::SharedDriveClient,
     root_folder_id: &str,
     max_depth: usize,
     max_folders: usize,
+    drive_id: Option<&str>,
 ) -> Result<Vec<String>, crate::drive_client::DriveClientError> {
     let mut visited: Vec<String> = vec![root_folder_id.to_string()];
-    // Each entry is (folder_id, depth). Depth 0
-    // is the root.
-    let mut queue: std::collections::VecDeque<(String, usize)> =
-        std::collections::VecDeque::new();
-    queue.push_back((root_folder_id.to_string(), 0));
+    let mut current_level: Vec<String> = vec![root_folder_id.to_string()];
 
-    while let Some((folder_id, depth)) = queue.pop_front() {
-        if visited.len() >= max_folders {
+    for depth in 0..max_depth {
+        if visited.len() >= max_folders || current_level.is_empty() {
             break;
         }
-        if depth >= max_depth {
-            // Don't descend further from this
-            // node — but the node itself stays in
-            // `visited`.
-            continue;
-        }
-        let q = format!(
-            "'{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-            folder_id
-        );
-        let query: Vec<(&str, String)> = vec![
-            ("pageSize", "100".to_string()),
-            ("fields", "files(id),nextPageToken".to_string()),
-            ("q", q),
-        ];
-        let body: serde_json::Value = client.get_json("/files", &query).await?;
-        if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
-            for f in files {
-                if let Some(id) = f.get("id").and_then(|v| v.as_str()) {
-                    if visited.len() >= max_folders {
-                        break;
-                    }
-                    visited.push(id.to_string());
-                    queue.push_back((id.to_string(), depth + 1));
+        // Fire all per-folder children-queries
+        // in this level concurrently. Each
+        // future returns the Vec of child folder
+        // IDs (or an error).
+        let futures = current_level.iter().map(|folder_id| {
+            let client = client.clone();
+            let folder_id = folder_id.clone();
+            let drive_id = drive_id.map(str::to_string);
+            async move {
+                children_of(&client, &folder_id, drive_id.as_deref()).await
+            }
+        });
+        let results = futures_util::future::join_all(futures).await;
+
+        let mut next_level: Vec<String> = Vec::new();
+        for result in results {
+            let children = result?;
+            for child in children {
+                if visited.len() >= max_folders {
+                    break;
                 }
+                visited.push(child.clone());
+                next_level.push(child);
+            }
+            if visited.len() >= max_folders {
+                break;
             }
         }
-        // Phase 153 doesn't paginate per-folder
-        // children — typical folder children
-        // count is well below Google's default
-        // pageSize. Phase 154+ candidate if
-        // ultra-wide folder operators surface.
+        let _ = depth; // we use the loop counter via iteration count
+        current_level = next_level;
     }
 
     Ok(visited)
+}
+
+/// Phase 157 — pure helper that queries one
+/// folder's direct-child folders. Lifted from
+/// the inline pre-157 body of
+/// [`walk_folder_tree`] so the level-parallel
+/// caller can fire many of these concurrently.
+async fn children_of(
+    client: &crate::drive_client::SharedDriveClient,
+    folder_id: &str,
+    drive_id: Option<&str>,
+) -> Result<Vec<String>, crate::drive_client::DriveClientError> {
+    let q = format!(
+        "'{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+        folder_id
+    );
+    let mut query: Vec<(&str, String)> = vec![
+        ("pageSize", "100".to_string()),
+        ("fields", "files(id),nextPageToken".to_string()),
+        ("q", q),
+    ];
+    // Phase 157 — drive_id scope. When present,
+    // query the shared drive's corpus instead
+    // of the operator's My Drive.
+    if let Some(did) = drive_id {
+        query.push(("corpora", "drive".to_string()));
+        query.push(("driveId", did.to_string()));
+        query.push(("includeItemsFromAllDrives", "true".to_string()));
+        query.push(("supportsAllDrives", "true".to_string()));
+    }
+    let body: serde_json::Value = client.get_json("/files", &query).await?;
+    let mut out: Vec<String> = Vec::new();
+    if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
+        for f in files {
+            if let Some(id) = f.get("id").and_then(|v| v.as_str()) {
+                out.push(id.to_string());
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Phase 153 — compose an OR-joined `'<id>' in

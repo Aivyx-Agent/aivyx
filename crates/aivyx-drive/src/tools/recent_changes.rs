@@ -139,6 +139,7 @@ impl Tool for DriveRecentChanges {
                     pf,
                     super::RECURSIVE_MAX_DEPTH,
                     super::RECURSIVE_MAX_FOLDERS,
+                    parsed.drive_id.as_deref(),
                 )
                 .await
                 {

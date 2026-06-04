@@ -39,6 +39,12 @@ toml = "0.8"
 uuid = { workspace = true }
 thiserror = { workspace = true }
 
+# Phase 157 — `futures_util::future::join_all`
+# for the parallel level-BFS walk_folder_tree.
+# Already a workspace dep via aivyx-calendar
+# (Phase 151).
+futures-util = { workspace = true }
+
 # Phase 145 — drive.recent_files +
 # drive.recent_changes compose `modifiedTime >
 # '<RFC3339>'` query strings against an
