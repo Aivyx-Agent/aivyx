@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 155 — Calendar: Small Follow-Ons Bundle
 
-**See [PHASE_155.md](PHASE_155.md).** Phase 151 follow-on
+**Frozen — see [PHASE_155.md](PHASE_155.md).** Phase 151 follow-on
 deferred 4 phases. Three small close-outs in one phase:
 fuzzy dedup (normalize summary + 5-min time bucket;
 `fuzzy_dedup` knob defaults true), writable_only filter
