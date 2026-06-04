@@ -1252,8 +1252,16 @@ fn content_part_for_attachment(
 /// type. Pure substrate so the classification
 /// can be tested without building a full
 /// Message.
+///
+/// Phase 164 — adds DOCX. Provider rejection
+/// on Anthropic surfaces as 400; the surface
+/// area lands so provider widening doesn't
+/// require voice-side work.
 fn is_document_media_type(media_type: &str) -> bool {
-    matches!(media_type, "application/pdf")
+    matches!(
+        media_type,
+        "application/pdf" | DOCX_MEDIA_TYPE
+    )
 }
 
 /// Phase 162 — build a `reqwest::header::HeaderMap`
@@ -1308,9 +1316,24 @@ fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
         "application/pdf" => Some("application/pdf"),
         "image/svg+xml" | "image/svg" => Some("image/svg+xml"),
         "image/tiff" | "image/tif" => Some("image/tiff"),
+        // Phase 164 — DOCX support. Provider
+        // rejection on Anthropic surfaces as a
+        // 400; the inference surface lands so
+        // that when provider support widens,
+        // voice-side work is unnecessary.
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        | "application/msword" => {
+            Some(DOCX_MEDIA_TYPE)
+        }
         _ => None,
     }
 }
+
+/// Phase 164 — canonical DOCX MIME string.
+/// Pulled out so the matcher and the extension
+/// branch share the same constant.
+const DOCX_MEDIA_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 /// Phase 156 — Extension-fallback for URL paths.
 /// Strips query string + fragment + then calls
@@ -1355,9 +1378,11 @@ fn infer_image_media_type(path: &str) -> Result<&'static str, String> {
         "pdf" => Ok("application/pdf"),
         "svg" => Ok("image/svg+xml"),
         "tif" | "tiff" => Ok("image/tiff"),
+        // Phase 164 — DOCX.
+        "docx" => Ok(DOCX_MEDIA_TYPE),
         other => Err(format!(
             "unsupported image extension {other:?}; \
-             supported: png / jpg / jpeg / gif / webp / pdf / svg / tif / tiff"
+             supported: png / jpg / jpeg / gif / webp / pdf / svg / tif / tiff / docx"
         )),
     }
 }
@@ -1713,6 +1738,64 @@ Authorization = "Bearer xyz"
             part,
             aivyx_core::ContentPart::Image { .. }
         ));
+    }
+
+    // ---- Phase 164 — DOCX inference ----
+
+    #[test]
+    fn infer_image_media_type_docx() {
+        assert_eq!(
+            infer_image_media_type("report.docx").unwrap(),
+            DOCX_MEDIA_TYPE,
+        );
+        assert_eq!(
+            infer_image_media_type("/abs/DRAFT.DOCX").unwrap(),
+            DOCX_MEDIA_TYPE,
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_docx() {
+        assert_eq!(
+            media_type_from_content_type(Some(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )),
+            Some(DOCX_MEDIA_TYPE),
+        );
+        // Legacy MS Word MIME maps to the
+        // modern DOCX label too — operators
+        // serving from older systems get the
+        // same routing.
+        assert_eq!(
+            media_type_from_content_type(Some("application/msword")),
+            Some(DOCX_MEDIA_TYPE),
+        );
+    }
+
+    #[test]
+    fn is_document_media_type_classifies_docx() {
+        assert!(is_document_media_type(DOCX_MEDIA_TYPE));
+    }
+
+    #[test]
+    fn content_part_for_attachment_routes_docx_to_document() {
+        let part = content_part_for_attachment(
+            DOCX_MEDIA_TYPE.to_string(),
+            b"PK\x03\x04 fake docx".to_vec(),
+        );
+        assert!(matches!(
+            part,
+            aivyx_core::ContentPart::Document { ref media_type, .. }
+                if media_type == DOCX_MEDIA_TYPE
+        ));
+    }
+
+    #[test]
+    fn infer_image_media_type_truly_unsupported_after_phase_164() {
+        // Phase 164's rejection error names docx
+        // in the supported list.
+        let err = infer_image_media_type("a.heic").unwrap_err();
+        assert!(err.contains("docx"), "{err}");
     }
 
     #[test]
