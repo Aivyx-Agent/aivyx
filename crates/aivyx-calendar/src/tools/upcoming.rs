@@ -124,7 +124,7 @@ impl Tool for CalendarUpcoming {
     }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
-        let parsed = match parse_input(&input) {
+        let mut parsed = match parse_input(&input) {
             Ok(p) => p,
             Err(reason) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -140,6 +140,79 @@ impl Tool for CalendarUpcoming {
         let time_min_rfc = now.to_rfc3339();
         let time_max_rfc = time_max.to_rfc3339();
 
+        // Phase 155 — writable_only filter. Pre-
+        // fetch the calendar list, filter to
+        // entries the operator can write to, and
+        // intersect with parsed.calendar_ids.
+        // When operator passed explicit ids
+        // (calendar_id or calendar_ids), the
+        // intersection drops read-only entries.
+        // When operator didn't (calendar_ids
+        // defaulted to ["primary"]), replace
+        // with the full set of writable ids.
+        if parsed.writable_only {
+            let body: Value = match self
+                .client
+                .get_json(
+                    "/users/me/calendarList",
+                    &[("fields", "items(id,accessRole)".to_string())],
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "calendar.upcoming: writable_only list fetch failed: {e}"
+                        ),
+                    });
+                }
+            };
+            let writable_set: std::collections::HashSet<String> = body
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|cal| {
+                            let role = cal
+                                .get("accessRole")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            role == "owner" || role == "writer"
+                        })
+                        .filter_map(|cal| {
+                            cal.get("id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if parsed.calendar_ids_explicit {
+                parsed.calendar_ids.retain(|id| writable_set.contains(id));
+            } else {
+                // Operator didn't pick — give
+                // them all writable calendars.
+                parsed.calendar_ids = writable_set.into_iter().collect();
+            }
+
+            if parsed.calendar_ids.is_empty() {
+                // Nothing to query. Return empty
+                // events cleanly rather than
+                // failing.
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "events": [],
+                        "now": now.to_rfc3339(),
+                        "window_hours": parsed.window_hours,
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
+        }
+
         // Phase 151 — parallel fan-out over the
         // requested calendars via
         // `futures_util::future::join_all`. Each
@@ -153,6 +226,20 @@ impl Tool for CalendarUpcoming {
         // — 5 calendars took ~5× single-calendar
         // latency. Now it's bounded by the
         // slowest single calendar's response.
+        // Phase 155 — max_concurrent throttle.
+        // When operator sets max_concurrent: N,
+        // wrap each per-calendar future with a
+        // semaphore-permit acquisition so at most
+        // N requests run simultaneously. When
+        // operator doesn't set it, we pass
+        // calendar_ids.len() permits, which is
+        // equivalent to unlimited (every future
+        // can hold a permit at once).
+        let permits = parsed
+            .max_concurrent
+            .map(|n| n as usize)
+            .unwrap_or(parsed.calendar_ids.len().max(1));
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
         let per_calendar_futures = parsed.calendar_ids.iter().map(|calendar_id| {
             let path = format!(
                 "/calendars/{}/events",
@@ -167,7 +254,12 @@ impl Tool for CalendarUpcoming {
             ];
             let client = self.client.clone();
             let cid = calendar_id.clone();
+            let semaphore = std::sync::Arc::clone(&semaphore);
             async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .expect("semaphore not closed");
                 let body: Value = client.get_json(&path, &query).await
                     .map_err(|e| (cid.clone(), e))?;
                 Ok::<(String, Value), (String, _)>((cid, body))
@@ -391,6 +483,15 @@ fn input_schema() -> Value {
             "fuzzy_dedup": {
                 "type": "boolean",
                 "description": "Phase 155 — normalize summary (lowercase + trim) and bucket start time to 5-minute boundaries when matching cross-calendar duplicates. Default true. Set false for the Phase 151 exact-match behavior."
+            },
+            "writable_only": {
+                "type": "boolean",
+                "description": "Phase 155 — when true, pre-fetches the calendar list and filters to entries with access_role in [owner, writer]. Useful for 'what's coming up that I can edit'. Adds one extra API round-trip."
+            },
+            "max_concurrent": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Phase 155 — throttle the parallel fan-out so at most N per-calendar requests run simultaneously. Default unlimited (every requested calendar's request fires at once). Useful for rate-limited operators hitting 429s."
             }
         },
         "additionalProperties": false
@@ -405,12 +506,25 @@ struct ParsedInput {
     /// a length-1 Vec; multi-calendar callers get
     /// whatever they passed in.
     calendar_ids: Vec<String>,
+    /// Phase 155 — true when the operator
+    /// supplied `calendar_id` or `calendar_ids`
+    /// explicitly. False when the default
+    /// `["primary"]` was used. Affects how
+    /// `writable_only` interprets the
+    /// calendar set.
+    calendar_ids_explicit: bool,
     max_results: u64,
     /// Phase 155 — when true, dedup uses
     /// normalized summary + 5-min time bucket.
     /// When false, falls back to Phase 151 exact
     /// match.
     fuzzy_dedup: bool,
+    /// Phase 155 — when true, only writable
+    /// calendars (owner / writer) are queried.
+    writable_only: bool,
+    /// Phase 155 — concurrent-request cap for
+    /// the parallel fan-out. None = unlimited.
+    max_concurrent: Option<u32>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -504,11 +618,38 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
             .ok_or_else(|| "`fuzzy_dedup` must be a boolean".to_string())?,
     };
 
+    let writable_only = match obj.get("writable_only") {
+        None => false,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| "`writable_only` must be a boolean".to_string())?,
+    };
+
+    let max_concurrent = match obj.get("max_concurrent") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| "`max_concurrent` must be a positive integer".to_string())?;
+            if n == 0 {
+                return Err("`max_concurrent` must be >= 1".to_string());
+            }
+            Some(n as u32)
+        }
+    };
+
+    // Phase 155 — true iff operator supplied an
+    // explicit calendar_id or calendar_ids.
+    let calendar_ids_explicit = has_ids || has_id;
+
     Ok(ParsedInput {
         window_hours,
         calendar_ids,
+        calendar_ids_explicit,
         max_results,
         fuzzy_dedup,
+        writable_only,
+        max_concurrent,
     })
 }
 
@@ -851,6 +992,54 @@ mod tests {
     fn fuzzy_dedup_false_honored_in_parse_input() {
         let parsed = parse_input(&json!({"fuzzy_dedup": false})).unwrap();
         assert!(!parsed.fuzzy_dedup);
+    }
+
+    // ---- Phase 155 — writable_only + max_concurrent ----
+
+    #[test]
+    fn writable_only_default_false() {
+        let parsed = parse_input(&json!({})).unwrap();
+        assert!(!parsed.writable_only);
+    }
+
+    #[test]
+    fn writable_only_honored() {
+        let parsed = parse_input(&json!({"writable_only": true})).unwrap();
+        assert!(parsed.writable_only);
+    }
+
+    #[test]
+    fn max_concurrent_default_none() {
+        let parsed = parse_input(&json!({})).unwrap();
+        assert!(parsed.max_concurrent.is_none());
+    }
+
+    #[test]
+    fn max_concurrent_honored() {
+        let parsed = parse_input(&json!({"max_concurrent": 3})).unwrap();
+        assert_eq!(parsed.max_concurrent, Some(3));
+    }
+
+    #[test]
+    fn max_concurrent_zero_rejected() {
+        let err = parse_input(&json!({"max_concurrent": 0})).unwrap_err();
+        assert!(err.contains(">= 1"), "{err}");
+    }
+
+    #[test]
+    fn calendar_ids_explicit_tracks_operator_choice() {
+        // Default — no calendar_id / calendar_ids
+        // supplied.
+        let parsed = parse_input(&json!({})).unwrap();
+        assert!(!parsed.calendar_ids_explicit);
+        // Single calendar_id explicit.
+        let parsed =
+            parse_input(&json!({"calendar_id": "primary"})).unwrap();
+        assert!(parsed.calendar_ids_explicit);
+        // Multi calendar_ids explicit.
+        let parsed =
+            parse_input(&json!({"calendar_ids": ["primary", "work@x"]})).unwrap();
+        assert!(parsed.calendar_ids_explicit);
     }
 
     // ---- enrichment with calendar_id tag ----
