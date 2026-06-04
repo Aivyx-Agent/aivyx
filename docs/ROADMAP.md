@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 160 — Throttle the Drive Walk: `walk_folder_tree` max_concurrent
+
+**See [PHASE_160.md](PHASE_160.md).** Phase 157 close-out
+deferred 2 phases. Single honest-debt: the parallel
+level-BFS walk fires unthrottled concurrent
+`/files?q=...` queries. Adds a Semaphore-based
+`max_concurrent` clamp on `walk_folder_tree` plus an
+operator-facing `walk_max_concurrent` input (cap 32)
+on `drive.recent_files` and `drive.recent_changes`.
+Symmetric to Phase 155 throttling the calendar fan-
+out after Phase 151 parallelized it. Zero new
+workspace deps.
+
 ## Phase 159 — Drive Activity API: `drive.recent_activity`
 
 **Frozen — see [PHASE_159.md](PHASE_159.md).** Twice-deferred
