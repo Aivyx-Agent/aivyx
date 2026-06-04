@@ -1260,7 +1260,13 @@ fn content_part_for_attachment(
 fn is_document_media_type(media_type: &str) -> bool {
     matches!(
         media_type,
-        "application/pdf" | DOCX_MEDIA_TYPE
+        "application/pdf"
+            | DOCX_MEDIA_TYPE
+            | DOC_MEDIA_TYPE
+            | RTF_MEDIA_TYPE
+            | ODT_MEDIA_TYPE
+            | PPTX_MEDIA_TYPE
+            | XLSX_MEDIA_TYPE
     )
 }
 
@@ -1321,9 +1327,23 @@ fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
         // 400; the inference surface lands so
         // that when provider support widens,
         // voice-side work is unnecessary.
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        | "application/msword" => {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
             Some(DOCX_MEDIA_TYPE)
+        }
+        // Phase 165 — Phase 164 conflated
+        // `application/msword` with DOCX; Phase
+        // 165 routes it to DOC (the legacy
+        // .doc binary format) since that's the
+        // semantically correct MIME for those
+        // files.
+        "application/msword" => Some(DOC_MEDIA_TYPE),
+        "application/rtf" | "text/rtf" => Some(RTF_MEDIA_TYPE),
+        "application/vnd.oasis.opendocument.text" => Some(ODT_MEDIA_TYPE),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            Some(PPTX_MEDIA_TYPE)
+        }
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+            Some(XLSX_MEDIA_TYPE)
         }
         _ => None,
     }
@@ -1334,6 +1354,20 @@ fn media_type_from_content_type(ct: Option<&str>) -> Option<&'static str> {
 /// branch share the same constant.
 const DOCX_MEDIA_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/// Phase 165 — canonical Office format MIME strings.
+/// All five route through the Phase 163 Document
+/// variant. Anthropic accepts PDF only today; these
+/// surface a 400 from the API. The inference is
+/// landing-bay for provider-side widening.
+const DOC_MEDIA_TYPE: &str = "application/msword";
+const RTF_MEDIA_TYPE: &str = "application/rtf";
+const ODT_MEDIA_TYPE: &str =
+    "application/vnd.oasis.opendocument.text";
+const PPTX_MEDIA_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const XLSX_MEDIA_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /// Phase 156 — Extension-fallback for URL paths.
 /// Strips query string + fragment + then calls
@@ -1380,9 +1414,16 @@ fn infer_image_media_type(path: &str) -> Result<&'static str, String> {
         "tif" | "tiff" => Ok("image/tiff"),
         // Phase 164 — DOCX.
         "docx" => Ok(DOCX_MEDIA_TYPE),
+        // Phase 165 — additional Office formats.
+        "doc" => Ok(DOC_MEDIA_TYPE),
+        "rtf" => Ok(RTF_MEDIA_TYPE),
+        "odt" => Ok(ODT_MEDIA_TYPE),
+        "pptx" => Ok(PPTX_MEDIA_TYPE),
+        "xlsx" => Ok(XLSX_MEDIA_TYPE),
         other => Err(format!(
             "unsupported image extension {other:?}; \
-             supported: png / jpg / jpeg / gif / webp / pdf / svg / tif / tiff / docx"
+             supported: png / jpg / jpeg / gif / webp / pdf / svg / tif / tiff / \
+             docx / doc / rtf / odt / pptx / xlsx"
         )),
     }
 }
@@ -1762,13 +1803,17 @@ Authorization = "Bearer xyz"
             )),
             Some(DOCX_MEDIA_TYPE),
         );
-        // Legacy MS Word MIME maps to the
-        // modern DOCX label too — operators
-        // serving from older systems get the
-        // same routing.
+    }
+
+    #[test]
+    fn media_type_from_content_type_doc_legacy_msword_maps_to_doc() {
+        // Phase 165 correction — `application/
+        // msword` is the legacy DOC binary
+        // MIME, not DOCX. Phase 164 conflated
+        // the two; Phase 165 separates them.
         assert_eq!(
             media_type_from_content_type(Some("application/msword")),
-            Some(DOCX_MEDIA_TYPE),
+            Some(DOC_MEDIA_TYPE),
         );
     }
 
@@ -1796,6 +1841,109 @@ Authorization = "Bearer xyz"
         // in the supported list.
         let err = infer_image_media_type("a.heic").unwrap_err();
         assert!(err.contains("docx"), "{err}");
+    }
+
+    // ---- Phase 165 — Office formats ----
+
+    #[test]
+    fn infer_image_media_type_doc_rtf_odt() {
+        assert_eq!(infer_image_media_type("a.doc").unwrap(), DOC_MEDIA_TYPE);
+        assert_eq!(infer_image_media_type("a.rtf").unwrap(), RTF_MEDIA_TYPE);
+        assert_eq!(infer_image_media_type("a.odt").unwrap(), ODT_MEDIA_TYPE);
+    }
+
+    #[test]
+    fn infer_image_media_type_pptx_and_xlsx() {
+        assert_eq!(
+            infer_image_media_type("deck.pptx").unwrap(),
+            PPTX_MEDIA_TYPE
+        );
+        assert_eq!(
+            infer_image_media_type("data.xlsx").unwrap(),
+            XLSX_MEDIA_TYPE
+        );
+    }
+
+    #[test]
+    fn infer_image_media_type_uppercase_extensions() {
+        // Case folding regression: all five
+        // formats should accept upper-case
+        // extensions (operators on Windows
+        // often have them).
+        assert_eq!(infer_image_media_type("A.DOC").unwrap(), DOC_MEDIA_TYPE);
+        assert_eq!(
+            infer_image_media_type("A.PPTX").unwrap(),
+            PPTX_MEDIA_TYPE
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_rtf_legacy_and_modern() {
+        assert_eq!(
+            media_type_from_content_type(Some("application/rtf")),
+            Some(RTF_MEDIA_TYPE),
+        );
+        // Some older servers send text/rtf
+        // instead of application/rtf.
+        assert_eq!(
+            media_type_from_content_type(Some("text/rtf")),
+            Some(RTF_MEDIA_TYPE),
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_odt() {
+        assert_eq!(
+            media_type_from_content_type(Some(
+                "application/vnd.oasis.opendocument.text"
+            )),
+            Some(ODT_MEDIA_TYPE),
+        );
+    }
+
+    #[test]
+    fn media_type_from_content_type_pptx_xlsx() {
+        assert_eq!(
+            media_type_from_content_type(Some(
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )),
+            Some(PPTX_MEDIA_TYPE),
+        );
+        assert_eq!(
+            media_type_from_content_type(Some(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )),
+            Some(XLSX_MEDIA_TYPE),
+        );
+    }
+
+    #[test]
+    fn is_document_media_type_classifies_all_office_formats() {
+        assert!(is_document_media_type(DOC_MEDIA_TYPE));
+        assert!(is_document_media_type(RTF_MEDIA_TYPE));
+        assert!(is_document_media_type(ODT_MEDIA_TYPE));
+        assert!(is_document_media_type(PPTX_MEDIA_TYPE));
+        assert!(is_document_media_type(XLSX_MEDIA_TYPE));
+    }
+
+    #[test]
+    fn content_part_for_attachment_routes_pptx_to_document() {
+        let part = content_part_for_attachment(
+            PPTX_MEDIA_TYPE.to_string(),
+            b"PK\x03\x04 fake pptx".to_vec(),
+        );
+        assert!(matches!(part, aivyx_core::ContentPart::Document { .. }));
+    }
+
+    #[test]
+    fn infer_image_media_type_error_lists_phase_165_formats() {
+        let err = infer_image_media_type("a.heic").unwrap_err();
+        for needed in &["pptx", "xlsx", "rtf", "odt", "doc"] {
+            assert!(
+                err.contains(needed),
+                "expected {needed} in supported list, got: {err}"
+            );
+        }
     }
 
     #[test]
