@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 158 — Calendar Follow-Ons Bundle (Sliding-Window Dedup + calendarList Cache + min_concurrent)
+
+**See [PHASE_158.md](PHASE_158.md).** Phase 155 close-out
+deferred 3 phases. Three calendar honest-debts in one
+phase: sliding-window adjacency merge replaces the
+5-min bucket flooring in fuzzy dedup, calendarList
+cache lifts the per-call writable_only round-trip to
+a 5-min-TTL session cache, `min_concurrent` input
+knob pairs with Phase 155's `max_concurrent`.
+Symmetric to Phase 157 closing Phase 153's three
+honest-debts. Zero new workspace deps.
+
 ## Phase 157 — Drive Recursive Walk Close-Out Bundle
 
 **Frozen — see [PHASE_157.md](PHASE_157.md).** Phase 153 close-out
