@@ -83,6 +83,15 @@ pub(crate) const RECURSIVE_MAX_FOLDERS: usize = 100;
 /// current level's width (equivalent to
 /// pre-Phase-160 unlimited fan-out).
 ///
+/// Phase 166 — Optional `min_concurrent` floor
+/// companion mirroring Phase 158's calendar
+/// pattern. permits = clamp(default,
+/// min_concurrent or 1,
+/// max_concurrent or default). The semaphore
+/// can't manufacture work that isn't there;
+/// a floor of 8 on a 3-folder level still
+/// fires 3 futures.
+///
 /// Hard caps (operator-tunable in Phase 157 via
 /// recent_* input fields):
 /// `max_depth` levels of descent;
@@ -99,6 +108,7 @@ pub(crate) async fn walk_folder_tree(
     max_folders: usize,
     drive_id: Option<&str>,
     max_concurrent: Option<usize>,
+    min_concurrent: Option<usize>,
 ) -> Result<Vec<String>, crate::drive_client::DriveClientError> {
     let mut visited: Vec<String> = vec![root_folder_id.to_string()];
     let mut current_level: Vec<String> = vec![root_folder_id.to_string()];
@@ -111,7 +121,13 @@ pub(crate) async fn walk_folder_tree(
         // None, permits = current_level.len()
         // (every future can hold a permit at
         // once — equivalent to unlimited).
-        let permits = max_concurrent.unwrap_or(current_level.len()).max(1);
+        // Phase 166 — min_concurrent floor
+        // raises permits below the default.
+        let default_permits = current_level.len().max(1);
+        let ceiling =
+            max_concurrent.unwrap_or(default_permits);
+        let floor = min_concurrent.unwrap_or(1);
+        let permits = default_permits.min(ceiling).max(floor).max(1);
         let semaphore =
             std::sync::Arc::new(tokio::sync::Semaphore::new(permits));
         // Fire all per-folder children-queries
@@ -294,32 +310,47 @@ mod shared_tests {
         assert_eq!(CONTENT_INLINE_CAP_BYTES, 10_485_760);
     }
 
-    // ---- Phase 160 — walk_folder_tree permits ----
+    // ---- Phase 160/166 — walk_folder_tree permits ----
 
     fn permits_for_level(
         level_width: usize,
         max_concurrent: Option<usize>,
+        min_concurrent: Option<usize>,
     ) -> usize {
         // Mirrors the permits calculation inside
         // walk_folder_tree. Direct-computation
         // test so the invariant is locked
         // without a live HTTP round trip.
-        max_concurrent.unwrap_or(level_width).max(1)
+        let default_permits = level_width.max(1);
+        let ceiling = max_concurrent.unwrap_or(default_permits);
+        let floor = min_concurrent.unwrap_or(1);
+        default_permits.min(ceiling).max(floor).max(1)
     }
 
     #[test]
     fn walk_permits_default_to_unlimited_when_none() {
         // None = pre-Phase-160 behavior: permits
         // = level width.
-        assert_eq!(permits_for_level(8, None), 8);
-        assert_eq!(permits_for_level(50, None), 50);
+        assert_eq!(permits_for_level(8, None, None), 8);
+        assert_eq!(permits_for_level(50, None, None), 50);
     }
 
     #[test]
     fn walk_permits_throttle_caps_when_set() {
-        // Operator throttle clamps fan-out.
-        assert_eq!(permits_for_level(50, Some(4)), 4);
-        assert_eq!(permits_for_level(2, Some(4)), 4);
+        // Operator throttle clamps fan-out to
+        // min(level_width, max_concurrent).
+        assert_eq!(permits_for_level(50, Some(4), None), 4);
+        // Phase 166 behavior shift: when
+        // max_concurrent exceeds level width
+        // the effective permits are now
+        // bounded by level width (matching
+        // actual concurrency, since the
+        // semaphore can't manufacture work).
+        // Pre-166 returned Some(max_concurrent)
+        // verbatim — semantically equivalent
+        // in real-world behavior but the unit
+        // test now pins the new bookkeeping.
+        assert_eq!(permits_for_level(2, Some(4), None), 2);
     }
 
     #[test]
@@ -330,7 +361,50 @@ mod shared_tests {
         // before the semaphore is built, but the
         // `.max(1)` invariant keeps the floor
         // explicit.
-        assert_eq!(permits_for_level(0, None), 1);
-        assert_eq!(permits_for_level(0, Some(0)), 1);
+        assert_eq!(permits_for_level(0, None, None), 1);
+        assert_eq!(permits_for_level(0, Some(0), None), 1);
+    }
+
+    // ---- Phase 166 — min_concurrent floor ----
+
+    #[test]
+    fn walk_permits_floor_lifts_below_default() {
+        // level_width=2, min=4 → floor wins;
+        // permits = 4 (semaphore allows extra
+        // permits but only 2 tasks exist).
+        assert_eq!(permits_for_level(2, None, Some(4)), 4);
+    }
+
+    #[test]
+    fn walk_permits_floor_below_default_keeps_default() {
+        // level_width=8, min=2 → default
+        // already exceeds floor; permits = 8.
+        assert_eq!(permits_for_level(8, None, Some(2)), 8);
+    }
+
+    #[test]
+    fn walk_permits_floor_with_ceiling_clamps_to_floor() {
+        // level_width=10, min=4, max=6 →
+        // permits = min(10, 6) = 6, then
+        // max(6, 4) = 6. Floor doesn't bite
+        // here because ceiling already exceeds
+        // floor.
+        assert_eq!(permits_for_level(10, Some(6), Some(4)), 6);
+    }
+
+    #[test]
+    fn walk_permits_floor_above_ceiling_floor_wins() {
+        // level_width=10, min=8, max=4 →
+        // permits = min(10, 4) = 4, then
+        // max(4, 8) = 8. Floor lifts above
+        // ceiling — invariant: floor is a
+        // hard minimum regardless of
+        // ceiling. (Parse-time min ≤ max
+        // validation prevents this in
+        // practice; the unit test pins the
+        // direct-computation behavior so a
+        // future refactor doesn't drop the
+        // floor.)
+        assert_eq!(permits_for_level(10, Some(4), Some(8)), 8);
     }
 }

@@ -146,6 +146,7 @@ impl Tool for DriveRecentFiles {
                     max_folders,
                     parsed.drive_id.as_deref(),
                     parsed.walk_max_concurrent,
+                    parsed.walk_min_concurrent,
                 )
                 .await
                 {
@@ -311,6 +312,12 @@ fn input_schema() -> Value {
                 "minimum": 1,
                 "maximum": 32,
                 "description": "Phase 160 — throttle the recursive walk's parallel fan-out. At most N per-folder children-queries run simultaneously per depth level. Default unlimited (level width). Upper bound 32. Useful for rate-limited operators hitting 429s on large folder trees."
+            },
+            "walk_min_concurrent": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16,
+                "description": "Phase 166 — floor on the recursive walk's permit count. permits = clamp(level_width, walk_min_concurrent or 1, walk_max_concurrent or level_width). Composes with walk_max_concurrent; min <= max validated at parse time. Default unlimited. Upper bound 16 (mirrors Phase 158 calendar.upcoming min_concurrent)."
             }
         },
         "additionalProperties": false
@@ -338,6 +345,11 @@ struct ParsedInput {
     /// walk fires unlimited per-folder queries
     /// per depth level (pre-Phase-160 default).
     walk_max_concurrent: Option<usize>,
+    /// Phase 166 — operator floor on the walk's
+    /// permit count. When None, the floor is 1.
+    /// Composes with walk_max_concurrent; min ≤
+    /// max validated at parse time.
+    walk_min_concurrent: Option<usize>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -437,6 +449,20 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         "walk_max_concurrent",
         32,
     )?;
+    let walk_min_concurrent = parse_recursive_cap(
+        obj.get("walk_min_concurrent"),
+        "walk_min_concurrent",
+        16,
+    )?;
+    if let (Some(min), Some(max)) =
+        (walk_min_concurrent, walk_max_concurrent)
+    {
+        if min > max {
+            return Err(format!(
+                "`walk_min_concurrent` ({min}) must be <= `walk_max_concurrent` ({max})"
+            ));
+        }
+    }
 
     Ok(ParsedInput {
         window_days,
@@ -448,6 +474,7 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         recursive_max_depth,
         recursive_max_folders,
         walk_max_concurrent,
+        walk_min_concurrent,
     })
 }
 
@@ -764,5 +791,51 @@ mod tests {
             parse_input(&json!({"walk_max_concurrent": 0})).unwrap_err();
         assert!(err.contains("walk_max_concurrent"));
         assert!(err.contains(">= 1"));
+    }
+
+    // ---- Phase 166 — walk_min_concurrent ----
+
+    #[test]
+    fn parse_input_walk_min_concurrent_honored() {
+        let p = parse_input(&json!({"walk_min_concurrent": 4})).unwrap();
+        assert_eq!(p.walk_min_concurrent, Some(4));
+    }
+
+    #[test]
+    fn parse_input_walk_min_concurrent_default_none() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.walk_min_concurrent, None);
+    }
+
+    #[test]
+    fn parse_input_walk_min_concurrent_over_cap_rejected() {
+        let err = parse_input(&json!({"walk_min_concurrent": 99}))
+            .unwrap_err();
+        assert!(err.contains("walk_min_concurrent"));
+        assert!(err.contains("<= 16"));
+    }
+
+    #[test]
+    fn parse_input_walk_min_greater_than_max_rejected() {
+        let err = parse_input(&json!({
+            "walk_min_concurrent": 8,
+            "walk_max_concurrent": 4,
+        }))
+        .unwrap_err();
+        assert!(err.contains("walk_min_concurrent"));
+        assert!(err.contains("walk_max_concurrent"));
+        assert!(err.contains("(8)"));
+        assert!(err.contains("(4)"));
+    }
+
+    #[test]
+    fn parse_input_walk_min_equal_to_max_accepted() {
+        let p = parse_input(&json!({
+            "walk_min_concurrent": 4,
+            "walk_max_concurrent": 4,
+        }))
+        .unwrap();
+        assert_eq!(p.walk_min_concurrent, Some(4));
+        assert_eq!(p.walk_max_concurrent, Some(4));
     }
 }
