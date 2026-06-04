@@ -199,8 +199,57 @@ clear. Phase 159+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 158 exit. Predictions at
-sign-off: DESIGN.md HOLD → 49; PRODUCT.md HOLD
-→ 49; lib.rs HOLD → 24; zero new deps; test
-count delta `+10` to `+16`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 49 | Untouched | ✅ |
+| PRODUCT.md HOLD → 49 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 24 | Untouched | ✅ |
+| Zero new workspace deps | Zero; everything used (chrono, tokio, futures-util) was already in workspace + crate manifest | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (after one mid-task `type_complexity` flag handled via type alias) | ✅ |
+| Test count delta `+10` to `+16` | `+18` (190 → 208 net in `cargo test -p aivyx-calendar --lib`, after removing 2 obsolete `bucket_start_5min` cases) | ⚠️ (over by 2; see correction note below) |
+
+All five exit criteria met. Three Phase 155 honest-
+debts closed in one phase:
+
+1. **Hard 5-min bucket flooring → sliding-window
+   adjacency merge.** Closed in Task 2 (commit
+   `906020a`). 10:04+10:06 now merge; chains like
+   10:00→10:04→10:08 fold to one cluster.
+2. **calendarList re-fetch on every call → 5-min
+   session cache.** Closed in Task 3 (commit
+   `05f0040`). Cache lives on `CalendarClient` and
+   is shared across all tools that consume the
+   client.
+3. **No min_concurrent knob → `min_concurrent`
+   input (cap 16) + parse-time min ≤ max
+   validation.** Closed in Task 4 (commit
+   `79d1855`).
+
+### Test count delta correction
+
+Open doc band was `+10` to `+16`. Actual delta is
+`+18`:
+
+- Task 2: -2 (removed `bucket_start_5min_*` cases)
+  +6 (sliding-window cases) = net +4.
+- Task 3: +5 (cache TTL pin + 4 cache-behavior).
+- Task 4: +9 (4 min_concurrent parse + 2 cross-
+  knob validation + 3 permit-clamp logic).
+
+Total: +18, over the ceiling by 2. Honest correction.
+The over-shoot came from Task 4 — the permit-
+clamp logic warranted three direct-computation
+tests in addition to the input-parse cases,
+which the open doc's `+10..+16` band hadn't
+budgeted for.
+
+### What landed beyond the open
+
+Nothing functional beyond the open. The over-band
+test count is the only deviation, called out
+above.
+
+### Forty-seventh deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold. Recorded
+for the record.

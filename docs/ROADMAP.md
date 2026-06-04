@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 158 — Calendar Follow-Ons Bundle (Sliding-Window Dedup + calendarList Cache + min_concurrent)
 
-**See [PHASE_158.md](PHASE_158.md).** Phase 155 close-out
+**Frozen — see [PHASE_158.md](PHASE_158.md).** Phase 155 close-out
 deferred 3 phases. Three calendar honest-debts in one
 phase: sliding-window adjacency merge replaces the
 5-min bucket flooring in fuzzy dedup, calendarList
