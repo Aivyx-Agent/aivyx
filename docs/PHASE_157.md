@@ -210,8 +210,53 @@ clear. Phase 158+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 157 exit. Predictions at
-sign-off: DESIGN.md HOLD → 48; PRODUCT.md HOLD
-→ 48; lib.rs HOLD → 23; zero new deps; test
-count delta `+8` to `+14`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 48 | Untouched | ✅ |
+| PRODUCT.md HOLD → 48 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 23 | Untouched | ✅ |
+| Zero new workspace deps | `futures-util` is a workspace dep already; added to aivyx-drive crate manifest only | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+8` to `+14` | `+14` (195 → 209 in `cargo test -p aivyx-drive --lib`) | ✅ (top of band) |
+
+All four exit criteria met:
+
+1. **Open doc + ROADMAP + README** (Task 1, commit `77df0e2`).
+2. **walk_folder_tree level-parallel BFS via `futures_util::future::join_all`** (Task 2, commit `0efaf10`).
+3. **drive_id scope on the recursive walk + tunable `recursive_max_depth` / `recursive_max_folders`** (Task 3, commit `70b050f`).
+4. **INSTALL row updates + this exit doc + README Frozen flip + ROADMAP Frozen flip** (Task 4, this commit).
+
+### Honest-debt status
+
+- ✅ **Parallel walk_folder_tree.** Closed. 100-folder
+  trees that took ~30–60s sequential now bounded by the
+  slowest single-level fan-out.
+- ✅ **drive_id scope on the recursive walk.** Closed.
+  Both `walk_folder_tree` and `children_of` thread
+  `Option<&str>` and append the four shared-drives
+  params (`corpora=drive` + `driveId` +
+  `includeItemsFromAllDrives` + `supportsAllDrives`)
+  when present.
+- ✅ **Hardcoded recursive caps.** Closed. Operators
+  can now pass `recursive_max_depth` (upper bound 20)
+  and `recursive_max_folders` (upper bound 1000) on
+  both `drive.recent_files` and
+  `drive.recent_changes`. Substrate-tier validation
+  via `parse_recursive_cap` in recent_files.rs
+  (`pub(crate)`).
+
+### What landed beyond the open
+
+Nothing beyond the open doc — the three honest-debts
+closed exactly as predicted. Tests landed at the top
+of the predicted band (`+14`) because the substrate
+`parse_recursive_cap` got its own dedicated 6-case
+test set (absent / null / zero / over-bound /
+negative / within-bound) plus 4 per-tool field
+plumbing tests per tool (`+8` total at the tool
+layer).
+
+### Forty-sixth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold. Recorded
+for the record.

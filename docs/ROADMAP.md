@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 157 — Drive Recursive Walk Close-Out Bundle
 
-**See [PHASE_157.md](PHASE_157.md).** Phase 153 close-out
+**Frozen — see [PHASE_157.md](PHASE_157.md).** Phase 153 close-out
 deferred 4 phases. Three drive honest-debts in one
 phase: parallel walk_folder_tree via level-BFS +
 join_all, drive_id scope on the recursive walk
