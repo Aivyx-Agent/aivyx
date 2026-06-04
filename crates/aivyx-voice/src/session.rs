@@ -396,14 +396,38 @@ where
     // sees both the transcribed prompt and the
     // image bytes. Otherwise fall back to the
     // text-only Message::text shape.
-    let message = match channel.take_pending_image() {
-        Some((media_type, data)) => Message::text_with_image(
+    // Phase 156 — pending_images is now a Vec
+    // (was Option pre-156). Empty Vec → text-only
+    // message. Length 1 → text+image. Length 2+ →
+    // MessageContent::Mixed with one Text part
+    // + N Image parts.
+    let pending_imgs = channel.take_pending_images();
+    let message = if pending_imgs.is_empty() {
+        Message::text(channel.session_id(), transcribed.clone())
+    } else if pending_imgs.len() == 1 {
+        let (media_type, data) =
+            pending_imgs.into_iter().next().expect("len 1");
+        Message::text_with_image(
             channel.session_id(),
             transcribed.clone(),
             media_type,
             data,
-        ),
-        None => Message::text(channel.session_id(), transcribed.clone()),
+        )
+    } else {
+        use aivyx_core::{ContentPart, MessageContent, MessageId};
+        use std::time::SystemTime;
+        let mut parts: Vec<ContentPart> =
+            Vec::with_capacity(pending_imgs.len() + 1);
+        parts.push(ContentPart::Text(transcribed.clone()));
+        for (media_type, data) in pending_imgs {
+            parts.push(ContentPart::Image { media_type, data });
+        }
+        Message {
+            id: MessageId::new(),
+            session_id: channel.session_id(),
+            content: MessageContent::Mixed(parts),
+            received_at: SystemTime::now(),
+        }
     };
     let outcome = agent.turn(message, channel.as_ref()).await;
 
@@ -602,7 +626,7 @@ where
                         data.len(),
                         media_type,
                     );
-                    channel.set_pending_image(media_type, data);
+                    channel.append_pending_image(media_type, data);
                 }
                 Err(reason) => {
                     eprintln!("[voice] image attach failed: {reason}");
@@ -909,12 +933,23 @@ fn read_stdin_line_trimmed() -> String {
     }
 }
 
+/// Phase 156 — client-side size cap on
+/// queued images. Matches the existing Drive
+/// inline cap from Phase 129
+/// (`CONTENT_INLINE_CAP_BYTES`) so the agent
+/// sees consistent size limits across
+/// substrates.
+const MAX_IMAGE_SIZE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Phase 154 — load + media-type-classify an
 /// image file for attach. Returns the inferred
 /// media type + the raw bytes on success;
 /// operator-readable error string on any
 /// failure (unknown extension, file not found,
-/// IO error, empty file).
+/// IO error, empty file, oversized file).
+///
+/// Phase 156 enforces `MAX_IMAGE_SIZE_BYTES`
+/// after read. URL-based source lands in Task 3.
 fn load_image_for_attach(path: &str) -> Result<(String, Vec<u8>), String> {
     if path.is_empty() {
         return Err("path must not be empty".to_string());
@@ -924,6 +959,14 @@ fn load_image_for_attach(path: &str) -> Result<(String, Vec<u8>), String> {
         .map_err(|e| format!("read {path:?}: {e}"))?;
     if data.is_empty() {
         return Err(format!("file {path:?} is empty"));
+    }
+    if data.len() > MAX_IMAGE_SIZE_BYTES {
+        return Err(format!(
+            "file {path:?} is {} bytes; max allowed is {} bytes ({} MB)",
+            data.len(),
+            MAX_IMAGE_SIZE_BYTES,
+            MAX_IMAGE_SIZE_BYTES / (1024 * 1024),
+        ));
     }
     Ok((media_type.to_string(), data))
 }
@@ -1009,6 +1052,33 @@ mod tests {
     fn load_image_missing_file_rejected() {
         let err = load_image_for_attach("/nonexistent/file.png").unwrap_err();
         assert!(err.contains("read"), "{err}");
+    }
+
+    // ---- Phase 156 — size cap + multi-image ----
+
+    #[test]
+    fn max_image_size_cap_is_ten_megabytes() {
+        // Pin the cap so future tasks (or the
+        // INSTALL.md doc) stay in sync. Same as
+        // Phase 129's Drive inline cap.
+        assert_eq!(MAX_IMAGE_SIZE_BYTES, 10 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn load_image_oversized_rejected() {
+        // Write a 10MB + 1 byte file and verify
+        // load_image_for_attach rejects it with
+        // a clear error.
+        let tmp = std::env::temp_dir().join("phase156-oversized.png");
+        let oversized = vec![0u8; MAX_IMAGE_SIZE_BYTES + 1];
+        std::fs::write(&tmp, &oversized).expect("write tmp");
+        let err =
+            load_image_for_attach(tmp.to_str().expect("utf8")).unwrap_err();
+        assert!(
+            err.contains("max allowed"),
+            "expected size-cap error, got: {err}"
+        );
+        std::fs::remove_file(&tmp).ok();
     }
 
     // Test fixtures: stub ASR + TTS engines that

@@ -96,15 +96,18 @@ pub struct VoiceChannel {
     /// rest of the response. When `None`, Phase 137
     /// behaviour (buffer-then-flush) is preserved.
     text_sink: Mutex<Option<TextSinkFn>>,
-    /// Phase 154 — operator-attached image for
+    /// Phase 154 — operator-attached images for
     /// the next turn. The PTT loop's `/image
-    /// <path>` command populates this; the
+    /// <path-or-url>` command populates this; the
     /// streaming turn driver consumes via
-    /// [`take_pending_image`] when constructing
-    /// the Message, so the agent sees a
-    /// text+image mixed message instead of
-    /// text-only.
-    pending_image: Mutex<Option<(String, Vec<u8>)>>,
+    /// [`take_pending_images`] when constructing
+    /// the Message.
+    ///
+    /// Phase 156 — promoted from `Option` to
+    /// `Vec` so the operator can queue multiple
+    /// images per turn by typing `/image`
+    /// repeatedly before recording.
+    pending_images: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl VoiceChannel {
@@ -115,7 +118,7 @@ impl VoiceChannel {
             token: Mutex::new(CancellationToken::new()),
             text_buffer: Mutex::new(String::new()),
             text_sink: Mutex::new(None),
-            pending_image: Mutex::new(None),
+            pending_images: Mutex::new(Vec::new()),
         }
     }
 
@@ -143,30 +146,36 @@ impl VoiceChannel {
         *slot = None;
     }
 
-    /// Phase 154 — queue an image for the
-    /// next turn. The PTT loop's `/image
-    /// <path>` command calls this after
-    /// loading the file + inferring the media
-    /// type. Subsequent calls replace the
-    /// queued image; the agent only ever sees
-    /// one image per turn.
-    pub fn set_pending_image(&self, media_type: String, data: Vec<u8>) {
-        let mut slot = self.pending_image.lock().expect("pending_image poisoned");
-        *slot = Some((media_type, data));
+    /// Phase 154 + 156 — append an image to
+    /// the queue for the next turn. The PTT
+    /// loop's `/image <path-or-url>` command
+    /// calls this after loading/fetching the
+    /// image + inferring the media type. Phase
+    /// 156 promotes from "replace prior" to
+    /// "append to list" so operators can attach
+    /// multiple images per turn by typing
+    /// `/image` repeatedly before recording.
+    pub fn append_pending_image(&self, media_type: String, data: Vec<u8>) {
+        let mut slot = self
+            .pending_images
+            .lock()
+            .expect("pending_images poisoned");
+        slot.push((media_type, data));
     }
 
-    /// Phase 154 — consume the queued image
-    /// if any. The streaming turn driver calls
+    /// Phase 154 + 156 — consume the queued
+    /// images. The streaming turn driver calls
     /// this once when building the Message; on
-    /// `Some(...)` it constructs
-    /// `Message::text_with_image`, on `None`
-    /// the usual `Message::text`. The slot is
-    /// cleared by this call so a subsequent
-    /// turn doesn't accidentally re-send the
-    /// same image.
-    pub fn take_pending_image(&self) -> Option<(String, Vec<u8>)> {
-        let mut slot = self.pending_image.lock().expect("pending_image poisoned");
-        slot.take()
+    /// non-empty Vec it constructs a
+    /// `MessageContent::Mixed` with one Text
+    /// part + N Image parts. The slot is
+    /// cleared so subsequent turns start fresh.
+    pub fn take_pending_images(&self) -> Vec<(String, Vec<u8>)> {
+        let mut slot = self
+            .pending_images
+            .lock()
+            .expect("pending_images poisoned");
+        std::mem::take(&mut *slot)
     }
 
     pub fn config(&self) -> &VoiceChannelConfig {
@@ -555,36 +564,45 @@ voice_path = "/m/p.onnx"
         assert_eq!(ch.peek_buffered_text(), "Buffered response.");
     }
 
-    // ---- Phase 154 — pending_image ----
+    // ---- Phase 154 + 156 — pending_images ----
 
     #[test]
-    fn pending_image_take_when_empty_returns_none() {
+    fn pending_images_take_when_empty_returns_empty_vec() {
         let ch = VoiceChannel::new(VoiceChannelConfig::default());
-        assert!(ch.take_pending_image().is_none());
+        assert!(ch.take_pending_images().is_empty());
     }
 
     #[test]
-    fn pending_image_set_then_take_round_trip() {
+    fn pending_images_append_then_take_round_trip() {
         let ch = VoiceChannel::new(VoiceChannelConfig::default());
-        ch.set_pending_image("image/png".to_string(), vec![1, 2, 3, 4]);
-        let taken = ch.take_pending_image().expect("some");
-        assert_eq!(taken.0, "image/png");
-        assert_eq!(taken.1, vec![1, 2, 3, 4]);
-        // Subsequent take returns None — the slot
-        // was cleared.
-        assert!(ch.take_pending_image().is_none());
+        ch.append_pending_image("image/png".to_string(), vec![1, 2, 3, 4]);
+        let taken = ch.take_pending_images();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].0, "image/png");
+        assert_eq!(taken[0].1, vec![1, 2, 3, 4]);
+        // Subsequent take returns empty — the
+        // queue was cleared.
+        assert!(ch.take_pending_images().is_empty());
     }
 
     #[test]
-    fn pending_image_set_replaces_prior() {
-        // Operator types /image foo.png then
-        // /image bar.png before recording — the
-        // second replaces the first.
+    fn pending_images_phase_156_append_accumulates_multiple() {
+        // Phase 156 — operator types /image
+        // foo.png then /image bar.png before
+        // recording; the queue accumulates both.
+        // (Pre-156 set_pending_image replaced;
+        // post-156 append accumulates.)
         let ch = VoiceChannel::new(VoiceChannelConfig::default());
-        ch.set_pending_image("image/png".to_string(), vec![1]);
-        ch.set_pending_image("image/jpeg".to_string(), vec![2, 3]);
-        let taken = ch.take_pending_image().expect("some");
-        assert_eq!(taken.0, "image/jpeg");
-        assert_eq!(taken.1, vec![2, 3]);
+        ch.append_pending_image("image/png".to_string(), vec![1]);
+        ch.append_pending_image("image/jpeg".to_string(), vec![2, 3]);
+        ch.append_pending_image("image/gif".to_string(), vec![4, 5, 6]);
+        let taken = ch.take_pending_images();
+        assert_eq!(taken.len(), 3);
+        assert_eq!(taken[0].0, "image/png");
+        assert_eq!(taken[1].0, "image/jpeg");
+        assert_eq!(taken[2].0, "image/gif");
+        // Order is append-order — first /image
+        // shows up first in the Vec.
+        assert_eq!(taken[2].1, vec![4, 5, 6]);
     }
 }
