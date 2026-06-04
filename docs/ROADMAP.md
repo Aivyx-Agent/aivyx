@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 162 — Phase 156 + 161 Stragglers (PDF/SVG/TIFF + Authenticated URL Fetch)
+
+**See [PHASE_162.md](PHASE_162.md).** Phase 156's last
+two carry-overs. PDF/SVG/TIFF media type inference
+extends `infer_image_media_type` and
+`media_type_from_content_type` (the downstream
+`ContentPart::Image::media_type` is already an
+opaque String — no core change). Authenticated URL
+fetch adds `[voice.image.url_headers]` TOML map
+threaded into HEAD + GET via reqwest headers.
+Smaller surface than the typical 3-debt bundle but
+same close-out shape; takes Phase 156's debt ledger
+to zero. Zero new workspace deps.
+
 ## Phase 161 — Multimodal Carry-Overs Bundle (Image Size Cap + URL Fetch Timeout + HEAD Pre-Fetch)
 
 **Frozen — see [PHASE_161.md](PHASE_161.md).** Phase 156 close-out
