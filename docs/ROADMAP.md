@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 165 — Multimodal Stragglers Bundle (Office Formats + Per-URL Headers + PDF Page Cap)
+
+**See [PHASE_165.md](PHASE_165.md).** Three multimodal
+honest-debts in one phase. Five additional Office
+formats (DOC/RTF/ODT/pptx/xlsx) extend the Phase
+164 DOCX inference. Per-URL header presets via
+new `[voice.image.url_header_presets]` TOML block
++ `--headers <preset>` flag on `/image`
+(Phase 162 carry-over). Best-effort PDF page-
+count cap on Anthropic via byte-scan; honest
+about false negatives on compressed PDFs.
+Symmetric to Phase 157/158/160/161 close-out
+cadence. Zero new workspace deps.
+
 ## Phase 164 — Phase 163 Cleanups (Anthropic Model Guard + DOCX Inference)
 
 **Frozen — see [PHASE_164.md](PHASE_164.md).** Phase 163 just-
