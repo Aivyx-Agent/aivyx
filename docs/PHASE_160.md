@@ -165,8 +165,60 @@ clears. Phase 161+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 160 exit. Predictions at
-sign-off: DESIGN.md HOLD → 51; PRODUCT.md HOLD
-→ 51; lib.rs HOLD → 26; zero new deps; test
-count delta `+4` to `+10`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 51 | Untouched | ✅ |
+| PRODUCT.md HOLD → 51 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 26 | Untouched | ✅ |
+| Zero new workspace deps | `tokio::sync::Semaphore` already in workspace feature set; no manifest change | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+4` to `+10` | `+10` (228 → 238 in `cargo test -p aivyx-drive --lib`) | ✅ (top of band) |
+
+All five exit criteria met. Phase 157's
+remaining honest-debt is now closed:
+
+1. **Substrate throttle** (Task 2, commit
+   `42050fd`). `walk_folder_tree` accepts
+   `max_concurrent: Option<usize>` and gates
+   each per-folder `children_of` future on a
+   `tokio::sync::Semaphore` permit
+   acquisition. None preserves the pre-Phase-
+   160 unlimited fan-out byte-identically.
+2. **Operator-facing knob** (Task 3, commit
+   `bc1cb39`). `drive.recent_files` and
+   `drive.recent_changes` both gain a
+   `walk_max_concurrent` input (cap 32),
+   validated via the shared
+   `parse_recursive_cap` substrate from Phase
+   157.
+
+### What landed beyond the open
+
+Nothing. Test count landed exactly at the top
+of the predicted `+4..+10` band — the
+substrate +3 + per-tool input parsing +7 add
+up to 10 cleanly.
+
+### Phase 157 honest-debt status — all clear
+
+The Phase 157 open doc listed three honest-
+debts at sign-off. Phase 158/159 close-out
+inventory marks them all closed:
+
+- ✅ Sequential walk → parallel level-BFS
+  (Phase 157 itself, Task 2).
+- ✅ Walk uses operator's default corpus, not
+  drive_id scope (Phase 157 itself, Task 2).
+- ✅ Hardcoded max_depth / max_folders (Phase
+  157 itself, Task 3 — operator-tunable
+  inputs).
+
+Phase 157's *carry-over* (parallel fan-out
+unthrottled) — flagged at exit, then closed
+in Phase 160. Two-phase pickup matches the
+Phase 153 → 157 cadence.
+
+### Forty-ninth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold. Recorded
+for the record.

@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 160 — Throttle the Drive Walk: `walk_folder_tree` max_concurrent
 
-**See [PHASE_160.md](PHASE_160.md).** Phase 157 close-out
+**Frozen — see [PHASE_160.md](PHASE_160.md).** Phase 157 close-out
 deferred 2 phases. Single honest-debt: the parallel
 level-BFS walk fires unthrottled concurrent
 `/files?q=...` queries. Adds a Semaphore-based
