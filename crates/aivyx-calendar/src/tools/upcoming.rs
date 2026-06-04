@@ -207,7 +207,7 @@ impl Tool for CalendarUpcoming {
         // typically the operator's primary
         // calendar when calendar_ids is listed
         // primary-first.
-        merged = dedup_events(merged);
+        merged = dedup_events(merged, parsed.fuzzy_dedup);
         merge_sort_and_cap(&mut merged, parsed.max_results as usize);
 
         let output = json!({
@@ -258,21 +258,38 @@ fn sort_key(event: &Value) -> Option<DateTime<Utc>> {
 ///
 /// Pure substrate so the dedup can be tested
 /// without touching the Drive client.
-pub(crate) fn dedup_events(events: Vec<Value>) -> Vec<Value> {
+///
+/// Phase 155 — `fuzzy` toggle. When true (the
+/// post-155 default), the key is the
+/// `(normalize_summary, bucket_start)` pair:
+///   `normalize_summary` is `trim().to_lowercase()`;
+///   `bucket_start` is the event's start time
+///   truncated to a 5-minute boundary.
+/// When false (the Phase 151 behavior), the key
+/// is the raw `(summary, start)` pair.
+pub(crate) fn dedup_events(events: Vec<Value>, fuzzy: bool) -> Vec<Value> {
     let mut seen: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
     let mut out: Vec<Value> = Vec::with_capacity(events.len());
     for event in events {
-        let summary = event
+        let raw_summary = event
             .get("summary")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let start = event
+        let raw_start = event
             .get("start")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let (summary_key, start_key) = if fuzzy {
+            (
+                normalize_summary(&raw_summary),
+                bucket_start_5min(&raw_start),
+            )
+        } else {
+            (raw_summary, raw_start)
+        };
         // Defensive: events with both fields
         // missing (impossibly malformed) get
         // passed through individually rather
@@ -282,12 +299,47 @@ pub(crate) fn dedup_events(events: Vec<Value>) -> Vec<Value> {
         // is acceptable — the alternative is
         // surfacing N copies of effectively-
         // unidentified events.
-        let key = (summary, start);
+        let key = (summary_key, start_key);
         if seen.insert(key) {
             out.push(event);
         }
     }
     out
+}
+
+/// Phase 155 — fuzzy summary normalization:
+/// trim + lowercase. Handles the most common
+/// cross-calendar variants: "Standup" vs
+/// "STANDUP" vs " Standup ". Doesn't collapse
+/// suffixed variants ("Standup" vs "Standup —
+/// Team A") — operators with intentional
+/// suffixes keep their distinctions.
+pub(crate) fn normalize_summary(summary: &str) -> String {
+    summary.trim().to_lowercase()
+}
+
+/// Phase 155 — bucket an RFC 3339 start time
+/// to a 5-minute boundary, so events at
+/// `10:00:00` and `10:01:30` dedupe against
+/// each other. Events at `9:59` and `10:00`
+/// fall in different buckets (9:55 vs 10:00 —
+/// adjacent-bucket merging is Phase 156+
+/// candidate).
+///
+/// On unparseable input, returns the raw
+/// string — so two unparseable events with
+/// identical strings still match. Defensive
+/// posture; in practice Google always returns
+/// parseable timestamps.
+pub(crate) fn bucket_start_5min(start: &str) -> String {
+    let Some(dt) = parse_event_time(start) else {
+        return start.to_string();
+    };
+    let unix = dt.timestamp();
+    let bucketed = (unix / 300) * 300;
+    let bucketed_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(bucketed, 0)
+        .unwrap_or(dt);
+    bucketed_dt.to_rfc3339()
 }
 
 /// Build the shared event summary, then attach
@@ -335,6 +387,10 @@ fn input_schema() -> Value {
                 "minimum": 1,
                 "maximum": MAX_RESULTS_CAP,
                 "description": "Cap on events returned post-merge (default 50, max 250)"
+            },
+            "fuzzy_dedup": {
+                "type": "boolean",
+                "description": "Phase 155 — normalize summary (lowercase + trim) and bucket start time to 5-minute boundaries when matching cross-calendar duplicates. Default true. Set false for the Phase 151 exact-match behavior."
             }
         },
         "additionalProperties": false
@@ -350,6 +406,11 @@ struct ParsedInput {
     /// whatever they passed in.
     calendar_ids: Vec<String>,
     max_results: u64,
+    /// Phase 155 — when true, dedup uses
+    /// normalized summary + 5-min time bucket.
+    /// When false, falls back to Phase 151 exact
+    /// match.
+    fuzzy_dedup: bool,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -436,10 +497,18 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
     }
     let max_results = max_results.min(MAX_RESULTS_CAP);
 
+    let fuzzy_dedup = match obj.get("fuzzy_dedup") {
+        None => true,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| "`fuzzy_dedup` must be a boolean".to_string())?,
+    };
+
     Ok(ParsedInput {
         window_hours,
         calendar_ids,
         max_results,
+        fuzzy_dedup,
     })
 }
 
@@ -613,7 +682,7 @@ mod tests {
             json!({"id": "a", "summary": "Standup", "start": at_offset(60)}),
             json!({"id": "b", "summary": "Review", "start": at_offset(120)}),
         ];
-        let got = dedup_events(events);
+        let got = dedup_events(events, false);
         assert_eq!(got.len(), 2);
     }
 
@@ -636,7 +705,7 @@ mod tests {
                 "calendar_id": "work@example.com",
             }),
         ];
-        let got = dedup_events(events);
+        let got = dedup_events(events, false);
         assert_eq!(got.len(), 1);
         // First occurrence wins → the primary
         // calendar's copy survives, work's
@@ -652,7 +721,7 @@ mod tests {
             json!({"id": "a", "summary": "Standup", "start": start}),
             json!({"id": "b", "summary": "Review", "start": start}),
         ];
-        let got = dedup_events(events);
+        let got = dedup_events(events, false);
         assert_eq!(got.len(), 2);
     }
 
@@ -662,7 +731,7 @@ mod tests {
             json!({"id": "a", "summary": "Standup", "start": at_offset(60)}),
             json!({"id": "b", "summary": "Standup", "start": at_offset(120)}),
         ];
-        let got = dedup_events(events);
+        let got = dedup_events(events, false);
         assert_eq!(got.len(), 2);
     }
 
@@ -681,15 +750,107 @@ mod tests {
             json!({"id": "a", "summary": null, "start": start}),
             json!({"id": "b", "summary": null, "start": start}),
         ];
-        let got = dedup_events(events);
+        let got = dedup_events(events, false);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["id"], json!("a"));
     }
 
     #[test]
     fn dedup_empty_input_returns_empty() {
-        let got = dedup_events(Vec::new());
+        let got = dedup_events(Vec::new(), false);
         assert!(got.is_empty());
+        let got = dedup_events(Vec::new(), true);
+        assert!(got.is_empty());
+    }
+
+    // ---- Phase 155 — fuzzy dedup ----
+
+    #[test]
+    fn normalize_summary_lowercases_and_trims() {
+        assert_eq!(normalize_summary("Standup"), "standup");
+        assert_eq!(normalize_summary("STANDUP"), "standup");
+        assert_eq!(normalize_summary("  Standup  "), "standup");
+        assert_eq!(normalize_summary("Team Standup"), "team standup");
+    }
+
+    #[test]
+    fn bucket_start_5min_truncates_to_boundary() {
+        let b = bucket_start_5min("2026-06-04T10:00:00+00:00");
+        assert!(b.contains("10:00:00"), "{b}");
+        let b = bucket_start_5min("2026-06-04T10:01:30+00:00");
+        assert!(b.contains("10:00:00"), "{b}");
+        let b = bucket_start_5min("2026-06-04T10:04:59+00:00");
+        assert!(b.contains("10:00:00"), "{b}");
+        let b = bucket_start_5min("2026-06-04T10:05:00+00:00");
+        assert!(b.contains("10:05:00"), "{b}");
+    }
+
+    #[test]
+    fn bucket_start_5min_returns_raw_on_unparseable() {
+        let b = bucket_start_5min("not-a-timestamp");
+        assert_eq!(b, "not-a-timestamp");
+    }
+
+    #[test]
+    fn dedup_fuzzy_identical_normalized_titles_dedupe() {
+        let start = at_offset(60);
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": start.clone()}),
+            json!({"id": "b", "summary": "  STANDUP  ", "start": start}),
+        ];
+        let got_phase_151 = dedup_events(events.clone(), false);
+        assert_eq!(got_phase_151.len(), 2, "Phase 151 kept both");
+        let got_phase_155 = dedup_events(events, true);
+        assert_eq!(got_phase_155.len(), 1, "Phase 155 fuzzy collapses");
+        assert_eq!(got_phase_155[0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_within_5min_bucket_dedupes() {
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:00:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "2026-06-04T10:01:30+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn dedup_fuzzy_outside_5min_bucket_kept_both() {
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": "2026-06-04T10:00:00+00:00"}),
+            json!({"id": "b", "summary": "Standup", "start": "2026-06-04T10:05:00+00:00"}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn dedup_fuzzy_differ_by_suffix_kept_both() {
+        // "Standup" vs "Standup — Team A" — the
+        // suffix carries intentional operator
+        // meaning; fuzzy normalization should NOT
+        // collapse these.
+        let start = at_offset(60);
+        let events = vec![
+            json!({"id": "a", "summary": "Standup", "start": start.clone()}),
+            json!({"id": "b", "summary": "Standup — Team A", "start": start}),
+        ];
+        let got = dedup_events(events, true);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn fuzzy_dedup_default_true_in_parse_input() {
+        let parsed = parse_input(&json!({})).unwrap();
+        assert!(parsed.fuzzy_dedup);
+    }
+
+    #[test]
+    fn fuzzy_dedup_false_honored_in_parse_input() {
+        let parsed = parse_input(&json!({"fuzzy_dedup": false})).unwrap();
+        assert!(!parsed.fuzzy_dedup);
     }
 
     // ---- enrichment with calendar_id tag ----
