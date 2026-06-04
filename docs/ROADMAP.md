@@ -3535,6 +3535,20 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 161 — Multimodal Carry-Overs Bundle (Image Size Cap + URL Fetch Timeout + HEAD Pre-Fetch)
+
+**See [PHASE_161.md](PHASE_161.md).** Phase 156 close-out
+deferred 4 phases. Three multimodal honest-debts
+in one phase: operator-tunable image size cap
+(replaces the hardcoded 10MB with a
+`[voice.image] size_cap_mb` knob), URL fetch
+timeout (`url_timeout_secs`, default 30s,
+replaces the bare `reqwest::get(url)`), and HEAD
+pre-fetch with Content-Length size check before
+download (`head_precheck`, default true).
+Symmetric to Phase 157/158/160 bundle pattern.
+Zero new workspace deps.
+
 ## Phase 160 — Throttle the Drive Walk: `walk_folder_tree` max_concurrent
 
 **Frozen — see [PHASE_160.md](PHASE_160.md).** Phase 157 close-out

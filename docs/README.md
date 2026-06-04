@@ -217,7 +217,8 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 157 | Frozen | [PHASE_157.md](PHASE_157.md) | `16c666a`  |
 | Phase 158 | Frozen | [PHASE_158.md](PHASE_158.md) | `dda59c2`  |
 | Phase 159 | Frozen | [PHASE_159.md](PHASE_159.md) | `2fc8bca`  |
-| Phase 160 | Frozen | [PHASE_160.md](PHASE_160.md) | _pending_  |
+| Phase 160 | Frozen | [PHASE_160.md](PHASE_160.md) | `9f091ff`  |
+| Phase 161 | Open   | [PHASE_161.md](PHASE_161.md) | —          |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
