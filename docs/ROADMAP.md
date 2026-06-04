@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 161 — Multimodal Carry-Overs Bundle (Image Size Cap + URL Fetch Timeout + HEAD Pre-Fetch)
 
-**See [PHASE_161.md](PHASE_161.md).** Phase 156 close-out
+**Frozen — see [PHASE_161.md](PHASE_161.md).** Phase 156 close-out
 deferred 4 phases. Three multimodal honest-debts
 in one phase: operator-tunable image size cap
 (replaces the hardcoded 10MB with a

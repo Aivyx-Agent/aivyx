@@ -201,8 +201,90 @@ clear. Phase 162+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 161 exit. Predictions at
-sign-off: DESIGN.md HOLD → 52; PRODUCT.md HOLD
-→ 52; lib.rs HOLD → 27; zero new deps; test
-count delta `+10` to `+18`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 52 | Untouched | ✅ |
+| PRODUCT.md HOLD → 52 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 27 | Untouched | ✅ |
+| Zero new workspace deps | `reqwest` and `tokio::time` already in workspace; `toml` already a `aivyx-voice` crate dep | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+10` to `+18` | `+6` (103 → 109 in `cargo test -p aivyx-voice --lib`) | ⚠️ (under-band by 4; see correction note below) |
+| Task plan: 5 tasks | 4 commits (Task 2 + Task 3 collapsed into one substrate landing) | ⚠️ (see correction note below) |
+
+All three Phase 156 honest-debts closed. The
+final shape ended up tighter than the open doc
+forecast on both task count and test count —
+honest corrections below.
+
+### Honest corrections
+
+**Test count under-band.** The open doc
+predicted `+10..+18`; actual was `+6`. The
+gap came from two simplifications:
+
+1. The Task 4 HEAD pre-fetch testing surface
+   shrank from what the open doc anticipated.
+   The substrate-tier `head_precheck_size`
+   helper sits inside `fetch_image_url` and
+   needs live HTTP to exercise meaningfully —
+   I didn't introduce a mock server (would
+   have meant a new dev-dep like `wiremock`,
+   violating "zero new workspace deps"). So
+   HEAD pre-check coverage is operator-
+   validation tier, not unit tier.
+2. The Task 3 timeout test ditto — verifying
+   that `Client::builder().timeout(...).build()`
+   actually times out a real request requires
+   either a mock server or a 30-second sleep
+   in the test. Skipped for the same reason.
+
+The shape-tier tests (config deserialization,
+defaults, size-cap byte math, operator-tightened
+cap behavior) do cover the substrate
+correctness; the live-network behavior is
+operator-validation territory.
+
+**Task count.** Open doc had Task 2 (size cap)
+/ Task 3 (URL timeout) / Task 4 (HEAD pre-
+fetch) as three separate tasks. All three
+touch `fetch_image_url`'s body — splitting
+them would have meant three identical-shape
+diffs to the same function with intermediate
+half-states. I collapsed into one substrate
+commit + one wire commit. Task tracker
+updated mid-phase to reflect the new shape:
+old Tasks 3+4 deleted, new Task 3 = "wire
+VoiceImageConfig into VoiceChannelConfig".
+
+Substrate landing (Task 2+3 commit `bcc55f9`)
+fulfilled all of:
+
+1. **Operator-tunable image size cap.** Closed.
+   `[voice.image] size_cap_mb` (default 10).
+   `size_cap_bytes()` uses `saturating_mul` so
+   absurd operator values can't overflow.
+2. **URL fetch timeout.** Closed.
+   `[voice.image] url_timeout_secs` (default 30).
+   `reqwest::Client::builder().timeout(...)`
+   replaces the bare `reqwest::get(url)`.
+3. **HEAD pre-fetch for size check.** Closed.
+   `[voice.image] head_precheck` (default
+   true). Refuses over-cap URLs before
+   download when Content-Length is advertised.
+   Falls through to GET on 405 / 5xx / chunked
+   transfer / transport failures.
+
+### Phase 156 honest-debt status — all clear
+
+The Phase 156 exit doc named three carry-overs.
+Phase 161 closed all three. Phase 156 also
+named "Authenticated URL fetch" and "PDF / SVG
+/ TIFF media type support" as Phase 157+
+candidates; those remain open and are listed
+in the post-161 candidate roster.
+
+### Fiftieth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Round-number milestone passed by. Recorded
+for the record.

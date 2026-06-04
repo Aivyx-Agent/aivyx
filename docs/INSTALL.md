@@ -1522,15 +1522,34 @@ debts in one bundle:**
   `Content-Type` header (falling back to
   URL-path extension if the header is
   absent). Operator can attach any public
-  image URL without manual download. URL
-  fetch has no auth + no timeout in Phase
-  156 — those are Phase 157+ candidates.
-- **Client-side 10MB size cap.** Files or URL
-  responses exceeding 10MB are rejected at
-  attach time with a clear "max allowed is
-  10485760 bytes (10 MB)" message. Matches
-  Phase 129's Drive `CONTENT_INLINE_CAP_BYTES`
-  for cross-substrate consistency.
+  image URL without manual download.
+- **Client-side size cap.** Files or URL
+  responses exceeding the cap (default 10MB,
+  Phase 161-tunable) are rejected at attach
+  time. Matches Phase 129's Drive
+  `CONTENT_INLINE_CAP_BYTES` for cross-
+  substrate consistency.
+
+**Phase 161 closed Phase 156's three honest-
+debts in one bundle — all operator-tunable via
+the new `[voice.image]` TOML block:**
+
+```toml
+[voice.image]
+size_cap_mb       = 10     # Default 10. Replaces the hardcoded MAX_IMAGE_SIZE_BYTES.
+url_timeout_secs  = 30     # Default 30. Per-request timeout on `/image <url>` fetches.
+head_precheck     = true   # Default true. Refuses over-cap URLs before download
+                           # when Content-Length is advertised.
+```
+
+All three fields have defaults that match Phase
+156 behavior, so operators with no
+`[voice.image]` section see unchanged behavior.
+The HEAD pre-check falls through to GET on 405
+Method Not Allowed, on chunked-transfer
+responses (no Content-Length), and on HEAD
+transport failures — operators with HEAD-
+hostile origins don't lose access.
 
 **Phase 154 added multimodal input — image
 attachment via voice.** Operator types `/image
