@@ -238,8 +238,85 @@ After Phase 165, Phase 164's stragglers + Phase
 
 ## Prediction vs reality
 
-_Populated at Phase 165 exit. Predictions at
-sign-off: DESIGN.md HOLD → 2; PRODUCT.md HOLD
-→ 56; lib.rs HOLD → 2; zero new deps; test
-count delta `+15` to `+25`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 2 | Untouched | ✅ |
+| PRODUCT.md HOLD → 56 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 2 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives (base64, serde, reqwest, stdlib) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+15` to `+25` | `+30` (aivyx-voice +20, anthropic feature +10) | ⚠️ (over by 5; see correction note) |
+
+All five exit criteria met functionally. The
+test count over-shoot is the only deviation;
+honest correction below.
+
+### Honest correction — test count over-band
+
+Open doc band was `+15..+25`. Actual delta is
+`+30`:
+
+- **Task 2** (Office formats): +10 tests
+  covering 5 extensions x 2 surfaces (inferer
+  + content-type matcher) plus a routing
+  case, a classifier case, and the error-
+  message regression. The 5x2 matrix
+  multiplied test count more than the open
+  doc budget anticipated.
+- **Task 3** (header presets): +10 tests
+  covering 8 parser shapes (plain path /
+  plain URL / path+preset / URL+preset /
+  empty / missing-name / whitespace-name /
+  flag-only) plus 2 config deserialize cases.
+  Parser-edge-case coverage warranted more
+  than the open doc estimated.
+- **Task 4** (page-count cap): +10 tests
+  covering the byte-scan substrate (5 cases:
+  empty / unrelated / 3-page / Pages
+  exclusion / compact form) plus the
+  build_request_body integration (4 cases:
+  over-cap reject / at-cap accept / invalid
+  base64 / non-PDF passthrough) plus the
+  constant pin.
+
+Each task's surface honestly warranted its
+test count; the open doc's `+15..+25` band
+was a conservative estimate that didn't
+account for the parser-edge-case multiplier
+on Task 3 or the substrate-tier coverage
+depth on Task 4.
+
+### What landed beyond the open
+
+One small functional correction landed during
+Task 2 that the open doc had glossed over:
+Phase 164's content-type matcher mapped
+`application/msword` to DOCX (which is
+semantically wrong — `application/msword` is
+the legacy `.doc` MIME). Phase 165 routes it
+correctly to DOC. The Phase 164 test that
+asserted the old conflation was split into
+two tests reflecting the corrected mapping;
+no operator-visible behavior change since the
+Phase 164 conflation already pointed to
+"Document" routing for both formats.
+
+### Phase 162 + 164 honest-debt status
+
+All three named carry-overs cleared:
+- ✅ Phase 162's per-URL header overrides
+  (Task 3).
+- ✅ Phase 164's DOC/RTF/ODT/pptx/xlsx
+  inference (Task 2).
+- ✅ Phase 164's PDF page-count cap (Task 4,
+  best-effort caveat documented).
+
+The Phase 165-introduced carry-overs (page-
+count TOML knob, compressed-stream-aware PDF
+counting, streaming document blocks) feed the
+Phase 166+ candidate list.
+
+### Fifty-fourth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

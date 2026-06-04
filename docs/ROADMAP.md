@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 165 — Multimodal Stragglers Bundle (Office Formats + Per-URL Headers + PDF Page Cap)
 
-**See [PHASE_165.md](PHASE_165.md).** Three multimodal
+**Frozen — see [PHASE_165.md](PHASE_165.md).** Three multimodal
 honest-debts in one phase. Five additional Office
 formats (DOC/RTF/ODT/pptx/xlsx) extend the Phase
 164 DOCX inference. Per-URL header presets via

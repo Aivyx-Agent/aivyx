@@ -1602,16 +1602,71 @@ is a one-line PR).
 **Phase 164 — DOCX inference.** Files with
 `.docx` extension or `application/vnd.
 openxmlformats-officedocument.
-wordprocessingml.document` /
-`application/msword` Content-Type now route
-through the `Document` variant. Anthropic's
-document blocks accept PDF only as of writing;
-DOCX attached to Anthropic surfaces as a 400
-from the API (same posture as SVG/TIFF in
-image blocks). The inference surface lands so
-that when provider support widens — or
-operators switch providers — no voice-side
-work is needed.
+wordprocessingml.document` Content-Type now
+route through the `Document` variant.
+Anthropic's document blocks accept PDF only as
+of writing; DOCX attached to Anthropic
+surfaces as a 400 from the API.
+
+**Phase 165 — five more Office formats.**
+`.doc` (`application/msword`), `.rtf`
+(`application/rtf` or `text/rtf`), `.odt`
+(`application/vnd.oasis.opendocument.text`),
+`.pptx`
+(`application/vnd.openxmlformats-officedocument.presentationml.presentation`),
+and `.xlsx`
+(`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)
+extend the Phase 164 set. All five route as
+Document; same provider-side caveats as DOCX.
+Phase 165 also corrects Phase 164's
+content-type conflation: `application/msword`
+now maps to DOC (legacy binary format) rather
+than DOCX.
+
+**Phase 165 — per-URL header presets.**
+Operators with multiple authenticated origins
+can now switch header bundles per `/image`
+attach instead of being locked to one global
+set. Configure named presets:
+
+```toml
+[voice.image.url_header_presets.work]
+Authorization = "Bearer work-token"
+"X-Workspace" = "production"
+
+[voice.image.url_header_presets.personal]
+Cookie = "session=personal-yyy"
+```
+
+Select with the `--headers <preset-name>` flag:
+
+```
+/image https://intranet.work.example/diagram.png --headers work
+/image https://photos.personal.example/a.png --headers personal
+```
+
+Without `--headers`, the global
+`[voice.image.url_headers]` block applies
+(unchanged Phase 162 behavior). Unknown
+preset names produce a clear error listing
+the available presets; an empty preset name
+or whitespace-containing name is rejected at
+parse time.
+
+**Phase 165 — best-effort PDF page-count cap
+on Anthropic.** When operators attach a PDF
+to a document-capable Anthropic model, the
+substrate byte-scans for `/Type /Page`
+markers and refuses if the count exceeds
+Anthropic's documented 100-page limit. Honest
+caveat: PDFs using FlateDecode object streams
+(common in modern Acrobat output) hide their
+page-object headers from the byte-scan; those
+fall through to Anthropic's server-side cap
+enforcement. The client-side check provides
+additive defense for uncompressed PDFs (older
+tools, command-line generators, scanned
+documents) where the markers are visible.
 
 SVG and TIFF still route as image blocks; most
 vision LLMs reject them, and the rejection
