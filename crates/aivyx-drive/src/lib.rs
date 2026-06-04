@@ -87,6 +87,13 @@ pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
 /// scopes are in effect.
 pub const DEFAULT_DRIVE_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/drive",
+    // Phase 159 — Drive Activity API
+    // (`drive.recent_activity` tool). Separate
+    // googleapis host + separate scope; operators
+    // upgrading from a pre-Phase-159 install
+    // re-run `aivyx-drive auth init` so the new
+    // scope is granted.
+    "https://www.googleapis.com/auth/drive.activity.readonly",
 ];
 
 /// Service-specific token storage path
@@ -101,4 +108,26 @@ pub fn default_token_path() -> Option<std::path::PathBuf> {
             .join("drive")
             .join("tokens.json"),
     )
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn default_scopes_include_full_drive() {
+        assert!(
+            DEFAULT_DRIVE_SCOPES.contains(&"https://www.googleapis.com/auth/drive")
+        );
+    }
+
+    #[test]
+    fn default_scopes_include_drive_activity_readonly() {
+        // Phase 159 — regression pin so a future
+        // narrowing of DEFAULT_DRIVE_SCOPES
+        // notices the impact on
+        // drive.recent_activity.
+        assert!(DEFAULT_DRIVE_SCOPES
+            .contains(&"https://www.googleapis.com/auth/drive.activity.readonly"));
+    }
 }

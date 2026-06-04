@@ -31,6 +31,16 @@ use aivyx_google_oauth::{
 pub const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 pub const DRIVE_UPLOAD_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
 
+/// Phase 159 — Google Drive Activity API base.
+/// The activity surface lives on its own
+/// googleapis subdomain (not under
+/// `/drive/v3`), so calls to it use the same
+/// access_token but a different host. Required
+/// scope:
+/// `https://www.googleapis.com/auth/drive.activity.readonly`.
+pub const DRIVE_ACTIVITY_API_BASE: &str =
+    "https://driveactivity.googleapis.com/v2";
+
 #[derive(Debug, Error)]
 pub enum DriveClientError {
     #[error("HTTP transport error: {0}")]
@@ -127,6 +137,31 @@ impl DriveClient {
     ) -> Result<T, DriveClientError> {
         let token = self.ensure_fresh_token().await?;
         let url = format!("{}{}", DRIVE_API_BASE, path);
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| DriveClientError::Transport(e.to_string()))?;
+        decode_json(resp).await
+    }
+
+    /// Phase 159 — POST `{DRIVE_ACTIVITY_API_BASE}{path}`
+    /// with JSON body; parse JSON response. Mirrors
+    /// [`post_json`] but targets the separate Drive
+    /// Activity API host
+    /// (`driveactivity.googleapis.com`) with the
+    /// same bearer token. Used by
+    /// `drive.recent_activity`.
+    pub async fn post_json_activity<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<T, DriveClientError> {
+        let token = self.ensure_fresh_token().await?;
+        let url = format!("{}{}", DRIVE_ACTIVITY_API_BASE, path);
         let resp = self
             .http
             .post(&url)
@@ -319,5 +354,15 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("20000000"));
         assert!(s.contains("10000000"));
+    }
+
+    // ---- Phase 159 — Drive Activity API base ----
+
+    #[test]
+    fn activity_api_base_targets_separate_subdomain() {
+        assert!(DRIVE_ACTIVITY_API_BASE.contains("driveactivity.googleapis.com"));
+        assert!(DRIVE_ACTIVITY_API_BASE.contains("/v2"));
+        assert_ne!(DRIVE_ACTIVITY_API_BASE, DRIVE_API_BASE);
+        assert_ne!(DRIVE_ACTIVITY_API_BASE, DRIVE_UPLOAD_BASE);
     }
 }
