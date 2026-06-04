@@ -460,6 +460,15 @@ fn ollama_message(msg: &LlmMessage) -> Result<Value, LlmError> {
     Ok(match msg {
         LlmMessage::User { content } => {
             let has_images = content.iter().any(ContentBlock::is_image);
+            let dropped_documents =
+                content.iter().filter(|b| b.is_document()).count();
+            if dropped_documents > 0 {
+                eprintln!(
+                    "ollama provider: dropping {dropped_documents} document \
+                     block(s); Ollama's chat API has no document content \
+                     block — Phase 163/A13 skip-and-warn"
+                );
+            }
             if has_images {
                 // Ollama's vision-model path uses an `images`
                 // array of base64 strings alongside text content

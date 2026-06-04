@@ -212,6 +212,19 @@ fn anthropic_message(msg: &LlmMessage) -> Result<Value, LlmError> {
                             "data": data,
                         }
                     }),
+                    // Phase 163 / amendment A13 —
+                    // Anthropic supports document content
+                    // blocks (Claude 3.5+). Same source
+                    // shape as image; the model handles
+                    // PDFs natively.
+                    ContentBlock::DocumentBase64 { media_type, data } => json!({
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        }
+                    }),
                 })
                 .collect();
             json!({ "role": "user", "content": blocks })
@@ -1034,5 +1047,52 @@ mod tests {
             }
             other => panic!("expected ToolCalls, got {other:?}"),
         }
+    }
+
+    // ---- Phase 163 / Amendment A13 — document content blocks ----
+
+    #[test]
+    fn anthropic_message_emits_document_block_for_pdf() {
+        use crate::{ContentBlock, LlmMessage};
+
+        let msg = LlmMessage::User {
+            content: vec![
+                ContentBlock::text("summarize this paper"),
+                ContentBlock::DocumentBase64 {
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0xLjQK".to_string(),
+                },
+            ],
+        };
+        let v = anthropic_message(&msg).expect("ok");
+        assert_eq!(v["role"], "user");
+        let blocks = v["content"].as_array().expect("array");
+        assert_eq!(blocks.len(), 2);
+        // First block is text.
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "summarize this paper");
+        // Second block is the document — type
+        // = "document", source shape matches the
+        // Anthropic API contract.
+        assert_eq!(blocks[1]["type"], "document");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "application/pdf");
+        assert_eq!(blocks[1]["source"]["data"], "JVBERi0xLjQK");
+    }
+
+    #[test]
+    fn anthropic_message_document_only_no_text() {
+        use crate::{ContentBlock, LlmMessage};
+
+        let msg = LlmMessage::User {
+            content: vec![ContentBlock::DocumentBase64 {
+                media_type: "application/pdf".to_string(),
+                data: "JVBE".to_string(),
+            }],
+        };
+        let v = anthropic_message(&msg).expect("ok");
+        let blocks = v["content"].as_array().expect("array");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "document");
     }
 }

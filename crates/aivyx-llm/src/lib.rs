@@ -100,6 +100,10 @@ pub mod verify;
 
 /// A content block within a user message. Matches the content-block
 /// array format used by both Anthropic and OpenAI APIs.
+///
+/// Phase 163 — amendment A13 adds `DocumentBase64` so PDFs route to
+/// provider-specific document blocks rather than masquerading as
+/// images.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
@@ -107,6 +111,14 @@ pub enum ContentBlock {
     Text { text: String },
     /// Base64-encoded image with MIME type (e.g. `image/png`).
     ImageBase64 { media_type: String, data: String },
+    /// Phase 163 — base64-encoded document with
+    /// MIME type (e.g. `application/pdf`).
+    /// Routes to provider-specific document
+    /// content blocks (Anthropic) or skip-and-
+    /// warn on providers without native
+    /// document support (OpenAI, Ollama,
+    /// mistral_rs). See amendment A13.
+    DocumentBase64 { media_type: String, data: String },
 }
 
 impl ContentBlock {
@@ -126,9 +138,33 @@ impl ContentBlock {
         }
     }
 
+    /// Phase 163 — convenience: create a
+    /// document content block from raw bytes.
+    /// Same base64 encoding shape as
+    /// [`image_from_bytes`]; provider mapping
+    /// downstream determines whether the block
+    /// reaches the model or gets skipped with a
+    /// warning.
+    pub fn document_from_bytes(
+        media_type: impl Into<String>,
+        bytes: &[u8],
+    ) -> Self {
+        use base64::Engine;
+        ContentBlock::DocumentBase64 {
+            media_type: media_type.into(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        }
+    }
+
     /// Returns `true` if this block is an image.
     pub fn is_image(&self) -> bool {
         matches!(self, ContentBlock::ImageBase64 { .. })
+    }
+
+    /// Phase 163 — Returns `true` if this block
+    /// is a document.
+    pub fn is_document(&self) -> bool {
+        matches!(self, ContentBlock::DocumentBase64 { .. })
     }
 }
 
@@ -240,6 +276,13 @@ pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
                     match block {
                         ContentBlock::Text { text } => chars += text.len(),
                         ContentBlock::ImageBase64 { .. } => images += 1,
+                        // Phase 163 — document blocks count
+                        // as a single "image-equivalent" for
+                        // the cost-estimate heuristic; the
+                        // provider-side billing varies, but
+                        // a PDF is closer to an image in
+                        // tokens than to chars.
+                        ContentBlock::DocumentBase64 { .. } => images += 1,
                     }
                 }
             }
@@ -951,6 +994,61 @@ mod tests {
         let tokens = estimate_tokens(&msgs);
         // 13 chars / 4 = 4 tokens + 1600 image tokens = 1604
         assert_eq!(tokens, 1604);
+    }
+
+    // ---- Phase 163 / Amendment A13 — DocumentBase64 ----
+
+    #[test]
+    fn document_from_bytes_encodes_base64() {
+        let block = ContentBlock::document_from_bytes(
+            "application/pdf",
+            b"%PDF-1.4 fake data",
+        );
+        match block {
+            ContentBlock::DocumentBase64 { media_type, data } => {
+                assert_eq!(media_type, "application/pdf");
+                // base64 of "%PDF-1.4 fake data"
+                assert_eq!(data, "JVBERi0xLjQgZmFrZSBkYXRh");
+            }
+            other => panic!("expected DocumentBase64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_document_returns_true_only_for_document_variant() {
+        assert!(ContentBlock::document_from_bytes("application/pdf", b"x")
+            .is_document());
+        assert!(!ContentBlock::text("hello").is_document());
+        assert!(!ContentBlock::image_from_bytes("image/png", b"x")
+            .is_document());
+    }
+
+    #[test]
+    fn is_image_stays_false_for_document_variant() {
+        // Regression pin so a future refactor
+        // doesn't accidentally widen is_image to
+        // include documents.
+        let doc = ContentBlock::document_from_bytes("application/pdf", b"x");
+        assert!(!doc.is_image());
+    }
+
+    #[test]
+    fn estimate_tokens_with_document_counts_as_image_equivalent() {
+        // Phase 163 — documents count as the
+        // same per-block budget as images for
+        // the cost-estimate heuristic.
+        let msgs = vec![LlmMessage::User {
+            content: vec![
+                ContentBlock::text("summarize this paper"),
+                ContentBlock::DocumentBase64 {
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBER...".to_string(),
+                },
+            ],
+        }];
+        let tokens = estimate_tokens(&msgs);
+        // 20 chars / 4 = 5 tokens + 1600 doc-as-image tokens = 1605
+        assert_eq!(tokens, 1605);
     }
 
     #[test]

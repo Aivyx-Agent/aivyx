@@ -262,20 +262,35 @@ fn openai_message(msg: &LlmMessage) -> Result<Value, LlmError> {
     Ok(match msg {
         LlmMessage::User { content } => {
             let has_images = content.iter().any(ContentBlock::is_image);
+            let has_documents = content.iter().any(ContentBlock::is_document);
+            if has_documents {
+                eprintln!(
+                    "openai provider: dropping {} document block(s); \
+                     OpenAI Chat Completions has no native document content \
+                     block — use the Files API + assistants flow for PDFs",
+                    content.iter().filter(|b| b.is_document()).count(),
+                );
+            }
             if has_images {
                 // OpenAI multimodal: content array with text + image_url blocks.
                 let blocks: Vec<Value> = content
                     .iter()
-                    .map(|b| match b {
+                    .filter_map(|b| match b {
                         ContentBlock::Text { text } => {
-                            json!({"type": "text", "text": text})
+                            Some(json!({"type": "text", "text": text}))
                         }
-                        ContentBlock::ImageBase64 { media_type, data } => json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!("data:{media_type};base64,{data}")
-                            }
-                        }),
+                        ContentBlock::ImageBase64 { media_type, data } => {
+                            Some(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{media_type};base64,{data}")
+                                }
+                            }))
+                        }
+                        // Phase 163 — skip document
+                        // blocks for OpenAI (warned
+                        // above).
+                        ContentBlock::DocumentBase64 { .. } => None,
                     })
                     .collect();
                 json!({ "role": "user", "content": blocks })

@@ -165,17 +165,46 @@ impl Message {
             received_at: SystemTime::now(),
         }
     }
+
+    /// Phase 163 — convenience constructor for a
+    /// document message (no text). Documents
+    /// route to provider-specific document
+    /// blocks (Anthropic) or skip-and-warn
+    /// (others) — see amendment A13.
+    pub fn document(
+        session_id: SessionId,
+        media_type: impl Into<String>,
+        data: Vec<u8>,
+    ) -> Self {
+        Message {
+            id: MessageId::new(),
+            session_id,
+            content: MessageContent::Document {
+                media_type: media_type.into(),
+                data,
+            },
+            received_at: SystemTime::now(),
+        }
+    }
 }
 
 /// The content of a user message. Phase 45 extended this from text-only
-/// to support images and mixed text+image messages.
+/// to support images and mixed text+image messages. Phase 163 added the
+/// `Document` variant — see amendment A13.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageContent {
     /// Plain text.
     Text(String),
     /// A single image with MIME type and raw bytes.
     Image { media_type: String, data: Vec<u8> },
-    /// Multiple content parts (text and/or images) in one message.
+    /// Phase 163 — a single document (e.g. PDF)
+    /// with MIME type and raw bytes. Routes to
+    /// provider-specific document content blocks
+    /// when the provider supports them
+    /// (Anthropic), skip-and-warn otherwise.
+    Document { media_type: String, data: Vec<u8> },
+    /// Multiple content parts (text, images, and/or
+    /// documents) in one message.
     Mixed(Vec<ContentPart>),
 }
 
@@ -186,6 +215,9 @@ pub enum ContentPart {
     Text(String),
     /// An image with MIME type and raw bytes.
     Image { media_type: String, data: Vec<u8> },
+    /// Phase 163 — a document (e.g. PDF) with
+    /// MIME type and raw bytes. See amendment A13.
+    Document { media_type: String, data: Vec<u8> },
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,6 +1210,61 @@ mod tests {
             }
             other => panic!("expected Mixed, got {other:?}"),
         }
+    }
+
+    // ---- Phase 163 / Amendment A13 — Document ----
+
+    #[test]
+    fn message_document_constructor_builds_document_variant() {
+        let session = SessionId::new();
+        let m = Message::document(session, "application/pdf", vec![0x25, 0x50, 0x44, 0x46]);
+        match &m.content {
+            MessageContent::Document { media_type, data } => {
+                assert_eq!(media_type, "application/pdf");
+                assert_eq!(data, &[0x25, 0x50, 0x44, 0x46]);
+            }
+            other => panic!("expected Document, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mixed_can_carry_document_content_part() {
+        let session = SessionId::new();
+        let m = Message {
+            id: MessageId::new(),
+            session_id: session,
+            content: MessageContent::Mixed(vec![
+                ContentPart::Text("summarize this paper".to_string()),
+                ContentPart::Document {
+                    media_type: "application/pdf".to_string(),
+                    data: vec![0x25, 0x50, 0x44, 0x46],
+                },
+            ]),
+            received_at: SystemTime::now(),
+        };
+        match &m.content {
+            MessageContent::Mixed(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(
+                    &parts[1],
+                    ContentPart::Document { media_type, .. }
+                        if media_type == "application/pdf"
+                ));
+            }
+            other => panic!("expected Mixed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn document_message_content_serializes_roundtrip() {
+        let content = MessageContent::Document {
+            media_type: "application/pdf".to_string(),
+            data: vec![1, 2, 3, 4, 5],
+        };
+        let json = serde_json::to_string(&content).expect("serialize");
+        let round: MessageContent =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(round, content);
     }
 
     // ---- AuditHook is usable as a trait object ----

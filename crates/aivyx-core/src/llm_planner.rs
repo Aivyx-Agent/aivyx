@@ -585,12 +585,18 @@ impl TurnPlanner for LlmPlanner {
             MessageContent::Image { media_type, data } => {
                 vec![ContentBlock::image_from_bytes(media_type, data)]
             }
+            MessageContent::Document { media_type, data } => {
+                vec![ContentBlock::document_from_bytes(media_type, data)]
+            }
             MessageContent::Mixed(parts) => parts
                 .iter()
                 .map(|part| match part {
                     ContentPart::Text(text) => ContentBlock::text(text),
                     ContentPart::Image { media_type, data } => {
                         ContentBlock::image_from_bytes(media_type, data)
+                    }
+                    ContentPart::Document { media_type, data } => {
+                        ContentBlock::document_from_bytes(media_type, data)
                     }
                 })
                 .collect(),
@@ -613,12 +619,14 @@ impl TurnPlanner for LlmPlanner {
         let query_text = match &message.content {
             MessageContent::Text(text) => text.clone(),
             MessageContent::Image { .. } => String::new(),
+            MessageContent::Document { .. } => String::new(),
             MessageContent::Mixed(parts) => {
                 let joined: Vec<&str> = parts
                     .iter()
                     .filter_map(|p| match p {
                         ContentPart::Text(t) => Some(t.as_str()),
                         ContentPart::Image { .. } => None,
+                        ContentPart::Document { .. } => None,
                     })
                     .collect();
                 joined.join(" ")
@@ -1254,6 +1262,7 @@ fn summarise_pruned(messages: &[LlmMessage]) -> String {
                     .map(|b| match b {
                         ContentBlock::Text { text } => text.as_str(),
                         ContentBlock::ImageBase64 { media_type, .. } => media_type.as_str(),
+                        ContentBlock::DocumentBase64 { media_type, .. } => media_type.as_str(),
                     })
                     .collect();
                 let summary = parts.join(", ");

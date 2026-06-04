@@ -32,6 +32,21 @@ pub fn flatten_user_content(content: &[ContentBlock]) -> String {
                 }
                 out.push_str("[image]");
             }
+            ContentBlock::DocumentBase64 { .. } => {
+                // Phase 163 / amendment A13 — mistralrs has no
+                // document content type. Skip-and-warn shape:
+                // we emit a placeholder so the model sees that
+                // SOMETHING was meant to be there, and we
+                // print a warning to stderr.
+                eprintln!(
+                    "mistral_rs convert: dropping document block; \
+                     mistralrs has no document content type"
+                );
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("[document]");
+            }
         }
     }
     out
