@@ -3535,6 +3535,17 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 156 — Multimodal Close-Out Bundle (Multi-Image + URL Source + Size Cap)
+
+**See [PHASE_156.md](PHASE_156.md).** Phase 154 close-out
+deferred 2 phases. Three multimodal honest-debts in one
+phase: multi-image queue (Vec<(media_type, data)>), URL
+source via reqwest (operator types `/image https://...`
+and loop fetches), client-side size cap (10MB matching
+Drive inline cap). Symmetric to Phase 148/151/152/153/155
+close-out cadence. reqwest added to aivyx-voice as crate
+dep (already a workspace dep); zero new workspace deps.
+
 ## Phase 155 — Calendar: Small Follow-Ons Bundle
 
 **Frozen — see [PHASE_155.md](PHASE_155.md).** Phase 151 follow-on
