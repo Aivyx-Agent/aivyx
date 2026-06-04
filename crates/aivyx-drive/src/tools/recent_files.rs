@@ -145,7 +145,7 @@ impl Tool for DriveRecentFiles {
                     max_depth,
                     max_folders,
                     parsed.drive_id.as_deref(),
-                    None, // Phase 160 Task 3 wires the operator input.
+                    parsed.walk_max_concurrent,
                 )
                 .await
                 {
@@ -305,6 +305,12 @@ fn input_schema() -> Value {
                 "minimum": 1,
                 "maximum": 1000,
                 "description": "Phase 157 — override the default recursive walk folder cap. Default 100 (RECURSIVE_MAX_FOLDERS); upper bound 1000."
+            },
+            "walk_max_concurrent": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32,
+                "description": "Phase 160 — throttle the recursive walk's parallel fan-out. At most N per-folder children-queries run simultaneously per depth level. Default unlimited (level width). Upper bound 32. Useful for rate-limited operators hitting 429s on large folder trees."
             }
         },
         "additionalProperties": false
@@ -327,6 +333,11 @@ struct ParsedInput {
     /// walk_folder_tree max_folders. When None,
     /// `RECURSIVE_MAX_FOLDERS` (100) is used.
     recursive_max_folders: Option<usize>,
+    /// Phase 160 — operator throttle for the
+    /// walk's parallel fan-out. When None, the
+    /// walk fires unlimited per-folder queries
+    /// per depth level (pre-Phase-160 default).
+    walk_max_concurrent: Option<usize>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -421,6 +432,11 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         "recursive_max_folders",
         1000,
     )?;
+    let walk_max_concurrent = parse_recursive_cap(
+        obj.get("walk_max_concurrent"),
+        "walk_max_concurrent",
+        32,
+    )?;
 
     Ok(ParsedInput {
         window_days,
@@ -431,6 +447,7 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         drive_id,
         recursive_max_depth,
         recursive_max_folders,
+        walk_max_concurrent,
     })
 }
 
@@ -717,5 +734,35 @@ mod tests {
             parse_input(&json!({"recursive_max_folders": 9999})).unwrap_err();
         assert!(err.contains("recursive_max_folders"));
         assert!(err.contains("<= 1000"));
+    }
+
+    // ---- Phase 160 — walk_max_concurrent ----
+
+    #[test]
+    fn parse_input_walk_max_concurrent_default_none() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.walk_max_concurrent, None);
+    }
+
+    #[test]
+    fn parse_input_walk_max_concurrent_honored() {
+        let p = parse_input(&json!({"walk_max_concurrent": 8})).unwrap();
+        assert_eq!(p.walk_max_concurrent, Some(8));
+    }
+
+    #[test]
+    fn parse_input_walk_max_concurrent_over_cap_rejected() {
+        let err =
+            parse_input(&json!({"walk_max_concurrent": 99})).unwrap_err();
+        assert!(err.contains("walk_max_concurrent"));
+        assert!(err.contains("<= 32"));
+    }
+
+    #[test]
+    fn parse_input_walk_max_concurrent_zero_rejected() {
+        let err =
+            parse_input(&json!({"walk_max_concurrent": 0})).unwrap_err();
+        assert!(err.contains("walk_max_concurrent"));
+        assert!(err.contains(">= 1"));
     }
 }
