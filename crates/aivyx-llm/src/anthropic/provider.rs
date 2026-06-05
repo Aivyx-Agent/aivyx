@@ -297,7 +297,31 @@ pub(crate) const ANTHROPIC_PDF_PAGE_CAP: usize = 100;
 /// Detection: looks for `/Type` whitespace
 /// `/Page` followed by a non-`s` byte so
 /// `/Pages` (the parent node) is excluded.
+///
+/// Phase 168 — augmented with catalog-aware
+/// fallback. Modern PDFs commonly compress
+/// individual page objects but leave the
+/// catalog's `/Type /Pages /Count N` declared
+/// total visible in the xref dictionaries.
+/// Phase 168 takes the maximum of the per-
+/// page scan and the largest declared
+/// `/Count` (after a `/Type /Pages` marker),
+/// so compressed PDFs surface their declared
+/// total via metadata rather than zero. The
+/// max() lean is the safe direction for a
+/// cap check: over-estimate = operator-
+/// visible error, under-estimate = silent
+/// bypass.
 pub(crate) fn count_pdf_pages_best_effort(bytes: &[u8]) -> usize {
+    let per_page = count_pdf_pages_per_page_scan(bytes);
+    let declared = count_pdf_pages_declared_max(bytes);
+    per_page.max(declared)
+}
+
+/// Phase 165 — original per-page byte scan.
+/// Kept as a named helper so Phase 168's
+/// max() composition reads obviously.
+fn count_pdf_pages_per_page_scan(bytes: &[u8]) -> usize {
     let needle = b"/Page";
     let mut count = 0usize;
     let mut i = 0usize;
@@ -328,6 +352,95 @@ pub(crate) fn count_pdf_pages_best_effort(bytes: &[u8]) -> usize {
         }
     }
     count
+}
+
+/// Phase 168 — declared-count scan. Walks the
+/// byte stream looking for `/Type /Pages`
+/// markers; within ~64 bytes after each
+/// match, looks for `/Count N` and parses
+/// the integer. Returns the maximum N seen.
+///
+/// Why look-ahead 64 bytes: PDF dictionaries
+/// can have `/Type /Pages` first with `/Count
+/// N` later in the same dict separated by
+/// `/Kids [...]` (which itself can be long
+/// but the count field is typically nearby).
+/// 64 is enough for typical Pages-node
+/// dictionaries that haven't been pretty-
+/// printed to extremes; longer Kids arrays
+/// push /Count out of reach but in those
+/// cases the per-page scan usually catches
+/// the count anyway.
+fn count_pdf_pages_declared_max(bytes: &[u8]) -> usize {
+    let pages_marker = b"/Pages";
+    let count_marker = b"/Count";
+    let mut max_declared = 0usize;
+    let mut i = 0usize;
+    while i + pages_marker.len() <= bytes.len() {
+        if &bytes[i..i + pages_marker.len()] == pages_marker {
+            // Confirm this is `/Type /Pages`
+            // (the parent / root node), not
+            // just `/Pages` as a reference.
+            let back_start = i.saturating_sub(20);
+            let prefix = &bytes[back_start..i];
+            if has_type_marker(prefix) {
+                // Look ahead up to 128 bytes
+                // for `/Count <digits>`.
+                let look_end = (i + pages_marker.len() + 128).min(bytes.len());
+                let look = &bytes[i..look_end];
+                if let Some(pos) = find_subslice(look, count_marker) {
+                    let rest = &look[pos + count_marker.len()..];
+                    if let Some(n) = parse_leading_integer_after_whitespace(rest) {
+                        if n > max_declared {
+                            max_declared = n;
+                        }
+                    }
+                }
+            }
+            i += pages_marker.len();
+        } else {
+            i += 1;
+        }
+    }
+    max_declared
+}
+
+/// Phase 168 — find a sub-slice in a slice.
+/// Returns the byte offset of the first
+/// match or None. Naive search; the slices
+/// we search are bounded (≤ 128 bytes) so
+/// this is fine.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    for i in 0..=(haystack.len() - needle.len()) {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Phase 168 — parse a leading integer after
+/// optional whitespace. Returns the parsed
+/// value or None if the input doesn't start
+/// with whitespace + digits.
+fn parse_leading_integer_after_whitespace(bytes: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    // Skip whitespace.
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    let start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if start == i {
+        return None;
+    }
+    let digits = std::str::from_utf8(&bytes[start..i]).ok()?;
+    digits.parse::<usize>().ok()
 }
 
 fn has_type_marker(prefix: &[u8]) -> bool {
@@ -1495,12 +1608,18 @@ mod tests {
     }
 
     #[test]
-    fn count_pdf_pages_does_not_count_pages_parent_node() {
+    fn count_pdf_pages_per_page_scan_does_not_count_pages_parent_node() {
         // `/Type /Pages` is the parent node,
-        // NOT a page. The byte-scan excludes it
-        // via the trailing-`s` check.
+        // NOT a page. The per-page byte-scan
+        // excludes it via the trailing-`s`
+        // check. Phase 168 — the declared-
+        // count scan picks up the /Count
+        // value, so the combined
+        // count_pdf_pages_best_effort returns
+        // the declared count.
         let body = b"<< /Type /Pages /Count 1 >>";
-        assert_eq!(count_pdf_pages_best_effort(body), 0);
+        assert_eq!(count_pdf_pages_per_page_scan(body), 0);
+        assert_eq!(count_pdf_pages_best_effort(body), 1);
     }
 
     #[test]
@@ -1514,6 +1633,158 @@ mod tests {
         // counted.
         let compact = b"<< /Type/Page /Parent 0 0 R >>";
         assert_eq!(count_pdf_pages_best_effort(compact), 1);
+    }
+
+    // ---- Phase 168 — declared-count scan ----
+
+    #[test]
+    fn declared_count_scan_reads_root_pages_count() {
+        // A compressed PDF would hide
+        // individual /Type /Page page objects
+        // inside FlateDecode streams, but the
+        // root catalog's `/Type /Pages /Count
+        // N` typically remains visible. The
+        // declared-count scan picks it up.
+        let body = b"%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Count 47 /Kids [...compressed...] >> endobj\n\
+%%EOF";
+        // per-page scan: zero (no individual
+        // /Type /Page in this uncompressed
+        // body).
+        assert_eq!(count_pdf_pages_per_page_scan(body), 0);
+        // declared-count: 47.
+        assert_eq!(count_pdf_pages_declared_max(body), 47);
+        // combined: max(0, 47) = 47.
+        assert_eq!(count_pdf_pages_best_effort(body), 47);
+    }
+
+    #[test]
+    fn declared_count_scan_handles_multiple_pages_nodes() {
+        // Large PDFs use a tree of /Type
+        // /Pages nodes; each inner one has
+        // its own /Count covering its
+        // subtree. Phase 168 takes the max
+        // across all /Count values. For a
+        // well-formed PDF the root /Count is
+        // the largest.
+        let body = b"\
+2 0 obj << /Type /Pages /Count 100 /Kids [3 0 R 4 0 R] >> endobj
+3 0 obj << /Type /Pages /Count 60 /Kids [...] >> endobj
+4 0 obj << /Type /Pages /Count 40 /Kids [...] >> endobj
+";
+        assert_eq!(count_pdf_pages_declared_max(body), 100);
+    }
+
+    #[test]
+    fn declared_count_scan_ignores_count_on_non_pages_dicts() {
+        // `/Count` outside a /Type /Pages
+        // dict shouldn't be picked up.
+        // Phase 168 requires the marker
+        // sequence in order.
+        let body = b"<< /Type /Outlines /Count 5 >>";
+        assert_eq!(count_pdf_pages_declared_max(body), 0);
+    }
+
+    #[test]
+    fn declared_count_scan_handles_compact_and_spaced_separators() {
+        // PDFs vary in whitespace; the
+        // scanner should tolerate the
+        // common shapes.
+        let compact = b"<< /Type /Pages/Count 12 >>";
+        let spaced = b"<< /Type /Pages  /Count   12   >>";
+        assert_eq!(count_pdf_pages_declared_max(compact), 12);
+        assert_eq!(count_pdf_pages_declared_max(spaced), 12);
+    }
+
+    #[test]
+    fn declared_count_scan_zero_when_count_field_too_far() {
+        // The look-ahead window is 128 bytes.
+        // A /Count placed beyond that window
+        // is missed; falls back to 0 (and
+        // the per-page scan or server cap
+        // catches the real count). This pins
+        // the documented edge case.
+        let mut body = b"<< /Type /Pages /Kids [".to_vec();
+        // Fill with 200 bytes of refs to
+        // push /Count out of the window.
+        for _ in 0..40 {
+            body.extend_from_slice(b" 999 0 R");
+        }
+        body.extend_from_slice(b" ] /Count 50 >>");
+        assert_eq!(count_pdf_pages_declared_max(&body), 0);
+    }
+
+    #[test]
+    fn declared_count_scan_ignores_malformed_count_value() {
+        // `/Count notanumber` — parse fails;
+        // the scanner returns 0 (not a
+        // panic).
+        let body = b"<< /Type /Pages /Count notanumber >>";
+        assert_eq!(count_pdf_pages_declared_max(body), 0);
+    }
+
+    #[test]
+    fn best_effort_max_combines_per_page_and_declared() {
+        // Both signals present, declared
+        // larger: max returns declared.
+        let body = b"\
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Count 100 /Kids [3 0 R 4 0 R 5 0 R] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+%%EOF";
+        assert_eq!(count_pdf_pages_per_page_scan(body), 3);
+        assert_eq!(count_pdf_pages_declared_max(body), 100);
+        assert_eq!(count_pdf_pages_best_effort(body), 100);
+    }
+
+    // ---- Phase 168 — find_subslice + parse_leading_integer_after_whitespace ----
+
+    #[test]
+    fn find_subslice_finds_first_match() {
+        assert_eq!(
+            find_subslice(b"abcXYZdef", b"XYZ"),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn find_subslice_returns_none_on_miss() {
+        assert_eq!(find_subslice(b"hello", b"world"), None);
+    }
+
+    #[test]
+    fn find_subslice_handles_empty_and_oversize_needles() {
+        assert_eq!(find_subslice(b"abc", b""), None);
+        assert_eq!(find_subslice(b"ab", b"abcdef"), None);
+    }
+
+    #[test]
+    fn parse_leading_integer_after_whitespace_strips_whitespace() {
+        assert_eq!(
+            parse_leading_integer_after_whitespace(b"  42 rest"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_leading_integer_after_whitespace(b"\t\n  7"),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn parse_leading_integer_after_whitespace_rejects_non_digit_start() {
+        assert_eq!(
+            parse_leading_integer_after_whitespace(b"abc"),
+            None
+        );
+        assert_eq!(
+            parse_leading_integer_after_whitespace(b" abc"),
+            None
+        );
+        assert_eq!(parse_leading_integer_after_whitespace(b""), None);
     }
 
     #[test]
