@@ -773,6 +773,29 @@ pub async fn loop_log(
     }
 }
 
+/// Mark a pending backlog story `Skipped`. Returns
+/// `(ok, message)`.
+pub async fn loop_skip(
+    socket_path: &Path,
+    story_id: String,
+) -> Result<(bool, String), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "loop-skip",
+        QueryPayload::LoopSkip { story_id },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::LoopControl { ok, message } => Ok((ok, message)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopControl, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

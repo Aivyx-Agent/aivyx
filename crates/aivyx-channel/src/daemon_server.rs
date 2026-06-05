@@ -2916,6 +2916,60 @@ async fn handle_query(
             };
             QueryResponsePayload::LoopProgressLog { notes }
         }
+        QueryPayload::LoopSkip { story_id } => {
+            let Some(backlog) = loop_backlog else {
+                return QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: "daemon has no loop backlog configured"
+                        .into(),
+                };
+            };
+            // Guard: only a pending story can be skipped — give a
+            // clear reason rather than a chain error.
+            match backlog.get(&story_id) {
+                None => QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: format!("unknown story `{story_id}`"),
+                },
+                Some(s)
+                    if !matches!(
+                        s.status,
+                        crate::loop_backlog::StoryStatus::Pending
+                    ) =>
+                {
+                    QueryResponsePayload::LoopControl {
+                        ok: false,
+                        message: format!(
+                            "story `{story_id}` is not pending \
+                             (already resolved)"
+                        ),
+                    }
+                }
+                Some(_) => {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    match backlog
+                        .mark_skipped(
+                            story_id.clone(),
+                            now_ms,
+                            Some("operator skip".into()),
+                        )
+                        .await
+                    {
+                        Ok(_) => QueryResponsePayload::LoopControl {
+                            ok: true,
+                            message: format!("skipped story `{story_id}`"),
+                        },
+                        Err(e) => QueryResponsePayload::LoopControl {
+                            ok: false,
+                            message: format!("skip failed: {e}"),
+                        },
+                    }
+                }
+            }
+        }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
             profile: profile_summary_from_profile(profile),
         },

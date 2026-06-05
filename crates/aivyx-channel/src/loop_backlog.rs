@@ -691,6 +691,20 @@ mod tests {
     }
 
     #[test]
+    fn cannot_skip_an_already_resolved_story() {
+        let c = chain();
+        c.append_created("s".into(), 1, 0, "t".into(), "".into())
+            .unwrap();
+        c.append_done("s".into(), 2).unwrap();
+        // A done story can't be skipped (the Phase 177 `loop skip`
+        // path relies on this guard).
+        assert!(matches!(
+            c.append_skipped("s".into(), 3, None),
+            Err(BacklogError::InvalidTransition { current: "Done", .. })
+        ));
+    }
+
+    #[test]
     fn completing_unknown_story_errors() {
         let c = chain();
         assert!(matches!(

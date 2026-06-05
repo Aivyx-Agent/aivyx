@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, loop_add, loop_list, loop_log, loop_start,
-    loop_status, loop_stop,
+    daemon_is_running, loop_add, loop_list, loop_log, loop_skip,
+    loop_start, loop_status, loop_stop,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::loop_backlog::{Story, StoryStatus};
@@ -95,6 +95,17 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                 .map_err(|e| format!("loop log failed: {e}"))?;
             print!("{}", render_log(&notes));
             Ok(())
+        }
+        LoopSubcommand::Skip { story_id } => {
+            let (ok, message) = loop_skip(&socket_path, story_id)
+                .await
+                .map_err(|e| format!("loop skip failed: {e}"))?;
+            println!("{message}");
+            if ok {
+                Ok(())
+            } else {
+                Err("loop skip did not take effect".to_string())
+            }
         }
     }
 }

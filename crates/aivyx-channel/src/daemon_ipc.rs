@@ -263,6 +263,12 @@ pub enum QueryPayload {
         #[serde(default)]
         limit: Option<u32>,
     },
+    /// Phase 177 — mark a pending backlog story `Skipped` (the
+    /// operator prunes a stuck / no-longer-wanted story). Reuses
+    /// the `LoopControl` response.
+    LoopSkip {
+        story_id: String,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in

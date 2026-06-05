@@ -1444,6 +1444,8 @@ enum LoopSubcommand {
     Status,
     /// `aivyx loop log [--limit <n>]`
     Log { limit: Option<u32> },
+    /// `aivyx loop skip <story-id>`
+    Skip { story_id: String },
 }
 
 /// Phase 119 Task 6 — `aivyx tool-relevance <subcommand>` variants.
@@ -2181,6 +2183,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "list" => LoopSubcommand::List,
             "stop" => LoopSubcommand::Stop,
             "status" => LoopSubcommand::Status,
+            "skip" => {
+                let story_id = args.get(2).ok_or_else(|| {
+                    "`aivyx loop skip` requires a <story-id>".to_string()
+                })?;
+                if args.len() > 3 {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx loop skip`: \
+                         `{}`",
+                        args[3]
+                    ));
+                }
+                LoopSubcommand::Skip {
+                    story_id: story_id.clone(),
+                }
+            }
             "log" => {
                 let mut limit: Option<u32> = None;
                 let mut idx = 2;
@@ -2252,14 +2269,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "" => {
                 return Err(
                     "`aivyx loop` requires a subcommand: add | list | \
-                     start | status | stop | log"
+                     skip | start | status | stop | log"
                         .to_string(),
                 );
             }
             other => {
                 return Err(format!(
                     "unknown `aivyx loop` subcommand `{other}` \
-                     (expected: add | list | start | status | stop | log)"
+                     (expected: add | list | skip | start | status | \
+                     stop | log)"
                 ));
             }
         };
@@ -8227,6 +8245,35 @@ mod tests {
             err.contains("requires a proposal id"),
             "error: {err}"
         );
+    }
+
+    // ---- Phase 177 — `aivyx loop skip` parsing ----------------
+
+    #[test]
+    fn loop_skip_parses_story_id() {
+        let parsed =
+            parse_cli_args_from(&argv(&["loop", "skip", "ls-abc"]))
+                .expect("loop skip must parse");
+        match parsed.mode {
+            CliMode::Loop(LoopSubcommand::Skip { story_id }) => {
+                assert_eq!(story_id, "ls-abc");
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loop_skip_without_id_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["loop", "skip"]))
+            .expect_err("missing story id must error");
+        assert!(err.contains("requires a <story-id>"), "error: {err}");
+    }
+
+    #[test]
+    fn loop_unknown_subcommand_lists_skip() {
+        let err = parse_cli_args_from(&argv(&["loop", "frobnicate"]))
+            .expect_err("unknown subcommand must error");
+        assert!(err.contains("skip"), "help should mention skip: {err}");
     }
 
     #[test]
