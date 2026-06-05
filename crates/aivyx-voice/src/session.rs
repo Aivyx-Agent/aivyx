@@ -1320,21 +1320,38 @@ async fn read_body_with_stall(
 /// Phase 166 — true iff a `reqwest::Error`
 /// represents a transient client-side
 /// condition worth retrying (timeout, connect
-/// failure). HTTP-status errors (4xx / 5xx)
-/// are NOT considered transient — those are
-/// operator-fixable (auth, content, server
-/// rate-limit) and retrying would mask the
-/// real cause. Pure substrate so the
-/// classification can be tested without going
-/// through `reqwest::Client`.
+/// failure). HTTP-status errors arrive as
+/// `Ok(Response)` with the status set, so
+/// this check is for the err-path only. Pure
+/// substrate so the classification can be
+/// tested without going through
+/// `reqwest::Client`.
 fn is_transient_reqwest_error(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect()
+}
+
+/// Phase 169 — true iff an HTTP response
+/// status code represents a transient server-
+/// side condition worth retrying. 503
+/// (Service Unavailable) and 429 (Too Many
+/// Requests) are the two retry-eligible
+/// codes; other 4xx / 5xx are operator-
+/// fixable (auth, content, permanent server
+/// errors) and bypass retry. Pure substrate.
+fn is_transient_http_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
 }
 
 /// Phase 166 — perform the GET with retry on
 /// transient transport errors. Backoff
 /// doubles per attempt; `retry_count = 0`
 /// means "try once" (the Phase 161 behavior).
+///
+/// Phase 169 — retry classification extended
+/// to include 503 / 429 HTTP responses
+/// alongside the existing timeout / connect-
+/// error path.
 async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -1344,9 +1361,25 @@ async fn send_with_retry(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let mut attempt: u32 = 0;
     loop {
-        match client.get(url).headers(headers.clone()).send().await {
-            Ok(resp) => return Ok(resp),
-            Err(e) if attempt < retry_count && is_transient_reqwest_error(&e) => {
+        let result = client.get(url).headers(headers.clone()).send().await;
+        match result {
+            Ok(resp) => {
+                let status = resp.status();
+                if attempt < retry_count && is_transient_http_status(status) {
+                    let delay_ms =
+                        backoff_ms.saturating_mul(1u64 << attempt);
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        delay_ms,
+                    ))
+                    .await;
+                    attempt += 1;
+                    continue;
+                }
+                return Ok(resp);
+            }
+            Err(e)
+                if attempt < retry_count && is_transient_reqwest_error(&e) =>
+            {
                 let delay_ms = backoff_ms.saturating_mul(1u64 << attempt);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms))
                     .await;
@@ -2423,6 +2456,57 @@ url_read_stall_secs = 5
         let cfg = VoiceImageConfig::default();
         let val: u64 = cfg.url_read_stall_secs;
         assert_eq!(val, 0);
+    }
+
+    // ---- Phase 169 — 503/429 retry classification ----
+
+    #[test]
+    fn is_transient_http_status_classifies_503_and_429_as_transient() {
+        assert!(is_transient_http_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(is_transient_http_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
+    }
+
+    #[test]
+    fn is_transient_http_status_does_not_retry_other_5xx() {
+        // 500 Internal Server Error, 502 Bad
+        // Gateway, 504 Gateway Timeout — none
+        // of these auto-retry. Operators can
+        // manually retry; retrying programmatically
+        // would mask permanent server issues.
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::BAD_GATEWAY
+        ));
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::GATEWAY_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn is_transient_http_status_does_not_retry_4xx_other_than_429() {
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::UNAUTHORIZED
+        ));
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::FORBIDDEN
+        ));
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::NOT_FOUND
+        ));
+    }
+
+    #[test]
+    fn is_transient_http_status_does_not_retry_2xx_or_3xx() {
+        assert!(!is_transient_http_status(reqwest::StatusCode::OK));
+        assert!(!is_transient_http_status(
+            reqwest::StatusCode::FOUND
+        ));
     }
 
     #[test]
