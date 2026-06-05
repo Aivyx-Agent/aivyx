@@ -2140,6 +2140,13 @@ pub struct LoopConfig {
     /// `0` disables injection (pre-Phase-175 behaviour). Default
     /// [`DEFAULT_LOOP_PROGRESS_INJECT_COUNT`].
     pub progress_inject_count: u32,
+    /// Phase 176 — per-run token-budget cap. A run stops once the
+    /// total token usage (input + output) of every turn that
+    /// completes during the run exceeds this. `None` → no token
+    /// cap (`max_iterations` / `max_run_secs` still apply). It is
+    /// a token cap, not a dollar cap, and counts all turns in the
+    /// run window (see the Phase 176 doc).
+    pub max_run_tokens: Option<u64>,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -3674,6 +3681,9 @@ struct RawLoop {
     // Phase 175 — progress-log injection count.
     #[serde(default)]
     progress_inject_count: Option<u32>,
+    // Phase 176 — per-run token-budget cap.
+    #[serde(default)]
+    max_run_tokens: Option<u64>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -6884,7 +6894,8 @@ fn build_loop_config(
         || raw.gate_timeout_secs.is_some()
         || raw.working_dir.is_some()
         || raw.max_run_secs.is_some()
-        || raw.progress_inject_count.is_some();
+        || raw.progress_inject_count.is_some()
+        || raw.max_run_tokens.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -6911,6 +6922,7 @@ fn build_loop_config(
     let progress_inject_count = raw
         .progress_inject_count
         .unwrap_or(DEFAULT_LOOP_PROGRESS_INJECT_COUNT);
+    let max_run_tokens = raw.max_run_tokens.filter(|n| *n > 0);
 
     if enabled {
         if max_iterations == 0 {
@@ -6943,6 +6955,7 @@ fn build_loop_config(
         working_dir,
         max_run_secs,
         progress_inject_count,
+        max_run_tokens,
     }))
 }
 

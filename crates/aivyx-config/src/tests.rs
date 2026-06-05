@@ -7796,6 +7796,32 @@ fn loop_progress_inject_count_parse_and_default() {
     drop(env);
 }
 
+/// Phase 176 — max_run_tokens parses; absent → None; `0`
+/// collapses to None (disabled), like max_run_secs.
+#[test]
+fn loop_max_run_tokens_parse_and_disable() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_run_tokens = 500000\n",
+        "loop-tokens",
+    );
+    assert_eq!(
+        cfg.loop_config.expect("present").max_run_tokens,
+        Some(500_000)
+    );
+    // Absent → None.
+    let cfg2 =
+        load_with_toml("\n[loop]\nenabled = true\n", "loop-tokens-none");
+    assert!(cfg2.loop_config.expect("present").max_run_tokens.is_none());
+    // 0 disables.
+    let cfg3 = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_run_tokens = 0\n",
+        "loop-tokens-zero",
+    );
+    assert!(cfg3.loop_config.expect("present").max_run_tokens.is_none());
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →

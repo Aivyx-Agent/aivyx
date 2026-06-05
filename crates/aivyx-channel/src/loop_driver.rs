@@ -138,6 +138,23 @@ pub async fn read_progress_notes(
     }
 }
 
+/// Phase 176 — sum `input_tokens + output_tokens` over every
+/// `TurnEnded` event in a slice of audit entries. Pure so the
+/// budget accounting is unit-testable without a daemon. The
+/// driver passes the run-window slice (entries since the run's
+/// start-seq) so the total is "tokens spent during this run."
+pub fn sum_turn_usage(entries: &[aivyx_audit::SignedEntry]) -> u64 {
+    entries
+        .iter()
+        .filter_map(|e| match &e.event {
+            aivyx_audit::AuditEvent::TurnEnded { usage, .. } => Some(
+                usage.input_tokens as u64 + usage.output_tokens as u64,
+            ),
+            _ => None,
+        })
+        .sum()
+}
+
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
 #[derive(
@@ -746,5 +763,60 @@ mod tests {
         let two = prompt.find("note 2").unwrap();
         let four = prompt.find("note 4").unwrap();
         assert!(two < four, "oldest of the window renders first");
+    }
+
+    // ---- Phase 176 — token-budget accounting ------------------
+
+    fn turn_ended_entry(seq: u64, input: u32, output: u32) -> aivyx_audit::SignedEntry {
+        aivyx_audit::SignedEntry {
+            seq,
+            appended_at: std::time::UNIX_EPOCH,
+            event: aivyx_audit::AuditEvent::TurnEnded {
+                turn_id: aivyx_core::TurnId::new(),
+                outcome: aivyx_core::TurnOutcomeSummary::Completed,
+                tool_calls_made: 0,
+                duration: Duration::from_millis(1),
+                usage: aivyx_core::TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    ..Default::default()
+                },
+            },
+            prev_mac: [0u8; 32],
+            mac: [0u8; 32],
+        }
+    }
+
+    fn non_turn_entry(seq: u64) -> aivyx_audit::SignedEntry {
+        aivyx_audit::SignedEntry {
+            seq,
+            appended_at: std::time::UNIX_EPOCH,
+            event: aivyx_audit::AuditEvent::MemoryAccess {
+                turn_id: aivyx_core::TurnId::new(),
+                operation: aivyx_audit::MemoryOperation::Write,
+                scope: aivyx_capability::Scope::parse("memory.write")
+                    .expect("known base"),
+                query_or_key: "k".into(),
+            },
+            prev_mac: [0u8; 32],
+            mac: [0u8; 32],
+        }
+    }
+
+    #[test]
+    fn sum_turn_usage_sums_input_plus_output_over_turn_ended_only() {
+        let entries = vec![
+            turn_ended_entry(0, 100, 50),
+            non_turn_entry(1), // ignored
+            turn_ended_entry(2, 200, 25),
+        ];
+        // (100+50) + (200+25) = 375.
+        assert_eq!(sum_turn_usage(&entries), 375);
+    }
+
+    #[test]
+    fn sum_turn_usage_empty_is_zero() {
+        assert_eq!(sum_turn_usage(&[]), 0);
+        assert_eq!(sum_turn_usage(&[non_turn_entry(0)]), 0);
     }
 }
