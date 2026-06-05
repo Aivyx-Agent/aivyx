@@ -3535,6 +3535,18 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 171 — Loose Ends Bundle (GIF/WebP Clipboard + calendarList Cache TTL Knob)
+
+**See [PHASE_171.md](PHASE_171.md).** Capstone phase
+before extended review. Two small substrate
+cleanups: Phase 170's just-shipped clipboard
+signature carry-over (GIF + WebP byte signature
+recognition added to infer_clipboard_media_type)
+and Phase 158's long-stale calendarList cache TTL
+knob (CalendarClient builder + env var override
+for the 5-min hardcoded default). Zero new
+workspace deps.
+
 ## Phase 170 — Voice Polish Bundle (Mid-Recording /image + Clipboard Source + Abort UX Knob)
 
 **Frozen — see [PHASE_170.md](PHASE_170.md).** Three deferred
