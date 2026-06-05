@@ -121,7 +121,10 @@ impl Tool for DriveRecentActivity {
 
         let now = Utc::now();
         let window_start = now - Duration::hours(parsed.window_hours as i64);
-        let filter = format!("time >= \"{}\"", window_start.to_rfc3339());
+        // Phase 167 — compose the filter with
+        // optional action-type clauses.
+        let filter =
+            compose_filter(&window_start.to_rfc3339(), &parsed.action_type_filter);
 
         let body = json!({
             "consolidationStrategy": {"legacy": {}},
@@ -181,16 +184,46 @@ fn input_schema() -> Value {
                 "minimum": 1,
                 "maximum": 100,
                 "description": "Maximum activities to return. Default 25, capped at 100."
+            },
+            "action_type_filter": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Phase 167 — restrict results to one or more action types. Accepts case-insensitive variants of: edit, create, rename, delete, move, comment, permissionChange, restore, reference, settingsChange. Builds Activity API `detail.action_detail_case:CASE` filter clauses. Empty array or omitted = no action-type filter."
             }
         },
         "additionalProperties": false
     })
 }
 
+/// Phase 167 — Activity API's action-type
+/// enumeration. Hand-maintained; new types
+/// added after Phase 167 fail-closed until
+/// added here. Each entry maps the operator-
+/// facing variant (case-folded) to the
+/// upper-snake-case form the API expects in
+/// the filter DSL.
+pub(crate) const SUPPORTED_ACTION_TYPES: &[(&str, &str)] = &[
+    ("edit", "EDIT"),
+    ("create", "CREATE"),
+    ("rename", "RENAME"),
+    ("delete", "DELETE"),
+    ("move", "MOVE"),
+    ("comment", "COMMENT"),
+    ("permissionchange", "PERMISSION_CHANGE"),
+    ("restore", "RESTORE"),
+    ("reference", "REFERENCE"),
+    ("settingschange", "SETTINGS_CHANGE"),
+];
+
 #[derive(Debug)]
 struct ParsedInput {
     window_hours: u64,
     max_results: u64,
+    /// Phase 167 — upper-snake-case action
+    /// names already validated against
+    /// `SUPPORTED_ACTION_TYPES`. Empty Vec =
+    /// no action-type filter.
+    action_type_filter: Vec<String>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -220,10 +253,86 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
     }
     let max_results = max_results.min(MAX_RESULTS_CAP);
 
+    let action_type_filter = parse_action_type_filter(obj.get("action_type_filter"))?;
+
     Ok(ParsedInput {
         window_hours,
         max_results,
+        action_type_filter,
     })
+}
+
+/// Phase 167 — parse and normalize the
+/// operator's `action_type_filter` input.
+/// Returns a Vec of upper-snake-case API names,
+/// or an empty Vec when the input is absent /
+/// null / empty array. Rejects non-array
+/// inputs and unknown type names with a clear
+/// error message listing the supported types.
+pub(crate) fn parse_action_type_filter(
+    v: Option<&Value>,
+) -> Result<Vec<String>, String> {
+    let arr = match v {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => {
+            return Err(
+                "`action_type_filter` must be an array of strings".to_string(),
+            );
+        }
+    };
+    if arr.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<String> = Vec::with_capacity(arr.len());
+    for item in arr {
+        let raw = item
+            .as_str()
+            .ok_or_else(|| {
+                "`action_type_filter` entries must be strings".to_string()
+            })?
+            .trim()
+            .to_ascii_lowercase();
+        let resolved = SUPPORTED_ACTION_TYPES
+            .iter()
+            .find(|(folded, _)| *folded == raw.as_str())
+            .map(|(_, api)| api.to_string());
+        match resolved {
+            Some(api) => {
+                if !out.contains(&api) {
+                    out.push(api);
+                }
+            }
+            None => {
+                let supported: Vec<&str> = SUPPORTED_ACTION_TYPES
+                    .iter()
+                    .map(|(folded, _)| *folded)
+                    .collect();
+                return Err(format!(
+                    "unsupported action_type {raw:?}; supported: {}",
+                    supported.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Phase 167 — compose the `filter` field
+/// for the Activity API query body. Joins the
+/// time-window clause with any
+/// `detail.action_detail_case:CASE` clauses
+/// using space-separated AND syntax.
+pub(crate) fn compose_filter(
+    window_start_rfc3339: &str,
+    action_types: &[String],
+) -> String {
+    let mut parts: Vec<String> =
+        vec![format!("time >= \"{window_start_rfc3339}\"")];
+    for case in action_types {
+        parts.push(format!("detail.action_detail_case:{case}"));
+    }
+    parts.join(" ")
 }
 
 /// Phase 159 — shape a raw Activity API entry
@@ -566,5 +675,132 @@ mod tests {
         let shaped = shape_activity(&raw);
         assert_eq!(shaped["target_title"], json!("First"));
         assert_eq!(shaped["target_id"], json!("items/first"));
+    }
+
+    // ---- Phase 167 — action_type_filter ----
+
+    #[test]
+    fn parse_action_type_filter_absent_yields_empty() {
+        let p = parse_input(&json!({})).unwrap();
+        assert!(p.action_type_filter.is_empty());
+    }
+
+    #[test]
+    fn parse_action_type_filter_null_yields_empty() {
+        let p = parse_input(&json!({"action_type_filter": null})).unwrap();
+        assert!(p.action_type_filter.is_empty());
+    }
+
+    #[test]
+    fn parse_action_type_filter_empty_array_yields_empty() {
+        let p = parse_input(&json!({"action_type_filter": []})).unwrap();
+        assert!(p.action_type_filter.is_empty());
+    }
+
+    #[test]
+    fn parse_action_type_filter_normalizes_case_to_api_form() {
+        let p = parse_input(&json!({
+            "action_type_filter": ["edit", "CREATE", "Rename"]
+        }))
+        .unwrap();
+        assert_eq!(p.action_type_filter, vec!["EDIT", "CREATE", "RENAME"]);
+    }
+
+    #[test]
+    fn parse_action_type_filter_normalizes_camel_case_to_snake() {
+        // permissionChange (camel) → PERMISSION_CHANGE (API).
+        let p = parse_input(&json!({
+            "action_type_filter": ["permissionChange", "settingsChange"]
+        }))
+        .unwrap();
+        assert_eq!(
+            p.action_type_filter,
+            vec!["PERMISSION_CHANGE", "SETTINGS_CHANGE"]
+        );
+    }
+
+    #[test]
+    fn parse_action_type_filter_dedupes() {
+        let p = parse_input(&json!({
+            "action_type_filter": ["edit", "EDIT", "Edit", "create"]
+        }))
+        .unwrap();
+        assert_eq!(p.action_type_filter, vec!["EDIT", "CREATE"]);
+    }
+
+    #[test]
+    fn parse_action_type_filter_rejects_unknown_type() {
+        let err = parse_input(&json!({
+            "action_type_filter": ["nuke"]
+        }))
+        .unwrap_err();
+        assert!(err.contains("unsupported"));
+        assert!(err.contains("nuke"));
+        assert!(err.contains("edit"));
+    }
+
+    #[test]
+    fn parse_action_type_filter_rejects_non_string_entry() {
+        let err = parse_input(&json!({
+            "action_type_filter": ["edit", 42]
+        }))
+        .unwrap_err();
+        assert!(err.contains("must be strings"));
+    }
+
+    #[test]
+    fn parse_action_type_filter_rejects_non_array_input() {
+        let err = parse_input(&json!({
+            "action_type_filter": "edit"
+        }))
+        .unwrap_err();
+        assert!(err.contains("must be an array"));
+    }
+
+    // ---- Phase 167 — compose_filter ----
+
+    #[test]
+    fn compose_filter_window_only() {
+        let s =
+            compose_filter("2026-06-05T10:00:00+00:00", &[]);
+        assert_eq!(s, "time >= \"2026-06-05T10:00:00+00:00\"");
+    }
+
+    #[test]
+    fn compose_filter_window_plus_one_action_type() {
+        let s = compose_filter(
+            "2026-06-05T10:00:00+00:00",
+            &["EDIT".to_string()],
+        );
+        assert_eq!(
+            s,
+            "time >= \"2026-06-05T10:00:00+00:00\" detail.action_detail_case:EDIT"
+        );
+    }
+
+    #[test]
+    fn compose_filter_window_plus_multiple_action_types() {
+        let s = compose_filter(
+            "2026-06-05T10:00:00+00:00",
+            &["EDIT".to_string(), "CREATE".to_string()],
+        );
+        assert_eq!(
+            s,
+            "time >= \"2026-06-05T10:00:00+00:00\" \
+             detail.action_detail_case:EDIT \
+             detail.action_detail_case:CREATE"
+        );
+    }
+
+    #[test]
+    fn supported_action_types_pinned_to_phase_167_list() {
+        // Regression pin so a future widening
+        // is caught at exit-doc time.
+        let folded: Vec<&str> =
+            SUPPORTED_ACTION_TYPES.iter().map(|(f, _)| *f).collect();
+        assert_eq!(folded.len(), 10);
+        assert!(folded.contains(&"edit"));
+        assert!(folded.contains(&"permissionchange"));
+        assert!(folded.contains(&"settingschange"));
     }
 }
