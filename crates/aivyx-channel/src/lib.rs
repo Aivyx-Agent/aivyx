@@ -53,6 +53,7 @@ pub mod cooccurrence_ledger;
 /// is the pure detector; `correction_ledger` the durable view;
 /// `correction_consolidation` the proposal actuator.
 pub mod correction_detect;
+pub mod correction_ledger;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;
 pub mod memory_gc_tool;

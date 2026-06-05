@@ -3804,6 +3804,22 @@ async fn run_async(
             ),
         )
     });
+    // Phase 172 — the durable correction ledger. Zero-config,
+    // same condition + rationale as the helpfulness ledger (the
+    // correction signal only exists when auto-recall is on).
+    // Folded + pruned on the same cadence; consumed by the Phase
+    // 172 correction-consolidation pass.
+    let correction_ledger: Option<
+        Arc<
+            aivyx_channel::correction_ledger::PersistentCorrectionLedger,
+        >,
+    > = recall_log.as_ref().map(|_| {
+        Arc::new(
+            aivyx_channel::correction_ledger::PersistentCorrectionLedger::new(
+                storage.domain(KeyDomain::CorrectionLedger),
+            ),
+        )
+    });
     // Phase 80 — proactive dedup log, created when the
     // `[proactive]` section is armed (enabled). The reflection
     // cron pass uses it for cross-cycle dedup + the cap.
@@ -5543,6 +5559,9 @@ async fn run_async(
             // Phase 83 — durable cross-session co-occurrence
             // ledger; folded by the same pass.
             cooccurrence_ledger: cooccurrence_ledger.clone(),
+            // Phase 172 — durable correction ledger; folded by
+            // the same recall-feedback pass.
+            correction_ledger: correction_ledger.clone(),
             // Phase 79 (Q4a) — same handle the adaptive refiner
             // writes; the GetLearningInsights handler reads it.
             persona_selection_stat: persona_selection_stat.clone(),

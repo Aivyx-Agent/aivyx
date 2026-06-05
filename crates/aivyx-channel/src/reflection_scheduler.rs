@@ -219,6 +219,19 @@ pub struct RecallFeedbackDeps {
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    /// Phase 172 — the durable correction ledger. The pass folds
+    /// each window's per-topic correction count (the
+    /// `completed`-then-rapid-followup proxy from
+    /// `crate::correction_detect`) into it, after the Phase
+    /// 82/83 folds so recall-feedback + both existing ledgers
+    /// stay byte-identical, and prunes on the same cadence.
+    /// `None` → no fold (a passive add-on; recall-feedback is
+    /// unaffected).
+    pub correction_ledger: Option<
+        std::sync::Arc<
+            crate::correction_ledger::PersistentCorrectionLedger,
+        >,
+    >,
     /// Phase 93 — flip `correlate_detailed` from the
     /// pre-Phase-93 structural-only behaviour (the default,
     /// `false`) to per-hit judgment override with structural
@@ -1086,6 +1099,50 @@ async fn run_recall_feedback_pass(
                                 "aivyx cooccurrence: folded \
                                  {folded} pair(s), pruned \
                                  {pruned}",
+                            );
+                        }
+                    }
+                }
+
+                // Phase 172 — fold this window's per-topic
+                // correction counts (the completed-then-rapid-
+                // followup proxy) into the durable correction
+                // ledger. After the Phase 82/83 folds, so
+                // recall-feedback AND both existing ledgers are
+                // byte-identical; a passive add-on, absent →
+                // skipped. Distinct actuator from helpfulness:
+                // it counts reworks, not net helpfulness.
+                if let Some(ledger) = &deps.correction_ledger {
+                    let tally =
+                        crate::correction_detect::detect_corrections(
+                            &recalls, summaries,
+                        );
+                    let count_by_topic: Vec<(String, f32)> = tally
+                        .ranked()
+                        .into_iter()
+                        .map(|(topic, count)| {
+                            (topic, count as f32)
+                        })
+                        .collect();
+                    let folded = count_by_topic.len();
+                    if folded > 0 {
+                        if let Err(e) = ledger
+                            .record_window(&count_by_topic, now_secs)
+                            .await
+                        {
+                            eprintln!(
+                                "aivyx correction-ledger: schedule \
+                                 {:?} fold error: {e}",
+                                sched.name,
+                            );
+                        } else {
+                            let pruned = ledger
+                                .prune(now_secs)
+                                .await
+                                .unwrap_or(0);
+                            eprintln!(
+                                "aivyx correction-ledger: folded \
+                                 {folded} topic(s), pruned {pruned}",
                             );
                         }
                     }
@@ -2554,6 +2611,7 @@ mod tests {
             gc_retain_secs: 2_000,
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
+            correction_ledger: None,
             use_judgment_signal: false,
         };
 
@@ -2723,6 +2781,7 @@ mod tests {
             gc_retain_secs: 2_000,
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
+            correction_ledger: None,
             // Phase 93 — the knob under test.
             use_judgment_signal: true,
         };
@@ -2887,6 +2946,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: Some(Arc::clone(&ledger)),
             cooccurrence_ledger: None,
+            correction_ledger: None,
             use_judgment_signal: false,
         };
 
@@ -2931,6 +2991,169 @@ mod tests {
             e2.ewma_score
         );
         assert_eq!(e2.samples, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 172 — correction-ledger fold-in -----------------
+
+    #[tokio::test]
+    async fn correction_ledger_folds_only_corrected_turns() {
+        use crate::correction_ledger::PersistentCorrectionLedger;
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-correction-fold-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([172u8; 32]),
+        )
+        .await
+        .unwrap();
+
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let ledger = Arc::new(PersistentCorrectionLedger::new(
+            store.domain(KeyDomain::CorrectionLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"correction-fold-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> =
+            Arc::new(InMemoryMemory::new());
+
+        // Turn t0 recalls `auth`, completes, and is followed
+        // within the window by t1 (same session) → a CORRECTION.
+        // Turn t2 recalls `db`, completes cleanly, NO quick
+        // follow-up → not a correction. Only `auth` should fold.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let auth_seq =
+            memory.put("auth", "auth note").await.unwrap();
+        let db_seq = memory.put("db", "db note").await.unwrap();
+        recall_log
+            .append(&RecallEvent {
+                ts_secs: 1000,
+                session_id: s,
+                hits: vec![RecallHit {
+                    topic: "auth".into(),
+                    seq: auth_seq,
+                    score: 0.9,
+                    cluster: false,
+                    judgment: None,
+                }],
+            })
+            .await
+            .unwrap();
+        recall_log
+            .append(&RecallEvent {
+                ts_secs: 5000,
+                session_id: s,
+                hits: vec![RecallHit {
+                    topic: "db".into(),
+                    seq: db_seq,
+                    score: 0.9,
+                    cluster: false,
+                    judgment: None,
+                }],
+            })
+            .await
+            .unwrap();
+
+        let summaries: Vec<OutcomeSummary> = vec![
+            // t0 recalled auth, completed, followed 5s later by t1.
+            OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: "t0".into(),
+                started_at_unix_ms: 1000 * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 1000,
+            },
+            OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: "t1".into(),
+                started_at_unix_ms: 1006 * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 1000,
+            },
+            // t2 recalled db, completed, no quick follow-up.
+            OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: "t2".into(),
+                started_at_unix_ms: 5000 * 1000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 1000,
+            },
+        ];
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: None,
+            cooccurrence_ledger: None,
+            correction_ledger: Some(Arc::clone(&ledger)),
+            use_judgment_signal: false,
+        };
+
+        run_recall_feedback_pass(
+            &deps,
+            &sched,
+            &summaries,
+            1_000_000_000,
+        )
+        .await;
+
+        // `auth` folded one correction; `db` never folds.
+        let auth = ledger
+            .topic_corrections("auth", 1_000_000)
+            .await
+            .unwrap()
+            .expect("auth corrected");
+        assert!((auth.ewma_count - 1.0).abs() < 1e-3);
+        assert_eq!(auth.samples, 1);
+        assert!(
+            ledger
+                .topic_corrections("db", 1_000_000)
+                .await
+                .unwrap()
+                .is_none(),
+            "a clean turn with no quick follow-up is never a \
+             correction"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3050,6 +3273,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: None,
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            correction_ledger: None,
             use_judgment_signal: false,
         };
 
@@ -3265,6 +3489,7 @@ mod tests {
             gc_retain_secs: 100_000_000_000,
             helpfulness_ledger: Some(Arc::clone(&help)),
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
+            correction_ledger: None,
             use_judgment_signal: false,
         };
         run_recall_feedback_pass(
