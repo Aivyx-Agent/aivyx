@@ -1230,6 +1230,13 @@ async fn load_image_for_attach(
     if path_or_url.is_empty() {
         return Err("path must not be empty".to_string());
     }
+    // Phase 170 — special-case the literal
+    // `clipboard` token. Reads from the
+    // platform clipboard tool and infers MIME
+    // from the byte prefix.
+    if path_or_url == "clipboard" {
+        return load_image_from_clipboard().await;
+    }
     if is_url(path_or_url) {
         return fetch_image_url(path_or_url, cfg).await;
     }
@@ -1573,6 +1580,119 @@ async fn head_precheck_size(
 /// session loop.
 pub(crate) fn mid_recording_image_command(line: &str) -> bool {
     line.starts_with("/image ") && !line.trim_start_matches("/image ").is_empty()
+}
+
+/// Phase 170 — describes the platform
+/// clipboard tool selection. Pure substrate so
+/// the platform-detection logic can be tested
+/// without spawning a process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClipboardCommand {
+    pub program: &'static str,
+    pub args: Vec<&'static str>,
+}
+
+/// Phase 170 — pick the platform clipboard
+/// tool for image reads. Wayland operators
+/// use `wl-paste`; X11 falls back to
+/// `xclip`; macOS uses `pbpaste -Prefer raw`
+/// (honest scope risk: pbpaste support for
+/// image bytes is fragile).
+pub(crate) fn select_clipboard_command() -> ClipboardCommand {
+    #[cfg(target_os = "macos")]
+    {
+        ClipboardCommand {
+            program: "pbpaste",
+            args: vec!["-Prefer", "raw"],
+        }
+    }
+    #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+    {
+        // Prefer wl-paste when Wayland session
+        // is detected; fall back to xclip
+        // otherwise. The selection happens at
+        // runtime via env var WAYLAND_DISPLAY.
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            ClipboardCommand {
+                program: "wl-paste",
+                args: vec!["--type", "image/png"],
+            }
+        } else {
+            ClipboardCommand {
+                program: "xclip",
+                args: vec!["-selection", "clipboard", "-t", "image/png", "-o"],
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        // Fallback for other platforms: try a
+        // standard-ish tool name; the spawn
+        // will surface a clear error.
+        ClipboardCommand {
+            program: "wl-paste",
+            args: vec!["--type", "image/png"],
+        }
+    }
+}
+
+/// Phase 170 — infer the image MIME type from
+/// the byte prefix. Recognizes PNG (0x89 50
+/// 4E 47) and JPEG (0xFF D8). Returns None for
+/// anything else; caller surfaces the honest
+/// "unrecognized clipboard image type" error.
+pub(crate) fn infer_clipboard_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 4 && &bytes[..4] == b"\x89PNG" {
+        Some("image/png")
+    } else if bytes.len() >= 2 && &bytes[..2] == b"\xff\xd8" {
+        Some("image/jpeg")
+    } else {
+        None
+    }
+}
+
+/// Phase 170 — shell out to the platform
+/// clipboard tool and return the image bytes
+/// plus inferred MIME type. Surfaces a clear
+/// error message for missing tool, non-zero
+/// exit, empty output, or unrecognized image
+/// signature.
+async fn load_image_from_clipboard() -> Result<(String, Vec<u8>), String> {
+    let cmd = select_clipboard_command();
+    let output = tokio::process::Command::new(cmd.program)
+        .args(&cmd.args)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "clipboard read via {prog:?}: spawn failed: {e}. \
+                 Install the platform clipboard tool or use \
+                 `/image <path>` instead.",
+                prog = cmd.program
+            )
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "clipboard read via {prog:?} exited non-zero: {stderr}",
+            prog = cmd.program
+        ));
+    }
+    let bytes = output.stdout;
+    if bytes.is_empty() {
+        return Err(format!(
+            "clipboard is empty (or contains no image readable by {prog:?})",
+            prog = cmd.program
+        ));
+    }
+    let media_type = infer_clipboard_media_type(&bytes).ok_or_else(|| {
+        format!(
+            "clipboard bytes ({} total) don't start with a recognized image \
+             signature (PNG/JPEG); Phase 170 supports png + jpeg only",
+            bytes.len()
+        )
+    })?;
+    Ok((media_type.to_string(), bytes))
 }
 
 /// Phase 165 — parse the `/image` command's
@@ -2746,6 +2866,80 @@ url_retry_jitter_ms = 250
         // valid — we treat as manual-stop
         // rather than silently ignoring.
         assert!(!mid_recording_image_command("/image "));
+    }
+
+    // ---- Phase 170 — clipboard image source ----
+
+    #[test]
+    fn infer_clipboard_media_type_recognizes_png_signature() {
+        // PNG magic: 0x89 0x50 0x4E 0x47.
+        let bytes = b"\x89PNG\r\n\x1a\n...rest";
+        assert_eq!(infer_clipboard_media_type(bytes), Some("image/png"));
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_recognizes_jpeg_signature() {
+        // JPEG magic: 0xFF 0xD8.
+        let bytes = b"\xff\xd8\xff\xe0...rest";
+        assert_eq!(infer_clipboard_media_type(bytes), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_rejects_unrecognized_signature() {
+        // GIF / WebP / random bytes not in
+        // Phase 170 set.
+        assert_eq!(infer_clipboard_media_type(b"GIF89a..."), None);
+        assert_eq!(infer_clipboard_media_type(b"RIFF...."), None);
+        assert_eq!(infer_clipboard_media_type(b"random text"), None);
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_handles_too_short_input() {
+        assert_eq!(infer_clipboard_media_type(b""), None);
+        assert_eq!(infer_clipboard_media_type(b"\x89PN"), None);
+        assert_eq!(infer_clipboard_media_type(b"\xff"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn select_clipboard_command_uses_wl_paste_on_wayland_session() {
+        // SAFETY (test-only): single-threaded
+        // env-var write; we restore the prior
+        // value below.
+        let prior = std::env::var_os("WAYLAND_DISPLAY");
+        unsafe { std::env::set_var("WAYLAND_DISPLAY", "wayland-0") };
+        let cmd = select_clipboard_command();
+        assert_eq!(cmd.program, "wl-paste");
+        assert!(cmd.args.contains(&"--type"));
+        assert!(cmd.args.contains(&"image/png"));
+        // Restore.
+        match prior {
+            Some(v) => unsafe { std::env::set_var("WAYLAND_DISPLAY", v) },
+            None => unsafe { std::env::remove_var("WAYLAND_DISPLAY") },
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn select_clipboard_command_uses_xclip_when_wayland_unset() {
+        let prior = std::env::var_os("WAYLAND_DISPLAY");
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+        let cmd = select_clipboard_command();
+        assert_eq!(cmd.program, "xclip");
+        assert!(cmd.args.contains(&"clipboard"));
+        // Restore.
+        if let Some(v) = prior {
+            unsafe { std::env::set_var("WAYLAND_DISPLAY", v) };
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn select_clipboard_command_uses_pbpaste_on_macos() {
+        let cmd = select_clipboard_command();
+        assert_eq!(cmd.program, "pbpaste");
+        assert!(cmd.args.contains(&"-Prefer"));
+        assert!(cmd.args.contains(&"raw"));
     }
 
     #[test]

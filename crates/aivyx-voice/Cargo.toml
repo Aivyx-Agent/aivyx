@@ -58,7 +58,7 @@ aivyx-capability = { path = "../aivyx-capability" }
 
 # Async + trait infrastructure.
 async-trait = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-std"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-std", "process"] }
 tokio-util = { workspace = true }
 
 # Config + error handling.
