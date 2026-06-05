@@ -24,7 +24,7 @@ type TextSinkFn = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Operator-supplied config for the voice channel.
 /// Threaded through `[voice]` in `aivyx.toml`.
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct VoiceChannelConfig {
     /// ASR engine selection. Aivyx supports
     /// `"whisper-rs"` (default) and `"whisper-cpp-plus"`
@@ -71,6 +71,42 @@ pub struct VoiceChannelConfig {
     /// section get unchanged behavior.
     #[serde(default)]
     pub image: crate::session::VoiceImageConfig,
+    /// Phase 170 — when true, mid-synthesis
+    /// abort requires two Enter presses within
+    /// `abort_double_enter_window_ms`. Defaults
+    /// to false so Phase 146 single-Enter
+    /// abort muscle memory still works.
+    #[serde(default)]
+    pub abort_requires_double_enter: bool,
+    /// Phase 170 — debounce window for
+    /// double-Enter abort confirmation.
+    /// Default 800ms. Only consulted when
+    /// `abort_requires_double_enter` is true.
+    #[serde(default = "default_abort_double_enter_window_ms")]
+    pub abort_double_enter_window_ms: u64,
+}
+
+fn default_abort_double_enter_window_ms() -> u64 {
+    800
+}
+
+impl Default for VoiceChannelConfig {
+    fn default() -> Self {
+        Self {
+            asr_engine: None,
+            tts_engine: None,
+            asr: AsrConfig::default(),
+            tts: TtsConfig::default(),
+            input_device: None,
+            output_device: None,
+            capture_debug_path: None,
+            vad: VoiceVadConfig::default(),
+            image: crate::session::VoiceImageConfig::default(),
+            abort_requires_double_enter: false,
+            abort_double_enter_window_ms:
+                default_abort_double_enter_window_ms(),
+        }
+    }
 }
 
 /// `ChannelContext` impl for voice I/O.
@@ -612,5 +648,52 @@ voice_path = "/m/p.onnx"
         // Order is append-order — first /image
         // shows up first in the Vec.
         assert_eq!(taken[2].1, vec![4, 5, 6]);
+    }
+
+    // ---- Phase 170 — abort_requires_double_enter ----
+
+    #[test]
+    fn voice_channel_config_abort_defaults_preserve_phase_146() {
+        let cfg = VoiceChannelConfig::default();
+        assert!(!cfg.abort_requires_double_enter);
+        assert_eq!(cfg.abort_double_enter_window_ms, 800);
+    }
+
+    #[test]
+    fn voice_channel_config_parses_abort_knobs() {
+        let toml = r#"
+asr_engine = "whisper-rs"
+tts_engine = "piper"
+abort_requires_double_enter = true
+abort_double_enter_window_ms = 1200
+
+[asr]
+model_path = "/m/w.bin"
+
+[tts]
+voice_path = "/m/p.onnx"
+"#;
+        let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
+        assert!(cfg.abort_requires_double_enter);
+        assert_eq!(cfg.abort_double_enter_window_ms, 1200);
+    }
+
+    #[test]
+    fn voice_channel_config_abort_window_default_when_only_toggle_set() {
+        // Operators who want double-Enter
+        // without overriding the window get
+        // the 800ms default.
+        let toml = r#"
+abort_requires_double_enter = true
+
+[asr]
+model_path = "/m/w.bin"
+
+[tts]
+voice_path = "/m/p.onnx"
+"#;
+        let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
+        assert!(cfg.abort_requires_double_enter);
+        assert_eq!(cfg.abort_double_enter_window_ms, 800);
     }
 }

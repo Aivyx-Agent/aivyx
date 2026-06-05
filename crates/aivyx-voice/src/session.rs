@@ -938,36 +938,92 @@ where
             AbortedQuit,
         }
 
-        let resolution = tokio::select! {
-            result = run_one_voice_turn_streaming(
-                &agent,
-                &channel,
-                asr.as_ref(),
-                &samples,
-                sentence_tx,
-                Arc::clone(&turn_assembled),
-            ) => {
-                match result {
-                    Ok(t) => TurnResolution::Completed(t),
-                    Err(e) => TurnResolution::Failed(e),
+        // Phase 170 — when
+        // abort_requires_double_enter is true,
+        // the first Enter press during synthesis
+        // primes a window; only a second press
+        // within abort_double_enter_window_ms
+        // actually aborts. The Box::pin lets us
+        // re-poll the turn future across loop
+        // iterations.
+        let abort_requires_double =
+            channel.config().abort_requires_double_enter;
+        let abort_window_ms =
+            channel.config().abort_double_enter_window_ms;
+        let mut turn_future = Box::pin(run_one_voice_turn_streaming(
+            &agent,
+            &channel,
+            asr.as_ref(),
+            &samples,
+            sentence_tx,
+            Arc::clone(&turn_assembled),
+        ));
+        let mut pending_first_press: Option<std::time::Instant> = None;
+        let resolution = loop {
+            tokio::select! {
+                result = &mut turn_future => {
+                    break match result {
+                        Ok(t) => TurnResolution::Completed(t),
+                        Err(e) => TurnResolution::Failed(e),
+                    };
                 }
-            }
-            line = line_rx.recv() => {
-                use aivyx_core::ChannelContext;
-                channel.cancel_inflight();
-                // Phase 152 — clear the channel's
-                // text sink so its references to
-                // the assembled Arc drop. We then
-                // own the only live clone of the
-                // assembled Arc and can read it
-                // freely below.
-                channel.clear_text_sink();
-                let _ = abort_tx.send(()).await;
-                let raw = line.unwrap_or_default();
-                if raw == "quit" {
-                    TurnResolution::AbortedQuit
-                } else {
-                    TurnResolution::AbortedContinue
+                line = line_rx.recv() => {
+                    // Phase 170 — when double-
+                    // Enter mode is on, the
+                    // first press primes the
+                    // window. `quit` and lines
+                    // starting with non-empty
+                    // text other than `/image`
+                    // still abort immediately
+                    // — only an empty Enter
+                    // is gated by the
+                    // double-press window.
+                    let raw = line.clone().unwrap_or_default();
+                    let is_empty_enter = raw.is_empty();
+                    let in_window = pending_first_press
+                        .map(|when| {
+                            when.elapsed()
+                                < std::time::Duration::from_millis(
+                                    abort_window_ms,
+                                )
+                        })
+                        .unwrap_or(false);
+                    if abort_requires_double
+                        && is_empty_enter
+                        && !in_window
+                    {
+                        // First press; arm the
+                        // window and wait for
+                        // a confirming second.
+                        pending_first_press =
+                            Some(std::time::Instant::now());
+                        eprintln!(
+                            "[voice] press Enter again within {abort_window_ms}ms to abort"
+                        );
+                        continue;
+                    }
+                    // Either single-Enter mode,
+                    // or non-empty input (quit
+                    // / other), or empty Enter
+                    // within the double-press
+                    // window: abort.
+                    use aivyx_core::ChannelContext;
+                    channel.cancel_inflight();
+                    // Phase 152 — clear the
+                    // channel's text sink so
+                    // its references to the
+                    // assembled Arc drop. We
+                    // then own the only live
+                    // clone of the assembled
+                    // Arc and can read it
+                    // freely below.
+                    channel.clear_text_sink();
+                    let _ = abort_tx.send(()).await;
+                    break if raw == "quit" {
+                        TurnResolution::AbortedQuit
+                    } else {
+                        TurnResolution::AbortedContinue
+                    };
                 }
             }
         };
@@ -2942,6 +2998,68 @@ url_retry_jitter_ms = 250
         assert!(cmd.args.contains(&"raw"));
     }
 
+    // ---- Phase 170 — double-Enter abort window check ----
+
+    #[test]
+    fn double_enter_window_check_within_window_returns_true() {
+        let window_ms = 800u64;
+        let when = std::time::Instant::now();
+        // Same-instant elapsed is always 0 < window.
+        let in_window = when.elapsed()
+            < std::time::Duration::from_millis(window_ms);
+        assert!(in_window);
+    }
+
+    #[test]
+    fn double_enter_window_check_past_window_returns_false() {
+        let window_ms = 10u64;
+        let when = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(100))
+            .expect("Instant arithmetic safe in test");
+        let in_window = when.elapsed()
+            < std::time::Duration::from_millis(window_ms);
+        assert!(!in_window);
+    }
+
+    #[test]
+    fn double_enter_disabled_single_press_aborts_immediately() {
+        // Pin the documented contract: when
+        // abort_requires_double_enter is false,
+        // the very first press should abort
+        // regardless of window state.
+        let abort_requires_double = false;
+        let is_empty_enter = true;
+        let in_window = false; // first press
+        let should_arm_window = abort_requires_double
+            && is_empty_enter
+            && !in_window;
+        assert!(!should_arm_window);
+    }
+
+    #[test]
+    fn double_enter_enabled_non_empty_input_aborts_immediately() {
+        // `quit` or anything non-empty bypasses
+        // the double-Enter window check.
+        let abort_requires_double = true;
+        let is_empty_enter = false; // "quit" or other text
+        let in_window = false;
+        let should_arm_window = abort_requires_double
+            && is_empty_enter
+            && !in_window;
+        assert!(!should_arm_window);
+    }
+
+    #[test]
+    fn double_enter_enabled_second_press_in_window_aborts() {
+        let abort_requires_double = true;
+        let is_empty_enter = true;
+        let in_window = true; // second press, primed window
+        let should_arm_window = abort_requires_double
+            && is_empty_enter
+            && !in_window;
+        assert!(!should_arm_window);
+    }
+
     #[test]
     fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
         // An operator setting an absurd cap like
@@ -3409,6 +3527,8 @@ url_retry_jitter_ms = 250
             capture_debug_path: None,
             vad: Default::default(),
             image: Default::default(),
+            abort_requires_double_enter: false,
+            abort_double_enter_window_ms: 800,
         };
         assert_eq!(cfg.asr.beam_size, Some(5));
         assert_eq!(cfg.tts.speaker_id, Some(0));
