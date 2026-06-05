@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 171 — Loose Ends Bundle (GIF/WebP Clipboard + calendarList Cache TTL Knob)
 
-**See [PHASE_171.md](PHASE_171.md).** Capstone phase
+**Frozen — see [PHASE_171.md](PHASE_171.md).** Capstone phase
 before extended review. Two small substrate
 cleanups: Phase 170's just-shipped clipboard
 signature carry-over (GIF + WebP byte signature

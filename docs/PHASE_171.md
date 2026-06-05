@@ -137,8 +137,48 @@ candidates remain on the roster:
 
 ## Prediction vs reality
 
-_Populated at Phase 171 exit. Predictions at
-sign-off: DESIGN.md HOLD → 8; PRODUCT.md HOLD
-→ 62; lib.rs HOLD → 8; zero new deps; test
-count delta `+5` to `+10`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 8 | Untouched | ✅ |
+| PRODUCT.md HOLD → 62 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 8 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (after one `doc list item` lint reworded) | ✅ |
+| Test count delta `+5` to `+10` | `+10` (voice +5, calendar +5) | ✅ (top of band) |
+
+Both pieces closed:
+
+1. **GIF + WebP clipboard signatures** (Task
+   2, commit `267a917`). PNG/JPEG matrix
+   widens to include GIF (`GIF` prefix) and
+   WebP (`RIFF`+size+`WEBP` envelope).
+2. **calendarList cache TTL knob** (Task 3,
+   commit `af65516`). 5-minute hardcoded
+   default becomes operator-tunable via
+   `CalendarClient::with_writable_calendars_
+   cache_ttl(Duration)` builder + env-var
+   override `AIVYX_CALENDAR_CACHE_TTL_SECS`.
+
+### What landed beyond the open
+
+Nothing. Test count landed exactly at the top
+of the `+5..+10` band.
+
+### Phase 170 + 158 honest-debt status
+
+- ✅ Phase 170's GIF/WebP clipboard signatures.
+- ✅ Phase 158's calendarList cache TTL knob.
+
+### Sixtieth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record. Round-number deferral
+count noted as the project enters extended
+review.
+
+### Extended review note
+
+Phase 171 is the project's capstone before an
+extended review. The Aivyx Agent Review
+artifact lands separately as
+[`docs/AGENT_REVIEW_2026-06-05.md`](AGENT_REVIEW_2026-06-05.md).
