@@ -196,6 +196,12 @@ pub struct LoopRunState {
     /// Why the last run ended (for `aivyx loop status`). `None`
     /// until a run has finished at least once.
     pub last_stop_reason: Option<String>,
+    /// Phase 177 — the run-window token total at the last
+    /// iteration boundary (the same window-sum the Phase 176
+    /// budget uses). Surfaced by `aivyx loop status` so an
+    /// operator can watch spend approach the cap. `0` until the
+    /// first iteration of a run; reset on each `request_start`.
+    pub tokens_used: u64,
 }
 
 /// What the driver should do at the top of an iteration. Pure
@@ -344,6 +350,7 @@ impl SharedLoopState {
             s.max_iterations = max_iterations;
             s.started_at_unix_ms = now_unix_ms;
             s.last_stop_reason = None;
+            s.tokens_used = 0;
         }
         self.notify.notify_one();
         true
@@ -379,6 +386,13 @@ impl SharedLoopState {
     fn record_iteration(&self) {
         let mut s = self.state.write().expect("loop state lock");
         s.iteration = s.iteration.saturating_add(1);
+    }
+
+    /// Phase 177 — record the run-window token total for the
+    /// operator-facing `aivyx loop status` surface.
+    fn record_tokens(&self, tokens: u64) {
+        let mut s = self.state.write().expect("loop state lock");
+        s.tokens_used = tokens;
     }
 
     fn finish_run(&self, reason: &str) {
@@ -473,6 +487,9 @@ pub async fn run_loop_driver(
                 audit_log.as_ref(),
                 budget_start_seq,
             );
+            // Phase 177 — surface the live run-window spend so
+            // `aivyx loop status` can show it approaching the cap.
+            shared.record_tokens(tokens_used);
             let decision = decide(
                 shared.is_active(),
                 shared.iteration(),
@@ -765,12 +782,26 @@ mod tests {
         s.request_start(3, 0);
         s.record_iteration();
         s.finish_run("operator stop");
-        // A fresh run zeroes iteration + clears the stop reason.
+        s.record_tokens(5_000);
+        // A fresh run zeroes iteration + tokens + clears the stop
+        // reason.
         assert!(s.request_start(7, 5_000));
         let snap = s.snapshot();
         assert_eq!(snap.iteration, 0);
         assert_eq!(snap.max_iterations, 7);
         assert!(snap.last_stop_reason.is_none());
+        assert_eq!(snap.tokens_used, 0);
+    }
+
+    #[test]
+    fn record_tokens_surfaces_in_snapshot() {
+        let s = SharedLoopState::new();
+        s.request_start(5, 0);
+        s.record_tokens(42_000);
+        assert_eq!(s.snapshot().tokens_used, 42_000);
+        // Latest write wins (the driver records the running total).
+        s.record_tokens(55_000);
+        assert_eq!(s.snapshot().tokens_used, 55_000);
     }
 
     #[test]

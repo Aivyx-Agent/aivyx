@@ -225,6 +225,17 @@ fn render_status(
                 None => "none".to_string(),
             },
         ));
+        // Phase 177 — live spend, once a run has had an iteration.
+        if state.tokens_used > 0 || state.active {
+            out.push_str(&format!(
+                "  tokens used: {}{}\n",
+                state.tokens_used,
+                match max_run_tokens {
+                    Some(t) => format!(" / {t}"),
+                    None => String::new(),
+                },
+            ));
+        }
     }
     out.push_str(&format!("  backlog: {remaining} pending\n"));
     out
@@ -300,6 +311,7 @@ mod tests {
             max_iterations: 25,
             started_at_unix_ms: 1,
             last_stop_reason: None,
+            tokens_used: 12_345,
         };
         let out = render_status(&state, 7, true, true, Some(3600), Some(500000));
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
@@ -307,6 +319,7 @@ mod tests {
         assert!(out.contains("gate verification: on"));
         assert!(out.contains("wall-clock cap: 3600s"));
         assert!(out.contains("token budget: 500000 tokens / run"));
+        assert!(out.contains("tokens used: 12345 / 500000"));
     }
 
     #[test]
@@ -317,12 +330,15 @@ mod tests {
             max_iterations: 25,
             started_at_unix_ms: 1,
             last_stop_reason: Some("backlog complete".into()),
+            tokens_used: 98_000,
         };
         let out = render_status(&state, 0, true, false, None, None);
         assert!(out.contains("idle (armed)"));
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
         assert!(out.contains("gate verification: off"));
         assert!(out.contains("wall-clock cap: none"));
+        // Last run's spend shown, no cap suffix.
+        assert!(out.contains("tokens used: 98000\n"));
     }
 
     #[test]
