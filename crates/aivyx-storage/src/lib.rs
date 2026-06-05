@@ -184,6 +184,15 @@ pub enum KeyDomain {
     /// the self-improvement signal, never memory, recall, the
     /// helpfulness/co-occurrence ledgers, or proactive dedup.
     CorrectionLedger,
+    /// Autonomous-loop backlog (Phase 173). One row per signed
+    /// chain entry, keyed by big-endian u64 sequence number, so
+    /// scan reads return chain-ordered. Holds the operator's
+    /// ordered story list (the Ralph `prd.json` analog) with
+    /// HMAC-chained `Created` / `Done` / `Skipped` status
+    /// transitions. Isolated so a corrupt row degrades only the
+    /// loop backlog, never persona, missions, or any learning
+    /// ledger.
+    LoopBacklog,
 }
 
 impl KeyDomain {
@@ -213,6 +222,7 @@ impl KeyDomain {
             KeyDomain::CooccurrenceLedger => b"cooccurrence-ledger",
             KeyDomain::ToolRelevanceLedger => b"tool-relevance-ledger",
             KeyDomain::CorrectionLedger => b"correction-ledger",
+            KeyDomain::LoopBacklog => b"loop-backlog",
         }
     }
 
@@ -249,12 +259,13 @@ impl KeyDomain {
             KeyDomain::CorrectionLedger => {
                 "aivyx_correction_ledger_v1"
             }
+            KeyDomain::LoopBacklog => "aivyx_loop_backlog_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 18] = [
+    pub const ALL: [KeyDomain; 19] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -273,6 +284,7 @@ impl KeyDomain {
         KeyDomain::CooccurrenceLedger,
         KeyDomain::ToolRelevanceLedger,
         KeyDomain::CorrectionLedger,
+        KeyDomain::LoopBacklog,
     ];
 }
 
@@ -458,7 +470,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 18],
+    subkeys: [SubKey; 19],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -535,7 +547,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 18], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 19], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -566,6 +578,7 @@ impl RedbStorage {
             master.derive_subkey(
                 KeyDomain::CorrectionLedger.as_bytes(),
             )?,
+            master.derive_subkey(KeyDomain::LoopBacklog.as_bytes())?,
         ])
     }
 
@@ -592,6 +605,7 @@ impl RedbStorage {
             KeyDomain::CooccurrenceLedger => &self.subkeys[15],
             KeyDomain::ToolRelevanceLedger => &self.subkeys[16],
             KeyDomain::CorrectionLedger => &self.subkeys[17],
+            KeyDomain::LoopBacklog => &self.subkeys[18],
         }
     }
 }
@@ -1015,7 +1029,8 @@ mod tests {
                 | KeyDomain::HelpfulnessLedger
                 | KeyDomain::CooccurrenceLedger
                 | KeyDomain::ToolRelevanceLedger
-                | KeyDomain::CorrectionLedger => {}
+                | KeyDomain::CorrectionLedger
+                | KeyDomain::LoopBacklog => {}
             }
         }
     }

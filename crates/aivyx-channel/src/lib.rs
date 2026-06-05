@@ -55,6 +55,11 @@ pub mod cooccurrence_ledger;
 pub mod correction_consolidation;
 pub mod correction_detect;
 pub mod correction_ledger;
+/// Phase 173 — the autonomous-loop backlog substrate (the
+/// Aivyx Ralph loop). HMAC-chained, append-only ordered story
+/// list (the `prd.json` analog) the loop driver works through
+/// one fresh-context iteration at a time.
+pub mod loop_backlog;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
