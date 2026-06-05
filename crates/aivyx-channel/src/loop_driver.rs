@@ -109,6 +109,9 @@ pub enum LoopDecision {
     StopMaxIterations,
     /// Stop — an operator `loop stop` cleared `active`.
     StopRequested,
+    /// Phase 174 — stop, the wall-clock `max_run_secs` cap was
+    /// reached.
+    StopWallClock,
 }
 
 impl LoopDecision {
@@ -122,22 +125,37 @@ impl LoopDecision {
                 Some("reached max_iterations cap")
             }
             LoopDecision::StopRequested => Some("operator stop"),
+            LoopDecision::StopWallClock => {
+                Some("reached max_run_secs wall-clock cap")
+            }
         }
     }
 }
 
 /// Pure termination decision. Checked at the top of every
 /// iteration. Order matters: an operator stop wins, then the
-/// cap, then backlog drain (so a stop mid-run is honoured even
-/// if the backlog still has work).
+/// wall-clock cap, then the iteration cap, then backlog drain
+/// (so a stop mid-run is honoured even if the backlog still has
+/// work).
+///
+/// Phase 174 — `elapsed_secs` + `max_run_secs` add the
+/// wall-clock cap; `max_run_secs = None` disables it (the cap
+/// never fires).
 pub fn decide(
     active: bool,
     iteration: u32,
     max_iterations: u32,
     remaining_stories: usize,
+    elapsed_secs: u64,
+    max_run_secs: Option<u64>,
 ) -> LoopDecision {
     if !active {
         return LoopDecision::StopRequested;
+    }
+    if let Some(cap) = max_run_secs {
+        if elapsed_secs >= cap {
+            return LoopDecision::StopWallClock;
+        }
     }
     if iteration >= max_iterations {
         return LoopDecision::StopMaxIterations;
@@ -146,6 +164,20 @@ pub fn decide(
         return LoopDecision::StopBacklogEmpty;
     }
     LoopDecision::Continue
+}
+
+/// Phase 174 — format the stop reason for a red gate after
+/// iteration N (pre-flight uses iteration `0`). Pure so the
+/// label is testable without running the driver.
+pub fn gate_stop_reason(
+    outcome: &crate::loop_gate::GateOutcome,
+    iteration: u32,
+) -> String {
+    if iteration == 0 {
+        format!("pre-flight {}", outcome.label())
+    } else {
+        format!("{} after iteration {iteration}", outcome.label())
+    }
 }
 
 /// Shared run-state handle plus the start-notify. Cloned into the
@@ -221,6 +253,10 @@ impl SharedLoopState {
         self.state.read().expect("loop state lock").max_iterations
     }
 
+    fn started_at_unix_ms(&self) -> u64 {
+        self.state.read().expect("loop state lock").started_at_unix_ms
+    }
+
     fn record_iteration(&self) {
         let mut s = self.state.write().expect("loop state lock");
         s.iteration = s.iteration.saturating_add(1);
@@ -238,6 +274,13 @@ impl SharedLoopState {
 /// responsive even when no run is active.
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Run the autonomous-loop driver. Never returns normally — runs
 /// until `shutdown` is cancelled. Idle (no CPU) until a run is
 /// requested via [`SharedLoopState::request_start`]; then fires
@@ -246,6 +289,8 @@ pub async fn run_loop_driver(
     dispatch: TriggerDispatch,
     backlog: Arc<PersistentLoopBacklog>,
     shared: SharedLoopState,
+    gate: Option<Arc<dyn crate::loop_gate::GateRunner>>,
+    max_run_secs: Option<u64>,
     shutdown: CancellationToken,
 ) {
     loop {
@@ -263,9 +308,25 @@ pub async fn run_loop_driver(
 
         // A run is active — drive iterations.
         eprintln!(
-            "aivyx loop: run started (max_iterations={})",
+            "aivyx loop: run started (max_iterations={}, gate={}, \
+             max_run_secs={:?})",
             shared.max_iterations(),
+            if gate.is_some() { "on" } else { "off" },
+            max_run_secs,
         );
+
+        // Phase 174 — pre-flight gate: refuse to start on a red
+        // tree. (iteration 0 → "pre-flight" in the reason.)
+        if let Some(g) = &gate {
+            let outcome = g.run().await;
+            if !outcome.is_green() {
+                let reason = gate_stop_reason(&outcome, 0);
+                shared.finish_run(&reason);
+                eprintln!("aivyx loop: run not started — {reason}");
+                continue;
+            }
+        }
+
         loop {
             if shutdown.is_cancelled() {
                 // Leave the run flagged active so it can resume on
@@ -273,11 +334,16 @@ pub async fn run_loop_driver(
                 return;
             }
             let remaining = backlog.remaining_count();
+            let elapsed_secs = now_unix_ms()
+                .saturating_sub(shared.started_at_unix_ms())
+                / 1000;
             let decision = decide(
                 shared.is_active(),
                 shared.iteration(),
                 shared.max_iterations(),
                 remaining,
+                elapsed_secs,
+                max_run_secs,
             );
             if let Some(reason) = decision.stop_reason() {
                 shared.finish_run(reason);
@@ -310,6 +376,21 @@ pub async fn run_loop_driver(
                 )
                 .await;
             shared.record_iteration();
+
+            // Phase 174 — post-iteration gate: verify the tree is
+            // still green. A red gate stops the run immediately
+            // (non-destructive — the commit is preserved for the
+            // operator; the loop does not pile more changes onto
+            // a broken tree).
+            if let Some(g) = &gate {
+                let outcome = g.run().await;
+                if !outcome.is_green() {
+                    let reason = gate_stop_reason(&outcome, iter);
+                    shared.finish_run(&reason);
+                    eprintln!("aivyx loop: run ended — {reason}");
+                    break;
+                }
+            }
         }
     }
 }
@@ -320,31 +401,43 @@ mod tests {
 
     #[test]
     fn decide_continue_when_active_under_cap_with_work() {
-        assert_eq!(decide(true, 0, 5, 3), LoopDecision::Continue);
-        assert_eq!(decide(true, 4, 5, 1), LoopDecision::Continue);
+        assert_eq!(
+            decide(true, 0, 5, 3, 0, None),
+            LoopDecision::Continue
+        );
+        assert_eq!(
+            decide(true, 4, 5, 1, 10, Some(3600)),
+            LoopDecision::Continue
+        );
     }
 
     #[test]
     fn decide_stops_at_cap() {
         assert_eq!(
-            decide(true, 5, 5, 3),
+            decide(true, 5, 5, 3, 0, None),
             LoopDecision::StopMaxIterations
         );
         assert_eq!(
-            decide(true, 6, 5, 3),
+            decide(true, 6, 5, 3, 0, None),
             LoopDecision::StopMaxIterations
         );
     }
 
     #[test]
     fn decide_stops_on_empty_backlog() {
-        assert_eq!(decide(true, 1, 5, 0), LoopDecision::StopBacklogEmpty);
+        assert_eq!(
+            decide(true, 1, 5, 0, 0, None),
+            LoopDecision::StopBacklogEmpty
+        );
     }
 
     #[test]
     fn decide_stop_request_wins_over_remaining_work() {
-        // Inactive (operator stopped) beats "still has stories".
-        assert_eq!(decide(false, 1, 5, 3), LoopDecision::StopRequested);
+        // Inactive (operator stopped) beats everything else.
+        assert_eq!(
+            decide(false, 1, 5, 3, 0, None),
+            LoopDecision::StopRequested
+        );
     }
 
     #[test]
@@ -352,9 +445,59 @@ mod tests {
         // At the cap with an empty backlog, the cap reason is
         // reported (checked first) — both are valid stops.
         assert_eq!(
-            decide(true, 5, 5, 0),
+            decide(true, 5, 5, 0, 0, None),
             LoopDecision::StopMaxIterations
         );
+    }
+
+    #[test]
+    fn decide_wall_clock_cap() {
+        // None → never fires, even at huge elapsed.
+        assert_eq!(
+            decide(true, 1, 5, 3, 1_000_000, None),
+            LoopDecision::Continue
+        );
+        // Under the cap → continue.
+        assert_eq!(
+            decide(true, 1, 5, 3, 59, Some(60)),
+            LoopDecision::Continue
+        );
+        // At/over the cap → stop.
+        assert_eq!(
+            decide(true, 1, 5, 3, 60, Some(60)),
+            LoopDecision::StopWallClock
+        );
+        assert_eq!(
+            decide(true, 1, 5, 3, 61, Some(60)),
+            LoopDecision::StopWallClock
+        );
+    }
+
+    #[test]
+    fn decide_wall_clock_beats_iteration_cap_and_backlog() {
+        // Wall-clock is checked before the iteration cap + drain.
+        assert_eq!(
+            decide(true, 99, 5, 0, 100, Some(60)),
+            LoopDecision::StopWallClock
+        );
+    }
+
+    #[test]
+    fn decide_stop_request_beats_wall_clock() {
+        assert_eq!(
+            decide(false, 1, 5, 3, 100, Some(60)),
+            LoopDecision::StopRequested
+        );
+    }
+
+    #[test]
+    fn gate_stop_reason_preflight_vs_iteration() {
+        use crate::loop_gate::GateOutcome;
+        let failed = GateOutcome::Failed { code: Some(1) };
+        assert!(gate_stop_reason(&failed, 0).starts_with("pre-flight"));
+        let r = gate_stop_reason(&failed, 3);
+        assert!(r.contains("after iteration 3"));
+        assert!(r.contains("exit 1"));
     }
 
     #[test]
@@ -371,6 +514,10 @@ mod tests {
         assert_eq!(
             LoopDecision::StopRequested.stop_reason(),
             Some("operator stop")
+        );
+        assert_eq!(
+            LoopDecision::StopWallClock.stop_reason(),
+            Some("reached max_run_secs wall-clock cap")
         );
     }
 

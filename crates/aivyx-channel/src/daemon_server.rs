@@ -610,18 +610,40 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let ld_backlog = Arc::clone(backlog);
             let ld_state = state.clone();
             let ld_shutdown = shutdown.clone();
+            // Phase 174 — build the gate runner from the armed
+            // `[loop]` config (gate_command + working_dir +
+            // timeout). `None` → no driver-side verification.
+            let ld_gate: Option<
+                Arc<dyn crate::loop_gate::GateRunner>,
+            > = loop_config.as_ref().and_then(|c| {
+                c.gate_command.as_ref().map(|cmd| {
+                    Arc::new(crate::loop_gate::ShellGateRunner::new(
+                        cmd.clone(),
+                        c.working_dir.as_ref().map(std::path::PathBuf::from),
+                        std::time::Duration::from_secs(c.gate_timeout_secs),
+                    ))
+                        as Arc<dyn crate::loop_gate::GateRunner>
+                })
+            });
+            let ld_max_run_secs =
+                loop_config.as_ref().and_then(|c| c.max_run_secs);
             eprintln!(
-                "aivyx loop: driver armed (max_iterations ceiling={})",
+                "aivyx loop: driver armed (max_iterations ceiling={}, \
+                 gate={}, max_run_secs={:?})",
                 loop_config
                     .as_ref()
                     .map(|c| c.max_iterations)
                     .unwrap_or(0),
+                if ld_gate.is_some() { "on" } else { "off" },
+                ld_max_run_secs,
             );
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
                     ld_backlog,
                     ld_state,
+                    ld_gate,
+                    ld_max_run_secs,
                     ld_shutdown,
                 )
                 .await;
