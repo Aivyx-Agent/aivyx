@@ -1081,6 +1081,17 @@ pub struct VoiceImageConfig {
     /// arrives within the window.
     #[serde(default)]
     pub url_read_stall_secs: u64,
+    /// Phase 169 — jitter window in
+    /// milliseconds applied to each backoff
+    /// delay (±jitter_ms randomization).
+    /// Defeats thundering-herd patterns when
+    /// multiple operators retry against the
+    /// same origin during a flap. Default 0 =
+    /// deterministic backoff (preserves Phase
+    /// 166 behavior). PRNG source is stdlib
+    /// SystemTime nanos; not cryptographic.
+    #[serde(default)]
+    pub url_retry_jitter_ms: u64,
 }
 
 impl Default for VoiceImageConfig {
@@ -1094,6 +1105,7 @@ impl Default for VoiceImageConfig {
             url_retry_count: 0,
             url_retry_backoff_ms: Self::default_url_retry_backoff_ms(),
             url_read_stall_secs: 0,
+            url_retry_jitter_ms: 0,
         }
     }
 }
@@ -1216,14 +1228,16 @@ async fn fetch_image_url(
     // Phase 166 — retry on transient timeout
     // or connect failure. Exponential backoff:
     // delay = backoff_ms * 2^attempt. 4xx /
-    // 5xx responses do NOT retry — those are
-    // operator-fixable errors.
+    // 5xx (except 503/429 — see Phase 169)
+    // do NOT retry. Phase 169 adds optional
+    // jitter for thundering-herd defense.
     let resp = send_with_retry(
         &client,
         url,
         &header_map,
         cfg.url_retry_count,
         cfg.url_retry_backoff_ms,
+        cfg.url_retry_jitter_ms,
     )
     .await
     .map_err(|e| format!("fetch {url:?}: {e}"))?;
@@ -1351,13 +1365,16 @@ fn is_transient_http_status(status: reqwest::StatusCode) -> bool {
 /// Phase 169 — retry classification extended
 /// to include 503 / 429 HTTP responses
 /// alongside the existing timeout / connect-
-/// error path.
+/// error path. Optional `jitter_ms`
+/// randomizes each backoff delay by ±jitter
+/// to defeat thundering-herd patterns.
 async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,
     headers: &reqwest::header::HeaderMap,
     retry_count: u32,
     backoff_ms: u64,
+    jitter_ms: u64,
 ) -> Result<reqwest::Response, reqwest::Error> {
     let mut attempt: u32 = 0;
     loop {
@@ -1367,7 +1384,7 @@ async fn send_with_retry(
                 let status = resp.status();
                 if attempt < retry_count && is_transient_http_status(status) {
                     let delay_ms =
-                        backoff_ms.saturating_mul(1u64 << attempt);
+                        backoff_with_jitter(backoff_ms, attempt, jitter_ms);
                     tokio::time::sleep(std::time::Duration::from_millis(
                         delay_ms,
                     ))
@@ -1380,7 +1397,8 @@ async fn send_with_retry(
             Err(e)
                 if attempt < retry_count && is_transient_reqwest_error(&e) =>
             {
-                let delay_ms = backoff_ms.saturating_mul(1u64 << attempt);
+                let delay_ms =
+                    backoff_with_jitter(backoff_ms, attempt, jitter_ms);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms))
                     .await;
                 attempt += 1;
@@ -1388,6 +1406,36 @@ async fn send_with_retry(
             }
             Err(e) => return Err(e),
         }
+    }
+}
+
+/// Phase 169 — exponential backoff with
+/// optional jitter. `base_ms * 2^attempt`
+/// is the deterministic component; jitter is
+/// a `[-jitter_ms, +jitter_ms]` offset using
+/// stdlib SystemTime nanos as a PRNG source.
+/// When `jitter_ms == 0`, returns the
+/// deterministic value (Phase 166 behavior).
+/// Saturating-arithmetic prevents over- or
+/// under-flow on pathological inputs.
+fn backoff_with_jitter(base_ms: u64, attempt: u32, jitter_ms: u64) -> u64 {
+    let deterministic = base_ms.saturating_mul(1u64 << attempt);
+    if jitter_ms == 0 {
+        return deterministic;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    // Range is 2 * jitter_ms + 1 possible
+    // offsets; offset shifts to [-jitter_ms,
+    // +jitter_ms].
+    let range = jitter_ms.saturating_mul(2).saturating_add(1);
+    let offset = (nanos % range) as i64 - jitter_ms as i64;
+    if offset >= 0 {
+        deterministic.saturating_add(offset as u64)
+    } else {
+        deterministic.saturating_sub((-offset) as u64)
     }
 }
 
@@ -1898,6 +1946,7 @@ mod tests {
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
             url_read_stall_secs: 0,
+            url_retry_jitter_ms: 0,
         };
         assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
     }
@@ -2509,6 +2558,78 @@ url_read_stall_secs = 5
         ));
     }
 
+    // ---- Phase 169 — backoff jitter ----
+
+    #[test]
+    fn voice_image_config_url_retry_jitter_ms_default_zero() {
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.url_retry_jitter_ms, 0);
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_url_retry_jitter_ms() {
+        let toml = r#"
+size_cap_mb = 10
+url_retry_jitter_ms = 250
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.url_retry_jitter_ms, 250);
+    }
+
+    #[test]
+    fn backoff_with_jitter_zero_returns_deterministic_value() {
+        // jitter=0 means no randomization;
+        // matches Phase 166 behavior.
+        assert_eq!(backoff_with_jitter(500, 0, 0), 500);
+        assert_eq!(backoff_with_jitter(500, 1, 0), 1000);
+        assert_eq!(backoff_with_jitter(500, 2, 0), 2000);
+        assert_eq!(backoff_with_jitter(500, 3, 0), 4000);
+    }
+
+    #[test]
+    fn backoff_with_jitter_stays_within_window() {
+        // With jitter=100, the result is
+        // bounded by [base*2^attempt - 100,
+        // base*2^attempt + 100]. Sample 200
+        // times to exercise the SystemTime
+        // entropy.
+        let base = 500u64;
+        let attempt = 0;
+        let jitter = 100u64;
+        let range = (base - jitter)..=(base + jitter);
+        for _ in 0..200 {
+            let v = backoff_with_jitter(base, attempt, jitter);
+            assert!(range.contains(&v), "{v} not in {range:?}");
+        }
+    }
+
+    #[test]
+    fn backoff_with_jitter_saturates_on_overflow() {
+        // 2^63 with base = u64::MAX would
+        // overflow; saturating_mul keeps the
+        // result at u64::MAX. Jitter then
+        // saturating-adds; the result stays
+        // valid.
+        let base = u64::MAX / 2;
+        let v = backoff_with_jitter(base, 63, 100);
+        // v is u64::MAX exactly (saturating
+        // arithmetic), plus or minus jitter.
+        // The saturating_add of u64::MAX +
+        // positive_offset stays at u64::MAX;
+        // the saturating_sub of u64::MAX -
+        // jitter is u64::MAX - jitter at most.
+        assert!(v >= u64::MAX - 100);
+    }
+
+    #[test]
+    fn backoff_with_jitter_zero_attempts_uses_base_unchanged() {
+        // Attempt 0 means no doubling; jitter
+        // window applies to `base` directly.
+        let v = backoff_with_jitter(100, 0, 50);
+        let range = 50u64..=150u64;
+        assert!(range.contains(&v));
+    }
+
     #[test]
     fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
         // An operator setting an absurd cap like
@@ -2526,6 +2647,7 @@ url_read_stall_secs = 5
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
             url_read_stall_secs: 0,
+            url_retry_jitter_ms: 0,
         };
         assert_eq!(cfg.size_cap_bytes(), usize::MAX);
     }
@@ -2544,6 +2666,7 @@ url_read_stall_secs = 5
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
             url_read_stall_secs: 0,
+            url_retry_jitter_ms: 0,
         };
         let tmp = std::env::temp_dir().join("phase161-tightcap.png");
         std::fs::write(&tmp, b"abc").expect("write tmp");
