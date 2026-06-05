@@ -233,7 +233,8 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 173 | Frozen | [PHASE_173.md](PHASE_173.md) | `36610d9`  |
 | Phase 174 | Frozen | [PHASE_174.md](PHASE_174.md) | `01d5777`  |
 | Phase 175 | Frozen | [PHASE_175.md](PHASE_175.md) | `5cc78eb`  |
-| Phase 176 | Frozen | [PHASE_176.md](PHASE_176.md) | _pending_  |
+| Phase 176 | Frozen | [PHASE_176.md](PHASE_176.md) | `2857c06`  |
+| Phase 177 | Active | [PHASE_177.md](PHASE_177.md) | _pending_  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
