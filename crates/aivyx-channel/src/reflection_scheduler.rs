@@ -232,6 +232,21 @@ pub struct RecallFeedbackDeps {
             crate::correction_ledger::PersistentCorrectionLedger,
         >,
     >,
+    /// Phase 178 — the LLM correction judge. When `Some` (armed
+    /// `[correction_judgment]`), the correction fold classifies
+    /// each detected correction's follow-up and folds only
+    /// `Rework` events; `None` → the Phase 172 structural fold.
+    pub correction_judge: Option<
+        std::sync::Arc<dyn crate::correction_judgment::CorrectionJudge>,
+    >,
+    /// Phase 178 — per-cycle judge cap (from
+    /// `[correction_judgment].max_corrections_per_cycle`).
+    pub correction_judgment_max: u32,
+    /// Phase 178 — last-cycle judgment stat sink for the Phase
+    /// 78 surface. `None` → breadcrumb-only.
+    pub correction_judgment_stat: Option<
+        crate::correction_judgment::SharedCorrectionJudgmentStat,
+    >,
     /// Phase 93 — flip `correlate_detailed` from the
     /// pre-Phase-93 structural-only behaviour (the default,
     /// `false`) to per-hit judgment override with structural
@@ -1149,17 +1164,52 @@ async fn run_recall_feedback_pass(
                 // skipped. Distinct actuator from helpfulness:
                 // it counts reworks, not net helpfulness.
                 if let Some(ledger) = &deps.correction_ledger {
-                    let tally =
-                        crate::correction_detect::detect_corrections(
-                            &recalls, summaries,
-                        );
-                    let count_by_topic: Vec<(String, f32)> = tally
-                        .ranked()
-                        .into_iter()
-                        .map(|(topic, count)| {
-                            (topic, count as f32)
-                        })
-                        .collect();
+                    // Phase 178 — when the correction judge is
+                    // armed, classify each correction's follow-up
+                    // and fold only `Rework` (plus structural
+                    // fallback for un-judgeable / failed events);
+                    // otherwise the Phase 172 structural fold.
+                    let count_by_topic: Vec<(String, f32)> =
+                        if let Some(judge) = &deps.correction_judge {
+                            let events = crate::correction_detect::detect_corrections_detailed(
+                                &recalls, summaries,
+                            );
+                            let (counts, stat) =
+                                crate::correction_judgment::judged_correction_counts(
+                                    &events,
+                                    judge.as_ref(),
+                                    deps.correction_judgment_max as usize,
+                                    now_secs,
+                                )
+                                .await;
+                            eprintln!(
+                                "aivyx correction-judgment: schedule \
+                                 {:?} — judged {} (rework {}, praise \
+                                 {}, unrelated {}, structural {})",
+                                sched.name,
+                                stat.judged,
+                                stat.rework,
+                                stat.praise,
+                                stat.unrelated,
+                                stat.structural_fallback,
+                            );
+                            if let Some(sink) =
+                                &deps.correction_judgment_stat
+                            {
+                                if let Ok(mut w) = sink.write() {
+                                    *w = Some(stat);
+                                }
+                            }
+                            counts
+                        } else {
+                            crate::correction_detect::detect_corrections(
+                                &recalls, summaries,
+                            )
+                            .ranked()
+                            .into_iter()
+                            .map(|(topic, count)| (topic, count as f32))
+                            .collect()
+                        };
                     let folded = count_by_topic.len();
                     if folded > 0 {
                         if let Err(e) = ledger
@@ -2707,6 +2757,9 @@ mod tests {
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
             correction_ledger: None,
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             use_judgment_signal: false,
         };
 
@@ -2878,6 +2931,9 @@ mod tests {
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
             correction_ledger: None,
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             // Phase 93 — the knob under test.
             use_judgment_signal: true,
         };
@@ -3044,6 +3100,9 @@ mod tests {
             helpfulness_ledger: Some(Arc::clone(&ledger)),
             cooccurrence_ledger: None,
             correction_ledger: None,
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             use_judgment_signal: false,
         };
 
@@ -3225,6 +3284,9 @@ mod tests {
             helpfulness_ledger: None,
             cooccurrence_ledger: None,
             correction_ledger: Some(Arc::clone(&ledger)),
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             use_judgment_signal: false,
         };
 
@@ -3253,6 +3315,170 @@ mod tests {
             "a clean turn with no quick follow-up is never a \
              correction"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 178 — judged correction fold --------------------
+
+    /// A fake `CorrectionJudge` that says `Rework` iff the
+    /// follow-up query contains "wrong", else `Praise`.
+    struct WrongMeansRework;
+    #[async_trait::async_trait]
+    impl crate::correction_judgment::CorrectionJudge for WrongMeansRework {
+        async fn judge(
+            &self,
+            inputs: &[crate::correction_judgment::CorrectionJudgeInput],
+        ) -> Vec<Option<crate::correction_judgment::CorrectionJudgment>>
+        {
+            inputs
+                .iter()
+                .map(|i| {
+                    if i.follow_up_query.contains("wrong") {
+                        Some(crate::correction_judgment::CorrectionJudgment::Rework)
+                    } else {
+                        Some(crate::correction_judgment::CorrectionJudgment::Praise)
+                    }
+                })
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn judged_fold_folds_only_rework_followups() {
+        use crate::correction_ledger::PersistentCorrectionLedger;
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::{
+            PersistentRecallLog, RecallEvent, RecallHit,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-judged-fold-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([178u8; 32]),
+        )
+        .await
+        .unwrap();
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let ledger = Arc::new(PersistentCorrectionLedger::new(
+            store.domain(KeyDomain::CorrectionLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"judged-fold-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+
+        // Two corrected turns, both completed-then-rapid-followup:
+        //   auth: followed by a turn whose query says "wrong" → Rework → folds
+        //   css:  followed by a turn whose query is praise      → drops
+        let s = SessionId::new();
+        let sid = s.to_string();
+        // Corrected turns recall auth / css; the FOLLOW-UP turns
+        // carry the captured queries.
+        for (ts, topic, query) in [
+            (1000u64, "auth", ""),
+            (1006, "x", "that is wrong, redo it"), // follow-up of auth
+            (5000, "css", ""),
+            (5006, "y", "thanks, perfect"), // follow-up of css
+        ] {
+            recall_log
+                .append(&RecallEvent {
+                    ts_secs: ts,
+                    session_id: s,
+                    query_text: query.to_string(),
+                    hits: vec![RecallHit {
+                        topic: topic.into(),
+                        seq: 1,
+                        score: 0.9,
+                        cluster: false,
+                        judgment: None,
+                    }],
+                })
+                .await
+                .unwrap();
+        }
+        let summaries: Vec<OutcomeSummary> = [
+            ("t0", 1000u64),
+            ("t1", 1006),
+            ("t2", 5000),
+            ("t3", 5006),
+        ]
+        .iter()
+        .map(|(id, ts)| OutcomeSummary {
+            session_id: sid.clone(),
+            turn_id: (*id).into(),
+            started_at_unix_ms: ts * 1000,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 0,
+            duration_ms: 1000,
+        })
+        .collect();
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
+        };
+        let stat = crate::correction_judgment::shared_correction_judgment_stat();
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: None,
+            cooccurrence_ledger: None,
+            correction_ledger: Some(Arc::clone(&ledger)),
+            correction_judge: Some(Arc::new(WrongMeansRework)),
+            correction_judgment_max: 30,
+            correction_judgment_stat: Some(stat.clone()),
+            use_judgment_signal: false,
+        };
+
+        run_recall_feedback_pass(&deps, &sched, &summaries, 1_000_000_000)
+            .await;
+
+        // auth (Rework) folded; css (Praise) dropped.
+        assert!(ledger
+            .topic_corrections("auth", 1_000_000)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(
+            ledger
+                .topic_corrections("css", 1_000_000)
+                .await
+                .unwrap()
+                .is_none(),
+            "a praise follow-up must NOT fold as a correction"
+        );
+        // Stat recorded the cycle.
+        let snap = stat.read().unwrap().clone().expect("stat written");
+        assert_eq!(snap.rework, 1);
+        assert_eq!(snap.praise, 1);
+        assert_eq!(snap.judged, 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3374,6 +3600,9 @@ mod tests {
             helpfulness_ledger: None,
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
             correction_ledger: None,
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             use_judgment_signal: false,
         };
 
@@ -3592,6 +3821,9 @@ mod tests {
             helpfulness_ledger: Some(Arc::clone(&help)),
             cooccurrence_ledger: Some(Arc::clone(&cooc)),
             correction_ledger: None,
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
             use_judgment_signal: false,
         };
         run_recall_feedback_pass(

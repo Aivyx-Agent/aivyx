@@ -3490,6 +3490,10 @@ async fn run_async(
         // Task 4 of Phase 91 wires it through DaemonConfig
         // to the reflection-cron LLM-judged recall pass.
         recall_judgment: _config_recall_judgment,
+        // Phase 178 — `[correction_judgment]` config. Wired
+        // through DaemonConfig to the reflection-cron correction
+        // fold (only Rework folds when armed).
+        correction_judgment: config_correction_judgment,
         // Phase 93 — `[recall_feedback]` config. Wired
         // through DaemonConfig to thread the per-hit
         // judgment-signal switch into `correlate_detailed`
@@ -4277,6 +4281,27 @@ async fn run_async(
     > = match &_config_recall_judgment {
         Some(r) if r.enabled => Some(Arc::new(
             aivyx_channel::recall_judgment::LlmRecallJudge::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
+        _ => None,
+    };
+    // Phase 178 — `[correction_judgment]` stat + LLM judge.
+    // Built when the section is enabled; the reflection-cron
+    // correction fold uses them only when armed.
+    let correction_judgment_stat =
+        match &config_correction_judgment {
+            Some(c) if c.enabled => Some(
+                aivyx_channel::correction_judgment::shared_correction_judgment_stat(),
+            ),
+            _ => None,
+        };
+    let correction_judge: Option<
+        Arc<dyn aivyx_channel::correction_judgment::CorrectionJudge>,
+    > = match &config_correction_judgment {
+        Some(c) if c.enabled => Some(Arc::new(
+            aivyx_channel::correction_judgment::LlmCorrectionJudge::new(
                 Arc::clone(&provider),
                 model.clone(),
             ),
@@ -5933,6 +5958,13 @@ async fn run_async(
             recall_judgment_stat:
                 recall_judgment_stat.clone(),
             recall_judge: recall_judge.clone(),
+            // Phase 178 — correction judgment config + judge +
+            // stat (Some iff `[correction_judgment].enabled`).
+            correction_judgment_config:
+                config_correction_judgment.clone(),
+            correction_judge: correction_judge.clone(),
+            correction_judgment_stat:
+                correction_judgment_stat.clone(),
             // Phase 93 — `[recall_feedback]` config threaded
             // into the daemon. Drives `correlate_detailed` in
             // both the reflection-cron recall-feedback pass

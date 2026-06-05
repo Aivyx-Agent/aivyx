@@ -7822,6 +7822,60 @@ fn loop_max_run_tokens_parse_and_disable() {
     drop(env);
 }
 
+/// Phase 178 — `[correction_judgment]` parses; absent → None;
+/// enabled with a 0 cap → Invalid.
+#[test]
+fn correction_judgment_parse_and_validate() {
+    let env = EnvScope::new();
+    // Absent.
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.correction_judgment.is_none());
+    // Enabled + valid.
+    let cfg2 = load_with_toml(
+        "\n[correction_judgment]\nenabled = true\n\
+         max_corrections_per_cycle = 12\n",
+        "cj-valid",
+    );
+    let c = cfg2.correction_judgment.expect("present");
+    assert!(c.enabled);
+    assert_eq!(c.max_corrections_per_cycle, 12);
+    // Default cap when omitted.
+    let cfg3 =
+        load_with_toml("\n[correction_judgment]\nenabled = true\n", "cj-def");
+    assert_eq!(
+        cfg3.correction_judgment.expect("present").max_corrections_per_cycle,
+        crate::DEFAULT_CJ_MAX_CORRECTIONS_PER_CYCLE
+    );
+    // Enabled + 0 cap → Invalid.
+    let tmp = TempDir::new("cj-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[correction_judgment]\nenabled = true\n\
+         max_corrections_per_cycle = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts).expect_err("err") {
+        ConfigError::Invalid { field, .. } => assert_eq!(
+            field,
+            "correction_judgment.max_corrections_per_cycle"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →

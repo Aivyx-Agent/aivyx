@@ -350,6 +350,17 @@ pub struct DaemonConfig {
     pub recall_judge: Option<
         std::sync::Arc<dyn crate::recall_judgment::RecallJudge>,
     >,
+    /// Phase 178 — `[correction_judgment]` config + judge + stat
+    /// for the LLM-judged correction fold. All `None` → the
+    /// Phase 172 structural correction fold.
+    pub correction_judgment_config:
+        Option<aivyx_config::CorrectionJudgmentConfig>,
+    pub correction_judge: Option<
+        std::sync::Arc<dyn crate::correction_judgment::CorrectionJudge>,
+    >,
+    pub correction_judgment_stat: Option<
+        crate::correction_judgment::SharedCorrectionJudgmentStat,
+    >,
     /// Phase 93 — `[recall_feedback]` config. `None` (no
     /// section) → `correlate_detailed` runs with the
     /// pre-Phase-93 structural-only behaviour. `Some` with
@@ -476,6 +487,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         recall_judgment_config,
         recall_judgment_stat,
         recall_judge,
+        correction_judgment_config,
+        correction_judge,
+        correction_judgment_stat,
         recall_feedback_config,
         tool_descriptors,
         skill_auto_proposer,
@@ -717,6 +731,26 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         // correction ledger (zero-config, same
                         // substrate).
                         correction_ledger: correction_ledger.clone(),
+                        // Phase 178 — the correction judge, armed
+                        // only when `[correction_judgment]` is
+                        // enabled AND a judge was built. `None` →
+                        // the Phase 172 structural fold.
+                        correction_judge: if correction_judgment_config
+                            .as_ref()
+                            .map(|c| c.enabled)
+                            .unwrap_or(false)
+                        {
+                            correction_judge.clone()
+                        } else {
+                            None
+                        },
+                        correction_judgment_max:
+                            correction_judgment_config
+                                .as_ref()
+                                .map(|c| c.max_corrections_per_cycle)
+                                .unwrap_or(0),
+                        correction_judgment_stat:
+                            correction_judgment_stat.clone(),
                         // Phase 93 — per-hit judgment override
                         // when `[recall_feedback].use_judgment_signal
                         // = true`. Absent section → `false`
@@ -2388,6 +2422,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_judgment_config: None,
         recall_judgment_stat: None,
         recall_judge: None,
+        correction_judgment_config: None,
+        correction_judge: None,
+        correction_judgment_stat: None,
         recall_feedback_config: None,
         tool_descriptors: Vec::new(),
         skill_auto_proposer: None,

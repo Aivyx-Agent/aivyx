@@ -702,6 +702,12 @@ pub struct AivyxConfig {
     /// `RecallHit` — every existing accumulator stays
     /// byte-identical to pre-Phase-91 (Q3a augment).
     pub recall_judgment: Option<RecallJudgmentConfig>,
+    /// Phase 178 — `[correction_judgment]` section. `None` when
+    /// absent: the Phase 172 correction fold is structural-only.
+    /// `Some` arms the LLM-judged correction classification on
+    /// the reflection cron (only genuine reworks fold); it still
+    /// no-ops unless `enabled = true`.
+    pub correction_judgment: Option<CorrectionJudgmentConfig>,
     /// Phase 93 — `[recall_feedback]` section. `None` when
     /// absent: `correlate_detailed` uses the Phase 77
     /// structural turn-level proxy uniformly across every hit
@@ -2204,6 +2210,31 @@ pub struct RecallJudgmentConfig {
 /// to the next cycle.
 pub const DEFAULT_RJ_MAX_RECALLS_PER_CYCLE: u32 = 30;
 
+/// Phase 178 — `[correction_judgment]` runtime config.
+///
+/// Arms the LLM-judged correction classification: when
+/// `enabled`, the reflection-cron correction fold classifies
+/// each detected correction's follow-up message (Rework /
+/// Praise / Unrelated) and folds **only** genuine reworks into
+/// the Phase 172 correction ledger. `None` (no section) → the
+/// fold is the byte-identical Phase 172 structural fold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrectionJudgmentConfig {
+    /// Master switch. Default `false`. The LLM call has real
+    /// cost; the operator opts into paying it.
+    pub enabled: bool,
+    /// Hard upper bound on how many corrections the batched LLM
+    /// call may judge in one cron tick. Past this cap, the
+    /// remaining corrections fall back to the structural signal
+    /// for the cycle (counted, never dropped). Mirrors the
+    /// Phase 91 `max_recalls_per_cycle` precedent.
+    pub max_corrections_per_cycle: u32,
+}
+
+/// Default per-cycle correction-judgment cap. Same value +
+/// reasoning as the Phase 91 recall-judgment cap.
+pub const DEFAULT_CJ_MAX_CORRECTIONS_PER_CYCLE: u32 = 30;
+
 /// Phase 93 — `[recall_feedback]` runtime config.
 ///
 /// The consumer-side switch that closes the Phase 91
@@ -2878,6 +2909,10 @@ struct RawToml {
     /// per-recall classification on the reflection cron.
     #[serde(default)]
     recall_judgment: RawRecallJudgment,
+    /// `[correction_judgment]` section. Phase 178 — LLM-judged
+    /// correction classification.
+    #[serde(default)]
+    correction_judgment: RawCorrectionJudgment,
     /// `[recall_feedback]` section. Phase 93 — consumer-side
     /// switch from structural proxy to LLM judgment signal.
     #[serde(default)]
@@ -3696,6 +3731,15 @@ struct RawRecallJudgment {
     enabled: Option<bool>,
     #[serde(default)]
     max_recalls_per_cycle: Option<u32>,
+}
+
+/// Phase 178 — `[correction_judgment]` deserialize target.
+#[derive(Debug, Default, Deserialize)]
+struct RawCorrectionJudgment {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_corrections_per_cycle: Option<u32>,
 }
 
 /// Phase 93 — `[recall_feedback]` deserialize target.
@@ -4527,6 +4571,9 @@ impl AivyxConfig {
         let loop_config = build_loop_config(&toml.loop_section)?;
         let recall_judgment =
             build_recall_judgment_config(&toml.recall_judgment)?;
+        let correction_judgment = build_correction_judgment_config(
+            &toml.correction_judgment,
+        )?;
         let recall_feedback =
             build_recall_feedback_config(&toml.recall_feedback)?;
         let skill_auto_propose =
@@ -5507,6 +5554,7 @@ impl AivyxConfig {
             correction_consolidation,
             loop_config,
             recall_judgment,
+            correction_judgment,
             recall_feedback,
             skill_auto_propose,
             persona_auto_propose,
@@ -6987,6 +7035,34 @@ fn build_recall_judgment_config(
     Ok(Some(RecallJudgmentConfig {
         enabled,
         max_recalls_per_cycle,
+    }))
+}
+
+/// Phase 178 — build the `[correction_judgment]` config.
+fn build_correction_judgment_config(
+    raw: &RawCorrectionJudgment,
+) -> Result<Option<CorrectionJudgmentConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_corrections_per_cycle.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_corrections_per_cycle = raw
+        .max_corrections_per_cycle
+        .unwrap_or(DEFAULT_CJ_MAX_CORRECTIONS_PER_CYCLE);
+
+    if enabled && max_corrections_per_cycle == 0 {
+        return Err(ConfigError::Invalid {
+            field: "correction_judgment.max_corrections_per_cycle",
+            reason: "`max_corrections_per_cycle` must be >= 1".into(),
+        });
+    }
+
+    Ok(Some(CorrectionJudgmentConfig {
+        enabled,
+        max_corrections_per_cycle,
     }))
 }
 
