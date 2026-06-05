@@ -146,4 +146,61 @@ substantially done. Natural next steps:
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 13 | Untouched (no new scope, no new tool — a config knob + driver logic over the existing audit chain; no A3 amendment) | ✅ |
+| PRODUCT.md HOLD → 67 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 13 | Untouched (`TurnOutcome` deliberately not changed) | ✅ |
+| Zero new workspace deps | Reused the audit chain + the driver's decision logic — no new dep | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+10` to `+16` | **`+5`** (config 1 + `sum_turn_usage` 2 + `decide` budget 2); workspace ~4,099 → ~4,104 | ❌ **well below band** |
+
+**Second consecutive over-prediction — a real pattern, now
+named.** Predicted `+10..+16`, landed `+5`. Phase 175 predicted
+`+12..+22` and landed `+11`; this one missed by more. The cause
+is structural: this phase added **no new tool** and almost no
+new pure logic — the genuinely-testable surface was one config
+knob, one pure helper (`sum_turn_usage`, 2 tests), and the
+`decide()` budget extension (2 tests). The driver wiring
+(`read_run_tokens` — start-seq windowing + `entries_range`) is
+thin glue over two already-tested pieces (`entries_range` in
+`aivyx-audit`, `sum_turn_usage` here), so an integration test
+there would mostly re-test the composition for heavy setup cost
+— deliberately skipped.
+
+**Refined prior:** these incremental loop follow-on phases land
+**`+5..+11`**, not the `+10..+16` I'd been guessing. A phase
+that adds a tool lands at the top of that range (175: +11); a
+pure config-knob-plus-cap phase lands at the bottom (176: +5).
+I'll predict `+5..+12` for loop-polish phases going forward.
+
+The cap closed end-to-end:
+
+1. **Config + helper** (Task 2). `[loop].max_run_tokens` (0
+   disables); pure `sum_turn_usage` summing input+output over
+   `TurnEnded`.
+2. **`decide()` budget** (Task 3). `StopBudget { tokens }`
+   after the wall-clock check; precedence tested.
+3. **Driver wiring** (Task 4). Snapshot `budget_start_seq` at
+   run start; `read_run_tokens` best-effort each iteration; no
+   audit → no cap.
+4. **Surface** (Task 5). `aivyx loop status` shows the token
+   budget; INSTALL documents the knob + the total-spend-during-
+   run framing.
+
+### Honest-debt status carried forward (Phase 177)
+
+- **Window-sum, not loop-only attribution** (concurrent turns
+  count); **token cap, not cost** (no pricing); **checked at
+  iteration boundaries** — all documented at entry, unchanged.
+- Sixty-fifth consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result — loop arc substantially complete
+
+With **three hard caps** (iterations + wall-clock + tokens),
+**driver-side gate verification**, and the **cross-iteration
+progress log**, the autonomous loop is safe, bounded on every
+axis an operator worries about, and gets smarter as it runs —
+all built from existing substrate, no new dependency, no broken
+contract streak across the whole 173–176 arc.

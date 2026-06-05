@@ -4853,6 +4853,9 @@ max_run_secs = 7200          # optional — wall-clock cap, in seconds
 
 # Phase 175 — cross-iteration progress log.
 progress_inject_count = 20   # optional, default 20; 0 disables injection
+
+# Phase 176 — per-run token budget (cost control).
+max_run_tokens = 2000000     # optional — stop the run past this many tokens
 ```
 
 Then, with the daemon running:
@@ -4888,9 +4891,14 @@ highest-trust-stakes action Aivyx takes. The guardrails:
   `gate failed after iteration N` reason. This is the strongest
   guard — set it. Without it, the driver trusts the agent's
   `loop.complete`.
-- **The `max_iterations` cap** + the optional **`max_run_secs`
-  wall-clock cap** — hard bounds on blast radius regardless of
-  what the agent does.
+- **The `max_iterations` cap**, the optional **`max_run_secs`
+  wall-clock cap**, and the optional **`max_run_tokens` token
+  budget** — three hard bounds on blast radius regardless of
+  what the agent does. The token budget sums the input+output
+  tokens of every turn that completes during the run (read from
+  the audit chain) and stops the run once they exceed the cap;
+  it's a token cap, not a dollar cap, and needs an audit log
+  configured to take effect.
 - **Capability gating** — loop turns run at the Trusted tier;
   a remote (SemiTrusted) adapter cannot drive a loop.
 - **The audit chain** — every iteration is recorded.
@@ -4925,9 +4933,12 @@ knowledge about your codebase accumulates over time. Inspect
 them any time with `aivyx loop log`. Set
 `progress_inject_count = 0` to disable injection.
 
-Still deferred (Phase 176): a **token-budget per-run cap** (the
-last cap in the trio). Until it lands, keep `max_iterations` /
-`max_run_secs` conservative and supervise early runs.
+With the cap trio complete (iterations + wall-clock + tokens),
+gate verification, and the progress log, the loop arc is
+substantially done. Still deferred (Phase 177): **loop-only
+token attribution** (today `max_run_tokens` counts *all* turns
+during the run window, which is the safe over-counting
+direction), a real **cost model**, and a **Web UI loop pane**.
 
 ## Tool observability (Phase 102)
 

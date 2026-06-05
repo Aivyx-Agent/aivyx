@@ -707,11 +707,20 @@ pub async fn loop_stop(
 }
 
 /// Read the loop run state + remaining backlog. Returns
-/// `(state, remaining, armed, gate_enabled, max_run_secs)`.
+/// `(state, remaining, armed, gate_enabled, max_run_secs,
+/// max_run_tokens)`.
+#[allow(clippy::type_complexity)]
 pub async fn loop_status(
     socket_path: &Path,
 ) -> Result<
-    (crate::loop_driver::LoopRunState, usize, bool, bool, Option<u64>),
+    (
+        crate::loop_driver::LoopRunState,
+        usize,
+        bool,
+        bool,
+        Option<u64>,
+        Option<u64>,
+    ),
     DaemonError,
 > {
     let payload =
@@ -724,7 +733,15 @@ pub async fn loop_status(
             armed,
             gate_enabled,
             max_run_secs,
-        } => Ok((state, remaining, armed, gate_enabled, max_run_secs)),
+            max_run_tokens,
+        } => Ok((
+            state,
+            remaining,
+            armed,
+            gate_enabled,
+            max_run_secs,
+            max_run_tokens,
+        )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))
         }

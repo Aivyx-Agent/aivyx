@@ -559,6 +559,10 @@ pub enum QueryResponsePayload {
         /// `#[serde(default)]` so pre-174 frames decode.
         #[serde(default)]
         max_run_secs: Option<u64>,
+        /// Phase 176 — the per-run token budget, if any.
+        /// `#[serde(default)]` so pre-176 frames decode.
+        #[serde(default)]
+        max_run_tokens: Option<u64>,
     },
     /// Phase 175 — response to [`QueryPayload::LoopLog`]. Recent
     /// progress notes, most-recent-first.

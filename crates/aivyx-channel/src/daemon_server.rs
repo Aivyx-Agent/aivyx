@@ -2895,6 +2895,8 @@ async fn handle_query(
                     .map(|c| c.gate_command.is_some())
                     .unwrap_or(false),
                 max_run_secs: loop_config.and_then(|c| c.max_run_secs),
+                max_run_tokens: loop_config
+                    .and_then(|c| c.max_run_tokens),
             }
         }
         QueryPayload::LoopLog { limit } => {

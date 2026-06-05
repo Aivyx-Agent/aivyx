@@ -66,10 +66,16 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
             }
         }
         LoopSubcommand::Status => {
-            let (state, remaining, armed, gate_enabled, max_run_secs) =
-                loop_status(&socket_path)
-                    .await
-                    .map_err(|e| format!("loop status failed: {e}"))?;
+            let (
+                state,
+                remaining,
+                armed,
+                gate_enabled,
+                max_run_secs,
+                max_run_tokens,
+            ) = loop_status(&socket_path)
+                .await
+                .map_err(|e| format!("loop status failed: {e}"))?;
             print!(
                 "{}",
                 render_status(
@@ -78,6 +84,7 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                     armed,
                     gate_enabled,
                     max_run_secs,
+                    max_run_tokens,
                 )
             );
             Ok(())
@@ -164,12 +171,14 @@ fn render_backlog(stories: &[Story]) -> String {
 }
 
 /// Pure renderer — the loop run state.
+#[allow(clippy::too_many_arguments)]
 fn render_status(
     state: &LoopRunState,
     remaining: usize,
     armed: bool,
     gate_enabled: bool,
     max_run_secs: Option<u64>,
+    max_run_tokens: Option<u64>,
 ) -> String {
     let mut out = String::from("Loop status:\n");
     if !armed {
@@ -206,6 +215,13 @@ fn render_status(
             "  wall-clock cap: {}\n",
             match max_run_secs {
                 Some(s) => format!("{s}s"),
+                None => "none".to_string(),
+            },
+        ));
+        out.push_str(&format!(
+            "  token budget: {}\n",
+            match max_run_tokens {
+                Some(t) => format!("{t} tokens / run"),
                 None => "none".to_string(),
             },
         ));
@@ -269,7 +285,7 @@ mod tests {
 
     #[test]
     fn status_not_armed() {
-        let out = render_status(&LoopRunState::default(), 3, false, false, None);
+        let out = render_status(&LoopRunState::default(), 3, false, false, None, None);
         assert!(out.contains("not armed"));
         assert!(out.contains("3 pending"));
         // Safety config is only shown when armed.
@@ -285,11 +301,12 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: None,
         };
-        let out = render_status(&state, 7, true, true, Some(3600));
+        let out = render_status(&state, 7, true, true, Some(3600), Some(500000));
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
         assert!(out.contains("7 pending"));
         assert!(out.contains("gate verification: on"));
         assert!(out.contains("wall-clock cap: 3600s"));
+        assert!(out.contains("token budget: 500000 tokens / run"));
     }
 
     #[test]
@@ -301,7 +318,7 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: Some("backlog complete".into()),
         };
-        let out = render_status(&state, 0, true, false, None);
+        let out = render_status(&state, 0, true, false, None, None);
         assert!(out.contains("idle (armed)"));
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
         assert!(out.contains("gate verification: off"));
