@@ -82,6 +82,30 @@ pub struct RecallEvent {
     pub ts_secs: u64,
     pub session_id: SessionId,
     pub hits: Vec<RecallHit>,
+    /// Phase 178 — the (truncated) operator message that drove
+    /// this turn's recall. Captured so the correction-judgment
+    /// pass can read a corrected turn's follow-up message and
+    /// classify it (Rework / Praise / Unrelated). `#[serde(default)]`
+    /// so pre-Phase-178 rows decode with an empty string (and
+    /// simply aren't judgeable). The recall log is HKDF-domain-
+    /// encrypted at rest; the text is truncated at capture.
+    #[serde(default)]
+    pub query_text: String,
+}
+
+/// Phase 178 — max characters of the operator query stored on a
+/// `RecallEvent`. Enough for the judge to classify a follow-up;
+/// bounded so the recall log doesn't bloat or hold long pastes.
+pub const QUERY_TEXT_MAX_CHARS: usize = 400;
+
+/// Phase 178 — truncate an operator message to
+/// [`QUERY_TEXT_MAX_CHARS`] on a char boundary for capture.
+pub fn truncate_query_text(msg: &str) -> String {
+    let trimmed = msg.trim();
+    if trimmed.chars().count() <= QUERY_TEXT_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(QUERY_TEXT_MAX_CHARS).collect()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -240,6 +264,40 @@ mod tests {
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
     use std::path::PathBuf;
+
+    #[test]
+    fn truncate_query_text_trims_and_caps() {
+        assert_eq!(truncate_query_text("  hi there  "), "hi there");
+        let long: String = "x".repeat(QUERY_TEXT_MAX_CHARS + 50);
+        let t = truncate_query_text(&long);
+        assert_eq!(t.chars().count(), QUERY_TEXT_MAX_CHARS);
+        // Multibyte safe (no panic on a char-boundary cut).
+        let emoji: String = "🦀".repeat(QUERY_TEXT_MAX_CHARS + 10);
+        assert_eq!(
+            truncate_query_text(&emoji).chars().count(),
+            QUERY_TEXT_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn recall_event_query_text_round_trips_and_defaults() {
+        // New field serializes; an old row without it decodes to "".
+        let ev = RecallEvent {
+            ts_secs: 5,
+            session_id: SessionId::new(),
+            hits: vec![],
+            query_text: "fix the auth bug".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: RecallEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.query_text, "fix the auth bug");
+        // Pre-178 shape (no query_text) → default "".
+        let old = r#"{"ts_secs":5,"session_id":""#.to_string()
+            + &ev.session_id.to_string()
+            + r#"","hits":[]}"#;
+        let decoded: RecallEvent = serde_json::from_str(&old).unwrap();
+        assert_eq!(decoded.query_text, "");
+    }
     use std::sync::Arc;
 
     struct Scratch {
@@ -281,6 +339,7 @@ mod tests {
         RecallEvent {
             ts_secs: ts,
             session_id: SessionId::new(),
+            query_text: String::new(),
             hits: vec![RecallHit {
                 topic: topic.into(),
                 seq,

@@ -2666,6 +2666,7 @@ mod tests {
                 .append(&RecallEvent {
                     ts_secs: 1000 + i * 100,
                     session_id: s,
+                    query_text: String::new(),
                     hits: vec![RecallHit {
                         topic: "proj".into(),
                         seq,
@@ -2837,6 +2838,7 @@ mod tests {
                 .append(&RecallEvent {
                     ts_secs: 1000 + (i as u64) * 100,
                     session_id: s,
+                    query_text: String::new(),
                     hits: vec![RecallHit {
                         topic: "proj".into(),
                         seq: *seq,
@@ -3000,6 +3002,7 @@ mod tests {
                 .append(&RecallEvent {
                     ts_secs: 1000 + i * 100,
                     session_id: s,
+                    query_text: String::new(),
                     hits: vec![RecallHit {
                         topic: "proj".into(),
                         seq,
@@ -3149,6 +3152,7 @@ mod tests {
             .append(&RecallEvent {
                 ts_secs: 1000,
                 session_id: s,
+                query_text: String::new(),
                 hits: vec![RecallHit {
                     topic: "auth".into(),
                     seq: auth_seq,
@@ -3163,6 +3167,7 @@ mod tests {
             .append(&RecallEvent {
                 ts_secs: 5000,
                 session_id: s,
+                query_text: String::new(),
                 hits: vec![RecallHit {
                     topic: "db".into(),
                     seq: db_seq,
@@ -3322,6 +3327,7 @@ mod tests {
                 .append(&RecallEvent {
                     ts_secs: ts,
                     session_id: s,
+                    query_text: String::new(),
                     hits: vec![
                         RecallHit {
                             topic: "deploy".into(),
@@ -3503,6 +3509,7 @@ mod tests {
             .append(&RecallEvent {
                 ts_secs: 1000,
                 session_id: s1,
+                query_text: String::new(),
                 hits: vec![
                     RecallHit {
                         topic: "alpha".into(),
@@ -3539,6 +3546,7 @@ mod tests {
             .append(&RecallEvent {
                 ts_secs: 1100,
                 session_id: s2,
+                query_text: String::new(),
                 hits: vec![
                     RecallHit {
                         topic: "cee".into(),
@@ -4883,6 +4891,7 @@ mod tests {
             .append(&crate::recall_log::RecallEvent {
                 ts_secs: now_secs,
                 session_id: aivyx_core::SessionId::new(),
+                query_text: String::new(),
                 hits: vec![
                     RecallHit {
                         topic: "deploy".into(),
@@ -4988,6 +4997,7 @@ mod tests {
             .append(&crate::recall_log::RecallEvent {
                 ts_secs: now_secs + 1,
                 session_id: aivyx_core::SessionId::new(),
+                query_text: String::new(),
                 hits: vec![
                     RecallHit {
                         topic: "deploy".into(),
@@ -5036,6 +5046,7 @@ mod tests {
             .append(&crate::recall_log::RecallEvent {
                 ts_secs: now_secs + 2,
                 session_id: aivyx_core::SessionId::new(),
+                query_text: String::new(),
                 hits: vec![RecallHit {
                     topic: "deploy".into(),
                     seq: s1,

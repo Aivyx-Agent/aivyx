@@ -256,6 +256,7 @@ mod tests {
         RecallEvent {
             ts_secs: ts,
             session_id: s,
+            query_text: String::new(),
             hits: hits
                 .iter()
                 .map(|(t, q)| RecallHit {

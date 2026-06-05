@@ -619,6 +619,12 @@ impl ContextProvider for SemanticMemoryContext {
             let event = crate::recall_log::RecallEvent {
                 ts_secs: ts,
                 session_id,
+                // Phase 178 — capture the (truncated) operator
+                // message so the correction-judgment pass can
+                // classify a corrected turn's follow-up.
+                query_text: crate::recall_log::truncate_query_text(
+                    user_message,
+                ),
                 hits: final_hits
                     .iter()
                     .zip(is_cluster.iter())

@@ -159,6 +159,94 @@ pub fn detect_corrections(
     tally
 }
 
+/// Phase 178 — one correction event with the context the
+/// correction-judgment pass needs: the corrected turn's distinct
+/// non-cluster topics (what folds, if the judge says `Rework`)
+/// plus the follow-up turn's captured query (what the judge
+/// classifies). `follow_up_query` is `None` when the follow-up
+/// turn fired no recall (so nothing was captured) — those events
+/// are unjudgeable and the structural signal stands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrectionEvent {
+    pub topics: Vec<String>,
+    pub follow_up_query: Option<String>,
+}
+
+/// Phase 178 — the per-event detail behind [`detect_corrections`].
+/// Same correction definition (a `completed` turn followed within
+/// the window by another same-session turn), but instead of an
+/// aggregate count it yields one [`CorrectionEvent`] per corrected
+/// turn, carrying the follow-up's captured query for LLM judgment.
+/// Pure; deterministic in `recalls` order.
+pub fn detect_corrections_detailed(
+    recalls: &[RecallEvent],
+    outcomes: &[OutcomeSummary],
+) -> Vec<CorrectionEvent> {
+    let mut out = Vec::new();
+    for recall in recalls {
+        let Some(outcome) =
+            crate::recall_feedback::match_outcome(recall, outcomes)
+        else {
+            continue;
+        };
+        if outcome.outcome_kind != "completed" {
+            continue;
+        }
+        let Some(followup) =
+            crate::recall_feedback::followup_outcome(outcome, outcomes)
+        else {
+            continue;
+        };
+
+        // Distinct non-cluster topics of the corrected turn.
+        let mut topics: Vec<String> = Vec::new();
+        for hit in &recall.hits {
+            if hit.cluster {
+                continue;
+            }
+            if !topics.iter().any(|t| t == &hit.topic) {
+                topics.push(hit.topic.clone());
+            }
+        }
+        if topics.is_empty() {
+            continue;
+        }
+
+        // The follow-up turn's captured query: find the recall
+        // event matching the follow-up outcome (same session,
+        // start ≈ recall ts) and read its `query_text`.
+        let follow_up_query =
+            query_for_outcome(followup, recalls).filter(|q| !q.is_empty());
+
+        out.push(CorrectionEvent {
+            topics,
+            follow_up_query,
+        });
+    }
+    out
+}
+
+/// Find the recall event whose turn is `outcome` (same session,
+/// closest start within `MATCH_TOLERANCE_MS`) and return its
+/// captured `query_text`. `None` if no recall event matches (the
+/// turn fired no recall).
+fn query_for_outcome(
+    outcome: &OutcomeSummary,
+    recalls: &[RecallEvent],
+) -> Option<String> {
+    let tol = crate::recall_feedback::MATCH_TOLERANCE_MS;
+    recalls
+        .iter()
+        .filter(|r| r.session_id.to_string() == outcome.session_id)
+        .map(|r| {
+            let recall_ms = r.ts_secs.saturating_mul(1000);
+            (recall_ms.abs_diff(outcome.started_at_unix_ms), r)
+        })
+        .filter(|(diff, _)| *diff <= tol)
+        .min_by_key(|(diff, _)| *diff)
+        .map(|(_, r)| r.query_text.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +261,7 @@ mod tests {
         RecallEvent {
             ts_secs,
             session_id: session,
+            query_text: String::new(),
             hits: hits
                 .iter()
                 .map(|(t, s, cluster)| RecallHit {
@@ -388,5 +477,90 @@ mod tests {
     #[test]
     fn empty_inputs_are_empty() {
         assert!(detect_corrections(&[], &[]).is_empty());
+    }
+
+    // ---- Phase 178 — detailed correction events ---------------
+
+    /// Build a recall event with a captured query.
+    fn recall_q(
+        ts_secs: u64,
+        session: SessionId,
+        query: &str,
+        hits: &[(&str, u64, bool)],
+    ) -> RecallEvent {
+        let mut e = recall(ts_secs, session, hits);
+        e.query_text = query.to_string();
+        e
+    }
+
+    #[test]
+    fn detailed_event_carries_topics_and_followup_query() {
+        // t0 (recalls auth) completes; t1 follows 5s later and
+        // recalled with the follow-up query.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [
+            recall_q(100, s, "summarize the auth flow", &[("auth", 1, false)]),
+            recall_q(106, s, "no, I meant the JWT refresh path", &[("jwt", 2, false)]),
+        ];
+        let outcomes = [
+            outcome(&sid, "t0", 100_000, 1_000, "completed"),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        let events = detect_corrections_detailed(&recalls, &outcomes);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].topics, vec!["auth".to_string()]);
+        assert_eq!(
+            events[0].follow_up_query.as_deref(),
+            Some("no, I meant the JWT refresh path")
+        );
+    }
+
+    #[test]
+    fn detailed_event_none_query_when_followup_had_no_recall() {
+        // t0 recalls + completes + is followed by t1, but t1
+        // fired no recall (no recall event for it) → query None.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_q(100, s, "q", &[("auth", 1, false)])];
+        let outcomes = [
+            outcome(&sid, "t0", 100_000, 1_000, "completed"),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        let events = detect_corrections_detailed(&recalls, &outcomes);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].topics, vec!["auth".to_string()]);
+        assert!(events[0].follow_up_query.is_none());
+    }
+
+    #[test]
+    fn detailed_no_event_for_clean_or_failed_turn() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        // Clean completion, no quick follow-up.
+        let recalls = [recall_q(100, s, "q", &[("auth", 1, false)])];
+        let clean = [outcome(&sid, "t0", 100_000, 2_000, "completed")];
+        assert!(detect_corrections_detailed(&recalls, &clean).is_empty());
+        // Failed turn (agent failure, not a correction) even with
+        // a quick follow-up.
+        let failed = [
+            outcome(&sid, "t0", 100_000, 1_000, "failed"),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        assert!(detect_corrections_detailed(&recalls, &failed).is_empty());
+    }
+
+    #[test]
+    fn detailed_skips_cluster_only_corrected_turn() {
+        // The corrected turn recalled only a cluster sibling →
+        // no distinct organic topic → no event.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let recalls = [recall_q(100, s, "q", &[("sibling", 1, true)])];
+        let outcomes = [
+            outcome(&sid, "t0", 100_000, 1_000, "completed"),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        assert!(detect_corrections_detailed(&recalls, &outcomes).is_empty());
     }
 }

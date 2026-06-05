@@ -275,6 +275,28 @@ pub async fn emit_persona_proposals(
 /// (`crate::correction_detect`) reuses the exact same proxy so
 /// the two consumers can never drift on what "the operator came
 /// right back" means.
+/// Phase 178 — the *earliest* follow-up turn that makes `this` a
+/// correction: same session, different turn, started within
+/// `CORRECTION_WINDOW_MS` of `this` ending. `None` if there is
+/// none (i.e. `this` was not followed quickly). The correction-
+/// judgment detector uses the returned outcome to locate the
+/// follow-up's captured query.
+pub(crate) fn followup_outcome<'a>(
+    this: &OutcomeSummary,
+    all: &'a [OutcomeSummary],
+) -> Option<&'a OutcomeSummary> {
+    let ended = this.started_at_unix_ms.saturating_add(this.duration_ms);
+    all.iter()
+        .filter(|o| {
+            o.session_id == this.session_id
+                && o.turn_id != this.turn_id
+                && o.started_at_unix_ms >= ended
+                && o.started_at_unix_ms.saturating_sub(ended)
+                    <= CORRECTION_WINDOW_MS
+        })
+        .min_by_key(|o| o.started_at_unix_ms)
+}
+
 pub(crate) fn followed_quickly(
     this: &OutcomeSummary,
     all: &[OutcomeSummary],
@@ -458,6 +480,7 @@ mod tests {
         RecallEvent {
             ts_secs,
             session_id: session,
+            query_text: String::new(),
             hits: hits
                 .iter()
                 .map(|(t, s)| RecallHit {
@@ -683,6 +706,7 @@ mod tests {
         RecallEvent {
             ts_secs,
             session_id: session,
+            query_text: String::new(),
             hits: triples
                 .iter()
                 .map(|(t, s, j)| RecallHit {
