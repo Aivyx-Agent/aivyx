@@ -162,14 +162,23 @@ impl Tool for DriveRecentActivity {
             .cloned()
             .unwrap_or_default();
 
-        let shaped: Vec<Value> = raw_activities
+        let mut shaped: Vec<Value> = raw_activities
             .iter()
             .map(shape_activity)
             .collect();
 
+        // Phase 169 — post-fetch actor_email
+        // filter. Applied after shape_activity
+        // populates the actor_email field but
+        // before output assembly so `count`
+        // reflects post-filter cardinality.
+        if let Some(ref pattern) = parsed.actor_email_filter {
+            shaped = filter_activities_by_actor_email(shaped, pattern);
+        }
+
         let output = json!({
-            "activities": shaped,
-            "count": raw_activities.len(),
+            "activities": &shaped,
+            "count": shaped.len(),
             "window_hours": parsed.window_hours,
         });
 
@@ -209,6 +218,10 @@ fn input_schema() -> Value {
             "parent_folder_id": {
                 "type": "string",
                 "description": "Phase 167 — scope results to activities on items within the parent folder's subtree (recursive via the Activity API's `ancestorName` field). Composes with action_type_filter and the time window. Note: semantics differ from drive.recent_files / drive.recent_changes — those default to direct children with a separate `recursive: true` toggle; the Activity API is always recursive."
+            },
+            "actor_email_filter": {
+                "type": "string",
+                "description": "Phase 169 — case-insensitive substring match against each activity's enriched actor_email field. Applied POST-fetch (the Activity API DSL has no native actor predicate), so the filter operates after the max_results page-size cut. Operators wanting a guaranteed N matching results should request a larger max_results and trust the filter to keep pace."
             }
         },
         "additionalProperties": false
@@ -275,6 +288,11 @@ struct ParsedInput {
     /// prefix); execute() composes the
     /// full ancestorName.
     parent_folder_id: Option<String>,
+    /// Phase 169 — case-insensitive substring
+    /// pattern applied post-fetch against
+    /// each activity's `actor_email` field.
+    /// None or empty means no filter.
+    actor_email_filter: Option<String>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -307,6 +325,7 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
     let action_type_filter = parse_action_type_filter(obj.get("action_type_filter"))?;
     let consolidation = parse_consolidation(obj.get("consolidation"))?;
     let parent_folder_id = parse_parent_folder_id(obj.get("parent_folder_id"))?;
+    let actor_email_filter = parse_actor_email_filter(obj.get("actor_email_filter"))?;
 
     Ok(ParsedInput {
         window_hours,
@@ -314,7 +333,50 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
         action_type_filter,
         consolidation,
         parent_folder_id,
+        actor_email_filter,
     })
+}
+
+/// Phase 169 — parse the `actor_email_filter`
+/// input. Returns the trimmed substring or
+/// None when absent / null / empty. Rejects
+/// non-string values with a clear error.
+/// Case-folding to lowercase happens here so
+/// the runtime filter is a straight
+/// `contains` call.
+pub(crate) fn parse_actor_email_filter(
+    v: Option<&Value>,
+) -> Result<Option<String>, String> {
+    let s = match v {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(_) => {
+            return Err("`actor_email_filter` must be a string".to_string());
+        }
+    };
+    if s.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(s.to_ascii_lowercase()))
+}
+
+/// Phase 169 — apply the post-fetch actor
+/// email filter against the shaped activities.
+/// Pure substrate so the filtering can be
+/// tested without going through execute().
+pub(crate) fn filter_activities_by_actor_email(
+    activities: Vec<Value>,
+    pattern: &str,
+) -> Vec<Value> {
+    activities
+        .into_iter()
+        .filter(|act| {
+            act.get("actor_email")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_ascii_lowercase().contains(pattern))
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 /// Phase 167 — parse the `parent_folder_id`
@@ -1052,5 +1114,110 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.contains("must be a string"));
+    }
+
+    // ---- Phase 169 — actor_email_filter ----
+
+    #[test]
+    fn parse_actor_email_filter_absent_yields_none() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.actor_email_filter, None);
+    }
+
+    #[test]
+    fn parse_actor_email_filter_null_yields_none() {
+        let p =
+            parse_input(&json!({"actor_email_filter": null})).unwrap();
+        assert_eq!(p.actor_email_filter, None);
+    }
+
+    #[test]
+    fn parse_actor_email_filter_empty_string_yields_none() {
+        let p =
+            parse_input(&json!({"actor_email_filter": ""})).unwrap();
+        assert_eq!(p.actor_email_filter, None);
+    }
+
+    #[test]
+    fn parse_actor_email_filter_case_folds_to_lowercase() {
+        let p =
+            parse_input(&json!({"actor_email_filter": "ALICE@WORK.com"}))
+                .unwrap();
+        assert_eq!(
+            p.actor_email_filter,
+            Some("alice@work.com".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_actor_email_filter_trims_whitespace() {
+        let p =
+            parse_input(&json!({"actor_email_filter": "  alice  "}))
+                .unwrap();
+        assert_eq!(p.actor_email_filter, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn parse_actor_email_filter_rejects_non_string() {
+        let err =
+            parse_input(&json!({"actor_email_filter": 42})).unwrap_err();
+        assert!(err.contains("must be a string"));
+    }
+
+    #[test]
+    fn filter_activities_matches_full_email() {
+        let activities = vec![
+            json!({"actor_email": "alice@work.com", "action_type": "edit"}),
+            json!({"actor_email": "bob@work.com", "action_type": "create"}),
+        ];
+        let filtered = filter_activities_by_actor_email(activities, "alice");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["actor_email"], json!("alice@work.com"));
+    }
+
+    #[test]
+    fn filter_activities_matches_substring() {
+        let activities = vec![
+            json!({"actor_email": "alice@work.com"}),
+            json!({"actor_email": "carol@home.com"}),
+            json!({"actor_email": "bob@work.com"}),
+        ];
+        let filtered = filter_activities_by_actor_email(activities, "@work");
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_activities_case_insensitive_against_pre_lowered_pattern() {
+        // parse_actor_email_filter already
+        // lowercases the pattern; the runtime
+        // filter compares against the activity's
+        // lowercased actor_email.
+        let activities = vec![
+            json!({"actor_email": "Alice@Work.Com"}),
+            json!({"actor_email": "Bob@Work.Com"}),
+        ];
+        let filtered = filter_activities_by_actor_email(
+            activities,
+            "alice", // already lowercased per parse contract
+        );
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filter_activities_drops_entries_with_no_actor_email() {
+        let activities = vec![
+            json!({"actor_email": "alice"}),
+            json!({}), // missing actor_email
+            json!({"actor_email": null}),
+        ];
+        let filtered =
+            filter_activities_by_actor_email(activities, "alice");
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filter_activities_empty_input_yields_empty() {
+        let filtered = filter_activities_by_actor_email(vec![], "alice");
+        assert!(filtered.is_empty());
     }
 }
