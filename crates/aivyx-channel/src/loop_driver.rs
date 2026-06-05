@@ -78,7 +78,9 @@ re-run and the next fresh context can try again.";
 
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub struct LoopRunState {
     /// Whether a run is currently executing iterations.
     pub active: bool,

@@ -232,6 +232,30 @@ pub enum QueryPayload {
         #[serde(default)]
         keyword_key_filter: Option<String>,
     },
+    /// Phase 173 — add a story to the autonomous-loop backlog.
+    /// `priority = None` → the `[loop].default_priority` (or the
+    /// built-in default). Returns the new story's id.
+    LoopAdd {
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        priority: Option<u32>,
+    },
+    /// Phase 173 — list every backlog story (all statuses).
+    LoopList,
+    /// Phase 173 — start an autonomous-loop run. `max_iterations
+    /// = None` → the `[loop].max_iterations` default. Fails if a
+    /// run is already active or the `[loop]` section is not armed.
+    LoopStart {
+        #[serde(default)]
+        max_iterations: Option<u32>,
+    },
+    /// Phase 173 — request the active run to stop (between
+    /// iterations). Fails if no run is active.
+    LoopStop,
+    /// Phase 173 — read the loop run state + remaining backlog.
+    LoopStatus,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -492,6 +516,33 @@ pub enum QueryResponsePayload {
     /// table renders in a stable column order.
     ToolRelevanceDump {
         rows: Vec<ToolRelevanceDumpRow>,
+    },
+    /// Phase 173 — response to [`QueryPayload::LoopAdd`]. Carries
+    /// the new story's id.
+    LoopStoryAdded {
+        story_id: String,
+    },
+    /// Phase 173 — response to [`QueryPayload::LoopList`]. Every
+    /// backlog story, insertion order.
+    LoopBacklog {
+        stories: Vec<crate::loop_backlog::Story>,
+    },
+    /// Phase 173 — response to [`QueryPayload::LoopStart`] /
+    /// [`QueryPayload::LoopStop`]. `ok` is whether the control
+    /// action took effect; `message` is the operator-readable
+    /// result either way.
+    LoopControl {
+        ok: bool,
+        message: String,
+    },
+    /// Phase 173 — response to [`QueryPayload::LoopStatus`]. The
+    /// run state plus the live remaining-pending count.
+    LoopStatus {
+        state: crate::loop_driver::LoopRunState,
+        remaining: usize,
+        /// Whether the `[loop]` section is armed (the driver was
+        /// spawned). When `false`, `loop start` will fail.
+        armed: bool,
     },
 }
 

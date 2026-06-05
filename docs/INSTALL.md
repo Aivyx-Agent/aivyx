@@ -4802,6 +4802,89 @@ with no recall is invisible). An LLM-judged refinement —
 mirroring the Phase 91 recall-judgment augment — is a future
 phase.
 
+## Autonomous loop — the Aivyx Ralph loop (Phase 173)
+
+Aivyx's native answer to the "Ralph" technique
+(snarktank/ralph): an autonomous, self-re-arming task loop.
+You stock a **backlog** of stories; the loop fires a
+**fresh-context agent turn per iteration**, each picking the
+next story, implementing it, running gates, committing, and
+marking it done — re-arming until the backlog is empty or a
+hard cap is hit. Durable state lives in git, the backlog, and
+memory — not in a single long model context.
+
+The backlog is an **HMAC-chained substrate**
+(`KeyDomain::LoopBacklog`) — tamper-evident, capability-gated,
+and queryable via the `aivyx loop` CLI. The agent already has
+`git` + `shell` in the thirteen-tool core, so each iteration
+can commit and run gates; two new channel-tier tools
+(`loop.next` / `loop.complete`) let it walk the backlog.
+
+### Stocking the backlog (works without arming a run)
+
+```
+aivyx loop add "Add a --json flag to the report command" \
+  --body "Acceptance: report --json emits valid JSON; tests pass." \
+  --priority 50
+aivyx loop list
+```
+
+Lower `--priority` numbers run first; ties break by insertion
+order. `--priority` defaults to `[loop].default_priority` (or
+`100`). The backlog is daemon-owned, so these commands need a
+running daemon (`aivyx daemon run`).
+
+### Arming + driving runs
+
+Runs are **opt-in** and fully autonomous once started. Arm the
+driver in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[loop]
+enabled = true
+max_iterations = 25     # optional, default 25 — the hard cap
+default_priority = 100  # optional, default 100
+```
+
+Then, with the daemon running:
+
+```
+aivyx loop start                      # run to backlog-done or the cap
+aivyx loop start --max-iterations 5   # lower the cap for this run
+aivyx loop status                     # driver state + remaining backlog
+aivyx loop stop                       # end the run after the current iteration
+```
+
+A run stops on exactly one condition: the backlog drains,
+`max_iterations` is reached, or you `aivyx loop stop`. Every
+iteration is a `TriggerSource::Loop` turn in the audit chain.
+
+Validation (only when `enabled = true`): `max_iterations >= 1`
+(it is the primary guardrail). `aivyx loop start` requires the
+section armed and a restart after enabling.
+
+### Safety posture (read this before your first run)
+
+The loop **writes code and commits** each iteration — the
+highest-trust-stakes action Aivyx takes. In this first
+(foundation) phase the guardrails are:
+
+- **The `max_iterations` cap** — the primary bound on blast
+  radius. Keep it small until you trust a given backlog.
+- **Capability gating** — loop turns run at the Trusted tier;
+  a remote (SemiTrusted) adapter cannot drive a loop.
+- **The audit chain** — every iteration is recorded.
+- **The canonical prompt** — instructs the agent to mark a
+  story done ONLY after gates pass and the change is committed,
+  and to stop cleanly when unsure or the backlog is empty.
+
+What is **not** yet enforced (Phase 174 hardening): the driver
+does **not** independently re-run your test command between
+iterations — it trusts the agent's `loop.complete` call under
+the canonical-prompt discipline. Token-budget + wall-clock caps
+and progress-log auto-injection are also deferred. Until those
+land, supervise early runs and keep the cap conservative.
+
 ## Tool observability (Phase 102)
 
 `aivyx tools` is the read-only window onto the tool layer —

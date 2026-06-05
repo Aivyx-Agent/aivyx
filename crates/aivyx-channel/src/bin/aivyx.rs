@@ -108,6 +108,8 @@ mod init;
 mod init_templates;
 #[path = "aivyx_modules/learning.rs"]
 mod learning;
+#[path = "aivyx_modules/loop_cli.rs"]
+mod loop_cli;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
@@ -636,6 +638,19 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt
             .block_on(async move { learning::run_learning(window_secs).await });
+    }
+
+    // Phase 173 — `aivyx loop <subcommand>`: autonomous loop
+    // control. IPC-backed; same minimal-runtime shape as
+    // `learning`.
+    if let CliMode::Loop(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            loop_cli::run_loop(sub).await
+        });
     }
 
     // Phase 102 — `aivyx tools`: read-only tool-observability
@@ -1404,6 +1419,29 @@ enum CliMode {
     /// per-keyword-key relevance ledger as a human-readable table.
     /// IPC-backed.
     ToolRelevance(ToolRelevanceSubcommand),
+    /// `aivyx loop <subcommand>`: Phase 173 — the autonomous
+    /// loop (the Aivyx Ralph loop). IPC-backed; stocks the
+    /// backlog + drives runs.
+    Loop(LoopSubcommand),
+}
+
+/// Phase 173 — `aivyx loop <subcommand>` variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum LoopSubcommand {
+    /// `aivyx loop add <title> [--body <text>] [--priority <n>]`
+    Add {
+        title: String,
+        body: String,
+        priority: Option<u32>,
+    },
+    /// `aivyx loop list`
+    List,
+    /// `aivyx loop start [--max-iterations <n>]`
+    Start { max_iterations: Option<u32> },
+    /// `aivyx loop stop`
+    Stop,
+    /// `aivyx loop status`
+    Status,
 }
 
 /// Phase 119 Task 6 — `aivyx tool-relevance <subcommand>` variants.
@@ -2072,6 +2110,126 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 173 — `aivyx loop <subcommand>`: stock the backlog +
+    // drive autonomous runs. IPC-backed.
+    if !args.is_empty() && args[0] == "loop" {
+        let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
+        let loop_sub = match sub {
+            "add" => {
+                let title = args.get(2).ok_or_else(|| {
+                    "`aivyx loop add` requires a <title>".to_string()
+                })?;
+                if title.starts_with('-') {
+                    return Err(
+                        "`aivyx loop add` requires a <title> before any \
+                         flags"
+                            .to_string(),
+                    );
+                }
+                let mut body = String::new();
+                let mut priority: Option<u32> = None;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--body" => {
+                            body = args
+                                .get(idx + 1)
+                                .ok_or_else(|| {
+                                    "`--body` requires a value".to_string()
+                                })?
+                                .clone();
+                            idx += 2;
+                        }
+                        "--priority" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--priority` requires a value".to_string()
+                            })?;
+                            priority = Some(v.parse().map_err(|_| {
+                                format!(
+                                    "`--priority` expects a non-negative \
+                                     integer, got `{v}`"
+                                )
+                            })?);
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx loop \
+                                 add`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                LoopSubcommand::Add {
+                    title: title.clone(),
+                    body,
+                    priority,
+                }
+            }
+            "list" => LoopSubcommand::List,
+            "stop" => LoopSubcommand::Stop,
+            "status" => LoopSubcommand::Status,
+            "start" => {
+                let mut max_iterations: Option<u32> = None;
+                let mut idx = 2;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--max-iterations" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--max-iterations` requires a value"
+                                    .to_string()
+                            })?;
+                            let parsed: u32 = v.parse().map_err(|_| {
+                                format!(
+                                    "`--max-iterations` expects a positive \
+                                     integer, got `{v}`"
+                                )
+                            })?;
+                            if parsed == 0 {
+                                return Err(
+                                    "`--max-iterations` must be >= 1"
+                                        .to_string(),
+                                );
+                            }
+                            max_iterations = Some(parsed);
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx loop \
+                                 start`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                LoopSubcommand::Start { max_iterations }
+            }
+            "" => {
+                return Err(
+                    "`aivyx loop` requires a subcommand: add | list | \
+                     start | status | stop"
+                        .to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unknown `aivyx loop` subcommand `{other}` \
+                     (expected: add | list | start | status | stop)"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Loop(loop_sub),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -3266,6 +3424,11 @@ async fn run_async(
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
         persona_consolidation: config_persona_consolidation,
+        // Phase 173 — `[loop]` config (the Aivyx Ralph loop).
+        // Arms the autonomous-loop driver + sets the iteration
+        // cap and default story priority. Wired through
+        // DaemonConfig below.
+        loop_config: config_loop,
         // Phase 172 — `[correction_consolidation]` config.
         // Wired into the daemon's reflection-cron correction-
         // consolidation pass via DaemonConfig below.
@@ -3483,6 +3646,17 @@ async fn run_async(
             ));
         }
     };
+    // Phase 173 — the shared loop run state, created iff the
+    // `[loop]` section is armed. `Some` → the daemon spawns the
+    // loop driver + the `loop start/stop/status` IPC handlers
+    // operate on this handle; `None` → loop runs cannot start.
+    let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> =
+        match &config_loop {
+            Some(c) if c.enabled => {
+                Some(aivyx_channel::loop_driver::SharedLoopState::new())
+            }
+            _ => None,
+        };
     let shared_persona = aivyx_channel::persona::shared_effective_persona(
         aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
@@ -5566,6 +5740,12 @@ async fn run_async(
                         ),
                     )
                 }),
+            // Phase 173 — autonomous loop: the always-built
+            // backlog, the shared run state (Some iff armed), and
+            // the [loop] config.
+            loop_backlog: Some(Arc::clone(&loop_backlog)),
+            loop_state: loop_state.clone(),
+            loop_config: config_loop.clone(),
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

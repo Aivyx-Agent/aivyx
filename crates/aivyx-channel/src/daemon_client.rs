@@ -617,6 +617,121 @@ pub async fn get_tool_stats(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 173 — autonomous loop control
+// ---------------------------------------------------------------------------
+
+/// Add a story to the autonomous-loop backlog. Returns the new
+/// story's id.
+pub async fn loop_add(
+    socket_path: &Path,
+    title: String,
+    body: String,
+    priority: Option<u32>,
+) -> Result<String, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "loop-add",
+        QueryPayload::LoopAdd {
+            title,
+            body,
+            priority,
+        },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::LoopStoryAdded { story_id } => Ok(story_id),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopStoryAdded, got {other:?}"
+        ))),
+    }
+}
+
+/// List every backlog story (all statuses).
+pub async fn loop_list(
+    socket_path: &Path,
+) -> Result<Vec<crate::loop_backlog::Story>, DaemonError> {
+    let payload =
+        send_query(socket_path, "loop-list", QueryPayload::LoopList).await?;
+    match payload {
+        QueryResponsePayload::LoopBacklog { stories } => Ok(stories),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopBacklog, got {other:?}"
+        ))),
+    }
+}
+
+/// Start an autonomous-loop run. Returns `(ok, message)`.
+pub async fn loop_start(
+    socket_path: &Path,
+    max_iterations: Option<u32>,
+) -> Result<(bool, String), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "loop-start",
+        QueryPayload::LoopStart { max_iterations },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::LoopControl { ok, message } => Ok((ok, message)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopControl, got {other:?}"
+        ))),
+    }
+}
+
+/// Request the active loop run to stop. Returns `(ok, message)`.
+pub async fn loop_stop(
+    socket_path: &Path,
+) -> Result<(bool, String), DaemonError> {
+    let payload =
+        send_query(socket_path, "loop-stop", QueryPayload::LoopStop).await?;
+    match payload {
+        QueryResponsePayload::LoopControl { ok, message } => Ok((ok, message)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopControl, got {other:?}"
+        ))),
+    }
+}
+
+/// Read the loop run state + remaining backlog. Returns
+/// `(state, remaining, armed)`.
+pub async fn loop_status(
+    socket_path: &Path,
+) -> Result<
+    (crate::loop_driver::LoopRunState, usize, bool),
+    DaemonError,
+> {
+    let payload =
+        send_query(socket_path, "loop-status", QueryPayload::LoopStatus)
+            .await?;
+    match payload {
+        QueryResponsePayload::LoopStatus {
+            state,
+            remaining,
+            armed,
+        } => Ok((state, remaining, armed)),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopStatus, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

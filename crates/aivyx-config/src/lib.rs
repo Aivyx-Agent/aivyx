@@ -687,6 +687,12 @@ pub struct AivyxConfig {
     /// `enabled = true`.
     pub correction_consolidation:
         Option<CorrectionConsolidationConfig>,
+    /// Phase 173 — `[loop]` section (the Aivyx Ralph loop).
+    /// `None` when absent: the autonomous-loop driver is not
+    /// spawned (the backlog can still be stocked, but no run can
+    /// start). `Some` arms the driver; runs still start only on
+    /// an explicit `aivyx loop start`.
+    pub loop_config: Option<LoopConfig>,
     /// Phase 91 — `[recall_judgment]` section. `None` when
     /// absent: the recall-feedback loop runs unchanged (the
     /// Phase 77 structural proxy is the only signal). `Some`
@@ -2083,6 +2089,44 @@ pub const DEFAULT_CC_MIN_SAMPLES: u32 = 2;
 /// Phase 80 caps.
 pub const DEFAULT_CC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
 
+/// Phase 173 — `[loop]` runtime config (the Aivyx Ralph loop).
+///
+/// Arms the autonomous-loop driver: when present and `enabled =
+/// true`, the daemon spawns the loop driver background task so
+/// `aivyx loop start` can run the backlog to completion. The
+/// HMAC-chained backlog substrate is always available (the
+/// `aivyx loop add` CLI works regardless); this block only
+/// controls whether *runs* can be driven and with what cap.
+///
+/// `None` (no section) → the driver is not spawned; the backlog
+/// can still be stocked but no run can start. `Some` arms the
+/// driver; runs still start only on an explicit `aivyx loop
+/// start`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present the driver is not spawned until this is `true`.
+    pub enabled: bool,
+    /// Hard cap on iterations per run — the primary guardrail on
+    /// a fully-autonomous, code-committing loop. A run stops once
+    /// it reaches this many fresh-context iterations regardless
+    /// of remaining backlog. `aivyx loop start --max-iterations`
+    /// may lower it per run; this is the default + the ceiling.
+    pub max_iterations: u32,
+    /// Priority assigned to a story added via `aivyx loop add`
+    /// without an explicit `--priority`. Lower runs first.
+    pub default_priority: u32,
+}
+
+/// Default per-run iteration cap. Conservative on purpose — an
+/// autonomous loop that writes code and commits should not run
+/// away; the operator raises it deliberately.
+pub const DEFAULT_LOOP_MAX_ITERATIONS: u32 = 25;
+/// Default story priority for `aivyx loop add` without
+/// `--priority`. A mid-range value so operators can insert both
+/// higher- and lower-priority stories around it.
+pub const DEFAULT_LOOP_PRIORITY: u32 = 100;
+
 /// Phase 91 — `[recall_judgment]` runtime config.
 ///
 /// The opt-in surface for the LLM-judged per-recall
@@ -2788,6 +2832,9 @@ struct RawToml {
     /// correction-driven Persona proposals.
     #[serde(default)]
     correction_consolidation: RawCorrectionConsolidation,
+    /// `[loop]` section. Phase 173 — the autonomous loop.
+    #[serde(default, rename = "loop")]
+    loop_section: RawLoop,
     /// `[recall_judgment]` section. Phase 91 — LLM-judged
     /// per-recall classification on the reflection cron.
     #[serde(default)]
@@ -3570,6 +3617,19 @@ struct RawCorrectionConsolidation {
     min_samples: Option<u32>,
     #[serde(default)]
     max_proposals_per_cycle: Option<u32>,
+}
+
+/// Phase 173 — `[loop]` deserialize target. Absent section →
+/// all-`None` via `Default` → the loader maps to
+/// `loop_config: None` (the driver is not spawned).
+#[derive(Debug, Default, Deserialize)]
+struct RawLoop {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_iterations: Option<u32>,
+    #[serde(default)]
+    default_priority: Option<u32>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -4410,6 +4470,7 @@ impl AivyxConfig {
             build_correction_consolidation_config(
                 &toml.correction_consolidation,
             )?;
+        let loop_config = build_loop_config(&toml.loop_section)?;
         let recall_judgment =
             build_recall_judgment_config(&toml.recall_judgment)?;
         let recall_feedback =
@@ -5390,6 +5451,7 @@ impl AivyxConfig {
             recall_cluster,
             persona_consolidation,
             correction_consolidation,
+            loop_config,
             recall_judgment,
             recall_feedback,
             skill_auto_propose,
@@ -6761,6 +6823,42 @@ fn build_correction_consolidation_config(
         min_corrections,
         min_samples,
         max_proposals_per_cycle,
+    }))
+}
+
+/// Phase 173 — build the `[loop]` config. Absent section →
+/// `None`; an armed (`enabled = true`) section must have a
+/// positive `max_iterations` cap (a staged `enabled = false`
+/// section may be partial).
+fn build_loop_config(
+    raw: &RawLoop,
+) -> Result<Option<LoopConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_iterations.is_some()
+        || raw.default_priority.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_iterations =
+        raw.max_iterations.unwrap_or(DEFAULT_LOOP_MAX_ITERATIONS);
+    let default_priority =
+        raw.default_priority.unwrap_or(DEFAULT_LOOP_PRIORITY);
+
+    if enabled && max_iterations == 0 {
+        return Err(ConfigError::Invalid {
+            field: "loop.max_iterations",
+            reason: "`max_iterations` must be >= 1 (it is the \
+                     primary guardrail on the autonomous loop)"
+                .into(),
+        });
+    }
+
+    Ok(Some(LoopConfig {
+        enabled,
+        max_iterations,
+        default_priority,
     }))
 }
 

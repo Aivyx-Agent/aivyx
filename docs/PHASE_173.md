@@ -189,4 +189,67 @@ thirteen-tool core is untouched, no DESIGN.md A12 amendment.**
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 10 | Untouched (the A3 amendment *file* enumeration was bumped 69→71 for the two new scopes — the established process, not a DESIGN.md edit) | ✅ |
+| PRODUCT.md HOLD → 64 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 10 | Untouched | ✅ |
+| Zero new workspace deps | All work reused existing primitives (`aivyx_storage`, the HMAC-chain template, `TriggerDispatch`, `tokio::sync::Notify`) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (one `manual Default` + one unused-fn reworded in Task 4) | ✅ |
+| Test count delta `+35` to `+55` | `+37` (backlog 12 + tools 5 + driver 11 + cli 5 + config 4); workspace ~4,035 → ~4,072 | ✅ (low end of band) |
+
+The foundation closed end-to-end — the loop works:
+
+1. **Backlog substrate** (Task 2). `loop_backlog`: an
+   HMAC-chained, append-only story list mirroring the Phase 70
+   persona-proposal chain, over the new
+   `KeyDomain::LoopBacklog`. add / next_pending / done /
+   skipped / list, chain-verified at load (tamper + wrong-key
+   both bail).
+2. **Agent tools** (Task 3). `loop.next` / `loop.complete` —
+   channel-tier, capability-gated under two new
+   Trusted-tier bases (A3 enumeration 69→71). The thirteen-tool
+   core (A12) untouched; the agent already has `git` + `shell`.
+3. **Driver + canonical prompt** (Task 4). `loop_driver`:
+   `run_loop_driver` fires a fresh-context `TriggerSource::Loop`
+   turn per iteration; pure `decide()` termination; Notify-woken
+   `SharedLoopState`. New `TriggerSource::Loop` +
+   `TriggerKindSummary::Loop`.
+4. **Config + CLI** (Task 5). `[loop]` block (cap + default
+   priority); `aivyx loop add/list/start/stop/status` over five
+   new IPC query/response pairs; the daemon spawns the driver
+   when armed.
+
+### What landed beyond the open
+
+The IPC + CLI surface touched the usual daemon plumbing
+(DaemonConfig / ConnectionContext field accretion, the
+`QueryPayload`/`QueryResponsePayload` enums) — expected for a
+new operator-facing daemon command, same shape as the Phase
+102 tool-observability add.
+
+### Honest-debt status carried forward (Phase 174)
+
+- **Driver-side gate verification** — the driver trusts the
+  agent's `loop.complete`; it does not independently re-run
+  tests between iterations. Headline hardening.
+- **Token-budget + wall-clock caps** — `max_iterations` is the
+  only hard cap this phase.
+- **Progress-log auto-injection** — the agent is told to write
+  learnings to memory, but prior learnings are not yet
+  auto-injected into the next iteration (the `progress.txt`
+  analog).
+- **Single concurrent run; mid-run backlog edits take effect
+  next iteration** — both documented, not bugs.
+- Sixty-second consecutive deferral of the Channel Activation
+  Milestone.
+
+### The orchestration push
+
+The Agent Review closed with *"the substrate's there; the
+orchestration is what remains."* Phase 173 is exactly that
+push: it composes the existing substrate (fresh-turn dispatch,
+the HMAC-chain pattern, capability gating, the audit chain,
+core `git`/`shell`) into a flagship autonomous-loop capability,
+adding no new workspace dependency and leaving every contract
+streak intact.

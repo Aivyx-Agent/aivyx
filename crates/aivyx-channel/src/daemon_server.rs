@@ -385,6 +385,20 @@ pub struct DaemonConfig {
     /// similar tasks` section (Phase 116 Task 5).
     pub tool_relevance_ledger:
         Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
+    /// Phase 173 — the autonomous-loop backlog (zero-config,
+    /// always built when storage is configured) for the loop
+    /// IPC handlers + the driver.
+    pub loop_backlog:
+        Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
+    /// Phase 173 — shared loop run state. `Some` only when the
+    /// `[loop]` section is armed; the daemon spawns the loop
+    /// driver and the IPC `loop start/stop/status` handlers
+    /// flip / read this handle.
+    pub loop_state: Option<crate::loop_driver::SharedLoopState>,
+    /// Phase 173 — `[loop]` config (priority default +
+    /// max-iterations ceiling). `None` when the section is
+    /// absent.
+    pub loop_config: Option<aivyx_config::LoopConfig>,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -466,6 +480,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         tool_descriptors,
         skill_auto_proposer,
         tool_relevance_ledger,
+        loop_backlog,
+        loop_state,
+        loop_config,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -580,6 +597,38 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             crate::file_watcher::run_file_watcher(fw_dispatch, store, fw_shutdown).await;
         })
     });
+
+    // Phase 173 — spawn the autonomous-loop driver iff the
+    // `[loop]` section is armed (loop_state is `Some`) AND the
+    // backlog is present. The driver idles (no CPU) until an
+    // `aivyx loop start` flips the shared run state; it then
+    // fires TriggerSource::Loop turns until the backlog drains
+    // or the max-iterations cap is hit.
+    let _loop_driver_handle = match (&loop_state, &loop_backlog) {
+        (Some(state), Some(backlog)) => {
+            let ld_dispatch = trigger_dispatch.clone();
+            let ld_backlog = Arc::clone(backlog);
+            let ld_state = state.clone();
+            let ld_shutdown = shutdown.clone();
+            eprintln!(
+                "aivyx loop: driver armed (max_iterations ceiling={})",
+                loop_config
+                    .as_ref()
+                    .map(|c| c.max_iterations)
+                    .unwrap_or(0),
+            );
+            Some(tokio::spawn(async move {
+                crate::loop_driver::run_loop_driver(
+                    ld_dispatch,
+                    ld_backlog,
+                    ld_state,
+                    ld_shutdown,
+                )
+                .await;
+            }))
+        }
+        _ => None,
+    };
 
     // Phase 71 — spawn the reflection scheduler if any
     // `[[reflection_schedule]]` entries are configured AND an
@@ -1067,6 +1116,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             tool_descriptors: Arc::clone(&tool_descriptors),
             skill_auto_proposer: skill_auto_proposer.clone(),
             tool_relevance_ledger: tool_relevance_ledger.clone(),
+            loop_backlog: loop_backlog.clone(),
+            loop_state: loop_state.clone(),
+            loop_config: loop_config.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1210,6 +1262,18 @@ struct ConnectionContext {
     /// `None` disables the recording hook + prompt section.
     tool_relevance_ledger:
         Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
+    /// Phase 173 — the autonomous-loop backlog (always `Some`
+    /// when storage is configured) for the `loop add/list/status`
+    /// IPC handlers.
+    loop_backlog:
+        Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
+    /// Phase 173 — shared loop run state for `loop start/stop/
+    /// status`. `Some` only when the `[loop]` section is armed
+    /// (the driver was spawned).
+    loop_state: Option<crate::loop_driver::SharedLoopState>,
+    /// Phase 173 — the `[loop]` config (default priority +
+    /// max-iterations ceiling) for the IPC handlers.
+    loop_config: Option<aivyx_config::LoopConfig>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1245,6 +1309,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         tool_descriptors,
         skill_auto_proposer,
         tool_relevance_ledger,
+        loop_backlog,
+        loop_state,
+        loop_config,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1863,6 +1930,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &cadence_stats,
                                 &tool_descriptors,
                                 tool_relevance_ledger.as_ref(),
+                                loop_backlog.as_ref(),
+                                loop_state.as_ref(),
+                                loop_config.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2214,6 +2284,9 @@ async fn run_single_connection_daemon(
         tool_descriptors: Arc::from(Vec::<ToolDescriptor>::new()),
         skill_auto_proposer: None,
         tool_relevance_ledger: None,
+        loop_backlog: None,
+        loop_state: None,
+        loop_config: None,
     })
     .await
 }
@@ -2278,6 +2351,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         tool_descriptors: Vec::new(),
         skill_auto_proposer: None,
         tool_relevance_ledger: None,
+        loop_backlog: None,
+        loop_state: None,
+        loop_config: None,
     }).await
 }
 
@@ -2483,6 +2559,9 @@ async fn handle_query(
     tool_relevance_ledger: Option<
         &Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>,
     >,
+    loop_backlog: Option<&Arc<crate::loop_backlog::PersistentLoopBacklog>>,
+    loop_state: Option<&crate::loop_driver::SharedLoopState>,
+    loop_config: Option<&aivyx_config::LoopConfig>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -2658,6 +2737,120 @@ async fn handle_query(
                     ))
             });
             QueryResponsePayload::ToolRelevanceDump { rows }
+        }
+        // ---- Phase 173 — autonomous loop control ---------------
+        QueryPayload::LoopAdd {
+            title,
+            body,
+            priority,
+        } => {
+            let Some(backlog) = loop_backlog else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_loop_backlog".into(),
+                    message: "daemon has no loop backlog configured".into(),
+                };
+            };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let priority = priority.unwrap_or_else(|| {
+                loop_config
+                    .map(|c| c.default_priority)
+                    .unwrap_or(aivyx_config::DEFAULT_LOOP_PRIORITY)
+            });
+            let story_id =
+                format!("ls-{}", uuid::Uuid::new_v4().as_simple());
+            match backlog
+                .add_story(story_id.clone(), now_ms, priority, title, body)
+                .await
+            {
+                Ok(_) => QueryResponsePayload::LoopStoryAdded { story_id },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "loop_add_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::LoopList => {
+            let Some(backlog) = loop_backlog else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_loop_backlog".into(),
+                    message: "daemon has no loop backlog configured".into(),
+                };
+            };
+            QueryResponsePayload::LoopBacklog {
+                stories: backlog
+                    .list(crate::loop_backlog::StoryStatusFilter::All),
+            }
+        }
+        QueryPayload::LoopStart { max_iterations } => {
+            let (Some(state), Some(cfg)) = (loop_state, loop_config) else {
+                return QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: "the [loop] section is not armed (set \
+                              `[loop] enabled = true` in aivyx.toml and \
+                              restart the daemon)"
+                        .into(),
+                };
+            };
+            // The configured cap is the ceiling; a per-run request
+            // may only lower it.
+            let requested = max_iterations
+                .unwrap_or(cfg.max_iterations)
+                .min(cfg.max_iterations)
+                .max(1);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if state.request_start(requested, now_ms) {
+                QueryResponsePayload::LoopControl {
+                    ok: true,
+                    message: format!(
+                        "loop run started (max_iterations={requested})"
+                    ),
+                }
+            } else {
+                QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: "a loop run is already active".into(),
+                }
+            }
+        }
+        QueryPayload::LoopStop => {
+            let Some(state) = loop_state else {
+                return QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: "the [loop] section is not armed".into(),
+                };
+            };
+            if state.request_stop() {
+                QueryResponsePayload::LoopControl {
+                    ok: true,
+                    message: "loop run stopping (after the current \
+                              iteration)"
+                        .into(),
+                }
+            } else {
+                QueryResponsePayload::LoopControl {
+                    ok: false,
+                    message: "no loop run is active".into(),
+                }
+            }
+        }
+        QueryPayload::LoopStatus => {
+            let remaining = loop_backlog
+                .map(|b| b.remaining_count())
+                .unwrap_or(0);
+            let state = loop_state
+                .map(|s| s.snapshot())
+                .unwrap_or_default();
+            QueryResponsePayload::LoopStatus {
+                state,
+                remaining,
+                armed: loop_state.is_some(),
+            }
         }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
             profile: profile_summary_from_profile(profile),
