@@ -312,6 +312,26 @@ pub struct DaemonConfig {
             dyn crate::persona_consolidation::PairPhraser,
         >,
     >,
+    /// Phase 172 — `[correction_consolidation]` config. `None`
+    /// (no section) → correction-driven proposals are off (the
+    /// correction ledger still accumulates passively); `Some`
+    /// arms the reflection-cron pass only when `enabled = true`.
+    pub correction_consolidation_config:
+        Option<aivyx_config::CorrectionConsolidationConfig>,
+    /// Phase 172 — shared last-cycle correction-consolidation
+    /// stat the pass writes and `GetLearningInsights` reads.
+    /// `None` → not armed (the surface reports none).
+    pub correction_consolidation_stat: Option<
+        crate::correction_consolidation::SharedCorrectionConsolidationStat,
+    >,
+    /// Phase 172 — production `TopicPhraser` for the correction
+    /// facet phrasing. `None` → the pass has no LLM access and
+    /// skips the cycle (the actuator stays best-effort).
+    pub correction_consolidation_phraser: Option<
+        std::sync::Arc<
+            dyn crate::correction_consolidation::TopicPhraser,
+        >,
+    >,
     /// Phase 91 — `[recall_judgment]` config. `None` (no
     /// section) → LLM-judged recall is off; `Some` arms the
     /// reflection-cron pass only when `enabled = true`.
@@ -436,6 +456,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_consolidation_config,
         persona_consolidation_stat,
         persona_consolidation_phraser,
+        correction_consolidation_config,
+        correction_consolidation_stat,
+        correction_consolidation_phraser,
         recall_judgment_config,
         recall_judgment_stat,
         recall_judge,
@@ -731,6 +754,34 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 ),
                 _ => None,
             };
+            // Phase 172 — correction-consolidation deps: armed
+            // only when the section is enabled AND the substrate
+            // is present (correction ledger + proposal chain + an
+            // LLM `TopicPhraser`). Any missing piece → None → the
+            // pass is skipped (the correction ledger still
+            // accumulates passively; no proposals are filed).
+            let rs_correction_consolidation = match (
+                correction_consolidation_config.clone(),
+                correction_ledger.clone(),
+                persona_proposal_log.clone(),
+                correction_consolidation_phraser.clone(),
+            ) {
+                (Some(cfg), Some(ledger), Some(plog), Some(phraser))
+                    if cfg.enabled =>
+                {
+                    Some(
+                        crate::reflection_scheduler::CorrectionConsolidationDeps {
+                            config: cfg,
+                            correction_ledger: ledger,
+                            proposal_log: plog,
+                            phraser,
+                            stat: correction_consolidation_stat
+                                .clone(),
+                        },
+                    )
+                }
+                _ => None,
+            };
             // Phase 91 — LLM-judged recall deps: armed only
             // when the section is enabled AND every substrate
             // is present (recall log + memory + an
@@ -776,6 +827,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_proactive,
                     rs_persona_lifecycle,
                     rs_persona_consolidation,
+                    rs_correction_consolidation,
                     rs_recall_judgment,
                     rs_cadence_stats,
                     rs_shutdown,
@@ -2196,6 +2248,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         persona_consolidation_config: None,
         persona_consolidation_stat: None,
         persona_consolidation_phraser: None,
+        correction_consolidation_config: None,
+        correction_consolidation_stat: None,
+        correction_consolidation_phraser: None,
         recall_judgment_config: None,
         recall_judgment_stat: None,
         recall_judge: None,

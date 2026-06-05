@@ -3249,6 +3249,10 @@ async fn run_async(
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
         persona_consolidation: config_persona_consolidation,
+        // Phase 172 — `[correction_consolidation]` config.
+        // Wired into the daemon's reflection-cron correction-
+        // consolidation pass via DaemonConfig below.
+        correction_consolidation: config_correction_consolidation,
         // Phase 91 — `[recall_judgment]` config. Bound here;
         // Task 4 of Phase 91 wires it through DaemonConfig
         // to the reflection-cron LLM-judged recall pass.
@@ -3965,6 +3969,28 @@ async fn run_async(
     > = match &config_persona_consolidation {
         Some(p) if p.enabled => Some(Arc::new(
             aivyx_channel::persona_consolidation::LlmPairPhraser::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
+        _ => None,
+    };
+    // Phase 172 — shared last-correction-consolidation-cycle
+    // stat + production `TopicPhraser`. Created iff the
+    // correction-consolidation pass is armed; the reflection-
+    // cron path skips the pass when the phraser is None.
+    let correction_consolidation_stat =
+        match &config_correction_consolidation {
+            Some(c) if c.enabled => Some(
+                aivyx_channel::correction_consolidation::shared_correction_consolidation_stat(),
+            ),
+            _ => None,
+        };
+    let correction_consolidation_phraser: Option<
+        Arc<dyn aivyx_channel::correction_consolidation::TopicPhraser>,
+    > = match &config_correction_consolidation {
+        Some(c) if c.enabled => Some(Arc::new(
+            aivyx_channel::correction_consolidation::LlmTopicPhraser::new(
                 Arc::clone(&provider),
                 model.clone(),
             ),
@@ -5597,6 +5623,15 @@ async fn run_async(
                 persona_consolidation_stat.clone(),
             persona_consolidation_phraser:
                 persona_consolidation_phraser.clone(),
+            // Phase 172 — correction-driven Persona consolidation
+            // config + Phase 78 surface stat + LLM topic phraser.
+            // All three are `Some` iff the section is enabled.
+            correction_consolidation_config:
+                config_correction_consolidation.clone(),
+            correction_consolidation_stat:
+                correction_consolidation_stat.clone(),
+            correction_consolidation_phraser:
+                correction_consolidation_phraser.clone(),
             // Phase 91 — `[recall_judgment]` config + stat +
             // LLM judge. All three are `Some` iff the
             // section is enabled.

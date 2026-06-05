@@ -52,6 +52,7 @@ pub mod cooccurrence_ledger;
 /// files an operator-gated Persona proposal. `correction_detect`
 /// is the pure detector; `correction_ledger` the durable view;
 /// `correction_consolidation` the proposal actuator.
+pub mod correction_consolidation;
 pub mod correction_detect;
 pub mod correction_ledger;
 pub mod helpfulness_ledger;

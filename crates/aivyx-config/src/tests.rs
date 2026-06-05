@@ -7523,6 +7523,102 @@ fn persona_consolidation_supersession_only_builds_some() {
     drop(env);
 }
 
+// ---- Phase 172 — [correction_consolidation] -----------------
+
+/// No `[correction_consolidation]` section →
+/// `correction_consolidation: None` (off; the correction ledger
+/// still accumulates passively but files no proposals).
+#[test]
+fn correction_consolidation_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.correction_consolidation.is_none());
+    drop(env);
+}
+
+/// A present-but-disabled section may be partial (staged
+/// config): builds with `enabled = false`, defaults elsewhere,
+/// and is NOT validated.
+#[test]
+fn correction_consolidation_present_disabled_is_allowed_partial() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[correction_consolidation]\nenabled = false\n",
+        "cc-staged",
+    );
+    let c =
+        cfg.correction_consolidation.expect("section present");
+    assert!(!c.enabled);
+    assert!(
+        (c.min_corrections - crate::DEFAULT_CC_MIN_CORRECTIONS)
+            .abs()
+            < 1e-6
+    );
+    assert_eq!(c.min_samples, crate::DEFAULT_CC_MIN_SAMPLES);
+    assert_eq!(
+        c.max_proposals_per_cycle,
+        crate::DEFAULT_CC_MAX_PROPOSALS_PER_CYCLE
+    );
+    drop(env);
+}
+
+/// Enabled + valid: explicit fields win.
+#[test]
+fn correction_consolidation_enabled_valid() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[correction_consolidation]\nenabled = true\n\
+         min_corrections = 5.0\nmin_samples = 4\n\
+         max_proposals_per_cycle = 2\n",
+        "cc-valid",
+    );
+    let c =
+        cfg.correction_consolidation.expect("section present");
+    assert!(c.enabled);
+    assert!((c.min_corrections - 5.0).abs() < 1e-6);
+    assert_eq!(c.min_samples, 4);
+    assert_eq!(c.max_proposals_per_cycle, 2);
+    drop(env);
+}
+
+/// Enabled with non-positive `min_corrections` → `Invalid`.
+#[test]
+fn correction_consolidation_enabled_nonpositive_corrections_is_invalid()
+{
+    let env = EnvScope::new();
+    let tmp = TempDir::new("cc-bad-corrections");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[correction_consolidation]\nenabled = true\n\
+         min_corrections = 0.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(
+                field,
+                "correction_consolidation.min_corrections"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →

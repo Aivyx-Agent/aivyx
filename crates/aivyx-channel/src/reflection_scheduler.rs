@@ -360,6 +360,30 @@ pub struct PersonaConsolidationDeps {
     pub pair_below_affinity: f32,
 }
 
+/// Phase 172 — handles the correction-consolidation pass needs.
+/// Bundled like [`PersonaConsolidationDeps`]. `None` (no
+/// `[correction_consolidation]` / no correction ledger
+/// substrate) → the pass is skipped entirely (the correction
+/// ledger still accumulates passively; no proposals are filed).
+/// Even when `Some`, the pass no-ops unless `config.enabled`.
+pub struct CorrectionConsolidationDeps {
+    pub config: aivyx_config::CorrectionConsolidationConfig,
+    pub correction_ledger: std::sync::Arc<
+        crate::correction_ledger::PersistentCorrectionLedger,
+    >,
+    pub proposal_log: std::sync::Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    pub phraser: std::sync::Arc<
+        dyn crate::correction_consolidation::TopicPhraser,
+    >,
+    /// Optional last-cycle stat sink for the Phase 78 surface.
+    /// `None` → breadcrumb-only.
+    pub stat: Option<
+        crate::correction_consolidation::SharedCorrectionConsolidationStat,
+    >,
+}
+
 /// Phase 91 — handles the LLM-judged recall pass needs.
 /// Bundled like [`PersonaConsolidationDeps`]. `None` (no
 /// `[recall_judgment]` / no recall-log + judge substrate) →
@@ -670,6 +694,7 @@ pub async fn run_reflection_scheduler(
     proactive: Option<ProactiveDeps>,
     persona_lifecycle: Option<PersonaLifecycleDeps>,
     persona_consolidation: Option<PersonaConsolidationDeps>,
+    correction_consolidation: Option<CorrectionConsolidationDeps>,
     recall_judgment: Option<RecallJudgmentDeps>,
     cadence_stats: SharedRecentReflectionStats,
     shutdown: CancellationToken,
@@ -767,6 +792,7 @@ pub async fn run_reflection_scheduler(
                     proactive.as_ref(),
                     persona_lifecycle.as_ref(),
                     persona_consolidation.as_ref(),
+                    correction_consolidation.as_ref(),
                     recall_judgment.as_ref(),
                 )
                 .await;
@@ -810,6 +836,7 @@ async fn fire_reflection(
     proactive: Option<&ProactiveDeps>,
     persona_lifecycle: Option<&PersonaLifecycleDeps>,
     persona_consolidation: Option<&PersonaConsolidationDeps>,
+    correction_consolidation: Option<&CorrectionConsolidationDeps>,
     recall_judgment: Option<&RecallJudgmentDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
@@ -866,6 +893,15 @@ async fn fire_reflection(
     // Phase 70 propose-only + edit-then-approve flow).
     if let Some(deps) = persona_consolidation {
         run_persona_consolidation_pass(deps, sched, now_ms).await;
+    }
+
+    // Phase 172 — correction-driven Persona consolidation on the
+    // same cadence. Independent of the above; no-op when absent
+    // or disabled. Files Pending proposals only — the self-
+    // improvement closure (the agent notices what it keeps
+    // getting reworked on and asks the operator about it).
+    if let Some(deps) = correction_consolidation {
+        run_correction_consolidation_pass(deps, sched, now_ms).await;
     }
 
     // Phase 91 — LLM-judged per-recall classification on the
@@ -1690,6 +1726,64 @@ async fn run_persona_consolidation_pass(
     // actually-filed pairs + the LLM-availability flag, post
     // selector dedup). Written every armed cycle so "0 filed"
     // is itself legible.
+    if let Some(sink) = &deps.stat {
+        if let Ok(mut w) = sink.write() {
+            *w = Some(stat);
+        }
+    }
+}
+
+/// Phase 172 — the correction-consolidation pass. Selects
+/// topics the operator has repeatedly reworked (the correction
+/// ledger past the `min_corrections` + `min_samples` double-
+/// gate), phrases each, and files a Pending `correction:{topic}`
+/// proposal through the Phase 70 chain. No-op when disabled.
+/// Files Pending proposals only — never resolves them.
+async fn run_correction_consolidation_pass(
+    deps: &CorrectionConsolidationDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let now_secs = now_ms / 1000;
+    let candidates =
+        crate::correction_consolidation::select_corrections(
+            deps.correction_ledger.as_ref(),
+            deps.proposal_log.as_ref(),
+            &deps.config,
+            now_secs,
+        )
+        .await;
+    if candidates.is_empty() {
+        // The quiet case is a valid outcome; skip the breadcrumb
+        // so chatty reflection cadences don't spam stderr.
+        return;
+    }
+
+    let source_label = format!("reflection:{}", sched.name);
+    let stat =
+        crate::correction_consolidation::consolidate_corrections(
+            candidates,
+            deps.phraser.as_ref(),
+            deps.proposal_log.as_ref(),
+            &source_label,
+            now_ms,
+        )
+        .await;
+
+    let llm_note =
+        if stat.llm_unavailable { " (LLM unavailable)" } else { "" };
+    eprintln!(
+        "aivyx correction-consolidation: schedule {:?} — \
+         filed {}{llm_note}",
+        sched.name, stat.filed,
+    );
+
+    // Record this cycle for the Phase 78 surface (filed topics +
+    // LLM-availability flag). Written every armed cycle so "0
+    // filed" is itself legible.
     if let Some(sink) = &deps.stat {
         if let Ok(mut w) = sink.write() {
             *w = Some(stat);

@@ -680,6 +680,13 @@ pub struct AivyxConfig {
     /// `Some` only arms the pass; it still no-ops unless
     /// `enabled = true`.
     pub persona_consolidation: Option<PersonaConsolidationConfig>,
+    /// Phase 172 — `[correction_consolidation]` section. `None`
+    /// when absent: the correction ledger still accumulates
+    /// passively but no correction-driven Persona proposals are
+    /// filed. `Some` only arms the pass; it still no-ops unless
+    /// `enabled = true`.
+    pub correction_consolidation:
+        Option<CorrectionConsolidationConfig>,
     /// Phase 91 — `[recall_judgment]` section. `None` when
     /// absent: the recall-feedback loop runs unchanged (the
     /// Phase 77 structural proxy is the only signal). `Some`
@@ -2028,6 +2035,54 @@ pub const DEFAULT_PC_MIN_TOPIC_HELPFULNESS: f32 = 0.0;
 /// of patience.
 pub const DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
 
+/// Phase 172 — `[correction_consolidation]` runtime config.
+///
+/// The actuator surface for **correction-driven** Persona
+/// proposals — the self-improvement closure named in the Aivyx
+/// Agent Review (§5.8). When the Phase 172 correction ledger
+/// shows a topic the operator has repeatedly *reworked* (the
+/// `completed`-then-rapid-followup proxy accumulated past the
+/// floor), the reflection cron asks the existing reflection LLM
+/// to phrase a `learned_context` facet noting the preference
+/// friction, and files it through the existing Phase 70
+/// proposal chain. Same propose-only + edit-then-approve +
+/// Revert + core-protected flow; opt-in.
+///
+/// `None` (no section) → the pass never runs; the correction
+/// ledger still accumulates passively (visible in `aivyx
+/// learning`) but files nothing. `Some` arms the pass; it still
+/// no-ops unless `enabled = true`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrectionConsolidationConfig {
+    /// Master switch. Default `false`; even with the section
+    /// present and the ledger populated, no correction
+    /// proposals are filed until this is `true`.
+    pub enabled: bool,
+    /// The decayed correction count a topic must clear before
+    /// it is proposal-eligible. Default `3.0` — three reworks
+    /// is the "this is a pattern, not a one-off" bar, mirroring
+    /// the reflection loop's recurs-in-at-least-3-turns
+    /// discipline.
+    pub min_corrections: f32,
+    /// Minimum number of reflection windows that folded into
+    /// the topic before it is proposal-eligible. Identity is
+    /// never proposed on a single noisy window. Default `2`.
+    pub min_samples: u32,
+    /// Hard cap on filings per reflection cycle. Same value and
+    /// reasoning as the Phase 87 cap — a passive actuator on
+    /// the reflection cadence never floods the review queue.
+    pub max_proposals_per_cycle: u32,
+}
+
+/// Default decayed-correction-count floor. Three reworks of the
+/// same topic is the "pattern, not a one-off" bar.
+pub const DEFAULT_CC_MIN_CORRECTIONS: f32 = 3.0;
+/// Default sample-count floor: at least two reflection windows.
+pub const DEFAULT_CC_MIN_SAMPLES: u32 = 2;
+/// Default per-cycle filing cap. Same value as the Phase 87 /
+/// Phase 80 caps.
+pub const DEFAULT_CC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
+
 /// Phase 91 — `[recall_judgment]` runtime config.
 ///
 /// The opt-in surface for the LLM-judged per-recall
@@ -2729,6 +2784,10 @@ struct RawToml {
     /// pattern-driven Persona proposals.
     #[serde(default)]
     persona_consolidation: RawPersonaConsolidation,
+    /// `[correction_consolidation]` section. Phase 172 —
+    /// correction-driven Persona proposals.
+    #[serde(default)]
+    correction_consolidation: RawCorrectionConsolidation,
     /// `[recall_judgment]` section. Phase 91 — LLM-judged
     /// per-recall classification on the reflection cron.
     #[serde(default)]
@@ -3495,6 +3554,22 @@ struct RawPersonaConsolidation {
     max_proposals_per_cycle: Option<u32>,
     #[serde(default)]
     enable_supersession: Option<bool>,
+}
+
+/// Phase 172 — `[correction_consolidation]` deserialize target.
+/// Absent section → all-`None` via `Default` → the loader maps
+/// to `correction_consolidation: None` (off; the correction
+/// ledger still accumulates but files no proposals).
+#[derive(Debug, Default, Deserialize)]
+struct RawCorrectionConsolidation {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    min_corrections: Option<f32>,
+    #[serde(default)]
+    min_samples: Option<u32>,
+    #[serde(default)]
+    max_proposals_per_cycle: Option<u32>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -4330,6 +4405,10 @@ impl AivyxConfig {
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
+            )?;
+        let correction_consolidation =
+            build_correction_consolidation_config(
+                &toml.correction_consolidation,
             )?;
         let recall_judgment =
             build_recall_judgment_config(&toml.recall_judgment)?;
@@ -5310,6 +5389,7 @@ impl AivyxConfig {
             persona_lifecycle,
             recall_cluster,
             persona_consolidation,
+            correction_consolidation,
             recall_judgment,
             recall_feedback,
             skill_auto_propose,
@@ -6625,6 +6705,62 @@ fn build_persona_consolidation_config(
         min_topic_helpfulness,
         max_proposals_per_cycle,
         enable_supersession,
+    }))
+}
+
+/// Phase 172 — build the `[correction_consolidation]` config.
+/// Absent section → `None`; an armed (`enabled = true`) section
+/// must be coherent (a staged `enabled = false` section may be
+/// partial, the staged-config pattern).
+fn build_correction_consolidation_config(
+    raw: &RawCorrectionConsolidation,
+) -> Result<Option<CorrectionConsolidationConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.min_corrections.is_some()
+        || raw.min_samples.is_some()
+        || raw.max_proposals_per_cycle.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+
+    let enabled = raw.enabled.unwrap_or(false);
+    let min_corrections =
+        raw.min_corrections.unwrap_or(DEFAULT_CC_MIN_CORRECTIONS);
+    let min_samples =
+        raw.min_samples.unwrap_or(DEFAULT_CC_MIN_SAMPLES);
+    let max_proposals_per_cycle = raw
+        .max_proposals_per_cycle
+        .unwrap_or(DEFAULT_CC_MAX_PROPOSALS_PER_CYCLE);
+
+    if enabled {
+        if !(min_corrections.is_finite() && min_corrections > 0.0) {
+            return Err(ConfigError::Invalid {
+                field: "correction_consolidation.min_corrections",
+                reason: "`min_corrections` must be finite and > 0.0"
+                    .into(),
+            });
+        }
+        if min_samples == 0 {
+            return Err(ConfigError::Invalid {
+                field: "correction_consolidation.min_samples",
+                reason: "`min_samples` must be >= 1".into(),
+            });
+        }
+        if max_proposals_per_cycle == 0 {
+            return Err(ConfigError::Invalid {
+                field:
+                    "correction_consolidation.max_proposals_per_cycle",
+                reason: "`max_proposals_per_cycle` must be >= 1"
+                    .into(),
+            });
+        }
+    }
+
+    Ok(Some(CorrectionConsolidationConfig {
+        enabled,
+        min_corrections,
+        min_samples,
+        max_proposals_per_cycle,
     }))
 }
 
