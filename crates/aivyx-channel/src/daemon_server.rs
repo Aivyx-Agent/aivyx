@@ -1185,6 +1185,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 persona_consolidation_stat.clone(),
             correction_consolidation_stat:
                 correction_consolidation_stat.clone(),
+            correction_judgment_stat:
+                correction_judgment_stat.clone(),
             recall_judgment_stat: recall_judgment_stat.clone(),
             recall_feedback_config: recall_feedback_config.clone(),
             cadence_stats: cadence_stats.clone(),
@@ -1311,6 +1313,11 @@ struct ConnectionContext {
     correction_consolidation_stat: Option<
         crate::correction_consolidation::SharedCorrectionConsolidationStat,
     >,
+    /// Phase 178 — last-cycle correction-judgment stat for the
+    /// `GetLearningInsights` surface.
+    correction_judgment_stat: Option<
+        crate::correction_judgment::SharedCorrectionJudgmentStat,
+    >,
     /// Phase 91 (Q4a) — last-reflection-cycle LLM-judged
     /// recall stat for the `GetLearningInsights` surface.
     recall_judgment_stat: Option<
@@ -1378,6 +1385,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         conversation_windows,
         persona_consolidation_stat,
         correction_consolidation_stat,
+        correction_judgment_stat,
         recall_judgment_stat,
         recall_feedback_config,
         cadence_stats,
@@ -2000,6 +2008,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 persona_lifecycle_stat.as_ref(),
                                 persona_consolidation_stat.as_ref(),
                                 correction_consolidation_stat.as_ref(),
+                                correction_judgment_stat.as_ref(),
                                 recall_judgment_stat.as_ref(),
                                 recall_feedback_config.as_ref(),
                                 &cadence_stats,
@@ -2353,6 +2362,7 @@ async fn run_single_connection_daemon(
         conversation_windows: None,
         persona_consolidation_stat: None,
         correction_consolidation_stat: None,
+        correction_judgment_stat: None,
         recall_judgment_stat: None,
         recall_feedback_config: None,
         cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
@@ -2627,6 +2637,9 @@ async fn handle_query(
     >,
     correction_consolidation_stat: Option<
         &crate::correction_consolidation::SharedCorrectionConsolidationStat,
+    >,
+    correction_judgment_stat: Option<
+        &crate::correction_judgment::SharedCorrectionJudgmentStat,
     >,
     recall_judgment_stat: Option<
         &crate::recall_judgment::SharedRecallJudgmentStat,
@@ -3400,6 +3413,9 @@ async fn handle_query(
                 correction_consolidation_stat.and_then(|s| {
                     s.read().ok().and_then(|g| g.clone())
                 });
+            // Phase 178 — last cycle's correction-judgment stat.
+            let correction_judgment = correction_judgment_stat
+                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
 
             // Phase 95 — snapshot per-schedule cadence stats.
             // Sorted by schedule name for stable rendering.
@@ -3441,6 +3457,7 @@ async fn handle_query(
                     persona_consolidation,
                     accumulated_corrections,
                     correction_consolidation,
+                    correction_judgment,
                     recall_judgment,
                     cadence,
                 };
@@ -3517,6 +3534,7 @@ async fn handle_query(
                 persona_consolidation,
                 accumulated_corrections,
                 correction_consolidation,
+                correction_judgment,
                 recall_judgment,
                 cadence,
             }

@@ -540,6 +540,7 @@ pub async fn get_learning_insights(
         Option<
             crate::correction_consolidation::CorrectionConsolidationStat,
         >,
+        Option<crate::correction_judgment::CorrectionJudgmentStat>,
         Option<crate::recall_judgment::RecallJudgmentStat>,
         Vec<(
             String,
@@ -567,6 +568,7 @@ pub async fn get_learning_insights(
             persona_consolidation,
             accumulated_corrections,
             correction_consolidation,
+            correction_judgment,
             recall_judgment,
             cadence,
         } => Ok((
@@ -581,6 +583,7 @@ pub async fn get_learning_insights(
             persona_consolidation,
             accumulated_corrections,
             correction_consolidation,
+            correction_judgment,
             recall_judgment,
             cadence,
         )),

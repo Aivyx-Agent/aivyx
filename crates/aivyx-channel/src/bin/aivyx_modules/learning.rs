@@ -47,6 +47,7 @@ pub async fn run_learning(
         persona_consolidation,
         accumulated_corrections,
         correction_consolidation,
+        correction_judgment,
         recall_judgment,
         cadence,
     ) = get_learning_insights(&socket_path, window_secs)
@@ -70,6 +71,7 @@ pub async fn run_learning(
             &cadence,
             accumulated_corrections.as_ref(),
             correction_consolidation.as_ref(),
+            correction_judgment.as_ref(),
         )
     );
     Ok(())
@@ -119,6 +121,9 @@ fn render_insights(
     cadence: &[(String, RecentReflectionStat)],
     accumulated_corrections: Option<&AccumulatedCorrections>,
     correction_consolidation: Option<&CorrectionConsolidationStat>,
+    correction_judgment: Option<
+        &aivyx_channel::correction_judgment::CorrectionJudgmentStat,
+    >,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -379,6 +384,32 @@ fn render_insights(
         ),
     }
 
+    // Phase 178 — LLM-judged correction classification.
+    out.push_str(
+        "\nLLM-judged corrections (last cycle, opt-in):\n",
+    );
+    match correction_judgment {
+        Some(c) if c.judged > 0 || c.structural_fallback > 0 => {
+            out.push_str(&format!(
+                "  {} judged (rework {}, praise {}, unrelated {}), \
+                 {} structural{}\n",
+                c.judged,
+                c.rework,
+                c.praise,
+                c.unrelated,
+                c.structural_fallback,
+                if c.llm_unavailable {
+                    " (LLM unavailable)"
+                } else {
+                    ""
+                },
+            ));
+        }
+        _ => out.push_str(
+            "  not engaged (off, or no corrections this cycle)\n",
+        ),
+    }
+
     out.push_str(
         "\nLLM-judged recall usefulness (last cycle, opt-in):\n",
     );
@@ -470,7 +501,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
+        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -491,7 +522,7 @@ mod tests {
         // Default (None) — banner absent.
         let out_none = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None,
+            None, None, None,
         );
         assert!(!out_none.contains("signal source"));
         // Explicit-off (Some(false)) — banner still absent
@@ -500,14 +531,14 @@ mod tests {
         d.judgment_signal = Some(false);
         let out_off = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None,
+            None, None, None,
         );
         assert!(!out_off.contains("signal source"));
         // Augment on — the banner fires.
         d.judgment_signal = Some(true);
         let out_on = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None,
+            None, None, None,
         );
         assert!(out_on.contains(
             "signal source: judgment-driven (Phase 93 — augmenting structural)"
@@ -537,7 +568,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[], None, None);
+        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -559,10 +590,33 @@ mod tests {
             proposals_in_window: 0,
             judgment_signal: None,
         };
-        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[], None, None);
+        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
+        assert!(out.contains("LLM-judged corrections"));
+        assert!(out.contains("not engaged"));
+    }
+
+    #[test]
+    fn render_correction_judgment_stat() {
+        use aivyx_channel::correction_judgment::CorrectionJudgmentStat;
+        let stat = CorrectionJudgmentStat {
+            ts_secs: 1,
+            judged: 5,
+            rework: 3,
+            praise: 1,
+            unrelated: 1,
+            structural_fallback: 2,
+            llm_unavailable: false,
+        };
+        let out = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &[], None, None, Some(&stat),
+        );
+        assert!(out.contains(
+            "5 judged (rework 3, praise 1, unrelated 1), 2 structural"
+        ));
     }
 
     /// Phase 172 — the most-reworked-topics view + the
@@ -578,7 +632,7 @@ mod tests {
         // None → "(none yet)" + "not engaged".
         let none_out = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
-            &[], None, None,
+            &[], None, None, None,
         );
         assert!(none_out.contains("Most-reworked topics (accumulated):"));
         assert!(none_out.contains("(none yet)"));
@@ -603,7 +657,7 @@ mod tests {
         };
         let some_out = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
-            &[], Some(&acc), Some(&stat),
+            &[], Some(&acc), Some(&stat), None,
         );
         assert!(some_out.contains("4.0  auth (3 windows)"));
         assert!(some_out.contains("1 filed last cycle"));
@@ -613,7 +667,7 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -623,7 +677,7 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[], None, None);
+            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[], None, None, None);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
         ));
@@ -636,7 +690,7 @@ mod tests {
         };
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -651,7 +705,7 @@ mod tests {
             capped: 1,
         };
         let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[], None, None);
+            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[], None, None, None);
         assert!(some_out.contains(
             "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
         ));
@@ -669,7 +723,7 @@ mod tests {
 
         // None → "not engaged" line.
         let none_out =
-            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
+            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
         assert!(
             none_out.contains("persona lifecycle: not engaged")
         );
@@ -697,6 +751,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
         );
@@ -729,6 +784,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
         );
@@ -764,6 +820,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         );
         assert!(some_out.contains("+4.5  rust  (2 samples)"));
         assert!(
@@ -790,6 +847,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
         );
@@ -820,6 +878,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         );
         assert!(some_out.contains(
             "+8.0  deploy + rollback  (5 samples)"
@@ -838,6 +897,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         );
         assert!(!out_empty.contains("Reflection cadence"));
 
@@ -849,6 +909,7 @@ mod tests {
         let out_zero = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
             &zero,
+            None,
             None,
             None,
         );
@@ -869,6 +930,7 @@ mod tests {
         let out_mixed = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
             &mixed,
+            None,
             None,
             None,
         );
@@ -897,6 +959,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
         );
@@ -930,6 +993,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         );
         assert!(some_out.contains(
             "1 affined sibling(s) injected"
@@ -956,6 +1020,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
         );

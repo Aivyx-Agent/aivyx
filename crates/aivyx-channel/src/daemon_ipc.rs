@@ -486,6 +486,15 @@ pub enum QueryResponsePayload {
         correction_consolidation: Option<
             crate::correction_consolidation::CorrectionConsolidationStat,
         >,
+        /// Phase 178 — last reflection cycle's correction-
+        /// judgment outcome (judged / rework / praise /
+        /// unrelated / structural-fallback counts). `None` when
+        /// `[correction_judgment]` is off / the fold hasn't run.
+        /// `#[serde(default)]` so older frames decode.
+        #[serde(default)]
+        correction_judgment: Option<
+            crate::correction_judgment::CorrectionJudgmentStat,
+        >,
         /// Phase 91 — last reflection cycle's LLM-judged
         /// recall outcome (per-classification counts +
         /// `(topic, judgment)` pairs + the
@@ -2109,6 +2118,17 @@ mod tests {
                             filed: 1,
                             llm_unavailable: false,
                             topics: vec!["deploy".into()],
+                        },
+                    ),
+                    correction_judgment: Some(
+                        crate::correction_judgment::CorrectionJudgmentStat {
+                            ts_secs: 1_715_005_560,
+                            judged: 4,
+                            rework: 2,
+                            praise: 1,
+                            unrelated: 1,
+                            structural_fallback: 1,
+                            llm_unavailable: false,
                         },
                     ),
                     recall_judgment: Some(

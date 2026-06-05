@@ -4794,13 +4794,44 @@ Validation (only when `enabled = true`):
 accumulating passively (still visible in `aivyx learning`)
 but no correction proposals are filed.
 
-The signal is structural, not semantic: "you came right
-back" is a coarse proxy that can't tell a genuine rework from
-praise or an unrelated follow-up, and corrections are
-attributed only to the topics recalled into the turn (a turn
-with no recall is invisible). An LLM-judged refinement —
-mirroring the Phase 91 recall-judgment augment — is a future
-phase.
+By default the signal is structural, not semantic: "you came
+right back" is a coarse proxy that can't tell a genuine rework
+from praise or an unrelated follow-up.
+
+**LLM-judged corrections (Phase 178).** Closing that gap, an
+opt-in judge classifies each correction's follow-up message
+into `rework` / `praise` / `unrelated` and folds **only**
+genuine reworks. Enable it alongside (or instead of) the
+proposal pass:
+
+```toml
+[correction_judgment]
+enabled = true
+max_corrections_per_cycle = 30   # optional, default 30
+```
+
+When armed, the reflection-cron correction fold runs one
+batched LLM call per cycle (bounded cost) over the cycle's
+detected corrections and drops `praise` / `unrelated`
+follow-ups instead of counting them. The judge reads the
+follow-up's message, which is captured (truncated, encrypted)
+on the recall log when the follow-up turn fired auto-recall; a
+follow-up with **no** recall has nothing to judge and falls
+back to the structural signal (counted). A parse/LLM failure
+also falls back — a transient outage never loses a signal.
+`aivyx learning` shows the last cycle's `rework / praise /
+unrelated / structural` counts.
+
+> **Privacy note.** Enabling this stores a truncated copy of
+> the operator's query text on the (HKDF-encrypted) recall log.
+> The *audit* chain stays transcript-free; the *recall* log
+> gains query content. `[correction_judgment]` off → no query
+> text is captured beyond what auto-recall already needs.
+
+Corrections are still attributed only to the topics recalled
+into the corrected turn (a turn with no recall is invisible) —
+broadening that (tool/topic surfacing in `OutcomeSummary`)
+remains a future item.
 
 ## Autonomous loop — the Aivyx Ralph loop (Phase 173)
 

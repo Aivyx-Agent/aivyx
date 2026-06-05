@@ -143,4 +143,58 @@ dep), and the long-deferred **Channel Activation Milestone**.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 15 | Untouched (a wire-compat `RecallEvent` field + a config section + a channel-tier judge; no scope/tool/`KeyDomain`) | ✅ |
+| PRODUCT.md HOLD → 69 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 15 | Untouched | ✅ |
+| Zero new workspace deps | Reused the recall log, the LLM provider, the reflection fold | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+15` to `+28` | **`+21`** (capture/detailed 7 + judge 8 + fold 6 (4 helper + 1 integration + 1 config) — net across crates); workspace ~4,110 → ~4,131 | ✅ **in band** |
+
+**Prediction note — the band discipline worked.** After three
+loop-polish phases I over-predicted (175 +11 vs +12–22, 176 +5
+vs +10–16, 177 +6 vs +8–14), I deliberately used a *different*
+band here — `+15..+28`, the self-learning-substrate band (Phase
+172 was +33) — and called out in the open doc that this was NOT
+a loop phase. Landed `+21`, mid-band. The lesson held: pick the
+band from the phase's *kind* (substrate-dense vs glue-thin), not
+a single global prior.
+
+The debt closed end-to-end:
+
+1. **Capture + detailed events** (Task 2). `RecallEvent.query_text`
+   (wire-compat, truncated, encrypted) + `detect_corrections_detailed`
+   exposing each correction's follow-up query with perfect
+   session/time correlation; graceful `None` when the follow-up
+   fired no recall.
+2. **The judge** (Task 3). `CorrectionJudgment` (Rework / Praise
+   / Unrelated) + `CorrectionJudge` + `LlmCorrectionJudge`,
+   mirroring Phase 91 — batched, tolerant parser, best-effort.
+3. **Judged fold** (Task 4). `judged_correction_counts` folds
+   only `Rework` (structural fallback for no-query / failed /
+   over-cap); `[correction_judgment]` config; wired into the
+   Phase 172 fold (off → byte-identical).
+4. **Surface** (Task 5). `aivyx learning` shows the last cycle's
+   `rework / praise / unrelated / structural` counts; INSTALL
+   documents the knob + the privacy posture.
+
+### Honest-debt status carried forward
+
+- **No-recall follow-ups are unjudged** (structural fallback) —
+  the universal-capture alternative stays deferred.
+- **The recall log now holds truncated query text** — the
+  documented privacy posture shift.
+- **Corrections are still recall-topic-attributed** — tool/topic
+  surfacing in `OutcomeSummary` is the next roster item.
+- Sixty-seventh consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result
+
+The self-learning correction loop, opened at the very start of
+this session as structural-only, is now **structurally
+detected AND LLM-judged**: a genuine rework folds, a "thanks,
+perfect" doesn't — built on the recall log + the LLM provider
+the agent already uses, with no new dependency and an unbroken
+DESIGN / PRODUCT / `lib.rs` streak.
