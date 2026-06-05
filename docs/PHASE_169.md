@@ -181,8 +181,59 @@ ledgers reach zero. Phase 170+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 169 exit. Predictions at
-sign-off: DESIGN.md HOLD → 6; PRODUCT.md HOLD
-→ 60; lib.rs HOLD → 6; zero new deps; test
-count delta `+12` to `+22`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 6 | Untouched | ✅ |
+| PRODUCT.md HOLD → 60 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 6 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives; PRNG via stdlib SystemTime | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (after two `manual_range_contains` lints handled inline) | ✅ |
+| Test count delta `+12` to `+22` | `+21` (actor_email_filter +11, 503/429 +4, jitter +6) | ✅ (within band) |
+
+All three pieces closed:
+
+1. **actor_email_filter** (Task 2, commit
+   `fcd2843`). Closes Phase 167's lone open
+   carry-over. Post-fetch substring match
+   against the enriched actor_email field;
+   output `count` reflects post-filter
+   cardinality.
+2. **503 / 429 retry classification** (Task
+   3, commit `1f65df9`). Closes one of Phase
+   166's two open carry-overs. Response-
+   status path now retries 503/429 alongside
+   the existing err-path classifying timeouts
+   and connect failures.
+3. **Backoff jitter** (Task 4, commit
+   `936fe73`). Closes the other Phase 166
+   carry-over. Stdlib SystemTime nanos as
+   PRNG source — no new crate.
+
+### What landed beyond the open
+
+Nothing functional beyond the open. Test
+count landed cleanly inside the predicted
+band.
+
+### Phase 166 + 167 honest-debt status — both ledgers zero
+
+After Phase 169:
+- Phase 167's three named carry-overs all
+  closed: action_type_filter (P167 itself),
+  consolidation knob (P167), parent_folder_id
+  (P167), actor filter (P169 actor_email_
+  filter).
+- Phase 166's three named carry-overs all
+  closed: PDF page cap knob (P166 itself),
+  URL retry (P166), drive walk floor (P166);
+  + 503/429 classification (P169) + backoff
+  jitter (P169).
+
+New Phase 169 carry-overs (cryptographic PRNG
+for jitter, server-side 503 maintenance-window
+edge case) feed Phase 170+ list.
+
+### Fifty-eighth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

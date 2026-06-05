@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 169 — Phase 166 + 167 Retry/Filter Refinements (Actor Filter + 503/429 Retry + Jitter)
 
-**See [PHASE_169.md](PHASE_169.md).** Three small
+**Frozen — see [PHASE_169.md](PHASE_169.md).** Three small
 substrate follow-ons: Phase 167's lone open
 carry-over (actor_email post-fetch filter on
 drive.recent_activity), Phase 166's 503/429
