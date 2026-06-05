@@ -155,6 +155,29 @@ pub fn sum_turn_usage(entries: &[aivyx_audit::SignedEntry]) -> u64 {
         .sum()
 }
 
+/// Phase 176 — best-effort read of the run-window token total:
+/// the sum of `TurnEnded` usage for audit entries appended since
+/// `start_seq`. `None` audit log or any read error → `0` (the
+/// budget simply isn't enforced, never breaks the run).
+fn read_run_tokens(
+    audit_log: Option<&Arc<aivyx_audit::PersistentAuditLog>>,
+    start_seq: usize,
+) -> u64 {
+    let Some(al) = audit_log else {
+        return 0;
+    };
+    let len = al.len();
+    if len <= start_seq {
+        return 0;
+    }
+    // entries_range(from_seq, limit): read the `len - start_seq`
+    // entries appended since the run began.
+    match al.entries_range(start_seq as u64, len - start_seq) {
+        Ok(entries) => sum_turn_usage(&entries),
+        Err(_) => 0,
+    }
+}
+
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
 #[derive(
@@ -191,6 +214,9 @@ pub enum LoopDecision {
     /// Phase 174 — stop, the wall-clock `max_run_secs` cap was
     /// reached.
     StopWallClock,
+    /// Phase 176 — stop, the `max_run_tokens` budget was reached.
+    /// `tokens` is the run-window total at the stop.
+    StopBudget { tokens: u64 },
 }
 
 impl LoopDecision {
@@ -207,6 +233,9 @@ impl LoopDecision {
             LoopDecision::StopWallClock => {
                 Some("reached max_run_secs wall-clock cap")
             }
+            LoopDecision::StopBudget { .. } => {
+                Some("reached max_run_tokens budget cap")
+            }
         }
     }
 }
@@ -218,8 +247,12 @@ impl LoopDecision {
 /// work).
 ///
 /// Phase 174 — `elapsed_secs` + `max_run_secs` add the
-/// wall-clock cap; `max_run_secs = None` disables it (the cap
-/// never fires).
+/// wall-clock cap; `max_run_secs = None` disables it.
+///
+/// Phase 176 — `tokens_used` + `max_run_tokens` add the token
+/// budget, checked after the wall-clock cap; `max_run_tokens =
+/// None` disables it.
+#[allow(clippy::too_many_arguments)]
 pub fn decide(
     active: bool,
     iteration: u32,
@@ -227,6 +260,8 @@ pub fn decide(
     remaining_stories: usize,
     elapsed_secs: u64,
     max_run_secs: Option<u64>,
+    tokens_used: u64,
+    max_run_tokens: Option<u64>,
 ) -> LoopDecision {
     if !active {
         return LoopDecision::StopRequested;
@@ -234,6 +269,11 @@ pub fn decide(
     if let Some(cap) = max_run_secs {
         if elapsed_secs >= cap {
             return LoopDecision::StopWallClock;
+        }
+    }
+    if let Some(cap) = max_run_tokens {
+        if tokens_used >= cap {
+            return LoopDecision::StopBudget { tokens: tokens_used };
         }
     }
     if iteration >= max_iterations {
@@ -373,6 +413,8 @@ pub async fn run_loop_driver(
     max_run_secs: Option<u64>,
     memory: Option<Arc<dyn aivyx_memory::Memory>>,
     progress_inject_count: u32,
+    audit_log: Option<Arc<aivyx_audit::PersistentAuditLog>>,
+    max_run_tokens: Option<u64>,
     shutdown: CancellationToken,
 ) {
     loop {
@@ -391,11 +433,19 @@ pub async fn run_loop_driver(
         // A run is active — drive iterations.
         eprintln!(
             "aivyx loop: run started (max_iterations={}, gate={}, \
-             max_run_secs={:?})",
+             max_run_secs={:?}, max_run_tokens={:?})",
             shared.max_iterations(),
             if gate.is_some() { "on" } else { "off" },
             max_run_secs,
+            max_run_tokens,
         );
+
+        // Phase 176 — snapshot the audit chain length so the
+        // token budget counts only turns that complete during
+        // THIS run. No audit log → the budget can't be enforced
+        // (degrades to no cap, like the gate when unset).
+        let budget_start_seq =
+            audit_log.as_ref().map(|al| al.len()).unwrap_or(0);
 
         // Phase 174 — pre-flight gate: refuse to start on a red
         // tree. (iteration 0 → "pre-flight" in the reason.)
@@ -419,6 +469,10 @@ pub async fn run_loop_driver(
             let elapsed_secs = now_unix_ms()
                 .saturating_sub(shared.started_at_unix_ms())
                 / 1000;
+            let tokens_used = read_run_tokens(
+                audit_log.as_ref(),
+                budget_start_seq,
+            );
             let decision = decide(
                 shared.is_active(),
                 shared.iteration(),
@@ -426,6 +480,8 @@ pub async fn run_loop_driver(
                 remaining,
                 elapsed_secs,
                 max_run_secs,
+                tokens_used,
+                max_run_tokens,
             );
             if let Some(reason) = decision.stop_reason() {
                 shared.finish_run(reason);
@@ -498,11 +554,11 @@ mod tests {
     #[test]
     fn decide_continue_when_active_under_cap_with_work() {
         assert_eq!(
-            decide(true, 0, 5, 3, 0, None),
+            decide(true, 0, 5, 3, 0, None, 0, None),
             LoopDecision::Continue
         );
         assert_eq!(
-            decide(true, 4, 5, 1, 10, Some(3600)),
+            decide(true, 4, 5, 1, 10, Some(3600), 0, None),
             LoopDecision::Continue
         );
     }
@@ -510,11 +566,11 @@ mod tests {
     #[test]
     fn decide_stops_at_cap() {
         assert_eq!(
-            decide(true, 5, 5, 3, 0, None),
+            decide(true, 5, 5, 3, 0, None, 0, None),
             LoopDecision::StopMaxIterations
         );
         assert_eq!(
-            decide(true, 6, 5, 3, 0, None),
+            decide(true, 6, 5, 3, 0, None, 0, None),
             LoopDecision::StopMaxIterations
         );
     }
@@ -522,7 +578,7 @@ mod tests {
     #[test]
     fn decide_stops_on_empty_backlog() {
         assert_eq!(
-            decide(true, 1, 5, 0, 0, None),
+            decide(true, 1, 5, 0, 0, None, 0, None),
             LoopDecision::StopBacklogEmpty
         );
     }
@@ -531,7 +587,7 @@ mod tests {
     fn decide_stop_request_wins_over_remaining_work() {
         // Inactive (operator stopped) beats everything else.
         assert_eq!(
-            decide(false, 1, 5, 3, 0, None),
+            decide(false, 1, 5, 3, 0, None, 0, None),
             LoopDecision::StopRequested
         );
     }
@@ -541,7 +597,7 @@ mod tests {
         // At the cap with an empty backlog, the cap reason is
         // reported (checked first) — both are valid stops.
         assert_eq!(
-            decide(true, 5, 5, 0, 0, None),
+            decide(true, 5, 5, 0, 0, None, 0, None),
             LoopDecision::StopMaxIterations
         );
     }
@@ -550,21 +606,21 @@ mod tests {
     fn decide_wall_clock_cap() {
         // None → never fires, even at huge elapsed.
         assert_eq!(
-            decide(true, 1, 5, 3, 1_000_000, None),
+            decide(true, 1, 5, 3, 1_000_000, None, 0, None),
             LoopDecision::Continue
         );
         // Under the cap → continue.
         assert_eq!(
-            decide(true, 1, 5, 3, 59, Some(60)),
+            decide(true, 1, 5, 3, 59, Some(60), 0, None),
             LoopDecision::Continue
         );
         // At/over the cap → stop.
         assert_eq!(
-            decide(true, 1, 5, 3, 60, Some(60)),
+            decide(true, 1, 5, 3, 60, Some(60), 0, None),
             LoopDecision::StopWallClock
         );
         assert_eq!(
-            decide(true, 1, 5, 3, 61, Some(60)),
+            decide(true, 1, 5, 3, 61, Some(60), 0, None),
             LoopDecision::StopWallClock
         );
     }
@@ -573,7 +629,7 @@ mod tests {
     fn decide_wall_clock_beats_iteration_cap_and_backlog() {
         // Wall-clock is checked before the iteration cap + drain.
         assert_eq!(
-            decide(true, 99, 5, 0, 100, Some(60)),
+            decide(true, 99, 5, 0, 100, Some(60), 0, None),
             LoopDecision::StopWallClock
         );
     }
@@ -581,7 +637,49 @@ mod tests {
     #[test]
     fn decide_stop_request_beats_wall_clock() {
         assert_eq!(
-            decide(false, 1, 5, 3, 100, Some(60)),
+            decide(false, 1, 5, 3, 100, Some(60), 0, None),
+            LoopDecision::StopRequested
+        );
+    }
+
+    #[test]
+    fn decide_token_budget_cap() {
+        // None → never fires, even at huge usage.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 1_000_000_000, None),
+            LoopDecision::Continue
+        );
+        // Under the cap → continue.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 999, Some(1000)),
+            LoopDecision::Continue
+        );
+        // At/over the cap → stop, carrying the total.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 1000, Some(1000)),
+            LoopDecision::StopBudget { tokens: 1000 }
+        );
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 1500, Some(1000)),
+            LoopDecision::StopBudget { tokens: 1500 }
+        );
+    }
+
+    #[test]
+    fn decide_budget_after_wall_clock_before_iteration_cap() {
+        // Wall-clock wins over budget.
+        assert_eq!(
+            decide(true, 1, 5, 3, 100, Some(60), 9999, Some(1000)),
+            LoopDecision::StopWallClock
+        );
+        // Budget wins over the iteration cap + backlog drain.
+        assert_eq!(
+            decide(true, 99, 5, 0, 0, None, 9999, Some(1000)),
+            LoopDecision::StopBudget { tokens: 9999 }
+        );
+        // Operator stop still beats budget.
+        assert_eq!(
+            decide(false, 1, 5, 3, 0, None, 9999, Some(1000)),
             LoopDecision::StopRequested
         );
     }
@@ -614,6 +712,10 @@ mod tests {
         assert_eq!(
             LoopDecision::StopWallClock.stop_reason(),
             Some("reached max_run_secs wall-clock cap")
+        );
+        assert_eq!(
+            LoopDecision::StopBudget { tokens: 5 }.stop_reason(),
+            Some("reached max_run_tokens budget cap")
         );
     }
 

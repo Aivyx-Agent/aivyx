@@ -646,6 +646,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 ld_max_run_secs,
                 ld_progress_inject,
             );
+            // Phase 176 — the token budget: the driver sums
+            // TurnEnded usage from the audit chain over the run
+            // window. No audit log → no budget enforcement.
+            let ld_audit = audit_log.clone();
+            let ld_max_run_tokens =
+                loop_config.as_ref().and_then(|c| c.max_run_tokens);
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -655,6 +661,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_max_run_secs,
                     ld_memory,
                     ld_progress_inject,
+                    ld_audit,
+                    ld_max_run_tokens,
                     ld_shutdown,
                 )
                 .await;
