@@ -270,7 +270,12 @@ pub async fn emit_persona_proposals(
 /// Did this outcome's session see another turn start within
 /// `CORRECTION_WINDOW_MS` of this turn *ending*? Proxy for
 /// "operator immediately came back."
-fn followed_quickly(
+///
+/// `pub(crate)` since Phase 172: the correction-signal detector
+/// (`crate::correction_detect`) reuses the exact same proxy so
+/// the two consumers can never drift on what "the operator came
+/// right back" means.
+pub(crate) fn followed_quickly(
     this: &OutcomeSummary,
     all: &[OutcomeSummary],
 ) -> bool {
@@ -308,7 +313,10 @@ fn turn_signal(
 /// Match a recall event to the turn it was injected into: same
 /// session, the outcome whose start is closest to the recall
 /// timestamp within `MATCH_TOLERANCE_MS`.
-fn match_outcome<'a>(
+///
+/// `pub(crate)` since Phase 172 so `crate::correction_detect`
+/// matches recalls to turns identically to the Phase-77 pass.
+pub(crate) fn match_outcome<'a>(
     recall: &RecallEvent,
     outcomes: &'a [OutcomeSummary],
 ) -> Option<&'a OutcomeSummary> {

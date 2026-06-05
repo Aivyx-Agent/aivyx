@@ -45,6 +45,14 @@ pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod conversation_window;
 pub mod cooccurrence_ledger;
+/// Phase 172 — the structural correction-signal detector +
+/// durable decayed correction ledger + consolidation pass.
+/// Closes the Aivyx Agent Review §5.8 self-improvement gap:
+/// the agent now notices when the operator corrects it and
+/// files an operator-gated Persona proposal. `correction_detect`
+/// is the pure detector; `correction_ledger` the durable view;
+/// `correction_consolidation` the proposal actuator.
+pub mod correction_detect;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
