@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 168 — Phase 161 + 165 Stragglers (Read-Stalled-Bytes Timeout + Catalog-Aware PDF Page Count)
 
-**See [PHASE_168.md](PHASE_168.md).** Two unrelated
+**Frozen — see [PHASE_168.md](PHASE_168.md).** Two unrelated
 honest-debts from two different parent phases.
 Read-stalled-bytes timeout defeats slow-trickle
 URL servers that fall under the per-request

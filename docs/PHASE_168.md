@@ -205,8 +205,64 @@ honest-debts clear. Phase 169+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 168 exit. Predictions at
-sign-off: DESIGN.md HOLD → 5; PRODUCT.md HOLD
-→ 59; lib.rs HOLD → 5; zero new deps; test
-count delta `+8` to `+15`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 5 | Untouched | ✅ |
+| PRODUCT.md HOLD → 59 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 5 | Untouched | ✅ |
+| Zero new workspace deps | `futures-util` added to aivyx-voice's crate manifest (already workspace dep via aivyx-calendar/drive — Phase 151/157 pattern); zero NEW workspace deps | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+8` to `+15` | `+17` (aivyx-voice +5, aivyx-llm anthropic +12) | ⚠️ (over by 2; see correction) |
+
+Both Phase 168 pieces functionally closed:
+
+1. **Read-stalled-bytes timeout** (Task 2,
+   commit `60e9036`). Per-chunk
+   `tokio::time::timeout` wraps each
+   `stream.next()` when
+   `url_read_stall_secs > 0`. Default 0 =
+   disabled = Phase 161 behavior.
+2. **Catalog-aware PDF page count** (Task 3,
+   commit `f0178a9`). New
+   `count_pdf_pages_declared_max` scans for
+   `/Type /Pages /Count N`; the public
+   `count_pdf_pages_best_effort` returns the
+   `max` of per-page and declared scans.
+
+### Honest correction — test count over-band
+
+Open band was `+8..+15`; actual is `+17`. The
+declared-count scanner needed more substrate-
+tier coverage than budgeted:
+
+- 7 declared-count tests cover the
+  scanner's robustness matrix (root-Count,
+  nested-tree-max, non-Pages-dict-ignored,
+  compact-vs-spaced, out-of-window-zero,
+  malformed-value-zero, combined-best-effort).
+- 3 `find_subslice` tests cover the
+  generic byte-scan primitive (match /
+  miss / edge sizes).
+- 2 `parse_leading_integer_after_whitespace`
+  tests cover the digit-parse primitive.
+
+The +12 from the Anthropic provider piece
+honestly reflects three layers of new
+substrate (declared-count scanner + two
+generic helpers); the +5 from aivyx-voice
+matches the open's budget. Slight over-shoot
+on the harder piece.
+
+### Phase 161 + 165 honest-debt status
+
+Both named carry-overs closed:
+- ✅ Phase 161: read-stalled-bytes timeout.
+- ✅ Phase 165: compressed-stream-aware PDF
+  page count (catalog-aware via declared
+  /Count; full-document-compressed catalog
+  remains the edge case).
+
+### Fifty-seventh deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

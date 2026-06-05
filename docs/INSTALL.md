@@ -1681,6 +1681,22 @@ with custom plans can override two ways:
   to the default. Set per-process; affects all
   aivyx instances in the shell.
 
+**Phase 168 — catalog-aware PDF page count.**
+Phase 165's byte-scan counted `/Type /Page`
+markers in the PDF body — accurate for
+uncompressed PDFs but missed pages inside
+FlateDecode object streams (modern Acrobat
+output). Phase 168 augments the count with a
+catalog-aware scan that picks up the root
+`/Type /Pages /Count N` declared total (which
+typically remains visible even when individual
+page objects are compressed). The cap check
+now uses `max(per_page_scan, declared_count)`.
+Honest caveat: if the catalog itself is inside
+a compressed object stream (PDF 1.5+ full-
+document compression), both approaches miss
+and Anthropic's server-side cap handles.
+
 **Phase 166 — URL fetch retry on transient
 timeout.** `[voice.image]` adds two knobs:
 
@@ -1697,6 +1713,22 @@ and `is_connect()` — server-side 4xx / 5xx
 responses are operator-fixable and do NOT
 retry. Default `url_retry_count = 0` preserves
 Phase 161 single-attempt behavior.
+
+**Phase 168 — read-stalled-bytes timeout.**
+Phase 161's `url_timeout_secs` catches the
+total wall-clock; it does NOT catch a server
+that trickles 1 byte per second forever.
+Phase 168 adds a per-chunk stall check:
+
+```toml
+[voice.image]
+url_read_stall_secs = 5  # Default 0 = disabled.
+```
+
+When set, the body read aborts if no chunk
+arrives within the configured window —
+defeating slow-trickle attacks. Default 0
+preserves Phase 161's single-`bytes()` shape.
 
 **Phase 166 — drive walk min_concurrent
 floor.** `drive.recent_files` and
