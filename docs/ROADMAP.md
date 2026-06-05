@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 166 — Small Carry-Overs Bundle (PDF Page Cap Knob + URL Retry + Drive Walk Floor)
 
-**See [PHASE_166.md](PHASE_166.md).** Three small
+**Frozen — see [PHASE_166.md](PHASE_166.md).** Three small
 substrate carry-overs from three different
 phases: Phase 165's hardcoded
 `ANTHROPIC_PDF_PAGE_CAP` becomes a config knob

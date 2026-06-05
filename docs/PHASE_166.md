@@ -204,8 +204,72 @@ clear. Phase 167+ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 166 exit. Predictions at
-sign-off: DESIGN.md HOLD → 3; PRODUCT.md HOLD
-→ 57; lib.rs HOLD → 3; zero new deps; test
-count delta `+12` to `+22`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 3 | Untouched | ✅ |
+| PRODUCT.md HOLD → 57 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 3 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives (stdlib env, tokio::time, reqwest::Error) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+12` to `+22` | `+24` (anthropic +7, voice +5, drive +12) | ⚠️ (over by 2; see correction) |
+
+All five exit criteria functionally met. Three
+carry-overs from three different parent phases
+closed:
+
+1. **`anthropic_pdf_page_cap` config knob**
+   (Task 2, commit `4b5d2d3`). Phase 165's
+   hardcoded constant becomes operator-tunable
+   via builder + env var with safe fallback on
+   invalid input.
+2. **URL fetch retry** (Task 3, commit
+   `207e613`). Phase 161's no-retry default
+   preserved; operators opt in via
+   `url_retry_count`. Exponential backoff
+   with saturating-mul overflow safety.
+3. **Drive walk `min_concurrent` companion**
+   (Task 4, commit `5e438d8`). Mirrors Phase
+   158 calendar pattern; min ≤ max validated
+   at parse time.
+
+### Honest correction — test count over-band
+
+Open band was `+12..+22`; actual is `+24`.
+The over-shoot came from Task 4: closing the
+min/max companion forced updating the Phase
+160 substrate test, which exposed a
+semantically equivalent but bookkeeping-
+different formula. I updated the test +
+added 4 floor cases (lifts/within-default/
+with-ceiling/floor-above-ceiling) + 5 input-
+parse cases in recent_files + 3 mirror cases
+in recent_changes = 12 tests for the drive
+piece alone, vs. the open's 6-8 estimate.
+The substrate-tier coverage warranted the
+depth.
+
+### Phase 166 substrate behavior shift documented
+
+The drive walk's permits formula changed:
+pre-166 returned `Some(max_concurrent)`
+verbatim (semaphore could have more permits
+than tasks); post-166 clamps to
+`min(level_width, max_concurrent)` (semaphore
+permits match actual concurrency). Real-world
+behavior is identical — the semaphore can't
+manufacture work that isn't there — but the
+unit test that pinned the old bookkeeping
+needed updating. Explanatory comment landed
+inline at the changed assertion.
+
+### Phase 160 + 161 + 165 honest-debt status
+
+Three named carry-overs cleared, one per
+parent phase. New Phase 166 carry-overs
+(server 503/429 retry classification,
+backoff jitter) feed Phase 167+ list.
+
+### Fifty-fifth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

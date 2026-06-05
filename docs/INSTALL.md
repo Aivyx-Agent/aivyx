@@ -1658,15 +1658,56 @@ on Anthropic.** When operators attach a PDF
 to a document-capable Anthropic model, the
 substrate byte-scans for `/Type /Page`
 markers and refuses if the count exceeds
-Anthropic's documented 100-page limit. Honest
-caveat: PDFs using FlateDecode object streams
-(common in modern Acrobat output) hide their
-page-object headers from the byte-scan; those
-fall through to Anthropic's server-side cap
-enforcement. The client-side check provides
-additive defense for uncompressed PDFs (older
-tools, command-line generators, scanned
-documents) where the markers are visible.
+the cap. Honest caveat: PDFs using FlateDecode
+object streams (common in modern Acrobat
+output) hide their page-object headers from
+the byte-scan; those fall through to
+Anthropic's server-side cap enforcement. The
+client-side check provides additive defense
+for uncompressed PDFs (older tools, command-
+line generators, scanned documents) where the
+markers are visible.
+
+**Phase 166 — operator-tunable Anthropic PDF
+page cap.** The cap defaults to 100 (matching
+Anthropic's documented limit) but operators
+with custom plans can override two ways:
+
+- **Builder method:**
+  `AnthropicConfig::new(...).with_pdf_page_cap(250)`.
+- **Environment variable:**
+  `AIVYX_ANTHROPIC_PDF_PAGE_CAP=250 aivyx ...`.
+  Invalid values (non-numeric, zero) fall back
+  to the default. Set per-process; affects all
+  aivyx instances in the shell.
+
+**Phase 166 — URL fetch retry on transient
+timeout.** `[voice.image]` adds two knobs:
+
+```toml
+[voice.image]
+url_retry_count       = 3      # Default 0. Number of retries on
+                               # client-side transient errors.
+url_retry_backoff_ms  = 500    # Default 500. Base backoff; doubles
+                               # per retry (500, 1000, 2000, 4000 ms).
+```
+
+Retries fire only on `reqwest::is_timeout()`
+and `is_connect()` — server-side 4xx / 5xx
+responses are operator-fixable and do NOT
+retry. Default `url_retry_count = 0` preserves
+Phase 161 single-attempt behavior.
+
+**Phase 166 — drive walk min_concurrent
+floor.** `drive.recent_files` and
+`drive.recent_changes` gain
+`walk_min_concurrent` (cap 16, mirrors Phase
+158 calendar). Composes with
+`walk_max_concurrent` ceiling; min ≤ max
+validated at parse time. The floor doesn't
+manufacture work — a floor of 8 on a 3-folder
+level still fires 3 futures (same posture as
+Phase 158 calendar's min_concurrent).
 
 SVG and TIFF still route as image blocks; most
 vision LLMs reject them, and the rejection
