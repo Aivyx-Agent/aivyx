@@ -70,6 +70,11 @@ pub mod loop_tool;
 /// `TriggerSource::Loop` turn per iteration over the backlog,
 /// re-arming until the backlog is empty or a hard cap is hit.
 pub mod loop_driver;
+/// Phase 174 — driver-side gate verification. The `GateRunner`
+/// trait + the production `ShellGateRunner` that runs the
+/// operator-configured gate command (build/tests) so the driver
+/// stops a run the moment the tree goes red.
+pub mod loop_gate;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
