@@ -283,6 +283,7 @@ mod tests {
             outcome_kind: kind.into(),
             tool_calls_made: 0,
             duration_ms: 100,
+            tools: Vec::new(),
         }
     }
 

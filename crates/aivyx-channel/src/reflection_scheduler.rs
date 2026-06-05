@@ -475,6 +475,13 @@ pub struct OutcomeSummary {
     pub tool_calls_made: u32,
     /// Wall-clock duration of the turn in milliseconds.
     pub duration_ms: u64,
+    /// Phase 179 — the distinct scope bases of the turn's
+    /// `ToolCall` audit events, in first-seen order (e.g.
+    /// `["fs.read", "git.read"]`). The scope base is stable
+    /// across daemon restarts (unlike the per-process
+    /// `tool_id`), so it is the restart-safe per-tool-surface
+    /// key. Empty for a turn that made no tool calls.
+    pub tools: Vec<String>,
 }
 
 /// Format a vector of summaries as the JSON block appended to
@@ -488,9 +495,16 @@ pub fn format_summaries_for_prompt(summaries: &[OutcomeSummary]) -> String {
     }
     let mut out = String::from("Recent outcome summaries (most recent first):\n\n");
     for s in summaries {
+        // Phase 179 — render the turn's tools so the reflection
+        // LLM sees what the turn actually did, not just a count.
+        let tools = if s.tools.is_empty() {
+            String::new()
+        } else {
+            format!(", tools=[{}]", s.tools.join(", "))
+        };
         out.push_str(&format!(
             "- turn `{turn}` (session `{ses}`) at {ts}ms — outcome={out_kind}, \
-             tool_calls={tc}, duration={dur}ms\n",
+             tool_calls={tc}{tools}, duration={dur}ms\n",
             turn = s.turn_id,
             ses = s.session_id,
             ts = s.started_at_unix_ms,
@@ -601,6 +615,10 @@ pub fn summarize_recent_outcomes_from_entries(
     // Map turn_id → (session_id, started_at_unix_ms). TurnId is
     // `Copy + Hash` (UUID newtype) so we can key directly.
     let mut open: HashMap<TurnId, (String, u64)> = HashMap::new();
+    // Phase 179 — distinct scope bases per open turn, accumulated
+    // from the `ToolCall` events that land between the turn's
+    // `TurnStarted` and `TurnEnded`.
+    let mut tools_by_turn: HashMap<TurnId, Vec<String>> = HashMap::new();
     let mut out: Vec<OutcomeSummary> = Vec::new();
     for entry in entries {
         let ts = system_time_to_unix_ms(entry.appended_at);
@@ -610,6 +628,20 @@ pub fn summarize_recent_outcomes_from_entries(
             } => {
                 open.insert(*turn_id, (session_id.to_string(), ts));
             }
+            AuditEvent::ToolCall {
+                turn_id,
+                scope_used,
+                ..
+            } => {
+                // The scope base is the restart-safe per-tool
+                // surface key (Phase 102 joins on it). Distinct,
+                // first-seen order.
+                let base = scope_used.base().to_string();
+                let list = tools_by_turn.entry(*turn_id).or_default();
+                if !list.contains(&base) {
+                    list.push(base);
+                }
+            }
             AuditEvent::TurnEnded {
                 turn_id,
                 outcome,
@@ -617,6 +649,8 @@ pub fn summarize_recent_outcomes_from_entries(
                 duration,
                 ..
             } => {
+                let tools =
+                    tools_by_turn.remove(turn_id).unwrap_or_default();
                 if let Some((session_id, started_at)) = open.remove(turn_id) {
                     if started_at < cutoff_ms {
                         // Window-of-interest filter.
@@ -629,6 +663,7 @@ pub fn summarize_recent_outcomes_from_entries(
                         outcome_kind: outcome_kind_label(outcome).to_string(),
                         tool_calls_made: *tool_calls_made as u32,
                         duration_ms: duration.as_millis() as u64,
+                        tools,
                     });
                 }
             }
@@ -2479,6 +2514,88 @@ mod tests {
         }
     }
 
+    fn make_toolcall(
+        seq: u64,
+        turn_id: TurnId,
+        ts_ms: u64,
+        scope_base: &str,
+    ) -> SignedEntry {
+        SignedEntry {
+            seq,
+            appended_at: UNIX_EPOCH + Duration::from_millis(ts_ms),
+            event: AuditEvent::ToolCall {
+                turn_id,
+                tool_id: aivyx_core::ToolId::new(),
+                scope_used: aivyx_capability::Scope::parse(scope_base)
+                    .expect("known base"),
+                input_hash: [0u8; 32],
+                outcome: aivyx_core::ToolOutcomeSummary::Completed {
+                    verified:
+                        aivyx_core::VerificationSummary::NotApplicable,
+                },
+                duration: Duration::from_millis(10),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            prev_mac: [0u8; 32],
+            mac: [0u8; 32],
+        }
+    }
+
+    #[test]
+    fn builder_collects_distinct_tool_scope_bases() {
+        // A turn that calls fs.read, fs.read (dup), then git.read.
+        let (started, turn_id, _session) = make_started(0, 1_000);
+        let tc1 = make_toolcall(1, turn_id, 1_100, "fs.read");
+        let tc2 = make_toolcall(2, turn_id, 1_200, "fs.read");
+        let tc3 = make_toolcall(3, turn_id, 1_300, "git.read");
+        let ended = make_ended(4, turn_id, 1_500, 3);
+        let entries = vec![started, tc1, tc2, tc3, ended];
+        let out =
+            summarize_recent_outcomes_from_entries(&entries, 3600, 10_000);
+        assert_eq!(out.len(), 1);
+        // Distinct, first-seen order.
+        assert_eq!(out[0].tools, vec!["fs.read", "git.read"]);
+    }
+
+    #[test]
+    fn builder_no_tools_when_turn_made_none() {
+        let (started, turn_id, _s) = make_started(0, 1_000);
+        let ended = make_ended(1, turn_id, 1_500, 0);
+        let out = summarize_recent_outcomes_from_entries(
+            &[started, ended],
+            3600,
+            10_000,
+        );
+        assert!(out[0].tools.is_empty());
+    }
+
+    #[test]
+    fn prompt_renders_tools_when_present() {
+        let with_tools = OutcomeSummary {
+            session_id: "s".into(),
+            turn_id: "t".into(),
+            started_at_unix_ms: 1,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 2,
+            duration_ms: 5,
+            tools: vec!["gmail.send".into(), "fs.read".into()],
+        };
+        let p = format_summaries_for_prompt(&[with_tools]);
+        assert!(p.contains("tools=[gmail.send, fs.read]"));
+        // No-tools turn omits the tools= clause.
+        let no_tools = OutcomeSummary {
+            session_id: "s".into(),
+            turn_id: "t".into(),
+            started_at_unix_ms: 1,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 0,
+            duration_ms: 5,
+            tools: vec![],
+        };
+        assert!(!format_summaries_for_prompt(&[no_tools]).contains("tools="));
+    }
+
     #[test]
     fn pairs_one_turn_returns_one_summary() {
         let (started, turn_id, session) = make_started(0, 1_000);
@@ -2544,6 +2661,7 @@ mod tests {
             outcome_kind: "completed".into(),
             tool_calls_made: 0,
             duration_ms: 50,
+            tools: Vec::new(),
         }];
         cache.put(key, initial.clone());
         assert_eq!(cache.len(), 1);
@@ -2607,6 +2725,7 @@ mod tests {
             outcome_kind: "completed".into(),
             tool_calls_made: 4,
             duration_ms: 1234,
+            tools: Vec::new(),
         }];
         let s = format_summaries_for_prompt(&summaries);
         assert!(s.contains("turn `turn-001`"));
@@ -2736,6 +2855,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 500,
+                tools: Vec::new(),
             })
             .collect();
 
@@ -2911,6 +3031,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 500,
+                tools: Vec::new(),
             })
             .collect();
 
@@ -3078,6 +3199,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 500,
+                tools: Vec::new(),
             })
             .collect();
 
@@ -3247,6 +3369,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 1000,
+                tools: Vec::new(),
             },
             OutcomeSummary {
                 session_id: sid.clone(),
@@ -3255,6 +3378,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 1000,
+                tools: Vec::new(),
             },
             // t2 recalled db, completed, no quick follow-up.
             OutcomeSummary {
@@ -3264,6 +3388,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 1000,
+                tools: Vec::new(),
             },
         ];
 
@@ -3430,6 +3555,7 @@ mod tests {
             outcome_kind: "completed".into(),
             tool_calls_made: 0,
             duration_ms: 1000,
+            tools: Vec::new(),
         })
         .collect();
 
@@ -3580,6 +3706,7 @@ mod tests {
                 outcome_kind: "completed".into(),
                 tool_calls_made: 0,
                 duration_ms: 500,
+                tools: Vec::new(),
             });
         }
 
@@ -3765,6 +3892,7 @@ mod tests {
             outcome_kind: "completed".into(),
             tool_calls_made: 0,
             duration_ms: 500,
+            tools: Vec::new(),
         });
 
         // Turn 2 (control): two PRIMARY topics co-recalled.
@@ -3802,6 +3930,7 @@ mod tests {
             outcome_kind: "completed".into(),
             tool_calls_made: 0,
             duration_ms: 500,
+            tools: Vec::new(),
         });
 
         let sched = aivyx_config::ReflectionScheduleConfig {
