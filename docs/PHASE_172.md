@@ -201,4 +201,62 @@ note.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 9 | Untouched | ✅ |
+| PRODUCT.md HOLD → 63 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 9 | Untouched | ✅ |
+| Zero new workspace deps | All work used existing primitives (`aivyx_storage`, `serde`, the Phase-70 chain, the Phase-87 phraser pattern) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (one `manual_contains` reworded in Task 2) | ✅ |
+| Test count delta `+30` to `+50` | `+33` (detect 12 + ledger 6 + fold 1 + consolidation 9 + config-parse 4 + render 1); workspace ~4,002 → ~4,035 | ✅ (low end of band) |
+
+The full loop closed end-to-end:
+
+1. **Correction signal** (Task 2, commit `…`). New
+   `correction_detect` counts, per recalled topic, the
+   `completed`-then-rapid-followup reworks — reusing Phase
+   77's `followed_quickly` + `match_outcome` (promoted to
+   `pub(crate)` so the two consumers can't drift). Narrower
+   than the helpfulness `−1`: agent failures and ambiguous
+   outcomes are excluded.
+2. **Durable decayed ledger** (Task 3). New
+   `correction_ledger` symmetric with the Phase-82 helpfulness
+   ledger; ~30-day half-life (half of helpfulness, since a
+   correction is a transient signal); HKDF-isolated via the
+   new `KeyDomain::CorrectionLedger`; folded + pruned on the
+   reflection cadence after the Phase 82/83 folds.
+3. **Consolidation → Pending proposal** (Task 4). New
+   `correction_consolidation` mirroring Phase 87:
+   double-gated, deduped, capped, LLM-phrased, filed under a
+   canonical `correction:{topic}` id through the Phase-70
+   chain behind the opt-in `[correction_consolidation]`
+   block.
+4. **Surface** (Task 5). `accumulated_corrections` +
+   `correction_consolidation` threaded through the
+   `GetLearningInsights` IPC → `aivyx learning` CLI +
+   Web UI Learning tab; INSTALL section.
+
+### What landed beyond the open
+
+Nothing material. The surface plumbing touched more files
+than a typical learning add (the `LearningInsights` payload
+accretes ~16 optional fields now), but the change shape is
+the established per-phase accretion.
+
+### Honest-debt status carried forward
+
+- Correction signal is structural-only (no LLM-judged
+  classification yet) and recall-attributed (turns with no
+  recall are invisible). Both are documented Phase 173+
+  candidates.
+- Sixty-first consecutive deferral of the Channel Activation
+  Milestone — intentional hold.
+
+### Self-improvement closure
+
+Phase 172 is the first phase to wire the §5.8 gap the Agent
+Review named: the agent now has a durable, operator-legible
+signal for *what it keeps getting reworked on*, and an
+opt-in path that turns that into a gated Profile proposal.
+The substrate the review said was "looking for the
+orchestration push" got one of its named pushes.

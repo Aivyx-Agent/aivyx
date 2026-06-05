@@ -13,6 +13,8 @@ use aivyx_channel::daemon_client::{
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::cooccurrence_ledger::CooccurrencePatterns;
+use aivyx_channel::correction_consolidation::CorrectionConsolidationStat;
+use aivyx_channel::correction_ledger::AccumulatedCorrections;
 use aivyx_channel::memory_recall::RecallClusterStat;
 use aivyx_channel::helpfulness_ledger::AccumulatedHelpfulness;
 use aivyx_channel::persona_context::PersonaSelectionStat;
@@ -43,6 +45,8 @@ pub async fn run_learning(
         cooccurrence,
         cluster_recall,
         persona_consolidation,
+        accumulated_corrections,
+        correction_consolidation,
         recall_judgment,
         cadence,
     ) = get_learning_insights(&socket_path, window_secs)
@@ -64,6 +68,8 @@ pub async fn run_learning(
             persona_consolidation.as_ref(),
             recall_judgment.as_ref(),
             &cadence,
+            accumulated_corrections.as_ref(),
+            correction_consolidation.as_ref(),
         )
     );
     Ok(())
@@ -111,6 +117,8 @@ fn render_insights(
     persona_consolidation: Option<&PersonaConsolidationStat>,
     recall_judgment: Option<&RecallJudgmentStat>,
     cadence: &[(String, RecentReflectionStat)],
+    accumulated_corrections: Option<&AccumulatedCorrections>,
+    correction_consolidation: Option<&CorrectionConsolidationStat>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -328,6 +336,49 @@ fn render_insights(
         ),
     }
 
+    // Phase 172 — the durable correction view (topics the
+    // operator most often reworks) + the last correction-
+    // consolidation cycle.
+    out.push_str("\nMost-reworked topics (accumulated):\n");
+    match accumulated_corrections {
+        Some(a) if !a.top_corrected.is_empty() => {
+            for tc in &a.top_corrected {
+                out.push_str(&format!(
+                    "  {:.1}  {} ({} window{})\n",
+                    tc.count,
+                    tc.topic,
+                    tc.samples,
+                    if tc.samples == 1 { "" } else { "s" },
+                ));
+            }
+        }
+        _ => out.push_str("  (none yet)\n"),
+    }
+
+    out.push_str(
+        "\nCorrection-driven Persona proposals (last cycle, opt-in):\n",
+    );
+    match correction_consolidation {
+        Some(c) if c.filed > 0 => {
+            out.push_str(&format!(
+                "  {} filed last cycle\n",
+                c.filed,
+            ));
+            for topic in &c.topics {
+                out.push_str(&format!("    {topic}\n"));
+            }
+        }
+        Some(c) if c.llm_unavailable => out.push_str(
+            "  engaged, 0 filed last cycle (LLM unavailable)\n",
+        ),
+        Some(_) => {
+            out.push_str("  engaged, 0 filed last cycle\n")
+        }
+        None => out.push_str(
+            "  not engaged (off, or no cycle yet)\n",
+        ),
+    }
+
     out.push_str(
         "\nLLM-judged recall usefulness (last cycle, opt-in):\n",
     );
@@ -419,7 +470,7 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
+        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
@@ -440,6 +491,7 @@ mod tests {
         // Default (None) — banner absent.
         let out_none = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
+            None, None,
         );
         assert!(!out_none.contains("signal source"));
         // Explicit-off (Some(false)) — banner still absent
@@ -448,12 +500,14 @@ mod tests {
         d.judgment_signal = Some(false);
         let out_off = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
+            None, None,
         );
         assert!(!out_off.contains("signal source"));
         // Augment on — the banner fires.
         d.judgment_signal = Some(true);
         let out_on = render_insights(
             &d, &[], None, None, None, None, None, None, None, None, &[],
+            None, None,
         );
         assert!(out_on.contains(
             "signal source: judgment-driven (Phase 93 — augmenting structural)"
@@ -483,7 +537,7 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[]);
+        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[], None, None);
         assert!(out.contains(
             "recall-fb:project/x [pending] topic 'project/x' net +5"
         ));
@@ -505,16 +559,61 @@ mod tests {
             proposals_in_window: 0,
             judgment_signal: None,
         };
-        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[]);
+        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[], None, None);
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
     }
 
+    /// Phase 172 — the most-reworked-topics view + the
+    /// correction-driven proposal block render in both the
+    /// None (not engaged / none yet) and Some shapes.
+    #[test]
+    fn render_corrections_some_and_none() {
+        use aivyx_channel::correction_consolidation::CorrectionConsolidationStat;
+        use aivyx_channel::correction_ledger::{
+            AccumulatedCorrections, TopicCorrections,
+        };
+
+        // None → "(none yet)" + "not engaged".
+        let none_out = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &[], None, None,
+        );
+        assert!(none_out.contains("Most-reworked topics (accumulated):"));
+        assert!(none_out.contains("(none yet)"));
+        assert!(none_out.contains(
+            "Correction-driven Persona proposals (last cycle, opt-in):"
+        ));
+
+        // Some → decayed count + topic + samples, and a filed
+        // proposal line.
+        let acc = AccumulatedCorrections {
+            top_corrected: vec![TopicCorrections {
+                topic: "auth".into(),
+                count: 4.0,
+                samples: 3,
+            }],
+        };
+        let stat = CorrectionConsolidationStat {
+            ts_secs: 1_715_006_000,
+            filed: 1,
+            llm_unavailable: false,
+            topics: vec!["auth".into()],
+        };
+        let some_out = render_insights(
+            &digest(), &[], None, None, None, None, None, None, None, None,
+            &[], Some(&acc), Some(&stat),
+        );
+        assert!(some_out.contains("4.0  auth (3 windows)"));
+        assert!(some_out.contains("1 filed last cycle"));
+        assert!(some_out.contains("    auth\n"));
+    }
+
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -524,7 +623,7 @@ mod tests {
             total: 20,
         };
         let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[]);
+            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[], None, None);
         assert!(some_out.contains(
             "adaptive Persona: 6/20 facets injected last turn"
         ));
@@ -537,7 +636,7 @@ mod tests {
         };
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
+        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -552,7 +651,7 @@ mod tests {
             capped: 1,
         };
         let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[]);
+            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[], None, None);
         assert!(some_out.contains(
             "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
         ));
@@ -570,7 +669,7 @@ mod tests {
 
         // None → "not engaged" line.
         let none_out =
-            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[]);
+            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None);
         assert!(
             none_out.contains("persona lifecycle: not engaged")
         );
@@ -598,6 +697,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(some_out.contains(
             "persona lifecycle: 1 proposed last cycle \
@@ -628,6 +729,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(none_out.contains(
             "Accumulated helpfulness (all-time, decayed):"
@@ -659,6 +762,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(some_out.contains("+4.5  rust  (2 samples)"));
         assert!(
@@ -685,6 +790,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(none_out.contains(
             "Topics that consistently help together:"
@@ -711,6 +818,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(some_out.contains(
             "+8.0  deploy + rollback  (5 samples)"
@@ -727,6 +836,8 @@ mod tests {
         let out_empty = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
             &[],
+            None,
+            None,
         );
         assert!(!out_empty.contains("Reflection cadence"));
 
@@ -738,6 +849,8 @@ mod tests {
         let out_zero = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
             &zero,
+            None,
+            None,
         );
         assert!(!out_zero.contains("Reflection cadence"));
 
@@ -756,6 +869,8 @@ mod tests {
         let out_mixed = render_insights(
             &digest(), &[], None, None, None, None, None, None, None, None,
             &mixed,
+            None,
+            None,
         );
         assert!(out_mixed.contains("Reflection cadence (Phase 95):"));
         assert!(out_mixed.contains("nightly: 7 fired, 2 skipped"));
@@ -782,6 +897,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(none_out.contains(
             "Cluster co-recall (last turn, opt-in):"
@@ -811,6 +928,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(some_out.contains(
             "1 affined sibling(s) injected"
@@ -837,6 +956,8 @@ mod tests {
             None,
             None,
             &[],
+            None,
+            None,
         );
         assert!(
             z.contains("engaged, 0 injected last turn")

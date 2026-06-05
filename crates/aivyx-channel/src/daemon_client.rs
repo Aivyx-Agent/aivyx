@@ -536,6 +536,10 @@ pub async fn get_learning_insights(
         Option<crate::cooccurrence_ledger::CooccurrencePatterns>,
         Option<crate::memory_recall::RecallClusterStat>,
         Option<crate::persona_consolidation::PersonaConsolidationStat>,
+        Option<crate::correction_ledger::AccumulatedCorrections>,
+        Option<
+            crate::correction_consolidation::CorrectionConsolidationStat,
+        >,
         Option<crate::recall_judgment::RecallJudgmentStat>,
         Vec<(
             String,
@@ -561,6 +565,8 @@ pub async fn get_learning_insights(
             cooccurrence,
             cluster_recall,
             persona_consolidation,
+            accumulated_corrections,
+            correction_consolidation,
             recall_judgment,
             cadence,
         } => Ok((
@@ -573,6 +579,8 @@ pub async fn get_learning_insights(
             cooccurrence,
             cluster_recall,
             persona_consolidation,
+            accumulated_corrections,
+            correction_consolidation,
             recall_judgment,
             cadence,
         )),

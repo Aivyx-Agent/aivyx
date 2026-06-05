@@ -430,6 +430,25 @@ pub enum QueryResponsePayload {
         persona_consolidation: Option<
             crate::persona_consolidation::PersonaConsolidationStat,
         >,
+        /// Phase 172 — durable accumulated correction view
+        /// (the topics the operator most often reworks). `None`
+        /// if the correction ledger is absent / empty (no
+        /// auto-recall, or pre-Phase-172). `#[serde(default)]`
+        /// so older frames decode.
+        #[serde(default)]
+        accumulated_corrections: Option<
+            crate::correction_ledger::AccumulatedCorrections,
+        >,
+        /// Phase 172 — the last reflection cycle's correction-
+        /// driven Persona consolidation outcome (filed topics +
+        /// the LLM-availability flag). `None` if
+        /// `[correction_consolidation]` is off, no cycle has
+        /// fired this daemon lifetime, or the substrate is
+        /// missing. `#[serde(default)]` so older frames decode.
+        #[serde(default)]
+        correction_consolidation: Option<
+            crate::correction_consolidation::CorrectionConsolidationStat,
+        >,
         /// Phase 91 — last reflection cycle's LLM-judged
         /// recall outcome (per-classification counts +
         /// `(topic, judgment)` pairs + the
@@ -1989,6 +2008,25 @@ mod tests {
                                 "rollback".into(),
                             )],
                             superseded: 0,
+                        },
+                    ),
+                    accumulated_corrections: Some(
+                        crate::correction_ledger::AccumulatedCorrections {
+                            top_corrected: vec![
+                                crate::correction_ledger::TopicCorrections {
+                                    topic: "deploy".into(),
+                                    count: 3.0,
+                                    samples: 2,
+                                },
+                            ],
+                        },
+                    ),
+                    correction_consolidation: Some(
+                        crate::correction_consolidation::CorrectionConsolidationStat {
+                            ts_secs: 1_715_005_550,
+                            filed: 1,
+                            llm_unavailable: false,
+                            topics: vec!["deploy".into()],
                         },
                     ),
                     recall_judgment: Some(

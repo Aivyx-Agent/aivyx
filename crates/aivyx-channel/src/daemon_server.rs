@@ -1051,6 +1051,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             recall_log: recall_log.clone(),
             helpfulness_ledger: helpfulness_ledger.clone(),
             cooccurrence_ledger: cooccurrence_ledger.clone(),
+            correction_ledger: correction_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             recall_cluster_stat: recall_cluster_stat.clone(),
             proactive_stat: proactive_stat.clone(),
@@ -1058,6 +1059,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             conversation_windows: conversation_windows.clone(),
             persona_consolidation_stat:
                 persona_consolidation_stat.clone(),
+            correction_consolidation_stat:
+                correction_consolidation_stat.clone(),
             recall_judgment_stat: recall_judgment_stat.clone(),
             recall_feedback_config: recall_feedback_config.clone(),
             cadence_stats: cadence_stats.clone(),
@@ -1141,6 +1144,12 @@ struct ConnectionContext {
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    /// Phase 172 — durable correction ledger for the read-only
+    /// `GetLearningInsights` accumulated-corrections view.
+    /// `None` = no auto-recall configured.
+    correction_ledger: Option<
+        Arc<crate::correction_ledger::PersistentCorrectionLedger>,
+    >,
     /// Phase 79 (Q4a) — last-Persona-selection stat for the
     /// `GetLearningInsights` surface.
     persona_selection_stat:
@@ -1169,6 +1178,11 @@ struct ConnectionContext {
     /// `GetLearningInsights` surface.
     persona_consolidation_stat: Option<
         crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
+    /// Phase 172 (Q4a) — last-reflection-cycle correction-driven
+    /// consolidation stat for the `GetLearningInsights` surface.
+    correction_consolidation_stat: Option<
+        crate::correction_consolidation::SharedCorrectionConsolidationStat,
     >,
     /// Phase 91 (Q4a) — last-reflection-cycle LLM-judged
     /// recall stat for the `GetLearningInsights` surface.
@@ -1217,12 +1231,14 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         recall_log,
         helpfulness_ledger,
         cooccurrence_ledger,
+        correction_ledger,
         persona_selection_stat,
         recall_cluster_stat,
         proactive_stat,
         persona_lifecycle_stat,
         conversation_windows,
         persona_consolidation_stat,
+        correction_consolidation_stat,
         recall_judgment_stat,
         recall_feedback_config,
         cadence_stats,
@@ -1835,11 +1851,13 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_log.as_ref(),
                                 helpfulness_ledger.as_ref(),
                                 cooccurrence_ledger.as_ref(),
+                                correction_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 recall_cluster_stat.as_ref(),
                                 proactive_stat.as_ref(),
                                 persona_lifecycle_stat.as_ref(),
                                 persona_consolidation_stat.as_ref(),
+                                correction_consolidation_stat.as_ref(),
                                 recall_judgment_stat.as_ref(),
                                 recall_feedback_config.as_ref(),
                                 &cadence_stats,
@@ -2182,12 +2200,14 @@ async fn run_single_connection_daemon(
         recall_log: None,
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
+        correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
         proactive_stat: None,
         persona_lifecycle_stat: None,
         conversation_windows: None,
         persona_consolidation_stat: None,
+        correction_consolidation_stat: None,
         recall_judgment_stat: None,
         recall_feedback_config: None,
         cadence_stats: crate::reflection_scheduler::shared_recent_reflection_stats(),
@@ -2433,6 +2453,9 @@ async fn handle_query(
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    correction_ledger: Option<
+        &Arc<crate::correction_ledger::PersistentCorrectionLedger>,
+    >,
     persona_selection_stat: Option<
         &crate::persona_context::SharedPersonaSelectionStat,
     >,
@@ -2447,6 +2470,9 @@ async fn handle_query(
     >,
     persona_consolidation_stat: Option<
         &crate::persona_consolidation::SharedPersonaConsolidationStat,
+    >,
+    correction_consolidation_stat: Option<
+        &crate::correction_consolidation::SharedCorrectionConsolidationStat,
     >,
     recall_judgment_stat: Option<
         &crate::recall_judgment::SharedRecallJudgmentStat,
@@ -3009,6 +3035,23 @@ async fn handle_query(
                     .filter(|p| !p.top_pairs.is_empty()),
                 None => None,
             };
+            // Phase 172 — durable accumulated correction view
+            // (the topics the operator most often reworks).
+            // Best-effort: ledger error → None, empty → None.
+            let accumulated_corrections = match correction_ledger {
+                Some(l) => l
+                    .accumulated(now_secs, 5)
+                    .await
+                    .ok()
+                    .filter(|a| !a.top_corrected.is_empty()),
+                None => None,
+            };
+            // Phase 172 (Q4a) — last reflection cycle's
+            // correction-driven consolidation outcome.
+            let correction_consolidation =
+                correction_consolidation_stat.and_then(|s| {
+                    s.read().ok().and_then(|g| g.clone())
+                });
 
             // Phase 95 — snapshot per-schedule cadence stats.
             // Sorted by schedule name for stable rendering.
@@ -3048,6 +3091,8 @@ async fn handle_query(
                     cooccurrence,
                     cluster_recall,
                     persona_consolidation,
+                    accumulated_corrections,
+                    correction_consolidation,
                     recall_judgment,
                     cadence,
                 };
@@ -3122,6 +3167,8 @@ async fn handle_query(
                 cooccurrence,
                 cluster_recall,
                 persona_consolidation,
+                accumulated_corrections,
+                correction_consolidation,
                 recall_judgment,
                 cadence,
             }

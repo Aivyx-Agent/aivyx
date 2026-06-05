@@ -4747,6 +4747,61 @@ count when the knob is on, so the operator can confirm at
 a glance that the loop is in the augmented mode they
 expect.
 
+### Correction-signal learning (Phase 172)
+
+Phase 172 closes the self-improvement loop named in the
+Aivyx Agent Review: the agent now notices when **you correct
+it**. Whenever a turn completes and you immediately come back
+in the same session (the structural "that wasn't what I
+wanted" proxy already computed since Phase 77), the topics
+recalled into that turn accumulate a **correction count** in
+a durable, time-decayed ledger (~30-day half-life). This is a
+distinct signal from helpfulness: a topic can be net-helpful
+yet still keep needing rework — those are exactly the ones
+worth a Profile note.
+
+Two layers ship:
+
+- **The correction ledger** — always on, zero-config (built
+  alongside the recall log, like the Phase 82/83 ledgers). It
+  only accumulates; it never changes behaviour on its own.
+  `aivyx learning` and the Web UI Learning tab render a
+  **"Most-reworked topics (accumulated)"** block so you can
+  see what the agent is picking up.
+- **The correction-consolidation pass** — opt-in. When a
+  topic's decayed correction count clears `min_corrections`
+  over at least `min_samples` reflection windows, the
+  reflection cron asks the LLM to phrase a one-line
+  `learned_context` facet and files it as a **Pending Persona
+  proposal** through the existing Phase 70 chain. You approve,
+  edit-then-approve, or reject — the operator gate stays the
+  sole authority (nothing is ever applied automatically).
+
+Enable the proposal pass in `~/.config/aivyx/aivyx.toml`:
+
+```toml
+[correction_consolidation]
+enabled = true
+min_corrections = 3.0          # optional, default 3.0
+min_samples = 2                # optional, default 2
+max_proposals_per_cycle = 3    # optional, default 3
+```
+
+Validation (only when `enabled = true`):
+`min_corrections` finite and `> 0.0`, `min_samples >= 1`,
+`max_proposals_per_cycle >= 1`. **To turn it off:** set
+`enabled = false` or delete the block — the ledger keeps
+accumulating passively (still visible in `aivyx learning`)
+but no correction proposals are filed.
+
+The signal is structural, not semantic: "you came right
+back" is a coarse proxy that can't tell a genuine rework from
+praise or an unrelated follow-up, and corrections are
+attributed only to the topics recalled into the turn (a turn
+with no recall is invisible). An LLM-judged refinement —
+mirroring the Phase 91 recall-judgment augment — is a future
+phase.
+
 ## Tool observability (Phase 102)
 
 `aivyx tools` is the read-only window onto the tool layer —
