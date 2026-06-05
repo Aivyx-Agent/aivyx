@@ -3535,6 +3535,21 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 170 — Voice Polish Bundle (Mid-Recording /image + Clipboard Source + Abort UX Knob)
+
+**See [PHASE_170.md](PHASE_170.md).** Three deferred
+voice carry-overs in one bundle. Mid-recording
+`/image <path>` now queues the image and
+continues recording instead of stopping. New
+`/image clipboard` reads from the platform
+clipboard tool (wl-paste / xclip / pbpaste).
+Phase 146's mid-synthesis abort gains an
+operator-tunable `abort_requires_double_enter`
+knob (default false preserves single-Enter
+behavior). Round-number Phase 170 milestone
+spent on long-deferred voice polish. Zero new
+workspace deps.
+
 ## Phase 169 — Phase 166 + 167 Retry/Filter Refinements (Actor Filter + 503/429 Retry + Jitter)
 
 **Frozen — see [PHASE_169.md](PHASE_169.md).** Three small
