@@ -1697,6 +1697,48 @@ a compressed object stream (PDF 1.5+ full-
 document compression), both approaches miss
 and Anthropic's server-side cap handles.
 
+**Phase 170 — mid-recording `/image`.** Pre-
+Phase-170 any line typed during recording
+stopped capture. Phase 170 changes this: lines
+starting with `/image <path>` now queue the
+attachment AND continue recording. Empty Enter
+still stops; `quit` still exits. Useful for
+the "I want to describe AND show this thing"
+flow without breaking the turn.
+
+**Phase 170 — `/image clipboard`.** Reads
+from the platform clipboard tool:
+- Linux/Wayland: `wl-paste --type image/png`
+- Linux/X11: `xclip -selection clipboard -t image/png -o`
+- macOS: `pbpaste -Prefer raw` (best-effort
+  — macOS clipboard image flow is
+  historically fragile)
+
+Recognizes PNG (`0x89 50 4E 47`) and JPEG
+(`0xFF D8`) byte signatures. Operators
+without the platform tool installed see a
+clear "spawn failed" error pointing at the
+missing binary.
+
+**Phase 170 — voice abort UX knob.** Phase
+146's mid-synthesis single-Enter abort gets a
+double-press guard so a stray Enter doesn't
+kill a long reply:
+
+```toml
+[voice]
+abort_requires_double_enter      = true   # Default false.
+abort_double_enter_window_ms     = 800    # Default 800ms.
+```
+
+When `abort_requires_double_enter` is true,
+the first empty-Enter primes a window and
+prints `[voice] press Enter again within
+800ms to abort`; a second Enter within the
+window aborts as before. `quit` and other
+non-empty inputs still abort immediately
+regardless of the toggle.
+
 **Phase 166 — URL fetch retry on transient
 timeout.** `[voice.image]` adds two knobs:
 

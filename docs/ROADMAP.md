@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 170 — Voice Polish Bundle (Mid-Recording /image + Clipboard Source + Abort UX Knob)
 
-**See [PHASE_170.md](PHASE_170.md).** Three deferred
+**Frozen — see [PHASE_170.md](PHASE_170.md).** Three deferred
 voice carry-overs in one bundle. Mid-recording
 `/image <path>` now queues the image and
 continues recording instead of stopping. New

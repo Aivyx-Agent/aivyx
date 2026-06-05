@@ -203,8 +203,64 @@ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 170 exit. Predictions at
-sign-off: DESIGN.md HOLD → 7; PRODUCT.md HOLD
-→ 61; lib.rs HOLD → 7; zero new deps; test
-count delta `+10` to `+20`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 7 | Untouched | ✅ |
+| PRODUCT.md HOLD → 61 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 7 | Untouched | ✅ |
+| Zero new workspace deps | tokio `process` feature added to aivyx-voice's manifest (workspace dep already, transitively enabled). No new workspace crate. | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean (after one `doc list item` lint reworded) | ✅ |
+| Test count delta `+10` to `+20` | `+18` (mid-record +4, clipboard +6, abort knob +8) | ✅ (within band) |
+
+All three pieces closed:
+
+1. **Mid-recording `/image`** (Task 2, commit
+   `f09cfb8`). `/image <path>` mid-recording
+   queues the attachment via the same parse +
+   preset + load_image_for_attach path; recording
+   continues. Other lines (empty Enter, quit,
+   unknown commands) still stop.
+2. **Clipboard image source** (Task 3, commit
+   `2534c4b`). `/image clipboard` shells out
+   to wl-paste / xclip / pbpaste by
+   `cfg(target_os)` (plus runtime WAYLAND_DISPLAY
+   check on Linux). PNG and JPEG byte signatures
+   recognized; clear error otherwise.
+3. **Abort UX knob** (Task 4, commit
+   `a62af7f`). `abort_requires_double_enter`
+   gates the mid-synthesis abort flow on a
+   second Enter within
+   `abort_double_enter_window_ms` (default
+   800ms). Single-Enter mode and `quit`
+   semantics unchanged.
+
+### What landed beyond the open
+
+One structural change beyond the open's narrow
+scope: `VoiceChannelConfig` lost its derived
+`Default` impl in favor of an explicit one.
+The auto-derived `u64` Default is 0, but the
+Phase 170 abort window default is 800ms; an
+explicit impl was the cleanest way to enforce
+both serde and constructor defaults to the
+same value. Other defaults flow through the
+underlying type's own `Default` impl
+unchanged.
+
+### Voice carry-over status
+
+Phase 170 closed three long-deferred voice
+carry-overs:
+- ✅ Mid-recording / mid-reply `/image`
+- ✅ Clipboard-based image source
+- ✅ Phase 146 abort UX knob
+
+New Phase 170 carry-overs (GIF / WebP
+clipboard byte signatures, `arboard`-based
+clipboard) feed Phase 171+ list.
+
+### Fifty-ninth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record. Phase 170's round-
+number milestone passes by.
