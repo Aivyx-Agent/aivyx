@@ -7694,6 +7694,75 @@ fn loop_enabled_zero_max_iterations_is_invalid() {
     drop(env);
 }
 
+/// Phase 174 — gate knobs parse + default; an empty/whitespace
+/// `gate_command` collapses to `None` (no driver verification).
+#[test]
+fn loop_gate_knobs_parse() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_iterations = 10\n\
+         gate_command = \"cargo test\"\ngate_timeout_secs = 120\n\
+         working_dir = \"/repo\"\nmax_run_secs = 3600\n",
+        "loop-gate",
+    );
+    let l = cfg.loop_config.expect("section present");
+    assert_eq!(l.gate_command.as_deref(), Some("cargo test"));
+    assert_eq!(l.gate_timeout_secs, 120);
+    assert_eq!(l.working_dir.as_deref(), Some("/repo"));
+    assert_eq!(l.max_run_secs, Some(3600));
+    drop(env);
+}
+
+/// Gate defaults: no gate_command → `None`; timeout defaults;
+/// `max_run_secs = 0` collapses to `None` (disabled).
+#[test]
+fn loop_gate_defaults() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_run_secs = 0\n",
+        "loop-gate-default",
+    );
+    let l = cfg.loop_config.expect("section present");
+    assert!(l.gate_command.is_none());
+    assert_eq!(
+        l.gate_timeout_secs,
+        crate::DEFAULT_LOOP_GATE_TIMEOUT_SECS
+    );
+    assert!(l.max_run_secs.is_none());
+    drop(env);
+}
+
+/// Enabled with a gate but `gate_timeout_secs = 0` → `Invalid`.
+#[test]
+fn loop_enabled_zero_gate_timeout_is_invalid() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("loop-bad-gate-timeout");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[loop]\nenabled = true\ngate_command = \"cargo test\"\n\
+         gate_timeout_secs = 0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("must error");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "loop.gate_timeout_secs");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →

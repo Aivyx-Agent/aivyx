@@ -2116,6 +2116,24 @@ pub struct LoopConfig {
     /// Priority assigned to a story added via `aivyx loop add`
     /// without an explicit `--priority`. Lower runs first.
     pub default_priority: u32,
+    /// Phase 174 — the shell command the driver runs to verify
+    /// the tree is green (e.g. `"cargo test"`). `None` → no
+    /// driver-side gate verification (pre-Phase-174 behaviour;
+    /// `max_iterations` is the only cap). When set, the driver
+    /// runs it before the first iteration and after every
+    /// iteration; a red result stops the run.
+    pub gate_command: Option<String>,
+    /// Phase 174 — kill the gate command + treat it as red if it
+    /// runs longer than this many seconds. Default
+    /// [`DEFAULT_LOOP_GATE_TIMEOUT_SECS`].
+    pub gate_timeout_secs: u64,
+    /// Phase 174 — directory the gate command runs in. `None` →
+    /// the daemon's current working directory.
+    pub working_dir: Option<String>,
+    /// Phase 174 — wall-clock cap (seconds). A run stops once it
+    /// has been running this long (checked between iterations).
+    /// `None` → no wall-clock cap (`max_iterations` only).
+    pub max_run_secs: Option<u64>,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -2126,6 +2144,10 @@ pub const DEFAULT_LOOP_MAX_ITERATIONS: u32 = 25;
 /// `--priority`. A mid-range value so operators can insert both
 /// higher- and lower-priority stories around it.
 pub const DEFAULT_LOOP_PRIORITY: u32 = 100;
+/// Phase 174 — default gate-command timeout. Ten minutes: long
+/// enough for a real build+test gate, short enough that a hung
+/// gate doesn't wedge a run forever.
+pub const DEFAULT_LOOP_GATE_TIMEOUT_SECS: u64 = 600;
 
 /// Phase 91 — `[recall_judgment]` runtime config.
 ///
@@ -3630,6 +3652,15 @@ struct RawLoop {
     max_iterations: Option<u32>,
     #[serde(default)]
     default_priority: Option<u32>,
+    // Phase 174 — gate verification + wall-clock cap.
+    #[serde(default)]
+    gate_command: Option<String>,
+    #[serde(default)]
+    gate_timeout_secs: Option<u64>,
+    #[serde(default)]
+    working_dir: Option<String>,
+    #[serde(default)]
+    max_run_secs: Option<u64>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -6835,7 +6866,11 @@ fn build_loop_config(
 ) -> Result<Option<LoopConfig>, ConfigError> {
     let any_set = raw.enabled.is_some()
         || raw.max_iterations.is_some()
-        || raw.default_priority.is_some();
+        || raw.default_priority.is_some()
+        || raw.gate_command.is_some()
+        || raw.gate_timeout_secs.is_some()
+        || raw.working_dir.is_some()
+        || raw.max_run_secs.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -6845,20 +6880,51 @@ fn build_loop_config(
         raw.max_iterations.unwrap_or(DEFAULT_LOOP_MAX_ITERATIONS);
     let default_priority =
         raw.default_priority.unwrap_or(DEFAULT_LOOP_PRIORITY);
+    let gate_command = raw
+        .gate_command
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let gate_timeout_secs = raw
+        .gate_timeout_secs
+        .unwrap_or(DEFAULT_LOOP_GATE_TIMEOUT_SECS);
+    let working_dir = raw
+        .working_dir
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let max_run_secs = raw.max_run_secs.filter(|n| *n > 0);
 
-    if enabled && max_iterations == 0 {
-        return Err(ConfigError::Invalid {
-            field: "loop.max_iterations",
-            reason: "`max_iterations` must be >= 1 (it is the \
-                     primary guardrail on the autonomous loop)"
-                .into(),
-        });
+    if enabled {
+        if max_iterations == 0 {
+            return Err(ConfigError::Invalid {
+                field: "loop.max_iterations",
+                reason: "`max_iterations` must be >= 1 (it is the \
+                         primary guardrail on the autonomous loop)"
+                    .into(),
+            });
+        }
+        // A gate is opt-in, but if one is configured its timeout
+        // must be positive (a 0-second timeout would kill every
+        // gate instantly = the tree is always "red").
+        if gate_command.is_some() && gate_timeout_secs == 0 {
+            return Err(ConfigError::Invalid {
+                field: "loop.gate_timeout_secs",
+                reason: "`gate_timeout_secs` must be >= 1 when a \
+                         `gate_command` is set"
+                    .into(),
+            });
+        }
     }
 
     Ok(Some(LoopConfig {
         enabled,
         max_iterations,
         default_priority,
+        gate_command,
+        gate_timeout_secs,
+        working_dir,
+        max_run_secs,
     }))
 }
 
