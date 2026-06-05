@@ -214,6 +214,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn working_dir_is_where_the_gate_runs() {
+        // The gate runs in `working_dir`: a command that only
+        // passes when run inside a temp dir (checks for a marker
+        // file we plant there) is green only with the dir set.
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-gate-cwd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("MARKER"), b"x").unwrap();
+
+        let in_dir = ShellGateRunner::new(
+            "test -f MARKER".into(),
+            Some(dir.clone()),
+            Duration::from_secs(10),
+        );
+        assert_eq!(in_dir.run().await, GateOutcome::Passed);
+
+        // Without the working dir, the marker isn't found → red.
+        let no_dir = ShellGateRunner::new(
+            "test -f MARKER".into(),
+            Some(std::env::temp_dir()),
+            Duration::from_secs(10),
+        );
+        assert!(matches!(
+            no_dir.run().await,
+            GateOutcome::Failed { .. }
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn shell_features_work_in_gate_command() {
+        // The gate runs under `sh -c`, so shell operators work.
+        let r = ShellGateRunner::new(
+            "test 1 -eq 1 && echo ok".into(),
+            None,
+            Duration::from_secs(10),
+        );
+        assert_eq!(r.run().await, GateOutcome::Passed);
+    }
+
+    #[tokio::test]
     async fn bad_working_dir_errors() {
         let r = ShellGateRunner::new(
             "true".into(),

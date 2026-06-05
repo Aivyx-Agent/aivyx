@@ -66,10 +66,20 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
             }
         }
         LoopSubcommand::Status => {
-            let (state, remaining, armed) = loop_status(&socket_path)
-                .await
-                .map_err(|e| format!("loop status failed: {e}"))?;
-            print!("{}", render_status(&state, remaining, armed));
+            let (state, remaining, armed, gate_enabled, max_run_secs) =
+                loop_status(&socket_path)
+                    .await
+                    .map_err(|e| format!("loop status failed: {e}"))?;
+            print!(
+                "{}",
+                render_status(
+                    &state,
+                    remaining,
+                    armed,
+                    gate_enabled,
+                    max_run_secs,
+                )
+            );
             Ok(())
         }
     }
@@ -129,7 +139,13 @@ fn render_backlog(stories: &[Story]) -> String {
 }
 
 /// Pure renderer — the loop run state.
-fn render_status(state: &LoopRunState, remaining: usize, armed: bool) -> String {
+fn render_status(
+    state: &LoopRunState,
+    remaining: usize,
+    armed: bool,
+    gate_enabled: bool,
+    max_run_secs: Option<u64>,
+) -> String {
     let mut out = String::from("Loop status:\n");
     if !armed {
         out.push_str(
@@ -149,6 +165,25 @@ fn render_status(state: &LoopRunState, remaining: usize, armed: bool) -> String 
                 state.iteration,
             ));
         }
+    }
+    if armed {
+        // Phase 174 — surface the safety config so the operator
+        // can confirm what guards a run before starting one.
+        out.push_str(&format!(
+            "  gate verification: {}\n",
+            if gate_enabled {
+                "on (driver re-runs the gate command each iteration)"
+            } else {
+                "off (driver trusts the agent's loop.complete)"
+            },
+        ));
+        out.push_str(&format!(
+            "  wall-clock cap: {}\n",
+            match max_run_secs {
+                Some(s) => format!("{s}s"),
+                None => "none".to_string(),
+            },
+        ));
     }
     out.push_str(&format!("  backlog: {remaining} pending\n"));
     out
@@ -209,13 +244,15 @@ mod tests {
 
     #[test]
     fn status_not_armed() {
-        let out = render_status(&LoopRunState::default(), 3, false);
+        let out = render_status(&LoopRunState::default(), 3, false, false, None);
         assert!(out.contains("not armed"));
         assert!(out.contains("3 pending"));
+        // Safety config is only shown when armed.
+        assert!(!out.contains("gate verification"));
     }
 
     #[test]
-    fn status_running_shows_iteration() {
+    fn status_running_shows_iteration_and_safety_config() {
         let state = LoopRunState {
             active: true,
             iteration: 4,
@@ -223,13 +260,15 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: None,
         };
-        let out = render_status(&state, 7, true);
+        let out = render_status(&state, 7, true, true, Some(3600));
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
         assert!(out.contains("7 pending"));
+        assert!(out.contains("gate verification: on"));
+        assert!(out.contains("wall-clock cap: 3600s"));
     }
 
     #[test]
-    fn status_idle_shows_last_stop_reason() {
+    fn status_idle_shows_last_stop_reason_and_gate_off() {
         let state = LoopRunState {
             active: false,
             iteration: 12,
@@ -237,8 +276,10 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: Some("backlog complete".into()),
         };
-        let out = render_status(&state, 0, true);
+        let out = render_status(&state, 0, true, false, None);
         assert!(out.contains("idle (armed)"));
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
+        assert!(out.contains("gate verification: off"));
+        assert!(out.contains("wall-clock cap: none"));
     }
 }

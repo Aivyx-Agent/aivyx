@@ -2872,6 +2872,10 @@ async fn handle_query(
                 state,
                 remaining,
                 armed: loop_state.is_some(),
+                gate_enabled: loop_config
+                    .map(|c| c.gate_command.is_some())
+                    .unwrap_or(false),
+                max_run_secs: loop_config.and_then(|c| c.max_run_secs),
             }
         }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {

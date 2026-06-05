@@ -707,11 +707,11 @@ pub async fn loop_stop(
 }
 
 /// Read the loop run state + remaining backlog. Returns
-/// `(state, remaining, armed)`.
+/// `(state, remaining, armed, gate_enabled, max_run_secs)`.
 pub async fn loop_status(
     socket_path: &Path,
 ) -> Result<
-    (crate::loop_driver::LoopRunState, usize, bool),
+    (crate::loop_driver::LoopRunState, usize, bool, bool, Option<u64>),
     DaemonError,
 > {
     let payload =
@@ -722,7 +722,9 @@ pub async fn loop_status(
             state,
             remaining,
             armed,
-        } => Ok((state, remaining, armed)),
+            gate_enabled,
+            max_run_secs,
+        } => Ok((state, remaining, armed, gate_enabled, max_run_secs)),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))
         }

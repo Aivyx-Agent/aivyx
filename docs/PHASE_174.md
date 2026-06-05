@@ -154,4 +154,67 @@ use demands it.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 11 | Untouched (gate config fields + a driver-internal runner; the gate runs as operator config, no new capability scope, no A3 amendment) | ✅ |
+| PRODUCT.md HOLD → 65 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 11 | Untouched | ✅ |
+| Zero new workspace deps | `tokio::process` was already compiled in via feature unification (aivyx-core requires it) — no Cargo.toml change | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+20` to `+40` | **`+16`** (gate 9 + driver +4 + config +3); workspace ~4,072 → ~4,088 | ❌ **below band** |
+
+**Honest miss on the test count.** Predicted `+20..+40`,
+landed `+16`. Two reasons, both real: (a) `decide()` was
+*extended in place* rather than re-implemented, so the
+wall-clock cases reused the existing decision-matrix scaffold
+instead of a fresh test module; (b) the headline behaviour —
+`run_loop_driver` actually stopping a run on a red gate — is
+**integration glue over the concrete `TriggerDispatch`**, which
+can't be unit-tested without faking the dispatch, so it is
+covered transitively (the `GateRunner` outcomes,
+`gate_stop_reason`, `decide()`, and `finish_run` are each unit-
+tested; their composition in the driver is build- + behaviour-
+verified, not unit-asserted). A tighter estimate for a
+hardening phase whose value is in glue would have been
+`+12..+20`.
+
+The hardening closed end-to-end:
+
+1. **Gate config knobs** (Task 2). `[loop].gate_command`,
+   `gate_timeout_secs`, `working_dir`, `max_run_secs` with
+   armed-section validation.
+2. **`GateRunner` + `ShellGateRunner`** (Task 3). `sh -c` in
+   `working_dir` with a timeout (kill_on_drop + start_kill);
+   `GateOutcome` where only `Passed` is green. Real `sh`
+   tests: true/false/exit-code/timeout/working-dir/shell-
+   features/bad-dir.
+3. **Driver verification** (Task 4). `decide()` gained the
+   wall-clock cap (`StopWallClock`); `run_loop_driver` runs the
+   gate **pre-flight** (refuse to start on red) + **after every
+   iteration** (stop on red, non-destructive). The gate is
+   built from the armed config at the daemon spawn site.
+4. **Surface** (Task 5). `aivyx loop status` now shows gate +
+   wall-clock config (`gate_enabled` / `max_run_secs` on the
+   IPC); INSTALL rewritten with the new knobs + the
+   stop-on-red, daemon-privilege, non-destructive posture.
+
+### Honest-debt status carried forward (Phase 175)
+
+- **Token-budget per-run cap** + **progress-log
+  auto-injection** — the remaining loop-capability items.
+- **Grandchildren on gate timeout may linger** — `start_kill`
+  kills the `sh` child, not a process group; documented.
+- **Wall-clock is checked at iteration boundaries**, not
+  mid-turn.
+- Sixty-third consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result
+
+The autonomous loop's single biggest safety gap from Phase 173
+— the driver trusting the agent's self-reported completion — is
+closed. With `gate_command` set, a run cannot start on a red
+tree and stops the instant any iteration breaks it, bounded
+additionally by `max_iterations` and an optional wall-clock
+cap, all without a single new workspace dependency or a broken
+contract streak.

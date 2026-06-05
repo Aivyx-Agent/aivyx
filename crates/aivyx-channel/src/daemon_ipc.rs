@@ -543,6 +543,15 @@ pub enum QueryResponsePayload {
         /// Whether the `[loop]` section is armed (the driver was
         /// spawned). When `false`, `loop start` will fail.
         armed: bool,
+        /// Phase 174 — whether driver-side gate verification is
+        /// configured (`[loop].gate_command` set). `#[serde(default)]`
+        /// so pre-174 frames decode.
+        #[serde(default)]
+        gate_enabled: bool,
+        /// Phase 174 — the wall-clock cap in seconds, if any.
+        /// `#[serde(default)]` so pre-174 frames decode.
+        #[serde(default)]
+        max_run_secs: Option<u64>,
     },
 }
 

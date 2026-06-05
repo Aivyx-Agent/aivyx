@@ -4842,48 +4842,71 @@ driver in `~/.config/aivyx/aivyx.toml`:
 ```toml
 [loop]
 enabled = true
-max_iterations = 25     # optional, default 25 — the hard cap
-default_priority = 100  # optional, default 100
+max_iterations = 25          # optional, default 25 — the iteration cap
+default_priority = 100       # optional, default 100
+
+# Phase 174 — driver-side gate verification (strongly recommended).
+gate_command = "cargo test"  # the driver re-runs this to verify the tree
+gate_timeout_secs = 600      # optional, default 600 — kill + treat as red
+working_dir = "/path/to/repo"  # optional, default: the daemon's CWD
+max_run_secs = 7200          # optional — wall-clock cap, in seconds
 ```
 
 Then, with the daemon running:
 
 ```
-aivyx loop start                      # run to backlog-done or the cap
-aivyx loop start --max-iterations 5   # lower the cap for this run
-aivyx loop status                     # driver state + remaining backlog
+aivyx loop start                      # run to backlog-done or a cap
+aivyx loop start --max-iterations 5   # lower the iteration cap for this run
+aivyx loop status                     # driver state, gate + cap config, backlog
 aivyx loop stop                       # end the run after the current iteration
 ```
 
 A run stops on exactly one condition: the backlog drains,
-`max_iterations` is reached, or you `aivyx loop stop`. Every
-iteration is a `TriggerSource::Loop` turn in the audit chain.
+`max_iterations` is reached, the `max_run_secs` wall-clock cap
+is reached, a **gate run goes red**, or you `aivyx loop stop`.
+Every iteration is a `TriggerSource::Loop` turn in the audit
+chain.
 
-Validation (only when `enabled = true`): `max_iterations >= 1`
-(it is the primary guardrail). `aivyx loop start` requires the
-section armed and a restart after enabling.
+Validation (only when `enabled = true`): `max_iterations >= 1`,
+and `gate_timeout_secs >= 1` when a `gate_command` is set.
+`aivyx loop start` requires the section armed and a restart
+after enabling.
 
 ### Safety posture (read this before your first run)
 
 The loop **writes code and commits** each iteration — the
-highest-trust-stakes action Aivyx takes. In this first
-(foundation) phase the guardrails are:
+highest-trust-stakes action Aivyx takes. The guardrails:
 
-- **The `max_iterations` cap** — the primary bound on blast
-  radius. Keep it small until you trust a given backlog.
+- **Driver-side gate verification (Phase 174).** When
+  `gate_command` is set, the driver runs it **before the first
+  iteration** (refuse to start on a red tree) and **after every
+  iteration**. On red, the run stops immediately with a
+  `gate failed after iteration N` reason. This is the strongest
+  guard — set it. Without it, the driver trusts the agent's
+  `loop.complete`.
+- **The `max_iterations` cap** + the optional **`max_run_secs`
+  wall-clock cap** — hard bounds on blast radius regardless of
+  what the agent does.
 - **Capability gating** — loop turns run at the Trusted tier;
   a remote (SemiTrusted) adapter cannot drive a loop.
 - **The audit chain** — every iteration is recorded.
 - **The canonical prompt** — instructs the agent to mark a
-  story done ONLY after gates pass and the change is committed,
-  and to stop cleanly when unsure or the backlog is empty.
+  story done ONLY after gates pass and the change is committed.
 
-What is **not** yet enforced (Phase 174 hardening): the driver
-does **not** independently re-run your test command between
-iterations — it trusts the agent's `loop.complete` call under
-the canonical-prompt discipline. Token-budget + wall-clock caps
-and progress-log auto-injection are also deferred. Until those
-land, supervise early runs and keep the cap conservative.
+**The gate command runs at daemon privilege** — it is operator
+config (like a cron), executed directly by the daemon, not an
+agent tool, so it is not capability-gated. Point it only at a
+command you trust (your build/test invocation).
+
+**Stop-on-red is non-destructive:** the driver does *not* roll
+back the agent's commit when the gate fails — it halts the run
+and preserves the commit for you to inspect and revert. Damage
+is bounded to one iteration.
+
+Still deferred (Phase 175): a **token-budget per-run cap** and
+**progress-log auto-injection** (carrying prior-iteration
+learnings into each fresh context). Until those land, keep the
+caps conservative and supervise early runs.
 
 ## Tool observability (Phase 102)
 
