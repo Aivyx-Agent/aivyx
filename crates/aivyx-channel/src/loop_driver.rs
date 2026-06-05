@@ -115,6 +115,29 @@ pub fn build_iteration_prompt(notes: &[String]) -> String {
     }
 }
 
+/// Phase 175 — read the last `count` progress notes from the
+/// reserved [`crate::loop_tool::LOOP_PROGRESS_TOPIC`] topic,
+/// most-recent-first. `count = 0`, no memory, or a read error
+/// all yield an empty vector (injection disabled / degraded).
+pub async fn read_progress_notes(
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+    count: u32,
+) -> Vec<String> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let Some(memory) = memory else {
+        return Vec::new();
+    };
+    match memory
+        .get_recent(crate::loop_tool::LOOP_PROGRESS_TOPIC, count as usize)
+        .await
+    {
+        Ok(entries) => entries.into_iter().map(|e| e.body).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
 #[derive(
@@ -324,12 +347,15 @@ fn now_unix_ms() -> u64 {
 /// until `shutdown` is cancelled. Idle (no CPU) until a run is
 /// requested via [`SharedLoopState::request_start`]; then fires
 /// `TriggerSource::Loop` iterations until [`decide`] says stop.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_loop_driver(
     dispatch: TriggerDispatch,
     backlog: Arc<PersistentLoopBacklog>,
     shared: SharedLoopState,
     gate: Option<Arc<dyn crate::loop_gate::GateRunner>>,
     max_run_secs: Option<u64>,
+    memory: Option<Arc<dyn aivyx_memory::Memory>>,
+    progress_inject_count: u32,
     shutdown: CancellationToken,
 ) {
     loop {
@@ -396,10 +422,24 @@ pub async fn run_loop_driver(
 
             let iter = shared.iteration() + 1;
             let trigger_id = format!("loop-iter-{iter}");
+
+            // Phase 175 — read the recent progress notes and
+            // prepend them to the canonical prompt so this fresh
+            // context opens with what earlier iterations learned.
+            // Best-effort: a memory read error degrades to no
+            // injection, never breaking the run.
+            let notes = read_progress_notes(
+                memory.as_ref(),
+                progress_inject_count,
+            )
+            .await;
+            let prompt = build_iteration_prompt(&notes);
+
             eprintln!(
                 "aivyx loop: iteration {iter} firing ({remaining} \
-                 stor{} remaining)",
+                 stor{} remaining, {} progress note(s) injected)",
                 if remaining == 1 { "y" } else { "ies" },
+                notes.len(),
             );
             // Fire a fresh-context loop turn. `wrap_mission =
             // false`: the loop's own backlog is the work tracker,
@@ -408,7 +448,7 @@ pub async fn run_loop_driver(
                 .fire(
                     TriggerSource::Loop,
                     &trigger_id,
-                    LOOP_SYSTEM_PROMPT,
+                    &prompt,
                     false,
                     &[],
                     aivyx_config::NotifyWhen::Always,
@@ -667,5 +707,44 @@ mod tests {
         assert!(prompt.starts_with("## Progress so far"));
         assert!(prompt.contains("a learning"));
         assert!(prompt.ends_with(LOOP_SYSTEM_PROMPT));
+    }
+
+    #[tokio::test]
+    async fn read_progress_notes_disabled_or_absent_is_empty() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put(crate::loop_tool::LOOP_PROGRESS_TOPIC, "x")
+            .await
+            .unwrap();
+        // count = 0 → empty even with notes present.
+        assert!(read_progress_notes(Some(&mem), 0).await.is_empty());
+        // No memory → empty.
+        assert!(read_progress_notes(None, 5).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_progress_notes_returns_recent_newest_first_capped() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        for i in 0..5 {
+            mem.put(
+                crate::loop_tool::LOOP_PROGRESS_TOPIC,
+                &format!("note {i}"),
+            )
+            .await
+            .unwrap();
+        }
+        // Only reads the reserved topic, capped at `count`,
+        // newest-first.
+        let notes = read_progress_notes(Some(&mem), 3).await;
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0], "note 4");
+        assert_eq!(notes[2], "note 2");
+
+        // build_iteration_prompt then renders them oldest-first.
+        let prompt = build_iteration_prompt(&notes);
+        let two = prompt.find("note 2").unwrap();
+        let four = prompt.find("note 4").unwrap();
+        assert!(two < four, "oldest of the window renders first");
     }
 }

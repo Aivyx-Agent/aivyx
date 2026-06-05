@@ -627,15 +627,24 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             });
             let ld_max_run_secs =
                 loop_config.as_ref().and_then(|c| c.max_run_secs);
+            // Phase 175 — the progress log: the driver reads
+            // recent notes from the shared memory handle and
+            // injects them into each iteration's prompt.
+            let ld_memory = memory.clone();
+            let ld_progress_inject = loop_config
+                .as_ref()
+                .map(|c| c.progress_inject_count)
+                .unwrap_or(0);
             eprintln!(
                 "aivyx loop: driver armed (max_iterations ceiling={}, \
-                 gate={}, max_run_secs={:?})",
+                 gate={}, max_run_secs={:?}, progress_inject={})",
                 loop_config
                     .as_ref()
                     .map(|c| c.max_iterations)
                     .unwrap_or(0),
                 if ld_gate.is_some() { "on" } else { "off" },
                 ld_max_run_secs,
+                ld_progress_inject,
             );
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
@@ -644,6 +653,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_state,
                     ld_gate,
                     ld_max_run_secs,
+                    ld_memory,
+                    ld_progress_inject,
                     ld_shutdown,
                 )
                 .await;
