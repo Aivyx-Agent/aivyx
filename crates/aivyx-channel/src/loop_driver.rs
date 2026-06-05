@@ -68,13 +68,52 @@ Do exactly this, then stop:
    commit message naming the story).
 5. Only after a green commit, call `loop.complete` with the \
    story's id.
-6. Optionally write one short learning line to `memory` about \
-   anything future iterations should know (a gotcha, a \
-   convention, a path).
+6. Record what the next iteration should know by calling \
+   `loop.note` with one short line (a gotcha, a convention, a \
+   path). These notes are surfaced back to you under \
+   \"Progress so far\" at the top of every future iteration, so \
+   future-you can avoid re-learning what you just learned.
 
 Be conservative: it is always correct to stop without completing \
 a story if you are unsure or the gates are red. The loop will \
 re-run and the next fresh context can try again.";
+
+/// Phase 175 — render the progress-log block prepended to the
+/// canonical prompt each iteration. `notes` are most-recent-
+/// first (as `Memory::get_recent` returns them); the block lists
+/// them oldest-first so the agent reads them in the order they
+/// were learned. Returns an empty string when there are no notes
+/// (the iteration then gets the plain canonical prompt).
+pub fn render_progress_block(notes: &[String]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## Progress so far (from earlier iterations — read this first)\n\n",
+    );
+    for note in notes.iter().rev() {
+        let line = note.trim();
+        if !line.is_empty() {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+    out
+}
+
+/// Phase 175 — assemble one iteration's full prompt: the
+/// progress block (if any) followed by the canonical loop
+/// instruction. Pure so the assembly is unit-testable.
+pub fn build_iteration_prompt(notes: &[String]) -> String {
+    let block = render_progress_block(notes);
+    if block.is_empty() {
+        LOOP_SYSTEM_PROMPT.to_string()
+    } else {
+        format!("{block}{LOOP_SYSTEM_PROMPT}")
+    }
+}
 
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
@@ -580,8 +619,53 @@ mod tests {
         // Guard the canonical prompt's load-bearing instructions.
         assert!(LOOP_SYSTEM_PROMPT.contains("loop.next"));
         assert!(LOOP_SYSTEM_PROMPT.contains("loop.complete"));
+        assert!(LOOP_SYSTEM_PROMPT.contains("loop.note"));
         assert!(LOOP_SYSTEM_PROMPT.contains("gates"));
         assert!(LOOP_SYSTEM_PROMPT.contains("commit"));
         assert!(LOOP_SYSTEM_PROMPT.contains("empty"));
+        assert!(LOOP_SYSTEM_PROMPT.contains("Progress so far"));
+    }
+
+    // ---- Phase 175 — progress-log rendering -------------------
+
+    #[test]
+    fn empty_notes_render_empty_block_and_plain_prompt() {
+        assert_eq!(render_progress_block(&[]), "");
+        assert_eq!(build_iteration_prompt(&[]), LOOP_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn notes_render_oldest_first_with_header() {
+        // get_recent returns newest-first; the block lists them
+        // oldest-first so the agent reads them in learned order.
+        let notes = vec![
+            "newest learning".to_string(),
+            "middle learning".to_string(),
+            "oldest learning".to_string(),
+        ];
+        let block = render_progress_block(&notes);
+        assert!(block.contains("## Progress so far"));
+        let oldest = block.find("oldest learning").unwrap();
+        let newest = block.find("newest learning").unwrap();
+        assert!(oldest < newest, "oldest note should render first");
+    }
+
+    #[test]
+    fn blank_notes_are_skipped() {
+        let notes =
+            vec!["real".to_string(), "  ".to_string(), "".to_string()];
+        let block = render_progress_block(&notes);
+        assert!(block.contains("- real\n"));
+        // Only one bullet.
+        assert_eq!(block.matches("\n- ").count(), 1);
+    }
+
+    #[test]
+    fn build_iteration_prompt_prepends_block() {
+        let notes = vec!["a learning".to_string()];
+        let prompt = build_iteration_prompt(&notes);
+        assert!(prompt.starts_with("## Progress so far"));
+        assert!(prompt.contains("a learning"));
+        assert!(prompt.ends_with(LOOP_SYSTEM_PROMPT));
     }
 }

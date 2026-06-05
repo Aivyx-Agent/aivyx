@@ -2134,6 +2134,12 @@ pub struct LoopConfig {
     /// has been running this long (checked between iterations).
     /// `None` → no wall-clock cap (`max_iterations` only).
     pub max_run_secs: Option<u64>,
+    /// Phase 175 — how many recent progress-log notes the driver
+    /// injects into each fresh iteration's prompt (the
+    /// cross-iteration learning, the Ralph `progress.txt` analog).
+    /// `0` disables injection (pre-Phase-175 behaviour). Default
+    /// [`DEFAULT_LOOP_PROGRESS_INJECT_COUNT`].
+    pub progress_inject_count: u32,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -2148,6 +2154,10 @@ pub const DEFAULT_LOOP_PRIORITY: u32 = 100;
 /// enough for a real build+test gate, short enough that a hung
 /// gate doesn't wedge a run forever.
 pub const DEFAULT_LOOP_GATE_TIMEOUT_SECS: u64 = 600;
+/// Phase 175 — default count of recent progress notes injected
+/// into each iteration. Enough to carry real cross-iteration
+/// context without flooding a fresh prompt; operator-tunable.
+pub const DEFAULT_LOOP_PROGRESS_INJECT_COUNT: u32 = 20;
 
 /// Phase 91 — `[recall_judgment]` runtime config.
 ///
@@ -3661,6 +3671,9 @@ struct RawLoop {
     working_dir: Option<String>,
     #[serde(default)]
     max_run_secs: Option<u64>,
+    // Phase 175 — progress-log injection count.
+    #[serde(default)]
+    progress_inject_count: Option<u32>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -6870,7 +6883,8 @@ fn build_loop_config(
         || raw.gate_command.is_some()
         || raw.gate_timeout_secs.is_some()
         || raw.working_dir.is_some()
-        || raw.max_run_secs.is_some();
+        || raw.max_run_secs.is_some()
+        || raw.progress_inject_count.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -6894,6 +6908,9 @@ fn build_loop_config(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let max_run_secs = raw.max_run_secs.filter(|n| *n > 0);
+    let progress_inject_count = raw
+        .progress_inject_count
+        .unwrap_or(DEFAULT_LOOP_PROGRESS_INJECT_COUNT);
 
     if enabled {
         if max_iterations == 0 {
@@ -6925,6 +6942,7 @@ fn build_loop_config(
         gate_timeout_secs,
         working_dir,
         max_run_secs,
+        progress_inject_count,
     }))
 }
 

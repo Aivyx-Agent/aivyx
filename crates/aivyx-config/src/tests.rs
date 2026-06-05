@@ -7763,6 +7763,39 @@ fn loop_enabled_zero_gate_timeout_is_invalid() {
     drop(env);
 }
 
+/// Phase 175 — progress_inject_count parses + defaults; `0`
+/// (disable injection) is allowed even on an armed section.
+#[test]
+fn loop_progress_inject_count_parse_and_default() {
+    let env = EnvScope::new();
+    // Explicit value wins.
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nprogress_inject_count = 5\n",
+        "loop-progress",
+    );
+    assert_eq!(
+        cfg.loop_config.expect("present").progress_inject_count,
+        5
+    );
+    // Absent → default.
+    let cfg2 =
+        load_with_toml("\n[loop]\nenabled = true\n", "loop-progress-def");
+    assert_eq!(
+        cfg2.loop_config.expect("present").progress_inject_count,
+        crate::DEFAULT_LOOP_PROGRESS_INJECT_COUNT
+    );
+    // 0 disables injection — valid on an armed section.
+    let cfg3 = load_with_toml(
+        "\n[loop]\nenabled = true\nprogress_inject_count = 0\n",
+        "loop-progress-off",
+    );
+    assert_eq!(
+        cfg3.loop_config.expect("present").progress_inject_count,
+        0
+    );
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →
