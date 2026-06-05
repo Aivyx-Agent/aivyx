@@ -3535,6 +3535,22 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 167 — drive.recent_activity Follow-Ons (Action Filter + Consolidation Knob + Parent Folder)
+
+**See [PHASE_167.md](PHASE_167.md).** Phase 159 close-
+out, deferred 8 phases (the longest gap in the
+project's close-out ledger; user declined this
+surface six times before picking it). Three input
+additions on the Activity API tool: action_type_
+filter for pre-fetch DSL filtering by action
+category; consolidation strategy knob (legacy /
+none); parent_folder_id mapping to the Activity
+API's ancestorName field for subtree scoping.
+Honest scope risk: actor filter deferred to
+Phase 168+ (the Activity API DSL has no native
+actor predicate; would need post-fetch shaping).
+Zero new workspace deps.
+
 ## Phase 166 — Small Carry-Overs Bundle (PDF Page Cap Knob + URL Retry + Drive Walk Floor)
 
 **Frozen — see [PHASE_166.md](PHASE_166.md).** Three small
