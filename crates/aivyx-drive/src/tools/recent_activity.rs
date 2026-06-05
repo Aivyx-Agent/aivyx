@@ -130,11 +130,18 @@ impl Tool for DriveRecentActivity {
         // is `{<key>: {}}` shaped per the
         // Activity API contract.
         let consolidation_body = json!({ parsed.consolidation.as_api_key(): {} });
-        let body = json!({
+        let mut body = json!({
             "consolidationStrategy": consolidation_body,
             "filter": filter,
             "pageSize": parsed.max_results,
         });
+        // Phase 167 — parent_folder_id maps to
+        // the Activity API's `ancestorName`
+        // request body field. Format: `items/
+        // <folder_id>`.
+        if let Some(ref pf) = parsed.parent_folder_id {
+            body["ancestorName"] = json!(format!("items/{pf}"));
+        }
 
         let response: Value =
             match self.client.post_json_activity("/activity:query", &body).await {
@@ -198,6 +205,10 @@ fn input_schema() -> Value {
                 "type": "string",
                 "enum": ["legacy", "none"],
                 "description": "Phase 167 — Activity API consolidation strategy. `legacy` (default) matches the Drive UI's activity feed. `none` returns un-consolidated events (a rename + edit on the same file surfaces as two activities instead of one). The internal `consolidated` strategy isn't exposed in the public API and is intentionally omitted."
+            },
+            "parent_folder_id": {
+                "type": "string",
+                "description": "Phase 167 — scope results to activities on items within the parent folder's subtree (recursive via the Activity API's `ancestorName` field). Composes with action_type_filter and the time window. Note: semantics differ from drive.recent_files / drive.recent_changes — those default to direct children with a separate `recursive: true` toggle; the Activity API is always recursive."
             }
         },
         "additionalProperties": false
@@ -256,6 +267,14 @@ struct ParsedInput {
     /// Default `Legacy` matches Phase 159
     /// behavior.
     consolidation: Consolidation,
+    /// Phase 167 — when present, scope to
+    /// activities on items within this folder
+    /// subtree via the Activity API's
+    /// `ancestorName` field. Stored as the
+    /// raw Drive folder ID (no `items/`
+    /// prefix); execute() composes the
+    /// full ancestorName.
+    parent_folder_id: Option<String>,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -287,13 +306,46 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
 
     let action_type_filter = parse_action_type_filter(obj.get("action_type_filter"))?;
     let consolidation = parse_consolidation(obj.get("consolidation"))?;
+    let parent_folder_id = parse_parent_folder_id(obj.get("parent_folder_id"))?;
 
     Ok(ParsedInput {
         window_hours,
         max_results,
         action_type_filter,
         consolidation,
+        parent_folder_id,
     })
+}
+
+/// Phase 167 — parse the `parent_folder_id`
+/// input. Returns the raw folder ID (no
+/// `items/` prefix) or None when absent. Trims
+/// surrounding whitespace; rejects empty
+/// strings; rejects IDs containing single
+/// quotes (same posture as recent_files /
+/// recent_changes — Drive folder IDs are
+/// opaque alphanumeric tokens, single quotes
+/// would only appear if the input were a
+/// query-DSL injection attempt).
+pub(crate) fn parse_parent_folder_id(
+    v: Option<&Value>,
+) -> Result<Option<String>, String> {
+    let s = match v {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(_) => {
+            return Err("`parent_folder_id` must be a string".to_string());
+        }
+    };
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if s.contains('\'') {
+        return Err(
+            "`parent_folder_id` must not contain single quotes".to_string(),
+        );
+    }
+    Ok(Some(s))
 }
 
 /// Phase 167 — parse the `consolidation` input.
@@ -940,5 +992,65 @@ mod tests {
         // contract.
         assert_eq!(Consolidation::Legacy.as_api_key(), "legacy");
         assert_eq!(Consolidation::None.as_api_key(), "none");
+    }
+
+    // ---- Phase 167 — parent_folder_id ----
+
+    #[test]
+    fn parse_parent_folder_id_absent_yields_none() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.parent_folder_id, None);
+    }
+
+    #[test]
+    fn parse_parent_folder_id_null_yields_none() {
+        let p =
+            parse_input(&json!({"parent_folder_id": null})).unwrap();
+        assert_eq!(p.parent_folder_id, None);
+    }
+
+    #[test]
+    fn parse_parent_folder_id_empty_string_yields_none() {
+        let p = parse_input(&json!({"parent_folder_id": ""})).unwrap();
+        assert_eq!(p.parent_folder_id, None);
+    }
+
+    #[test]
+    fn parse_parent_folder_id_extracts_string_value() {
+        let p = parse_input(&json!({
+            "parent_folder_id": "0AAfolder123"
+        }))
+        .unwrap();
+        assert_eq!(p.parent_folder_id, Some("0AAfolder123".to_string()));
+    }
+
+    #[test]
+    fn parse_parent_folder_id_trims_whitespace() {
+        let p = parse_input(&json!({
+            "parent_folder_id": "  abc-123  "
+        }))
+        .unwrap();
+        assert_eq!(p.parent_folder_id, Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn parse_parent_folder_id_rejects_single_quote() {
+        // Same posture as recent_files /
+        // recent_changes — guards against
+        // query-DSL injection attempts.
+        let err = parse_input(&json!({
+            "parent_folder_id": "0AA'inject"
+        }))
+        .unwrap_err();
+        assert!(err.contains("single quotes"));
+    }
+
+    #[test]
+    fn parse_parent_folder_id_rejects_non_string() {
+        let err = parse_input(&json!({
+            "parent_folder_id": 42
+        }))
+        .unwrap_err();
+        assert!(err.contains("must be a string"));
     }
 }
