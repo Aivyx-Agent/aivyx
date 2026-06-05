@@ -4863,10 +4863,20 @@ Then, with the daemon running:
 ```
 aivyx loop start                      # run to backlog-done or a cap
 aivyx loop start --max-iterations 5   # lower the iteration cap for this run
-aivyx loop status                     # driver state, gate + cap config, backlog
+aivyx loop status                     # driver state, gate + cap config, live tokens used
 aivyx loop stop                       # end the run after the current iteration
 aivyx loop log [--limit N]            # the cross-iteration progress notes
+aivyx loop skip <story-id>            # prune a stuck / unwanted backlog story
 ```
+
+`aivyx loop status` shows `tokens used: N / cap` once a run has
+had an iteration, so you can watch spend approach the
+`max_run_tokens` budget live. `aivyx loop skip <id>` marks a
+`Pending` story `Skipped` (it stays in the append-only backlog
+chain as a skip, so the audit trail is preserved). The agent
+records progress notes with `loop.note`; an exact repeat of the
+most-recent note is de-duplicated so the injected progress block
+stays clean.
 
 A run stops on exactly one condition: the backlog drains,
 `max_iterations` is reached, the `max_run_secs` wall-clock cap

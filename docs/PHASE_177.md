@@ -129,4 +129,53 @@ PDF full-compression page count, and the long-deferred
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 14 | Untouched (no new scope, no new tool) | ✅ |
+| PRODUCT.md HOLD → 68 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 14 | Untouched | ✅ |
+| Zero new workspace deps | All three touch-ups reused existing primitives | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+8` to `+14` | **`+6`** (tokens-used 1 + skip 4 + dedup 1); workspace ~4,104 → ~4,110 | ❌ **below band — but within my own refined prior** |
+
+**The prediction lesson, now landing.** Phase 176's retro
+*explicitly* set the loop-polish band at **`+5..+12`**. Then in
+this open doc I wrote **`+8..+14`** — drifting the band back up
+again — and landed `+6`, which is squarely in the `+5..+12`
+prior I'd just established but below the band I actually
+predicted. This is the third loop-follow-on phase I've
+over-predicted (175: +11 vs +12–22; 176: +5 vs +10–16; 177: +6
+vs +8–14). The fix is simple and I'm committing to it: **loop
+touch-up / cap / polish phases get `+5..+12`, full stop** — no
+upward drift "because this one feels bigger."
+
+The bundle landed all three touch-ups:
+
+1. **Live `tokens used`** (Task 2). `LoopRunState.tokens_used`,
+   recorded by the driver each iteration, rendered by `aivyx
+   loop status` (`N / cap` with a budget set).
+2. **`aivyx loop skip <id>`** (Task 3). Exposes the backlog's
+   `mark_skipped` over a new `LoopSkip` IPC + CLI; the story
+   stays in the append-only chain as `Skipped`.
+3. **Progress-note de-dup** (Task 4). `loop.note` skips an exact
+   repeat of the most-recent note.
+
+### Honest-debt status carried forward
+
+- **`tokens used` inherits the window-sum framing** (all turns
+  during the run, not loop-only).
+- **Dedup is most-recent-only** (back-to-back repeats only).
+- **`loop skip` skips, doesn't delete** (append-only chain).
+- All three were flagged at entry; none changed.
+- Sixty-sixth consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result
+
+The autonomous-loop arc (173–177) is now complete *and*
+polished: three caps with live spend visibility, gate
+verification, the cross-iteration progress log (de-duplicated),
+and full operator backlog control (add / list / skip / start /
+stop / status / log) — all built from existing substrate, with
+no new workspace dependency and an unbroken DESIGN / PRODUCT /
+`lib.rs` streak across the entire five-phase arc.
