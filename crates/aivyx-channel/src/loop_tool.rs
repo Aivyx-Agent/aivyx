@@ -394,6 +394,23 @@ impl Tool for LoopNoteTool {
             });
         }
 
+        // Phase 177 — de-dup against the most-recent progress note:
+        // an agent that re-states the same learning on consecutive
+        // iterations shouldn't fill the injected progress block with
+        // repeats. Most-recent-only (a full-history scan would be
+        // O(n) per note); catches the common back-to-back case.
+        if let Ok(recent) =
+            memory.get_recent(LOOP_PROGRESS_TOPIC, 1).await
+        {
+            if recent.first().map(|e| e.body.trim()) == Some(text.as_str())
+            {
+                return ToolOutcome::Completed {
+                    output: json!({ "noted": false, "deduped": true }),
+                    verified: Verification::NotApplicable,
+                };
+            }
+        }
+
         match memory.put(LOOP_PROGRESS_TOPIC, &text).await {
             Ok(_) => ToolOutcome::Completed {
                 output: json!({ "noted": true }),
@@ -667,5 +684,76 @@ mod tests {
             bare.execute(json!({ "text": "x" }), &ctx).await,
             ToolOutcome::Failed(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn loop_note_dedups_consecutive_identical_notes() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let t = LoopNoteTool::new();
+        assert!(t.set_memory(Arc::clone(&mem)).is_ok());
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+
+        // First write lands.
+        let out = t
+            .execute(json!({ "text": "use --release" }), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["noted"], true);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // Exact repeat (with surrounding whitespace) is deduped.
+        let out = t
+            .execute(json!({ "text": "  use --release  " }), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["noted"], false);
+                assert_eq!(output["deduped"], true);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // Still only one entry stored.
+        assert_eq!(
+            mem.get_recent(LOOP_PROGRESS_TOPIC, 10).await.unwrap().len(),
+            1
+        );
+
+        // A DIFFERENT note still writes (and resets the
+        // most-recent for future dedup).
+        let out = t
+            .execute(json!({ "text": "tests in tests/" }), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["noted"], true);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            mem.get_recent(LOOP_PROGRESS_TOPIC, 10).await.unwrap().len(),
+            2
+        );
+
+        // And a non-consecutive repeat of the FIRST note writes
+        // (most-recent-only dedup — the current most-recent is the
+        // different note).
+        let out = t
+            .execute(json!({ "text": "use --release" }), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["noted"], true);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            mem.get_recent(LOOP_PROGRESS_TOPIC, 10).await.unwrap().len(),
+            3
+        );
     }
 }
