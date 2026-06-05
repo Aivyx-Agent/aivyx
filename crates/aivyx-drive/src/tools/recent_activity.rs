@@ -126,8 +126,12 @@ impl Tool for DriveRecentActivity {
         let filter =
             compose_filter(&window_start.to_rfc3339(), &parsed.action_type_filter);
 
+        // Phase 167 — consolidation strategy
+        // is `{<key>: {}}` shaped per the
+        // Activity API contract.
+        let consolidation_body = json!({ parsed.consolidation.as_api_key(): {} });
         let body = json!({
-            "consolidationStrategy": {"legacy": {}},
+            "consolidationStrategy": consolidation_body,
             "filter": filter,
             "pageSize": parsed.max_results,
         });
@@ -189,6 +193,11 @@ fn input_schema() -> Value {
                 "type": "array",
                 "items": { "type": "string" },
                 "description": "Phase 167 — restrict results to one or more action types. Accepts case-insensitive variants of: edit, create, rename, delete, move, comment, permissionChange, restore, reference, settingsChange. Builds Activity API `detail.action_detail_case:CASE` filter clauses. Empty array or omitted = no action-type filter."
+            },
+            "consolidation": {
+                "type": "string",
+                "enum": ["legacy", "none"],
+                "description": "Phase 167 — Activity API consolidation strategy. `legacy` (default) matches the Drive UI's activity feed. `none` returns un-consolidated events (a rename + edit on the same file surfaces as two activities instead of one). The internal `consolidated` strategy isn't exposed in the public API and is intentionally omitted."
             }
         },
         "additionalProperties": false
@@ -215,6 +224,25 @@ pub(crate) const SUPPORTED_ACTION_TYPES: &[(&str, &str)] = &[
     ("settingschange", "SETTINGS_CHANGE"),
 ];
 
+/// Phase 167 — Activity API consolidation
+/// strategies exposed in the public API.
+/// `consolidated` exists internally but isn't
+/// publicly addressable; intentionally omitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Consolidation {
+    Legacy,
+    None,
+}
+
+impl Consolidation {
+    pub(crate) fn as_api_key(self) -> &'static str {
+        match self {
+            Consolidation::Legacy => "legacy",
+            Consolidation::None => "none",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ParsedInput {
     window_hours: u64,
@@ -224,6 +252,10 @@ struct ParsedInput {
     /// `SUPPORTED_ACTION_TYPES`. Empty Vec =
     /// no action-type filter.
     action_type_filter: Vec<String>,
+    /// Phase 167 — consolidation strategy.
+    /// Default `Legacy` matches Phase 159
+    /// behavior.
+    consolidation: Consolidation,
 }
 
 fn parse_input(input: &Value) -> Result<ParsedInput, String> {
@@ -254,12 +286,43 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
     let max_results = max_results.min(MAX_RESULTS_CAP);
 
     let action_type_filter = parse_action_type_filter(obj.get("action_type_filter"))?;
+    let consolidation = parse_consolidation(obj.get("consolidation"))?;
 
     Ok(ParsedInput {
         window_hours,
         max_results,
         action_type_filter,
+        consolidation,
     })
+}
+
+/// Phase 167 — parse the `consolidation` input.
+/// Defaults to `Consolidation::Legacy` when
+/// absent or null. Rejects unknown strings
+/// (including the public-API-omitted
+/// `consolidated`) with a clear error.
+pub(crate) fn parse_consolidation(
+    v: Option<&Value>,
+) -> Result<Consolidation, String> {
+    let raw = match v {
+        None | Some(Value::Null) => return Ok(Consolidation::Legacy),
+        Some(Value::String(s)) => s.trim().to_ascii_lowercase(),
+        Some(_) => {
+            return Err("`consolidation` must be a string".to_string());
+        }
+    };
+    match raw.as_str() {
+        "legacy" => Ok(Consolidation::Legacy),
+        "none" => Ok(Consolidation::None),
+        "consolidated" => Err(
+            "`consolidation: \"consolidated\"` is not exposed in the public \
+             Drive Activity API; supported: legacy, none"
+                .to_string(),
+        ),
+        other => Err(format!(
+            "unsupported consolidation {other:?}; supported: legacy, none"
+        )),
+    }
 }
 
 /// Phase 167 — parse and normalize the
@@ -802,5 +865,80 @@ mod tests {
         assert!(folded.contains(&"edit"));
         assert!(folded.contains(&"permissionchange"));
         assert!(folded.contains(&"settingschange"));
+    }
+
+    // ---- Phase 167 — consolidation strategy ----
+
+    #[test]
+    fn parse_consolidation_defaults_to_legacy() {
+        let p = parse_input(&json!({})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::Legacy);
+    }
+
+    #[test]
+    fn parse_consolidation_null_defaults_to_legacy() {
+        let p = parse_input(&json!({"consolidation": null})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::Legacy);
+    }
+
+    #[test]
+    fn parse_consolidation_legacy_honored() {
+        let p =
+            parse_input(&json!({"consolidation": "legacy"})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::Legacy);
+    }
+
+    #[test]
+    fn parse_consolidation_none_honored() {
+        let p = parse_input(&json!({"consolidation": "none"})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::None);
+    }
+
+    #[test]
+    fn parse_consolidation_case_insensitive() {
+        let p =
+            parse_input(&json!({"consolidation": "LEGACY"})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::Legacy);
+        let p =
+            parse_input(&json!({"consolidation": "  None  "})).unwrap();
+        assert_eq!(p.consolidation, Consolidation::None);
+    }
+
+    #[test]
+    fn parse_consolidation_consolidated_rejected_with_explanation() {
+        // The `consolidated` strategy isn't
+        // exposed in the public Drive Activity
+        // API; we surface this honestly
+        // instead of silently sending it.
+        let err =
+            parse_input(&json!({"consolidation": "consolidated"}))
+                .unwrap_err();
+        assert!(err.contains("not exposed in the public"));
+        assert!(err.contains("supported: legacy, none"));
+    }
+
+    #[test]
+    fn parse_consolidation_unknown_rejected() {
+        let err =
+            parse_input(&json!({"consolidation": "magic"})).unwrap_err();
+        assert!(err.contains("magic"));
+        assert!(err.contains("supported: legacy, none"));
+    }
+
+    #[test]
+    fn parse_consolidation_non_string_rejected() {
+        let err =
+            parse_input(&json!({"consolidation": 7})).unwrap_err();
+        assert!(err.contains("must be a string"));
+    }
+
+    #[test]
+    fn consolidation_as_api_key_matches_request_body_shape() {
+        // The body builds `{<as_api_key>: {}}`;
+        // pin the strings so a future rename
+        // doesn't silently break the API
+        // contract.
+        assert_eq!(Consolidation::Legacy.as_api_key(), "legacy");
+        assert_eq!(Consolidation::None.as_api_key(), "none");
     }
 }
