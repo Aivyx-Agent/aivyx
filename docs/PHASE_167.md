@@ -197,8 +197,78 @@ candidates:
 
 ## Prediction vs reality
 
-_Populated at Phase 167 exit. Predictions at
-sign-off: DESIGN.md HOLD → 4; PRODUCT.md HOLD
-→ 58; lib.rs HOLD → 4; zero new deps; test
-count delta `+15` to `+25`; zero clippy
-warnings._
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 4 | Untouched | ✅ |
+| PRODUCT.md HOLD → 58 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 4 | Untouched | ✅ |
+| Zero new workspace deps | All work uses existing primitives (serde_json, hand-maintained enum tables) | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+15` to `+25` | `+29` (action_type +13, consolidation +9, parent_folder_id +7) | ⚠️ (over by 4; see correction) |
+
+All five exit criteria functionally met. Three
+of Phase 159's named honest-debts closed; the
+fourth (actor filter) deferred to Phase 168+
+with documented honest scope.
+
+### Honest correction — test count over-band
+
+Open band was `+15..+25`; actual is `+29`. The
+over-shoot is consistent with Phase 165's
+similar pattern: each pure-substrate input
+warrants more parser-edge-case coverage than
+the open's conservative estimate budgeted.
+Per task:
+
+- Task 2 (action_type_filter): 13 tests cover
+  6 input-normalization shapes (absent / null
+  / empty / case-fold / camel-snake / dedupe),
+  3 input rejection shapes (unknown / non-
+  string / non-array), 3 compose_filter
+  cases, and one regression pin on the
+  hand-maintained enumeration.
+- Task 3 (consolidation): 9 tests cover 5
+  parsing shapes + 3 rejection shapes
+  (including the explicit `consolidated`
+  rejection with explanation) + the
+  as_api_key pin.
+- Task 4 (parent_folder_id): 7 tests cover
+  the input-validation matrix (absent / null
+  / empty / extract / trim / single-quote-
+  reject / non-string-reject).
+
+Each piece's surface honestly warranted its
+test count; the `+15..+25` band was a
+conservative estimate that didn't account
+for the parser-edge-case multiplier.
+
+### Phase 159 honest-debt status — three of four cleared
+
+Phase 159's exit doc named three carry-overs.
+Phase 167 closes:
+
+1. ✅ Action type filter (Task 2, commit
+   `fb69430`).
+2. ✅ Consolidation strategy knob (Task 3,
+   commit `ced68cb`).
+3. ✅ parent_folder_id composition (Task 4,
+   commit `2ff62ad`).
+
+Actor filter — named in Phase 159's
+"actor / target filters" carry-over as a
+single item — splits in Phase 167's
+honest framing:
+
+- ✅ Target (via ancestorName) is the
+  parent_folder_id input.
+- ⏳ Actor-specific filtering (e.g. "only
+  activities by user@example.com") deferred
+  to Phase 168+. The Activity API DSL has no
+  native actor predicate; honest path is
+  post-fetch shaping against the enriched
+  output's `actor_email` field.
+
+### Fifty-sixth deferral of Channel Activation Milestone
+
+Per operator framing — intentional hold.
+Recorded for the record.

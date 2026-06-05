@@ -3537,7 +3537,7 @@ first-real-use signal.
 
 ## Phase 167 — drive.recent_activity Follow-Ons (Action Filter + Consolidation Knob + Parent Folder)
 
-**See [PHASE_167.md](PHASE_167.md).** Phase 159 close-
+**Frozen — see [PHASE_167.md](PHASE_167.md).** Phase 159 close-
 out, deferred 8 phases (the longest gap in the
 project's close-out ledger; user declined this
 surface six times before picking it). Three input
