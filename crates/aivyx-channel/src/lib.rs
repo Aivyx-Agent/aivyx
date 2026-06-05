@@ -65,6 +65,11 @@ pub mod loop_backlog;
 /// `mission.*`. The only new agent-facing surface the loop
 /// needs; the thirteen-tool substrate core is untouched.
 pub mod loop_tool;
+/// Phase 173 — the autonomous-loop driver. A background task
+/// (sibling of `reflection_scheduler`) that fires a fresh-context
+/// `TriggerSource::Loop` turn per iteration over the backlog,
+/// re-arming until the backlog is empty or a hard cap is hit.
+pub mod loop_driver;
 pub mod helpfulness_ledger;
 pub mod memory_embedding;
 pub mod memory_gc_tool;

@@ -490,6 +490,12 @@ pub enum TriggerKindSummary {
     /// declared cron job ran." Reflection turns carry the
     /// canonical reflection prompt + outcome-summary input.
     Reflection,
+    /// Phase 173 — autonomous-loop fire (the Aivyx Ralph loop).
+    /// Distinct from `Cron` / `Reflection` so forensic searches
+    /// can isolate the autonomous, code-committing loop's
+    /// iterations: every `TriggerSource::Loop` turn is one
+    /// fresh-context pass over the backlog.
+    Loop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -40,6 +40,11 @@ pub enum TriggerSource {
     /// so audit forensics + log lines can tell self-learning
     /// reflection turns apart from operator-declared cron jobs.
     Reflection,
+    /// Phase 173 — autonomous-loop fire (the Aivyx Ralph loop).
+    /// Distinct from `Cron` / `Reflection` so audit forensics +
+    /// log lines can isolate the autonomous loop's per-iteration
+    /// turns.
+    Loop,
 }
 
 impl std::fmt::Display for TriggerSource {
@@ -49,6 +54,7 @@ impl std::fmt::Display for TriggerSource {
             TriggerSource::Webhook => write!(f, "webhook"),
             TriggerSource::FileWatch => write!(f, "file-watch"),
             TriggerSource::Reflection => write!(f, "reflection"),
+            TriggerSource::Loop => write!(f, "loop"),
         }
     }
 }
@@ -63,6 +69,7 @@ impl From<TriggerSource> for TriggerKindSummary {
             TriggerSource::Webhook => TriggerKindSummary::Webhook,
             TriggerSource::FileWatch => TriggerKindSummary::FileWatch,
             TriggerSource::Reflection => TriggerKindSummary::Reflection,
+            TriggerSource::Loop => TriggerKindSummary::Loop,
         }
     }
 }
