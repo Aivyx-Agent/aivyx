@@ -1692,16 +1692,24 @@ pub(crate) fn select_clipboard_command() -> ClipboardCommand {
     }
 }
 
-/// Phase 170 — infer the image MIME type from
-/// the byte prefix. Recognizes PNG (0x89 50
-/// 4E 47) and JPEG (0xFF D8). Returns None for
-/// anything else; caller surfaces the honest
-/// "unrecognized clipboard image type" error.
+/// Phase 170 + 171 — infer the image MIME
+/// type from the byte prefix. Recognizes the
+/// PNG, JPEG, GIF, and WebP signatures (see
+/// the match arms below for the exact byte
+/// patterns). Returns None for anything else
+/// so the caller can surface a clear error.
 pub(crate) fn infer_clipboard_media_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 4 && &bytes[..4] == b"\x89PNG" {
         Some("image/png")
     } else if bytes.len() >= 2 && &bytes[..2] == b"\xff\xd8" {
         Some("image/jpeg")
+    } else if bytes.len() >= 3 && &bytes[..3] == b"GIF" {
+        Some("image/gif")
+    } else if bytes.len() >= 12
+        && &bytes[..4] == b"RIFF"
+        && &bytes[8..12] == b"WEBP"
+    {
+        Some("image/webp")
     } else {
         None
     }
@@ -1744,7 +1752,7 @@ async fn load_image_from_clipboard() -> Result<(String, Vec<u8>), String> {
     let media_type = infer_clipboard_media_type(&bytes).ok_or_else(|| {
         format!(
             "clipboard bytes ({} total) don't start with a recognized image \
-             signature (PNG/JPEG); Phase 170 supports png + jpeg only",
+             signature; supports png / jpeg / gif / webp",
             bytes.len()
         )
     })?;
@@ -2941,12 +2949,51 @@ url_retry_jitter_ms = 250
     }
 
     #[test]
-    fn infer_clipboard_media_type_rejects_unrecognized_signature() {
-        // GIF / WebP / random bytes not in
-        // Phase 170 set.
-        assert_eq!(infer_clipboard_media_type(b"GIF89a..."), None);
-        assert_eq!(infer_clipboard_media_type(b"RIFF...."), None);
+    fn infer_clipboard_media_type_rejects_truly_unrecognized_signature() {
+        // Phase 171 — GIF and WebP are now
+        // recognized; the rejection cases tighten
+        // to TIFF / HEIC / random bytes.
+        assert_eq!(infer_clipboard_media_type(b"II*\x00..."), None); // TIFF LE
+        assert_eq!(infer_clipboard_media_type(b"\x00\x00\x00\x20ftypheic"), None);
         assert_eq!(infer_clipboard_media_type(b"random text"), None);
+    }
+
+    // ---- Phase 171 — GIF + WebP signatures ----
+
+    #[test]
+    fn infer_clipboard_media_type_recognizes_gif87a() {
+        let bytes = b"GIF87a\x10\x00\x10\x00";
+        assert_eq!(infer_clipboard_media_type(bytes), Some("image/gif"));
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_recognizes_gif89a() {
+        let bytes = b"GIF89a\x10\x00\x10\x00";
+        assert_eq!(infer_clipboard_media_type(bytes), Some("image/gif"));
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_recognizes_webp_riff_envelope() {
+        // RIFF (4 bytes) + size (4 bytes) +
+        // WEBP (4 bytes) + payload.
+        let bytes = b"RIFF\x10\x00\x00\x00WEBPVP8 ";
+        assert_eq!(infer_clipboard_media_type(bytes), Some("image/webp"));
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_rejects_riff_non_webp() {
+        // RIFF envelope without WEBP signature
+        // is a different file format (e.g. WAV).
+        let bytes = b"RIFF\x10\x00\x00\x00WAVEfmt ";
+        assert_eq!(infer_clipboard_media_type(bytes), None);
+    }
+
+    #[test]
+    fn infer_clipboard_media_type_too_short_for_webp() {
+        // RIFF without enough bytes to check
+        // for WEBP at offset 8.
+        let bytes = b"RIFF\x00\x00";
+        assert_eq!(infer_clipboard_media_type(bytes), None);
     }
 
     #[test]
