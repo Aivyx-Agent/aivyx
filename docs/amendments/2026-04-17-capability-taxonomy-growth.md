@@ -455,6 +455,30 @@ family grows 28 → 30:
 
 Total: 16 + 5 + 30 + 20 = 71.
 
+## Phase 175 addendum — Loop progress log (2026-06-06)
+
+> *Added at Phase 175 exit. The Aivyx Ralph loop's
+> cross-iteration learning: a reserved memory topic
+> (`loop:progress`) holds durable notes the driver injects
+> into each fresh iteration's prompt. One new channel-tier
+> tool, `loop.note`, lets the loop agent append a learning to
+> that topic (the tool owns the topic so the agent can't
+> mis-route it). One new base gates it, Trusted-tier at the
+> ceiling like the other `loop.*` tools — a SemiTrusted remote
+> adapter must not write the loop's progress log. The
+> thirteen-tool substrate core (amendment A12) is untouched.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 175 | `loop.note` | Loop progress log — append a learning to the reserved progress topic the driver injects into each fresh iteration (Trusted-tier-only at the ceiling, matching `loop.next` / `loop.complete`). |
+
+### Current full enumeration after Phase 175 (72 bases)
+
+The Phase 173 enumeration plus one new **infrastructure** base
+(`loop.note`), so the infrastructure family grows 30 → 31:
+
+Total: 16 + 5 + 31 + 20 = 72.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

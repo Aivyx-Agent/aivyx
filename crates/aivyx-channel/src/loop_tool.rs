@@ -33,6 +33,13 @@ use crate::loop_backlog::{PersistentLoopBacklog, StoryStatus};
 /// both tools + the loop driver so they all see one chain.
 pub type SharedBacklog = Arc<PersistentLoopBacklog>;
 
+/// Phase 175 — the reserved memory topic the loop progress log
+/// lives under. `loop.note` appends here; the driver reads the
+/// last N entries and injects them into each fresh iteration's
+/// prompt. Owned in one place so the writer (the tool) and the
+/// reader (the driver) can never disagree on the topic.
+pub const LOOP_PROGRESS_TOPIC: &str = "loop:progress";
+
 fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -278,6 +285,128 @@ impl Tool for LoopCompleteTool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// loop.note (Phase 175)
+// ---------------------------------------------------------------------------
+
+/// `loop.note` — append a one-line learning to the loop progress
+/// log (the reserved [`LOOP_PROGRESS_TOPIC`] memory topic the
+/// driver injects into each fresh iteration). Owns the topic so
+/// the agent can't mis-route the note; gated under the
+/// `loop.note` scope (narrower than `memory.write` — it can only
+/// write this one reserved topic).
+pub struct LoopNoteTool {
+    id: ToolId,
+    schema: Value,
+    memory: OnceLock<Arc<dyn aivyx_memory::Memory>>,
+}
+
+impl std::fmt::Debug for LoopNoteTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoopNoteTool")
+            .field("id", &self.id)
+            .field("has_memory", &self.memory.get().is_some())
+            .finish()
+    }
+}
+
+impl Default for LoopNoteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoopNoteTool {
+    pub fn new() -> Self {
+        LoopNoteTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "A short one-line learning for \
+                                        future iterations (a gotcha, a \
+                                        convention, a path)."
+                    }
+                },
+                "required": ["text"]
+            }),
+            memory: OnceLock::new(),
+        }
+    }
+
+    pub fn set_memory(
+        &self,
+        memory: Arc<dyn aivyx_memory::Memory>,
+    ) -> Result<(), Arc<dyn aivyx_memory::Memory>> {
+        self.memory.set(memory)
+    }
+}
+
+#[async_trait]
+impl Tool for LoopNoteTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "loop.note"
+    }
+
+    fn description(&self) -> &str {
+        "Append a one-line learning to the autonomous-loop progress log. \
+         Input is a JSON object with a `text` field. The note is stored \
+         durably and surfaced to FUTURE loop iterations (which start with \
+         fresh context), so record anything the next iteration should know \
+         — a gotcha, a codebase convention, where tests live. Keep it to \
+         one short line."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("loop.note").expect("known base")
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let Some(memory) = self.memory.get() else {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "loop.note: no memory substrate configured".to_string(),
+            });
+        };
+
+        let text = input
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if text.is_empty() {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "loop.note requires a non-empty `text` field"
+                    .to_string(),
+            });
+        }
+
+        match memory.put(LOOP_PROGRESS_TOPIC, &text).await {
+            Ok(_) => ToolOutcome::Completed {
+                output: json!({ "noted": true }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("loop.note failed to record: {e}"),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +605,66 @@ mod tests {
         let ctx = make_ctx(&ch, &audit);
         assert!(matches!(
             next.execute(json!({}), &ctx).await,
+            ToolOutcome::Failed(_)
+        ));
+    }
+
+    // ---- loop.note (Phase 175) --------------------------------
+
+    #[test]
+    fn loop_note_name_and_scope() {
+        let t = LoopNoteTool::new();
+        assert_eq!(t.name(), "loop.note");
+        assert_eq!(t.required_scope(&json!({})).as_str(), "loop.note");
+        assert!(t.input_schema()["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("text")));
+    }
+
+    #[tokio::test]
+    async fn loop_note_writes_reserved_topic() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let t = LoopNoteTool::new();
+        assert!(t.set_memory(Arc::clone(&mem)).is_ok());
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+
+        let out = t
+            .execute(json!({ "text": "tests live in tests/" }), &ctx)
+            .await;
+        assert!(matches!(out, ToolOutcome::Completed { .. }));
+
+        // Landed under the reserved topic, retrievable newest-first.
+        let recent = mem.get_recent(LOOP_PROGRESS_TOPIC, 10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].body, "tests live in tests/");
+    }
+
+    #[tokio::test]
+    async fn loop_note_rejects_empty_and_missing_memory() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        // Empty text → failure (no write).
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let t = LoopNoteTool::new();
+        assert!(t.set_memory(Arc::clone(&mem)).is_ok());
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        assert!(matches!(
+            t.execute(json!({ "text": "   " }), &ctx).await,
+            ToolOutcome::Failed(_)
+        ));
+        assert!(mem
+            .get_recent(LOOP_PROGRESS_TOPIC, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // No memory configured → clean failure.
+        let bare = LoopNoteTool::new();
+        assert!(matches!(
+            bare.execute(json!({ "text": "x" }), &ctx).await,
             ToolOutcome::Failed(_)
         ));
     }

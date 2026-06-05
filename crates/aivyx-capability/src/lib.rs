@@ -324,6 +324,11 @@ const KNOWN_BASES: &[&str] = &[
     // thirteen-tool substrate core (amendment A12) is untouched.
     "loop.next",
     "loop.complete",
+    // Phase 175 — Loop progress log. `loop.note` gates appending
+    // a learning to the reserved progress topic the driver
+    // injects into each fresh iteration. Channel-tier, Trusted,
+    // like the other loop tools.
+    "loop.note",
 ];
 
 // ---------------------------------------------------------------------------
@@ -812,6 +817,7 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // autonomous code-committing loop.
         "loop.next",
         "loop.complete",
+        "loop.note",
         // Phase 110 — Skills Auto-Creation. Trusted tier gets
         // skills.* because skill proposal + listing + invocation
         // are inside the same reflection-layer envelope as
@@ -1706,12 +1712,13 @@ mod tests {
         // (aivyx-toolkit budget tracking — `budget.summary`
         // and `budget.record`). Phase 173 adds loop.next +
         // loop.complete for the Autonomous Loop (the Aivyx
-        // Ralph loop) backlog tools.
+        // Ralph loop) backlog tools. Phase 175 adds loop.note
+        // for the loop progress log.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            71,
+            72,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

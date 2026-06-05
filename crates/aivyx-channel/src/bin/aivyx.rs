@@ -4569,6 +4569,13 @@ async fn run_async(
     > = Arc::new(aivyx_channel::loop_tool::LoopCompleteTool::new());
     let _ = loop_complete_tool.set_backlog(Arc::clone(&loop_backlog));
     tool_list.push(Arc::clone(&loop_complete_tool) as Arc<dyn Tool>);
+    // Phase 175 — loop.note appends a learning to the reserved
+    // progress topic the driver injects into each fresh
+    // iteration. Built with the shared memory handle.
+    let loop_note_tool: Arc<aivyx_channel::loop_tool::LoopNoteTool> =
+        Arc::new(aivyx_channel::loop_tool::LoopNoteTool::new());
+    let _ = loop_note_tool.set_memory(Arc::clone(&memory));
+    tool_list.push(Arc::clone(&loop_note_tool) as Arc<dyn Tool>);
 
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
     // `persona_log` + `shared_persona` were created earlier (right
