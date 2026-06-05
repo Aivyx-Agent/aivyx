@@ -73,6 +73,14 @@ thiserror = { workspace = true }
 # pattern for aivyx-calendar).
 reqwest = { workspace = true }
 
+# Phase 168 — futures_util for the streaming
+# body read in fetch_image_url (read-stall
+# timeout substrate). Already a workspace dep
+# via aivyx-calendar / aivyx-drive (Phase 151
+# / Phase 157); aivyx-voice adds as a crate
+# dep matching the same pattern.
+futures-util = { workspace = true }
+
 # Audio I/O — always on inside aivyx-voice. cpal is the
 # pure-Rust cross-platform audio library Aivyx already uses
 # transitively through other channels; pinning here for

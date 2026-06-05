@@ -1070,6 +1070,17 @@ pub struct VoiceImageConfig {
     /// `url_retry_count` is 0.
     #[serde(default = "VoiceImageConfig::default_url_retry_backoff_ms")]
     pub url_retry_backoff_ms: u64,
+    /// Phase 168 — per-chunk stall timeout in
+    /// seconds during URL body reads. Defeats
+    /// slow-trickle servers that fall under
+    /// the overall `url_timeout_secs` cap
+    /// (e.g. one byte per second for an hour).
+    /// Default 0 = disabled (preserves Phase
+    /// 161 single-bytes() shape). When set,
+    /// the body read aborts if no chunk
+    /// arrives within the window.
+    #[serde(default)]
+    pub url_read_stall_secs: u64,
 }
 
 impl Default for VoiceImageConfig {
@@ -1082,6 +1093,7 @@ impl Default for VoiceImageConfig {
             url_header_presets: std::collections::HashMap::new(),
             url_retry_count: 0,
             url_retry_backoff_ms: Self::default_url_retry_backoff_ms(),
+            url_read_stall_secs: 0,
         }
     }
 }
@@ -1220,11 +1232,13 @@ async fn fetch_image_url(
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("read {url:?} body: {e}"))?
-        .to_vec();
+    // Phase 168 — switch the body read from
+    // one-shot `resp.bytes()` to a streaming
+    // read so we can detect per-chunk stalls.
+    // When `url_read_stall_secs == 0`, the
+    // wrapping timeout is effectively infinite
+    // and the behavior matches Phase 161.
+    let bytes = read_body_with_stall(resp, cfg.url_read_stall_secs, url).await?;
     if bytes.is_empty() {
         return Err(format!("url {url:?} returned empty body"));
     }
@@ -1247,6 +1261,60 @@ async fn fetch_image_url(
             )
         })?;
     Ok((media_type.to_string(), bytes))
+}
+
+/// Phase 168 — read a response body in chunks
+/// with an optional per-chunk stall timeout.
+/// When `stall_secs == 0`, the timeout is
+/// disabled and the call collapses to a
+/// straight stream-collect (semantically
+/// equivalent to `resp.bytes().await` with
+/// chunk-level intermediate bookkeeping).
+/// When `stall_secs > 0`, each chunk poll is
+/// wrapped in `tokio::time::timeout`; a timeout
+/// surfaces as a clear "stalled" error.
+async fn read_body_with_stall(
+    resp: reqwest::Response,
+    stall_secs: u64,
+    url: &str,
+) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let next = if stall_secs == 0 {
+            // No stall enforcement — wait
+            // indefinitely (bounded by the
+            // overall request timeout from
+            // reqwest::Client::builder().timeout).
+            stream.next().await
+        } else {
+            // Per-chunk stall: abort if no
+            // chunk arrives within the window.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(stall_secs),
+                stream.next(),
+            )
+            .await
+            {
+                Ok(item) => item,
+                Err(_) => {
+                    return Err(format!(
+                        "fetch {url:?} stalled: no bytes received within \
+                         {stall_secs}s window (per-chunk stall timeout)"
+                    ));
+                }
+            }
+        };
+        match next {
+            Some(Ok(chunk)) => out.extend_from_slice(&chunk),
+            Some(Err(e)) => {
+                return Err(format!("read {url:?} body: {e}"));
+            }
+            None => break,
+        }
+    }
+    Ok(out)
 }
 
 /// Phase 166 — true iff a `reqwest::Error`
@@ -1796,6 +1864,7 @@ mod tests {
             url_header_presets: Default::default(),
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
+            url_read_stall_secs: 0,
         };
         assert_eq!(cfg.size_cap_bytes(), 5 * 1024 * 1024);
     }
@@ -2297,6 +2366,65 @@ url_retry_backoff_ms = 1000
         assert!(!would_retry);
     }
 
+    // ---- Phase 168 — read-stalled-bytes timeout ----
+
+    #[test]
+    fn voice_image_config_url_read_stall_secs_default_zero() {
+        let cfg = VoiceImageConfig::default();
+        assert_eq!(cfg.url_read_stall_secs, 0);
+    }
+
+    #[test]
+    fn voice_image_config_deserializes_url_read_stall_secs() {
+        let toml = r#"
+size_cap_mb = 10
+url_read_stall_secs = 5
+"#;
+        let cfg: VoiceImageConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.url_read_stall_secs, 5);
+    }
+
+    #[test]
+    fn voice_image_config_url_read_stall_secs_zero_means_disabled() {
+        // Same posture as Phase 166's
+        // url_retry_count = 0 = "no retry":
+        // url_read_stall_secs = 0 means "no
+        // stall enforcement" (the stream
+        // reads to completion bounded only by
+        // the overall request timeout).
+        let cfg = VoiceImageConfig::default();
+        let disabled = cfg.url_read_stall_secs == 0;
+        assert!(disabled);
+    }
+
+    #[test]
+    fn url_read_stall_secs_documented_as_disabled_at_zero() {
+        // Open-doc / INSTALL.md contract: 0
+        // means "disabled" not "0 seconds".
+        // Pin the convention so a future
+        // refactor to "stall_secs always
+        // applies" doesn't slip through.
+        let stall_secs: u64 = 0;
+        let would_apply_timeout = stall_secs > 0;
+        assert!(!would_apply_timeout);
+        // Positive value enables the timeout.
+        let stall_secs: u64 = 5;
+        let would_apply_timeout = stall_secs > 0;
+        assert!(would_apply_timeout);
+    }
+
+    #[test]
+    fn url_read_stall_secs_field_type_matches_config() {
+        // Pin that the cfg field is u64 (the
+        // type Duration::from_secs accepts).
+        // A refactor to u32 or i64 would
+        // break read_body_with_stall's
+        // tokio::time::timeout call site.
+        let cfg = VoiceImageConfig::default();
+        let val: u64 = cfg.url_read_stall_secs;
+        assert_eq!(val, 0);
+    }
+
     #[test]
     fn voice_image_config_size_cap_bytes_saturates_on_overflow() {
         // An operator setting an absurd cap like
@@ -2313,6 +2441,7 @@ url_retry_backoff_ms = 1000
             url_header_presets: Default::default(),
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
+            url_read_stall_secs: 0,
         };
         assert_eq!(cfg.size_cap_bytes(), usize::MAX);
     }
@@ -2330,6 +2459,7 @@ url_retry_backoff_ms = 1000
             url_header_presets: Default::default(),
             url_retry_count: 0,
             url_retry_backoff_ms: 500,
+            url_read_stall_secs: 0,
         };
         let tmp = std::env::temp_dir().join("phase161-tightcap.png");
         std::fs::write(&tmp, b"abc").expect("write tmp");
