@@ -54,6 +54,7 @@ pub mod cooccurrence_ledger;
 /// `correction_consolidation` the proposal actuator.
 pub mod correction_consolidation;
 pub mod correction_detect;
+pub mod correction_judgment;
 pub mod correction_ledger;
 /// Phase 173 — the autonomous-loop backlog substrate (the
 /// Aivyx Ralph loop). HMAC-chained, append-only ordered story
