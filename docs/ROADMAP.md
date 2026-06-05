@@ -3535,6 +3535,21 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 168 — Phase 161 + 165 Stragglers (Read-Stalled-Bytes Timeout + Catalog-Aware PDF Page Count)
+
+**See [PHASE_168.md](PHASE_168.md).** Two unrelated
+honest-debts from two different parent phases.
+Read-stalled-bytes timeout defeats slow-trickle
+URL servers that fall under the per-request
+timeout (Phase 161 carry-over). Catalog-aware
+PDF page count augments Phase 165's per-page
+byte scan with the catalog's declared /Count
+field so compressed PDFs surface their page
+count via metadata rather than zero. Smaller
+bundle than typical (2-piece) and genuinely
+harder than typical — both pieces involve
+substrate-level depth. Zero new workspace deps.
+
 ## Phase 167 — drive.recent_activity Follow-Ons (Action Filter + Consolidation Knob + Parent Folder)
 
 **Frozen — see [PHASE_167.md](PHASE_167.md).** Phase 159 close-
