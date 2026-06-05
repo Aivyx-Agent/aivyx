@@ -315,6 +315,15 @@ const KNOWN_BASES: &[&str] = &[
     // a webhook). Relaxation to SemiTrusted is a Phase 63+
     // consideration if real use surfaces.
     "notify.send",
+    // Phase 173 — Autonomous Loop (the Aivyx Ralph loop).
+    // `loop.next` gates reading the next pending backlog story;
+    // `loop.complete` gates marking a story Done. Both are
+    // channel-tier substrate tools (like `mission.*`), granted
+    // to the trust tier the loop driver's `TriggerSource::Loop`
+    // turns run under (Trusted, like reflection). The
+    // thirteen-tool substrate core (amendment A12) is untouched.
+    "loop.next",
+    "loop.complete",
 ];
 
 // ---------------------------------------------------------------------------
@@ -796,6 +805,13 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "reflection.propose",
         "reflection.apply",
         "persona.propose",
+        // Phase 173 — Autonomous Loop. Trusted-tier (the
+        // loop driver fires local `TriggerSource::Loop` turns,
+        // same envelope as reflection). SemiTrusted does not
+        // get these: a remote adapter must not drive an
+        // autonomous code-committing loop.
+        "loop.next",
+        "loop.complete",
         // Phase 110 — Skills Auto-Creation. Trusted tier gets
         // skills.* because skill proposal + listing + invocation
         // are inside the same reflection-layer envelope as
@@ -1688,12 +1704,14 @@ mod tests {
         // Phase 143 adds the budget.read + budget.write bases
         // for the Chapter G #2 third-party tool process
         // (aivyx-toolkit budget tracking — `budget.summary`
-        // and `budget.record`).
+        // and `budget.record`). Phase 173 adds loop.next +
+        // loop.complete for the Autonomous Loop (the Aivyx
+        // Ralph loop) backlog tools.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            69,
+            71,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

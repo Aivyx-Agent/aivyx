@@ -883,6 +883,21 @@ fn run() -> Result<(), String> {
         out.copy_from_slice(subkey.as_bytes());
         out
     };
+    // Phase 173 — distinct HMAC key for the autonomous-loop
+    // backlog chain. Domain-separated via the HKDF info bytes
+    // (`loop-backlog`) so a chain-confusion attack across the
+    // persona / proposal / backlog chains is structurally
+    // rejected at MAC verification.
+    let loop_backlog_chain_key: [u8; 32] = {
+        let subkey = master_key
+            .derive_subkey(b"loop-backlog")
+            .map_err(|e| {
+                format!("failed to derive loop backlog chain key: {e}")
+            })?;
+        let mut out = [0u8; 32];
+        out.copy_from_slice(subkey.as_bytes());
+        out
+    };
 
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
@@ -952,6 +967,7 @@ fn run() -> Result<(), String> {
             audit_chain_key,
             persona_chain_key,
             persona_proposal_chain_key,
+            loop_backlog_chain_key,
             channel_kind,
             mode,
             no_daemon,
@@ -3184,6 +3200,7 @@ async fn run_async(
     audit_chain_key: [u8; 32],
     persona_chain_key: [u8; 32],
     persona_proposal_chain_key: [u8; 32],
+    loop_backlog_chain_key: [u8; 32],
     channel_kind: ChannelKind,
     mode: CliMode,
     no_daemon: bool,
@@ -3442,6 +3459,27 @@ async fn run_async(
             return Err(format!(
                 "failed to open persona proposal chain \
                  (KeyDomain::PersonaProposals): {e}"
+            ));
+        }
+    };
+    // Phase 173 — the autonomous-loop backlog. Always opened
+    // (zero-config, like memory): the `aivyx loop add` CLI + the
+    // loop tools need it even when no run is active. The driver
+    // (armed only by `[loop]`) and both loop tools share this
+    // one `Arc` so they see a single HMAC-chained backlog.
+    let loop_backlog: Arc<
+        aivyx_channel::loop_backlog::PersistentLoopBacklog,
+    > = match aivyx_channel::loop_backlog::PersistentLoopBacklog::open(
+        storage.domain(KeyDomain::LoopBacklog),
+        loop_backlog_chain_key.to_vec(),
+    )
+    .await
+    {
+        Ok(bl) => Arc::new(bl),
+        Err(e) => {
+            return Err(format!(
+                "failed to open loop backlog chain \
+                 (KeyDomain::LoopBacklog): {e}"
             ));
         }
     };
@@ -4343,6 +4381,21 @@ async fn run_async(
 
     let role_update_tool: Arc<RoleUpdateTool> = Arc::new(RoleUpdateTool::new());
     tool_list.push(Arc::clone(&role_update_tool) as Arc<dyn Tool>);
+
+    // Phase 173 — the autonomous-loop backlog tools. Built with
+    // the shared backlog `Arc` so the loop agent (and any Trusted
+    // turn) can read the next story + mark stories done. Always
+    // registered; capability-gated under loop.next / loop.complete.
+    let loop_next_tool: Arc<aivyx_channel::loop_tool::LoopNextTool> =
+        Arc::new(aivyx_channel::loop_tool::LoopNextTool::new());
+    let _ = loop_next_tool.set_backlog(Arc::clone(&loop_backlog));
+    tool_list.push(Arc::clone(&loop_next_tool) as Arc<dyn Tool>);
+    let loop_complete_tool: Arc<
+        aivyx_channel::loop_tool::LoopCompleteTool,
+    > = Arc::new(aivyx_channel::loop_tool::LoopCompleteTool::new());
+    let _ = loop_complete_tool.set_backlog(Arc::clone(&loop_backlog));
+    tool_list.push(Arc::clone(&loop_complete_tool) as Arc<dyn Tool>);
+
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
     // `persona_log` + `shared_persona` were created earlier (right
     // after the role assemble) so the system-prompt path could read

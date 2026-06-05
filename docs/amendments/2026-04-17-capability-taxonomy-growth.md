@@ -423,6 +423,38 @@ Third-party tool process scopes (20):
 
 Total: 16 + 5 + 28 + 20 = 69.
 
+## Phase 173 addendum — Autonomous Loop backlog tools (2026-06-05)
+
+> *Added at Phase 173 exit. The Aivyx-native answer to the
+> Ralph technique (snarktank/ralph): an autonomous,
+> self-re-arming task loop that fires a fresh-context agent
+> turn per iteration over an operator-stocked backlog. Two
+> new channel-tier substrate tools let the loop agent
+> interact with the HMAC-chained backlog substrate
+> (`KeyDomain::LoopBacklog`): `loop.next` returns the next
+> pending story; `loop.complete` marks a story done. Two new
+> bases gate them, sharing the read/write split the
+> `mission.*` and `reflection.*` siblings already use. Both
+> Trusted-tier-only at the ceiling — the loop driver fires
+> local `TriggerSource::Loop` turns, the same envelope as
+> reflection; a SemiTrusted remote adapter must not be able
+> to drive an autonomous code-committing loop. The
+> thirteen-tool substrate core (amendment A12) is
+> untouched.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 173 | `loop.next` | Autonomous Loop — read the next pending backlog story (the Ralph task-selection step). |
+| Phase 173 | `loop.complete` | Autonomous Loop — mark a backlog story Done (Trusted-tier-only at the ceiling, matching `mission.*` / `reflection.*`). |
+
+### Current full enumeration after Phase 173 (71 bases)
+
+The Phase 143 enumeration plus two new **infrastructure**
+bases (`loop.next`, `loop.complete`), so the infrastructure
+family grows 28 → 30:
+
+Total: 16 + 5 + 30 + 20 = 71.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —
