@@ -1442,6 +1442,8 @@ enum LoopSubcommand {
     Stop,
     /// `aivyx loop status`
     Status,
+    /// `aivyx loop log [--limit <n>]`
+    Log { limit: Option<u32> },
 }
 
 /// Phase 119 Task 6 — `aivyx tool-relevance <subcommand>` variants.
@@ -2179,6 +2181,39 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "list" => LoopSubcommand::List,
             "stop" => LoopSubcommand::Stop,
             "status" => LoopSubcommand::Status,
+            "log" => {
+                let mut limit: Option<u32> = None;
+                let mut idx = 2;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--limit" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--limit` requires a value".to_string()
+                            })?;
+                            let parsed: u32 = v.parse().map_err(|_| {
+                                format!(
+                                    "`--limit` expects a positive \
+                                     integer, got `{v}`"
+                                )
+                            })?;
+                            if parsed == 0 {
+                                return Err(
+                                    "`--limit` must be >= 1".to_string()
+                                );
+                            }
+                            limit = Some(parsed);
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx loop \
+                                 log`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                LoopSubcommand::Log { limit }
+            }
             "start" => {
                 let mut max_iterations: Option<u32> = None;
                 let mut idx = 2;
@@ -2217,14 +2252,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "" => {
                 return Err(
                     "`aivyx loop` requires a subcommand: add | list | \
-                     start | status | stop"
+                     start | status | stop | log"
                         .to_string(),
                 );
             }
             other => {
                 return Err(format!(
                     "unknown `aivyx loop` subcommand `{other}` \
-                     (expected: add | list | start | status | stop)"
+                     (expected: add | list | start | status | stop | log)"
                 ));
             }
         };

@@ -4850,6 +4850,9 @@ gate_command = "cargo test"  # the driver re-runs this to verify the tree
 gate_timeout_secs = 600      # optional, default 600 — kill + treat as red
 working_dir = "/path/to/repo"  # optional, default: the daemon's CWD
 max_run_secs = 7200          # optional — wall-clock cap, in seconds
+
+# Phase 175 — cross-iteration progress log.
+progress_inject_count = 20   # optional, default 20; 0 disables injection
 ```
 
 Then, with the daemon running:
@@ -4859,6 +4862,7 @@ aivyx loop start                      # run to backlog-done or a cap
 aivyx loop start --max-iterations 5   # lower the iteration cap for this run
 aivyx loop status                     # driver state, gate + cap config, backlog
 aivyx loop stop                       # end the run after the current iteration
+aivyx loop log [--limit N]            # the cross-iteration progress notes
 ```
 
 A run stops on exactly one condition: the backlog drains,
@@ -4903,10 +4907,27 @@ back the agent's commit when the gate fails — it halts the run
 and preserves the commit for you to inspect and revert. Damage
 is bounded to one iteration.
 
-Still deferred (Phase 175): a **token-budget per-run cap** and
-**progress-log auto-injection** (carrying prior-iteration
-learnings into each fresh context). Until those land, keep the
-caps conservative and supervise early runs.
+### Cross-iteration learning — the progress log (Phase 175)
+
+Each iteration runs in a **fresh context**, so without help it
+would re-learn the same things every time. The progress log
+fixes that: the canonical prompt directs the agent to record
+one-line learnings with the **`loop.note`** tool (a gotcha, a
+convention, where tests live), and the driver injects the last
+`progress_inject_count` notes (default 20) into the top of
+**every** subsequent iteration under a `## Progress so far`
+heading. Unlike embedding-based recall, this is deterministic —
+the notes are *always* in context.
+
+Notes are durable (they live in the memory substrate under the
+reserved `loop:progress` topic) and persist across runs, so
+knowledge about your codebase accumulates over time. Inspect
+them any time with `aivyx loop log`. Set
+`progress_inject_count = 0` to disable injection.
+
+Still deferred (Phase 176): a **token-budget per-run cap** (the
+last cap in the trio). Until it lands, keep `max_iterations` /
+`max_run_secs` conservative and supervise early runs.
 
 ## Tool observability (Phase 102)
 

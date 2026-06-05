@@ -734,6 +734,28 @@ pub async fn loop_status(
     }
 }
 
+/// Read the recent loop progress-log notes (most-recent-first).
+pub async fn loop_log(
+    socket_path: &Path,
+    limit: Option<u32>,
+) -> Result<Vec<String>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "loop-log",
+        QueryPayload::LoopLog { limit },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::LoopProgressLog { notes } => Ok(notes),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected LoopProgressLog, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

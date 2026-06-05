@@ -2889,6 +2889,23 @@ async fn handle_query(
                 max_run_secs: loop_config.and_then(|c| c.max_run_secs),
             }
         }
+        QueryPayload::LoopLog { limit } => {
+            let limit = limit.unwrap_or(50).max(1) as usize;
+            let notes = match memory {
+                Some(m) => m
+                    .get_recent(
+                        crate::loop_tool::LOOP_PROGRESS_TOPIC,
+                        limit,
+                    )
+                    .await
+                    .map(|entries| {
+                        entries.into_iter().map(|e| e.body).collect()
+                    })
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            QueryResponsePayload::LoopProgressLog { notes }
+        }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
             profile: profile_summary_from_profile(profile),
         },

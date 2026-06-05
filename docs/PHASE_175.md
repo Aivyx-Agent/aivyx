@@ -153,4 +153,57 @@ no new storage domain and no new workspace dependency.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 12 | Untouched (one new scope via the A3 amendment-file process; channel-tier tool; 13-tool core untouched) | ✅ |
+| PRODUCT.md HOLD → 66 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 12 | Untouched | ✅ |
+| Zero new workspace deps | Reused the memory substrate, the loop-tool pattern, the driver's prompt assembly — no new storage domain, no new dep | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+12` to `+22` | **`+11`** (loop.note 3 + config 1 + driver render/read 6 + cli 1); workspace ~4,088 → ~4,099 | ❌ **one below band** |
+
+**Honest miss (by one).** Predicted the tightened `+12..+22`,
+landed `+11` — one shy. The Phase 174 retro correctly called
+that loop phases land low, but `+12..+22` was still slightly
+high: the testable surface here is exactly the tool + the two
+pure helpers (`render_progress_block` / `build_iteration_prompt`)
++ the `read_progress_notes` read-path + config, while the
+injection's effect on a real turn is again integration glue over
+`TriggerDispatch` (covered transitively). The empirical band for
+these glue-heavy loop phases is now clearly **`+10..+16`** — a
+better prior than I've been using.
+
+The capability closed end-to-end:
+
+1. **`loop.note` tool + scope** (Task 2). A channel-tier tool
+   owning the reserved `loop:progress` memory topic; new
+   `loop.note` Trusted-tier base (A3 71 → 72).
+2. **Render + config + prompt** (Task 3).
+   `[loop].progress_inject_count` (default 20; 0 disables); pure
+   `render_progress_block` (oldest-first, blank-skipping) +
+   `build_iteration_prompt`; `LOOP_SYSTEM_PROMPT` now names
+   `loop.note`.
+3. **Driver injection** (Task 4). `run_loop_driver` reads the
+   last-N notes (`read_progress_notes`, best-effort) and fires
+   each iteration with the progress block prepended.
+4. **Surface** (Task 5). `aivyx loop log [--limit N]` over a new
+   IPC pair; INSTALL section.
+
+### Honest-debt status carried forward (Phase 176)
+
+- **Token-budget per-run cap** — the last cap in the trio
+  (max_iterations + wall-clock + spend).
+- **Last-N by recency, not relevance**; **no de-duplication**;
+  **the agent must call `loop.note`** — all documented at entry,
+  all unchanged.
+- Sixty-fourth consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result
+
+The loop now does the thing that makes Ralph work: it
+**accumulates knowledge across iterations**. A learning recorded
+in iteration 3 is unconditionally in front of iteration 4's
+fresh context — durably, across runs — so a long backlog gets
+*easier* as it goes instead of re-paying the same discovery
+cost every turn. No new dependency, no broken streak.

@@ -256,6 +256,13 @@ pub enum QueryPayload {
     LoopStop,
     /// Phase 173 — read the loop run state + remaining backlog.
     LoopStatus,
+    /// Phase 175 — read the recent loop progress-log notes
+    /// (operator parity with what the driver injects). `limit =
+    /// None` → a default window.
+    LoopLog {
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -552,6 +559,11 @@ pub enum QueryResponsePayload {
         /// `#[serde(default)]` so pre-174 frames decode.
         #[serde(default)]
         max_run_secs: Option<u64>,
+    },
+    /// Phase 175 — response to [`QueryPayload::LoopLog`]. Recent
+    /// progress notes, most-recent-first.
+    LoopProgressLog {
+        notes: Vec<String>,
     },
 }
 

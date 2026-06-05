@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, loop_add, loop_list, loop_start, loop_status,
-    loop_stop,
+    daemon_is_running, loop_add, loop_list, loop_log, loop_start,
+    loop_status, loop_stop,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::loop_backlog::{Story, StoryStatus};
@@ -82,7 +82,32 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
             );
             Ok(())
         }
+        LoopSubcommand::Log { limit } => {
+            let notes = loop_log(&socket_path, limit)
+                .await
+                .map_err(|e| format!("loop log failed: {e}"))?;
+            print!("{}", render_log(&notes));
+            Ok(())
+        }
     }
+}
+
+/// Pure renderer — the progress log, oldest-first (the order the
+/// agent learned them), matching how the driver injects them.
+fn render_log(notes: &[String]) -> String {
+    if notes.is_empty() {
+        return "Loop progress log is empty. The agent records \
+                learnings with `loop.note` during a run.\n"
+            .to_string();
+    }
+    let mut out =
+        format!("Loop progress log ({} note(s), oldest first):\n", notes.len());
+    for note in notes.iter().rev() {
+        out.push_str("  - ");
+        out.push_str(note.trim());
+        out.push('\n');
+    }
+    out
 }
 
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
@@ -281,5 +306,21 @@ mod tests {
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
         assert!(out.contains("gate verification: off"));
         assert!(out.contains("wall-clock cap: none"));
+    }
+
+    #[test]
+    fn log_empty_and_oldest_first() {
+        assert!(render_log(&[]).contains("empty"));
+        // Notes arrive newest-first; render oldest-first.
+        let notes = vec![
+            "newest".to_string(),
+            "middle".to_string(),
+            "oldest".to_string(),
+        ];
+        let out = render_log(&notes);
+        assert!(out.contains("3 note(s)"));
+        let oldest = out.find("oldest").unwrap();
+        let newest = out.find("newest").unwrap();
+        assert!(oldest < newest);
     }
 }
