@@ -717,16 +717,87 @@ where
                     }
                 }
                 line = line_rx.recv() => {
-                    // Operator pressed Enter
-                    // mid-recording (or stdin
-                    // closed). Either way → manual
-                    // stop. We dispatch whatever
-                    // samples we've collected.
-                    stopped_reason = match line {
-                        Some(_) => "manual",
-                        None => "stdin-closed",
-                    };
-                    break;
+                    // Phase 170 — mid-recording
+                    // `/image <path>` queues the
+                    // attachment and continues
+                    // recording instead of stopping.
+                    // Pre-170 ANY line stopped with
+                    // stopped_reason="manual".
+                    match line {
+                        None => {
+                            stopped_reason = "stdin-closed";
+                            break;
+                        }
+                        Some(ref l) if mid_recording_image_command(l) => {
+                            let global_cfg = &channel.config().image;
+                            let rest = l.trim_start_matches("/image ").trim();
+                            let (path_or_url, preset_name) =
+                                match parse_image_command_args(rest) {
+                                    Ok(parts) => parts,
+                                    Err(reason) => {
+                                        eprintln!(
+                                            "[voice] /image: {reason}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                            let effective_cfg;
+                            let cfg_ref: &VoiceImageConfig = match preset_name
+                            {
+                                None => global_cfg,
+                                Some(name) => match global_cfg
+                                    .url_header_presets
+                                    .get(name)
+                                {
+                                    Some(preset) => {
+                                        effective_cfg = VoiceImageConfig {
+                                            url_headers: preset.clone(),
+                                            ..global_cfg.clone()
+                                        };
+                                        &effective_cfg
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "[voice] /image: unknown preset \
+                                             {name:?}"
+                                        );
+                                        continue;
+                                    }
+                                },
+                            };
+                            match load_image_for_attach(path_or_url, cfg_ref)
+                                .await
+                            {
+                                Ok((media_type, data)) => {
+                                    eprintln!(
+                                        "[voice] image queued mid-record: \
+                                         {} ({} bytes, {})",
+                                        path_or_url,
+                                        data.len(),
+                                        media_type,
+                                    );
+                                    channel.append_pending_image(media_type, data);
+                                }
+                                Err(reason) => {
+                                    eprintln!(
+                                        "[voice] image attach failed: {reason}"
+                                    );
+                                }
+                            }
+                            // Continue recording —
+                            // the image is queued for
+                            // this turn.
+                            continue;
+                        }
+                        Some(_) => {
+                            // Operator pressed Enter
+                            // mid-recording. Manual
+                            // stop; dispatch whatever
+                            // samples we've collected.
+                            stopped_reason = "manual";
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1492,6 +1563,16 @@ async fn head_precheck_size(
     } else {
         Ok(None)
     }
+}
+
+/// Phase 170 — true iff a line received mid-
+/// recording is a `/image <path>` command
+/// (rather than an empty Enter or other text).
+/// Pure substrate so the predicate can be
+/// tested without going through the full
+/// session loop.
+pub(crate) fn mid_recording_image_command(line: &str) -> bool {
+    line.starts_with("/image ") && !line.trim_start_matches("/image ").is_empty()
 }
 
 /// Phase 165 — parse the `/image` command's
@@ -2628,6 +2709,43 @@ url_retry_jitter_ms = 250
         let v = backoff_with_jitter(100, 0, 50);
         let range = 50u64..=150u64;
         assert!(range.contains(&v));
+    }
+
+    // ---- Phase 170 — mid-recording /image ----
+
+    #[test]
+    fn mid_recording_image_command_detects_image_with_path() {
+        assert!(mid_recording_image_command("/image foo.png"));
+        assert!(mid_recording_image_command("/image https://x.com/a.png"));
+        assert!(mid_recording_image_command(
+            "/image foo.png --headers work"
+        ));
+    }
+
+    #[test]
+    fn mid_recording_image_command_rejects_empty_enter() {
+        // Empty line = manual stop, NOT an
+        // image command.
+        assert!(!mid_recording_image_command(""));
+    }
+
+    #[test]
+    fn mid_recording_image_command_rejects_other_commands() {
+        assert!(!mid_recording_image_command("quit"));
+        assert!(!mid_recording_image_command("/help"));
+        assert!(!mid_recording_image_command("hello world"));
+    }
+
+    #[test]
+    fn mid_recording_image_command_rejects_image_no_args() {
+        // `/image` alone (no space, no path)
+        // isn't a queue command; falls through
+        // to manual-stop semantics.
+        assert!(!mid_recording_image_command("/image"));
+        // `/image ` with no path also isn't
+        // valid — we treat as manual-stop
+        // rather than silently ignoring.
+        assert!(!mid_recording_image_command("/image "));
     }
 
     #[test]
