@@ -159,6 +159,48 @@ pub fn detect_corrections(
     tally
 }
 
+/// Phase 179 — the key prefix for a tool-attributed correction
+/// in the shared correction ledger. Keeps the `tool:` namespace
+/// distinct from recalled-topic keys so the two never collide.
+pub const TOOL_CORRECTION_PREFIX: &str = "tool:";
+
+/// Phase 179 — **outcome-driven** tool correction attribution.
+/// For each `completed` turn followed quickly by another
+/// same-session turn (the Phase 172 correction proxy), count the
+/// turn's distinct tools, keyed `tool:<scope_base>`.
+///
+/// Unlike [`detect_corrections`] (which is recall-driven and so
+/// only sees turns that fired auto-recall), this walks the
+/// outcomes directly — so it attributes corrections on
+/// **no-recall turns** too, using the tools surfaced on
+/// `OutcomeSummary` (Phase 179). Same exclusions as the topic
+/// detector: only `completed`-then-rapid-followup fires;
+/// failed / escalated / cancelled never do.
+///
+/// Pure + deterministic. A corrected turn that used no tools
+/// contributes nothing.
+pub fn detect_tool_corrections(
+    outcomes: &[OutcomeSummary],
+) -> CorrectionTally {
+    let mut tally = CorrectionTally::default();
+    for outcome in outcomes {
+        if outcome.outcome_kind != "completed" {
+            continue;
+        }
+        if crate::recall_feedback::followup_outcome(outcome, outcomes)
+            .is_none()
+        {
+            continue;
+        }
+        // `OutcomeSummary.tools` is already distinct (the builder
+        // dedups); one count per tool per corrected turn.
+        for tool in &outcome.tools {
+            tally.add(&format!("{TOOL_CORRECTION_PREFIX}{tool}"));
+        }
+    }
+    tally
+}
+
 /// Phase 178 — one correction event with the context the
 /// correction-judgment pass needs: the corrected turn's distinct
 /// non-cluster topics (what folds, if the judge says `Rework`)
@@ -549,6 +591,85 @@ mod tests {
             outcome(&sid, "t1", 106_000, 1_000, "completed"),
         ];
         assert!(detect_corrections_detailed(&recalls, &failed).is_empty());
+    }
+
+    // ---- Phase 179 — tool correction attribution -------------
+
+    fn outcome_with_tools(
+        session: &str,
+        turn: &str,
+        start_ms: u64,
+        dur_ms: u64,
+        kind: &str,
+        tools: &[&str],
+    ) -> OutcomeSummary {
+        let mut o = outcome(session, turn, start_ms, dur_ms, kind);
+        o.tools = tools.iter().map(|t| t.to_string()).collect();
+        o
+    }
+
+    #[test]
+    fn tool_corrections_attribute_to_no_recall_turn_tools() {
+        // A corrected turn that fired NO recall (so the recall-
+        // driven detector misses it) but used gmail.send + fs.read.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let outcomes = [
+            outcome_with_tools(
+                &sid, "t0", 100_000, 1_000, "completed",
+                &["gmail.send", "fs.read"],
+            ),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        let tally = detect_tool_corrections(&outcomes);
+        assert_eq!(tally.count("tool:gmail.send"), 1);
+        assert_eq!(tally.count("tool:fs.read"), 1);
+        assert_eq!(tally.len(), 2);
+        // And the recall-driven topic detector sees nothing (no
+        // recall events at all) — proving the broadening.
+        assert!(detect_corrections(&[], &outcomes).is_empty());
+    }
+
+    #[test]
+    fn tool_corrections_skip_clean_failed_and_no_tools() {
+        let s = SessionId::new();
+        let sid = s.to_string();
+        // Clean completion (no quick follow-up) → nothing.
+        let clean = [outcome_with_tools(
+            &sid, "t0", 100_000, 2_000, "completed", &["fs.read"],
+        )];
+        assert!(detect_tool_corrections(&clean).is_empty());
+        // Failed turn with a quick follow-up → not a correction.
+        let failed = [
+            outcome_with_tools(
+                &sid, "t0", 100_000, 1_000, "failed", &["fs.read"],
+            ),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        assert!(detect_tool_corrections(&failed).is_empty());
+        // Corrected turn that used no tools → nothing.
+        let no_tools = [
+            outcome(&sid, "t0", 100_000, 1_000, "completed"),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+        ];
+        assert!(detect_tool_corrections(&no_tools).is_empty());
+    }
+
+    #[test]
+    fn tool_corrections_count_per_corrected_turn() {
+        // fs.read used in TWO separate corrected turns → 2.
+        let s = SessionId::new();
+        let sid = s.to_string();
+        let outcomes = [
+            outcome_with_tools(&sid, "t0", 100_000, 1_000, "completed", &["fs.read"]),
+            outcome(&sid, "t1", 106_000, 1_000, "completed"),
+            outcome_with_tools(&sid, "t2", 300_000, 1_000, "completed", &["fs.read"]),
+            outcome(&sid, "t3", 306_000, 1_000, "completed"),
+        ];
+        assert_eq!(
+            detect_tool_corrections(&outcomes).count("tool:fs.read"),
+            2
+        );
     }
 
     #[test]
