@@ -75,6 +75,16 @@ pub struct CalendarClient {
     /// read time; the cache never grows beyond a
     /// single tuple (one operator per process).
     writable_calendars_cache: WritableCalendarsCache,
+    /// Phase 171 — operator-tunable TTL for the
+    /// writable_calendars cache. Defaults to
+    /// [`WRITABLE_CALENDARS_CACHE_TTL`] (300s,
+    /// matching Phase 158). Operators with
+    /// rapidly-changing calendar lists
+    /// (workspace admin scenarios) can shorten
+    /// it via [`with_writable_calendars_cache_ttl`]
+    /// or the env var
+    /// `AIVYX_CALENDAR_CACHE_TTL_SECS`.
+    writable_calendars_cache_ttl: Duration,
 }
 
 /// Phase 158 — type alias for the writable-
@@ -83,13 +93,34 @@ pub struct CalendarClient {
 /// keeps clippy's `type_complexity` lint happy.
 type WritableCalendarsCache = Arc<Mutex<Option<(Instant, Vec<String>)>>>;
 
-/// Phase 158 — TTL for the writable_calendars
-/// cache. 5 minutes is long enough that a
-/// multi-tool-call session amortizes the round
-/// trip and short enough that an operator who
-/// gains a new calendar mid-session waits at
-/// most one TTL window before it surfaces.
+/// Phase 158 — default TTL for the
+/// writable_calendars cache. 5 minutes is long
+/// enough that a multi-tool-call session
+/// amortizes the round trip and short enough
+/// that an operator who gains a new calendar
+/// mid-session waits at most one TTL window
+/// before it surfaces. Phase 171 promotes
+/// this from the load-bearing TTL to the
+/// named default; operators tune via the
+/// builder or env var.
 pub const WRITABLE_CALENDARS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Phase 171 — read the env-var override for
+/// the cache TTL or fall back to the default.
+/// Pure substrate so the env-var resolution
+/// can be tested. Same posture as Phase 166's
+/// `pdf_page_cap_from_env_or_default` —
+/// non-numeric and zero values fall back to
+/// the default.
+fn cache_ttl_from_env_or_default() -> Duration {
+    match std::env::var("AIVYX_CALENDAR_CACHE_TTL_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(n) if n >= 1 => Duration::from_secs(n),
+            _ => WRITABLE_CALENDARS_CACHE_TTL,
+        },
+        Err(_) => WRITABLE_CALENDARS_CACHE_TTL,
+    }
+}
 
 impl CalendarClient {
     /// Build a `CalendarClient` from the operator-loaded
@@ -110,7 +141,20 @@ impl CalendarClient {
             token_path,
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
             writable_calendars_cache: Arc::new(Mutex::new(None)),
+            writable_calendars_cache_ttl: cache_ttl_from_env_or_default(),
         }
+    }
+
+    /// Phase 171 — override the writable
+    /// calendars cache TTL. Takes precedence
+    /// over the env-var fallback applied in
+    /// `new`.
+    pub fn with_writable_calendars_cache_ttl(
+        mut self,
+        ttl: Duration,
+    ) -> Self {
+        self.writable_calendars_cache_ttl = ttl;
+        self
     }
 
     /// Test-only constructor that lets tests point the
@@ -130,6 +174,7 @@ impl CalendarClient {
             token_path,
             token_endpoint: token_endpoint.into(),
             writable_calendars_cache: Arc::new(Mutex::new(None)),
+            writable_calendars_cache_ttl: cache_ttl_from_env_or_default(),
         }
     }
 
@@ -244,7 +289,7 @@ impl CalendarClient {
         {
             let guard = self.writable_calendars_cache.lock().await;
             if let Some((populated_at, ref ids)) = *guard {
-                if populated_at.elapsed() < WRITABLE_CALENDARS_CACHE_TTL {
+                if populated_at.elapsed() < self.writable_calendars_cache_ttl {
                     return Ok(ids.clone());
                 }
             }
@@ -500,5 +545,95 @@ mod tests {
             ),
             Err(_) => { /* expected: network unreachable */ }
         }
+    }
+
+    // ---- Phase 171 — cache TTL knob ----
+
+    #[test]
+    fn cache_ttl_default_matches_constant() {
+        let client = make_client();
+        // Field is private to the impl; pin
+        // via the env-helper that new() uses.
+        assert_eq!(
+            cache_ttl_from_env_or_default(),
+            WRITABLE_CALENDARS_CACHE_TTL
+        );
+        // Indirect pin: the client's field
+        // would equal the default when no env
+        // override is set. Verified via the
+        // builder-override test below.
+        drop(client);
+    }
+
+    #[test]
+    fn cache_ttl_builder_override_takes_effect() {
+        let client = make_client()
+            .with_writable_calendars_cache_ttl(Duration::from_secs(60));
+        // Indirect verification: peek at the
+        // cache after seeding fresh and verify
+        // a sufficiently-old populated_at
+        // expires.
+        let client = std::sync::Arc::new(client);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // 90 seconds ago — past the
+            // overridden 60s TTL.
+            let stale_at = Instant::now()
+                .checked_sub(Duration::from_secs(90))
+                .expect("Instant arithmetic safe");
+            client
+                .writable_calendars_cache_seed_at(
+                    stale_at,
+                    vec!["stale@example.com".to_string()],
+                )
+                .await;
+            // The builder-overridden TTL is
+            // 60s; 90s elapsed should be
+            // treated as expired by
+            // writable_calendar_ids.
+            let result = client.writable_calendar_ids().await;
+            match result {
+                Ok(ids) => assert_ne!(
+                    ids,
+                    vec!["stale@example.com".to_string()],
+                    "60s-TTL override didn't expire 90s-old cache"
+                ),
+                Err(_) => { /* network unreachable in test */ }
+            }
+        });
+    }
+
+    #[test]
+    fn cache_ttl_env_var_overrides_default() {
+        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        unsafe { std::env::set_var(key, "60") };
+        let ttl = cache_ttl_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(ttl, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn cache_ttl_env_var_invalid_falls_back_to_default() {
+        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        unsafe { std::env::set_var(key, "not a number") };
+        let ttl = cache_ttl_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(ttl, WRITABLE_CALENDARS_CACHE_TTL);
+    }
+
+    #[test]
+    fn cache_ttl_env_var_zero_falls_back_to_default() {
+        // Zero would effectively disable the
+        // cache. Treating as invalid prevents
+        // operator surprise; same posture as
+        // Phase 166's PDF cap env-var.
+        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        unsafe { std::env::set_var(key, "0") };
+        let ttl = cache_ttl_from_env_or_default();
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(ttl, WRITABLE_CALENDARS_CACHE_TTL);
     }
 }
