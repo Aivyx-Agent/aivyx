@@ -3535,6 +3535,19 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 169 — Phase 166 + 167 Retry/Filter Refinements (Actor Filter + 503/429 Retry + Jitter)
+
+**See [PHASE_169.md](PHASE_169.md).** Three small
+substrate follow-ons: Phase 167's lone open
+carry-over (actor_email post-fetch filter on
+drive.recent_activity), Phase 166's 503/429
+retry classification (extending send_with_retry
+beyond the err-only path), and Phase 166's
+backoff jitter (using stdlib SystemTime nanos
+as PRNG source — no new dep). Closes one Phase
+167 carry-over and two Phase 166 carry-overs.
+Zero new workspace deps.
+
 ## Phase 168 — Phase 161 + 165 Stragglers (Read-Stalled-Bytes Timeout + Catalog-Aware PDF Page Count)
 
 **Frozen — see [PHASE_168.md](PHASE_168.md).** Two unrelated
