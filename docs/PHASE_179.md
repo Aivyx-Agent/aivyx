@@ -140,4 +140,61 @@ deferred **Channel Activation Milestone**.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 16 | Untouched (a field on an internal type + a detector + a config knob; no scope/tool/`KeyDomain`/wire contract) | ✅ |
+| PRODUCT.md HOLD → 70 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 16 | Untouched | ✅ |
+| Zero new workspace deps | Read the audit chain + reused the correction ledger/fold | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+14` to `+24` | **`+8`** (builder 3 + detector 3 + fold 1 + config 1); workspace ~4,131 → ~4,139 | ❌ **below band** |
+
+**Prediction note — the band needs finer granularity than
+"substrate vs loop."** I used the reflection-substrate band
+(`+14..+24`) because this was a substrate phase, not a loop
+phase — and missed low by 6. The honest diagnosis: 172 (+33) and
+178 (+21) landed high because they each shipped **dense-test
+components** — a tolerant LLM-output *parser* (≈8 tests on its
+own) and/or a new *IPC surface* (the learning-stat plumbing,
+many fixture round-trips). Phase 179 had **neither**: it
+augments an existing builder, adds one small pure detector, and
+threads a single config bool. That profile is closer to
+`+6..+12` — between the loop band and the substrate band. The
+refined rule: **price the band from the dense-test components a
+phase actually contains** (new parser? new wire/IPC surface? new
+HMAC/round-trip substrate?), not from a coarse "substrate"
+label. A substrate phase with none of those is light.
+
+What shipped, end-to-end:
+
+1. **`OutcomeSummary.tools` + builder + prompt** (Task 2). The
+   audit-walker collects each turn's distinct `ToolCall` scope
+   bases (restart-safe — no `tool_id` map);
+   `format_summaries_for_prompt` renders `tools=[...]` so the
+   reflection LLM sees what each turn did.
+2. **`detect_tool_corrections`** (Task 3). Outcome-driven,
+   `tool:`-namespaced; sees no-recall turns the recall-driven
+   detector misses.
+3. **`[correction_signal].attribute_tools` + additive fold**
+   (Task 4). Opt-in; folds tool keys **outside** the
+   recalls-non-empty gate so no-recall turns actually land. Off
+   → byte-identical Phase 172/178.
+
+### Honest-debt status carried forward
+
+- **Tool corrections aren't LLM-judged** — a no-recall turn has
+  no captured follow-up query, so they always fold structurally.
+- **The surfaced identifier is the scope base, not the
+  advertised name** (`web.fetch` → `net.fetch`).
+- **`tool:` rows appear in `aivyx learning`** when opted in.
+- Sixty-eighth consecutive deferral of the Channel Activation
+  Milestone.
+
+### The result
+
+The reflection family now carries per-turn **tool context** — in
+the LLM's prompt and, opt-in, in the correction signal — closing
+the "no-recall turns are invisible" gap the Phase 172/178 arc
+kept flagging. Built from the audit chain it already had, with
+no new dependency and an unbroken DESIGN / PRODUCT / `lib.rs`
+streak.

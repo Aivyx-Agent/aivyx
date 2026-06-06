@@ -4828,10 +4828,28 @@ unrelated / structural` counts.
 > gains query content. `[correction_judgment]` off → no query
 > text is captured beyond what auto-recall already needs.
 
-Corrections are still attributed only to the topics recalled
-into the corrected turn (a turn with no recall is invisible) —
-broadening that (tool/topic surfacing in `OutcomeSummary`)
-remains a future item.
+By default, corrections are attributed only to the topics
+recalled into the corrected turn — so a turn that fired no
+auto-recall is invisible to the signal.
+
+**Tool correction attribution (Phase 179).** Closing that gap,
+the reflection cron now surfaces each turn's **tools** on its
+outcome summary (the stable scope base of every `ToolCall` —
+`fs.read`, `gmail.send` — which the reflection LLM also sees in
+its prompt). Opt in to attribute corrections to those tools:
+
+```toml
+[correction_signal]
+attribute_tools = true
+```
+
+When on, the correction fold also counts the corrected turn's
+tools, keyed `tool:<scope_base>`, **driven by the outcome chain
+rather than the recall log** — so it catches the no-recall
+turns the topic attribution misses. The `tool:` keys are
+namespaced (they never collide with topic keys) and show up in
+`aivyx learning`'s accumulated corrections. Off → the ledger is
+topic-only (byte-identical to Phase 172).
 
 ## Autonomous loop — the Aivyx Ralph loop (Phase 173)
 
