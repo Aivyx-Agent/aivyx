@@ -61,6 +61,9 @@ pub mod correction_ledger;
 /// list (the `prd.json` analog) the loop driver works through
 /// one fresh-context iteration at a time.
 pub mod loop_backlog;
+/// Phase 183 — durable one-shot reminder store + the pure
+/// `due_now` selector (everyday-PA breadth #1).
+pub mod reminder_store;
 /// Phase 173 — the autonomous-loop backlog agent tools
 /// (`loop.next` / `loop.complete`), channel-tier like
 /// `mission.*`. The only new agent-facing surface the loop

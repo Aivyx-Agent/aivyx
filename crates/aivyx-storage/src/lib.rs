@@ -193,6 +193,12 @@ pub enum KeyDomain {
     /// loop backlog, never persona, missions, or any learning
     /// ledger.
     LoopBacklog,
+    /// One-shot reminders (Phase 183). One row per pending
+    /// reminder — `due_unix`, `message`, optional notify targets
+    /// — set by `remind.set`, fired + cleared by the reminder
+    /// driver. Isolated so a corrupt row degrades only reminders,
+    /// never schedules, missions, or any learning ledger.
+    Reminders,
 }
 
 impl KeyDomain {
@@ -223,6 +229,7 @@ impl KeyDomain {
             KeyDomain::ToolRelevanceLedger => b"tool-relevance-ledger",
             KeyDomain::CorrectionLedger => b"correction-ledger",
             KeyDomain::LoopBacklog => b"loop-backlog",
+            KeyDomain::Reminders => b"reminders",
         }
     }
 
@@ -260,12 +267,13 @@ impl KeyDomain {
                 "aivyx_correction_ledger_v1"
             }
             KeyDomain::LoopBacklog => "aivyx_loop_backlog_v1",
+            KeyDomain::Reminders => "aivyx_reminders_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 19] = [
+    pub const ALL: [KeyDomain; 20] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -285,6 +293,7 @@ impl KeyDomain {
         KeyDomain::ToolRelevanceLedger,
         KeyDomain::CorrectionLedger,
         KeyDomain::LoopBacklog,
+        KeyDomain::Reminders,
     ];
 }
 
@@ -470,7 +479,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 19],
+    subkeys: [SubKey; 20],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -547,7 +556,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 19], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 20], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -579,6 +588,7 @@ impl RedbStorage {
                 KeyDomain::CorrectionLedger.as_bytes(),
             )?,
             master.derive_subkey(KeyDomain::LoopBacklog.as_bytes())?,
+            master.derive_subkey(KeyDomain::Reminders.as_bytes())?,
         ])
     }
 
@@ -606,6 +616,7 @@ impl RedbStorage {
             KeyDomain::ToolRelevanceLedger => &self.subkeys[16],
             KeyDomain::CorrectionLedger => &self.subkeys[17],
             KeyDomain::LoopBacklog => &self.subkeys[18],
+            KeyDomain::Reminders => &self.subkeys[19],
         }
     }
 }
@@ -1030,7 +1041,8 @@ mod tests {
                 | KeyDomain::CooccurrenceLedger
                 | KeyDomain::ToolRelevanceLedger
                 | KeyDomain::CorrectionLedger
-                | KeyDomain::LoopBacklog => {}
+                | KeyDomain::LoopBacklog
+                | KeyDomain::Reminders => {}
             }
         }
     }
