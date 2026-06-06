@@ -147,4 +147,53 @@ visible, reversible event, not a silent identity change.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 21 | Untouched (channel-tier tools + one `skills.write` base via A3; 13-tool cap untouched) | ✅ |
+| PRODUCT.md HOLD → 75 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 21 | Untouched (edit tools are channel-tier; core `skills.list/invoke` untouched) | ✅ |
+| Zero new workspace deps | reused the persona chain + capability + sha256 | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+12` to `+20` | **`+11`** (skill_edit 6 + skill_tool 4 + prompt 1); ~4,195 → ~4,206 | ⚠️ **one below band** |
+
+**Band note — a near-hit, low by one.** Component-pricing put
+this at `+12..+20` (delta builders ~6, three tools ~8, guidance
+~2). It landed `+11`: the builders + guidance were on target, but
+I wrote the tool tests **denser** than estimated — one
+round-trip covering teach→update→forget, one unconfirmed-reject,
+one duplicate/missing-reject, one scope = 4, not ~8. So the
+estimate's *shape* was right (no coarse-label regression like
+Phase 183); I just under-counted by consolidating. A clean miss
+of one, recorded honestly.
+
+What shipped, end-to-end:
+
+1. **`skills.write` base + pure builders** (T2). `teach_op` /
+   `forget_op` / `update_ops` / `merged_skill` /
+   `find_skill_by_name` / `validate_skill_name`, unit-tested
+   without a chain.
+2. **The three tools** (T3). `skills.teach` / `update` / `forget`
+   read the current skill set, require `confirmed: true`, append
+   `LearnedSkill` deltas to the persona chain, recompute the
+   effective persona.
+3. **Confirm-first guidance** (T4). The tool contract enforces
+   it always (the `confirmed` field); the skills prompt section
+   reinforces it; INSTALL documents the flow.
+
+### Honest scope risks at sign-off
+
+- **The `confirmed` gate is a protocol, not a second human
+  approval** — the safeguards are Trusted-tier + audit + revert.
+- **Find-by-name is exact** — a near-miss lists the available
+  names rather than guessing.
+- **Capture quality is the agent's** — the in-chat confirmation
+  + `skills.update` are the corrections.
+
+### The result
+
+Chapter H is **complete**. The "fully customizable" promise is
+realized end-to-end: Profile (Phase 181 guided builder), Persona
+(reflection-grown), Roles, and now **skills the End User teaches
+in conversation** — all user-shaped, on the existing HMAC persona
+chain, with the 13-tool substrate cap untouched and an unbroken
+DESIGN / PRODUCT / `lib.rs` streak across the whole chapter.

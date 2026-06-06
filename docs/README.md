@@ -241,7 +241,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 | Phase 181 | Frozen | [PHASE_181.md](PHASE_181.md) | `fc8eafe`  |
 | Phase 182 | Frozen | [PHASE_182.md](PHASE_182.md) | `c600ab0`  |
 | Phase 183 | Frozen | [PHASE_183.md](PHASE_183.md) | `b9e59d0`  |
-| Phase 184 | Active | [PHASE_184.md](PHASE_184.md) | _pending_  |
+| Phase 184 | Frozen | [PHASE_184.md](PHASE_184.md) | _pending_  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
