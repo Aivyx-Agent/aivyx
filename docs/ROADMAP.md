@@ -3593,13 +3593,74 @@ unbroken DESIGN / PRODUCT / `lib.rs` streak across the chapter.
   Discord / Slack / Telegram. Scheduled after the phase sequence
   settles.
 
-**What's next.** With Chapter H complete, the open directions are
-the everyday-PA breadth continuation (weather / contacts / news),
-the dep-requiring hardenings (cryptographic PRNG / PDF parser —
-both break the long zero-new-dependency streak), cutting
-`v0.1.0` (gated on the external hosting decision), and the
-long-deferred Channel Activation Milestone — picked at the next
-phase open by operator pressure.
+**What's next.** With Chapter H complete, the chosen next axis is
+**interface & reach** — see Chapter I below. (Other open
+directions remain on the shelf: the everyday-PA breadth
+continuation, the dep-requiring substrate hardenings, cutting
+`v0.1.0`, and the Channel Activation Milestone.)
+
+## Chapter I — Interface & Reach (Phases 185+)
+
+How the End User **connects to, interacts with, launches, and
+runs** their Aivyx Agent. The load-bearing framing (DESIGN /
+PRODUCT P5): there is exactly **one daemon** — it holds the
+agent, state, capabilities, and audit — and every interface is a
+**frontend client** that connects over the local Unix-socket IPC
+and detaches (the daemon survives any frontend exiting). So this
+chapter is not "build a UI" — it is **richer frontends + the
+launch/run lifecycle around the daemon.**
+
+Today's surface: a plain line-based REPL; a localhost-only Web UI
+SPA (Chat / Audit / Verify / Memory / Mission / Persona tabs, but
+feature-stale — no loop / reminders / skills / connect / identity,
+and no auth); the Telegram / Discord / Slack / voice channels
+(the only remote reach); and auto-spawn launch with manual
+systemd/launchd wiring.
+
+**Operator-chosen direction:**
+
+- **Local-first preserved.** No networked remote access — the
+  threat model (Unix socket `0600` + OS-user isolation) is
+  untouched; reaching the agent from another device stays the
+  job of the existing messaging channels.
+- **Headline frontend: a rich terminal TUI** (replacing the
+  REPL).
+- **Productize launch/run:** `aivyx service install` (always-on
+  daemon) + a first-run launch flow.
+
+> **A deliberate streak break.** A real TUI needs a terminal-UI
+> library — **`ratatui` + `crossterm`** (operator-confirmed). This
+> consciously **ends the zero-new-workspace-dependency streak**
+> held across the entire 172–184 run. The judgment: a load-bearing,
+> widely-audited, pure-Rust dependency for a feature that genuinely
+> requires it is the right trade — and it is **quarantined to the
+> TUI frontend** (a dedicated crate), so the substrate crates
+> (`aivyx-core`, `aivyx-capability`, …) stay dependency-clean.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 185 — Terminal TUI foundation.** Replace the REPL with
+  a `ratatui`/`crossterm` frontend over the daemon IPC: streaming
+  chat pane + scrollback, an input line, a status bar
+  (role / daemon / in-flight), clean keybindings. The agent's
+  data already flows over IPC — this is the render + interaction
+  layer. The new deps live in a dedicated frontend crate.
+- **Phase 186 — TUI state panels.** Side/overlay views the IPC
+  already serves — mission, loop status, reminders, recent audit
+  — so the agent's state is visible in-terminal, not just chat.
+  (May fold into 185 if scoped tightly.)
+- **Phase 187 — Service install + first-run launch.** `aivyx
+  service install` generates a systemd/launchd unit (run at
+  login/boot); the `init` wizard ends by offering to install +
+  launch. Turnkey "install once, always there." No new
+  dependency.
+- **Phase 188+ — Web UI feature-parity refresh.** Dependency-free:
+  bring the localhost SPA up to Chapter F–H (loop, reminders,
+  skills, connect, identity) + polish + mobile-responsive.
+  Broadens reach for non-terminal users.
+
+Subsequent phases (and whether 185/186 merge) are chosen at each
+exit; ordering revised as each exit teaches us something.
 
 ## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
 
