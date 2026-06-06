@@ -3662,6 +3662,30 @@ systemd/launchd wiring.
 Subsequent phases (and whether 185/186 merge) are chosen at each
 exit; ordering revised as each exit teaches us something.
 
+**Known follow-ups (carried from the Phase 185 real-session
+verify):**
+
+- **Daemon banner bleed on auto-spawn.** When a frontend
+  auto-spawns the daemon (the TUI *and* the REPL both do this), the
+  daemon's startup banner — `aivyx config sources…`, `… listening
+  on …/daemon.sock`, the webhook line — prints onto the launching
+  terminal, where in the TUI it briefly bleeds under the alternate
+  screen. The daemon inherits the frontend's controlling TTY; the
+  fix is to detach the auto-spawned daemon's stdout/stderr (e.g.
+  redirect to a log file or `/dev/null`) in `spawn_daemon_and_wait`.
+  Pre-existing to Phase 185 (not a TUI-logic bug), but most visible
+  in the TUI — a natural fit for the **Phase 187** launch/run
+  lifecycle work, or sooner if a TUI phase touches launch. Cosmetic;
+  the session itself is unaffected.
+- **`Broken pipe` from the daemon connection handler.** One
+  `connection handler error: io error: Broken pipe` was logged
+  during the connect→(spawn)→connect→disconnect dance of a fresh
+  TUI launch. The session completed correctly (the turn round-trip
+  succeeded), so it appears benign — likely the failed first
+  connect probe or the final `Disconnect`/close race — but it is
+  unverified. Trace it before relying on the log being clean;
+  low priority.
+
 ## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
 
 **Frozen — see [PHASE_184.md](PHASE_184.md).** The End User can
