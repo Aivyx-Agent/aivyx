@@ -21,10 +21,22 @@
 //!   [`update`](model::update) reducer, and the
 //!   [`lines_from_event`](model::lines_from_event) mapping. Unit-tested
 //!   in CI.
-//! - The terminal driver + render (Task 3) and the `aivyx tui` command
-//!   wiring (Task 4) land in follow-on tasks; their visual behaviour is
-//!   operator-verified (no terminal in CI).
+//! - [`event`] — the pure keystroke → [`Action`](event::Action)
+//!   translation that feeds the reducer. Unit-tested in CI.
+//! - [`render`] — the ratatui layout (chat pane + status bar + input).
+//!   Smoke-tested headlessly via `TestBackend`; visually
+//!   operator-verified.
+//! - [`terminal`] — the [`Tui`](terminal::Tui) RAII guard with
+//!   panic-safe raw-mode / alternate-screen restore. Operator-verified.
+//! - The `aivyx tui` command wiring + the async daemon-driven event
+//!   loop land in Task 4.
 
+pub mod event;
 pub mod model;
+pub mod render;
+pub mod terminal;
 
+pub use event::{key_to_action, Action};
 pub use model::{update, AppState, ChatLine, LineKind, Msg, PendingGate, Status};
+pub use render::render;
+pub use terminal::Tui;
