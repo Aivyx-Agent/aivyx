@@ -483,6 +483,23 @@ fn run() -> Result<(), String> {
         return rt.block_on(mcp_server::run_mcp_server(name));
     }
 
+    // ---- Phase 185: terminal UI (Chapter I #1) -------------------------
+    // The TUI is a frontend client over the daemon IPC, exactly like
+    // the REPL — it needs only a tokio runtime + the socket path; the
+    // daemon owns the agent, provider, config, and audit, and is
+    // auto-spawned if not already running. A multi-thread runtime is
+    // used because the event loop drives a blocking key-poll on the
+    // blocking pool concurrently with the daemon turn future. Opt-in;
+    // the REPL stays the default and the non-TTY / scripting path.
+    if mode == CliMode::Tui {
+        let socket_path = default_socket_path()?;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(aivyx_tui::run(socket_path, role_override.clone()));
+    }
+
     // ---- Phase 58: profile inspection / edit (PRODUCT.md P13) ----------
     // The profile subcommands are synchronous file operations — no
     // tokio runtime, no daemon dispatch, no API key required. `show`
@@ -1444,6 +1461,14 @@ enum CliMode {
     /// loop (the Aivyx Ralph loop). IPC-backed; stocks the
     /// backlog + drives runs.
     Loop(LoopSubcommand),
+    /// `aivyx tui [--role <name>]`: Phase 185 — the ratatui terminal
+    /// UI. A frontend client over the local daemon IPC (auto-spawns
+    /// the daemon if needed), exactly like the default REPL — only
+    /// rendered into a real terminal application. Opt-in; the REPL
+    /// stays the default and the non-TTY / scripting path. The role
+    /// rides on the top-level `CliArgs::role` (parsed below); this
+    /// variant carries no fields.
+    Tui,
 }
 
 /// Phase 173 — `aivyx loop <subcommand>` variants.
@@ -1795,6 +1820,44 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             mcp_sse_servers: Vec::new(),
             provider: None,
             web_ui_port: daemon_web_ui_port,
+        });
+    }
+
+    // Check for `tui` — Phase 185. The ratatui terminal UI. Accepts
+    // only an optional `--role <name>`; everything else is an error so
+    // typos surface instead of being silently ignored.
+    if !args.is_empty() && args[0] == "tui" {
+        let mut role: Option<String> = None;
+        let mut ti = 1;
+        while ti < args.len() {
+            match args[ti].as_str() {
+                "--role" => {
+                    let value = args.get(ti + 1).ok_or_else(|| {
+                        "`--role` requires a value".to_string()
+                    })?;
+                    if value.trim().is_empty() {
+                        return Err("`--role` requires a non-empty name".to_string());
+                    }
+                    role = Some(value.clone());
+                    ti += 2;
+                }
+                other => {
+                    return Err(format!(
+                        "unrecognized argument after `tui`: `{other}`. \
+                         `aivyx tui` supports: --role <name>"
+                    ));
+                }
+            }
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Tui,
+            channel: ChannelKind::Local,
+            role,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
         });
     }
 
@@ -6991,6 +7054,48 @@ mod tests {
         assert_eq!(parsed.role.as_deref(), Some("researcher"));
         assert_eq!(parsed.mode, CliMode::Session);
         assert_eq!(parsed.channel, ChannelKind::Local);
+    }
+
+    #[test]
+    fn tui_subcommand_parses_to_tui_mode() {
+        let parsed =
+            parse_cli_args_from(&argv(&["tui"])).expect("`tui` must parse");
+        assert_eq!(parsed.mode, CliMode::Tui);
+        assert_eq!(parsed.channel, ChannelKind::Local);
+        assert!(parsed.role.is_none());
+        assert!(!parsed.no_daemon);
+    }
+
+    #[test]
+    fn tui_accepts_role_flag() {
+        let parsed = parse_cli_args_from(&argv(&["tui", "--role", "coder"]))
+            .expect("`tui --role coder` must parse");
+        assert_eq!(parsed.mode, CliMode::Tui);
+        assert_eq!(parsed.role.as_deref(), Some("coder"));
+    }
+
+    #[test]
+    fn tui_role_missing_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["tui", "--role"]))
+            .expect_err("`tui --role` with no value must error");
+        assert!(err.contains("--role"), "error names the flag: {err}");
+    }
+
+    #[test]
+    fn tui_role_empty_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["tui", "--role", "  "]))
+            .expect_err("`tui --role '  '` must error");
+        assert!(err.contains("non-empty"), "error explains why: {err}");
+    }
+
+    #[test]
+    fn tui_rejects_unknown_argument() {
+        let err = parse_cli_args_from(&argv(&["tui", "--bogus"]))
+            .expect_err("`tui --bogus` must error");
+        assert!(
+            err.contains("tui") && err.contains("--bogus"),
+            "error names the subcommand and the bad arg: {err}"
+        );
     }
 
     #[test]

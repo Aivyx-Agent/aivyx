@@ -207,6 +207,9 @@ futures-util = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 serde_json = { workspace = true }
 
-[[bin]]
-name = "aivyx"
-path = "src/bin/aivyx.rs"
+# Phase 185 — the `aivyx` binary was extracted to the `aivyx-cli`
+# crate. It depends on both this crate and `aivyx-tui`; keeping it
+# here would form an `aivyx-channel → aivyx-tui → aivyx-channel`
+# package cycle (Cargo rejects it), since `aivyx-tui` depends on this
+# crate for `DaemonSession` + the IPC types. aivyx-channel is now a
+# pure library crate.

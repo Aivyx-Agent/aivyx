@@ -28,14 +28,18 @@
 //!   operator-verified.
 //! - [`terminal`] — the [`Tui`](terminal::Tui) RAII guard with
 //!   panic-safe raw-mode / alternate-screen restore. Operator-verified.
-//! - The `aivyx tui` command wiring + the async daemon-driven event
-//!   loop land in Task 4.
+//! - [`app`] — [`run`](app::run): the async event loop that connects
+//!   the daemon (auto-spawning if needed), reads keys, and performs
+//!   submit / cancel / gate-resolve round-trips. The `aivyx tui`
+//!   command dispatches into it. Operator-verified.
 
+pub mod app;
 pub mod event;
 pub mod model;
 pub mod render;
 pub mod terminal;
 
+pub use app::run;
 pub use event::{key_to_action, Action};
 pub use model::{update, AppState, ChatLine, LineKind, Msg, PendingGate, Status};
 pub use render::render;

@@ -1,0 +1,108 @@
+[package]
+name = "aivyx-cli"
+description = "The `aivyx` command-line binary — REPL, daemon, TUI, and operator subcommands (Phase 185: extracted from aivyx-channel to break the aivyx-tui ↔ aivyx-channel cycle)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "aivyx"
+path = "src/bin/aivyx.rs"
+
+[features]
+default = []
+# Phase 134 — embedded Rust-native inference. Forwarded through
+# aivyx-channel to aivyx-llm. The binary gates a mistral.rs-only
+# code path on `provider-mistral-rs` directly (see aivyx.rs), so the
+# feature must be defined here too.
+provider-mistral-rs = ["aivyx-channel/provider-mistral-rs"]
+provider-mistral-rs-cuda = ["aivyx-channel/provider-mistral-rs-cuda"]
+provider-mistral-rs-metal = ["aivyx-channel/provider-mistral-rs-metal"]
+provider-mistral-rs-accelerate = ["aivyx-channel/provider-mistral-rs-accelerate"]
+recommended-providers = ["aivyx-channel/recommended-providers"]
+# Phase 135 — voice channel. The binary references `aivyx_voice`
+# under `channel-voice-full`; forward to aivyx-channel + pull the
+# optional dep.
+channel-voice = ["aivyx-channel/channel-voice", "dep:aivyx-voice"]
+channel-voice-full = [
+    "channel-voice",
+    "aivyx-channel/channel-voice-full",
+    "aivyx-voice/recommended-voice",
+]
+
+[dependencies]
+# The crate this binary was extracted from — the library that owns
+# the agent, daemon, IPC, channels, and every operator subcommand
+# the binary dispatches into.
+aivyx-channel = { path = "../aivyx-channel" }
+# Phase 185 — the terminal UI. The binary dispatches `aivyx tui`
+# into `aivyx_tui::run`. Sitting in this separate binary crate (not
+# in aivyx-channel) is what keeps the dependency graph acyclic:
+# aivyx-cli → {aivyx-channel, aivyx-tui}, aivyx-tui → aivyx-channel.
+aivyx-tui = { path = "../aivyx-tui" }
+
+# Substrate + adapter crates the binary names directly (`use
+# aivyx_core::…`, etc.). These mirror aivyx-channel's binary-only
+# dependency set, now relocated here with the binary.
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-config = { path = "../aivyx-config" }
+aivyx-crypto = { path = "../aivyx-crypto" }
+aivyx-storage = { path = "../aivyx-storage" }
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-memory = { path = "../aivyx-memory" }
+aivyx-mcp = { path = "../aivyx-mcp" }
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-llm = { path = "../aivyx-llm", features = [
+    "provider-anthropic",
+    "provider-openai",
+    "provider-ollama",
+] }
+aivyx-telegram = { path = "../aivyx-telegram" }
+aivyx-discord = { path = "../aivyx-discord" }
+aivyx-slack = { path = "../aivyx-slack" }
+aivyx-voice = { path = "../aivyx-voice", optional = true }
+
+# External crates the binary uses directly. Same set the binary
+# relied on inside aivyx-channel.
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "signal",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+] }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+cron = { workspace = true }
+chrono = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+notify = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+serde_jcs = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+lettre = { workspace = true }
+thiserror = { workspace = true }
+zeroize = "1.8"
+rpassword = "7"
+toml_edit = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+serde_json = { workspace = true }
