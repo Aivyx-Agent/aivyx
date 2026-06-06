@@ -858,6 +858,11 @@ pub struct AivyxConfig {
     /// Tool process configurations from `[[tool_process]]` entries.
     /// Phase 49 — PRODUCT.md P12. Empty when no entries are configured.
     pub tool_processes: Vec<ToolProcessConfig>,
+    /// Phase 180 — `[sandbox].default_backend`: the bundled
+    /// default sandbox preset applied to tool processes with no
+    /// explicit `sandbox` block. `None` (absent section) keeps
+    /// the pre-Phase-180 unsandboxed default.
+    pub sandbox_default_backend: SandboxDefaultBackend,
     /// Scheduled execution entries from `[[schedule]]` entries.
     /// Empty when no entries are configured.
     pub schedules: Vec<ScheduleConfig>,
@@ -1296,6 +1301,9 @@ pub struct ToolProcessConfig {
     /// firejail, docker run, sandbox-exec — see `docs/TOOL_SDK.md`
     /// §9).
     pub sandbox: Option<SandboxConfig>,
+    /// Phase 180 — opt out of the bundled `[sandbox].default_backend`
+    /// preset for this tool. Ignored when `sandbox` is `Some`.
+    pub disable_sandbox: bool,
 }
 
 /// Phase 52 — operator-supplied command wrapper that hardens a
@@ -1305,6 +1313,27 @@ pub struct ToolProcessConfig {
 pub struct SandboxConfig {
     pub wrapper: String,
     pub args: Vec<String>,
+}
+
+/// Phase 180 — the `[sandbox].default_backend` choice: the
+/// bundled default sandbox applied to a `[[tool_process]]` that
+/// has no explicit `sandbox` block. `None` is the in-code default
+/// (absent section) so existing configs are byte-identical to
+/// Phase 179; the `aivyx init` wizard writes `Auto` so new
+/// launches are secure-by-default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxDefaultBackend {
+    /// No bundled default — tools spawn unsandboxed unless they
+    /// declare an explicit `sandbox` block (pre-Phase-180).
+    #[default]
+    None,
+    /// Use a detected backend (bubblewrap → firejail), warning +
+    /// falling back to `None` if neither is installed.
+    Auto,
+    /// Force the bubblewrap preset.
+    Bubblewrap,
+    /// Force the firejail preset.
+    Firejail,
 }
 
 /// Phase 72 — conditional dispatch gate. When a trigger's
@@ -2991,6 +3020,9 @@ struct RawToml {
     /// `[[tool_process]]` table-array. Phase 49 — PRODUCT.md P12.
     #[serde(default, rename = "tool_process")]
     tool_processes: Option<Vec<RawToolProcess>>,
+    /// `[sandbox]` section. Phase 180 — bundled default sandbox.
+    #[serde(default)]
+    sandbox: RawSandboxDefaults,
     /// `[[schedule]]` table-array. Phase 26 Task 2.
     #[serde(default, rename = "schedule")]
     schedules: Option<Vec<RawSchedule>>,
@@ -3159,6 +3191,11 @@ struct RawToolProcess {
     /// Phase 52 — optional `[tool_process.sandbox]` nested block.
     #[serde(default)]
     sandbox: Option<RawSandbox>,
+    /// Phase 180 — opt this tool process out of the bundled
+    /// `[sandbox].default_backend` preset. Ignored when an
+    /// explicit `sandbox` block is present (that always wins).
+    #[serde(default)]
+    disable_sandbox: bool,
 }
 
 /// `[tool_process.sandbox]` block. Phase 52.
@@ -3167,6 +3204,13 @@ struct RawSandbox {
     wrapper: String,
     #[serde(default)]
     args: Option<Vec<String>>,
+}
+
+/// `[sandbox]` section. Phase 180 — the bundled default sandbox.
+#[derive(Debug, Default, Deserialize)]
+struct RawSandboxDefaults {
+    #[serde(default)]
+    default_backend: Option<String>,
 }
 
 fn default_stdio_transport() -> String {
@@ -5052,8 +5096,36 @@ impl AivyxConfig {
                 scope_overrides,
                 enabled: true,
                 sandbox,
+                disable_sandbox: r.disable_sandbox,
             });
         }
+
+        // --- [sandbox] default backend (Phase 180) -----------------
+        let sandbox_default_backend = match toml
+            .sandbox
+            .default_backend
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+        {
+            None => SandboxDefaultBackend::None,
+            Some(s) => match s.as_str() {
+                "none" => SandboxDefaultBackend::None,
+                "auto" => SandboxDefaultBackend::Auto,
+                "bubblewrap" | "bwrap" => {
+                    SandboxDefaultBackend::Bubblewrap
+                }
+                "firejail" => SandboxDefaultBackend::Firejail,
+                other => {
+                    return Err(ConfigError::Invalid {
+                        field: "sandbox.default_backend",
+                        reason: format!(
+                            "`sandbox.default_backend` must be one of \
+                             auto / bubblewrap / firejail / none, got {other:?}"
+                        ),
+                    })
+                }
+            },
+        };
 
         // --- schedules ---------------------------------------------
         let mut schedules: Vec<ScheduleConfig> = Vec::new();
@@ -5606,6 +5678,7 @@ impl AivyxConfig {
             warnings,
             mcp_servers,
             tool_processes,
+            sandbox_default_backend,
             schedules,
             webhooks,
             file_watches,

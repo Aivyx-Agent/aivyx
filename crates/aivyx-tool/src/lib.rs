@@ -32,7 +32,8 @@ pub use bridge::{
     ToolProcessConfig,
 };
 pub use sandbox::{
-    detect_sandbox_backend, preset_for, SandboxBackend,
+    detect_sandbox_backend, preset_for, resolve_sandbox,
+    SandboxBackend, SandboxChoice,
 };
 pub use frame::{encode_frame, read_frame, write_frame, FrameError, MAX_PAYLOAD_SIZE};
 pub use harness::{run_tool_as_subprocess, HarnessError};

@@ -7876,6 +7876,58 @@ fn correction_judgment_parse_and_validate() {
     drop(env);
 }
 
+/// Phase 180 — `[sandbox].default_backend` parses; absent →
+/// None; unknown → Invalid.
+#[test]
+fn sandbox_default_backend_parse_and_validate() {
+    let env = EnvScope::new();
+    // Absent → None.
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert_eq!(
+        cfg.sandbox_default_backend,
+        crate::SandboxDefaultBackend::None
+    );
+    // auto / bubblewrap / firejail / none.
+    for (s, want) in [
+        ("auto", crate::SandboxDefaultBackend::Auto),
+        ("bubblewrap", crate::SandboxDefaultBackend::Bubblewrap),
+        ("firejail", crate::SandboxDefaultBackend::Firejail),
+        ("none", crate::SandboxDefaultBackend::None),
+    ] {
+        let cfg = load_with_toml(
+            &format!("\n[sandbox]\ndefault_backend = \"{s}\"\n"),
+            &format!("sb-{s}"),
+        );
+        assert_eq!(cfg.sandbox_default_backend, want, "for {s}");
+    }
+    // Unknown → Invalid.
+    let tmp = TempDir::new("sb-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[sandbox]\ndefault_backend = \"docker\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    match AivyxConfig::load_from_env_and_toml(&opts).expect_err("err") {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "sandbox.default_backend")
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 /// Phase 179 — `[correction_signal]` parses; absent → None.
 #[test]
 fn correction_signal_parse() {

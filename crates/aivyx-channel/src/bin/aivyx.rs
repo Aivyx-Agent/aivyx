@@ -3544,6 +3544,7 @@ async fn run_async(
         warnings: _,
         mut mcp_servers,
         tool_processes: config_tool_processes,
+        sandbox_default_backend: config_sandbox_default_backend,
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
@@ -4756,14 +4757,76 @@ async fn run_async(
     // envelope is **logged and skipped**, not fatal. The daemon
     // continues with the tools that registered successfully.
     let mut tool_bridges: Vec<std::sync::Arc<aivyx_tool::ToolProcessBridge>> = Vec::new();
+    // Phase 180 — resolve the bundled default sandbox once. `auto`
+    // detects bwrap/firejail on PATH; an unresolved `auto` warns
+    // and falls back to no sandbox (no worse than pre-Phase-180).
+    let sandbox_choice = match config_sandbox_default_backend {
+        aivyx_config::SandboxDefaultBackend::None => {
+            aivyx_tool::SandboxChoice::None
+        }
+        aivyx_config::SandboxDefaultBackend::Auto => {
+            aivyx_tool::SandboxChoice::Auto
+        }
+        aivyx_config::SandboxDefaultBackend::Bubblewrap => {
+            aivyx_tool::SandboxChoice::Backend(
+                aivyx_tool::SandboxBackend::Bubblewrap,
+            )
+        }
+        aivyx_config::SandboxDefaultBackend::Firejail => {
+            aivyx_tool::SandboxChoice::Backend(
+                aivyx_tool::SandboxBackend::Firejail,
+            )
+        }
+    };
+    let detected_backend = aivyx_tool::detect_sandbox_backend();
+    if matches!(sandbox_choice, aivyx_tool::SandboxChoice::Auto)
+        && detected_backend.is_none()
+        && !config_tool_processes.is_empty()
+    {
+        eprintln!(
+            "aivyx: [sandbox] default_backend = auto but neither \
+             bwrap nor firejail is on PATH — tool processes will \
+             run UNSANDBOXED. Install bubblewrap or firejail, or \
+             set an explicit [tool_process.sandbox] block."
+        );
+    }
     for tp_cfg in &config_tool_processes {
-        // Phase 52 — thread the operator's [tool_process.sandbox]
-        // through to the aivyx-tool spawn config. None when the
-        // operator omitted the nested block.
-        let spawn_sandbox = tp_cfg.sandbox.as_ref().map(|s| aivyx_tool::SandboxConfig {
+        // Phase 52 — the operator's explicit [tool_process.sandbox]
+        // wins outright. None when the block is omitted.
+        let explicit = tp_cfg.sandbox.as_ref().map(|s| aivyx_tool::SandboxConfig {
             wrapper: s.wrapper.clone(),
             args: s.args.clone(),
         });
+        // Phase 180 — read-only bind the command-binary dir (a
+        // bundled tool may live outside /usr) and writable-bind the
+        // per-tool data dir (where its OAuth token lives).
+        let ro_extra: Vec<std::path::PathBuf> =
+            std::path::Path::new(&tp_cfg.command)
+                .parent()
+                .map(|p| vec![p.to_path_buf()])
+                .unwrap_or_default();
+        let writable: Vec<std::path::PathBuf> = std::env::var_os("HOME")
+            .map(|home| {
+                vec![std::path::PathBuf::from(home)
+                    .join(".aivyx")
+                    .join("tool-processes")
+                    .join(&tp_cfg.name)]
+            })
+            .unwrap_or_default();
+        let spawn_sandbox = aivyx_tool::resolve_sandbox(
+            explicit,
+            tp_cfg.disable_sandbox,
+            sandbox_choice,
+            detected_backend,
+            &ro_extra,
+            &writable,
+        );
+        if let Some(s) = &spawn_sandbox {
+            eprintln!(
+                "aivyx: tool process {:?} sandboxed via {:?}",
+                tp_cfg.name, s.wrapper
+            );
+        }
         let spawn_cfg = aivyx_tool::ToolProcessConfig {
             name: tp_cfg.name.clone(),
             command: tp_cfg.command.clone(),

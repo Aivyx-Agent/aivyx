@@ -99,23 +99,32 @@ fn binary_on_path(program: &str) -> bool {
 const RO_SYSTEM_DIRS: &[&str] =
     &["/usr", "/bin", "/lib", "/lib64", "/etc"];
 
-/// Build the conservative-but-functional preset for `backend`,
-/// binding each path in `writable` read-write (the per-tool data
+/// Build the conservative-but-functional preset for `backend`.
+/// `ro_extra` is bound read-only (the tool's command-binary dir,
+/// so a binary outside `/usr` — e.g. `target/release` — is
+/// reachable). `writable` is bound read-write (the per-tool data
 /// dir, so the tool can read/write its OAuth token).
 pub fn preset_for(
     backend: SandboxBackend,
+    ro_extra: &[PathBuf],
     writable: &[PathBuf],
 ) -> SandboxConfig {
     match backend {
-        SandboxBackend::Bubblewrap => bubblewrap_preset(writable),
-        SandboxBackend::Firejail => firejail_preset(writable),
+        SandboxBackend::Bubblewrap => {
+            bubblewrap_preset(ro_extra, writable)
+        }
+        SandboxBackend::Firejail => firejail_preset(ro_extra, writable),
     }
 }
 
-/// Bubblewrap preset: read-only system, private `/tmp`, isolated
-/// PID namespace, `$HOME` hidden except the writable binds,
-/// network on. The strongest of the two backends.
-pub fn bubblewrap_preset(writable: &[PathBuf]) -> SandboxConfig {
+/// Bubblewrap preset: read-only system (+ `ro_extra`), private
+/// `/tmp`, isolated PID namespace, `$HOME` hidden except the
+/// `writable` binds, network on. The strongest of the two
+/// backends.
+pub fn bubblewrap_preset(
+    ro_extra: &[PathBuf],
+    writable: &[PathBuf],
+) -> SandboxConfig {
     let mut args: Vec<String> = Vec::new();
     for dir in RO_SYSTEM_DIRS {
         // `--ro-bind-try` so an absent dir (merged-/usr) is a
@@ -123,6 +132,14 @@ pub fn bubblewrap_preset(writable: &[PathBuf]) -> SandboxConfig {
         args.push("--ro-bind-try".into());
         args.push((*dir).into());
         args.push((*dir).into());
+    }
+    // The command-binary dir (and any operator extras) read-only,
+    // so a tool binary outside the system dirs is reachable.
+    for path in ro_extra {
+        let p = path_string(path);
+        args.push("--ro-bind-try".into());
+        args.push(p.clone());
+        args.push(p);
     }
     args.push("--proc".into());
     args.push("/proc".into());
@@ -154,9 +171,12 @@ pub fn bubblewrap_preset(writable: &[PathBuf]) -> SandboxConfig {
 /// capability hardening. `$HOME` stays readable (firejail's model
 /// differs), so the per-tool token is reachable without explicit
 /// binds — weaker filesystem isolation than bubblewrap, hence the
-/// fallback ordering. `writable` is accepted for a uniform
-/// signature but not needed (home is visible).
-pub fn firejail_preset(_writable: &[PathBuf]) -> SandboxConfig {
+/// fallback ordering. `ro_extra` / `writable` are accepted for a
+/// uniform signature but not needed (home + system stay visible).
+pub fn firejail_preset(
+    _ro_extra: &[PathBuf],
+    _writable: &[PathBuf],
+) -> SandboxConfig {
     SandboxConfig {
         wrapper: SandboxBackend::Firejail.program().to_string(),
         args: vec![
@@ -165,6 +185,51 @@ pub fn firejail_preset(_writable: &[PathBuf]) -> SandboxConfig {
             "--private-tmp".into(),
         ],
     }
+}
+
+/// The operator-facing `[sandbox].default_backend` choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxChoice {
+    /// Use a detected backend (bwrap → firejail), else none.
+    Auto,
+    /// Force a specific backend.
+    Backend(SandboxBackend),
+    /// No default sandbox.
+    None,
+}
+
+/// Resolve the effective sandbox for one tool-process spawn.
+///
+/// Precedence (highest first):
+///
+/// 1. `explicit` — an operator-supplied per-tool `sandbox` block
+///    wins outright.
+/// 2. `disabled` — a per-tool `disable_sandbox = true` opt-out.
+/// 3. `global` — the `[sandbox].default_backend` choice (`Auto`
+///    resolves through `detected`).
+///
+/// `ro_extra` (the command-binary dir) and `writable` (the
+/// per-tool data dir) feed the chosen preset. Pure + testable.
+pub fn resolve_sandbox(
+    explicit: Option<SandboxConfig>,
+    disabled: bool,
+    global: SandboxChoice,
+    detected: Option<SandboxBackend>,
+    ro_extra: &[PathBuf],
+    writable: &[PathBuf],
+) -> Option<SandboxConfig> {
+    if let Some(e) = explicit {
+        return Some(e);
+    }
+    if disabled {
+        return None;
+    }
+    let backend = match global {
+        SandboxChoice::None => return None,
+        SandboxChoice::Backend(b) => b,
+        SandboxChoice::Auto => detected?,
+    };
+    Some(preset_for(backend, ro_extra, writable))
 }
 
 fn path_string(p: &Path) -> String {
@@ -206,14 +271,16 @@ mod tests {
 
     #[test]
     fn bubblewrap_preset_argv_is_isolating_and_functional() {
+        let cmd_dir = PathBuf::from("/opt/aivyx/bin");
         let token_dir =
             PathBuf::from("/home/op/.aivyx/tool-processes/gmail");
-        let c = bubblewrap_preset(&[token_dir.clone()]);
+        let c = bubblewrap_preset(&[cmd_dir], &[token_dir]);
         assert_eq!(c.wrapper, "bwrap");
         let a = c.args.join(" ");
-        // Read-only system.
+        // Read-only system + the command-binary dir.
         assert!(a.contains("--ro-bind-try /usr /usr"));
         assert!(a.contains("--ro-bind-try /etc /etc"));
+        assert!(a.contains("--ro-bind-try /opt/aivyx/bin /opt/aivyx/bin"));
         // Private /tmp + proc/dev.
         assert!(a.contains("--tmpfs /tmp"));
         assert!(a.contains("--proc /proc"));
@@ -230,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn bubblewrap_preset_with_no_writable_binds_nothing_extra() {
-        let c = bubblewrap_preset(&[]);
+    fn bubblewrap_preset_with_no_binds_nothing_extra() {
+        let c = bubblewrap_preset(&[], &[]);
         assert!(!c.args.iter().any(|s| s == "--bind"));
         // Still isolates + keeps network.
         assert!(c.args.iter().any(|s| s == "--tmpfs"));
@@ -240,21 +307,113 @@ mod tests {
 
     #[test]
     fn firejail_preset_hardens_without_binds() {
-        let c = firejail_preset(&[PathBuf::from("/ignored")]);
+        let c = firejail_preset(
+            &[PathBuf::from("/ignored")],
+            &[PathBuf::from("/ignored2")],
+        );
         assert_eq!(c.wrapper, "firejail");
         assert_eq!(c.args, vec!["--quiet", "--noroot", "--private-tmp"]);
     }
 
     #[test]
     fn preset_for_dispatches_by_backend() {
+        let ro = [PathBuf::from("/opt/aivyx/bin")];
         let w = [PathBuf::from("/home/op/.aivyx/tool-processes/notion")];
         assert_eq!(
-            preset_for(SandboxBackend::Bubblewrap, &w).wrapper,
+            preset_for(SandboxBackend::Bubblewrap, &ro, &w).wrapper,
             "bwrap"
         );
         assert_eq!(
-            preset_for(SandboxBackend::Firejail, &w).wrapper,
+            preset_for(SandboxBackend::Firejail, &ro, &w).wrapper,
             "firejail"
         );
+    }
+
+    // ---- resolve_sandbox precedence ---------------------------
+
+    fn explicit_cfg() -> SandboxConfig {
+        SandboxConfig {
+            wrapper: "operator-wrapper".into(),
+            args: vec!["--custom".into()],
+        }
+    }
+
+    #[test]
+    fn resolve_explicit_wins_over_everything() {
+        let got = resolve_sandbox(
+            Some(explicit_cfg()),
+            true, // even with disable set
+            SandboxChoice::Backend(SandboxBackend::Bubblewrap),
+            Some(SandboxBackend::Bubblewrap),
+            &[],
+            &[],
+        )
+        .expect("explicit");
+        assert_eq!(got.wrapper, "operator-wrapper");
+    }
+
+    #[test]
+    fn resolve_disable_opts_out_of_the_default() {
+        assert!(resolve_sandbox(
+            None,
+            true,
+            SandboxChoice::Auto,
+            Some(SandboxBackend::Bubblewrap),
+            &[],
+            &[],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn resolve_auto_uses_detected_else_none() {
+        // Detected → preset.
+        let got = resolve_sandbox(
+            None,
+            false,
+            SandboxChoice::Auto,
+            Some(SandboxBackend::Firejail),
+            &[],
+            &[],
+        )
+        .expect("preset");
+        assert_eq!(got.wrapper, "firejail");
+        // Nothing detected → None (graceful fallback).
+        assert!(resolve_sandbox(
+            None,
+            false,
+            SandboxChoice::Auto,
+            None,
+            &[],
+            &[],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn resolve_forced_backend_ignores_detection() {
+        let got = resolve_sandbox(
+            None,
+            false,
+            SandboxChoice::Backend(SandboxBackend::Bubblewrap),
+            None, // nothing detected, but forced
+            &[PathBuf::from("/opt/bin")],
+            &[PathBuf::from("/home/op/.aivyx/tool-processes/x")],
+        )
+        .expect("forced");
+        assert_eq!(got.wrapper, "bwrap");
+    }
+
+    #[test]
+    fn resolve_global_none_means_no_sandbox() {
+        assert!(resolve_sandbox(
+            None,
+            false,
+            SandboxChoice::None,
+            Some(SandboxBackend::Bubblewrap),
+            &[],
+            &[],
+        )
+        .is_none());
     }
 }
