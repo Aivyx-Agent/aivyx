@@ -428,6 +428,15 @@ pub type SharedCalendarClient = Arc<CalendarClient>;
 mod tests {
     use super::*;
 
+    // Env vars are process-global. Serialize every test that mutates
+    // the shared `AIVYX_CALENDAR_CACHE_TTL_SECS` key so `cargo test`
+    // parallelism can't make one test's `remove_var` race with
+    // another's `set_var`. Same pattern as aivyx-channel::passphrase.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn api_base_is_calendar_v3_endpoint() {
         // Regression catch — accidentally swapping to a
@@ -608,6 +617,7 @@ mod tests {
 
     #[test]
     fn cache_ttl_env_var_overrides_default() {
+        let _lock = env_lock();
         let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "60") };
         let ttl = cache_ttl_from_env_or_default();
@@ -617,6 +627,7 @@ mod tests {
 
     #[test]
     fn cache_ttl_env_var_invalid_falls_back_to_default() {
+        let _lock = env_lock();
         let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "not a number") };
         let ttl = cache_ttl_from_env_or_default();
@@ -630,6 +641,7 @@ mod tests {
         // cache. Treating as invalid prevents
         // operator surprise; same posture as
         // Phase 166's PDF cap env-var.
+        let _lock = env_lock();
         let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "0") };
         let ttl = cache_ttl_from_env_or_default();

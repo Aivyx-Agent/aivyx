@@ -958,6 +958,16 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use futures_util::stream;
+
+    // Env vars are process-global. Run every env-touching test under
+    // one mutex so `cargo test` parallelism can't make one test's
+    // `remove_var` race with another's `set_var` on the shared
+    // `AIVYX_ANTHROPIC_PDF_PAGE_CAP` key. Same pattern as
+    // aivyx-channel::passphrase and aivyx-config.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
     use std::sync::Mutex;
 
     use crate::transport::{ByteStream, HttpTransport};
@@ -1900,16 +1910,11 @@ mod tests {
 
     #[test]
     fn pdf_page_cap_env_var_overrides_default() {
-        // Run in a serialized helper since
-        // env-var manipulation isn't thread-
-        // safe across `cargo test` parallelism.
-        // We use a small unique-suffix dance:
-        // set, check, unset.
+        // Two sibling tests below also set this key — serialize them
+        // under `env_lock` so the set/remove can't race.
+        let _lock = env_lock();
         let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
-        // SAFETY (test-only): no other test in
-        // this module reads or writes this env
-        // var; clippy::env_var hazard is
-        // acceptable in tests.
+        // SAFETY: serialized through `env_lock`.
         unsafe { std::env::set_var(key, "250") };
         let result = pdf_page_cap_from_env_or_default();
         unsafe { std::env::remove_var(key) };
@@ -1918,6 +1923,7 @@ mod tests {
 
     #[test]
     fn pdf_page_cap_env_var_invalid_falls_back_to_default() {
+        let _lock = env_lock();
         let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
         unsafe { std::env::set_var(key, "not a number") };
         let result = pdf_page_cap_from_env_or_default();
@@ -1931,6 +1937,7 @@ mod tests {
         // would never be able to attach a PDF.
         // Treat as invalid; fall back to
         // default.
+        let _lock = env_lock();
         let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
         unsafe { std::env::set_var(key, "0") };
         let result = pdf_page_cap_from_env_or_default();

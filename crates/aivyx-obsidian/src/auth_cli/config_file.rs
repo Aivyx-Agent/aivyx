@@ -61,13 +61,19 @@ mod tests {
     use std::io::Write;
 
     fn tmpfile(body: &str) -> PathBuf {
+        // Per-process monotonic counter: pid + nanos alone can collide
+        // when two tests build a path in the same clock tick (Phase 185
+        // flaky-test isolation fix).
+        static SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "aivyx-obs-cfg-{}-{}.toml",
+            "aivyx-obs-cfg-{}-{}-{}.toml",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ));
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(body.as_bytes()).unwrap();

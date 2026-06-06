@@ -2033,6 +2033,16 @@ mod tests {
     use crate::tts::{TtsAudio, TtsConfig};
     use async_trait::async_trait;
 
+    // Env vars are process-global. The two clipboard-command tests
+    // below mutate `WAYLAND_DISPLAY` (one sets it, one removes it);
+    // serialize them under one mutex so `cargo test` parallelism can't
+    // make them race. Same pattern as aivyx-channel::passphrase.
+    #[cfg(target_os = "linux")]
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     // ---- Phase 154 — image media type inference + load ----
 
     #[test]
@@ -3006,9 +3016,10 @@ url_retry_jitter_ms = 250
     #[cfg(target_os = "linux")]
     #[test]
     fn select_clipboard_command_uses_wl_paste_on_wayland_session() {
-        // SAFETY (test-only): single-threaded
-        // env-var write; we restore the prior
-        // value below.
+        // Serialize with the sibling `..._uses_xclip_when_wayland_unset`
+        // test — they both mutate WAYLAND_DISPLAY.
+        let _lock = env_lock();
+        // SAFETY: serialized through `env_lock`; we restore below.
         let prior = std::env::var_os("WAYLAND_DISPLAY");
         unsafe { std::env::set_var("WAYLAND_DISPLAY", "wayland-0") };
         let cmd = select_clipboard_command();
@@ -3025,6 +3036,7 @@ url_retry_jitter_ms = 250
     #[cfg(target_os = "linux")]
     #[test]
     fn select_clipboard_command_uses_xclip_when_wayland_unset() {
+        let _lock = env_lock();
         let prior = std::env::var_os("WAYLAND_DISPLAY");
         unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
         let cmd = select_clipboard_command();

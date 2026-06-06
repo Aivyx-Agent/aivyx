@@ -156,13 +156,20 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmp_vault() -> PathBuf {
+        // Per-process monotonic counter: pid + nanos alone can collide
+        // when two tests build a path in the same clock tick, and one
+        // test's `remove_dir_all` cleanup would then delete another's
+        // vault (Phase 185 flaky-test isolation fix).
+        static SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "aivyx-obs-del-{}-{}",
+            "aivyx-obs-del-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ));
         fs::create_dir_all(&path).unwrap();
         std::fs::canonicalize(&path).unwrap()
