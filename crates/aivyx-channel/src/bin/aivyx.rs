@@ -4734,6 +4734,27 @@ async fn run_async(
     let _ = remind_cancel_tool.set_store(Arc::clone(&reminder_store));
     tool_list.push(Arc::clone(&remind_cancel_tool) as Arc<dyn Tool>);
 
+    // Phase 184 — conversational skill-teaching. The edit tools
+    // append LearnedSkill deltas to the persona chain after the
+    // agent confirms the drafted skill with the operator.
+    {
+        use aivyx_channel::skill_tool::{
+            SkillForgetTool, SkillTeachTool, SkillUpdateTool,
+        };
+        let teach = Arc::new(SkillTeachTool::new());
+        let _ = teach.set_persona_log(Arc::clone(&persona_log));
+        let _ = teach.set_effective_persona(shared_persona.clone());
+        tool_list.push(Arc::clone(&teach) as Arc<dyn Tool>);
+        let update = Arc::new(SkillUpdateTool::new());
+        let _ = update.set_persona_log(Arc::clone(&persona_log));
+        let _ = update.set_effective_persona(shared_persona.clone());
+        tool_list.push(Arc::clone(&update) as Arc<dyn Tool>);
+        let forget = Arc::new(SkillForgetTool::new());
+        let _ = forget.set_persona_log(Arc::clone(&persona_log));
+        let _ = forget.set_effective_persona(shared_persona.clone());
+        tool_list.push(Arc::clone(&forget) as Arc<dyn Tool>);
+    }
+
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
     // `persona_log` + `shared_persona` were created earlier (right
     // after the role assemble) so the system-prompt path could read
