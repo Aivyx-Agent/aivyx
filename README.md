@@ -12,37 +12,64 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Phase 61 exit, 2026-05-13)
+## Status (Phase 179 exit, 2026-06-06)
 
 | | |
 |---|---|
-| Phases shipped | 61 (Phase 0 → Phase 61, plus 10 contract amendments) |
-| Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped |
-| Release pipeline | **Wired, not yet firing** (Phase 61) — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64. First published release pending public hosting. |
-| Workspace crates | 12 |
-| Rust tests | 1074 passing |
+| Phases shipped | 179 (Phase 0 → Phase 179, plus 13 contract amendments) |
+| Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent phases extend the platform within the locked contract |
+| Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
+| Workspace crates | 24 |
+| Rust tests | 4,139 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 44 |
-| Encrypted storage domains | 10 |
+| Capability scope bases | 70 |
+| Encrypted storage domains | 19 |
 
-The 61-phase arc divides into three halves: **Phases 0–49** built
-out the original PRODUCT.md commitment surface (channels, daemon,
-missions, reflection, scheduling, MCP, multi-provider, web UI,
-multimodal input, bundled tools, channel/tool SDKs, tool process
-IPC). **Phases 50–54 (Chapter A — Foundation Closeout)**
-finished the deferred refinements, paid down the cleanup
-backlog, added the sandbox layer, and brought the documentation
-back in sync with the implementation. **Phases 56–60 (Profile +
-Persona arc)** delivered the operator-declared identity layer
-(P13) and the reflection-written character layer (P14), shaping
-Aivyx into a *self-learning, self-improving AI personal
-assistant with a user-defined Profile and Persona based on the
-end-user use-case*. **Phase 61 (Distribution — Pipeline Ready)**
-wired the release substrate (CI gates, dist config, four-target
-matrix, install script generation) but holds the first published
-release until public hosting goes live — a follow-up micro-phase
-will cut v0.1.0.
+The arc to date, by chapter:
+
+- **Phases 0–49 — Commitment surface.** Built out the original
+  PRODUCT.md surface: channels, daemon, missions, reflection,
+  scheduling, MCP, multi-provider LLM, web UI, multimodal input,
+  bundled tools, channel/tool SDKs, tool-process IPC.
+- **Phases 50–54 (Chapter A — Foundation Closeout).** Paid down
+  the cleanup backlog, added the sandbox layer, resynced docs.
+- **Phases 56–60 — Profile + Persona.** The operator-declared
+  identity layer (P13) and the reflection-written character
+  layer (P14) — Aivyx as a *self-learning AI personal assistant
+  with a user-defined Profile and Persona shaped to the
+  end-user's use-case*.
+- **Phase 61 — Distribution (pipeline ready).** Wired the
+  release substrate (CI gates, dist config, four-target matrix);
+  publication waits on public hosting.
+- **Phases 62–99 — Onboarding + recall self-tuning.** Template
+  archetypes (`init --template`), the recall-feedback learning
+  loop, helpfulness/co-occurrence ledgers, LLM-judged recall.
+- **Chapter B — Tooling (100+).** Tool stats, tool-author
+  ergonomics, the in-tree adapter checklist.
+- **Chapter C — Operator Onboarding (104+).** Docs-landing and
+  paper-cut reduction.
+- **Chapter D — Substrate Breadth (105–110+).** Audit export,
+  richer IPC surfaces, the threat-model-adjacent hardening.
+- **Chapter E — Self-Improvement Loop Deepening (114+).**
+  Generalised the learning loop beyond recall to the full
+  reflection family.
+- **Chapter F — External Productivity Integrations (123+).**
+  Operator-OAuth productivity tools as separate per-service
+  binaries: Gmail, Google Calendar, Google Drive, Notion,
+  Obsidian, n8n — each a sandboxed tool process over the IPC
+  bridge.
+- **Chapter G — Toolkit.** A multi-tool single-binary bundle
+  (`web.search` + `task.*` + `health.check.*`), plus the Discord
+  / Slack channel adapters and the voice channel.
+- **Phases 172–179 — Correction learning + the autonomous
+  loop.** A correction-signal learning loop (the agent notices
+  when the operator reworks its answer), now structurally
+  detected, LLM-judged (genuine rework vs praise), and
+  tool-attributed; and the **Aivyx Ralph loop** — a fully
+  autonomous, self-re-arming agent loop over an HMAC-chained
+  backlog with iteration / wall-clock / token caps, driver-side
+  gate verification, and a cross-iteration progress log.
 
 ## Five-minute setup
 
@@ -136,26 +163,35 @@ operator
    ├── turn loop (capability check → audit → execute → audit)
    ├── HMAC-chained audit log (offline-verifiable)
    ├── encrypted redb store (Argon2id → HKDF → ChaCha20-Poly1305)
-   ├── 8 substrate tools + role-gated infrastructure tools
-   └── tool process bridge (third-party tools as subprocesses)
+   ├── 13 substrate tools + role-gated infrastructure tools
+   └── tool process bridge (third-party + productivity tools as subprocesses)
 ```
 
-Twelve crates in the workspace:
+Twenty-four crates in the workspace. The substrate core:
 
 | Crate | What it owns |
 |---|---|
-| `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 8 substrate tools |
-| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, 43 scope bases |
+| `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 13 substrate tools |
+| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, 70 scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
-| `aivyx-storage` | redb-backed encrypted store, 9 key domains |
+| `aivyx-storage` | redb-backed encrypted store, 19 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
 | `aivyx-config` | TOML + env loader with source provenance |
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
-| `aivyx-channel` | Daemon, CLI/Local channel, Web UI, mission/schedule machinery |
-| `aivyx-telegram` | Telegram channel adapter |
+| `aivyx-channel` | Daemon, CLI/Local channel, Web UI, mission/schedule/reflection/loop machinery |
 | `aivyx-mcp` | MCP client adapter (stdio + SSE) |
 | `aivyx-tool` | Tool process IPC bridge + sandbox wrapper layer |
+
+Channel adapters — `aivyx-telegram`, `aivyx-discord`,
+`aivyx-slack`, `aivyx-voice`.
+
+Productivity integrations (Chapter F/G — each a sandboxed
+operator-OAuth tool process) — `aivyx-gmail`, `aivyx-calendar`,
+`aivyx-drive`, `aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n`,
+`aivyx-toolkit` (web.search + task.* + health.check.*), with
+`aivyx-google-oauth` + `aivyx-auth-cli` providing the shared
+OAuth substrate.
 
 ## Where to look next
 
@@ -178,8 +214,8 @@ Twelve crates in the workspace:
   the daemon's IPC protocol.
 
 **For architects** wanting to understand the design:
-- [`DESIGN.md`](DESIGN.md) — locked technical contract (7 amendments)
-- [`PRODUCT.md`](PRODUCT.md) — locked product contract (P1–P12)
+- [`DESIGN.md`](DESIGN.md) — locked technical contract (13 amendments)
+- [`PRODUCT.md`](PRODUCT.md) — locked product contract (P1–P14)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase-by-phase narrative
 - [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) — product-shape milestone narrative
 - [`docs/`](docs/) — per-phase journals (frozen artifacts)
@@ -212,8 +248,10 @@ discuss the shape, send a PR. New channels, new tools, new
 provider adapters fit cleanly into the existing SDK surfaces.
 
 Architectural changes that touch DESIGN.md or PRODUCT.md require
-a formal amendment under `docs/amendments/` — eight have been
-filed across the 54-phase arc; the process is established.
+a formal amendment under `docs/amendments/` — thirteen have been
+filed across the arc; the process is established. (The two
+contracts have otherwise held untouched for many phases — a
+tracked stability discipline.)
 
 ## License & trademark
 

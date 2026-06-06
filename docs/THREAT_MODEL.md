@@ -1,7 +1,9 @@
 # Aivyx Threat Model
 
-**Status:** Draft. **Last reviewed:** Phase 46 exit (2026-05-10).
-**Owners:** the operator.
+**Status:** Draft. **Last reviewed:** Phase 179 exit (2026-06-06)
+— added the productivity-tool OAuth asset (§3), the autonomous
+loop (§4.9), and productivity-tool egress (§4.10). **Owners:**
+the operator.
 
 This document is **operator-facing**. It states plainly what Aivyx
 defends against, what it does not, and where each defense lives in
@@ -75,15 +77,21 @@ What an attacker would gain by compromising each.
 | Encrypted store | `$XDG_DATA_HOME/aivyx/store.redb`, chmod 0600 | Confidential without the passphrase; needs Argon2id work to brute. |
 | Audit chain | redb `KeyDomain::Audit` | Reading reveals every tool call ever made. Tampering trips `AuditError::ChainBroken` on next open. |
 | API keys (LLM provider, Telegram bot token) | `KeyDomain::Secrets`, AEAD-sealed under a domain subkey | Spend on operator's LLM account; impersonate operator's bot. |
+| Productivity-tool OAuth tokens (Gmail, Calendar, Drive, Notion, …) | A **per-tool-process token file**, owned by the separate tool binary — *not* the daemon store | Act as the operator on that one external service. Scoped to the single tool process; a daemon-store compromise does not reach them, and vice versa. |
 | Memory entries | `KeyDomain::Memory`, AEAD-sealed under a domain subkey | Reveals everything the operator told the agent across sessions. |
 | Daemon IPC socket | `$XDG_RUNTIME_DIR/aivyx/aivyx.sock`, mode 0600 | Anything the operator can do. |
 | Source code & config | `~/Projects/.../aivyx/`, `aivyx.toml` | Loosen role envelopes, add malicious tools. |
 
-Nine encrypted domains exist today (`aivyx-storage/src/lib.rs:117`):
-Sessions, Memory, Audit, Secrets, ChannelState, Missions,
-Schedules, Webhooks, FileWatches. Each is sealed under its own
+Nineteen encrypted domains exist today: the original nine
+(Sessions, Memory, Audit, Secrets, ChannelState, Missions,
+Schedules, Webhooks, FileWatches) plus the Persona /
+self-learning / loop domains added since (Persona,
+PersonaProposals, MemoryVectors, RecallEvents, ProactiveLog,
+HelpfulnessLedger, CooccurrenceLedger, ToolRelevanceLedger,
+CorrectionLedger, LoopBacklog). Each is sealed under its own
 HKDF-derived subkey so a leak of one domain's plaintext does not
-compromise another.
+compromise another — and the productivity-tool OAuth tokens sit
+outside this set entirely, in their own per-tool-process files.
 
 ## 4. Threats we defend against
 
@@ -212,6 +220,43 @@ triggered run lands in the mission audit surface.
 The agent has no path to silent self-modification. Both `memory`
 and runtime role overrides (`RoleOverrides`, Phase 30) flow through
 the same approval gate.
+
+### 4.9 The autonomous loop runs unbounded (the Aivyx Ralph loop)
+
+**Mitigation:** The autonomous loop (Phases 173–177) is a
+self-re-arming agent that works a backlog without per-iteration
+operator prompting — so its containment is structural, not
+interactive. Three independent caps bound every run:
+`max_iterations`, `max_run_secs` (wall-clock), and
+`max_run_tokens` (turn spend summed over the run window), with a
+pure `decide()` termination function that always halts. Each
+iteration is a fresh agent turn under the loop's configured role
+envelope — it cannot exceed the capabilities that role grants,
+and every tool call is audited like any other. A backlog story
+is only marked complete after **driver-side gate verification**
+confirms the loop's build/test gates actually ran and passed
+(Phase 174), so a model that merely *claims* success cannot
+advance the backlog. The backlog itself is an HMAC-chained
+append-only substrate: a tampered or reordered entry trips the
+chain check. The operator can stop a run at any time
+(`aivyx loop stop`) and inspect live spend (`aivyx loop status`).
+
+### 4.10 A productivity tool exfiltrates data to an external service
+
+**Mitigation:** The Chapter F/G productivity integrations
+(Gmail, Calendar, Drive, Notion, Obsidian, n8n, the toolkit) are
+the only components that egress to the public internet on the
+operator's behalf, and each is a **separate sandboxed binary**
+behind the tool-process IPC bridge — not code in the daemon's
+address space. Each holds only its own OAuth token (in its own
+per-tool-process file), is reachable only through a capability
+scope the operator granted, and every invocation is audited as a
+`ToolCall` with the scope used. A compromised or buggy
+productivity tool can misuse the one service it is authorized
+for; it cannot read the daemon's store, another tool's token, or
+a scope it was never granted. (The residual "a malicious tool
+process abuses its own grant" case is the same class as §5.2 /
+§5.6 below — out of scope by the same reasoning.)
 
 ## 5. Threats we explicitly do not defend against
 

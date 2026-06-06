@@ -1908,3 +1908,41 @@ conformance tests passing, zero clippy warnings, 12 workspace
 crates, 43 capability scope bases, 9 encrypted storage domains,
 7 contract amendments filed, 4 deferrals carried forward (none
 load-bearing).
+
+## Milestone — Forward-Commitment Ledger Closed (Phase 61)
+
+**Status:** Closed. By Phase 61 every PRODUCT.md forward
+commitment (P1–P14) and every goal commitment (G1–G7) had
+shipped. With the contract surface complete, **this document
+stops adding milestones** — there are no further PRODUCT.md-
+derived product-shape milestones to track, because the contract
+is closed. Phases 56–60 delivered the last two commitments (the
+P13 Profile + P14 Persona layers); Phase 61 wired the release
+substrate (publication still pending public hosting).
+
+Everything after Phase 61 is **platform extension within the
+locked contract** — new capability *surface*, not new
+contractual *commitments*. That work is organised as named
+chapters and tracked in [`ROADMAP.md`](ROADMAP.md), not here:
+
+- **Chapter B — Tooling**, **C — Operator Onboarding**,
+  **D — Substrate Breadth**, **E — Self-Improvement Loop
+  Deepening** (Phases 100–122).
+- **Chapter F — External Productivity Integrations** and
+  **Chapter G — Operator-Facing Capabilities** (Phases 123+):
+  operator-OAuth productivity tools (Gmail, Calendar, Drive,
+  Notion, Obsidian, n8n) + the `aivyx-toolkit` bundle, plus the
+  Discord / Slack / voice channels — each shipped as a
+  third-party tool process or channel adapter, leaving the
+  thirteen-tool substrate core untouched (DESIGN A12).
+- **Phases 172–179** — the correction-signal learning loop
+  (structural → LLM-judged → tool-attributed) and the
+  **Aivyx Ralph loop** (a capped, gate-verified autonomous
+  agent loop over an HMAC-chained backlog).
+
+For the current point-in-time state (crate count, test count,
+scope bases, domains), see [`../README.md`](../README.md). For
+the per-phase narrative, see [`ROADMAP.md`](ROADMAP.md). The one
+product-shape milestone still genuinely *open* is the **Channel
+Activation Milestone** — operator verification across all
+channels — intentionally held until the phase sequence settles.

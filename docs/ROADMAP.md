@@ -3535,6 +3535,73 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
+## Phase 179 — Tool Surfacing in OutcomeSummary
+
+**Frozen — see [PHASE_179.md](PHASE_179.md).** The reflection
+family's `OutcomeSummary` now carries each turn's **tools** (the
+restart-safe `ToolCall` scope base — no `tool_id` map), rendered
+into the reflection prompt and, opt-in via
+`[correction_signal].attribute_tools`, attributed in the
+correction signal — an outcome-driven `detect_tool_corrections`
+that unblocks the no-recall turns the recall-driven detector
+misses. Streaks held; `+8` tests (below the predicted `+14..+24`
+— the band lesson refined: price by dense-test *components*, not
+a substrate-vs-loop label).
+
+## Phase 178 — LLM-Judged Correction Classification
+
+**Frozen — see [PHASE_178.md](PHASE_178.md).** Closed the Phase
+172 debt: the correction signal is now LLM-judged (genuine
+`rework` vs `praise` vs `unrelated`), folding only real reworks.
+A truncated, encrypted `query_text` on the recall log gives the
+judge the follow-up message with perfect correlation and
+graceful degradation. `[correction_judgment]` opt-in. `+21`
+tests, in band.
+
+## Phase 177 — Loop Loose-Ends Bundle
+
+**Frozen — see [PHASE_177.md](PHASE_177.md).** Operator polish on
+the autonomous loop: live `tokens used` in `aivyx loop status`,
+`aivyx loop skip <id>`, and progress-note de-duplication.
+
+## Phase 176 — Loop Token-Budget Cap
+
+**Frozen — see [PHASE_176.md](PHASE_176.md).** A third loop cap —
+`max_run_tokens` — alongside the iteration and wall-clock caps,
+summing turn spend over the run window with a `StopBudget`
+termination reason.
+
+## Phase 175 — Loop Progress Log
+
+**Frozen — see [PHASE_175.md](PHASE_175.md).** Cross-iteration
+learning: a `loop.note` tool writes to a reserved progress topic
+that is auto-injected into each iteration's prompt, so a long
+backlog gets easier as it goes.
+
+## Phase 174 — Loop Hardening (Gate Verification)
+
+**Frozen — see [PHASE_174.md](PHASE_174.md).** Driver-side
+verification that the loop's build/test gates actually ran and
+passed before a backlog story is marked complete.
+
+## Phase 173 — Autonomous Loop Foundation (the Aivyx Ralph Loop)
+
+**Frozen — see [PHASE_173.md](PHASE_173.md).** Aivyx's native
+answer to the "Ralph" technique: a fully autonomous,
+self-re-arming agent loop over an HMAC-chained append-only
+backlog substrate, a re-arming driver (sibling of the reflection
+scheduler), a canonical loop system prompt, iteration +
+wall-clock caps, and a pure `decide()` termination function.
+
+## Phase 172 — Correction-Signal Learning Loop
+
+**Frozen — see [PHASE_172.md](PHASE_172.md).** The agent now
+notices when the operator *corrects* it: a structural
+correction detector (`completed`-then-rapid-followup), a durable
+decayed correction ledger, and an opt-in
+`[correction_consolidation]` pass that turns repeated corrections
+on a topic into operator-gated Persona proposals.
+
 ## Phase 171 — Loose Ends Bundle (GIF/WebP Clipboard + calendarList Cache TTL Knob)
 
 **Frozen — see [PHASE_171.md](PHASE_171.md).** Capstone phase
