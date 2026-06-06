@@ -15,10 +15,6 @@
 //! the operator reviews/edits every field afterward — they are
 //! always the author of record.
 
-// Phase 181 — the public API here is consumed by the guided
-// wizard flow wired in Task 4; this allow is removed then.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use aivyx_core::CancellationToken;

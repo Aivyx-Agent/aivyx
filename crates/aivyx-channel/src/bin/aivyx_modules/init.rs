@@ -6,10 +6,16 @@
 
 use std::io::{self, BufRead, IsTerminal, Write as IoWrite};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
 use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
+use aivyx_llm::LlmProvider;
+
+use super::identity_draft::{
+    draft_identity, DraftedProfile, IdentityAnswers,
+};
 
 /// Default config file name (matches `aivyx-config` convention).
 const CONFIG_FILE: &str = "aivyx.toml";
@@ -529,6 +535,317 @@ fn toml_string_array(items: &[String]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 181 — the guided first-launch identity builder.
+// ---------------------------------------------------------------------------
+
+/// The six P13 Profile fields the guided builder collects. The
+/// confidant dimension lives in `operator_profile` (who you are to
+/// each other), `communication_style` (the voice), and
+/// `behavioral_constraints` (the lines it must never cross).
+#[derive(Debug, Clone, Default, PartialEq)]
+struct IdentityFields {
+    assistant_name: Option<String>,
+    operator_profile: Option<String>,
+    communication_style: Option<String>,
+    primary_use_cases: Vec<String>,
+    behavioral_preferences: Vec<String>,
+    behavioral_constraints: Vec<String>,
+}
+
+fn opt(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn split_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
+}
+
+/// Run the guided identity builder. Offers an LLM-assisted draft
+/// (only when a `provider` is available + the operator opts in);
+/// otherwise — or on any LLM error — collects the six fields with
+/// guided manual prompts. Always returns a complete set the
+/// operator can confirm in the preview step. Local-first: never
+/// requires an LLM.
+async fn run_identity_builder(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    provider: Option<&Arc<dyn LlmProvider>>,
+    model: &str,
+    defaults: &TemplateDefaults,
+) -> Result<IdentityFields, String> {
+    let w = |writer: &mut dyn IoWrite, s: &str| -> Result<(), String> {
+        writeln!(writer, "{s}").map_err(|e| format!("write error: {e}"))
+    };
+    w(writer, "\n— Let's shape your assistant —")?;
+    w(
+        writer,
+        "This is who you'll be working with. You can refine it \
+         any time later in aivyx.toml.",
+    )?;
+
+    let assisted = provider.is_some()
+        && prompt_yes_no(
+            "Would you like help? I'll ask a few questions and \
+             draft an identity you can edit",
+            true,
+            reader,
+            writer,
+        )?;
+
+    if assisted {
+        let answers = IdentityAnswers {
+            intent: prompt_line(
+                "\nIn your own words, what do you want this \
+                 assistant to be for you?\n> ",
+                reader,
+                writer,
+            )?,
+            role: prompt_line(
+                "What role should it play? (collaborator / coach / \
+                 confidant / assistant — or your own words)\n> ",
+                reader,
+                writer,
+            )?,
+            tone: prompt_line(
+                "How should it talk to you? (tone & warmth)\n> ",
+                reader,
+                writer,
+            )?,
+            never_do: prompt_line(
+                "Is there anything it should never do?\n> ",
+                reader,
+                writer,
+            )?,
+        };
+        w(writer, "\nDrafting your assistant's identity…")?;
+        match draft_identity(provider.unwrap(), model, &answers).await {
+            Some(draft) => {
+                w(
+                    writer,
+                    "\nHere's a draft — press Enter to keep each \
+                     line, or type a replacement:",
+                )?;
+                return review_draft(reader, writer, draft);
+            }
+            None => {
+                w(
+                    writer,
+                    "\n(I couldn't reach the model for a draft — \
+                     let's do it together instead.)",
+                )?;
+            }
+        }
+    }
+
+    manual_identity(reader, writer, defaults)
+}
+
+/// Review/edit a drafted profile field-by-field. The operator is
+/// always the author of record.
+fn review_draft(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    draft: DraftedProfile,
+) -> Result<IdentityFields, String> {
+    Ok(IdentityFields {
+        assistant_name: review_scalar(
+            reader,
+            writer,
+            "Name",
+            draft.assistant_name,
+        )?,
+        operator_profile: review_scalar(
+            reader,
+            writer,
+            "Who you are",
+            draft.operator_profile,
+        )?,
+        communication_style: review_scalar(
+            reader,
+            writer,
+            "How I'll talk",
+            draft.communication_style,
+        )?,
+        primary_use_cases: review_list(
+            reader,
+            writer,
+            "What I'm here for",
+            draft.primary_use_cases,
+        )?,
+        behavioral_preferences: review_list(
+            reader,
+            writer,
+            "What I'll tend to do",
+            draft.behavioral_preferences,
+        )?,
+        behavioral_constraints: review_list(
+            reader,
+            writer,
+            "What I'll never do",
+            draft.behavioral_constraints,
+        )?,
+    })
+}
+
+fn review_scalar(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    label: &str,
+    drafted: Option<String>,
+) -> Result<Option<String>, String> {
+    let shown = drafted.as_deref().unwrap_or("(none)");
+    let input =
+        prompt_line(&format!("  {label} [{shown}]: "), reader, writer)?;
+    Ok(if input.is_empty() {
+        drafted
+    } else {
+        opt(input)
+    })
+}
+
+fn review_list(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    label: &str,
+    drafted: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let shown = if drafted.is_empty() {
+        "(none)".to_string()
+    } else {
+        drafted.join(", ")
+    };
+    let input = prompt_line(
+        &format!("  {label} [{shown}] (comma-separated): "),
+        reader,
+        writer,
+    )?;
+    Ok(if input.is_empty() {
+        drafted
+    } else {
+        split_list(&input)
+    })
+}
+
+/// The offline / declined / draft-failed path — guided manual
+/// prompts for all six fields, pre-filled from the template when
+/// one was chosen.
+fn manual_identity(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    defaults: &TemplateDefaults,
+) -> Result<IdentityFields, String> {
+    writeln!(
+        writer,
+        "\nLet's set up the identity together (press Enter to skip \
+         any line):"
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+
+    let name_default = defaults.assistant_name.as_deref().unwrap_or("Aivyx");
+    let assistant_name = opt(prompt_line(
+        &format!("  Name [{name_default}]: "),
+        reader,
+        writer,
+    )?)
+    .or_else(|| defaults.assistant_name.clone());
+
+    let operator_profile = opt(prompt_line(
+        "  Who are you? (role, expertise, what you work on)\n> ",
+        reader,
+        writer,
+    )?);
+
+    let style_default =
+        defaults.communication_style.as_deref().unwrap_or("");
+    let communication_style = opt(prompt_line(
+        &format!(
+            "  How should it talk to you? (e.g. 'warm but concise')\
+             {}\n> ",
+            if style_default.is_empty() {
+                String::new()
+            } else {
+                format!(" [{style_default}]")
+            }
+        ),
+        reader,
+        writer,
+    )?)
+    .or_else(|| defaults.communication_style.clone());
+
+    let uc_raw = prompt_line(
+        "  Primary use cases (1-3, comma-separated)\n> ",
+        reader,
+        writer,
+    )?;
+    let primary_use_cases = if uc_raw.is_empty() {
+        defaults.primary_use_case.clone().into_iter().collect()
+    } else {
+        split_list(&uc_raw)
+    };
+
+    let behavioral_preferences = split_list(&prompt_line(
+        "  Things it should generally do (comma-separated, optional)\n> ",
+        reader,
+        writer,
+    )?);
+
+    let behavioral_constraints = split_list(&prompt_line(
+        "  Things it should NEVER do (comma-separated, optional)\n> ",
+        reader,
+        writer,
+    )?);
+
+    Ok(IdentityFields {
+        assistant_name,
+        operator_profile,
+        communication_style,
+        primary_use_cases,
+        behavioral_preferences,
+        behavioral_constraints,
+    })
+}
+
+/// Construct the provider for the optional identity draft from the
+/// just-verified wizard selection. `None` on any construction
+/// failure (the builder falls back to manual prompts). The draft
+/// model is passed separately to `draft_identity`, so the config
+/// here only needs credentials / endpoint.
+fn build_wizard_provider(
+    provider: Provider,
+    api_key: Option<&str>,
+) -> Option<Arc<dyn LlmProvider>> {
+    match provider {
+        Provider::Anthropic => {
+            use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
+            let key = api_key?;
+            AnthropicProvider::new(AnthropicConfig::new(key.to_string()))
+                .ok()
+                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        Provider::OpenAi => {
+            use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
+            let key = api_key?;
+            OpenAiProvider::new(OpenAiConfig::new(key.to_string()))
+                .ok()
+                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        Provider::Ollama => {
+            use aivyx_llm::ollama::{OllamaConfig, OllamaProvider};
+            OllamaProvider::new(OllamaConfig::default_local())
+                .ok()
+                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point (stub — wired end-to-end in Task 5)
 // ---------------------------------------------------------------------------
 
@@ -951,54 +1268,20 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // Each prompt is **opt-in** — blank input means "skip, leave
     // this field unset" when no template is supplied, or "keep
     // the template's default" when one is.
-    writeln!(writer, "\nAssistant identity (optional — press Enter to skip):")
-        .map_err(|e| format!("write error: {e}"))?;
-
-    let assistant_name_prompt = match &template_defaults.assistant_name {
-        Some(name) => format!("Assistant name [{name}]: "),
-        None => "Assistant name (default Aivyx): ".to_string(),
-    };
-    let assistant_name_raw = prompt_line(
-        &assistant_name_prompt,
+    // Phase 181 — the guided identity builder. A provider is
+    // constructed for the optional LLM-assisted draft; `None`
+    // falls back to the guided manual prompts (local-first — the
+    // builder never requires an LLM).
+    let draft_provider =
+        build_wizard_provider(provider, api_key.as_deref());
+    let identity = run_identity_builder(
         &mut reader,
         &mut writer,
-    )?;
-    let profile_assistant_name = if assistant_name_raw.is_empty() {
-        template_defaults.assistant_name.clone()
-    } else {
-        Some(assistant_name_raw)
-    };
-
-    let primary_use_case_prompt = match &template_defaults.primary_use_case {
-        Some(uc) => format!("Primary use case [{uc}]: "),
-        None => "Primary use case (e.g. 'Rust systems programming'): ".to_string(),
-    };
-    let primary_use_case_raw = prompt_line(
-        &primary_use_case_prompt,
-        &mut reader,
-        &mut writer,
-    )?;
-    let profile_primary_use_case = if primary_use_case_raw.is_empty() {
-        template_defaults.primary_use_case.clone()
-    } else {
-        Some(primary_use_case_raw)
-    };
-
-    let style_prompt = match &template_defaults.communication_style {
-        Some(s) => format!("Communication style [{s}]: "),
-        None => "Communication style (e.g. 'terse, conclusion-first'): "
-            .to_string(),
-    };
-    let style_raw = prompt_line(
-        &style_prompt,
-        &mut reader,
-        &mut writer,
-    )?;
-    let profile_communication_style = if style_raw.is_empty() {
-        template_defaults.communication_style.clone()
-    } else {
-        Some(style_raw)
-    };
+        draft_provider.as_ref(),
+        &model,
+        &template_defaults,
+    )
+    .await?;
 
     // 6. Render + write.
     let cfg = InitConfig {
@@ -1008,18 +1291,12 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         storage_path,
         fs_root,
         enable_web_search,
-        profile_assistant_name,
-        // Phase 181 — the guided builder (Task 4) populates the
-        // three new fields + multi use-cases; until then the
-        // single-prompt use case maps to a one-element list and
-        // the new fields default empty.
-        profile_operator_profile: None,
-        profile_communication_style,
-        profile_primary_use_cases: profile_primary_use_case
-            .into_iter()
-            .collect(),
-        profile_behavioral_preferences: Vec::new(),
-        profile_behavioral_constraints: Vec::new(),
+        profile_assistant_name: identity.assistant_name,
+        profile_operator_profile: identity.operator_profile,
+        profile_communication_style: identity.communication_style,
+        profile_primary_use_cases: identity.primary_use_cases,
+        profile_behavioral_preferences: identity.behavioral_preferences,
+        profile_behavioral_constraints: identity.behavioral_constraints,
     };
     // Phase 66 — when a template was supplied, splice wizard
     // answers into the template document so the role declarations,
@@ -1052,6 +1329,183 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Phase 181 — identity builder flow fixtures ----------
+
+    /// A fake provider whose draft call returns a fixed labeled
+    /// response (or errors, to exercise the manual fallback).
+    struct FakeDraftProvider {
+        reply: Option<String>,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for FakeDraftProvider {
+        async fn chat_stream(
+            &self,
+            _request: aivyx_llm::LlmRequest<'_>,
+            _cancel: &aivyx_core::CancellationToken,
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError>
+        {
+            match &self.reply {
+                Some(text) => Ok(Box::new(FakeDraftStream {
+                    text: Some(text.clone()),
+                })),
+                None => Err(aivyx_llm::LlmError::Config(
+                    "offline".into(),
+                )),
+            }
+        }
+    }
+    struct FakeDraftStream {
+        text: Option<String>,
+    }
+    #[async_trait::async_trait]
+    impl aivyx_llm::LlmStream for FakeDraftStream {
+        async fn next_event(
+            &mut self,
+        ) -> Result<
+            Option<aivyx_llm::LlmStreamEvent>,
+            aivyx_llm::LlmError,
+        > {
+            Ok(None)
+        }
+        async fn finish(
+            self: Box<Self>,
+        ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError>
+        {
+            Ok(aivyx_llm::LlmStepEnd::FinalMessage {
+                text: self.text.unwrap_or_default(),
+                usage: aivyx_llm::LlmUsage::default(),
+            })
+        }
+    }
+
+    fn fake_provider(reply: Option<&str>) -> Arc<dyn LlmProvider> {
+        Arc::new(FakeDraftProvider {
+            reply: reply.map(String::from),
+        })
+    }
+
+    #[tokio::test]
+    async fn identity_builder_manual_path_collects_all_six() {
+        // provider = None → straight to the guided manual prompts
+        // (the local-first / offline path).
+        let input = b"My Helper\na Rust dev\nwarm but concise\n\
+            coding, review\nwrite tests first\n\
+            never force push, never commit secrets\n"
+            .to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = run_identity_builder(
+            &mut reader,
+            &mut writer,
+            None,
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fields.assistant_name.as_deref(), Some("My Helper"));
+        assert_eq!(fields.operator_profile.as_deref(), Some("a Rust dev"));
+        assert_eq!(
+            fields.communication_style.as_deref(),
+            Some("warm but concise")
+        );
+        assert_eq!(fields.primary_use_cases, vec!["coding", "review"]);
+        assert_eq!(
+            fields.behavioral_preferences,
+            vec!["write tests first"]
+        );
+        assert_eq!(
+            fields.behavioral_constraints,
+            vec!["never force push", "never commit secrets"]
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_builder_draft_path_drafts_then_keeps_on_review()
+    {
+        let draft = "ASSISTANT_NAME: Sage\n\
+            OPERATOR_PROFILE: a founder\n\
+            COMMUNICATION_STYLE: warm\n\
+            PRIMARY_USE_CASES: email, planning\n\
+            BEHAVIORAL_PREFERENCES: be proactive\n\
+            BEHAVIORAL_CONSTRAINTS: never flatter";
+        let provider = fake_provider(Some(draft));
+        // offer=yes (Enter), 4 conversation answers, 6 review
+        // lines (all Enter → keep the drafted value).
+        let input =
+            b"\na calm partner\nconfidant\nwarm\nnothing\n\n\n\n\n\n\n"
+                .to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = run_identity_builder(
+            &mut reader,
+            &mut writer,
+            Some(&provider),
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fields.assistant_name.as_deref(), Some("Sage"));
+        assert_eq!(fields.operator_profile.as_deref(), Some("a founder"));
+        assert_eq!(fields.primary_use_cases, vec!["email", "planning"]);
+        assert_eq!(fields.behavioral_constraints, vec!["never flatter"]);
+    }
+
+    #[tokio::test]
+    async fn identity_builder_llm_error_degrades_to_manual() {
+        // Provider present + operator accepts, but the draft call
+        // errors → graceful fallback to the manual prompts.
+        let provider = fake_provider(None); // errors on chat_stream
+        // offer=yes, 4 conversation answers, then 6 MANUAL prompts.
+        let input = b"\nintent\nrole\ntone\nnope\n\
+            Fallback\na dev\nplain\ncoding\n\n\n"
+            .to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = run_identity_builder(
+            &mut reader,
+            &mut writer,
+            Some(&provider),
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        // Collected via the manual path after the draft failed.
+        assert_eq!(fields.assistant_name.as_deref(), Some("Fallback"));
+        assert_eq!(fields.operator_profile.as_deref(), Some("a dev"));
+        assert_eq!(fields.primary_use_cases, vec!["coding"]);
+    }
+
+    #[test]
+    fn review_draft_keeps_blank_and_replaces_typed() {
+        let draft = DraftedProfile {
+            assistant_name: Some("Sage".into()),
+            operator_profile: Some("a dev".into()),
+            communication_style: Some("warm".into()),
+            primary_use_cases: vec!["coding".into()],
+            behavioral_preferences: vec![],
+            behavioral_constraints: vec!["never force push".into()],
+        };
+        // Keep name (Enter), replace operator_profile, keep style,
+        // replace use-cases, keep prefs (Enter), keep constraints.
+        let input =
+            b"\na founder\n\nplanning, email\n\n\n".to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields =
+            review_draft(&mut reader, &mut writer, draft).unwrap();
+        assert_eq!(fields.assistant_name.as_deref(), Some("Sage"));
+        assert_eq!(fields.operator_profile.as_deref(), Some("a founder"));
+        assert_eq!(fields.communication_style.as_deref(), Some("warm"));
+        assert_eq!(fields.primary_use_cases, vec!["planning", "email"]);
+        assert_eq!(
+            fields.behavioral_constraints,
+            vec!["never force push"]
+        );
+    }
 
     #[test]
     fn parse_tags_response_extracts_model_names() {
