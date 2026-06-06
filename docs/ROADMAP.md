@@ -3673,24 +3673,23 @@ verify):**
   the daemon's stdout/stderr to a sibling `daemon.log` (next to the
   socket + pid). Verified: screen-banner count 0, `daemon.log`
   banner count 3. Direct `aivyx daemon run` is unaffected.
-- **`RecoveryNotice` breaks the first connect after an unclean
-  daemon shutdown.** The daemon sends a `RecoveryNotice` envelope
-  (take-once) between `DaemonReady` and `SessionStarted` to the
-  first frontend that connects after it restarts with stale
-  `daemon.state` (i.e. the previous instance was killed / crashed
-  rather than `daemon stop`-ed). `DaemonSession::connect`'s
-  `SessionStarted`-wait loop does **not** handle `RecoveryNotice` —
-  it hits the catch-all arm and fails with *"expected
-  SessionStarted, got RecoveryNotice"*. This affects **every**
-  frontend (REPL, TUI, channels) since they share `connect`, and it
-  fails in exactly the recovery scenario where reconnect most needs
-  to be smooth. Found during the Phase 185 verify (reproduces on the
-  connect after a `kill -9` of the daemon). Fix is small and
-  clearly correct: drain + skip (and optionally surface)
-  `RecoveryNotice` in the wait loop, like `IncompleteBuf`. Not yet
-  fixed — it's a shared-handshake change worth its own decision.
-  Supersedes the earlier vague *"Broken pipe"* note (same
-  connect-time dance; this is the precise root cause).
+- **`RecoveryNotice` broke the first connect after an unclean
+  daemon shutdown — FIXED.** The daemon sends a `RecoveryNotice`
+  envelope (take-once) between `DaemonReady` and `SessionStarted` to
+  the first frontend that connects after it restarts with stale
+  `daemon.state` (the previous instance was killed / crashed rather
+  than `daemon stop`-ed). `DaemonSession::connect`'s
+  `SessionStarted`-wait loop did **not** handle it — it hit the
+  catch-all and failed with *"expected SessionStarted, got
+  RecoveryNotice"*, affecting **every** frontend (REPL, TUI,
+  channels share `connect`) in exactly the recovery scenario where
+  reconnect most needs to be smooth. `connect` now drains + skips
+  the notice (surfacing it to stderr only when sessions/turns were
+  actually lost) and keeps waiting for `SessionStarted`. Verified
+  end-to-end: reconnect after a `kill -9` of the daemon (stale
+  `daemon.state` present) now succeeds + runs a real turn; +1
+  handshake integration test. Supersedes the earlier vague *"Broken
+  pipe"* note (same connect-time dance; this was the root cause).
 
 ## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
 

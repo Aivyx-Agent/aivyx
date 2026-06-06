@@ -95,6 +95,34 @@ impl DaemonSession {
                     buf.drain(..consumed);
                     break sid;
                 }
+                // The daemon delivers a take-once `RecoveryNotice`
+                // between `DaemonReady` and `SessionStarted` to the
+                // first frontend that connects after it restarted with
+                // stale state (a previous instance that crashed / was
+                // killed rather than shut down cleanly). It is
+                // informational — skip past it and keep waiting for
+                // `SessionStarted`, surfacing it so the operator knows
+                // a prior session/turn was lost. Without this arm the
+                // first reconnect after an unclean shutdown fails for
+                // every frontend (REPL, TUI, channels all share this).
+                Ok((
+                    DaemonEnvelope::RecoveryNotice {
+                        lost_sessions,
+                        lost_turns,
+                        ..
+                    },
+                    consumed,
+                )) => {
+                    buf.drain(..consumed);
+                    if !lost_sessions.is_empty() || !lost_turns.is_empty() {
+                        eprintln!(
+                            "aivyx: daemon recovered from an unclean shutdown — \
+                             {} session(s) and {} in-flight turn(s) were lost.",
+                            lost_sessions.len(),
+                            lost_turns.len(),
+                        );
+                    }
+                }
                 Ok((DaemonEnvelope::Error { code, message }, _)) => {
                     return Err(DaemonError::Protocol(format!(
                         "daemon error ({code}): {message}"
@@ -1484,6 +1512,54 @@ async fn read_more(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon_ipc::{encode_frame, DaemonEnvelope};
+    use tokio::net::UnixListener;
+
+    /// A fake daemon that performs the lifecycle handshake while
+    /// injecting a `RecoveryNotice` between `DaemonReady` and
+    /// `SessionStarted` — exactly what a real daemon sends to the
+    /// first frontend that connects after an unclean restart. `connect`
+    /// must skip the notice and still succeed.
+    #[tokio::test]
+    async fn connect_skips_recovery_notice_in_the_handshake() {
+        let sock = std::env::temp_dir()
+            .join(format!("aivyx-recov-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            for env in [
+                DaemonEnvelope::DaemonReady {
+                    version: "0.1".into(),
+                },
+                DaemonEnvelope::RecoveryNotice {
+                    lost_sessions: vec!["old-session".into()],
+                    lost_turns: vec!["old-turn".into()],
+                    stale_since: 42,
+                },
+                DaemonEnvelope::SessionStarted {
+                    session_id: "sess-recovered".into(),
+                },
+            ] {
+                let frame = encode_frame(&env).expect("encode");
+                stream.write_all(&frame).await.expect("write frame");
+            }
+            // Drain the client's StartSession so the socket stays open
+            // until the client has finished the handshake.
+            let mut tmp = [0u8; 1024];
+            let _ = stream.read(&mut tmp).await;
+        });
+
+        let session = DaemonSession::connect(&sock, None, None)
+            .await
+            .expect("connect must succeed despite the RecoveryNotice");
+        assert_eq!(session.session_id, "sess-recovered");
+        assert_eq!(session.daemon_version.as_deref(), Some("0.1"));
+
+        let _ = session.disconnect().await;
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
+    }
 
     #[test]
     fn daemon_log_path_is_sibling_of_socket_and_pid() {
