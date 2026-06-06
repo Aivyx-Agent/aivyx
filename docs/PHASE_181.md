@@ -178,4 +178,52 @@ require hand-editing TOML, so almost no operator sets them.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 18 | Untouched (richer collection over the existing P13 fields + an optional draft; the Persona boundary respected) | ✅ |
+| PRODUCT.md HOLD → 72 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 18 | Untouched | ✅ |
+| Zero new workspace deps | Reused `aivyx-llm` (provider) + `async_trait` | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+14` to `+24` | **`+15`** (render 1 + draft parser 6 + flow 4 + preview/confirm 4); ~4,153 → ~4,168 | ✅ **in band** |
+
+**Band note — components again.** Priced from the dense
+components (the draft parser + the six-field render round-trip +
+the scripted-stdin flow tests), `+14..+24`, landed `+15`. The
+flow tests (fake provider + `Cursor` stdin) were the bulk; the
+parser carried its own six. Third phase running the
+component-priced band held.
+
+What shipped, end-to-end:
+
+1. **Six-field model + render** (T2). `InitConfig` carries all
+   six P13 fields (use-cases became a list); both render paths
+   emit them, round-tripping as valid TOML.
+2. **LLM draft** (T3). `identity_draft` — a tolerant,
+   judge-pattern parser + an `Arc<dyn LlmProvider>` seam;
+   `None` on any error so the caller falls back.
+3. **The guided flow** (T4). Invitation → relationship
+   conversation → draft → review/edit, with a fully-offline
+   manual path and a `build_wizard_provider` factory.
+4. **Meet your assistant** (T5). A warm first-person preview +
+   confirm / edit / restart loop.
+
+### Honest scope risks at sign-off
+
+- **Draft quality is model-dependent** — the review/edit step is
+  the backstop; the operator is always the author of record.
+- **Interactive coverage is path-sampled** — manual, drafted,
+  LLM-error→manual, edit-then-accept are covered; the full
+  combinatorial edit space is not enumerated.
+- **No Persona seeding** — the deliberate P13/P14 boundary held.
+- **One LLM round-trip at init** — only on the opted-in assisted
+  path, skipped offline.
+
+### The result
+
+Chapter H's second phase turns the first launch from "fill in
+three fields" into shaping a relationship: the End User describes
+what they want, the assistant drafts an identity across all six
+declared dimensions, and they meet it before it's written —
+local-first, with the Soul left to grow. Streaks held; zero new
+deps.

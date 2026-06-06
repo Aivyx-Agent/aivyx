@@ -178,9 +178,29 @@ After install:
    `http://127.0.0.1:11434` and offers it as the default
    provider (no API key required). Otherwise prompts for an
    Anthropic or OpenAI key. Writes `aivyx.toml` to your CWD with
-   `0600` permissions. Three optional Profile prompts (assistant
-   name, primary use case, communication style) seed your
-   operator identity layer.
+   `0600` permissions.
+
+   **Phase 181 — the guided identity builder.** The wizard's
+   identity step is a *guided builder* that shapes who your
+   assistant will be — collaborator, coach, confidant — across
+   all six P13 Profile fields (name, who *you* are, how it talks,
+   what it's for, what it tends to do, and the lines it must
+   never cross). It works two ways:
+
+   - **LLM-assisted** (when a provider is reachable + you opt in):
+     it asks a few questions about the relationship you want, has
+     your chosen model **draft** the full identity, and lets you
+     **review and edit** every line — you're always the author of
+     record.
+   - **Guided manual** (offline, declined, or if the draft call
+     fails): the same six fields with good prompts, fully
+     **local-first** — no LLM required, ever.
+
+   It ends with a warm **"meet your assistant"** preview you
+   confirm, edit, or start over. The Profile is the *declared*
+   layer; your assistant's deeper character (the Persona/Soul) is
+   *earned* over time through reflection — the builder shapes who
+   it starts as, not who it becomes.
 
    **Phase 104 — verify-before-write.** When the operator picks
    Anthropic or OpenAI, the wizard hits the provider's
