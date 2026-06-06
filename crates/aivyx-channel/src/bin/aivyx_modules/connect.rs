@@ -397,7 +397,157 @@ async fn run_onboarding(
 
     writeln!(writer, "\n✓ {} is connected.", svc.display)
         .map_err(|e| format!("write error: {e}"))?;
+
+    offer_tool_process_wiring(reader, writer, svc, &binary)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Part A — offer to wire [[tool_process]] into aivyx.toml.
+// ---------------------------------------------------------------------------
+
+/// Find the operator's `aivyx.toml`: CWD first (where the wizard
+/// writes), then `~/.config/aivyx/aivyx.toml`.
+pub fn find_aivyx_toml(home: &Path) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok().map(|d| d.join("aivyx.toml"));
+    if let Some(p) = &cwd {
+        if p.exists() {
+            return cwd;
+        }
+    }
+    let xdg = home.join(".config").join("aivyx").join("aivyx.toml");
+    if xdg.exists() {
+        Some(xdg)
+    } else {
+        None
+    }
+}
+
+/// Is a `[[tool_process]]` with this `name` already present?
+pub fn tool_process_present(
+    doc: &toml_edit::DocumentMut,
+    name: &str,
+) -> bool {
+    doc.get("tool_process")
+        .and_then(|i| i.as_array_of_tables())
+        .map(|arr| {
+            arr.iter().any(|t| {
+                t.get("name").and_then(|v| v.as_str()) == Some(name)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Append a `[[tool_process]]` entry (name + command) to the doc,
+/// preserving everything else. Caller checks
+/// [`tool_process_present`] first.
+pub fn append_tool_process(
+    doc: &mut toml_edit::DocumentMut,
+    name: &str,
+    command: &str,
+) {
+    use toml_edit::{value, Item, Table};
+    let mut t = Table::new();
+    t["name"] = value(name);
+    t["command"] = value(command);
+    let entry = doc
+        .entry("tool_process")
+        .or_insert_with(|| Item::ArrayOfTables(Default::default()));
+    if let Some(aot) = entry.as_array_of_tables_mut() {
+        aot.push(t);
+    }
+}
+
+fn offer_tool_process_wiring(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+    svc: &ConnectService,
+    binary: &Path,
+) -> Result<(), String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let Some(toml_path) = find_aivyx_toml(&home) else {
+        writeln!(
+            writer,
+            "\nAdd this to your aivyx.toml to enable the tool:\n\n\
+             [[tool_process]]\nname = \"{}\"\ncommand = \"{}\"",
+            svc.key,
+            binary.display()
+        )
+        .map_err(|e| format!("write error: {e}"))?;
+        return Ok(());
+    };
+
+    let body = std::fs::read_to_string(&toml_path)
+        .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .map_err(|e| format!("parse {}: {e}", toml_path.display()))?;
+    if tool_process_present(&doc, svc.key) {
+        writeln!(
+            writer,
+            "Your aivyx.toml already has a `{}` tool — you're all set.",
+            svc.key
+        )
+        .map_err(|e| format!("write error: {e}"))?;
+        return Ok(());
+    }
+    if !prompt_yes_no(
+        &format!(
+            "Add a [[tool_process]] entry for {} to {}?",
+            svc.display,
+            toml_path.display()
+        ),
+        true,
+        reader,
+        writer,
+    )? {
+        return Ok(());
+    }
+    append_tool_process(&mut doc, svc.key, &binary.to_string_lossy());
+    std::fs::write(&toml_path, doc.to_string())
+        .map_err(|e| format!("write {}: {e}", toml_path.display()))?;
+    writeln!(
+        writer,
+        "Added `{}` to {}. Restart the daemon to load it.",
+        svc.key,
+        toml_path.display()
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Part B — conversational surfacing of an unauthenticated tool.
+// ---------------------------------------------------------------------------
+
+/// Map a `[[tool_process]]` `command` to a known connectable
+/// service by binary file name (e.g. `/opt/bin/aivyx-gmail` →
+/// gmail).
+pub fn service_for_command(command: &str) -> Option<&'static ConnectService>
+{
+    let file = Path::new(command)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command);
+    SERVICES.iter().find(|s| s.binary == file)
+}
+
+/// If `command` is a Google service that is configured but NOT yet
+/// authenticated (no `tokens.json`), return the operator-facing
+/// fix. The daemon surfaces this at tool-process startup so a
+/// missing connection names its own remedy.
+pub fn unauthenticated_hint(command: &str, home: &Path) -> Option<String> {
+    let svc = service_for_command(command)?;
+    if svc.is_connected(home) {
+        return None;
+    }
+    Some(format!(
+        "tool process {:?} is configured but not authenticated — \
+         run `aivyx connect {}` to connect {}",
+        svc.binary, svc.key, svc.display
+    ))
 }
 
 #[cfg(test)]
@@ -511,6 +661,57 @@ mod tests {
             resolve_service_binary(svc, Some(&tmp)),
             Some(sibling)
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn append_tool_process_adds_when_absent_and_detects_present() {
+        let mut doc: toml_edit::DocumentMut =
+            "[agent]\nprovider = \"ollama\"\n".parse().unwrap();
+        assert!(!tool_process_present(&doc, "gmail"));
+        append_tool_process(&mut doc, "gmail", "/opt/bin/aivyx-gmail");
+        assert!(tool_process_present(&doc, "gmail"));
+        let s = doc.to_string();
+        assert!(s.contains("[[tool_process]]"));
+        assert!(s.contains("name = \"gmail\""));
+        assert!(s.contains("command = \"/opt/bin/aivyx-gmail\""));
+        // The original section survived.
+        assert!(s.contains("[agent]"));
+        // A second service appends a second entry.
+        append_tool_process(&mut doc, "drive", "/opt/bin/aivyx-drive");
+        assert!(tool_process_present(&doc, "drive"));
+        assert!(tool_process_present(&doc, "gmail"));
+    }
+
+    #[test]
+    fn service_for_command_matches_by_binary_basename() {
+        assert_eq!(
+            service_for_command("/opt/aivyx/bin/aivyx-gmail").unwrap().key,
+            "gmail"
+        );
+        assert_eq!(
+            service_for_command("aivyx-drive").unwrap().key,
+            "drive"
+        );
+        assert!(service_for_command("/usr/bin/some-other-tool").is_none());
+    }
+
+    #[test]
+    fn unauthenticated_hint_only_when_configured_but_no_tokens() {
+        let tmp = std::env::temp_dir()
+            .join(format!("aivyx-hint-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cmd = "/opt/bin/aivyx-gmail";
+        // No tokens.json → hint names the fix.
+        let hint = unauthenticated_hint(cmd, &tmp).expect("hint");
+        assert!(hint.contains("aivyx connect gmail"));
+        // A non-service command → no hint.
+        assert!(unauthenticated_hint("/usr/bin/ripgrep", &tmp).is_none());
+        // Once tokens.json exists → no hint.
+        let g = find_service("gmail").unwrap();
+        std::fs::create_dir_all(g.process_dir(&tmp)).unwrap();
+        std::fs::write(g.token_path(&tmp), "{}").unwrap();
+        assert!(unauthenticated_hint(cmd, &tmp).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -4842,6 +4842,16 @@ async fn run_async(
         );
     }
     for tp_cfg in &config_tool_processes {
+        // Phase 182 — if a Google productivity tool is configured
+        // but not yet authenticated, name its own remedy.
+        if let Some(home) = std::env::var_os("HOME") {
+            if let Some(hint) = connect::unauthenticated_hint(
+                &tp_cfg.command,
+                std::path::Path::new(&home),
+            ) {
+                eprintln!("aivyx: {hint}");
+            }
+        }
         // Phase 52 — the operator's explicit [tool_process.sandbox]
         // wins outright. None when the block is omitted.
         let explicit = tp_cfg.sandbox.as_ref().map(|s| aivyx_tool::SandboxConfig {
