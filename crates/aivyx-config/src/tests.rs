@@ -7876,6 +7876,30 @@ fn correction_judgment_parse_and_validate() {
     drop(env);
 }
 
+/// Phase 179 — `[correction_signal]` parses; absent → None.
+#[test]
+fn correction_signal_parse() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.correction_signal.is_none());
+
+    let on = load_with_toml(
+        "\n[correction_signal]\nattribute_tools = true\n",
+        "cs-on",
+    );
+    assert!(on.correction_signal.expect("present").attribute_tools);
+
+    let off = load_with_toml(
+        "\n[correction_signal]\nattribute_tools = false\n",
+        "cs-off",
+    );
+    assert!(!off.correction_signal.expect("present").attribute_tools);
+    drop(env);
+}
+
 // ---- Phase 89 — [memory].canonicalize_topics ----------------
 
 /// No `[memory]` block (or no `canonicalize_topics` key) →

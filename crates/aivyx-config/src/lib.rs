@@ -708,6 +708,9 @@ pub struct AivyxConfig {
     /// the reflection cron (only genuine reworks fold); it still
     /// no-ops unless `enabled = true`.
     pub correction_judgment: Option<CorrectionJudgmentConfig>,
+    /// Phase 179 — `[correction_signal]` section. `None` when
+    /// absent: the correction fold is topic-only (Phase 172).
+    pub correction_signal: Option<CorrectionSignalConfig>,
     /// Phase 93 — `[recall_feedback]` section. `None` when
     /// absent: `correlate_detailed` uses the Phase 77
     /// structural turn-level proxy uniformly across every hit
@@ -2235,6 +2238,21 @@ pub struct CorrectionJudgmentConfig {
 /// reasoning as the Phase 91 recall-judgment cap.
 pub const DEFAULT_CJ_MAX_CORRECTIONS_PER_CYCLE: u32 = 30;
 
+/// Phase 179 — `[correction_signal]` runtime config. Opt-in
+/// shaping of what the Phase 172 correction fold accumulates.
+///
+/// `None` (no section) → the fold is the byte-identical Phase
+/// 172 structural fold (recalled-topic attribution only).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrectionSignalConfig {
+    /// Phase 179 — also attribute corrections to the corrected
+    /// turn's **tools** (keyed `tool:<scope_base>`), via the
+    /// outcome-driven detector. Broadens the signal to no-recall
+    /// turns the recall-driven detector misses. Default `false`
+    /// (the ledger stays topic-only until the operator opts in).
+    pub attribute_tools: bool,
+}
+
 /// Phase 93 — `[recall_feedback]` runtime config.
 ///
 /// The consumer-side switch that closes the Phase 91
@@ -2913,6 +2931,10 @@ struct RawToml {
     /// correction classification.
     #[serde(default)]
     correction_judgment: RawCorrectionJudgment,
+    /// `[correction_signal]` section. Phase 179 — tool
+    /// correction attribution toggle.
+    #[serde(default)]
+    correction_signal: RawCorrectionSignal,
     /// `[recall_feedback]` section. Phase 93 — consumer-side
     /// switch from structural proxy to LLM judgment signal.
     #[serde(default)]
@@ -3740,6 +3762,13 @@ struct RawCorrectionJudgment {
     enabled: Option<bool>,
     #[serde(default)]
     max_corrections_per_cycle: Option<u32>,
+}
+
+/// Phase 179 — `[correction_signal]` deserialize target.
+#[derive(Debug, Default, Deserialize)]
+struct RawCorrectionSignal {
+    #[serde(default)]
+    attribute_tools: Option<bool>,
 }
 
 /// Phase 93 — `[recall_feedback]` deserialize target.
@@ -4574,6 +4603,12 @@ impl AivyxConfig {
         let correction_judgment = build_correction_judgment_config(
             &toml.correction_judgment,
         )?;
+        let correction_signal = toml
+            .correction_signal
+            .attribute_tools
+            .map(|attribute_tools| CorrectionSignalConfig {
+                attribute_tools,
+            });
         let recall_feedback =
             build_recall_feedback_config(&toml.recall_feedback)?;
         let skill_auto_propose =
@@ -5555,6 +5590,7 @@ impl AivyxConfig {
             loop_config,
             recall_judgment,
             correction_judgment,
+            correction_signal,
             recall_feedback,
             skill_auto_propose,
             persona_auto_propose,

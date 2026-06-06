@@ -247,6 +247,12 @@ pub struct RecallFeedbackDeps {
     pub correction_judgment_stat: Option<
         crate::correction_judgment::SharedCorrectionJudgmentStat,
     >,
+    /// Phase 179 — when `true` (from
+    /// `[correction_signal].attribute_tools`), the correction
+    /// fold also attributes corrections to the corrected turn's
+    /// tools (outcome-driven, keyed `tool:<base>`), additively
+    /// over the topic counts. `false` → Phase 172 topic-only.
+    pub attribute_tool_corrections: bool,
     /// Phase 93 — flip `correlate_detailed` from the
     /// pre-Phase-93 structural-only behaviour (the default,
     /// `false`) to per-hit judgment override with structural
@@ -1277,6 +1283,47 @@ async fn run_recall_feedback_pass(
                  error: {e}",
                 sched.name,
             );
+        }
+    }
+
+    // Phase 179 — opt-in tool correction attribution. Runs
+    // **outside** the recalls-non-empty gate above precisely so it
+    // catches **no-recall** turns (the whole point — the topic
+    // fold is recall-driven and never sees them). Outcome-driven,
+    // `tool:`-namespaced, and a separate `record_window` call:
+    // `record_window` is per-key, so disjoint topic + tool keys at
+    // the same `now_secs` are equivalent to one merged call. Off →
+    // nothing runs (byte-identical to Phase 172/178).
+    if deps.attribute_tool_corrections {
+        if let Some(ledger) = &deps.correction_ledger {
+            let tools =
+                crate::correction_detect::detect_tool_corrections(
+                    summaries,
+                );
+            if !tools.is_empty() {
+                let counts: Vec<(String, f32)> = tools
+                    .ranked()
+                    .into_iter()
+                    .map(|(k, c)| (k, c as f32))
+                    .collect();
+                let n = counts.len();
+                if let Err(e) =
+                    ledger.record_window(&counts, now_secs).await
+                {
+                    eprintln!(
+                        "aivyx correction-signal: schedule {:?} tool \
+                         fold error: {e}",
+                        sched.name,
+                    );
+                } else {
+                    let _ = ledger.prune(now_secs).await;
+                    eprintln!(
+                        "aivyx correction-signal: schedule {:?} — \
+                         attributed {n} tool key(s)",
+                        sched.name,
+                    );
+                }
+            }
         }
     }
 
@@ -2880,6 +2927,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
 
@@ -3055,6 +3103,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             // Phase 93 — the knob under test.
             use_judgment_signal: true,
         };
@@ -3225,6 +3274,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
 
@@ -3412,6 +3462,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
 
@@ -3580,6 +3631,7 @@ mod tests {
             correction_judge: Some(Arc::new(WrongMeansRework)),
             correction_judgment_max: 30,
             correction_judgment_stat: Some(stat.clone()),
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
 
@@ -3605,6 +3657,112 @@ mod tests {
         assert_eq!(snap.rework, 1);
         assert_eq!(snap.praise, 1);
         assert_eq!(snap.judged, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Phase 179 — additive tool correction fold -------------
+
+    #[tokio::test]
+    async fn attribute_tools_folds_tool_keys_for_no_recall_turn() {
+        use crate::correction_ledger::PersistentCorrectionLedger;
+        use crate::persona_proposal::PersistentPersonaProposalLog;
+        use crate::recall_log::PersistentRecallLog;
+        use aivyx_crypto::MasterKey;
+        use aivyx_memory::{InMemoryMemory, Memory};
+        use aivyx_storage::{
+            KeyDomain, RedbStorage, Storage, StorageConfig,
+        };
+        use std::sync::Arc;
+
+        let base =
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base).join(format!(
+            "aivyx-tool-fold-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([179u8; 32]),
+        )
+        .await
+        .unwrap();
+        let recall_log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let ledger = Arc::new(PersistentCorrectionLedger::new(
+            store.domain(KeyDomain::CorrectionLedger),
+        ));
+        let proposal_log = Arc::new(
+            PersistentPersonaProposalLog::open(
+                store.domain(KeyDomain::PersonaProposals),
+                b"tool-fold-key".to_vec(),
+            )
+            .await
+            .unwrap(),
+        );
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+
+        // NO recall events. A corrected turn (t0 completed, t1
+        // follows fast) that used gmail.send — invisible to the
+        // recall-driven detector, attributable via tools.
+        let sid = SessionId::new().to_string();
+        let t0 = OutcomeSummary {
+            session_id: sid.clone(),
+            turn_id: "t0".into(),
+            started_at_unix_ms: 100_000,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 1,
+            duration_ms: 1_000,
+            tools: vec!["gmail.send".into()],
+        };
+        let summaries = vec![
+            t0,
+            OutcomeSummary {
+                session_id: sid.clone(),
+                turn_id: "t1".into(),
+                started_at_unix_ms: 106_000,
+                outcome_kind: "completed".into(),
+                tool_calls_made: 0,
+                duration_ms: 1_000,
+                tools: vec![],
+            },
+        ];
+
+        let sched = aivyx_config::ReflectionScheduleConfig {
+            name: "nightly".into(),
+            cron: "0 0 3 * * *".into(),
+            lookback_window_secs: 10_000_000_000,
+            role_override: None,
+            enabled: true,
+            skip_when_idle: false,
+            min_audit_entries_to_fire: 1,
+        };
+        let deps = RecallFeedbackDeps {
+            recall_log: Arc::clone(&recall_log),
+            memory: Arc::clone(&memory),
+            proposal_log: Arc::clone(&proposal_log),
+            gc_retain_secs: 100_000_000_000,
+            helpfulness_ledger: None,
+            cooccurrence_ledger: None,
+            correction_ledger: Some(Arc::clone(&ledger)),
+            correction_judge: None,
+            correction_judgment_max: 0,
+            correction_judgment_stat: None,
+            attribute_tool_corrections: true,
+            use_judgment_signal: false,
+        };
+
+        run_recall_feedback_pass(&deps, &sched, &summaries, 1_000_000_000)
+            .await;
+
+        // The tool key folded even with zero recall events.
+        assert!(ledger
+            .topic_corrections("tool:gmail.send", 1_000_000)
+            .await
+            .unwrap()
+            .is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3730,6 +3888,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
 
@@ -3953,6 +4112,7 @@ mod tests {
             correction_judge: None,
             correction_judgment_max: 0,
             correction_judgment_stat: None,
+            attribute_tool_corrections: false,
             use_judgment_signal: false,
         };
         run_recall_feedback_pass(

@@ -361,6 +361,10 @@ pub struct DaemonConfig {
     pub correction_judgment_stat: Option<
         crate::correction_judgment::SharedCorrectionJudgmentStat,
     >,
+    /// Phase 179 — `[correction_signal]` config (tool correction
+    /// attribution toggle). `None` → topic-only (Phase 172).
+    pub correction_signal_config:
+        Option<aivyx_config::CorrectionSignalConfig>,
     /// Phase 93 — `[recall_feedback]` config. `None` (no
     /// section) → `correlate_detailed` runs with the
     /// pre-Phase-93 structural-only behaviour. `Some` with
@@ -490,6 +494,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         correction_judgment_config,
         correction_judge,
         correction_judgment_stat,
+        correction_signal_config,
         recall_feedback_config,
         tool_descriptors,
         skill_auto_proposer,
@@ -751,6 +756,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                                 .unwrap_or(0),
                         correction_judgment_stat:
                             correction_judgment_stat.clone(),
+                        // Phase 179 — opt-in tool correction
+                        // attribution from `[correction_signal]`.
+                        attribute_tool_corrections:
+                            correction_signal_config
+                                .as_ref()
+                                .map(|c| c.attribute_tools)
+                                .unwrap_or(false),
                         // Phase 93 — per-hit judgment override
                         // when `[recall_feedback].use_judgment_signal
                         // = true`. Absent section → `false`
@@ -2435,6 +2447,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         correction_judgment_config: None,
         correction_judge: None,
         correction_judgment_stat: None,
+        correction_signal_config: None,
         recall_feedback_config: None,
         tool_descriptors: Vec::new(),
         skill_auto_proposer: None,

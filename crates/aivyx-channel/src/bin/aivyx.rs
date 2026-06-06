@@ -3494,6 +3494,9 @@ async fn run_async(
         // through DaemonConfig to the reflection-cron correction
         // fold (only Rework folds when armed).
         correction_judgment: config_correction_judgment,
+        // Phase 179 — `[correction_signal]` config (tool
+        // correction attribution toggle).
+        correction_signal: config_correction_signal,
         // Phase 93 — `[recall_feedback]` config. Wired
         // through DaemonConfig to thread the per-hit
         // judgment-signal switch into `correlate_detailed`
@@ -5965,6 +5968,9 @@ async fn run_async(
             correction_judge: correction_judge.clone(),
             correction_judgment_stat:
                 correction_judgment_stat.clone(),
+            // Phase 179 — `[correction_signal]` config.
+            correction_signal_config:
+                config_correction_signal.clone(),
             // Phase 93 — `[recall_feedback]` config threaded
             // into the daemon. Drives `correlate_detailed` in
             // both the reflection-cron recall-feedback pass
