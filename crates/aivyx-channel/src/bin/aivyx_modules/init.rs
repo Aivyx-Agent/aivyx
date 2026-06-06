@@ -455,6 +455,14 @@ fn render_toml(cfg: &InitConfig) -> String {
         }
     }
 
+    // Phase 180 — secure-by-default. New configs request the
+    // bundled sandbox preset: tool processes are OS-isolated
+    // (bubblewrap / firejail, auto-detected) without further
+    // setup. Set to "none" to opt out, or add a per-tool
+    // `disable_sandbox = true`.
+    out.push_str("\n[sandbox]\n");
+    out.push_str("default_backend = \"auto\"\n");
+
     out
 }
 
@@ -652,6 +660,15 @@ fn render_with_template(
     // [fs] + [storage]
     doc["fs"]["root"] = value(cfg.fs_root.as_str());
     doc["storage"]["path"] = value(cfg.storage_path.as_str());
+
+    // Phase 180 — secure-by-default. Every template-generated
+    // config requests the bundled sandbox preset for tool
+    // processes (auto-detected bubblewrap / firejail). An explicit
+    // `Item::Table` renders the readable `[sandbox]` header form
+    // (a plain auto-vivified assignment renders an inline table).
+    let mut sandbox_tbl = toml_edit::Table::new();
+    sandbox_tbl["default_backend"] = value("auto");
+    doc["sandbox"] = toml_edit::Item::Table(sandbox_tbl);
 
     // [profile] fields. Only update keys the operator actually
     // customized; leave the template's defaults otherwise. The
@@ -1271,6 +1288,46 @@ mod tests {
         let toml = render_toml(&cfg);
         assert!(!toml.contains("[profile]"));
         assert!(!toml.contains("assistant_name"));
+    }
+
+    #[test]
+    fn render_toml_is_secure_by_default() {
+        // Phase 180 — every wizard-generated config requests the
+        // bundled sandbox preset (secure-by-default for new
+        // launches; existing configs without [sandbox] are
+        // unchanged).
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "store.redb",
+            ".",
+            false,
+        );
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[sandbox]"));
+        assert!(toml.contains("default_backend = \"auto\""));
+    }
+
+    #[test]
+    fn template_render_is_secure_by_default() {
+        // Template mode (toml_edit path) is also secure-by-default.
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "store.redb",
+            ".",
+            false,
+        );
+        let doc: toml_edit::DocumentMut =
+            "[agent]\nprovider = \"ollama\"\nmodel = \"x\"\n\
+             [fs]\nroot = \".\"\n[storage]\npath = \"s.redb\"\n"
+                .parse()
+                .unwrap();
+        let out = render_with_template(&cfg, "coder", doc);
+        assert!(out.contains("[sandbox]"));
+        assert!(out.contains("default_backend = \"auto\""));
     }
 
     #[test]

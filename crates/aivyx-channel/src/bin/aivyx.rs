@@ -4821,11 +4821,16 @@ async fn run_async(
             &ro_extra,
             &writable,
         );
-        if let Some(s) = &spawn_sandbox {
-            eprintln!(
-                "aivyx: tool process {:?} sandboxed via {:?}",
+        match &spawn_sandbox {
+            Some(s) => eprintln!(
+                "aivyx: tool process {:?} — sandboxed ({})",
                 tp_cfg.name, s.wrapper
-            );
+            ),
+            None => eprintln!(
+                "aivyx: tool process {:?} — UNSANDBOXED (runs with \
+                 your full user identity)",
+                tp_cfg.name
+            ),
         }
         let spawn_cfg = aivyx_tool::ToolProcessConfig {
             name: tp_cfg.name.clone(),
