@@ -429,6 +429,49 @@ production-ready in-process AND daemon-mode after Phase
 Channel Activation Milestone's job (operator-driven
 verification pass, separate from the phase sequence).
 
+## The terminal UI (Phase 185)
+
+`aivyx tui` launches a **terminal application** instead of the
+plain line REPL: a scrollable chat pane, a status bar
+(role · daemon · working), and an input line — rendered with
+`ratatui`. Like every Aivyx interface it is a **frontend client**
+over the local daemon IPC: it connects to the running daemon
+(auto-spawning one if none is listening), exactly as the REPL
+does. The daemon — not the TUI — holds the agent, state,
+capabilities, and audit, and it survives the TUI exiting.
+
+```sh
+aivyx tui                 # default role
+aivyx tui --role coder    # pick a role, like the REPL
+```
+
+Keybindings:
+
+| Key | Action |
+|---|---|
+| `Enter` | Send the current line |
+| `←` `→` `Home` `End` | Move the input cursor |
+| `PgUp` / `PgDn` | Scroll the chat pane (arrows scroll one line) |
+| `Esc` / `Ctrl-C` | Cancel the in-flight turn |
+| `Ctrl-Q` | Quit (the daemon keeps running) |
+| `y` / `n` | Approve / reject an approval gate when one is shown |
+
+**Opt-in by design.** The TUI requires a real terminal, so the
+**REPL stays the default** and the only non-TTY / scripting /
+piped path — automation that pipes into `aivyx` keeps working
+unchanged. Promote the TUI to the default in your own workflow by
+aliasing `aivyx` to `aivyx tui`.
+
+**New dependencies.** The TUI is the first feature to add
+workspace dependencies in a long time: `ratatui` + `crossterm`,
+the terminal-UI stack. They are **quarantined to the `aivyx-tui`
+crate** — the substrate crates (`aivyx-core`, `aivyx-capability`,
+`aivyx-storage`, `aivyx-crypto`, …) stay dependency-clean, and
+only the `aivyx-cli` binary crate links the TUI in. Turn 1's
+foundation collects each turn and renders it with a *working…*
+status; live token-by-token streaming is the next interface
+phase.
+
 ## Teaching the agent a skill (Phase 184)
 
 You can **teach** the agent a skill in conversation — no config,

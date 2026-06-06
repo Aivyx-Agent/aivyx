@@ -113,21 +113,20 @@ in a later phase; this foundation never removes the REPL.
 
 ## Exit criteria
 
-- [ ] `docs/PHASE_185.md` + README row + Phase 184 backfill — T1.
-- [ ] `aivyx-tui` crate + the pure `AppState`/`update` model +
+- [x] `docs/PHASE_185.md` + README row + Phase 184 backfill — T1.
+- [x] `aivyx-tui` crate + the pure `AppState`/`update` model +
   event→line mapping — T2.
-- [ ] The ratatui terminal driver with panic-safe restore — T3.
-- [ ] `aivyx tui` connects, submits, handles gates, cancels,
+- [x] The ratatui terminal driver with panic-safe restore — T3.
+- [x] `aivyx tui` connects, submits, handles gates, cancels,
   quits; REPL still the default — T4.
-- [ ] DESIGN.md / PRODUCT.md / `aivyx-core/src/lib.rs` HOLD.
-- [ ] **Exactly two** new workspace deps (`ratatui`, `crossterm`),
-  quarantined to `aivyx-tui`.
-- [ ] Zero clippy warnings.
-- [ ] Test count delta: `+12` to `+20`. *(Component-priced: the
-  pure reducer is the dense part — key-edit / submit / scroll /
-  status / gate transitions + the event→line mapping. The
-  terminal rendering + daemon glue are operator-verified, not
-  unit-tested.)*
+- [x] DESIGN.md / PRODUCT.md / `aivyx-core/src/lib.rs` HOLD.
+- [x] **Exactly two** new workspace deps (`ratatui`, `crossterm`),
+  quarantined to `aivyx-tui`. *(Held — the unplanned `aivyx-cli`
+  crate added no external deps; `aivyx-tui` is still the only
+  direct `ratatui`/`crossterm` consumer.)*
+- [x] Zero clippy warnings.
+- [ ] ~~Test count delta: `+12` to `+20`.~~ **Missed — landed
+  `+42`** (see Prediction vs reality). Over band by 2×.
 
 ## Honest scope risks at sign-off
 
@@ -149,4 +148,102 @@ in a later phase; this foundation never removes the REPL.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+### The unplanned crate — an `aivyx-tui ↔ aivyx-channel` cycle
+
+The Design's stated dependency shape — *"`aivyx-tui` depends on
+`aivyx-channel`"* **and** *"`aivyx-channel`'s binary depends on
+`aivyx-tui`"* — is a **package cycle**, which Cargo rejects:
+
+```
+error: cyclic package dependency:
+  aivyx-channel → aivyx-tui → aivyx-channel
+```
+
+It was never cycle-checked. The `aivyx` binary lived *inside*
+`aivyx-channel`, and `aivyx-tui` legitimately needs
+`aivyx-channel` for `DaemonSession` + the `StreamEventPayload`
+IPC types — so the binary's crate and the renderer's dependency
+were the same crate. Surfaced at T4 (the first time the binary
+linked `aivyx-tui`).
+
+**Resolution (operator-chosen):** extract the `aivyx` binary into
+a **new `aivyx-cli` crate** that depends on both `aivyx-channel`
+and `aivyx-tui`. The graph is now acyclic — `aivyx-cli →
+{aivyx-channel, aivyx-tui}`, `aivyx-tui → aivyx-channel` — and
+`aivyx-channel` becomes a **pure library** that no longer
+declares the ratatui stack. The binary, its `aivyx_modules`, and
+all 420 of its tests moved via `git mv` (history preserved); the
+`aivyx` binary name and `cargo … --bin aivyx` are unchanged, so
+scripts (`dev-run.sh`, `dev-verify.sh`) and cargo-dist's
+binary discovery keep working untouched.
+
+This is an **unplanned 26th workspace crate** beyond the planned
+25th (`aivyx-tui`). It added **no new external dependency** — so
+the "exactly two new workspace deps" contract held — but it is a
+real structural change the 5-task plan didn't foresee. The two
+clean alternatives (dependency-invert `aivyx-tui` to be
+transport-free; or feature-gate the TUI inside `aivyx-channel`)
+were weighed and declined in favour of the layering this gives:
+the binary is a frontend launcher *above* both the library and
+the renderer, which is where a launcher belongs.
+
+### Streaks — all HELD as predicted
+
+- **DESIGN.md** 21 → **22**. Untouched.
+- **PRODUCT.md** 75 → **76**. Untouched.
+- **`aivyx-core/src/lib.rs`** 21 → **22**. Untouched.
+- **Zero-new-dependency streak** — **BROKEN, as planned.**
+  `ratatui` + `crossterm`, quarantined to `aivyx-tui`.
+
+### Test band — MISSED, `+42` vs predicted `+12..+20`
+
+Over band by 2×, and the same under-pricing shape as Phase 184,
+worse: I priced only *"the reducer"* as the dense part, but
+**three** pure cores turned out unit-testable at fine grain, not
+one:
+
+- the reducer (T2) — **23** (input editing incl. multibyte,
+  submit/blank/while-working, scroll bounds + re-pin, status
+  transitions, gate set/clear, event→line mapping);
+- the keystroke→`Action` map + the render scroll math (T3) —
+  **14** (11 key-binding cases incl. gate capture / cancel /
+  release-ignore, 3 render: `chat_scroll_offset` + two
+  `TestBackend` buffer smokes);
+- the `tui` CLI parse (T4) — **5**.
+
+The estimate's *posture* was right (component-priced; the
+terminal driver + daemon run-loop are operator-verified, not
+counted), but I undercounted the **event/render pure surface**:
+`key_to_action` and `chat_scroll_offset` are exactly the kind of
+small pure functions that earn a test apiece, and the TEA reducer
+rewards one-assertion-per-transition granularity. Recorded as a
+clean over-band miss — the recurring lesson (price *every* dense
+pure component, not just the headline one) restated, not yet
+learned.
+
+### What shipped, end-to-end
+
+1. **`aivyx-tui` crate + pure model** (T2) — `AppState`,
+   `update(state, msg) -> state`, `lines_from_event`. Terminal-free,
+   CI-tested.
+2. **Terminal driver + render** (T3) — `Tui` RAII guard
+   (panic-safe raw-mode / alt-screen restore), the ratatui layout
+   (chat + status + input / gate prompt), and the pure
+   keystroke→`Action` map.
+3. **`aivyx tui` command + run loop** (T4) — auto-spawn connect,
+   render→read-key→act, submit / in-turn-cancel / gate-resolve
+   round-trips; the `aivyx-cli` extraction.
+4. **Docs + frozen** (T5) — INSTALL TUI section (keybindings,
+   opt-in vs the REPL, the new deps), this exit, README frozen.
+
+### The result
+
+Chapter I opens: the keyboard experience is now an **application**
+(`aivyx tui`) — a real terminal frontend over the same daemon IPC
+the REPL uses — while the REPL stays the default and the only
+non-TTY / scripting path. The dependency break was made
+deliberately and stayed quarantined; the substrate is untouched.
+The honest scars: an unplanned crate extraction forced by a cycle
+the plan didn't catch, and a 2× test-band overshoot from
+under-pricing the pure event/render surface. Live token streaming
++ state panels are the next Chapter I phases.
