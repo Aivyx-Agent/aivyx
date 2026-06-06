@@ -4951,6 +4951,34 @@ namespaced (they never collide with topic keys) and show up in
 `aivyx learning`'s accumulated corrections. Off → the ledger is
 topic-only (byte-identical to Phase 172).
 
+## Reminders (Phase 183)
+
+One-shot reminders: *"remind me to call mom at 6pm"* → a
+notification arrives at 6pm. Three agent tools, daemon-native
+(the reminder driver pushes through the notify dispatcher — a
+capability a separate tool process can't provide):
+
+- **`remind.set`** — `{ "at": <unix seconds or RFC3339>,
+  "message": <text>, "notify_targets"?: [..] }`. The agent
+  resolves your natural language ("6pm", "in 2 hours") to an
+  absolute `at` using the current time; you can read it back with
+  `remind.list`. Omit `notify_targets` to use every configured
+  notify target.
+- **`remind.list`** — pending reminders, soonest first.
+- **`remind.cancel`** — `{ "id": <reminder id> }`.
+
+The reminder driver checks for due reminders on a cadence
+(default every 30 s; tune with `[reminders] check_interval_secs
+= N`), delivers each through your configured notify targets
+(see *Email notifications* / *Web UI desktop notifications* /
+the Telegram backend), and clears it. Delivery is **at-least-
+once**: a reminder due while the daemon is down fires on the next
+tick after restart.
+
+Reminders are **Trusted-tier** — a SemiTrusted remote adapter
+can't set them (they push notifications). One-shot only;
+recurring reminders are the `[[schedule]]` cron surface.
+
 ## Autonomous loop — the Aivyx Ralph loop (Phase 173)
 
 Aivyx's native answer to the "Ralph" technique

@@ -138,4 +138,54 @@ notify dispatcher.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 20 | Untouched (a `KeyDomain` + channel-tier tools + bases, all added without a DESIGN edit in 172/173; A3 amendment for the scopes) | ✅ |
+| PRODUCT.md HOLD → 74 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 20 | Untouched | ✅ |
+| Zero new workspace deps | reused `chrono` (already present), notify, storage | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+18` to `+28` | **`+14`** (store 5 + tools 5 + driver 3 + config 1); ~4,181 → ~4,195 | ❌ **below band** |
+
+**Band note — I regressed to a coarse label, and missed.** I
+priced this `+18..+28` by calling it "a substrate phase like the
+loop foundation." That was the wrong instinct — the *exact*
+mistake the Phase 179 retro named. This substrate is **much
+lighter** than the loop foundation: a plain CRUD store (not an
+HMAC chain with a `decide()` function and gate verification),
+three *thin* CRUD tools, and a simple fire-loop. Pricing by the
+actual dense components — a simple store (~5) + 3 thin tools (~5)
++ a simple driver (~3) + a config knob (~1) — gives **~14**,
+exactly what landed. The lesson, restated for the fifth time and
+clearly not yet a reflex: **price by the components a phase
+contains, never by a family label** ("substrate" / "loop" /
+"glue"). Two substrate phases can differ 2×.
+
+What shipped, end-to-end:
+
+1. **`KeyDomain::Reminders` + `ReminderStore`** (T2). A simple
+   id-keyed durable CRUD store + the pure `due_now` selector.
+2. **`remind.*` tools + bases** (T3). Three channel-tier tools;
+   `remind.read` / `remind.write` via the A3 process; the agent
+   resolves NL time to an absolute `at`.
+3. **The driver + config** (T4). A re-arming driver that delivers
+   due reminders through the notify dispatcher (at-least-once)
+   and clears them; `[reminders].check_interval_secs`.
+
+### Honest scope risks at sign-off
+
+- **The agent resolves NL time, not the tool** — `remind.list` is
+  the readback check.
+- **Delivery is best-effort / at-least-once** — a reminder due
+  while the daemon is down fires on the next tick after restart;
+  a failed clear re-fires (never lost).
+- **No-target reminders fan out to every configured target** —
+  the documented default.
+- **One-shot only** — recurrence stays the `[[schedule]]` surface.
+
+### The result
+
+The first everyday-PA breadth pick: reminders, the canonical
+personal-assistant capability, shipped daemon-native (the correct
+home for push-at-a-time) with the 13-tool substrate cap untouched.
+Streaks held; zero new deps. THREAT_MODEL updated to 20 domains.

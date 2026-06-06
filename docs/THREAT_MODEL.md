@@ -83,13 +83,13 @@ What an attacker would gain by compromising each.
 | Daemon IPC socket | `$XDG_RUNTIME_DIR/aivyx/aivyx.sock`, mode 0600 | Anything the operator can do. |
 | Source code & config | `~/Projects/.../aivyx/`, `aivyx.toml` | Loosen role envelopes, add malicious tools. |
 
-Nineteen encrypted domains exist today: the original nine
+Twenty encrypted domains exist today: the original nine
 (Sessions, Memory, Audit, Secrets, ChannelState, Missions,
 Schedules, Webhooks, FileWatches) plus the Persona /
-self-learning / loop domains added since (Persona,
+self-learning / loop / reminder domains added since (Persona,
 PersonaProposals, MemoryVectors, RecallEvents, ProactiveLog,
 HelpfulnessLedger, CooccurrenceLedger, ToolRelevanceLedger,
-CorrectionLedger, LoopBacklog). Each is sealed under its own
+CorrectionLedger, LoopBacklog, Reminders). Each is sealed under its own
 HKDF-derived subkey so a leak of one domain's plaintext does not
 compromise another — and the productivity-tool OAuth tokens sit
 outside this set entirely, in their own per-tool-process files.
