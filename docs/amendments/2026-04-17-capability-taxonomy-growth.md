@@ -503,6 +503,31 @@ grows 31 → 33:
 
 Total: 16 + 5 + 33 + 20 = 74.
 
+## Phase 184 addendum — Conversational skill-teaching (2026-06-06)
+
+> *Added at Phase 184 exit. The last Chapter H phase: make the
+> `LearnedSkill` layer operator-authorable. One new channel-tier
+> base, `skills.write`, gates the three edit tools (`skills.teach`
+> / `skills.update` / `skills.forget`) that append LearnedSkill
+> deltas to the Persona chain after the agent confirms the
+> drafted skill with the operator. Trusted-tier at the ceiling
+> like the existing `skills.propose` / `skills.list` /
+> `skills.invoke` — a SemiTrusted remote adapter must not edit
+> the skill set (it is identity). Distinct from `skills.propose`
+> (the gated reflection path). The thirteen-tool substrate core
+> (amendment A12) is untouched.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 184 | `skills.write` | Operator-authored skill editing — teach / update / forget a `LearnedSkill` after in-chat confirmation (Trusted-tier-only at the ceiling, matching the other `skills.*` bases). |
+
+### Current full enumeration after Phase 184 (75 bases)
+
+The Phase 183 enumeration plus one new **infrastructure** base
+(`skills.write`), so the infrastructure family grows 33 → 34:
+
+Total: 16 + 5 + 34 + 20 = 75.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

@@ -279,6 +279,15 @@ const KNOWN_BASES: &[&str] = &[
     // approved skill set.
     "skills.list",
     "skills.invoke",
+    // Phase 184 — Conversational skill-teaching. `skills.write`
+    // gates the operator-authored edit tools (`skills.teach` /
+    // `skills.update` / `skills.forget`) that append LearnedSkill
+    // deltas to the Persona chain after the agent confirms the
+    // drafted skill with the operator. Channel-tier, Trusted-tier
+    // (a remote adapter must not edit the skill set — it is
+    // identity). Distinct from `skills.propose` (the gated
+    // reflection path).
+    "skills.write",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
     // ollama model management (Phase 36 — local LLM story completion)
@@ -841,6 +850,9 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "skills.propose",
         "skills.list",
         "skills.invoke",
+        // Phase 184 — operator-authored skill editing (Trusted
+        // only; identity-modifying).
+        "skills.write",
         "role.update",
         "ollama.list",
         "ollama.show",
@@ -1726,11 +1738,13 @@ mod tests {
         // Ralph loop) backlog tools. Phase 175 adds loop.note
         // for the loop progress log. Phase 183 adds remind.read +
         // remind.write for the reminder tools (everyday-PA #1).
+        // Phase 184 adds skills.write for conversational
+        // skill-teaching (skills.teach / update / forget).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            74,
+            75,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

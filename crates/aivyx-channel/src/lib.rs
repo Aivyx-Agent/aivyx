@@ -142,6 +142,7 @@ pub mod telegram_daemon_frontend;
 pub mod discord_daemon_frontend;
 pub mod gate_command;
 pub mod skill_auto_proposer;
+pub mod skill_edit;
 pub mod relevance_prompt_refiner;
 pub mod tool_relevance_ledger;
 pub mod slack_daemon_frontend;
