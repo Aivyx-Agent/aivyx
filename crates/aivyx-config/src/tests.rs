@@ -7876,6 +7876,24 @@ fn correction_judgment_parse_and_validate() {
     drop(env);
 }
 
+/// Phase 183 — `[reminders].check_interval_secs` parses; absent
+/// → None (driver default).
+#[test]
+fn reminders_check_interval_parses() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(
+        &LoadOptions::test_env_only(),
+    )
+    .expect("load");
+    assert!(cfg.reminders_check_interval_secs.is_none());
+    let on = load_with_toml(
+        "\n[reminders]\ncheck_interval_secs = 15\n",
+        "rem-on",
+    );
+    assert_eq!(on.reminders_check_interval_secs, Some(15));
+    drop(env);
+}
+
 /// Phase 180 — `[sandbox].default_backend` parses; absent →
 /// None; unknown → Invalid.
 #[test]

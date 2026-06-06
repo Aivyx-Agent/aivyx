@@ -711,6 +711,10 @@ pub struct AivyxConfig {
     /// Phase 179 — `[correction_signal]` section. `None` when
     /// absent: the correction fold is topic-only (Phase 172).
     pub correction_signal: Option<CorrectionSignalConfig>,
+    /// Phase 183 — `[reminders].check_interval_secs`: how often
+    /// the reminder driver checks for due reminders. `None`
+    /// (absent) → the driver default (30s).
+    pub reminders_check_interval_secs: Option<u64>,
     /// Phase 93 — `[recall_feedback]` section. `None` when
     /// absent: `correlate_detailed` uses the Phase 77
     /// structural turn-level proxy uniformly across every hit
@@ -2964,6 +2968,9 @@ struct RawToml {
     /// correction attribution toggle.
     #[serde(default)]
     correction_signal: RawCorrectionSignal,
+    /// `[reminders]` section. Phase 183.
+    #[serde(default)]
+    reminders: RawReminders,
     /// `[recall_feedback]` section. Phase 93 — consumer-side
     /// switch from structural proxy to LLM judgment signal.
     #[serde(default)]
@@ -3815,6 +3822,13 @@ struct RawCorrectionSignal {
     attribute_tools: Option<bool>,
 }
 
+/// Phase 183 — `[reminders]` deserialize target.
+#[derive(Debug, Default, Deserialize)]
+struct RawReminders {
+    #[serde(default)]
+    check_interval_secs: Option<u64>,
+}
+
 /// Phase 93 — `[recall_feedback]` deserialize target.
 /// Absent section → all-`None` via `Default` → the loader
 /// maps to `recall_feedback: None` (off; the correlator's
@@ -4653,6 +4667,8 @@ impl AivyxConfig {
             .map(|attribute_tools| CorrectionSignalConfig {
                 attribute_tools,
             });
+        let reminders_check_interval_secs =
+            toml.reminders.check_interval_secs;
         let recall_feedback =
             build_recall_feedback_config(&toml.recall_feedback)?;
         let skill_auto_propose =
@@ -5663,6 +5679,7 @@ impl AivyxConfig {
             recall_judgment,
             correction_judgment,
             correction_signal,
+            reminders_check_interval_secs,
             recall_feedback,
             skill_auto_propose,
             persona_auto_propose,

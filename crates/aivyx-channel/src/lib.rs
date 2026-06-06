@@ -65,6 +65,7 @@ pub mod loop_backlog;
 /// `due_now` selector (everyday-PA breadth #1).
 pub mod reminder_store;
 pub mod reminder_tool;
+pub mod reminder_driver;
 /// Phase 173 — the autonomous-loop backlog agent tools
 /// (`loop.next` / `loop.complete`), channel-tier like
 /// `mission.*`. The only new agent-facing surface the loop

@@ -3596,6 +3596,7 @@ async fn run_async(
         mut mcp_servers,
         tool_processes: config_tool_processes,
         sandbox_default_backend: config_sandbox_default_backend,
+        reminders_check_interval_secs: config_reminders_check_interval_secs,
         schedules: config_schedules,
         webhooks: config_webhooks,
         file_watches: config_file_watches,
@@ -3758,6 +3759,14 @@ async fn run_async(
             ));
         }
     };
+    // Phase 183 — the reminder store, shared between the remind.*
+    // tools and the reminder driver. Zero-config (like the loop
+    // backlog): always opened.
+    let reminder_store: Arc<aivyx_channel::reminder_store::ReminderStore> =
+        Arc::new(aivyx_channel::reminder_store::ReminderStore::new(
+            storage.domain(KeyDomain::Reminders),
+        ));
+
     // Phase 173 — the shared loop run state, created iff the
     // `[loop]` section is armed. `Some` → the daemon spawns the
     // loop driver + the `loop start/stop/status` IPC handlers
@@ -4710,6 +4719,21 @@ async fn run_async(
     let _ = loop_note_tool.set_memory(Arc::clone(&memory));
     tool_list.push(Arc::clone(&loop_note_tool) as Arc<dyn Tool>);
 
+    // Phase 183 — the remind.* channel-tier tools, sharing the
+    // reminder store with the driver.
+    let remind_set_tool =
+        Arc::new(aivyx_channel::reminder_tool::RemindSetTool::new());
+    let _ = remind_set_tool.set_store(Arc::clone(&reminder_store));
+    tool_list.push(Arc::clone(&remind_set_tool) as Arc<dyn Tool>);
+    let remind_list_tool =
+        Arc::new(aivyx_channel::reminder_tool::RemindListTool::new());
+    let _ = remind_list_tool.set_store(Arc::clone(&reminder_store));
+    tool_list.push(Arc::clone(&remind_list_tool) as Arc<dyn Tool>);
+    let remind_cancel_tool =
+        Arc::new(aivyx_channel::reminder_tool::RemindCancelTool::new());
+    let _ = remind_cancel_tool.set_store(Arc::clone(&reminder_store));
+    tool_list.push(Arc::clone(&remind_cancel_tool) as Arc<dyn Tool>);
+
     let shared_role_overrides = aivyx_channel::role_overrides::shared_role_overrides();
     // `persona_log` + `shared_persona` were created earlier (right
     // after the role assemble) so the system-prompt path could read
@@ -5077,6 +5101,35 @@ async fn run_async(
         email_context,
         web_ui_broadcaster.clone(),
     )?;
+    // Phase 183 — spawn the reminder driver. It shares the
+    // notify dispatcher; a reminder that names no target goes to
+    // every registered target (the operator configured them).
+    {
+        use aivyx_channel::reminder_driver::{
+            run_reminder_driver, DispatcherNotifier, ReminderNotifier,
+            DEFAULT_CHECK_INTERVAL_SECS,
+        };
+        let default_targets: Vec<String> = notify_dispatcher
+            .list_targets()
+            .into_iter()
+            .map(|(name, _kind)| name.to_string())
+            .collect();
+        let notifier: Arc<dyn ReminderNotifier> =
+            Arc::new(DispatcherNotifier::new(
+                Arc::clone(&notify_dispatcher),
+                default_targets,
+            ));
+        let interval = std::time::Duration::from_secs(
+            config_reminders_check_interval_secs
+                .filter(|s| *s > 0)
+                .unwrap_or(DEFAULT_CHECK_INTERVAL_SECS),
+        );
+        let store = Arc::clone(&reminder_store);
+        tokio::spawn(async move {
+            run_reminder_driver(store, notifier, interval).await;
+        });
+    }
+
     let notify_send_tool: Arc<aivyx_channel::notify_tool::NotifySendTool> =
         Arc::new(aivyx_channel::notify_tool::NotifySendTool::new());
     // Phase 63 Task 3: the same dispatcher is shared between
