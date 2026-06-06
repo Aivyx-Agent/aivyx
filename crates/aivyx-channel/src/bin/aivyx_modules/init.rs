@@ -812,6 +812,101 @@ fn manual_identity(
     })
 }
 
+impl IdentityFields {
+    /// Re-view the collected fields as a draft (for the preview's
+    /// "edit" path — the operator tweaks what they already have).
+    fn as_draft(&self) -> DraftedProfile {
+        DraftedProfile {
+            assistant_name: self.assistant_name.clone(),
+            operator_profile: self.operator_profile.clone(),
+            communication_style: self.communication_style.clone(),
+            primary_use_cases: self.primary_use_cases.clone(),
+            behavioral_preferences: self.behavioral_preferences.clone(),
+            behavioral_constraints: self.behavioral_constraints.clone(),
+        }
+    }
+}
+
+/// Phase 181 — the "meet your assistant" preview. A warm,
+/// first-person summary of the identity the operator just shaped,
+/// rendered before anything is written. Pure + unit-testable.
+fn render_identity_summary(f: &IdentityFields) -> String {
+    let name = f.assistant_name.as_deref().unwrap_or("Aivyx");
+    let mut s = String::from("\n— Meet your assistant —\n\n");
+    s.push_str(&format!("  I'm {name}.\n"));
+    if let Some(who) = &f.operator_profile {
+        s.push_str(&format!("  You're {who}.\n"));
+    }
+    if let Some(style) = &f.communication_style {
+        s.push_str(&format!("  I'll talk {style}.\n"));
+    }
+    if !f.primary_use_cases.is_empty() {
+        s.push_str(&format!(
+            "  I'm here for {}.\n",
+            f.primary_use_cases.join(", ")
+        ));
+    }
+    if !f.behavioral_preferences.is_empty() {
+        s.push_str(&format!(
+            "  I'll tend to {}.\n",
+            f.behavioral_preferences.join(", ")
+        ));
+    }
+    if !f.behavioral_constraints.is_empty() {
+        s.push_str(&format!(
+            "  I'll never {}.\n",
+            f.behavioral_constraints.join(", ")
+        ));
+    }
+    s
+}
+
+/// The full identity step: collect → preview → confirm / edit /
+/// restart. Loops until the operator confirms.
+async fn confirm_identity(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    provider: Option<&Arc<dyn LlmProvider>>,
+    model: &str,
+    defaults: &TemplateDefaults,
+) -> Result<IdentityFields, String> {
+    loop {
+        let mut fields = run_identity_builder(
+            reader, writer, provider, model, defaults,
+        )
+        .await?;
+        loop {
+            write!(writer, "{}", render_identity_summary(&fields))
+                .map_err(|e| format!("write error: {e}"))?;
+            let choice = prompt_choice(
+                "\nDoes this feel right?",
+                &[
+                    "Yes, this is my assistant",
+                    "Edit a few details",
+                    "Start over",
+                ],
+                0,
+                reader,
+                writer,
+            )?;
+            match choice {
+                0 => return Ok(fields),
+                1 => {
+                    writeln!(
+                        writer,
+                        "\nEdit each line (press Enter to keep):"
+                    )
+                    .map_err(|e| format!("write error: {e}"))?;
+                    fields =
+                        review_draft(reader, writer, fields.as_draft())?;
+                }
+                // "Start over" → re-run the whole builder.
+                _ => break,
+            }
+        }
+    }
+}
+
 /// Construct the provider for the optional identity draft from the
 /// just-verified wizard selection. `None` on any construction
 /// failure (the builder falls back to manual prompts). The draft
@@ -1274,7 +1369,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // builder never requires an LLM).
     let draft_provider =
         build_wizard_provider(provider, api_key.as_deref());
-    let identity = run_identity_builder(
+    let identity = confirm_identity(
         &mut reader,
         &mut writer,
         draft_provider.as_ref(),
@@ -1477,6 +1572,79 @@ mod tests {
         assert_eq!(fields.assistant_name.as_deref(), Some("Fallback"));
         assert_eq!(fields.operator_profile.as_deref(), Some("a dev"));
         assert_eq!(fields.primary_use_cases, vec!["coding"]);
+    }
+
+    #[test]
+    fn identity_summary_reads_warmly_and_omits_empty() {
+        let f = IdentityFields {
+            assistant_name: Some("Sage".into()),
+            operator_profile: Some("a Rust engineer".into()),
+            communication_style: Some("warm but concise".into()),
+            primary_use_cases: vec!["coding".into(), "review".into()],
+            behavioral_preferences: vec![],
+            behavioral_constraints: vec!["never force push".into()],
+        };
+        let s = render_identity_summary(&f);
+        assert!(s.contains("Meet your assistant"));
+        assert!(s.contains("I'm Sage."));
+        assert!(s.contains("You're a Rust engineer."));
+        assert!(s.contains("I'll talk warm but concise."));
+        assert!(s.contains("I'm here for coding, review."));
+        assert!(s.contains("I'll never never force push."));
+        // Empty preferences line is omitted.
+        assert!(!s.contains("I'll tend to"));
+    }
+
+    #[test]
+    fn identity_summary_falls_back_to_default_name() {
+        let s = render_identity_summary(&IdentityFields::default());
+        assert!(s.contains("I'm Aivyx."));
+    }
+
+    #[tokio::test]
+    async fn confirm_identity_accepts_on_first_preview() {
+        // Manual collection (provider None): 6 field lines, then
+        // choose option 1 ("Yes") at the preview.
+        let input = b"Sage\na dev\nwarm\ncoding\n\n\n1\n".to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = confirm_identity(
+            &mut reader,
+            &mut writer,
+            None,
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fields.assistant_name.as_deref(), Some("Sage"));
+        assert!(String::from_utf8_lossy(&writer)
+            .contains("Meet your assistant"));
+    }
+
+    #[tokio::test]
+    async fn confirm_identity_edit_then_accept() {
+        // Collect (6 lines) → preview → "Edit" (2) → re-review 6
+        // lines (change the name) → preview → "Yes" (1).
+        let input = b"Sage\na dev\nwarm\ncoding\n\n\n\
+            2\n\
+            Mira\n\n\n\n\n\n\
+            1\n"
+            .to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = confirm_identity(
+            &mut reader,
+            &mut writer,
+            None,
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        // The edit replaced the name; the rest kept (Enter).
+        assert_eq!(fields.assistant_name.as_deref(), Some("Mira"));
+        assert_eq!(fields.operator_profile.as_deref(), Some("a dev"));
     }
 
     #[test]
