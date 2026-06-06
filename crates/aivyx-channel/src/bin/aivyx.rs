@@ -104,6 +104,8 @@ mod identity;
 mod mcp_recipes;
 #[path = "aivyx_modules/init.rs"]
 mod init;
+#[path = "aivyx_modules/identity_draft.rs"]
+mod identity_draft;
 #[path = "aivyx_modules/init_templates.rs"]
 mod init_templates;
 #[path = "aivyx_modules/learning.rs"]
