@@ -1,0 +1,36 @@
+[package]
+name = "aivyx-tui"
+description = "Terminal UI frontend for Aivyx — ratatui over the daemon IPC (Phase 185 — Chapter I #1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The TUI is just another frontend client over the local daemon
+# IPC — exactly like the REPL and the Web UI. It depends on
+# `aivyx-channel` for `DaemonSession` + the `StreamEventPayload`
+# IPC types it renders, and reuses `render_for_cli` text content
+# for the chat-line mapping. No new substrate concern.
+aivyx-channel = { path = "../aivyx-channel" }
+aivyx-core = { path = "../aivyx-core" }
+
+# Phase 185 — the deliberate dependency break, quarantined here.
+# `ratatui` is the terminal-UI library; `crossterm` is its event
+# + raw-mode backend. See the workspace manifest for the full
+# justification + quarantine invariant.
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+
+# Async runtime — the terminal driver awaits the daemon session
+# (`DaemonSession::submit_input`) between rendered frames.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

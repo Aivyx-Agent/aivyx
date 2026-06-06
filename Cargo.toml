@@ -25,6 +25,7 @@ members = [
     "crates/aivyx-n8n",
     "crates/aivyx-auth-cli",
     "crates/aivyx-voice",
+    "crates/aivyx-tui",
 ]
 
 [workspace.package]
@@ -115,6 +116,19 @@ lettre = { version = "0.11", default-features = false, features = [
 # workspace's rustls-only policy. With defaults off we get the
 # synchronous in-memory validator and nothing else.
 jsonschema = { version = "0.46", default-features = false }
+
+# Phase 185 — Terminal UI stack for the `aivyx tui` frontend. These
+# are the FIRST new workspace dependencies since well before Phase
+# 172, deliberately ending the zero-new-dep streak: a real terminal
+# UI genuinely requires a terminal-UI library, and ratatui +
+# crossterm are the load-bearing, widely-audited, pure-Rust choice.
+# They are QUARANTINED to the `aivyx-tui` crate (and the binary that
+# launches it) — no substrate crate (`aivyx-core`,
+# `aivyx-capability`, `aivyx-storage`, `aivyx-crypto`, …) may depend
+# on them, so the substrate stays dependency-clean. A future audit
+# should confirm `aivyx-tui` is the only ratatui consumer.
+ratatui = "0.29"
+crossterm = "0.28"
 
 # The profile that 'dist' will build with
 [profile.dist]
