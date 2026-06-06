@@ -429,6 +429,33 @@ production-ready in-process AND daemon-mode after Phase
 Channel Activation Milestone's job (operator-driven
 verification pass, separate from the phase sequence).
 
+## Teaching the agent a skill (Phase 184)
+
+You can **teach** the agent a skill in conversation — no config,
+no waiting for the auto-proposer:
+
+> *"Let me show you how I review a PR: first check the diff
+> size, then…"*
+
+The agent drafts the skill, **shows it back** (name +
+when-to-use + steps), and on your **explicit confirmation** saves
+it as a callable skill (it then appears in `skills.list` /
+`skills.invoke`). You can also refine one (*"actually, also run
+the linter first"*) or drop one you no longer want.
+
+Three Trusted-tier tools back this — `skills.teach`,
+`skills.update`, `skills.forget` (all gated by the new
+`skills.write` capability). Each **requires** an internal
+`confirmed: true` the agent sets only after you approve the
+draft, so a skill is never saved silently. A skill is a Persona
+(P14) delta on the HMAC-chained persona log — every teach /
+update / forget is **audited and reversible** (`aivyx persona`).
+
+This is the *operator-authored* path; the reflection
+auto-proposer below is the complementary *agent-detected* path
+(it watches for repeated procedures and proposes them for your
+approval). Both populate the same `LearnedSkill` layer.
+
 ## Persona auto-proposer (Phases 112-115)
 
 The Persona auto-proposer is the optional self-learning

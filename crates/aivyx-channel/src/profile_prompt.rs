@@ -184,6 +184,19 @@ fn render_skills_section(persona: &EffectivePersona) -> String {
             out.push_str(&format!("- {}: {}\n", skill.name, skill.trigger));
         }
     }
+    // Phase 184 — the conversational skill-teaching protocol. The
+    // tool descriptions + the required `confirmed` field enforce
+    // it; this reinforces it whenever the operator already has
+    // skills. When the operator teaches, refines, or drops a
+    // skill, DRAFT the change, SHOW it (name + when-to-use +
+    // steps), and only after they confirm call `skills.teach` /
+    // `skills.update` / `skills.forget` with `confirmed: true`.
+    out.push_str(
+        "\nWhen the operator teaches, refines, or drops a skill, \
+         draft the change, show them the name + when-to-use + \
+         steps, and only after they confirm call `skills.teach` / \
+         `skills.update` / `skills.forget` with `confirmed: true`.\n",
+    );
     out
 }
 
@@ -763,6 +776,29 @@ mod tests {
             "You are helpful.",
         );
         assert_eq!(assembled, "You are helpful.");
+    }
+
+    #[test]
+    fn skills_section_carries_the_teaching_protocol() {
+        // Phase 184 — when the operator has any skill, the prompt
+        // reinforces the draft-show-confirm protocol.
+        let mut persona = EffectivePersona::default();
+        persona.learned_skills.push(
+            crate::persona::LearnedSkill {
+                name: "greet".into(),
+                trigger: "on hello".into(),
+                procedure: "say hi".into(),
+            }
+            .to_json_value(),
+        );
+        let out = render_skills_section(&persona);
+        assert!(out.contains("## Learned skills"));
+        assert!(out.contains("- greet: on hello"));
+        // The teaching protocol + the three edit tools are named.
+        assert!(out.contains("confirmed: true"));
+        assert!(out.contains("skills.teach"));
+        assert!(out.contains("skills.update"));
+        assert!(out.contains("skills.forget"));
     }
 
     #[test]
