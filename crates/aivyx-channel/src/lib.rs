@@ -64,6 +64,7 @@ pub mod loop_backlog;
 /// Phase 183 — durable one-shot reminder store + the pure
 /// `due_now` selector (everyday-PA breadth #1).
 pub mod reminder_store;
+pub mod reminder_tool;
 /// Phase 173 — the autonomous-loop backlog agent tools
 /// (`loop.next` / `loop.complete`), channel-tier like
 /// `mission.*`. The only new agent-facing surface the loop

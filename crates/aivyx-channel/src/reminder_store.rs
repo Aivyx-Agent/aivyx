@@ -56,6 +56,12 @@ pub struct ReminderStore {
     storage: DomainHandle,
 }
 
+impl std::fmt::Debug for ReminderStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReminderStore").finish()
+    }
+}
+
 impl ReminderStore {
     pub fn new(storage: DomainHandle) -> Self {
         Self { storage }

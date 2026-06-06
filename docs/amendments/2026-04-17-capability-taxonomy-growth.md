@@ -479,6 +479,30 @@ The Phase 173 enumeration plus one new **infrastructure** base
 
 Total: 16 + 5 + 31 + 20 = 72.
 
+## Phase 183 addendum — Reminders (everyday-PA breadth #1) (2026-06-06)
+
+> *Added at Phase 183 exit. The first everyday-PA breadth pick:
+> one-shot reminders. Two new channel-tier tools' worth of bases —
+> `remind.read` gates `remind.list`, `remind.write` gates
+> `remind.set` / `remind.cancel` — Trusted-tier at the ceiling
+> like the `loop.*` tools (a SemiTrusted remote adapter must not
+> set reminders that push notifications). A daemon-native
+> capability (push-at-a-time needs the scheduler + notify, which a
+> separate tool process lacks). The thirteen-tool substrate core
+> (amendment A12) is untouched.*
+
+| Phase | Bases added | Provenance |
+|---|---|---|
+| Phase 183 | `remind.read`, `remind.write` | Reminder tools — list pending (`read`) + set / cancel (`write`); the reminder driver fires due reminders through the notify dispatcher (Trusted-tier-only at the ceiling, matching `loop.*`). |
+
+### Current full enumeration after Phase 183 (74 bases)
+
+The Phase 175 enumeration plus two new **infrastructure** bases
+(`remind.read`, `remind.write`), so the infrastructure family
+grows 31 → 33:
+
+Total: 16 + 5 + 33 + 20 = 74.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

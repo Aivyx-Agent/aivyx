@@ -329,6 +329,13 @@ const KNOWN_BASES: &[&str] = &[
     // injects into each fresh iteration. Channel-tier, Trusted,
     // like the other loop tools.
     "loop.note",
+    // Phase 183 — Reminders (everyday-PA breadth #1). `remind.read`
+    // gates `remind.list`; `remind.write` gates `remind.set` /
+    // `remind.cancel`. Channel-tier, Trusted, like the loop tools;
+    // the reminder driver fires due reminders through the notify
+    // dispatcher. The thirteen-tool substrate core is untouched.
+    "remind.read",
+    "remind.write",
 ];
 
 // ---------------------------------------------------------------------------
@@ -818,6 +825,10 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "loop.next",
         "loop.complete",
         "loop.note",
+        // Phase 183 — Reminders. Trusted-tier (like the loop
+        // tools); the reminder driver delivers via notify.
+        "remind.read",
+        "remind.write",
         // Phase 110 — Skills Auto-Creation. Trusted tier gets
         // skills.* because skill proposal + listing + invocation
         // are inside the same reflection-layer envelope as
@@ -1713,12 +1724,13 @@ mod tests {
         // and `budget.record`). Phase 173 adds loop.next +
         // loop.complete for the Autonomous Loop (the Aivyx
         // Ralph loop) backlog tools. Phase 175 adds loop.note
-        // for the loop progress log.
+        // for the loop progress log. Phase 183 adds remind.read +
+        // remind.write for the reminder tools (everyday-PA #1).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            72,
+            74,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
