@@ -1363,23 +1363,61 @@ async fn send_query(
     }
 }
 
+/// The auto-spawned daemon's log file: a sibling `daemon.log` next to
+/// the socket (and the `daemon.pid`), so the three live together in
+/// the runtime dir.
+fn daemon_log_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("log")
+}
+
+/// Open the sibling `daemon.log` for the auto-spawned daemon's
+/// stdout + stderr (created if missing, appended otherwise). Falls
+/// back to discarding output if the log cannot be opened, so a
+/// logging problem never blocks the daemon from starting.
+fn daemon_log_stdio(socket_path: &Path) -> (std::process::Stdio, std::process::Stdio) {
+    let log_path = daemon_log_path(socket_path);
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        // Two independent handles so stdout and stderr can be written
+        // concurrently without sharing one offset cursor.
+        Ok(file) => match file.try_clone() {
+            Ok(file2) => (file.into(), file2.into()),
+            Err(_) => (file.into(), std::process::Stdio::null()),
+        },
+        Err(_) => (std::process::Stdio::null(), std::process::Stdio::null()),
+    }
+}
+
 /// Spawn a daemon process in the background and wait for its socket
 /// to appear. Returns the socket path on success.
 ///
 /// Uses `tokio::process::Command` to launch `aivyx daemon run` as a
-/// detached child with stdout/stderr inherited (so the daemon's
-/// startup banner appears on the operator's terminal).
+/// detached child. The daemon's stdout/stderr are redirected to a
+/// sibling `daemon.log` rather than inherited: a background daemon
+/// must not print onto the launching terminal — in the TUI the
+/// startup banner bleeds under the alternate screen, and in the REPL
+/// it interleaves with the prompt. The banner + ongoing logs stay
+/// recoverable in the log file. (A direct `aivyx daemon run` is
+/// unaffected — it does not go through this path and keeps writing to
+/// the operator's terminal.)
 pub async fn spawn_daemon_and_wait(
     socket_path: &Path,
     timeout: Duration,
 ) -> Result<PathBuf, DaemonError> {
     let exe = std::env::current_exe()?;
 
+    let (stdout, stderr) = daemon_log_stdio(socket_path);
     let _child = tokio::process::Command::new(&exe)
         .args(["daemon", "run"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .stdout(stdout)
+        .stderr(stderr)
         .spawn()
         .map_err(|e| DaemonError::Internal(format!("failed to spawn daemon: {e}")))?;
 
@@ -1441,4 +1479,41 @@ async fn read_more(
     }
     buf.extend_from_slice(&tmp[..n]);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_log_path_is_sibling_of_socket_and_pid() {
+        let socket = Path::new("/run/user/1000/aivyx/daemon.sock");
+        let log = daemon_log_path(socket);
+        assert_eq!(log, Path::new("/run/user/1000/aivyx/daemon.log"));
+        // Lives alongside the pid file (same `with_extension` rule the
+        // server + status probe use), so the runtime dir holds the
+        // socket, pid, and log together.
+        assert_eq!(log.parent(), socket.with_extension("pid").parent());
+        assert_eq!(log.file_name().unwrap(), "daemon.log");
+    }
+
+    #[test]
+    fn daemon_log_stdio_opens_a_log_under_a_temp_runtime_dir() {
+        // The auto-spawn redirect must create the log (and its parent
+        // dir if missing) so the daemon never bleeds onto the
+        // launching terminal. Use a throwaway dir under the temp root.
+        let base = std::env::temp_dir().join(format!(
+            "aivyx-daemon-log-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let socket = base.join("nested").join("daemon.sock");
+        assert!(!base.exists());
+
+        // Should not panic and should materialize the log + parents.
+        let _stdio = daemon_log_stdio(&socket);
+        let log = daemon_log_path(&socket);
+        assert!(log.exists(), "daemon.log was created: {}", log.display());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

@@ -3665,26 +3665,32 @@ exit; ordering revised as each exit teaches us something.
 **Known follow-ups (carried from the Phase 185 real-session
 verify):**
 
-- **Daemon banner bleed on auto-spawn.** When a frontend
-  auto-spawns the daemon (the TUI *and* the REPL both do this), the
-  daemon's startup banner — `aivyx config sources…`, `… listening
-  on …/daemon.sock`, the webhook line — prints onto the launching
-  terminal, where in the TUI it briefly bleeds under the alternate
-  screen. The daemon inherits the frontend's controlling TTY; the
-  fix is to detach the auto-spawned daemon's stdout/stderr (e.g.
-  redirect to a log file or `/dev/null`) in `spawn_daemon_and_wait`.
-  Pre-existing to Phase 185 (not a TUI-logic bug), but most visible
-  in the TUI — a natural fit for the **Phase 187** launch/run
-  lifecycle work, or sooner if a TUI phase touches launch. Cosmetic;
-  the session itself is unaffected.
-- **`Broken pipe` from the daemon connection handler.** One
-  `connection handler error: io error: Broken pipe` was logged
-  during the connect→(spawn)→connect→disconnect dance of a fresh
-  TUI launch. The session completed correctly (the turn round-trip
-  succeeded), so it appears benign — likely the failed first
-  connect probe or the final `Disconnect`/close race — but it is
-  unverified. Trace it before relying on the log being clean;
-  low priority.
+- **Daemon banner bleed on auto-spawn — FIXED.** The auto-spawned
+  daemon inherited the frontend's controlling TTY, so its startup
+  banner (`aivyx config sources…`, `… listening on …`, the webhook
+  line) printed onto the launching terminal — in the TUI it bled
+  under the alternate screen. `spawn_daemon_and_wait` now redirects
+  the daemon's stdout/stderr to a sibling `daemon.log` (next to the
+  socket + pid). Verified: screen-banner count 0, `daemon.log`
+  banner count 3. Direct `aivyx daemon run` is unaffected.
+- **`RecoveryNotice` breaks the first connect after an unclean
+  daemon shutdown.** The daemon sends a `RecoveryNotice` envelope
+  (take-once) between `DaemonReady` and `SessionStarted` to the
+  first frontend that connects after it restarts with stale
+  `daemon.state` (i.e. the previous instance was killed / crashed
+  rather than `daemon stop`-ed). `DaemonSession::connect`'s
+  `SessionStarted`-wait loop does **not** handle `RecoveryNotice` —
+  it hits the catch-all arm and fails with *"expected
+  SessionStarted, got RecoveryNotice"*. This affects **every**
+  frontend (REPL, TUI, channels) since they share `connect`, and it
+  fails in exactly the recovery scenario where reconnect most needs
+  to be smooth. Found during the Phase 185 verify (reproduces on the
+  connect after a `kill -9` of the daemon). Fix is small and
+  clearly correct: drain + skip (and optionally surface)
+  `RecoveryNotice` in the wait loop, like `IncompleteBuf`. Not yet
+  fixed — it's a shared-handshake change worth its own decision.
+  Supersedes the earlier vague *"Broken pipe"* note (same
+  connect-time dance; this is the precise root cause).
 
 ## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
 
