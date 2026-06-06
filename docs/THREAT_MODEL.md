@@ -1,7 +1,8 @@
 # Aivyx Threat Model
 
-**Status:** Draft. **Last reviewed:** Phase 179 exit (2026-06-06)
-— added the productivity-tool OAuth asset (§3), the autonomous
+**Status:** Draft. **Last reviewed:** Phase 180 exit (2026-06-06)
+— the bundled secure-by-default sandbox preset (§6, §4.10); prior
+pass added the productivity-tool OAuth asset (§3), the autonomous
 loop (§4.9), and productivity-tool egress (§4.10). **Owners:**
 the operator.
 
@@ -254,9 +255,14 @@ scope the operator granted, and every invocation is audited as a
 `ToolCall` with the scope used. A compromised or buggy
 productivity tool can misuse the one service it is authorized
 for; it cannot read the daemon's store, another tool's token, or
-a scope it was never granted. (The residual "a malicious tool
-process abuses its own grant" case is the same class as §5.2 /
-§5.6 below — out of scope by the same reasoning.)
+a scope it was never granted. As of **Phase 180**, on a new
+config these binaries are additionally **OS-sandboxed by
+default** (the `[sandbox] default_backend = "auto"` preset —
+filesystem-isolated with only the per-tool token dir writable;
+see §5.6), so even the tool's own filesystem reach is contained
+to its token dir + read-only system. (The residual "a malicious
+tool process abuses its own grant" case is the same class as
+§5.2 / §5.6 below — out of scope by the same reasoning.)
 
 ## 5. Threats we explicitly do not defend against
 
@@ -372,6 +378,26 @@ gap has narrowed substantially.
   sandbox-exec — Aivyx supplies the policy slot; the operator
   supplies the policy. See `docs/TOOL_SDK.md` §9 for worked
   examples.
+- **Phase 180 — secure-by-default.** A *bundled* default preset
+  closes the "unsandboxed unless configured" gap for
+  `[[tool_process]]`. `[sandbox] default_backend = "auto"`
+  (which the `aivyx init` wizard now writes into every new
+  config) detects bubblewrap / firejail on `PATH` and applies a
+  conservative-but-functional preset automatically: read-only
+  system dirs, a private `/tmp`, an isolated PID namespace,
+  `$HOME` hidden except a writable bind of the per-tool token
+  dir, and network left on (it is already capability-gated at the
+  IPC boundary). The in-code default with no `[sandbox]` section
+  stays `none`, so existing configs are unchanged; an operator
+  opts in by adding the section, opts a single tool out with
+  `disable_sandbox = true`, or overrides with an explicit
+  `[tool_process.sandbox]` block. **Scope:** the bundled preset
+  applies to `[[tool_process]]`, not `[mcp_server]` — MCP servers
+  are operator-configured external programs with unknown
+  filesystem needs and keep the Phase 55 explicit-wrapper model.
+  The preset's argv is unit-tested; whether it actually contains
+  a given process is operator-verified (no sandbox backend in
+  CI).
 
 **What is still in scope of this section:**
 

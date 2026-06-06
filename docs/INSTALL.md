@@ -2596,6 +2596,47 @@ in prose would trigger spurious extractions.
   language or escaping. Same posture as Phase 126 — drop
   silently rather than dispatch a wrong call.
 
+## Tool-process sandboxing (`[sandbox]`, Phase 180)
+
+Every `[[tool_process]]` is a separate subprocess. By default
+before Phase 180 it ran with your full user identity unless you
+declared an explicit `[tool_process.sandbox]` wrapper. Phase 180
+adds a **bundled, secure-by-default preset**:
+
+```toml
+[sandbox]
+default_backend = "auto"   # auto | bubblewrap | firejail | none
+```
+
+- **`auto`** (written into every new `aivyx init` config) detects
+  `bwrap` (bubblewrap) then `firejail` on `PATH` and applies a
+  conservative-but-functional preset automatically: read-only
+  system directories, a private `/tmp`, an isolated PID
+  namespace, **`$HOME` hidden except a writable bind of the
+  tool's own `~/.aivyx/tool-processes/<name>/` token dir**, and
+  network left on (it is already capability-gated at the IPC
+  boundary, and productivity tools need it). If neither backend
+  is installed, `auto` warns at startup and falls back to no
+  sandbox — install `bubblewrap` (preferred) or `firejail` to get
+  the protection.
+- **`bubblewrap` / `firejail`** force that backend.
+- **`none`** (also the in-code default when the `[sandbox]`
+  section is absent) — no bundled sandbox; **existing configs are
+  unchanged.**
+
+Precedence per tool: an explicit `[tool_process.sandbox]` block
+wins → then a per-tool `disable_sandbox = true` opts out → then
+the global `[sandbox] default_backend`. The daemon prints the
+applied posture per tool at startup (`sandboxed (bubblewrap)` or
+`UNSANDBOXED`).
+
+> **Scope.** The bundled preset applies to `[[tool_process]]`
+> only. `[mcp_server]` entries — operator-configured external
+> programs with unknown filesystem needs — keep the Phase 55
+> explicit `[mcp_server.sandbox]` model. A tool whose data lives
+> outside `~/.aivyx/tool-processes/<name>/` should declare an
+> explicit `[tool_process.sandbox]` block instead.
+
 ## External productivity integrations (Chapter F)
 
 After three named local-LLM rehab phases (120-122), the

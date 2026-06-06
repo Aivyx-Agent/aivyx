@@ -133,4 +133,67 @@ forbid. The resolution threads the needle:
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 17 | Untouched (a default preset + config section over the existing Phase 52/55 sandbox; no scope/tool/`KeyDomain`/contract change) | ✅ |
+| PRODUCT.md HOLD → 71 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 17 | Untouched | ✅ |
+| Zero new workspace deps | PATH lookup + argv strings only | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+12` to `+20` | **`+14`** (sandbox 12: 6 presets/detection + 6 resolver; config 1; wizard 2; ~4,139 → ~4,153) | ✅ **in band** |
+
+**The watch item resolved in favour of HOLD.** The open doc
+flagged that secure-by-default *might* read as a contract-level
+posture change needing an A14 amendment. It didn't: the in-code
+default with no `[sandbox]` section stays `none`, so the
+*contract behaviour* is byte-identical to Phase 179 — only the
+wizard's generated output changed, and the posture is documented
+in THREAT_MODEL (a living doc). No amendment.
+
+**Band note — priced from components, landed mid-band.** I used
+`+12..+20` (a substrate phase whose dense component is the preset
+argv + resolver-precedence builders, with no parser / IPC
+surface), and landed `+14`. The Phase 179 lesson — price the
+band from the dense-test *components* a phase contains — held a
+second time.
+
+What shipped, end-to-end:
+
+1. **Detection + preset builders** (Task 2). `detect_sandbox_backend`
+   + `bubblewrap_preset` / `firejail_preset` — argv is the
+   unit-testable core; runtime isolation is operator-verified.
+2. **Config + resolution** (Task 3). `[sandbox].default_backend`
+   + per-tool `disable_sandbox` + the `resolve_sandbox`
+   precedence resolver, wired into the tool-process spawn loop
+   (ro-bind the command dir, writable-bind the token dir).
+3. **Secure-by-default + legibility** (Task 4). The wizard writes
+   `auto` in both render paths; the spawn breadcrumb names the
+   posture per tool — including the security-relevant
+   **UNSANDBOXED** case.
+4. **Docs** (Task 5). THREAT_MODEL §6 / §4.10, the INSTALL
+   `[sandbox]` section.
+
+### Honest scope risks at sign-off
+
+- **Runtime isolation is operator-verified.** The argv is
+  asserted in unit tests; whether bwrap actually contains a
+  process is verified on the operator's host (no backend in CI).
+- **Network stays ON** in the preset — filesystem + process
+  isolation is the win; egress is capability-gated at the IPC
+  layer, not blocked at the OS layer.
+- **MCP servers are out of the bundled preset** — they keep the
+  Phase 55 explicit model (documented scope boundary).
+- **The per-tool `aivyx tools` posture column was deferred** —
+  the startup breadcrumb is the Phase 180 legibility; the IPC
+  plumbing for a per-tool column is a follow-on. Honest cut to
+  keep the phase focused.
+- **Existing configs are unchanged** — only new launches are
+  secure-by-default; existing operators opt in with one line.
+
+### The result
+
+Chapter H's first phase closes the backend review's #1 Tier-1
+gap: a *security-focused* product is now secure by default for
+every new launch — bundled OS-level tool isolation, no operator
+setup — without changing a single existing config or breaking the
+zero-new-dependency / contract-streak discipline.
