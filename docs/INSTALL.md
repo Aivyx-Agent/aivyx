@@ -2657,6 +2657,45 @@ applied posture per tool at startup (`sandboxed (bubblewrap)` or
 > outside `~/.aivyx/tool-processes/<name>/` should declare an
 > explicit `[tool_process.sandbox]` block instead.
 
+## Connecting a productivity tool — `aivyx connect` (Phase 182)
+
+The fastest way to connect a Google productivity tool (Gmail,
+Calendar, Drive) is the guided command:
+
+```sh
+aivyx connect            # list connectable services + status
+aivyx connect gmail      # guided OAuth onboarding for Gmail
+```
+
+`aivyx connect <service>` walks you through the whole thing:
+
+1. **Google Cloud app setup** — it prints the exact steps (enable
+   the API, create an OAuth client ID of type *Desktop app*, and
+   the precise `http://127.0.0.1:<port>/callback` redirect URI to
+   register), then prompts you to paste the **Client ID** and
+   **Client secret** from the console.
+2. **Writes `config.toml`** to
+   `~/.aivyx/tool-processes/<service>/config.toml` (`0600`) — you
+   never hand-edit it. Scopes are filled by the service's own
+   defaults, so you don't need to know scope URLs.
+3. **Runs the consent flow** by shelling out to the tested
+   per-service `aivyx-<service> auth init` (a loopback server
+   catches the browser redirect and exchanges the code for
+   tokens). It finds the binary as a sibling of `aivyx` or on
+   `PATH`, or asks for the path.
+4. **Confirms** the connection and **offers to add the
+   `[[tool_process]]` entry** to your `aivyx.toml` so the tool is
+   enabled — restart the daemon to load it.
+
+If a Google tool is configured in `aivyx.toml` but not yet
+authenticated, the daemon prints the remedy at startup
+(*"run `aivyx connect <service>`"*).
+
+> **Token-based services (Notion / n8n)** still use their own
+> `auth` flow today (paste an integration token); a guided
+> `aivyx connect` path for them is a planned follow-on. The
+> manual per-service setup below still works for every tool.
+
 ## External productivity integrations (Chapter F)
 
 After three named local-LLM rehab phases (120-122), the

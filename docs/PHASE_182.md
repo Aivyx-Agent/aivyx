@@ -154,4 +154,49 @@ around it.
 
 ## Prediction vs reality
 
-_(Filled at exit.)_
+| Prediction | Reality | Held? |
+| --- | --- | --- |
+| DESIGN.md HOLD → 19 | Untouched (a new CLI command + config writing over the existing Chapter F substrate; 13-tool cap untouched) | ✅ |
+| PRODUCT.md HOLD → 73 | Untouched | ✅ |
+| `aivyx-core/src/lib.rs` HOLD → 19 | Untouched | ✅ |
+| Zero new workspace deps | `std::process` + `toml_edit` + the existing registry | ✅ |
+| Zero clippy warnings | `cargo clippy --workspace --all-targets -- -D warnings` clean | ✅ |
+| Test count delta `+12` to `+20` | **`+13`** (registry/config 4 + flow 3 + CLI-parse 3 + wire/surfacing 3); ~4,168 → ~4,181 | ✅ **in band** |
+
+**Band note — components, a fourth time.** Priced from the pure
+components (registry + config round-trip + `toml_edit` append +
+path resolution + scripted collection), `+12..+20`, landed `+13`.
+The shell-out OAuth dance is operator-verified and contributes no
+unit tests — exactly as scoped.
+
+What shipped, end-to-end:
+
+1. **Registry + config writer** (T2). The gmail/calendar/drive
+   registry, the minimal `config.toml` (scopes injected by the
+   service), per-service paths, the connected check.
+2. **`aivyx connect [service]`** (T3). List + the guided flow:
+   Google Cloud guidance → paste creds → write config → resolve
+   binary → shell out to `auth init` → confirm.
+3. **Auto-wire + surfacing** (T4). Offer to append
+   `[[tool_process]]` to `aivyx.toml`; the daemon names the fix
+   (*"run `aivyx connect <service>`"*) for an unauthenticated
+   tool at startup.
+
+### Honest scope risks at sign-off
+
+- **The OAuth dance + browser are operator-verified** — shelling
+  out to `auth init` (loopback, consent, Google) can't run in CI.
+- **Requires the service binary present** — resolution falls back
+  to a prompt; a missing binary is a clear error.
+- **Google Cloud app creation is guided, not automated.**
+- **Notion / n8n (token paste) deferred** to a follow-on, per the
+  Google-first scope.
+
+### The result
+
+Chapter H's third phase turns "connect a productivity tool" from
+an undocumented four-step sequence across a separate binary into
+one guided command — `aivyx connect gmail` — that walks the
+operator through the Google Cloud app, writes the config, runs
+the tested consent flow, and offers to enable the tool. Streaks
+held; zero new deps.
