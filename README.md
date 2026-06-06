@@ -12,19 +12,19 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Phase 179 exit, 2026-06-06)
+## Status (Phase 184 exit, 2026-06-06)
 
 | | |
 |---|---|
-| Phases shipped | 179 (Phase 0 → Phase 179, plus 13 contract amendments) |
+| Phases shipped | 184 (Phase 0 → Phase 184, plus 13 contract amendments) |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent phases extend the platform within the locked contract |
 | Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
 | Workspace crates | 24 |
-| Rust tests | 4,139 passing |
+| Rust tests | 4,206 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 70 |
-| Encrypted storage domains | 19 |
+| Capability scope bases | 75 |
+| Encrypted storage domains | 20 |
 
 The arc to date, by chapter:
 
@@ -70,6 +70,18 @@ The arc to date, by chapter:
   autonomous, self-re-arming agent loop over an HMAC-chained
   backlog with iteration / wall-clock / token caps, driver-side
   gate verification, and a cross-iteration progress log.
+- **Chapter H — Productize (Phases 180–184).** Closing the
+  backend-review gaps that stand between a mature substrate and a
+  launchable product: a **secure-by-default sandbox** preset for
+  tool processes; a **guided first-launch identity builder**
+  (the End User shapes their assistant's Personality + Role,
+  optionally LLM-assisted); **`aivyx connect`** — guided in-agent
+  OAuth onboarding for the productivity tools; **reminders** (the
+  first everyday-PA capability); and **conversational
+  skill-teaching** — the End User teaches the agent a skill in
+  chat. Together these realize the founding "fully customizable"
+  promise: Profile, Persona, Roles, and skills are all
+  user-shaped.
 
 ## Five-minute setup
 
@@ -172,9 +184,9 @@ Twenty-four crates in the workspace. The substrate core:
 | Crate | What it owns |
 |---|---|
 | `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 13 substrate tools |
-| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, 70 scope bases |
+| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, 75 scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
-| `aivyx-storage` | redb-backed encrypted store, 19 key domains |
+| `aivyx-storage` | redb-backed encrypted store, 20 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
 | `aivyx-config` | TOML + env loader with source provenance |
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |

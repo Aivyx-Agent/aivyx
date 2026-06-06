@@ -6,6 +6,17 @@ explicitly excluded** — the current `:7843` Web UI is a minimal
 built-in, and the channel adapters (CLI / voice / Telegram /
 Discord / Slack) are the present interface surface.
 
+> **Update (Phase 184 exit).** The Tier-1 + Tier-2 gaps this
+> review named were closed by **Chapter H (Phases 180–184)** — a
+> default sandbox (180), a guided first-launch identity builder
+> (181), guided `aivyx connect` credential onboarding (182),
+> reminders (183, everyday-PA breadth #1), and conversational
+> skill-teaching (184). The remaining open items are the Tier-3
+> bookends: cutting `v0.1.0` (external hosting), the
+> everyday-PA breadth continuation, the dep-requiring hardenings,
+> and the Channel Activation Milestone. See
+> [`ROADMAP.md`](ROADMAP.md) Chapter H.
+
 **Founding goal.** A **Local-First, Security-Focused, fully
 customizable autonomous Personal Assistant** that an End User
 shapes by **Personality + Role** at first launch and uses for

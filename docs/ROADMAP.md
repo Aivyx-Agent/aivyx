@@ -3535,7 +3535,7 @@ health.check.remove + automatic alert dispatch) picked at
 each phase exit based on operator pressure and observed
 first-real-use signal.
 
-## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180+)
+## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
 arc, the Phase 179 backend review
@@ -3554,52 +3554,34 @@ value / dependency order. Per P10–P12, any new capability still
 ships as a tool process; the thirteen-tool substrate core stays
 frozen.
 
-**Expected phases (subject to revision at each exit):**
+**Shipped — all five gaps closed (see the phase log below + each
+`PHASE_N.md`):**
 
-- **Phase 180 — Security-by-default: bundled sandbox preset.**
-  The review's #1 Tier-1 gap. Today the sandbox
-  (`aivyx-tool`, Phase 52/55) is a *wrapper* the operator must
-  configure — so out-of-the-box, tool processes run with the
-  operator's full UID, and a *security-focused* product is not
-  secure by default. Detect an available backend
-  (bubblewrap / firejail), ship a sane default policy, and apply
-  it by default with an explicit, audited opt-out. Closes the
-  "posture isn't on without operator setup" gap for non-expert
-  users.
+- **Phase 180 — Security-by-default sandbox preset.** Bundled
+  bubblewrap / firejail preset, auto-detected, applied to new
+  launches via the wizard; existing configs unchanged.
+- **Phase 181 — Guided first-launch identity builder.** The End
+  User shapes the full six-field Profile (Personality + Role),
+  LLM-drafted from a relationship conversation with a fully
+  offline manual fallback + a "meet your assistant" preview.
+- **Phase 182 — Guided in-agent credential onboarding.**
+  `aivyx connect <service>` — Google Cloud guidance, config
+  write, shell-out to the tested `auth init`, `[[tool_process]]`
+  auto-wire, startup surfacing.
+- **Phase 183 — Reminders (everyday-PA breadth #1).** Daemon-
+  native `remind.*` over the notify dispatcher. (The breadth
+  sub-sequence can continue — weather / contacts / news — picked
+  at each exit by operator pressure.)
+- **Phase 184 — Conversational skill-teaching.** `skills.teach /
+  update / forget` — the End User teaches a skill in chat,
+  confirm-then-save into the Persona chain.
 
-- **Phase 181 — Guided first-launch identity builder.** Tier-1
-  #3. Today `aivyx init` collects three free-text Profile fields
-  + a template (Phase 44/66). Make the Personality + Role step a
-  *guided* builder — optionally LLM-assisted from the operator's
-  stated use-case — so the launch-time identity generation (the
-  goal's defining UX) is rich, not minimal. Builds on the
-  Phase 57–60 Profile/Persona substrate and the Phase 66
-  templates.
+**Outcome:** the founding "**fully customizable**" promise is
+realized end-to-end — Profile, Persona, Roles, and skills are all
+user-shaped — with the 13-tool substrate cap untouched and an
+unbroken DESIGN / PRODUCT / `lib.rs` streak across the chapter.
 
-- **Phase 182 — Guided in-agent credential onboarding.** Tier-2.
-  The Chapter F/G productivity tools (Gmail / Calendar / Drive /
-  Notion / …) currently need a manual CLI OAuth flow
-  (`aivyx-auth-cli`). Turn it into a guided in-agent step so an
-  end user connects a service without token wrangling —
-  unblocking adoption of the integrations the substrate already
-  ships. Reuses the Phase 123 per-tool-process token substrate;
-  the tokens stay isolated per the threat model.
-
-- **Phase 183+ — Everyday-PA domain breadth.** Tier-2. The
-  covered tool set skews developer / knowledge-worker. Fill the
-  common-PA gaps the review named (weather, reminders / contacts,
-  lightweight finance / budget tracking, …) as Chapter F/G-pattern
-  tool processes, picked at each exit by operator pressure and
-  first-real-use signal. A sub-sequence, not a single phase.
-
-- **Phase 184 — Conversational skill-teaching.** Tier-2. The
-  skills system (`skill_proposer` + `skills.{list,invoke}`) is
-  author-facing. Let an end user *teach* a new skill
-  conversationally, so skills become a user-facing customization
-  surface — completing the "fully customizable for any purpose"
-  promise alongside Personality + Role.
-
-**Bookends (not Chapter H phases):**
+**Bookends (not Chapter H phases) — still open:**
 
 - **Distribution — cut `v0.1.0`.** A Tier-1 gap, but gated on an
   external public-hosting decision rather than a code phase (the
@@ -3611,9 +3593,62 @@ frozen.
   Discord / Slack / Telegram. Scheduled after the phase sequence
   settles.
 
-Subsequent Chapter H phases (and the Phase 183+ domain picks) are
-chosen at each phase exit; ordering is revised as each exit
-teaches us something — the standard roadmap discipline.
+**What's next.** With Chapter H complete, the open directions are
+the everyday-PA breadth continuation (weather / contacts / news),
+the dep-requiring hardenings (cryptographic PRNG / PDF parser —
+both break the long zero-new-dependency streak), cutting
+`v0.1.0` (gated on the external hosting decision), and the
+long-deferred Channel Activation Milestone — picked at the next
+phase open by operator pressure.
+
+## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
+
+**Frozen — see [PHASE_184.md](PHASE_184.md).** The End User can
+*teach* the agent a skill in conversation (`skills.teach` /
+`skills.update` / `skills.forget`): the agent drafts it, shows it
+back, and on explicit confirmation saves it as a callable skill
+on the HMAC persona chain. Made safe-by-contract with a required
+`confirmed: true`, Trusted-tier-only (`skills.write`), full audit
++ revert. Completes the fully-customizable promise; 13-tool cap
+untouched.
+
+## Phase 183 — Reminders (Everyday-PA Breadth #1, Chapter H #4)
+
+**Frozen — see [PHASE_183.md](PHASE_183.md).** One-shot reminders
+— *"remind me at 6pm"* → a notification arrives. Daemon-native
+(`KeyDomain::Reminders` + a `ReminderStore` + `remind.*`
+channel-tier tools + a re-arming driver that pushes due reminders
+through the notify dispatcher), because push-at-a-time is the
+daemon's job, not a pull-only tool process.
+
+## Phase 182 — Guided In-Agent Credential Onboarding (Chapter H #3)
+
+**Frozen — see [PHASE_182.md](PHASE_182.md).** `aivyx connect
+<service>` replaces the undocumented connect-a-tool sequence: it
+guides the Google Cloud app setup, writes `config.toml`, shells
+out to the tested per-service `auth init`, confirms, and offers
+to wire `[[tool_process]]`. Surfaces "run `aivyx connect`" for an
+unauthenticated tool at startup.
+
+## Phase 181 — Guided First-Launch Identity Builder (Chapter H #2)
+
+**Frozen — see [PHASE_181.md](PHASE_181.md).** First launch
+becomes shaping a relationship: the End User describes what they
+want, the LLM drafts all six P13 Profile fields from a
+relationship conversation (with a fully-offline manual fallback),
+they review/edit each, and meet their assistant in a warm preview
+before it's written. Local-first; the Persona/Soul is left to
+grow.
+
+## Phase 180 — Security-by-Default: Bundled Sandbox Preset (Chapter H #1)
+
+**Frozen — see [PHASE_180.md](PHASE_180.md).** Tool processes are
+OS-isolated by default for new launches: a bundled
+bubblewrap / firejail preset (auto-detected,
+filesystem-isolated with only the per-tool token dir writable,
+network on), applied via the wizard writing `[sandbox]
+default_backend = "auto"`; the in-code default stays `none` so
+existing configs are byte-identical.
 
 ## Phase 179 — Tool Surfacing in OutcomeSummary
 
