@@ -367,13 +367,22 @@ struct InitConfig {
     fs_root: String,
     /// Phase 46: enable bundled web search MCP server.
     enable_web_search: bool,
-    /// Phase 57: Profile bootstrap per Q4(c). Each field is
-    /// `None` when the operator left the corresponding wizard
-    /// prompt blank; the renderer only emits a `[profile]`
-    /// section when at least one is `Some`.
+    /// Phase 57 / Phase 181 — the full P13 Profile, collected by
+    /// the guided identity builder. A field is `None` / empty
+    /// when undeclared; the renderer only emits a `[profile]`
+    /// section when at least one field is set. Phase 181 expanded
+    /// this from three fields to all six the substrate supports.
     profile_assistant_name: Option<String>,
-    profile_primary_use_case: Option<String>,
+    /// Who the operator is — the other half of the relationship.
+    profile_operator_profile: Option<String>,
     profile_communication_style: Option<String>,
+    /// 1–3 use-case archetypes (was a single `Option<String>`
+    /// pre-Phase-181).
+    profile_primary_use_cases: Vec<String>,
+    /// Voice-layer judgment defaults.
+    profile_behavioral_preferences: Vec<String>,
+    /// The lines it must never cross — the trust boundaries.
+    profile_behavioral_constraints: Vec<String>,
 }
 
 /// Render a ready-to-use `aivyx.toml` from the wizard answers.
@@ -434,12 +443,21 @@ fn render_toml(cfg: &InitConfig) -> String {
     // pass leaves the substrate at its synthesized default — same
     // behavior as pre-Phase-57 configs.
     if cfg.profile_assistant_name.is_some()
-        || cfg.profile_primary_use_case.is_some()
+        || cfg.profile_operator_profile.is_some()
         || cfg.profile_communication_style.is_some()
+        || !cfg.profile_primary_use_cases.is_empty()
+        || !cfg.profile_behavioral_preferences.is_empty()
+        || !cfg.profile_behavioral_constraints.is_empty()
     {
         out.push_str("\n[profile]\n");
         if let Some(name) = &cfg.profile_assistant_name {
             out.push_str(&format!("assistant_name = \"{}\"\n", escape_toml_string(name)));
+        }
+        if let Some(who) = &cfg.profile_operator_profile {
+            out.push_str(&format!(
+                "operator_profile = \"{}\"\n",
+                escape_toml_string(who),
+            ));
         }
         if let Some(style) = &cfg.profile_communication_style {
             out.push_str(&format!(
@@ -447,10 +465,22 @@ fn render_toml(cfg: &InitConfig) -> String {
                 escape_toml_string(style),
             ));
         }
-        if let Some(use_case) = &cfg.profile_primary_use_case {
+        if !cfg.profile_primary_use_cases.is_empty() {
             out.push_str(&format!(
-                "primary_use_cases = [\"{}\"]\n",
-                escape_toml_string(use_case),
+                "primary_use_cases = {}\n",
+                toml_string_array(&cfg.profile_primary_use_cases),
+            ));
+        }
+        if !cfg.profile_behavioral_preferences.is_empty() {
+            out.push_str(&format!(
+                "behavioral_preferences = {}\n",
+                toml_string_array(&cfg.profile_behavioral_preferences),
+            ));
+        }
+        if !cfg.profile_behavioral_constraints.is_empty() {
+            out.push_str(&format!(
+                "behavioral_constraints = {}\n",
+                toml_string_array(&cfg.profile_behavioral_constraints),
             ));
         }
     }
@@ -483,6 +513,19 @@ fn escape_toml_string(s: &str) -> String {
         }
     }
     out
+}
+
+/// Phase 181 — render a `Vec<String>` as a TOML array of escaped
+/// basic strings: `["a", "b"]`. Used for the Profile list fields
+/// (`primary_use_cases`, `behavioral_preferences`,
+/// `behavioral_constraints`).
+fn toml_string_array(items: &[String]) -> String {
+    let inner = items
+        .iter()
+        .map(|s| format!("\"{}\"", escape_toml_string(s)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{inner}]")
 }
 
 // ---------------------------------------------------------------------------
@@ -677,17 +720,33 @@ fn render_with_template(
     if let Some(name) = &cfg.profile_assistant_name {
         doc["profile"]["assistant_name"] = value(name.as_str());
     }
-    if let Some(uc) = &cfg.profile_primary_use_case {
-        // Replace primary_use_cases with a single-element array
-        // matching the operator's input. Templates may have
-        // multi-element arrays; the wizard's single prompt is
-        // intentionally a single use case.
-        let mut arr = toml_edit::Array::new();
-        arr.push(uc.as_str());
-        doc["profile"]["primary_use_cases"] = value(arr);
+    if let Some(who) = &cfg.profile_operator_profile {
+        doc["profile"]["operator_profile"] = value(who.as_str());
     }
     if let Some(style) = &cfg.profile_communication_style {
         doc["profile"]["communication_style"] = value(style.as_str());
+    }
+    // Phase 181 — the three list fields. Each replaces the
+    // template's array when the operator supplied values; an empty
+    // builder Vec leaves the template's default untouched.
+    for (key, items) in [
+        ("primary_use_cases", &cfg.profile_primary_use_cases),
+        (
+            "behavioral_preferences",
+            &cfg.profile_behavioral_preferences,
+        ),
+        (
+            "behavioral_constraints",
+            &cfg.profile_behavioral_constraints,
+        ),
+    ] {
+        if !items.is_empty() {
+            let mut arr = toml_edit::Array::new();
+            for s in items {
+                arr.push(s.as_str());
+            }
+            doc["profile"][key] = value(arr);
+        }
     }
 
     let mut out = format!(
@@ -950,8 +1009,17 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         fs_root,
         enable_web_search,
         profile_assistant_name,
-        profile_primary_use_case,
+        // Phase 181 — the guided builder (Task 4) populates the
+        // three new fields + multi use-cases; until then the
+        // single-prompt use case maps to a one-element list and
+        // the new fields default empty.
+        profile_operator_profile: None,
         profile_communication_style,
+        profile_primary_use_cases: profile_primary_use_case
+            .into_iter()
+            .collect(),
+        profile_behavioral_preferences: Vec::new(),
+        profile_behavioral_constraints: Vec::new(),
     };
     // Phase 66 — when a template was supplied, splice wizard
     // answers into the template document so the role declarations,
@@ -1127,8 +1195,11 @@ mod tests {
             fs_root: fs_root.into(),
             enable_web_search,
             profile_assistant_name: None,
-            profile_primary_use_case: None,
+            profile_operator_profile: None,
             profile_communication_style: None,
+            profile_primary_use_cases: Vec::new(),
+            profile_behavioral_preferences: Vec::new(),
+            profile_behavioral_constraints: Vec::new(),
         }
     }
 
@@ -1291,6 +1362,67 @@ mod tests {
     }
 
     #[test]
+    fn render_toml_emits_all_six_profile_fields() {
+        let cfg = InitConfig {
+            profile_assistant_name: Some("Mira".into()),
+            profile_operator_profile: Some(
+                "a senior Rust engineer who values directness".into(),
+            ),
+            profile_communication_style: Some("warm but concise".into()),
+            profile_primary_use_cases: vec![
+                "systems programming".into(),
+                "personal-finance analysis".into(),
+            ],
+            profile_behavioral_preferences: vec![
+                "prefer integration tests over mocks".into(),
+            ],
+            profile_behavioral_constraints: vec![
+                "never autonomously commit code".into(),
+                "always confirm destructive shell commands".into(),
+            ],
+            ..init_config_no_profile(
+                Provider::Ollama,
+                "llama3.2:latest",
+                None,
+                "store.redb",
+                ".",
+                false,
+            )
+        };
+        let toml = render_toml(&cfg);
+        // All six fields present.
+        assert!(toml.contains("assistant_name = \"Mira\""));
+        assert!(toml.contains(
+            "operator_profile = \"a senior Rust engineer who values directness\""
+        ));
+        assert!(toml.contains("communication_style = \"warm but concise\""));
+        assert!(toml.contains(
+            "primary_use_cases = [\"systems programming\", \
+             \"personal-finance analysis\"]"
+        ));
+        assert!(toml.contains(
+            "behavioral_preferences = [\"prefer integration tests over mocks\"]"
+        ));
+        assert!(toml.contains(
+            "behavioral_constraints = [\"never autonomously commit code\", \
+             \"always confirm destructive shell commands\"]"
+        ));
+        // Round-trips as valid TOML — all six survive a parse.
+        let parsed: toml_edit::DocumentMut =
+            toml.parse().expect("valid TOML");
+        let p = &parsed["profile"];
+        assert_eq!(p["assistant_name"].as_str(), Some("Mira"));
+        assert_eq!(
+            p["primary_use_cases"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            p["behavioral_constraints"].as_array().unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
     fn render_toml_is_secure_by_default() {
         // Phase 180 — every wizard-generated config requests the
         // bundled sandbox preset (secure-by-default for new
@@ -1337,8 +1469,6 @@ mod tests {
         // primary_use_cases and communication_style are absent.
         let cfg = InitConfig {
             profile_assistant_name: Some("Codex".into()),
-            profile_primary_use_case: None,
-            profile_communication_style: None,
             ..init_config_no_profile(
                 Provider::Ollama,
                 "llama3.2:latest",
@@ -1359,8 +1489,8 @@ mod tests {
     fn render_toml_emits_all_three_profile_fields_when_set() {
         let cfg = InitConfig {
             profile_assistant_name: Some("Mira".into()),
-            profile_primary_use_case: Some("personal-finance analysis".into()),
             profile_communication_style: Some("terse, conclusion-first".into()),
+            profile_primary_use_cases: vec!["personal-finance analysis".into()],
             ..init_config_no_profile(
                 Provider::Anthropic,
                 DEFAULT_ANTHROPIC_MODEL,
@@ -1384,10 +1514,10 @@ mod tests {
         // generated TOML still parses cleanly.
         let cfg = InitConfig {
             profile_assistant_name: Some("Quote\"y".into()),
-            profile_primary_use_case: Some("Path C:\\\\Users\\code".into()),
             profile_communication_style: Some(
                 "with \"emphasis\" sometimes".into(),
             ),
+            profile_primary_use_cases: vec!["Path C:\\\\Users\\code".into()],
             ..init_config_no_profile(
                 Provider::Ollama,
                 "llama3.2:latest",
