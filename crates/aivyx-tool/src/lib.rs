@@ -24,11 +24,15 @@ pub mod frame;
 pub mod harness;
 pub mod multi_harness;
 pub mod proxy;
+pub mod sandbox;
 pub mod wire;
 
 pub use bridge::{
     InvocationOutcome, SandboxConfig, ToolBridgeError, ToolProcessBridge,
     ToolProcessConfig,
+};
+pub use sandbox::{
+    detect_sandbox_backend, preset_for, SandboxBackend,
 };
 pub use frame::{encode_frame, read_frame, write_frame, FrameError, MAX_PAYLOAD_SIZE};
 pub use harness::{run_tool_as_subprocess, HarnessError};
