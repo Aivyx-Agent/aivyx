@@ -12,10 +12,7 @@
 //! dance itself stays in the per-service `auth init` (we shell
 //! out to it) and is operator-verified, not unit-tested.
 
-// Phase 182 — the guided flow (Task 3) + tool_process auto-wire
-// (Task 4) consume this API; the allow is removed when wired.
-#![allow(dead_code)]
-
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// A connectable Google OAuth service. The registry is the source
@@ -160,6 +157,249 @@ fn set_file_0600(path: &Path) {
 #[cfg(not(unix))]
 fn set_file_0600(_path: &Path) {}
 
+// ---------------------------------------------------------------------------
+// The guided flow.
+// ---------------------------------------------------------------------------
+
+fn prompt_line(
+    prompt: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+) -> Result<String, String> {
+    write!(writer, "{prompt}").map_err(|e| format!("write error: {e}"))?;
+    writer.flush().map_err(|e| format!("flush error: {e}"))?;
+    let mut buf = String::new();
+    reader
+        .read_line(&mut buf)
+        .map_err(|e| format!("read error: {e}"))?;
+    Ok(buf.trim().to_string())
+}
+
+fn prompt_yes_no(
+    prompt: &str,
+    default: bool,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+) -> Result<bool, String> {
+    let hint = if default { "Y/n" } else { "y/N" };
+    let input = prompt_line(&format!("{prompt} [{hint}]: "), reader, writer)?;
+    match input.to_ascii_lowercase().as_str() {
+        "" => Ok(default),
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        _ => prompt_yes_no(prompt, default, reader, writer),
+    }
+}
+
+/// `aivyx connect` (no service) — list the connectable services
+/// and their connection status.
+pub fn list_services(
+    writer: &mut dyn Write,
+    home: &Path,
+) -> Result<(), String> {
+    writeln!(writer, "Connectable services:\n")
+        .map_err(|e| format!("write error: {e}"))?;
+    for s in SERVICES {
+        let status = if s.is_connected(home) {
+            "connected"
+        } else {
+            "not connected"
+        };
+        writeln!(writer, "  {:<16} {} — {status}", s.key, s.display)
+            .map_err(|e| format!("write error: {e}"))?;
+    }
+    writeln!(
+        writer,
+        "\nRun `aivyx connect <service>` to set one up.\n\
+         (Notion / n8n token-based connect is coming in a follow-on.)"
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    Ok(())
+}
+
+/// Print the Google Cloud app setup steps + collect the operator's
+/// client id / secret. Testable (no shell-out).
+pub fn collect_credentials(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+    svc: &ConnectService,
+) -> Result<(String, String), String> {
+    let w = |writer: &mut dyn Write, s: &str| -> Result<(), String> {
+        writeln!(writer, "{s}").map_err(|e| format!("write error: {e}"))
+    };
+    w(writer, &format!("\n— Connect {} —\n", svc.display))?;
+    w(writer, "You'll need an OAuth app from Google Cloud Console:")?;
+    w(
+        writer,
+        "  1. Open https://console.cloud.google.com/ and pick (or \
+         create) a project.",
+    )?;
+    w(
+        writer,
+        &format!(
+            "  2. Enable the {} for that project (APIs & Services → \
+             Library).",
+            svc.google_api
+        ),
+    )?;
+    w(
+        writer,
+        "  3. APIs & Services → Credentials → Create credentials → \
+         OAuth client ID.",
+    )?;
+    w(writer, "  4. Application type: Desktop app.")?;
+    w(
+        writer,
+        &format!(
+            "  5. Add this Authorized redirect URI: {}",
+            svc.redirect_uri()
+        ),
+    )?;
+    w(writer, "  6. Copy the Client ID and Client secret below.\n")?;
+
+    let client_id = loop {
+        let v = prompt_line("Client ID: ", reader, writer)?;
+        if !v.is_empty() {
+            break v;
+        }
+        w(writer, "  (Client ID can't be empty.)")?;
+    };
+    let client_secret = loop {
+        let v = prompt_line("Client secret: ", reader, writer)?;
+        if !v.is_empty() {
+            break v;
+        }
+        w(writer, "  (Client secret can't be empty.)")?;
+    };
+    Ok((client_id, client_secret))
+}
+
+/// Resolve the service's `auth init` binary: a sibling of the
+/// running `aivyx` binary first (covers both from-source
+/// `target/release` and packaged `/usr/bin` installs), then a
+/// `PATH` lookup. `None` → the caller prompts.
+pub fn resolve_service_binary(
+    svc: &ConnectService,
+    exe_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(dir) = exe_dir {
+        let sibling = dir.join(svc.binary);
+        if sibling.exists() {
+            return Some(sibling);
+        }
+    }
+    binary_on_path(svc.binary)
+}
+
+fn binary_on_path(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|d| d.join(program))
+        .find(|p| p.exists())
+}
+
+/// `aivyx connect [service]` entry point.
+pub async fn run_connect(service: Option<&str>) -> Result<(), String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "$HOME is unset; cannot locate config".to_string())?;
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut writer = std::io::stderr();
+
+    let key = match service {
+        None => return list_services(&mut writer, &home),
+        Some(k) => k,
+    };
+    let svc = find_service(key).ok_or_else(|| {
+        format!(
+            "unknown service `{key}`. Connectable: gmail, calendar, \
+             drive. Run `aivyx connect` to list them."
+        )
+    })?;
+
+    run_onboarding(&mut reader, &mut writer, svc, &home).await
+}
+
+async fn run_onboarding(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+    svc: &ConnectService,
+    home: &Path,
+) -> Result<(), String> {
+    if svc.is_connected(home)
+        && !prompt_yes_no(
+            &format!(
+                "{} is already connected. Re-connect (replaces the \
+                 stored credentials)?",
+                svc.display
+            ),
+            false,
+            reader,
+            writer,
+        )?
+    {
+        writeln!(writer, "Keeping the existing connection.")
+            .map_err(|e| format!("write error: {e}"))?;
+        return Ok(());
+    }
+
+    let (client_id, client_secret) =
+        collect_credentials(reader, writer, svc)?;
+    let path = write_oauth_config(svc, home, &client_id, &client_secret)?;
+    writeln!(writer, "\nWrote {}.", path.display())
+        .map_err(|e| format!("write error: {e}"))?;
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    let binary = match resolve_service_binary(svc, exe_dir.as_deref()) {
+        Some(b) => b,
+        None => {
+            let typed = prompt_line(
+                &format!(
+                    "Couldn't find `{}` automatically. Path to it: ",
+                    svc.binary
+                ),
+                reader,
+                writer,
+            )?;
+            PathBuf::from(typed)
+        }
+    };
+
+    writeln!(
+        writer,
+        "\nOpening the consent flow via {} — follow the browser \
+         prompt…",
+        binary.display()
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+
+    // Shell out to the tested per-service `auth init` (loopback +
+    // consent + token exchange). Inherits stdio so the consent URL
+    // and the operator's browser interaction happen live. The dance
+    // itself is operator-verified, not unit-tested (no Google in CI).
+    let status = tokio::process::Command::new(&binary)
+        .arg("auth")
+        .arg("init")
+        .status()
+        .await
+        .map_err(|e| format!("failed to run {}: {e}", binary.display()))?;
+
+    if !status.success() || !svc.is_connected(home) {
+        return Err(format!(
+            "{} connection did not complete. Re-run `aivyx connect {}` \
+             to try again.",
+            svc.display, svc.key
+        ));
+    }
+
+    writeln!(writer, "\n✓ {} is connected.", svc.display)
+        .map_err(|e| format!("write error: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +459,59 @@ mod tests {
             Some("http://127.0.0.1:8765/callback")
         );
         assert!(doc.get("scopes").is_none());
+    }
+
+    #[test]
+    fn list_services_shows_status() {
+        let tmp = std::env::temp_dir()
+            .join(format!("aivyx-list-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Mark gmail connected.
+        let g = find_service("gmail").unwrap();
+        std::fs::create_dir_all(g.process_dir(&tmp)).unwrap();
+        std::fs::write(g.token_path(&tmp), "{}").unwrap();
+        let mut out: Vec<u8> = Vec::new();
+        list_services(&mut out, &tmp).unwrap();
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("gmail") && s.contains("connected"));
+        assert!(s.contains("calendar") && s.contains("not connected"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn collect_credentials_guides_and_requires_nonempty() {
+        let svc = find_service("gmail").unwrap();
+        // First Client ID is blank (re-prompted), then real values.
+        let input = b"\nthe-client-id\nthe-secret\n".to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let (id, secret) =
+            collect_credentials(&mut reader, &mut writer, svc).unwrap();
+        assert_eq!(id, "the-client-id");
+        assert_eq!(secret, "the-secret");
+        let shown = String::from_utf8_lossy(&writer);
+        // The guidance names the API + the exact redirect URI.
+        assert!(shown.contains("Gmail API"));
+        assert!(shown.contains("http://127.0.0.1:8765/callback"));
+        assert!(shown.contains("Desktop app"));
+        assert!(shown.contains("can't be empty"));
+    }
+
+    #[test]
+    fn resolve_binary_prefers_exe_sibling() {
+        let tmp = std::env::temp_dir()
+            .join(format!("aivyx-bin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let svc = find_service("drive").unwrap();
+        // A sibling of the exe dir resolves first (deterministic —
+        // independent of whatever is on PATH).
+        let sibling = tmp.join("aivyx-drive");
+        std::fs::write(&sibling, "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            resolve_service_binary(svc, Some(&tmp)),
+            Some(sibling)
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

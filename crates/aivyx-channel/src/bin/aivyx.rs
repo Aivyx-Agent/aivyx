@@ -460,6 +460,18 @@ fn run() -> Result<(), String> {
         }
     }
 
+    // ---- Phase 182: guided credential onboarding ------------------------
+    // Like init, `connect` needs only a minimal runtime — it writes a
+    // per-tool-process config.toml and shells out to the service's
+    // `auth init`. No config/store/API key.
+    if let CliMode::Connect(ref service) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(connect::run_connect(service.as_deref()));
+    }
+
     // ---- Phase 46: bundled MCP server -----------------------------------
     // Like init, the MCP server needs only a minimal runtime and no
     // config/store/API key — it reads from stdin and writes to stdout.
@@ -1347,6 +1359,11 @@ enum CliMode {
     /// operator through each prompt; the template sets the suggested
     /// defaults.
     Init(InitMode),
+    /// `aivyx connect [service]`: guided credential onboarding for
+    /// the Google productivity tools (Phase 182). `None` lists the
+    /// connectable services + status; `Some(service)` runs the
+    /// guided OAuth flow.
+    Connect(Option<String>),
     /// `aivyx mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
     /// `aivyx profile <subcommand>`: Profile inspection / edit
@@ -2118,6 +2135,36 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Phase 182 — `aivyx connect [service]`: guided credential
+    // onboarding. No arg lists the connectable services; one arg
+    // runs the guided OAuth flow for that service.
+    if !args.is_empty() && args[0] == "connect" {
+        let service = args.get(1).cloned();
+        if let Some(s) = &service {
+            if s.starts_with("--") {
+                return Err(format!(
+                    "`aivyx connect` takes a service name, not a flag \
+                     (`{s}`). Run `aivyx connect` to list services."
+                ));
+            }
+        }
+        if args.len() > 2 {
+            return Err(
+                "`aivyx connect` takes at most one service name".into(),
+            );
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Connect(service),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -8111,6 +8158,30 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["--version"]))
             .expect("--version must parse");
         assert_eq!(parsed.mode, CliMode::Version);
+    }
+
+    #[test]
+    fn parse_connect_no_service_lists() {
+        let parsed = parse_cli_args_from(&argv(&["connect"]))
+            .expect("connect must parse");
+        assert_eq!(parsed.mode, CliMode::Connect(None));
+    }
+
+    #[test]
+    fn parse_connect_with_service() {
+        let parsed = parse_cli_args_from(&argv(&["connect", "gmail"]))
+            .expect("connect gmail must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Connect(Some("gmail".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_connect_rejects_flag_and_extra_args() {
+        assert!(parse_cli_args_from(&argv(&["connect", "--foo"])).is_err());
+        assert!(parse_cli_args_from(&argv(&["connect", "gmail", "x"]))
+            .is_err());
     }
 
     #[test]
