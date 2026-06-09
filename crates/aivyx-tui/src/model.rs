@@ -74,10 +74,53 @@ pub struct Status {
     pub working: bool,
 }
 
+/// A top-level view in the TUI. `Chat` is the shipped interactive
+/// surface; the others are read-only panels (live-data wiring is the
+/// Phase 186 follow-on). The order is the tab order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Chat,
+    Dashboard,
+    Audit,
+    Tools,
+}
+
+impl View {
+    /// Every view, in tab order.
+    pub const ALL: [View; 4] = [View::Chat, View::Dashboard, View::Audit, View::Tools];
+
+    /// The tab label.
+    pub fn label(self) -> &'static str {
+        match self {
+            View::Chat => "Chat",
+            View::Dashboard => "Dashboard",
+            View::Audit => "Audit",
+            View::Tools => "Tools",
+        }
+    }
+
+    fn index(self) -> usize {
+        View::ALL.iter().position(|v| *v == self).unwrap_or(0)
+    }
+
+    /// The next view (wraps).
+    pub fn next(self) -> View {
+        View::ALL[(self.index() + 1) % View::ALL.len()]
+    }
+
+    /// The previous view (wraps).
+    pub fn prev(self) -> View {
+        View::ALL[(self.index() + View::ALL.len() - 1) % View::ALL.len()]
+    }
+}
+
 /// The complete UI state. Owned, cloneable, and free of terminal
 /// types so the reducer is pure.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AppState {
+    /// The active top-level view (Chat by default).
+    pub view: View,
     /// Scrollback, oldest first.
     pub history: Vec<ChatLine>,
     /// The current input buffer.
@@ -123,6 +166,14 @@ pub enum Msg {
     /// echoed as an [`LineKind::Operator`] line, the buffer cleared,
     /// and [`Status::working`] set.
     Submit,
+
+    // ---- view navigation ----
+    /// Switch to the next view (wraps).
+    NextView,
+    /// Switch to the previous view (wraps).
+    PrevView,
+    /// Jump directly to a view.
+    SwitchView(View),
 
     // ---- scrolling ----
     /// Scroll up (toward older lines) by `n` lines.
@@ -224,6 +275,10 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
         Msg::CursorHome => state.cursor = 0,
         Msg::CursorEnd => state.cursor = state.input_char_len(),
+
+        Msg::NextView => state.view = state.view.next(),
+        Msg::PrevView => state.view = state.view.prev(),
+        Msg::SwitchView(v) => state.view = v,
 
         Msg::Submit => {
             if state.status.working {
@@ -538,6 +593,34 @@ mod tests {
     fn quit_sets_flag() {
         let s = update(AppState::new(), Msg::Quit);
         assert!(s.should_quit);
+    }
+
+    // ---- view navigation ----
+
+    #[test]
+    fn default_view_is_chat() {
+        assert_eq!(AppState::new().view, View::Chat);
+    }
+
+    #[test]
+    fn next_view_cycles_and_wraps() {
+        let mut s = AppState::new();
+        for expected in [View::Dashboard, View::Audit, View::Tools, View::Chat] {
+            s = update(s, Msg::NextView);
+            assert_eq!(s.view, expected);
+        }
+    }
+
+    #[test]
+    fn prev_view_wraps_backwards() {
+        let s = update(AppState::new(), Msg::PrevView);
+        assert_eq!(s.view, View::Tools);
+    }
+
+    #[test]
+    fn switch_view_jumps_directly() {
+        let s = update(AppState::new(), Msg::SwitchView(View::Audit));
+        assert_eq!(s.view, View::Audit);
     }
 
     // ---- approval-gate transitions ----

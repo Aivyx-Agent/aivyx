@@ -36,11 +36,12 @@
 pub mod app;
 pub mod event;
 pub mod model;
+pub mod palette;
 pub mod render;
 pub mod terminal;
 
 pub use app::run;
 pub use event::{key_to_action, Action};
-pub use model::{update, AppState, ChatLine, LineKind, Msg, PendingGate, Status};
+pub use model::{update, AppState, ChatLine, LineKind, Msg, PendingGate, Status, View};
 pub use render::render;
 pub use terminal::Tui;

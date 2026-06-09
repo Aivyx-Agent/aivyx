@@ -12,7 +12,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::model::{AppState, Msg};
+use crate::model::{AppState, Msg, View};
 
 /// How many lines a PageUp / PageDn scrolls.
 const PAGE: usize = 10;
@@ -59,6 +59,32 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // Tab cycles the top-level views (universal — Tab is not text input).
+    match key.code {
+        KeyCode::Tab => return Action::Update(Msg::NextView),
+        KeyCode::BackTab => return Action::Update(Msg::PrevView),
+        _ => {}
+    }
+
+    // Read-only panel views take no text input: number keys jump to a
+    // view, arrows scroll, Esc returns to Chat, ^Q quits.
+    if state.view != View::Chat {
+        return match key.code {
+            KeyCode::Char('q') if ctrl => Action::Quit,
+            KeyCode::Esc => Action::Update(Msg::SwitchView(View::Chat)),
+            KeyCode::Char('1') => Action::Update(Msg::SwitchView(View::Chat)),
+            KeyCode::Char('2') => Action::Update(Msg::SwitchView(View::Dashboard)),
+            KeyCode::Char('3') => Action::Update(Msg::SwitchView(View::Audit)),
+            KeyCode::Char('4') => Action::Update(Msg::SwitchView(View::Tools)),
+            KeyCode::PageUp => Action::Update(Msg::ScrollUp(PAGE)),
+            KeyCode::PageDown => Action::Update(Msg::ScrollDown(PAGE)),
+            KeyCode::Up => Action::Update(Msg::ScrollUp(1)),
+            KeyCode::Down => Action::Update(Msg::ScrollDown(1)),
+            _ => Action::None,
+        };
+    }
+
+    // Chat view — text input + the existing bindings.
     match key.code {
         // Quit / cancel.
         KeyCode::Char('q') if ctrl => Action::Quit,
@@ -233,5 +259,55 @@ mod tests {
         // ctrl+a is not a quit/cancel binding and must not insert 'a'.
         let s = AppState::new();
         assert_eq!(key_to_action(ctrl_key('a'), &s), Action::None);
+    }
+
+    // ---- view navigation ----
+
+    #[test]
+    fn tab_cycles_views_from_any_view() {
+        let chat = AppState::new();
+        assert_eq!(
+            key_to_action(key(KeyCode::Tab), &chat),
+            Action::Update(Msg::NextView)
+        );
+        assert_eq!(
+            key_to_action(key(KeyCode::BackTab), &chat),
+            Action::Update(Msg::PrevView)
+        );
+        // Also works inside a panel.
+        let mut panel = AppState::new();
+        panel.view = View::Dashboard;
+        assert_eq!(
+            key_to_action(key(KeyCode::Tab), &panel),
+            Action::Update(Msg::NextView)
+        );
+    }
+
+    #[test]
+    fn panels_take_no_text_input_but_digits_jump() {
+        let mut s = AppState::new();
+        s.view = View::Audit;
+        // A letter does not type in a panel.
+        assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::None);
+        // Digit jumps directly to a view.
+        assert_eq!(
+            key_to_action(key(KeyCode::Char('2')), &s),
+            Action::Update(Msg::SwitchView(View::Dashboard))
+        );
+        // Esc returns to Chat.
+        assert_eq!(
+            key_to_action(key(KeyCode::Esc), &s),
+            Action::Update(Msg::SwitchView(View::Chat))
+        );
+    }
+
+    #[test]
+    fn chat_view_still_types() {
+        // The Chat view is unchanged: printable chars insert.
+        let s = AppState::new();
+        assert_eq!(
+            key_to_action(key(KeyCode::Char('a')), &s),
+            Action::Update(Msg::InsertChar('a'))
+        );
     }
 }

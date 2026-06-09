@@ -13,12 +13,13 @@
 //! a later Chapter I phase, alongside live token streaming.
 
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
-use crate::model::{AppState, LineKind};
+use crate::model::{AppState, LineKind, View};
+use crate::palette::{self, bold, fg};
 
 /// Compute the first visible chat row given the total line count, the
 /// chat viewport height, and the scroll offset (`0` == pinned to the
@@ -38,48 +39,163 @@ pub fn chat_scroll_offset(total: usize, viewport: usize, scroll: usize) -> u16 {
 /// the headless smoke test can assert on).
 fn kind_style(kind: LineKind) -> (&'static str, Style) {
     match kind {
-        LineKind::Operator => (
-            "❯ ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        LineKind::Agent => ("", Style::default()),
-        LineKind::Tool => (
-            "  ",
-            Style::default().fg(Color::DarkGray),
-        ),
+        LineKind::Operator => ("❯ ", bold(palette::AMBER)),
+        LineKind::Agent => ("", fg(palette::FG)),
+        LineKind::Tool => ("  ", fg(palette::DIM)),
         LineKind::Status => (
             "  ",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
+            fg(palette::DIM).add_modifier(Modifier::ITALIC),
         ),
-        LineKind::Gate => (
-            "⚑ ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        LineKind::System => (
-            "· ",
-            Style::default().fg(Color::Magenta),
-        ),
+        LineKind::Gate => ("⚑ ", bold(palette::AMBER)),
+        LineKind::System => ("· ", fg(palette::LAV)),
     }
 }
 
 /// Draw the whole UI for the current state.
 pub fn render(frame: &mut Frame, state: &AppState) {
-    let chunks = Layout::vertical([
-        Constraint::Min(1),    // chat pane
-        Constraint::Length(1), // status bar
-        Constraint::Length(3), // bordered input
-    ])
-    .split(frame.area());
+    // The near-black Aivyx canvas behind every pane.
+    frame.render_widget(
+        Block::new().style(Style::default().bg(palette::BG)),
+        frame.area(),
+    );
 
-    render_chat(frame, chunks[0], state);
-    render_status(frame, chunks[1], state);
-    render_input(frame, chunks[2], state);
+    // Tab bar on top of every view; the body below it.
+    let outer = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(frame.area());
+    render_tab_bar(frame, outer[0], state);
+    let body = outer[1];
+
+    match state.view {
+        View::Chat => {
+            let rows = Layout::vertical([
+                Constraint::Min(1),    // chat pane
+                Constraint::Length(1), // status bar
+                Constraint::Length(3), // bordered input
+            ])
+            .split(body);
+            render_chat(frame, rows[0], state);
+            render_status(frame, rows[1], state);
+            render_input(frame, rows[2], state);
+        }
+        View::Dashboard | View::Audit | View::Tools => {
+            let rows = Layout::vertical([
+                Constraint::Min(1),    // panel
+                Constraint::Length(1), // status bar
+            ])
+            .split(body);
+            render_panel(frame, rows[0], state);
+            render_status(frame, rows[1], state);
+        }
+    }
+}
+
+/// The view selector: `▌ AIVYX  1 Chat · 2 Dashboard · …` with the
+/// active view amber, on the dark status fill.
+fn render_tab_bar(frame: &mut Frame, area: Rect, state: &AppState) {
+    let mut spans = vec![
+        Span::styled("▌", bold(palette::AMBER)),
+        Span::styled(" AIVYX  ", bold(palette::AMBER)),
+    ];
+    for (i, v) in View::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", fg(palette::DIMMER)));
+        }
+        let label = format!("{} {}", i + 1, v.label());
+        spans.push(if *v == state.view {
+            Span::styled(label, bold(palette::AMBER))
+        } else {
+            Span::styled(label, fg(palette::DIM))
+        });
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(palette::STATUS_BG)),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("Tab ⇄ views ", fg(palette::DIMMER))]))
+            .right_aligned()
+            .style(Style::default().bg(palette::STATUS_BG)),
+        area,
+    );
+}
+
+/// A bordered panel with an amber title (the read-only views' frame).
+fn panel_block(title: &str) -> Block<'_> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(fg(palette::BORDER))
+        .title(Span::styled(format!(" {title} "), bold(palette::AMBER)))
+        .padding(Padding::new(1, 1, 0, 0))
+        .style(Style::default().bg(palette::BG))
+}
+
+/// Render the active read-only panel (Dashboard / Audit / Tools). These
+/// show their frame + the state the model already holds; live IPC data
+/// (mission / loop / reminders / audit stream / tool stats) is the
+/// Phase 186 follow-on.
+fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
+    let (title, lines) = match state.view {
+        View::Dashboard => ("DASHBOARD", dashboard_lines(state)),
+        View::Audit => (
+            "AUDIT",
+            placeholder_lines("the HMAC-chained audit stream — events, verification, JSONL export"),
+        ),
+        View::Tools => (
+            "TOOLS",
+            placeholder_lines("the registered tools — provenance, capability scope, and call stats"),
+        ),
+        View::Chat => return,
+    };
+    frame.render_widget(Paragraph::new(lines).block(panel_block(title)), area);
+}
+
+fn kv<'a>(k: &'a str, v: Span<'a>) -> Line<'a> {
+    Line::from(vec![Span::styled(format!("{k:<10}"), fg(palette::DIM)), v])
+}
+
+fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
+    let role = state.status.role.as_deref().unwrap_or("—");
+    let daemon = if state.status.daemon_connected {
+        Span::styled("connected ✓", fg(palette::OK))
+    } else {
+        Span::styled("offline ✗", fg(palette::ERR))
+    };
+    let status = if state.status.working {
+        Span::styled("working…", fg(palette::LAV))
+    } else {
+        Span::styled("idle", fg(palette::FG))
+    };
+    vec![
+        kv("role", Span::styled(role.to_string(), fg(palette::FG))),
+        kv("daemon", daemon),
+        kv("status", status),
+        kv(
+            "session",
+            Span::styled(format!("{} lines", state.history.len()), fg(palette::FG)),
+        ),
+        Line::from(""),
+        Line::from(Span::styled(
+            "mission · loop · reminders · recent-audit panels land in Phase 186,",
+            fg(palette::DIMMER),
+        )),
+        Line::from(Span::styled(
+            "wired to the live daemon state the IPC already serves.",
+            fg(palette::DIMMER),
+        )),
+    ]
+}
+
+fn placeholder_lines(desc: &str) -> Vec<Line<'_>> {
+    vec![
+        Line::from(""),
+        Line::from(Span::styled("— not yet wired to the daemon —", fg(palette::DIM))),
+        Line::from(Span::styled(desc.to_string(), fg(palette::DIMMER))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Phase 186: this panel reads live state over the IPC.",
+            fg(palette::DIMMER),
+        )),
+    ]
 }
 
 fn render_chat(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -101,36 +217,57 @@ fn render_chat(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
-    let role = state.status.role.as_deref().unwrap_or("—");
-    let daemon = if state.status.daemon_connected {
-        "daemon ✓"
-    } else {
-        "daemon ✗"
-    };
+    let sep = || Span::styled(" · ", fg(palette::DIM));
 
-    let mut left = format!(" {role} · {daemon}");
+    // Left: role · daemon · (gate | working).
+    let role = state.status.role.as_deref().unwrap_or("—");
+    let mut left = vec![
+        Span::styled(format!(" {role}"), bold(palette::AMBER)),
+        sep(),
+        if state.status.daemon_connected {
+            Span::styled("daemon ✓", fg(palette::OK))
+        } else {
+            Span::styled("daemon ✗", fg(palette::ERR))
+        },
+    ];
     if state.gate.is_some() {
-        left.push_str(" · ⚑ approval needed");
+        left.push(sep());
+        left.push(Span::styled("⚑ approval needed", bold(palette::AMBER)));
     } else if state.status.working {
-        left.push_str(" · working…");
+        left.push(sep());
+        left.push(Span::styled("working…", fg(palette::LAV)));
     }
 
-    let help = if state.gate.is_some() {
-        "y approve · n reject "
+    // Right: context-appropriate keybinding help.
+    let help: Vec<Span> = if state.gate.is_some() {
+        vec![
+            Span::styled("y approve", fg(palette::OK)),
+            sep(),
+            Span::styled("n reject", fg(palette::FG)),
+            sep(),
+            Span::styled("^Q quit ", fg(palette::DIM)),
+        ]
+    } else if state.view != View::Chat {
+        vec![Span::styled(
+            "Tab views · 1-4 jump · ↑↓ scroll · Esc chat · ^Q quit ",
+            fg(palette::DIM),
+        )]
     } else {
-        "^Q quit · PgUp/PgDn scroll · Esc cancel "
+        vec![Span::styled(
+            "Tab views · ^Q quit · PgUp/PgDn scroll · Esc cancel ",
+            fg(palette::DIM),
+        )]
     };
 
     // Left status, right-aligned help on the same row.
-    let used = left.chars().count() + help.chars().count();
-    let pad = (area.width as usize).saturating_sub(used);
-    let line = Line::from(vec![
-        Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(help, Style::default().fg(Color::DarkGray)),
-    ]);
+    let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    let pad = (area.width as usize).saturating_sub(span_w(&left) + span_w(&help));
+
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(help);
     frame.render_widget(
-        Paragraph::new(line).style(Style::default().bg(Color::Black)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(palette::STATUS_BG)),
         area,
     );
 }
@@ -140,12 +277,12 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
         let prompt = format!("Approve? [y/n] — {}", gate.reason);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Approval gate ")
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_type(BorderType::Rounded)
+            .title(Span::styled(" Approval gate ", bold(palette::AMBER)))
+            .border_style(fg(palette::AMBER))
+            .style(Style::default().bg(palette::BG));
         frame.render_widget(
-            Paragraph::new(prompt)
-                .style(Style::default().fg(Color::Yellow))
-                .block(block),
+            Paragraph::new(prompt).style(fg(palette::AMBER)).block(block),
             area,
         );
         return;
@@ -156,8 +293,18 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         " Input "
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
-    frame.render_widget(Paragraph::new(state.input.as_str()).block(block), area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(fg(palette::BORDER))
+        .title(Span::styled(title, fg(palette::DIM)))
+        .style(Style::default().bg(palette::BG));
+    frame.render_widget(
+        Paragraph::new(state.input.as_str())
+            .style(fg(palette::FG))
+            .block(block),
+        area,
+    );
 
     // Place the terminal cursor inside the bordered input at the
     // current char position. Approximate (char count, not grapheme
@@ -221,6 +368,31 @@ mod tests {
         assert!(text.contains("assistant"), "role in status bar");
         assert!(text.contains("daemon ✓"), "daemon status rendered");
         assert!(text.contains("Input"), "input block titled");
+        // The tab bar is present on every view.
+        assert!(text.contains("Chat"), "tab bar lists Chat");
+        assert!(text.contains("Dashboard"), "tab bar lists Dashboard");
+    }
+
+    #[test]
+    fn dashboard_view_renders_panel_not_chat_input() {
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.status.daemon_connected = true;
+        state.status.role = Some("researcher".into());
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        // The panel renders (not the chat input line).
+        assert!(text.contains("DASHBOARD"), "panel titled");
+        assert!(text.contains("researcher"), "role shown in panel");
+        assert!(text.contains("Phase 186"), "honest live-wiring note");
+        assert!(!text.contains(" Input "), "no chat input in a panel view");
+        // Tab bar still present.
+        assert!(text.contains("Audit"), "tab bar lists Audit");
     }
 
     #[test]
