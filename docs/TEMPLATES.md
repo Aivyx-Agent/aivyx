@@ -12,6 +12,7 @@ aivyx init --list-templates
 #   coder       (bundled)  Software engineering assistant — Rust/Python/etc. dev work…
 #   researcher  (bundled)  Research and synthesis assistant — heavy web fetch + memory…
 #   personal    (bundled)  Personal assistant — daily briefings, task management, …
+#   kitchen     (bundled)  Back-of-house kitchen operations — inventory, reorder, HACCP (vertical pack)
 #
 # Use `aivyx init --template <name>` to start the wizard pre-filled from a template.
 ```
@@ -90,6 +91,44 @@ token + chat_id.
 **Pick this when:** you want Aivyx to remember things over
 time, summarize what's on your plate, and (with the commented
 blocks uncommented) push briefings to your phone.
+
+### `kitchen` — back-of-house kitchen operations (vertical pack)
+
+The first Aivyx **vertical pack** — and richer than the three
+archetypes above. It specializes the agent for a small commercial
+kitchen's back-of-house: inventory, recipes, par-level reorder, and
+HACCP food-safety logging over the existing KitchenDB. See
+[`docs/VERTICAL_PACKS.md`](VERTICAL_PACKS.md) for the full design.
+
+**Profile:** `assistant_name = "Aria"`, primary use cases
+`["kitchen operations", "back of house"]`, constraints that hard-stop
+autonomous purchase orders and require a corrective action on every
+out-of-limit temperature.
+
+**Role envelope (`boh`):** the `kitchen.*` capability scopes
+(`kitchen.read`, `kitchen.write`, `kitchen.order.send`,
+`kitchen.haccp.log`) + `memory.{read,write}`, `trust_ceiling =
+"Trusted"`.
+
+**Tool process:** wires the **`aivyx-kitchen`** tool process — the
+read/compute/gated-write/HACCP tool surface over the KitchenDB RPC
+API. Requires building the binary (`cargo build --release -p
+aivyx-kitchen`) and a per-tool-process config with the KitchenDB
+connection.
+
+**Starter automation (commented out):** a `[[schedule]]` for the
+**nightly autonomous par-level reorder** — it drafts per-supplier
+purchase orders unattended and **stops at the confirm-first gate**, so
+nothing is ordered without morning approval (VERTICAL_PACKS §3.5).
+
+**Skills bundle:** starter routines (nightly reorder, fridge-temp
+round, cook/hold check, stocktake, recipe scaling) ship with the pack
+— `aivyx_kitchen::pack::skills_json()` — installed by teaching the
+agent each via `skills.teach`.
+
+**Pick this when:** you run a kitchen and want stock/reorder/recipe
+help and tamper-evident food-safety records — with autonomous overnight
+analysis but a human at every order and an immutable HACCP log.
 
 ## Custom templates
 

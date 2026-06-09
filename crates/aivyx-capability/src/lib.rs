@@ -345,6 +345,38 @@ const KNOWN_BASES: &[&str] = &[
     // dispatcher. The thirteen-tool substrate core is untouched.
     "remind.read",
     "remind.write",
+    // Kitchen / Back-of-House — the first Aivyx **vertical pack**
+    // (see docs/VERTICAL_PACKS.md). `kitchen.read` gates the read +
+    // compute tool surface of the `aivyx-kitchen` tool process
+    // (inventory / recipe / supplier / PO / alert reads over the
+    // KitchenDB RPCs, plus the pure `kitchen.recipe.scale`).
+    // Trusted-tier-only by default — same gating pattern as every
+    // other third-party-tool-process surface (email.* / web.search /
+    // drive.* …). The gated write bases (`kitchen.write`,
+    // `kitchen.order.send`, `kitchen.haccp.log`) land with later
+    // vertical-pack phases.
+    "kitchen.read",
+    // Kitchen vertical pack — gated write surface. `kitchen.write`
+    // gates inventory counts / adjustments (and, later, production
+    // batch lifecycle); `kitchen.order.send` gates dispatching a
+    // purchase order to a supplier — money leaves the building, so it
+    // is *additionally* confirm-first at the tool level (the
+    // `skills.teach` `confirmed: true` pattern). Both Trusted-tier-only
+    // at the ceiling, like every other mutating third-party surface.
+    "kitchen.write",
+    "kitchen.order.send",
+    // Kitchen vertical pack — food-safety (HACCP) logging. Distinct
+    // from `kitchen.write`: `kitchen.haccp.log` gates **append-only**
+    // food-safety records (temperature checks, corrective actions,
+    // cleaning / allergen / use-by). The compliance wedge — each call
+    // lands on the tamper-evident HMAC audit chain (tool id, scope,
+    // input hash, time, outcome), so the food-safety log is
+    // cryptographically ordered + non-repudiable. Ungated (logging a
+    // fridge temp must be friction-free) but immutable by construction.
+    // Trusted-tier-only at the ceiling; operators can grant it to a
+    // SemiTrusted line role (logging from the pass) via
+    // `capability_scopes`.
+    "kitchen.haccp.log",
 ];
 
 // ---------------------------------------------------------------------------
@@ -922,6 +954,19 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Chapter F precedent for write-capable bases.
         "n8n.read",
         "n8n.write",
+        // Kitchen / BOH vertical pack — `kitchen.read` (the read +
+        // compute tool surface). Trusted-tier-only default, matching
+        // the email.* / web.search / drive.* third-party-tool-process
+        // gating pattern. See docs/VERTICAL_PACKS.md.
+        "kitchen.read",
+        // Kitchen vertical pack — gated write surface. Trusted-tier-
+        // only; `kitchen.order.send` is additionally confirm-first at
+        // the tool level.
+        "kitchen.write",
+        "kitchen.order.send",
+        // Append-only food-safety logging (the compliance wedge); each
+        // call lands on the HMAC audit chain. Trusted-tier-only default.
+        "kitchen.haccp.log",
     ])
 });
 
@@ -1740,11 +1785,15 @@ mod tests {
         // remind.write for the reminder tools (everyday-PA #1).
         // Phase 184 adds skills.write for conversational
         // skill-teaching (skills.teach / update / forget).
+        // The Kitchen/BOH vertical pack (docs/VERTICAL_PACKS.md)
+        // adds kitchen.read, kitchen.write + kitchen.order.send for
+        // the gated write surface, and kitchen.haccp.log for the
+        // append-only food-safety (HACCP) compliance log.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            75,
+            79,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

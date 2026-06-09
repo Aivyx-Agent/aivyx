@@ -1,0 +1,128 @@
+# description: Back-of-house kitchen operations assistant — inventory, recipes, par-level reorder, and HACCP food-safety logging over your KitchenDB.
+#
+# The first Aivyx **vertical pack** (see docs/VERTICAL_PACKS.md).
+# `aivyx init --template kitchen` pre-fills the wizard with these
+# defaults. After generation you must, in addition to the storage
+# passphrase + provider key:
+#
+#   1. Build the kitchen tool process:  cargo build --release -p aivyx-kitchen
+#      and point `[[tool_process]].command` at the binary.
+#   2. Create ~/.aivyx/tool-processes/kitchen/config.toml with your
+#      KitchenDB connection (postgrest_url, api_key, organization_id).
+#   3. Install the starter skills bundle (the kitchen routines) — see
+#      crates/aivyx-kitchen/src/pack.rs / `aivyx_kitchen::pack::skills_json()`.
+#
+# ----------------------------------------------------------------
+# Provider — default to local Ollama (no API key, no egress)
+# ----------------------------------------------------------------
+
+[agent]
+provider = "ollama"
+model = "llama3.1"
+
+[ollama]
+base_url = "http://localhost:11434"
+
+# [anthropic]
+# api_key = "sk-ant-..."   # or set ANTHROPIC_API_KEY env var
+
+# ----------------------------------------------------------------
+# Storage + filesystem sandbox
+# ----------------------------------------------------------------
+
+[storage]
+path = "~/.local/share/aivyx/store.redb"
+
+[fs]
+# Where the agent writes digests / reports / exports. The KitchenDB
+# is the system of record; the filesystem is just for documents.
+root = "~/kitchen"
+
+[aivyx]
+# passphrase = "set-a-real-passphrase"   # or AIVYX_PASSPHRASE env var
+
+[daemon]
+web_ui = true
+
+# ----------------------------------------------------------------
+# Profile — operator-declared identity layer (P13)
+# ----------------------------------------------------------------
+
+[profile]
+assistant_name = "Aria"
+operator_profile = "Head chef / kitchen manager of a small commercial kitchen. Cares about food cost, par levels, waste, and food-safety compliance."
+communication_style = "Terse, checklist-first, safety-conscious. Lead with what needs doing."
+primary_use_cases = ["kitchen operations", "back of house"]
+behavioral_preferences = [
+    "lead with what's low and what needs ordering",
+    "always show a draft before any purchase order",
+    "log food-safety checks immediately and exactly",
+]
+behavioral_constraints = [
+    "NEVER send a purchase order without the operator's explicit approval",
+    "an out-of-limit temperature reading must always record a corrective action",
+    "never reveal supplier pricing or the org's data outside this kitchen",
+]
+
+# ----------------------------------------------------------------
+# Roles — the back-of-house role is the default active role
+# ----------------------------------------------------------------
+
+[[role]]
+name = "boh"
+system_prompt = "You are a back-of-house kitchen operations assistant. Read stock, recipes, suppliers, and alerts from the KitchenDB; draft par-level reorders; log HACCP food-safety checks. Show a draft before any purchase order and never send one without explicit approval."
+tool_allowlist = [
+    "kitchen.inventory.list",
+    "kitchen.inventory.low_stock",
+    "kitchen.inventory.value",
+    "kitchen.recipe.search",
+    "kitchen.recipe.scale",
+    "kitchen.supplier.list",
+    "kitchen.po.list",
+    "kitchen.alert.list",
+    "kitchen.par.reorder",
+    "kitchen.po.send",
+    "kitchen.haccp.log",
+    "kitchen.inventory.count.open",
+    "kitchen.inventory.count.submit",
+    "kitchen.inventory.item.upsert",
+    "memory.read",
+    "memory.write",
+]
+capability_scopes = [
+    "kitchen.read",
+    "kitchen.write",
+    "kitchen.order.send",
+    "kitchen.haccp.log",
+    "memory.read",
+    "memory.write",
+]
+trust_ceiling = "Trusted"
+memory_topic_prefix = "kitchen/"
+
+# ----------------------------------------------------------------
+# Tool process — the aivyx-kitchen vertical-pack tool surface over
+# the KitchenDB. Build it (`cargo build --release -p aivyx-kitchen`)
+# and set `command` to the binary path.
+# ----------------------------------------------------------------
+
+[[tool_process]]
+name = "kitchen"
+command = "aivyx-kitchen"   # or an absolute path to the built binary
+args = []
+enabled = true
+
+# ----------------------------------------------------------------
+# Schedule — the nightly autonomous par-level reorder (opt-in).
+# Runs unattended; it DRAFTS purchase orders and stops at the
+# confirm-first gate — nothing is sent without your approval. See
+# docs/VERTICAL_PACKS.md §3.5.
+# ----------------------------------------------------------------
+
+# [[schedule]]
+# name = "nightly-par-reorder"
+# cron = "0 0 2 * * * *"   # 2:00 AM daily
+# role = "boh"
+# prompt = "Run the nightly par-level reorder: check low stock, draft per-supplier purchase orders with kitchen.par.reorder, and present the drafts for my approval. Do NOT send any purchase order."
+# enabled = true
+# notify_target = "phone"   # optional — surface the drafts for morning approval

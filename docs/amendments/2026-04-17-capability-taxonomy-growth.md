@@ -131,6 +131,44 @@ rejects any base not in the array at parse time.
 
 ---
 
+## Kitchen vertical-pack addendum — `kitchen.*` (2026-06-07)
+
+> *Added with the first Aivyx **vertical pack** — Kitchen /
+> Back-of-House (see `docs/VERTICAL_PACKS.md`). Three new bases gate
+> the `aivyx-kitchen` tool process over the existing KitchenDB:
+> `kitchen.read` (inventory / recipe / supplier / PO / alert reads +
+> the pure `kitchen.recipe.scale` / `kitchen.par.reorder` compute),
+> `kitchen.write` (inventory counts / adjustments), and
+> `kitchen.order.send` (dispatching a purchase order to a supplier),
+> and `kitchen.haccp.log` (append-only food-safety records — the
+> compliance wedge). All Trusted-tier-only at the ceiling, matching
+> every other third-party-tool-process surface (`email.*` /
+> `web.search` / `drive.*`). `kitchen.order.send` is **additionally
+> confirm-first** at the tool level — money leaving the building
+> requires the `confirmed: true` protocol the `skills.teach` family
+> established. `kitchen.haccp.log` is ungated (logging a fridge temp
+> must be friction-free) but immutable: every call lands on the
+> tamper-evident HMAC audit chain (tool id, scope, input hash, time,
+> outcome). This is the pack model proving out: a vertical adds
+> **additive bases + a tool process**, never a substrate fork.*
+
+| Source | Bases added | Provenance |
+|---|---|---|
+| Kitchen pack | `kitchen.read` | Read + compute tools (KitchenDB RPC reads + the pure recipe-scale / par-reorder compute). |
+| Kitchen pack | `kitchen.write` | Inventory counts / adjustments (gated write surface). |
+| Kitchen pack | `kitchen.order.send` | Dispatch a purchase order to a supplier — Trusted-tier **and** confirm-first at the tool level. |
+| Kitchen pack | `kitchen.haccp.log` | Append-only food-safety (HACCP) records; anchored on the HMAC audit chain (the compliance wedge). |
+
+### Current full enumeration after the Kitchen pack (79 bases)
+
+The Phase 184 enumeration plus four new **infrastructure** bases
+(`kitchen.read`, `kitchen.write`, `kitchen.order.send`,
+`kitchen.haccp.log`), so the infrastructure family grows 34 → 38:
+
+Total: 16 + 5 + 38 + 20 = 79.
+
+---
+
 ## Phase 54 addendum — current scope-base count (2026-05-12)
 
 > *Added at Phase 54 exit during the Chapter A docs sweep. The

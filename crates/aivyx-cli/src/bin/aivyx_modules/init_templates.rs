@@ -71,6 +71,12 @@ const BUNDLED_RESEARCHER: &str =
     include_str!("../../../../../examples/templates/aivyx-researcher.toml");
 const BUNDLED_PERSONAL: &str =
     include_str!("../../../../../examples/templates/aivyx-personal.toml");
+// The first Aivyx vertical pack — Kitchen / Back-of-House
+// (docs/VERTICAL_PACKS.md). Richer than the personal-assistant
+// archetypes: it wires the `aivyx-kitchen` tool process + a BOH role
+// + the opt-in nightly reorder schedule.
+const BUNDLED_KITCHEN: &str =
+    include_str!("../../../../../examples/templates/aivyx-kitchen.toml");
 
 /// Every bundled template, keyed by name. Order is the
 /// canonical listing order.
@@ -79,6 +85,7 @@ fn bundled_specs() -> &'static [(&'static str, &'static str)] {
         ("coder", BUNDLED_CODER),
         ("researcher", BUNDLED_RESEARCHER),
         ("personal", BUNDLED_PERSONAL),
+        ("kitchen", BUNDLED_KITCHEN),
     ]
 }
 
@@ -268,10 +275,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_templates_returns_the_three_starter_archetypes() {
+    fn bundled_templates_returns_the_starter_archetypes_and_kitchen_pack() {
         let bundled = bundled_templates();
         let names: Vec<&str> = bundled.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["coder", "researcher", "personal"]);
+        // Three personal-assistant archetypes + the Kitchen vertical pack.
+        assert_eq!(names, vec!["coder", "researcher", "personal", "kitchen"]);
         for t in &bundled {
             assert_eq!(t.source, TemplateSource::Bundled);
             assert!(!t.toml_content.is_empty(), "{} has content", t.name);
