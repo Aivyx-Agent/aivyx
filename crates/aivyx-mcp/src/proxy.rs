@@ -9,31 +9,23 @@ use aivyx_core::{
     AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification,
 };
 
-use crate::jsonrpc::{Request, Response};
+use crate::conn::McpConn;
 use crate::protocol::{McpToolDef, ToolsCallParams, ToolsCallResult};
-use crate::transport_trait::McpTransport;
 
 pub struct McpToolProxy {
     id: ToolId,
     server_name: String,
     def: McpToolDef,
-    transport: Arc<dyn McpTransport>,
-    next_id: Arc<std::sync::atomic::AtomicU64>,
+    conn: Arc<McpConn>,
 }
 
 impl McpToolProxy {
-    pub fn new(
-        server_name: String,
-        def: McpToolDef,
-        transport: Arc<dyn McpTransport>,
-        next_id: Arc<std::sync::atomic::AtomicU64>,
-    ) -> Self {
+    pub fn new(server_name: String, def: McpToolDef, conn: Arc<McpConn>) -> Self {
         McpToolProxy {
             id: ToolId::new(),
             server_name,
             def,
-            transport,
-            next_id,
+            conn,
         }
     }
 
@@ -41,38 +33,13 @@ impl McpToolProxy {
         &self,
         arguments: serde_json::Value,
     ) -> Result<ToolsCallResult, String> {
-        let id = self
-            .next_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let params = ToolsCallParams {
             name: self.def.name.clone(),
             arguments,
         };
-        let req = Request::new(
-            id,
-            "tools/call",
-            Some(serde_json::to_value(&params).unwrap()),
-        );
-        let mut line = serde_json::to_string(&req)
-            .map_err(|e| format!("serialize: {e}"))?;
-        line.push('\n');
-
-        self.transport.send(&line).await?;
-
-        let resp_line = self.transport.receive().await?;
-
-        let resp: Response = serde_json::from_str(&resp_line)
-            .map_err(|e| format!("parse response: {e}"))?;
-
-        if let Some(err) = resp.error {
-            return Err(format!("{err}"));
-        }
-
-        let result = resp
-            .result
-            .ok_or_else(|| "no result in response".to_string())?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("deserialize result: {e}"))
+        self.conn
+            .call("tools/call", Some(serde_json::to_value(&params).unwrap()))
+            .await
     }
 }
 

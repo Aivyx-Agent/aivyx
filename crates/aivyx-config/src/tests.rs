@@ -2013,6 +2013,72 @@ command = "npx"
 }
 
 #[test]
+fn mcp_server_http_transport_parses() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-http");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "modern"
+transport = "http"
+url = "https://example.com/mcp"
+
+[[mcp_server]]
+name = "alias"
+transport = "streamable-http"
+url = "https://example.com/mcp2"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+
+    assert_eq!(cfg.mcp_servers.len(), 2);
+    assert_eq!(cfg.mcp_servers[0].transport, McpTransportKind::Http);
+    assert_eq!(cfg.mcp_servers[0].url.as_deref(), Some("https://example.com/mcp"));
+    // The `streamable-http` alias parses to the same kind.
+    assert_eq!(cfg.mcp_servers[1].transport, McpTransportKind::Http);
+
+    drop(env);
+}
+
+#[test]
+fn mcp_server_http_missing_url_is_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-http-nourl");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "[anthropic]\napi_key = \"sk-test\"\n\n[[mcp_server]]\nname = \"x\"\ntransport = \"http\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("http needs url");
+    assert!(format!("{err:?}").contains("url"));
+    drop(env);
+}
+
+#[test]
 fn mcp_server_sse_missing_url_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sse-no-url");

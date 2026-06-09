@@ -1252,8 +1252,11 @@ pub struct SlackConfig {
 pub enum McpTransportKind {
     /// Local child process over stdio (Phase 23).
     Stdio,
-    /// Remote HTTP server over SSE (Phase 32).
+    /// Remote HTTP server over the legacy HTTP+SSE pair (Phase 32).
     Sse,
+    /// Remote HTTP server over the modern single-endpoint Streamable
+    /// HTTP transport (MCP 2025-03-26+).
+    Http,
 }
 
 /// One MCP server to connect to at daemon startup.
@@ -3139,7 +3142,8 @@ struct RawRole {
 #[derive(Debug, Default, Deserialize)]
 struct RawMcpServer {
     name: String,
-    /// Transport kind: `"stdio"` (default) or `"sse"`.
+    /// Transport kind: `"stdio"` (default), `"sse"`, or `"http"`
+    /// (Streamable HTTP; alias `"streamable-http"`).
     #[serde(default = "default_stdio_transport")]
     transport: String,
     /// Command to spawn (stdio transport).
@@ -4985,12 +4989,13 @@ impl AivyxConfig {
             let transport = match r.transport.as_str() {
                 "stdio" => McpTransportKind::Stdio,
                 "sse" => McpTransportKind::Sse,
+                "http" | "streamable-http" => McpTransportKind::Http,
                 other => {
                     return Err(ConfigError::Invalid {
                         field: "mcp_server.transport",
                         reason: format!(
                             "server {:?}: unknown transport {:?} \
-                             (expected \"stdio\" or \"sse\")",
+                             (expected \"stdio\", \"sse\", or \"http\")",
                             r.name, other,
                         ),
                     });
@@ -5006,12 +5011,15 @@ impl AivyxConfig {
                     ),
                 });
             }
-            if transport == McpTransportKind::Sse && r.url.is_none() {
+            if matches!(transport, McpTransportKind::Sse | McpTransportKind::Http)
+                && r.url.is_none()
+            {
                 return Err(ConfigError::Invalid {
                     field: "mcp_server.url",
                     reason: format!(
-                        "server {:?}: sse transport requires `url`",
+                        "server {:?}: {} transport requires `url`",
                         r.name,
+                        if transport == McpTransportKind::Http { "http" } else { "sse" },
                     ),
                 });
             }
@@ -5020,12 +5028,12 @@ impl AivyxConfig {
             // validation in `[[tool_process]]`.
             let sandbox = match r.sandbox {
                 Some(s) => {
-                    if transport == McpTransportKind::Sse {
+                    if transport != McpTransportKind::Stdio {
                         return Err(ConfigError::Invalid {
                             field: "mcp_server.sandbox",
                             reason: format!(
                                 "server {:?}: sandbox is stdio-only \
-                                 (no local child to wrap on SSE transport)",
+                                 (no local child to wrap on a remote transport)",
                                 r.name,
                             ),
                         });

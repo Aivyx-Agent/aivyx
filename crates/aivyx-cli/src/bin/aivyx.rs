@@ -4823,7 +4823,12 @@ async fn run_async(
     // after the role assemble) so the system-prompt path could read
     // the startup snapshot. The apply-tool setters land just below.
 
-    let mut mcp_bridges: Vec<aivyx_mcp::McpServerBridge> = Vec::new();
+    let mut mcp_bridges: Vec<std::sync::Arc<aivyx_mcp::McpServerBridge>> = Vec::new();
+    // Phase: live `tools/list_changed` hot-swap — the tool ids each MCP
+    // server currently contributes, so the refresh coordinator can swap
+    // exactly that server's tools when it signals a change.
+    let mut mcp_server_tool_ids: std::collections::HashMap<String, Vec<aivyx_core::ToolId>> =
+        std::collections::HashMap::new();
     for mcp_cfg in &mcp_servers {
         let bridge_result = match mcp_cfg.transport {
             aivyx_config::McpTransportKind::Stdio => {
@@ -4870,16 +4875,34 @@ async fn run_async(
                     Err(e) => Err(e),
                 }
             }
+            aivyx_config::McpTransportKind::Http => {
+                let url = mcp_cfg.url.as_deref().unwrap_or("");
+                match aivyx_mcp::StreamableHttpTransport::connect(url).await {
+                    Ok(transport) => {
+                        aivyx_mcp::McpServerBridge::from_transport(
+                            std::sync::Arc::new(transport),
+                            &mcp_cfg.name,
+                        )
+                        .await
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         };
         match bridge_result {
             Ok(bridge) => {
                 match bridge.discover_tools().await {
                     Ok(mcp_tools) => {
                         let count = mcp_tools.len();
+                        mcp_server_tool_ids.insert(
+                            mcp_cfg.name.clone(),
+                            mcp_tools.iter().map(|t| t.id()).collect(),
+                        );
                         tool_list.extend(mcp_tools);
                         let transport_label = match mcp_cfg.transport {
                             aivyx_config::McpTransportKind::Stdio => "stdio",
                             aivyx_config::McpTransportKind::Sse => "sse",
+                            aivyx_config::McpTransportKind::Http => "http",
                         };
                         eprintln!(
                             "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
@@ -4893,7 +4916,7 @@ async fn run_async(
                         );
                     }
                 }
-                mcp_bridges.push(bridge);
+                mcp_bridges.push(std::sync::Arc::new(bridge));
             }
             Err(e) => {
                 eprintln!(
@@ -5227,6 +5250,51 @@ async fn run_async(
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
+    // Live MCP `tools/list_changed` hot-swap. A background task polls
+    // each bridge's drained list-changed set (recorded by the shared
+    // `McpConn` demux during normal tool calls); when a server signals a
+    // change it re-discovers that server and swaps exactly its tools in
+    // the shared `ToolRegistry` — no restart. Capability-safe: the
+    // replacements carry the same `mcp.call:<server>` scope family the
+    // role already granted. The round-trip lock in `McpConn` keeps the
+    // coordinator's `rediscover()` from racing in-flight agent calls.
+    if !mcp_bridges.is_empty() {
+        let bridges = mcp_bridges.clone();
+        let registry = Arc::clone(&tools);
+        let mut server_tool_ids = mcp_server_tool_ids.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                for bridge in &bridges {
+                    let changed = bridge.take_pending_list_changed();
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    let name = bridge.server_name().to_string();
+                    match bridge.rediscover().await {
+                        Ok(new_tools) => {
+                            let new_ids: Vec<aivyx_core::ToolId> =
+                                new_tools.iter().map(|t| t.id()).collect();
+                            let old_ids =
+                                server_tool_ids.get(&name).cloned().unwrap_or_default();
+                            let (removed, added) =
+                                registry.replace_tools(&old_ids, new_tools);
+                            server_tool_ids.insert(name.clone(), new_ids);
+                            eprintln!(
+                                "aivyx: MCP server {name:?} signalled {changed:?} — \
+                                 hot-swapped tools ({removed} removed, {added} added)"
+                            );
+                        }
+                        Err(e) => eprintln!(
+                            "aivyx: MCP server {name:?} list-changed rediscover failed: {e}"
+                        ),
+                    }
+                }
+            }
+        });
+    }
+
     // Phase 102 — snapshot the registered tool set for the daemon's
     // `GetToolStats` query, captured here before `tools` is moved
     // into the planner factory. The scope base comes from
@@ -5235,7 +5303,8 @@ async fn run_async(
     // only the daemon path consumes it, but capturing here keeps it
     // ahead of every move of `tools`.
     let tool_descriptors: Vec<ToolDescriptor> = tools
-        .iter_tools()
+        .snapshot()
+        .into_iter()
         .map(|t| ToolDescriptor {
             name: t.name().to_string(),
             description: t.description().to_string(),
@@ -5262,7 +5331,8 @@ async fn run_async(
                 | aivyx_config::OllamaFamilyStrategy::FewShotExamples
         ) {
             tools
-                .iter_tools()
+                .snapshot()
+                .into_iter()
                 .filter(|t| match &tool_allowlist {
                     None => true,
                     Some(set) => set.contains(t.name()),
@@ -5510,7 +5580,8 @@ async fn run_async(
                     | aivyx_config::OllamaFamilyStrategy::FewShotExamples
             ) {
                 tools_for_factory
-                    .iter_tools()
+                    .snapshot()
+                    .into_iter()
                     .filter(|t| match &child_tool_allowlist {
                         None => true,
                         Some(set) => set.contains(t.name()),
@@ -6248,7 +6319,7 @@ async fn run_async(
         })
             .await;
 
-        for bridge in mcp_bridges {
+        for bridge in &mcp_bridges {
             let _ = bridge.shutdown().await;
         }
         // Phase 49 — tool processes get a polite ToolShutdown; the

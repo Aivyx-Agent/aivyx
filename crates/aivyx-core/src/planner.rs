@@ -162,37 +162,73 @@ impl TurnPlanner for VecPlanner {
     }
 }
 
-/// A tool registry — how the loop looks up a `Tool` by its `ToolId`. The
-/// simplest possible registry is a `Vec<Arc<dyn Tool>>` scanned linearly.
-/// Real runtimes will hash by id; Phase 1 tests don't care.
+/// A tool registry — how the loop looks up a `Tool` by its `ToolId`. A
+/// linearly-scanned `Vec<Arc<dyn Tool>>` behind an `RwLock` so the set
+/// can be **hot-swapped** at runtime (e.g. when an MCP server signals
+/// `tools/list_changed`) while the agent shares it via `Arc`. Lookups
+/// take a brief read lock and return owned clones — never a guard — so
+/// no lock is ever held across an `.await`.
 pub struct ToolRegistry {
-    tools: Vec<Arc<dyn Tool>>,
+    tools: std::sync::RwLock<Vec<Arc<dyn Tool>>>,
 }
 
 impl ToolRegistry {
     pub fn new(tools: Vec<Arc<dyn Tool>>) -> Self {
-        ToolRegistry { tools }
+        ToolRegistry {
+            tools: std::sync::RwLock::new(tools),
+        }
     }
 
-    pub fn get(&self, id: ToolId) -> Option<&Arc<dyn Tool>> {
-        self.tools.iter().find(|t| t.id() == id)
+    pub fn get(&self, id: ToolId) -> Option<Arc<dyn Tool>> {
+        self.tools
+            .read()
+            .unwrap()
+            .iter()
+            .find(|t| t.id() == id)
+            .cloned()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.read().unwrap().is_empty()
     }
 
-    /// Iterate over every registered tool. Used by the LLM planner to
-    /// build the `LlmToolDescriptor` list at construction time.
-    pub fn iter_tools(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
-        self.tools.iter()
+    /// An owned snapshot of every registered tool. Used by the LLM
+    /// planner to build the `LlmToolDescriptor` list. Returns owned
+    /// `Arc`s so the caller holds no lock.
+    pub fn snapshot(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools.read().unwrap().clone()
     }
 
     /// Look up a tool by its human name. Linear scan — the registry
     /// holds at most a few dozen tools in realistic use, and the LLM
     /// planner only calls this once per LLM step.
     pub fn find_by_name(&self, name: &str) -> Option<ToolId> {
-        self.tools.iter().find(|t| t.name() == name).map(|t| t.id())
+        self.tools
+            .read()
+            .unwrap()
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.id())
+    }
+
+    /// Hot-swap: remove the tools with the given ids and append
+    /// `additions`, atomically under the write lock. Returns
+    /// `(removed, added)`. Used to apply an MCP server's
+    /// `*/list_changed` refresh without restarting the daemon —
+    /// capability-safe because the replacements carry the same
+    /// `required_scope` family the role already granted.
+    pub fn replace_tools(
+        &self,
+        remove_ids: &[ToolId],
+        additions: Vec<Arc<dyn Tool>>,
+    ) -> (usize, usize) {
+        let mut guard = self.tools.write().unwrap();
+        let before = guard.len();
+        guard.retain(|t| !remove_ids.contains(&t.id()));
+        let removed = before - guard.len();
+        let added = additions.len();
+        guard.extend(additions);
+        (removed, added)
     }
 }
 
@@ -331,9 +367,10 @@ mod tool_surface_audit {
             .expect("id lookup must return the tool");
         assert_eq!(found_tool.name(), "fs.read");
 
-        // Path 2: LLM planner walks `iter_tools` once at construction to
-        // build the descriptor list it sends to the model.
-        let names: Vec<&str> = registry.iter_tools().map(|t| t.name()).collect();
+        // Path 2: LLM planner walks the registry snapshot once at
+        // construction to build the descriptor list it sends to the model.
+        let snapshot = registry.snapshot();
+        let names: Vec<&str> = snapshot.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["fs.read"]);
 
         // Path 3: `input_schema()` returns a stable `&serde_json::Value`
@@ -342,6 +379,32 @@ mod tool_surface_audit {
         let schema = found_tool.input_schema();
         assert_eq!(schema["type"], json!("object"));
         assert_eq!(schema["required"], json!(["path"]));
+    }
+
+    #[test]
+    fn replace_tools_hot_swaps_by_id() {
+        let keep = Arc::new(FsReadSkeleton::new("/sandbox"));
+        let drop_me = Arc::new(FsReadSkeleton::new("/sandbox"));
+        let keep_id = keep.id();
+        let drop_id = drop_me.id();
+        let registry = ToolRegistry::new(vec![
+            keep as Arc<dyn Tool>,
+            drop_me as Arc<dyn Tool>,
+        ]);
+        assert_eq!(registry.snapshot().len(), 2);
+
+        // Swap out `drop_me`, add a fresh tool — atomically.
+        let added = Arc::new(FsReadSkeleton::new("/sandbox"));
+        let added_id = added.id();
+        let (removed, added_n) =
+            registry.replace_tools(&[drop_id], vec![added as Arc<dyn Tool>]);
+        assert_eq!((removed, added_n), (1, 1));
+
+        // The kept + added tools resolve; the dropped one is gone.
+        assert!(registry.get(keep_id).is_some());
+        assert!(registry.get(added_id).is_some());
+        assert!(registry.get(drop_id).is_none());
+        assert_eq!(registry.snapshot().len(), 2);
     }
 
     #[test]

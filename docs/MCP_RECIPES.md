@@ -31,6 +31,50 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 > enabled, the agent can use any of its tools" is the most common
 > operator intent.
 
+> **Resources.** Discovery is **capability-gated** on the server's
+> `initialize` response. A server that declares the `tools` capability
+> contributes its tools as above; one that declares `resources`
+> additionally contributes two resource-access tools —
+> `mcp.<server>.resources.list` (catalog the resources it exposes) and
+> `mcp.<server>.resources.read` (read one by `uri`) — so the agent can
+> read the **context** a server publishes, not just call its tools.
+> A server that declares `prompts` likewise contributes
+> `mcp.<server>.prompts.list` (catalog its reusable prompt templates)
+> and `mcp.<server>.prompts.get` (retrieve one rendered with `name` +
+> `arguments`). All of these reuse the same `mcp.call` scope (each is a
+> call to the server), so no extra scope is needed, and the client
+> never probes a method the server didn't declare.
+
+> **Live list changes (hot-swap).** The client fully handles
+> `tools/list_changed` (and the resources / prompts variants) **without
+> a restart**. A shared per-server `McpConn` demuxes a server's
+> interleaved notifications during normal calls and records which
+> primitives changed; a background coordinator in the daemon polls that
+> signal, calls `rediscover()`, and swaps exactly that server's tools in
+> the live `ToolRegistry` (an `RwLock`-backed set). A round-trip lock on
+> the connection keeps the coordinator's re-discovery from racing
+> in-flight agent tool calls. It's **capability-safe**: the refreshed
+> tools carry the same `mcp.call:<server>` scope family the role already
+> granted, so a swap never widens what the agent can do.
+
+> **Transports.** The recipes below are **stdio** (local child
+> processes, the common case). Remote servers use one of two HTTP
+> transports — drop the `command`/`sandbox` lines and give a `url`:
+>
+> ```toml
+> [[mcp_server]]
+> name = "remote"
+> transport = "http"          # modern Streamable HTTP (MCP 2025-03-26+)
+> url = "https://mcp.example.com/mcp"
+> # transport = "sse"         # or the legacy HTTP+SSE pair
+> ```
+>
+> `transport = "http"` (alias `"streamable-http"`) speaks the modern
+> single-endpoint transport: one POST per request, JSON or SSE
+> response, with the server-assigned `Mcp-Session-Id` carried
+> automatically. Sandboxing is stdio-only (there's no local child to
+> wrap on a remote transport).
+
 ## Catalog at a glance
 
 | Recipe | Operator-touch frequency | Notes |

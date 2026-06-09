@@ -372,7 +372,8 @@ impl LlmPlanner {
         // `agent.rs::run_tool_call` for the belt-and-suspenders
         // safety net.
         let tools = registry
-            .iter_tools()
+            .snapshot()
+            .into_iter()
             .filter(|tool| {
                 config
                     .tool_allowlist
@@ -1136,7 +1137,8 @@ fn fuzzy_recover_tool_name(
     threshold: f32,
 ) -> Option<crate::ToolId> {
     let mut best: Option<(crate::ToolId, f32)> = None;
-    for tool in registry.iter_tools() {
+    let snapshot = registry.snapshot();
+    for tool in &snapshot {
         let score = crate::skill_proposer::title_similarity(
             emitted_name,
             tool.name(),
@@ -1174,7 +1176,8 @@ fn top_n_similar_tools(
     n: usize,
 ) -> Vec<(String, f32)> {
     let mut scored: Vec<(String, f32)> = registry
-        .iter_tools()
+        .snapshot()
+        .into_iter()
         .map(|tool| {
             let score = crate::skill_proposer::title_similarity(
                 emitted_name,

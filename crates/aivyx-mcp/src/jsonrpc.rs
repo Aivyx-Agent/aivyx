@@ -1,4 +1,5 @@
-//! Minimal JSON-RPC 2.0 framing — just enough for MCP's three methods.
+//! Minimal JSON-RPC 2.0 framing. The locked, demuxing round-trip lives
+//! on [`crate::conn::McpConn`].
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
