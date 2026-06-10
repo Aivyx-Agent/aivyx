@@ -50,6 +50,9 @@ aivyx-tui = { path = "../aivyx-tui" }
 # dependency set, now relocated here with the binary.
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Chapter J — the Nonagon. `aivyx team run/roster` assembles a team
+# (TeamAssembly) and runs a mission lead in-process on the same audit chain.
+aivyx-team = { path = "../aivyx-team" }
 aivyx-config = { path = "../aivyx-config" }
 aivyx-crypto = { path = "../aivyx-crypto" }
 aivyx-storage = { path = "../aivyx-storage" }

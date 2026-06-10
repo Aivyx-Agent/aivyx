@@ -130,6 +130,8 @@ mod role;
 mod tool_relevance;
 #[path = "aivyx_modules/tools.rs"]
 mod tools;
+#[path = "aivyx_modules/team.rs"]
+mod team;
 #[path = "aivyx_modules/tool_init.rs"]
 mod tool_init;
 #[path = "aivyx_modules/toml_edit_apply.rs"]
@@ -710,6 +712,13 @@ fn run() -> Result<(), String> {
     // no tokio runtime.
     if let CliMode::Mcp(McpSubcommand::Recipes { name }) = mode {
         return run_mcp_recipes(name.as_deref());
+    }
+
+    // Chapter J — `aivyx team roster`: render the default Nonagon. Pure
+    // stdout, no storage/provider/daemon (like `mcp recipes`). `team run`
+    // takes the run_async path below — it needs the live provider + audit.
+    if let CliMode::Team(TeamSubcommand::Roster) = mode {
+        return team::run_roster();
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1469,6 +1478,20 @@ enum CliMode {
     /// rides on the top-level `CliArgs::role` (parsed below); this
     /// variant carries no fields.
     Tui,
+    /// `aivyx team <subcommand>`: Chapter J — the Nonagon. `roster`
+    /// renders the default team (offline); `run "<mission>"` assembles
+    /// the team in-process and hands the mission to the lead, whose
+    /// specialist sub-turns land on the same HMAC chain.
+    Team(TeamSubcommand),
+}
+
+/// Chapter J — `aivyx team <subcommand>` variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum TeamSubcommand {
+    /// `aivyx team roster` — render the default Nonagon. Offline.
+    Roster,
+    /// `aivyx team run "<mission>"` — run the lead over a mission.
+    Run { mission: String },
 }
 
 /// Phase 173 — `aivyx loop <subcommand>` variants.
@@ -2397,6 +2420,62 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Loop(loop_sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter J — `aivyx team <subcommand>`: roster (offline) | run "<mission>".
+    if !args.is_empty() && args[0] == "team" {
+        let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
+        let team_sub = match sub {
+            "roster" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx team roster`: `{}`",
+                        args[2]
+                    ));
+                }
+                TeamSubcommand::Roster
+            }
+            "run" => {
+                let mission = args.get(2).ok_or_else(|| {
+                    "`aivyx team run` requires a \"<mission>\" argument".to_string()
+                })?;
+                if mission.starts_with('-') {
+                    return Err(
+                        "`aivyx team run` expects the mission text before any flags".to_string(),
+                    );
+                }
+                if args.len() > 3 {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx team run`: `{}` \
+                         (quote the mission as one argument)",
+                        args[3]
+                    ));
+                }
+                TeamSubcommand::Run {
+                    mission: mission.clone(),
+                }
+            }
+            "" => {
+                return Err(
+                    "`aivyx team` requires a subcommand: roster | run".to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unknown `aivyx team` subcommand `{other}` (expected: roster | run)"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Team(team_sub),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -4076,6 +4155,22 @@ async fn run_async(
     // `AuditWriter` / `AuditLog` traits).
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
+
+    // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider
+    // + the persistent HMAC audit hook, which is everything the Nonagon needs:
+    // assemble the default team and run the lead in-process, so every
+    // specialist sub-turn lands on this same chain. A one-shot command — it
+    // returns here rather than falling through to the session/daemon wiring.
+    if let CliMode::Team(TeamSubcommand::Run { mission }) = &mode {
+        return team::run_mission(
+            Arc::clone(&provider),
+            &model,
+            DEFAULT_MAX_TOKENS,
+            Arc::clone(&audit),
+            mission,
+        )
+        .await;
+    }
 
     // ---- Tools --------------------------------------------------------
     // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`
@@ -8715,6 +8810,48 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["loop", "frobnicate"]))
             .expect_err("unknown subcommand must error");
         assert!(err.contains("skip"), "help should mention skip: {err}");
+    }
+
+    // ---- Chapter J — `aivyx team` parsing ---------------------
+
+    #[test]
+    fn team_roster_parses() {
+        let parsed = parse_cli_args_from(&argv(&["team", "roster"]))
+            .expect("team roster must parse");
+        assert_eq!(parsed.mode, CliMode::Team(TeamSubcommand::Roster));
+    }
+
+    #[test]
+    fn team_run_parses_the_mission() {
+        let parsed = parse_cli_args_from(&argv(&["team", "run", "close the kitchen"]))
+            .expect("team run must parse");
+        match parsed.mode {
+            CliMode::Team(TeamSubcommand::Run { mission }) => {
+                assert_eq!(mission, "close the kitchen");
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn team_run_without_a_mission_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["team", "run"]))
+            .expect_err("missing mission must error");
+        assert!(err.contains("requires a"), "error: {err}");
+    }
+
+    #[test]
+    fn team_unknown_subcommand_lists_roster_and_run() {
+        let err = parse_cli_args_from(&argv(&["team", "frobnicate"]))
+            .expect_err("unknown subcommand must error");
+        assert!(err.contains("roster") && err.contains("run"), "error: {err}");
+    }
+
+    #[test]
+    fn team_roster_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&["team", "roster", "extra"]))
+            .expect_err("roster takes no args");
+        assert!(err.contains("unrecognized"), "error: {err}");
     }
 
     #[test]

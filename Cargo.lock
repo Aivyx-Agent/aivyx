@@ -179,6 +179,7 @@ dependencies = [
  "aivyx-memory",
  "aivyx-slack",
  "aivyx-storage",
+ "aivyx-team",
  "aivyx-telegram",
  "aivyx-tool",
  "aivyx-tui",
