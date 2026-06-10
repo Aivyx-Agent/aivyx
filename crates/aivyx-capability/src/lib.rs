@@ -383,6 +383,11 @@ const KNOWN_BASES: &[&str] = &[
     // specialists (they don't declare it, so the lead→specialist
     // attenuation drops it): a specialist cannot convene its own team.
     "team.delegate",
+    // `team.message` is the team *dialogue* scope — held by EVERY member
+    // (lead + specialists) so peers can message each other on the bus.
+    // Distinct from `team.delegate`: a specialist may talk, but not convene
+    // its own team.
+    "team.message",
 ];
 
 // ---------------------------------------------------------------------------
@@ -976,6 +981,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Nonagon team orchestration (docs/NONAGON.md): the lead's
         // authority to delegate to specialists. Trusted-tier default.
         "team.delegate",
+        // Team dialogue (the message bus) — held by every member. Trusted.
+        "team.message",
     ])
 });
 
@@ -1802,7 +1809,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            80,
+            81,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

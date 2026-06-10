@@ -167,17 +167,18 @@ The Phase 184 enumeration plus four new **infrastructure** bases
 
 Total: 16 + 5 + 38 + 20 = 79.
 
-### Nonagon multi-agent chapter addendum (+1 → 80 bases)
+### Nonagon multi-agent chapter addendum (+2 → 81 bases)
 
-The Nonagon chapter (`docs/NONAGON.md`) adds one **infrastructure** base:
+The Nonagon chapter (`docs/NONAGON.md`) adds two **infrastructure** bases:
 
 | Chapter | Base | Purpose |
 |---------|------|---------|
 | Nonagon | `team.delegate` | The lead's authority to convene + delegate to specialists (`delegate_task` / `query_agent`). **Not** inherited by specialists — the lead→specialist attenuation drops it, so a specialist cannot convene its own team. Trusted-tier default. |
+| Nonagon | `team.message` | Team dialogue on the message bus (`send_message` / `read_message`). Held by **every** member (lead + specialists) so peers can talk; distinct from `team.delegate`. Trusted-tier default. |
 
-So the infrastructure family grows 38 → 39:
+So the infrastructure family grows 38 → 40:
 
-Total: 16 + 5 + 39 + 20 = 80.
+Total: 16 + 5 + 40 + 20 = 81.
 
 ---
 
