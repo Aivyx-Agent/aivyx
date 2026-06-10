@@ -717,8 +717,8 @@ fn run() -> Result<(), String> {
     // Chapter J — `aivyx team roster`: render the default Nonagon. Pure
     // stdout, no storage/provider/daemon (like `mcp recipes`). `team run`
     // takes the run_async path below — it needs the live provider + audit.
-    if let CliMode::Team(TeamSubcommand::Roster) = mode {
-        return team::run_roster();
+    if let CliMode::Team(TeamSubcommand::Roster { config }) = &mode {
+        return team::run_roster(config.as_deref());
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1485,13 +1485,18 @@ enum CliMode {
     Team(TeamSubcommand),
 }
 
-/// Chapter J — `aivyx team <subcommand>` variants.
+/// Chapter J — `aivyx team <subcommand>` variants. The optional
+/// `--config <path.toml>` loads a **vertical pack's** customised `TeamConfig`
+/// (e.g. the kitchen BOH Nonagon); omitted, the default 9-role Nonagon runs.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum TeamSubcommand {
-    /// `aivyx team roster` — render the default Nonagon. Offline.
-    Roster,
-    /// `aivyx team run "<mission>"` — run the lead over a mission.
-    Run { mission: String },
+    /// `aivyx team roster [--config <path>]` — render a team. Offline.
+    Roster { config: Option<String> },
+    /// `aivyx team run "<mission>" [--config <path>]` — run the lead.
+    Run {
+        mission: String,
+        config: Option<String>,
+    },
 }
 
 /// Phase 173 — `aivyx loop <subcommand>` variants.
@@ -2433,16 +2438,32 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Chapter J — `aivyx team <subcommand>`: roster (offline) | run "<mission>".
     if !args.is_empty() && args[0] == "team" {
         let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
-        let team_sub = match sub {
-            "roster" => {
-                if args.len() > 2 {
-                    return Err(format!(
-                        "unrecognized argument to `aivyx team roster`: `{}`",
-                        args[2]
-                    ));
+        // Shared `--config <path>` parser over a tail of args.
+        let parse_config = |tail: &[String], cmd: &str| -> Result<Option<String>, String> {
+            let mut config: Option<String> = None;
+            let mut idx = 0;
+            while idx < tail.len() {
+                match tail[idx].as_str() {
+                    "--config" => {
+                        let v = tail.get(idx + 1).ok_or_else(|| {
+                            "`--config` requires a path to a team TOML".to_string()
+                        })?;
+                        config = Some(v.clone());
+                        idx += 2;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unrecognized argument to `aivyx team {cmd}`: `{other}`"
+                        ));
+                    }
                 }
-                TeamSubcommand::Roster
             }
+            Ok(config)
+        };
+        let team_sub = match sub {
+            "roster" => TeamSubcommand::Roster {
+                config: parse_config(args.get(2..).unwrap_or(&[]), "roster")?,
+            },
             "run" => {
                 let mission = args.get(2).ok_or_else(|| {
                     "`aivyx team run` requires a \"<mission>\" argument".to_string()
@@ -2452,15 +2473,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         "`aivyx team run` expects the mission text before any flags".to_string(),
                     );
                 }
-                if args.len() > 3 {
-                    return Err(format!(
-                        "unrecognized argument to `aivyx team run`: `{}` \
-                         (quote the mission as one argument)",
-                        args[3]
-                    ));
-                }
                 TeamSubcommand::Run {
                     mission: mission.clone(),
+                    config: parse_config(args.get(3..).unwrap_or(&[]), "run")?,
                 }
             }
             "" => {
@@ -4161,13 +4176,14 @@ async fn run_async(
     // assemble the default team and run the lead in-process, so every
     // specialist sub-turn lands on this same chain. A one-shot command — it
     // returns here rather than falling through to the session/daemon wiring.
-    if let CliMode::Team(TeamSubcommand::Run { mission }) = &mode {
+    if let CliMode::Team(TeamSubcommand::Run { mission, config }) = &mode {
         return team::run_mission(
             Arc::clone(&provider),
             &model,
             DEFAULT_MAX_TOKENS,
             Arc::clone(&audit),
             mission,
+            config.as_deref(),
         )
         .await;
     }
@@ -8818,19 +8834,41 @@ mod tests {
     fn team_roster_parses() {
         let parsed = parse_cli_args_from(&argv(&["team", "roster"]))
             .expect("team roster must parse");
-        assert_eq!(parsed.mode, CliMode::Team(TeamSubcommand::Roster));
+        assert_eq!(parsed.mode, CliMode::Team(TeamSubcommand::Roster { config: None }));
     }
 
     #[test]
-    fn team_run_parses_the_mission() {
-        let parsed = parse_cli_args_from(&argv(&["team", "run", "close the kitchen"]))
-            .expect("team run must parse");
+    fn team_roster_with_config_parses_the_pack_path() {
+        let parsed = parse_cli_args_from(&argv(&["team", "roster", "--config", "kitchen.toml"]))
+            .expect("team roster --config must parse");
         match parsed.mode {
-            CliMode::Team(TeamSubcommand::Run { mission }) => {
-                assert_eq!(mission, "close the kitchen");
+            CliMode::Team(TeamSubcommand::Roster { config }) => {
+                assert_eq!(config.as_deref(), Some("kitchen.toml"));
             }
             other => panic!("unexpected mode: {other:?}"),
         }
+    }
+
+    #[test]
+    fn team_run_parses_the_mission_and_optional_config() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "team", "run", "close the kitchen", "--config", "kitchen.toml",
+        ]))
+        .expect("team run must parse");
+        match parsed.mode {
+            CliMode::Team(TeamSubcommand::Run { mission, config }) => {
+                assert_eq!(mission, "close the kitchen");
+                assert_eq!(config.as_deref(), Some("kitchen.toml"));
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn team_config_flag_without_a_value_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["team", "roster", "--config"]))
+            .expect_err("--config needs a path");
+        assert!(err.contains("requires a path"), "error: {err}");
     }
 
     #[test]

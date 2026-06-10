@@ -61,9 +61,19 @@ fn trust_label(t: TrustTier) -> &'static str {
     }
 }
 
-/// `aivyx team roster` — print the default Nonagon. Offline.
-pub fn run_roster() -> Result<(), String> {
-    print!("{}", render_roster(&default_nonagon()));
+/// Load the team to run: a vertical pack's `TeamConfig` from `--config
+/// <path.toml>`, or the default 9-role Nonagon when none is given.
+fn load_team(config: Option<&str>) -> Result<TeamConfig, String> {
+    match config {
+        Some(path) => TeamConfig::load(path)
+            .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
+        None => Ok(default_nonagon()),
+    }
+}
+
+/// `aivyx team roster [--config <path>]` — print a team. Offline.
+pub fn run_roster(config: Option<&str>) -> Result<(), String> {
+    print!("{}", render_roster(&load_team(config)?));
     Ok(())
 }
 
@@ -76,11 +86,13 @@ pub async fn run_mission(
     max_tokens: u32,
     audit: Arc<dyn AuditHook>,
     mission: &str,
+    config: Option<&str>,
 ) -> Result<(), String> {
-    let config = default_nonagon();
+    let config = load_team(config)?;
+    let team_name = config.name.clone();
     let lead = config
         .lead_member()
-        .ok_or("default team has no lead")?
+        .ok_or("team has no lead")?
         .clone();
     // The team runs under the lead's declared authority; every specialist is
     // attenuated to a subset of it (NT-02). It grants team.delegate +
@@ -93,7 +105,10 @@ pub async fn run_mission(
         model,
         max_tokens,
         Arc::clone(&audit),
-        vec![], // base tools for specialists land with the vertical packs (J.6)
+        // Specialists run tool-less for now; threading the pack's domain tools
+        // (e.g. the kitchen toolkit's RPC tools) into base_tools lands with the
+        // toolkit crate. They still delegate, dialogue, and produce text.
+        vec![],
         lead_caps.clone(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
@@ -122,7 +137,7 @@ pub async fn run_mission(
 
     let channel = MissionChannel::new();
     let msg = Message::text(channel.session_id(), mission);
-    eprintln!("team: running mission on the default Nonagon (lead: {})…", channel.label());
+    eprintln!("team: running mission on {} (lead: {})…", team_name, lead.name);
     match agent.turn(msg, &channel).await {
         TurnOutcome::Completed { final_message, .. } => {
             println!("{final_message}");
@@ -151,9 +166,6 @@ impl MissionChannel {
             session: SessionId::new(),
             token: CancellationToken::new(),
         }
-    }
-    fn label(&self) -> &str {
-        "coordinator"
     }
 }
 
@@ -205,6 +217,15 @@ mod tests {
         assert!(out.contains("team.delegate"));
         // J.5 roster wiring: every member can talk on the bus.
         assert!(out.contains("team.message"));
+    }
+
+    #[test]
+    fn load_team_defaults_to_the_nonagon_and_errors_on_a_bad_path() {
+        // No --config → the default 9-role Nonagon.
+        assert_eq!(load_team(None).unwrap().lead, "coordinator");
+        // A missing pack path is a clean error, not a panic.
+        let err = load_team(Some("/no/such/team.toml")).unwrap_err();
+        assert!(err.contains("failed to load team config"), "error: {err}");
     }
 
     #[test]
