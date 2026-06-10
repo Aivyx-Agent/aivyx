@@ -18,12 +18,15 @@ readme.workspace = true
 aivyx-capability = { path = "../aivyx-capability" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-llm = { path = "../aivyx-llm" }
+# J.2.2: the SpecialistChannel impls ChannelContext (#[async_trait]) — a
+# real dep now, not just for tests.
+async-trait = { workspace = true }
 serde = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# Test fakes: a never-called `LlmProvider` (construction-only in J.2.1) and
-# a minimal `Tool` for the allowlist filter, both #[async_trait].
-async-trait = { workspace = true }
+# Turn-running tests: a working FakeLlmProvider/Stream + a fake lead
+# channel; serde_json for the minimal Tool fixture.
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
