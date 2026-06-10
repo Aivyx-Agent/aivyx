@@ -21,8 +21,10 @@
 
 pub mod attenuation;
 pub mod config;
+pub mod factory;
 pub mod roster;
 
 pub use attenuation::{attenuate_for_member, effective_trust};
 pub use config::{DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS};
+pub use factory::{filter_tools, SpecialistFactory};
 pub use roster::default_nonagon;

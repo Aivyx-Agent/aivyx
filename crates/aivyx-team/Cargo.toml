@@ -10,11 +10,20 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-# Phase J.1 is pure config + roster + the capability-attenuation
-# primitive — no async/agent deps yet (pool, tools, runtime land in
-# J.2+). The whole safety story rests on aivyx-capability's Scope /
-# CapabilitySet / TrustTier.
+# The safety story rests on aivyx-capability's Scope / CapabilitySet /
+# TrustTier. J.2 adds construction: the SpecialistFactory builds attenuated
+# specialist `ConcreteAgent`s (aivyx-core) driven by an injected
+# `LlmProvider` (aivyx-llm). `aivyx-team` sits above core/llm/capability
+# and below the daemon — a clean DAG, no cycle.
 aivyx-capability = { path = "../aivyx-capability" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-llm = { path = "../aivyx-llm" }
 serde = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Test fakes: a never-called `LlmProvider` (construction-only in J.2.1) and
+# a minimal `Tool` for the allowlist filter, both #[async_trait].
+async-trait = { workspace = true }
+serde_json = { workspace = true }
