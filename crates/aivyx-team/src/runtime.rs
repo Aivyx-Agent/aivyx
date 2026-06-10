@@ -156,7 +156,9 @@ impl TeamRuntime {
 }
 
 /// A gate passes unless its verdict begins with `FAIL` (case-insensitive).
-fn gate_passed(verdict: &str) -> bool {
+/// Shared with `verify_output` (J.4.3) so in-DAG gates and the ad-hoc verify
+/// tool judge a verdict the same way.
+pub(crate) fn gate_passed(verdict: &str) -> bool {
     !verdict.trim_start().to_ascii_uppercase().starts_with("FAIL")
 }
 
