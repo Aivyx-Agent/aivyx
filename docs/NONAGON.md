@@ -205,7 +205,7 @@ panel (mockup → live).
 | **J.3 Message bus** ✅ | `MessageBus` (bounded broadcast, fan-out, lag/backpressure) + `send_message`/`read_message` tools over the new `team.message` scope + dialogue caps (peer-dialogue toggle, per-turn budget). Roster wiring deferred to J.5. | J.2 | **12 shipped** (J.3.1–2) |
 | **J.4 Mission DAG** ⭐ ✅ | `MissionPlan` DAG (cycle detection, ready-set); `TeamRuntime` runs independent branches concurrently (`join_all`); `decompose_task`/`synthesize_results`/`verify_output` over the existing `team.delegate` scope (no new base). `collect_results` lands as the `MissionReport`. | J.2, J.3 | **31 shipped** (J.4.1–3) |
 | **J.5 CLI + audit + loop** ✅ | `aivyx team run "<mission>"` (in-process) + `aivyx team roster`; the roster wiring (`TeamAssembly`, per-member dialogue tools via `SpecialistFactory::with_dialogue`, `team.message` on every default role); specialist sub-turns land on the same persistent HMAC `AuditHook`. (Loop integration deferred — optional.) | J.4 | **17 shipped** (J.5.1–2) |
-| **J.6 Kitchen Nonagon** 💰 | "pack supplies a `TeamConfig`" wiring + the kitchen BOH roster + the overnight-close mission | J.5 | ~20–30 |
+| **J.6 Kitchen Nonagon** 💰 ✅ | `aivyx-kitchen` pack crate: `kitchen_boh_team()` (Aria + 4 least-privileged specialists over `kitchen.*`; HACCP holds only `kitchen.haccp.log`) + `overnight_close_mission()` + the `kitchen-boh.toml` asset. Domain-neutral `aivyx team --config <pack.toml>` loads it. (Specialist domain tools land with the kitchen toolkit crate.) | J.5 | **11 shipped** (J.6.1–2) |
 | **J.7 TUI Missions/Fleet** | wire live team/mission state into the TUI panel (the mockup → real) | J.5 | ~15–25 |
 
 ```
