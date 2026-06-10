@@ -45,3 +45,9 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "fs"] }
+
+# Excluded from `dist` releases — only the top-level `aivyx` binary is
+# published as a release artifact. This tool-process binary ships with
+# the daemon / is built from source, not as a standalone download.
+[package.metadata.dist]
+dist = false

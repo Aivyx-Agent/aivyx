@@ -38,3 +38,7 @@ install-updater = false
 # Mirrors the local pre-commit hook discipline; defense in depth
 # alongside `.github/workflows/ci.yml`.
 plan-jobs = ["./quality-gate"]
+# Don't run the release workflow on pull requests — ci.yml already runs
+# the quality gate on every PR, so a PR-time release run would just
+# duplicate it. The release pipeline runs on version tags only.
+pr-run-mode = "skip"
