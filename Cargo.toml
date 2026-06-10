@@ -27,6 +27,7 @@ members = [
     "crates/aivyx-voice",
     "crates/aivyx-tui",
     "crates/aivyx-cli",
+    "crates/aivyx-team",
 ]
 
 [workspace.package]

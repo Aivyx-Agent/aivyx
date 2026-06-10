@@ -1,0 +1,20 @@
+[package]
+name = "aivyx-team"
+description = "Nonagon multi-agent teams — a lead agent convening up to 9 attenuated specialists (Chapter J). See docs/NONAGON.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# Phase J.1 is pure config + roster + the capability-attenuation
+# primitive — no async/agent deps yet (pool, tools, runtime land in
+# J.2+). The whole safety story rests on aivyx-capability's Scope /
+# CapabilitySet / TrustTier.
+aivyx-capability = { path = "../aivyx-capability" }
+serde = { workspace = true }
+toml = "0.8"
+thiserror = { workspace = true }

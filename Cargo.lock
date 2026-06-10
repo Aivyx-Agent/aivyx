@@ -470,6 +470,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-team"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "serde",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "aivyx-telegram"
 version = "0.1.0"
 dependencies = [
