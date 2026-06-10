@@ -15,12 +15,17 @@ fn member(
     tools: &[&str],
     scopes: &[&str],
 ) -> TeamMember {
+    // Every member can talk on the team bus, so `team.message` is granted to
+    // all (the lead holds it too, so attenuation keeps it for specialists).
+    // The send/read_message tools are injected per member at assembly (J.5).
+    let mut capability_scopes: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
+    capability_scopes.push("team.message".to_string());
     TeamMember {
         name: name.to_string(),
         role: role.to_string(),
         soul: soul.to_string(),
         tool_allowlist: tools.iter().map(|s| s.to_string()).collect(),
-        capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        capability_scopes,
         trust_ceiling: TrustTier::Trusted,
     }
 }
@@ -154,6 +159,19 @@ mod tests {
                 "planner", "ops", "archivist"
             ]
         );
+    }
+
+    #[test]
+    fn every_member_can_talk_on_the_bus() {
+        use aivyx_capability::Scope;
+        let msg = Scope::parse("team.message").unwrap();
+        for m in &default_nonagon().members {
+            assert!(
+                m.declared_capabilities().unwrap().grants(&msg),
+                "{} should hold team.message for peer dialogue",
+                m.name
+            );
+        }
     }
 
     #[test]

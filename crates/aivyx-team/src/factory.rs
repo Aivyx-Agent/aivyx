@@ -25,7 +25,9 @@ use aivyx_core::{
 use aivyx_llm::LlmProvider;
 
 use crate::attenuation::attenuate_for_member;
-use crate::config::{TeamError, TeamMember};
+use crate::config::{DialogueConfig, TeamError, TeamMember};
+use crate::message_bus::MessageBus;
+use crate::message_tools::{ReadMessagesTool, SendMessageTool};
 
 /// The shared deps the daemon injects so the pool can build specialists.
 pub struct SpecialistFactory {
@@ -35,6 +37,10 @@ pub struct SpecialistFactory {
     audit: Arc<dyn AuditHook>,
     /// The daemon's full tool set; each specialist gets a filtered subset.
     base_tools: Vec<Arc<dyn Tool>>,
+    /// When set (J.5), every built specialist also gets its own
+    /// `send_message` / `read_message` tools bound to its name + this bus, so
+    /// peers can talk. Opt-in: without it, specialists are tool-only.
+    dialogue: Option<(Arc<MessageBus>, DialogueConfig)>,
 }
 
 impl SpecialistFactory {
@@ -51,7 +57,15 @@ impl SpecialistFactory {
             max_tokens,
             audit,
             base_tools,
+            dialogue: None,
         }
+    }
+
+    /// Wire team dialogue: every specialist `build`-t hereafter also gets its
+    /// own message tools on `bus` (J.5 roster wiring).
+    pub fn with_dialogue(mut self, bus: Arc<MessageBus>, dialogue: DialogueConfig) -> Self {
+        self.dialogue = Some((bus, dialogue));
+        self
     }
 
     /// Build an attenuated specialist agent from `member`, with its
@@ -62,10 +76,7 @@ impl SpecialistFactory {
         lead_caps: &CapabilitySet,
     ) -> Result<ConcreteAgent, TeamError> {
         let caps = attenuate_for_member(lead_caps, &member.parsed_scopes()?);
-        let registry = Arc::new(ToolRegistry::new(filter_tools(
-            &self.base_tools,
-            &member.tool_allowlist,
-        )));
+        let registry = Arc::new(ToolRegistry::new(self.member_tools(member)));
 
         // Captured by the planner factory (invoked once per turn, in J.2.2).
         let provider = Arc::clone(&self.provider);
@@ -90,6 +101,24 @@ impl SpecialistFactory {
                 ))
             },
         ))
+    }
+
+    /// The tool set a specialist receives: its allowlisted base tools, plus —
+    /// when dialogue is wired (J.5) — its own `send_message` / `read_message`
+    /// bound to its name. A specialist is never the lead, so `is_lead = false`
+    /// and its sends honour `enable_peer_dialogue`.
+    fn member_tools(&self, member: &TeamMember) -> Vec<Arc<dyn Tool>> {
+        let mut tools = filter_tools(&self.base_tools, &member.tool_allowlist);
+        if let Some((bus, dialogue)) = &self.dialogue {
+            tools.push(Arc::new(SendMessageTool::new(
+                &member.name,
+                Arc::clone(bus),
+                dialogue,
+                false,
+            )));
+            tools.push(Arc::new(ReadMessagesTool::new(bus, &member.name)));
+        }
+        tools
     }
 }
 
@@ -239,6 +268,27 @@ mod tests {
         );
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name(), "beta");
+    }
+
+    #[test]
+    fn with_dialogue_injects_per_member_message_tools() {
+        use crate::message_bus::MessageBus;
+        let bus = MessageBus::new(8);
+        let f = factory(vec![fake("alpha")]).with_dialogue(bus, DialogueConfig::default());
+        // The specialist lists `alpha`; dialogue adds send_message + read_message.
+        let tools = f.member_tools(&member("spec", &["fs.read"], &["alpha"]));
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"send_message"), "dialogue wired send");
+        assert!(names.contains(&"read_message"), "dialogue wired read");
+    }
+
+    #[test]
+    fn without_dialogue_no_message_tools() {
+        let f = factory(vec![fake("alpha")]);
+        let tools = f.member_tools(&member("spec", &["fs.read"], &["alpha"]));
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, ["alpha"], "no bus → tool-only, least privilege");
     }
 
     #[test]
