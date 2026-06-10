@@ -26,9 +26,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # J.3: the MessageBus is a bounded tokio broadcast channel.
 tokio = { workspace = true, features = ["sync"] }
+# J.4.2: the TeamRuntime runs a DAG's independent ready steps concurrently
+# via join_all.
+futures-util = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# Turn-running tests need a Tokio runtime for the sub-turn.
-tokio = { workspace = true, features = ["macros", "rt"] }
+# Turn-running tests need a Tokio runtime for the sub-turn; J.4.2's
+# concurrency proof needs a Barrier + a timeout guard (sync + time).
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }

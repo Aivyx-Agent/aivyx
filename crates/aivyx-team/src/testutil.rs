@@ -27,20 +27,36 @@ struct FakeStep {
 
 pub struct FakeProvider {
     script: Mutex<VecDeque<FakeStep>>,
+    /// When set, every `chat_stream` returns this text (never exhausts) —
+    /// needed for multi-step missions where one provider serves many turns.
+    repeat: Option<String>,
+}
+
+fn one_shot(text: &str) -> FakeStep {
+    FakeStep {
+        events: vec![LlmStreamEvent::TextChunk(text.to_string())],
+        terminal: LlmStepEnd::FinalMessage {
+            text: text.to_string(),
+            usage: aivyx_llm::LlmUsage::default(),
+        },
+    }
 }
 
 impl FakeProvider {
     /// A provider that completes one turn with `text` as the final message.
     pub fn says(text: &str) -> Arc<Self> {
-        let step = FakeStep {
-            events: vec![LlmStreamEvent::TextChunk(text.to_string())],
-            terminal: LlmStepEnd::FinalMessage {
-                text: text.to_string(),
-                usage: aivyx_llm::LlmUsage::default(),
-            },
-        };
         Arc::new(FakeProvider {
-            script: Mutex::new(VecDeque::from(vec![step])),
+            script: Mutex::new(VecDeque::from(vec![one_shot(text)])),
+            repeat: None,
+        })
+    }
+
+    /// A provider that returns `text` on *every* turn — for missions whose
+    /// many delegated sub-turns share one provider.
+    pub fn always(text: &str) -> Arc<Self> {
+        Arc::new(FakeProvider {
+            script: Mutex::new(VecDeque::new()),
+            repeat: Some(text.to_string()),
         })
     }
 }
@@ -52,12 +68,15 @@ impl LlmProvider for FakeProvider {
         _: LlmRequest<'_>,
         _: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        let step = self
-            .script
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or_else(|| LlmError::Config("fake provider exhausted".into()))?;
+        let step = match &self.repeat {
+            Some(text) => one_shot(text),
+            None => self
+                .script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("fake provider exhausted".into()))?,
+        };
         Ok(Box::new(FakeStream {
             events: step.events.into_iter(),
             terminal: Some(step.terminal),

@@ -27,6 +27,7 @@ pub mod message_tools;
 pub mod mission;
 pub mod pool;
 pub mod roster;
+pub mod runtime;
 pub mod tools;
 
 #[cfg(test)]
@@ -40,4 +41,5 @@ pub use message_tools::{ReadMessagesTool, SendMessageTool};
 pub use mission::{MissionPlan, Step, StepKind};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
+pub use runtime::{MissionReport, MissionStatus, TeamRuntime};
 pub use tools::{DelegateTaskTool, QueryAgentTool};
