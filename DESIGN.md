@@ -67,8 +67,11 @@ against it: does this make the paragraph easier or harder to say?
 - Concurrency model (sequential? parallel tools?) — **resolved by
   [Amendment A6](docs/amendments/2026-04-21-parallel-tool-execution.md)**:
   batch dispatch via `join_all` when planner returns `NextStep::ToolCalls`
-- Multi-agent coordination — out of scope for v1
-- Federation / remote agents — out of scope for v1
+- Multi-agent coordination — out of scope for v1; **shipped post-v1 as
+  Chapter J (the Nonagon)** — a lead convening ≤9 *attenuated, in-process*
+  specialists on the one daemon/chain, which preserves (not breaks) the
+  single-agent ethos. See [`docs/NONAGON.md`](docs/NONAGON.md).
+- Federation / remote agents — out of scope for v1 (still deferred)
 
 ### Scenario tests
 

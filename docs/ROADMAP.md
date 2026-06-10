@@ -3599,7 +3599,7 @@ directions remain on the shelf: the everyday-PA breadth
 continuation, the dep-requiring substrate hardenings, cutting
 `v0.1.0`, and the Channel Activation Milestone.)
 
-## Chapter J — Nonagon: Multi-Agent Teams (Phases J.1–J.7)
+## Chapter J — Nonagon: Multi-Agent Teams (Phases J.1–J.7) ✅ COMPLETE
 
 The free-core **multi-agent** capability: a *lead* agent convenes up
 to **9 attenuated specialists**, decomposes a mission into a DAG,
@@ -3611,9 +3611,28 @@ existing turn loop, not a loop rewrite — and the safety invariant
 (**NT-02:** specialist `⊆` lead) rests on the `CapabilitySet`/`Scope`
 attenuation the core already ships. The **engine is free**; **verticals
 customise the team** (kitchen ships a Back-of-House Nonagon). Full
-design contract + phase plan (~180–260 tests, 7 phases) in
-[`NONAGON.md`](NONAGON.md). Ported/re-grounded from the pre-rebuild
-archive's `aivyx-team` crate. Plugs into [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md).
+design contract + phase plan in [`NONAGON.md`](NONAGON.md).
+Ported/re-grounded from the pre-rebuild archive's `aivyx-team` crate.
+Plugs into [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md).
+
+**Shipped (J.1–J.7):** the `aivyx-team` crate — `TeamConfig`/roster,
+`attenuate_for_member` (NT-02), `SpecialistFactory`/`SpecialistPool`,
+the `MessageBus`, the `MissionPlan` **DAG** (cycle detection + ready-set)
++ the concurrent `TeamRuntime`, the `decompose_task`/`synthesize_results`/
+`verify_output`/`delegate_task`/`query_agent`/`send_message`/`read_message`
+tools, and `TeamAssembly` (the wiring entrypoint). The CLI: **`aivyx team
+run "<mission>" [--config <pack.toml>]`** (in-process, on the HMAC chain,
+specialists holding their real attenuated tools) and **`aivyx team roster
+[--config <pack.toml>]`**. First vertical: the **`aivyx-kitchen`** pack
+(Aria's Back-of-House Nonagon + the overnight-close mission, shipped as a
+`TeamConfig` + a TOML asset). TUI: the live **Missions** panel
+(`View::Missions`, master/detail). Two new scope bases (`team.delegate`,
+`team.message`); the kitchen pack adds none (reuses the pre-registered
+`kitchen.*`). **Deferred follow-ons** (out of chapter scope): a vertical's
+*domain* tools (the kitchen toolkit crate's KitchenDB RPCs) joining
+`base_tools`; **daemon-side** team execution + the live Missions IPC feed
+(today `team run` is a one-shot CLI); optional autonomous-loop integration
+of team missions.
 
 ## Chapter I — Interface & Reach (Phases 185+)
 

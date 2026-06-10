@@ -12,18 +12,18 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Phase 184 exit, 2026-06-06)
+## Status (Chapter J exit, 2026-06-11)
 
 | | |
 |---|---|
-| Phases shipped | 184 (Phase 0 → Phase 184, plus 13 contract amendments) |
-| Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent phases extend the platform within the locked contract |
+| Phases shipped | Phase 0 → Chapter J (the Nonagon), plus 13 contract amendments |
+| Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
-| Workspace crates | 24 |
-| Rust tests | 4,206 passing |
+| Workspace crates | 28 |
+| Rust tests | 4,407 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 75 |
+| Capability scope bases | 81 |
 | Encrypted storage domains | 20 |
 
 The arc to date, by chapter:
@@ -82,6 +82,22 @@ The arc to date, by chapter:
   chat. Together these realize the founding "fully customizable"
   promise: Profile, Persona, Roles, and skills are all
   user-shaped.
+- **Chapter I — Interface & Reach (Phases 185+).** Richer frontends
+  around the one daemon: a **terminal TUI** (`ratatui`/`crossterm`,
+  `aivyx tui`) — streaming chat, scrollback, status bar, and
+  multi-view navigation (Chat · Missions · Dashboard · Audit · Tools) —
+  quarantined to a dedicated `aivyx-tui` frontend crate so the
+  substrate stays dependency-clean.
+- **Chapter J — Nonagon: Multi-Agent Teams.** The free-core
+  multi-agent capability: a **lead** agent convenes up to **9
+  attenuated specialists**, decomposes a mission into a **DAG**,
+  delegates, verifies, and synthesizes — all in the **one daemon** on
+  the **one HMAC chain**, preserving the single-agent ethos (one lead;
+  ephemeral, least-privileged specialists, **NT-02:** specialist `⊆`
+  lead). Ships the `aivyx-team` engine, **`aivyx team run "<mission>"`**
+  / **`aivyx team roster`**, the live TUI Missions panel, and the first
+  **vertical pack** — `aivyx-kitchen`'s Back-of-House Nonagon. See
+  [`docs/NONAGON.md`](docs/NONAGON.md) + [`docs/VERTICAL_PACKS.md`](docs/VERTICAL_PACKS.md).
 
 ## Five-minute setup
 
@@ -135,6 +151,21 @@ Then open `http://127.0.0.1:7843/` in a browser — that's the
 Web UI. Type a message in the **Chat** tab. Click **Audit** to
 watch events land in the HMAC-chained log; click **Verify chain**
 to cold-verify the chain offline.
+
+**Terminal frontends + the Nonagon (Chapter I/J):**
+
+```sh
+./target/release/aivyx tui                 # the ratatui terminal UI
+./target/release/aivyx team roster         # the default 9-role Nonagon
+./target/release/aivyx team run "research the latest on X and draft a summary"
+./target/release/aivyx team roster --config crates/aivyx-kitchen/assets/kitchen-boh.toml
+```
+
+`aivyx team run` hands the mission to a **lead** agent that decomposes it
+into a DAG, delegates to least-privileged specialists, verifies, and
+synthesizes — every step on the one HMAC chain. A **vertical pack** swaps in
+a domain crew via `--config <pack.toml>` (the kitchen Back-of-House Nonagon
+is the worked example). See [`docs/NONAGON.md`](docs/NONAGON.md).
 
 For a config that uses Anthropic or OpenAI instead, see
 [`examples/aivyx.toml`](examples/aivyx.toml). For a Telegram

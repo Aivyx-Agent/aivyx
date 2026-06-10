@@ -7,10 +7,15 @@ free. This document defines the pack format and works through the first
 example: a **Kitchen / Back-of-House (BOH)** pack over the existing
 KitchenDB.
 
-> Status: design + Phase-1 spike. The `aivyx-kitchen` crate scaffolds
-> the integration core (the KitchenDB RPC client + read-only domain
-> methods). Wiring it as a tool process (Tool-trait impls + scope
-> registration + the multi-tool harness) is the documented next step.
+> Status: in progress. The `aivyx-kitchen` pack crate is **live** and ships
+> the **BOH Nonagon team** — the customised `TeamConfig` (Aria + four
+> least-privileged specialists over the `kitchen.*` scopes) + the
+> overnight-close `MissionPlan`, as a Rust constructor and a committed TOML
+> asset (Chapter **J.6**; loaded by `aivyx team run --config <path>`). The
+> `kitchen.*` scope bases are registered. **Next** for the same crate: the
+> KitchenDB RPC client + the read/compute/write `aivyx_core::Tool` impls
+> (the domain tool surface §3.2), wired into the team's `base_tools` so the
+> specialists *act* on the DB, not just plan.
 
 ---
 
@@ -28,15 +33,21 @@ packs"), this is the load-bearing decision.
 
 ## 2. The pack format
 
-A vertical pack is five things, each riding an existing primitive:
+A vertical pack is up to six things, each riding an existing primitive:
 
 | Component | Primitive | New code? |
 |---|---|---|
 | **Template** | `aivyx init --template <name>` (Phase 66) → seeds Profile + default Role | config only |
 | **Toolkit crate** | a bundled multi-tool process, same shape as `aivyx-toolkit`/`aivyx-gmail` (Chapter F/G), reusing `aivyx_tool::multi_harness` | new sibling crate |
 | **Scopes + gate policy** | capability scope bases (additive to `aivyx-capability` `KNOWN_BASES`) + trust ceiling + gates | additive bases |
+| **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤9 least-privileged specialists over the pack's scopes — loaded by `aivyx team run --config <pack.toml>` (Chapter J) | config (TOML) |
 | **Skills bundle** | starter conversationally-taught `LearnedSkill`s | config only |
 | **Integrations** | `aivyx connect` tool-processes / MCP servers (Chapter F) | config only |
+
+The **Team** component is what makes a pack a *force multiplier*: the same
+free engine, shaped into a domain expert crew. The kitchen pack's BOH Nonagon
+(Aria + stocktake / inventory / purchasing / HACCP) is the worked example —
+see [`NONAGON.md`](NONAGON.md) §9 and `crates/aivyx-kitchen`.
 
 The only Rust that changes outside the new crate is **additive scope
 bases** in `aivyx-capability` (exactly how `web.search`, `gmail.*`,

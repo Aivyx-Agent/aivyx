@@ -52,6 +52,14 @@ edited freely when a new adapter or subsystem teaches us something new.
   for adding a new `ChannelContext` adapter, grounded in the two
   adapters in tree (`LocalChannel`, `TelegramChannel`). Read this
   first if you're about to add a third.
+- [`NONAGON.md`](NONAGON.md) — the **Nonagon** (Chapter J): the
+  multi-agent team capability — a lead convening ≤9 attenuated
+  specialists, the mission DAG, the safety invariant (NT-02), and the
+  `aivyx team` CLI. ✅ complete.
+- [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md) — the **pack** model: how to
+  specialize the one agent to a domain (template + toolkit + scopes +
+  **team** + skills + integrations) without forking the substrate.
+  Worked example: the Kitchen / Back-of-House pack.
 
 ## Phase status
 
