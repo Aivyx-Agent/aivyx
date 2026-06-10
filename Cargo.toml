@@ -34,8 +34,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-authors = ["Julian <julian@aivyx-studio.com>"]
-repository = "https://github.com/AivyxDev/aivyx"
+authors = ["Aivyx <aivyx@aivyx-studio.com>"]
+repository = "https://github.com/Aivyx-Agent/aivyx"
 readme = "README.md"
 
 [workspace.dependencies]
