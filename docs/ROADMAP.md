@@ -3599,6 +3599,22 @@ directions remain on the shelf: the everyday-PA breadth
 continuation, the dep-requiring substrate hardenings, cutting
 `v0.1.0`, and the Channel Activation Milestone.)
 
+## Chapter J — Nonagon: Multi-Agent Teams (Phases J.1–J.7)
+
+The free-core **multi-agent** capability: a *lead* agent convenes up
+to **9 attenuated specialists**, decomposes a mission into a DAG,
+delegates, verifies, and synthesizes — all inside the **one daemon**
+on the **one HMAC audit chain**, preserving the single-agent ethos
+(one lead; ephemeral, subordinate, least-privileged specialists). The
+key de-risk: it's a `SpecialistPool` + delegation **tools** on the
+existing turn loop, not a loop rewrite — and the safety invariant
+(**NT-02:** specialist `⊆` lead) rests on the `CapabilitySet`/`Scope`
+attenuation the core already ships. The **engine is free**; **verticals
+customise the team** (kitchen ships a Back-of-House Nonagon). Full
+design contract + phase plan (~180–260 tests, 7 phases) in
+[`NONAGON.md`](NONAGON.md). Ported/re-grounded from the pre-rebuild
+archive's `aivyx-team` crate. Plugs into [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md).
+
 ## Chapter I — Interface & Reach (Phases 185+)
 
 How the End User **connects to, interacts with, launches, and
