@@ -474,8 +474,13 @@ name = "aivyx-team"
 version = "0.1.0"
 dependencies = [
  "aivyx-capability",
+ "aivyx-core",
+ "aivyx-llm",
+ "async-trait",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.23",
 ]
 
