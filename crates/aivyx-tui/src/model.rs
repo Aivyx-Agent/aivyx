@@ -81,6 +81,9 @@ pub struct Status {
 pub enum View {
     #[default]
     Chat,
+    /// The Nonagon Missions/Fleet panel — a running team's mission DAG
+    /// (Chapter J.7). Live-fed by [`Msg::MissionsUpdated`].
+    Missions,
     Dashboard,
     Audit,
     Tools,
@@ -88,12 +91,14 @@ pub enum View {
 
 impl View {
     /// Every view, in tab order.
-    pub const ALL: [View; 4] = [View::Chat, View::Dashboard, View::Audit, View::Tools];
+    pub const ALL: [View; 5] =
+        [View::Chat, View::Missions, View::Dashboard, View::Audit, View::Tools];
 
     /// The tab label.
     pub fn label(self) -> &'static str {
         match self {
             View::Chat => "Chat",
+            View::Missions => "Missions",
             View::Dashboard => "Dashboard",
             View::Audit => "Audit",
             View::Tools => "Tools",
@@ -115,6 +120,102 @@ impl View {
     }
 }
 
+/// A running mission's lifecycle phase, as shown in the Missions panel.
+/// A view-model — the daemon/driver maps a team's `MissionStatus` +
+/// live progress onto these; the TUI stays free of `aivyx-team` types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissionPhase {
+    /// Decomposed, not yet running.
+    Planning,
+    /// At least one step is running.
+    Executing,
+    /// Blocked on an operator approval gate.
+    AwaitingApproval,
+    /// Every step completed.
+    Done,
+    /// A quality gate rejected the work (`MissionStatus::GateRejected`).
+    Rejected,
+}
+
+impl MissionPhase {
+    pub fn label(self) -> &'static str {
+        match self {
+            MissionPhase::Planning => "planning",
+            MissionPhase::Executing => "executing",
+            MissionPhase::AwaitingApproval => "approval",
+            MissionPhase::Done => "done",
+            MissionPhase::Rejected => "rejected",
+        }
+    }
+}
+
+/// A mission DAG step's state, mirroring how the [`crate`]'s runtime
+/// walks a plan (ready → running → done, or gated/failed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepState {
+    Pending,
+    Running,
+    Done,
+    /// A gate step still awaiting its verdict.
+    Gated,
+    Failed,
+}
+
+impl StepState {
+    /// The timeline dot the renderer shows for this state.
+    pub fn dot(self) -> &'static str {
+        match self {
+            StepState::Pending => "○",
+            StepState::Running => "◐",
+            StepState::Done => "●",
+            StepState::Gated => "⚑",
+            StepState::Failed => "✗",
+        }
+    }
+}
+
+/// One step in a mission's timeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissionStep {
+    /// e.g. `"stocktake — count closing stock"`.
+    pub label: String,
+    pub state: StepState,
+}
+
+/// One mission in the panel: a team lead running a DAG, with a step
+/// timeline and a rolled-up phase + progress.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissionRow {
+    pub id: String,
+    pub title: String,
+    /// The team lead running it (e.g. `coordinator`, `aria`).
+    pub lead: String,
+    pub phase: MissionPhase,
+    /// Completion percent in `0..=100`.
+    pub progress: u16,
+    pub steps: Vec<MissionStep>,
+}
+
+/// The Missions panel's model: the rows + which is selected for detail.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MissionsState {
+    pub rows: Vec<MissionRow>,
+    /// Index into `rows`; kept in range by the reducer.
+    pub selected: usize,
+}
+
+impl MissionsState {
+    /// The selected mission, if any.
+    pub fn selected_row(&self) -> Option<&MissionRow> {
+        self.rows.get(self.selected)
+    }
+
+    /// Keep `selected` a valid index (0 when empty).
+    fn clamp(&mut self) {
+        self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+    }
+}
+
 /// The complete UI state. Owned, cloneable, and free of terminal
 /// types so the reducer is pure.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -133,6 +234,8 @@ pub struct AppState {
     /// render layer further clamps to the viewport height.
     pub scroll: usize,
     pub status: Status,
+    /// The Nonagon Missions panel's state (Chapter J.7).
+    pub missions: MissionsState,
     /// A pending approval gate, if any.
     pub gate: Option<PendingGate>,
     /// Set once the operator asks to quit; the driver's event loop
@@ -174,6 +277,14 @@ pub enum Msg {
     PrevView,
     /// Jump directly to a view.
     SwitchView(View),
+
+    // ---- Missions panel (Chapter J.7) ----
+    /// Replace the missions snapshot — the driver pushes this from the
+    /// running team's mission state (selection is re-clamped in range).
+    MissionsUpdated(Vec<MissionRow>),
+    /// Move the Missions selection to the next / previous mission (clamped).
+    MissionSelectNext,
+    MissionSelectPrev,
 
     // ---- scrolling ----
     /// Scroll up (toward older lines) by `n` lines.
@@ -279,6 +390,18 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         Msg::NextView => state.view = state.view.next(),
         Msg::PrevView => state.view = state.view.prev(),
         Msg::SwitchView(v) => state.view = v,
+
+        Msg::MissionsUpdated(rows) => {
+            state.missions.rows = rows;
+            state.missions.clamp();
+        }
+        Msg::MissionSelectNext => {
+            let last = state.missions.rows.len().saturating_sub(1);
+            state.missions.selected = (state.missions.selected + 1).min(last);
+        }
+        Msg::MissionSelectPrev => {
+            state.missions.selected = state.missions.selected.saturating_sub(1);
+        }
 
         Msg::Submit => {
             if state.status.working {
@@ -605,7 +728,13 @@ mod tests {
     #[test]
     fn next_view_cycles_and_wraps() {
         let mut s = AppState::new();
-        for expected in [View::Dashboard, View::Audit, View::Tools, View::Chat] {
+        for expected in [
+            View::Missions,
+            View::Dashboard,
+            View::Audit,
+            View::Tools,
+            View::Chat,
+        ] {
             s = update(s, Msg::NextView);
             assert_eq!(s.view, expected);
         }
@@ -621,6 +750,76 @@ mod tests {
     fn switch_view_jumps_directly() {
         let s = update(AppState::new(), Msg::SwitchView(View::Audit));
         assert_eq!(s.view, View::Audit);
+    }
+
+    // ---- Missions panel (Chapter J.7) ----
+
+    fn mission(id: &str, phase: MissionPhase) -> MissionRow {
+        MissionRow {
+            id: id.into(),
+            title: format!("mission {id}"),
+            lead: "aria".into(),
+            phase,
+            progress: 0,
+            steps: vec![MissionStep {
+                label: "count".into(),
+                state: StepState::Running,
+            }],
+        }
+    }
+
+    #[test]
+    fn missions_update_replaces_and_clamps_selection() {
+        let mut s = AppState::new();
+        s.missions.selected = 5; // stale out-of-range index
+        s = update(
+            s,
+            Msg::MissionsUpdated(vec![
+                mission("m1", MissionPhase::Executing),
+                mission("m2", MissionPhase::Planning),
+            ]),
+        );
+        assert_eq!(s.missions.rows.len(), 2);
+        assert_eq!(s.missions.selected, 1, "selection clamped into range");
+        assert_eq!(s.missions.selected_row().unwrap().id, "m2");
+    }
+
+    #[test]
+    fn mission_selection_moves_within_bounds() {
+        let mut s = AppState::new();
+        s = update(
+            s,
+            Msg::MissionsUpdated(vec![
+                mission("a", MissionPhase::Executing),
+                mission("b", MissionPhase::Done),
+            ]),
+        );
+        assert_eq!(s.missions.selected, 0);
+        // Prev at the top is a no-op.
+        s = update(s, Msg::MissionSelectPrev);
+        assert_eq!(s.missions.selected, 0);
+        // Next moves down, then clamps at the last row.
+        s = update(s, Msg::MissionSelectNext);
+        assert_eq!(s.missions.selected, 1);
+        s = update(s, Msg::MissionSelectNext);
+        assert_eq!(s.missions.selected, 1, "clamped at the last mission");
+    }
+
+    #[test]
+    fn empty_missions_have_no_selected_row() {
+        let s = AppState::new();
+        assert!(s.missions.selected_row().is_none());
+        // Navigating an empty list never panics.
+        let s = update(s, Msg::MissionSelectNext);
+        assert_eq!(s.missions.selected, 0);
+    }
+
+    #[test]
+    fn phase_and_step_labels() {
+        assert_eq!(MissionPhase::Rejected.label(), "rejected");
+        assert_eq!(MissionPhase::AwaitingApproval.label(), "approval");
+        assert_eq!(StepState::Done.dot(), "●");
+        assert_eq!(StepState::Gated.dot(), "⚑");
     }
 
     // ---- approval-gate transitions ----

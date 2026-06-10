@@ -67,15 +67,26 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
     }
 
     // Read-only panel views take no text input: number keys jump to a
-    // view, arrows scroll, Esc returns to Chat, ^Q quits.
+    // view, arrows scroll (or, in Missions, move the selection), Esc
+    // returns to Chat, ^Q quits.
     if state.view != View::Chat {
+        // In the Missions panel, ↑↓ move the mission selection instead of
+        // scrolling chat.
+        if state.view == View::Missions {
+            match key.code {
+                KeyCode::Up => return Action::Update(Msg::MissionSelectPrev),
+                KeyCode::Down => return Action::Update(Msg::MissionSelectNext),
+                _ => {}
+            }
+        }
         return match key.code {
             KeyCode::Char('q') if ctrl => Action::Quit,
             KeyCode::Esc => Action::Update(Msg::SwitchView(View::Chat)),
             KeyCode::Char('1') => Action::Update(Msg::SwitchView(View::Chat)),
-            KeyCode::Char('2') => Action::Update(Msg::SwitchView(View::Dashboard)),
-            KeyCode::Char('3') => Action::Update(Msg::SwitchView(View::Audit)),
-            KeyCode::Char('4') => Action::Update(Msg::SwitchView(View::Tools)),
+            KeyCode::Char('2') => Action::Update(Msg::SwitchView(View::Missions)),
+            KeyCode::Char('3') => Action::Update(Msg::SwitchView(View::Dashboard)),
+            KeyCode::Char('4') => Action::Update(Msg::SwitchView(View::Audit)),
+            KeyCode::Char('5') => Action::Update(Msg::SwitchView(View::Tools)),
             KeyCode::PageUp => Action::Update(Msg::ScrollUp(PAGE)),
             KeyCode::PageDown => Action::Update(Msg::ScrollDown(PAGE)),
             KeyCode::Up => Action::Update(Msg::ScrollUp(1)),
@@ -289,15 +300,39 @@ mod tests {
         s.view = View::Audit;
         // A letter does not type in a panel.
         assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::None);
-        // Digit jumps directly to a view.
+        // Digit jumps directly to a view (2 = Missions, 3 = Dashboard).
         assert_eq!(
             key_to_action(key(KeyCode::Char('2')), &s),
+            Action::Update(Msg::SwitchView(View::Missions))
+        );
+        assert_eq!(
+            key_to_action(key(KeyCode::Char('3')), &s),
             Action::Update(Msg::SwitchView(View::Dashboard))
         );
         // Esc returns to Chat.
         assert_eq!(
             key_to_action(key(KeyCode::Esc), &s),
             Action::Update(Msg::SwitchView(View::Chat))
+        );
+    }
+
+    #[test]
+    fn missions_panel_arrows_move_the_selection() {
+        let mut s = AppState::new();
+        s.view = View::Missions;
+        assert_eq!(
+            key_to_action(key(KeyCode::Down), &s),
+            Action::Update(Msg::MissionSelectNext)
+        );
+        assert_eq!(
+            key_to_action(key(KeyCode::Up), &s),
+            Action::Update(Msg::MissionSelectPrev)
+        );
+        // Other panels still scroll on the arrows.
+        s.view = View::Audit;
+        assert_eq!(
+            key_to_action(key(KeyCode::Down), &s),
+            Action::Update(Msg::ScrollDown(1))
         );
     }
 

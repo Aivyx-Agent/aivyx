@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
-use crate::model::{AppState, LineKind, View};
+use crate::model::{AppState, LineKind, MissionPhase, StepState, View};
 use crate::palette::{self, bold, fg};
 
 /// Compute the first visible chat row given the total line count, the
@@ -75,6 +75,15 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             render_chat(frame, rows[0], state);
             render_status(frame, rows[1], state);
             render_input(frame, rows[2], state);
+        }
+        View::Missions => {
+            let rows = Layout::vertical([
+                Constraint::Min(1),    // master/detail body
+                Constraint::Length(1), // status bar
+            ])
+            .split(body);
+            render_missions(frame, rows[0], state);
+            render_status(frame, rows[1], state);
         }
         View::Dashboard | View::Audit | View::Tools => {
             let rows = Layout::vertical([
@@ -144,9 +153,124 @@ fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             "TOOLS",
             placeholder_lines("the registered tools — provenance, capability scope, and call stats"),
         ),
-        View::Chat => return,
+        View::Chat | View::Missions => return,
     };
     frame.render_widget(Paragraph::new(lines).block(panel_block(title)), area);
+}
+
+/// The Nonagon Missions/Fleet panel (Chapter J.7): a mission stream on the
+/// left, the selected mission's step timeline on the right — the live render
+/// of a team's mission DAG, fed by `Msg::MissionsUpdated`.
+fn render_missions(frame: &mut Frame, area: Rect, state: &AppState) {
+    let cols = Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .spacing(1)
+        .split(area);
+    render_mission_stream(frame, cols[0], state);
+    render_mission_detail(frame, cols[1], state);
+}
+
+/// Phase → (badge text, style).
+fn phase_badge(phase: MissionPhase) -> Span<'static> {
+    let (text, color) = match phase {
+        MissionPhase::Executing => ("● executing", palette::OK),
+        MissionPhase::AwaitingApproval => ("⚑ approval", palette::AMBER),
+        MissionPhase::Planning => ("◦ planning", palette::DIM),
+        MissionPhase::Done => ("✓ done", palette::DIMMER),
+        MissionPhase::Rejected => ("✗ rejected", palette::ERR),
+    };
+    Span::styled(text, bold(color))
+}
+
+/// A `[████░░░]` progress bar `width` cells wide.
+fn progress_bar(pct: u16, width: usize) -> Vec<Span<'static>> {
+    let filled = (pct as usize * width / 100).min(width);
+    vec![
+        Span::styled("█".repeat(filled), fg(palette::AMBER)),
+        Span::styled("░".repeat(width - filled), fg(palette::DIMMER)),
+    ]
+}
+
+fn render_mission_stream(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = &state.missions.rows;
+    if rows.is_empty() {
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled("— no missions running —", fg(palette::DIM))),
+            Line::from(Span::styled(
+                "Run one with `aivyx team run \"<mission>\"`; the lead's DAG",
+                fg(palette::DIMMER),
+            )),
+            Line::from(Span::styled(
+                "and each specialist's progress stream in here live.",
+                fg(palette::DIMMER),
+            )),
+        ];
+        frame.render_widget(Paragraph::new(lines).block(panel_block("MISSIONS")), area);
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, m) in rows.iter().enumerate() {
+        let sel = i == state.missions.selected;
+        let marker = if sel {
+            Span::styled("▌ ", bold(palette::AMBER))
+        } else {
+            Span::styled("  ", fg(palette::DIM))
+        };
+        let title_style = if sel { bold(palette::AMBER) } else { bold(palette::FG) };
+        lines.push(Line::from(vec![
+            marker,
+            phase_badge(m.phase),
+            Span::styled(format!("  {}  ", m.id), fg(palette::DIMMER)),
+            Span::styled(m.title.clone(), title_style),
+        ]));
+        // Progress + lead on the meta line.
+        let mut meta = vec![Span::styled("    ", fg(palette::DIM))];
+        meta.extend(progress_bar(m.progress, 18));
+        meta.push(Span::styled(format!("  {}%  · ", m.progress), fg(palette::DIM)));
+        meta.push(Span::styled(m.lead.clone(), fg(palette::LAV)));
+        lines.push(Line::from(meta));
+        lines.push(Line::from(""));
+    }
+    frame.render_widget(Paragraph::new(lines).block(panel_block("MISSIONS")), area);
+}
+
+fn render_mission_detail(frame: &mut Frame, area: Rect, state: &AppState) {
+    let Some(m) = state.missions.selected_row() else {
+        frame.render_widget(
+            Paragraph::new(Vec::<Line>::new()).block(panel_block("STEPS")),
+            area,
+        );
+        return;
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    for step in &m.steps {
+        let color = match step.state {
+            StepState::Done => palette::OK,
+            StepState::Running => palette::AMBER,
+            StepState::Gated => palette::LAV,
+            StepState::Failed => palette::ERR,
+            StepState::Pending => palette::DIMMER,
+        };
+        lines.push(Line::from(vec![
+            Span::styled(step.state.dot(), fg(color)),
+            Span::styled("  ", fg(palette::DIM)),
+            Span::styled(step.label.clone(), fg(palette::FG)),
+        ]));
+    }
+    if m.steps.is_empty() {
+        lines.push(Line::from(Span::styled("— no steps yet —", fg(palette::DIM))));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("lead · ", fg(palette::LAV)),
+        Span::styled(m.lead.clone(), fg(palette::FG)),
+        Span::styled(format!("   {}", m.phase.label()), fg(palette::DIMMER)),
+    ]));
+
+    let title = format!("{} · STEPS", m.id);
+    frame.render_widget(Paragraph::new(lines).block(panel_block(&title)), area);
 }
 
 fn kv<'a>(k: &'a str, v: Span<'a>) -> Line<'a> {
@@ -393,6 +517,63 @@ mod tests {
         assert!(!text.contains(" Input "), "no chat input in a panel view");
         // Tab bar still present.
         assert!(text.contains("Audit"), "tab bar lists Audit");
+    }
+
+    #[test]
+    fn missions_view_renders_stream_and_selected_steps() {
+        use crate::model::{MissionPhase, MissionRow, MissionStep, StepState};
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.view = View::Missions;
+        state.missions.rows = vec![
+            MissionRow {
+                id: "m-aria".into(),
+                title: "Run end-of-day BOH close".into(),
+                lead: "aria".into(),
+                phase: MissionPhase::Executing,
+                progress: 50,
+                steps: vec![
+                    MissionStep { label: "stocktake — count".into(), state: StepState::Done },
+                    MissionStep { label: "inventory — low stock".into(), state: StepState::Running },
+                ],
+            },
+            MissionRow {
+                id: "m-2".into(),
+                title: "second mission".into(),
+                lead: "coordinator".into(),
+                phase: MissionPhase::Planning,
+                progress: 0,
+                steps: vec![],
+            },
+        ];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("MISSIONS"), "stream panel titled");
+        assert!(text.contains("Run end-of-day BOH close"), "mission title rendered");
+        assert!(text.contains("executing"), "phase badge rendered");
+        // The selected mission's steps appear in the detail panel.
+        assert!(text.contains("STEPS"), "detail panel titled");
+        assert!(text.contains("stocktake — count"), "selected mission's steps shown");
+        assert!(text.contains("aria"), "lead shown");
+        assert!(!text.contains(" Input "), "no chat input in the Missions panel");
+        // Tab bar lists the new view.
+        assert!(text.contains("Missions"), "tab bar lists Missions");
+    }
+
+    #[test]
+    fn missions_view_shows_empty_state() {
+        let backend = TestBackend::new(90, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Missions;
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("no missions running"), "empty-state hint shown");
+        assert!(text.contains("aivyx team run"), "points at the command");
     }
 
     #[test]
