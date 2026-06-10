@@ -1,8 +1,16 @@
 # Nonagon — Multi-Agent Teams (Chapter J)
 
-> **Status:** design contract. Chapter J is not yet opened; this is the
-> spec the phases scaffold from.
+> **Status:** ✅ **COMPLETE** (J.1–J.7 shipped). This was the design
+> contract the phases scaffolded from; all seven phases landed. Engine:
+> `aivyx-team` (config/roster/attenuation/pool/message-bus/mission-DAG/
+> runtime/orchestration-tools/assembly). CLI: `aivyx team run|roster
+> [--config <pack.toml>]`. First vertical: `aivyx-kitchen` (BOH Nonagon).
+> TUI: the live Missions panel. Deferred follow-ons: specialist domain
+> `base_tools` (lands with the kitchen toolkit crate), daemon-side team
+> execution + the live Missions IPC feed, optional autonomous-loop
+> integration.
 >
+
 > The **Nonagon** is Aivyx's multi-agent capability: a *lead* agent that
 > convenes up to **9 attenuated specialists**, decomposes a mission into
 > a DAG, delegates, verifies, and synthesizes — all inside the single
@@ -206,7 +214,7 @@ panel (mockup → live).
 | **J.4 Mission DAG** ⭐ ✅ | `MissionPlan` DAG (cycle detection, ready-set); `TeamRuntime` runs independent branches concurrently (`join_all`); `decompose_task`/`synthesize_results`/`verify_output` over the existing `team.delegate` scope (no new base). `collect_results` lands as the `MissionReport`. | J.2, J.3 | **31 shipped** (J.4.1–3) |
 | **J.5 CLI + audit + loop** ✅ | `aivyx team run "<mission>"` (in-process) + `aivyx team roster`; the roster wiring (`TeamAssembly`, per-member dialogue tools via `SpecialistFactory::with_dialogue`, `team.message` on every default role); specialist sub-turns land on the same persistent HMAC `AuditHook`. (Loop integration deferred — optional.) | J.4 | **17 shipped** (J.5.1–2) |
 | **J.6 Kitchen Nonagon** 💰 ✅ | `aivyx-kitchen` pack crate: `kitchen_boh_team()` (Aria + 4 least-privileged specialists over `kitchen.*`; HACCP holds only `kitchen.haccp.log`) + `overnight_close_mission()` + the `kitchen-boh.toml` asset. Domain-neutral `aivyx team --config <pack.toml>` loads it. (Specialist domain tools land with the kitchen toolkit crate.) | J.5 | **11 shipped** (J.6.1–2) |
-| **J.7 TUI Missions/Fleet** | wire live team/mission state into the TUI panel (the mockup → real) | J.5 | ~15–25 |
+| **J.7 TUI Missions/Fleet** ✅ | `View::Missions` panel in the live TUI (master/detail: mission stream + selected step timeline); `MissionRow`/`MissionStep`/`MissionsState` view-models + `Msg::MissionsUpdated` feed seam; ↑↓ selection + digit remap. The mockup → real. | J.5 | **12 shipped** |
 
 ```
 J.1 ─▶ J.2 ─▶ J.3 ─▶ J.4 ─▶ J.5 ─┬─▶ J.6  (kitchen team)
