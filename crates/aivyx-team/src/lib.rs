@@ -24,6 +24,7 @@ pub mod config;
 pub mod factory;
 pub mod message_bus;
 pub mod message_tools;
+pub mod mission;
 pub mod pool;
 pub mod roster;
 pub mod tools;
@@ -36,6 +37,7 @@ pub use config::{DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALI
 pub use factory::{filter_tools, SpecialistFactory};
 pub use message_bus::{Drained, MessageBus, Recipient, Subscription, TeamMessage};
 pub use message_tools::{ReadMessagesTool, SendMessageTool};
+pub use mission::{MissionPlan, Step, StepKind};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
 pub use tools::{DelegateTaskTool, QueryAgentTool};
