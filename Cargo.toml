@@ -28,6 +28,7 @@ members = [
     "crates/aivyx-tui",
     "crates/aivyx-cli",
     "crates/aivyx-team",
+    "crates/aivyx-kitchen",
 ]
 
 [workspace.package]

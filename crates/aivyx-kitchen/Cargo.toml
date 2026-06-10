@@ -1,0 +1,17 @@
+[package]
+name = "aivyx-kitchen"
+description = "Kitchen / Back-of-House vertical pack — the BOH Nonagon team config + the overnight-close mission (Chapter J.6). See docs/VERTICAL_PACKS.md + docs/NONAGON.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# A vertical pack is config over the free engine: the kitchen team is a
+# customised TeamConfig + a MissionPlan, both aivyx-team types. TrustTier
+# comes from aivyx-capability. NO substrate fork — packs inherit the engine.
+aivyx-team = { path = "../aivyx-team" }
+aivyx-capability = { path = "../aivyx-capability" }

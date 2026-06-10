@@ -337,6 +337,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-kitchen"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-team",
+]
+
+[[package]]
 name = "aivyx-llm"
 version = "0.1.0"
 dependencies = [
