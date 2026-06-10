@@ -50,7 +50,8 @@ pub fn default_nonagon() -> TeamConfig {
             "You gather information from the web and project files and distill it into \
              structured, cited findings. You flag contradictions and note confidence per \
              claim rather than picking one interpretation prematurely.",
-            &["web.search", "fs.read", "memory.write"],
+            // web.fetch ships in the daemon; web.search arrives with the toolkit pack.
+            &["web.fetch", "web.search", "fs.read", "memory.write"],
             &["web.search", "net.fetch", "fs.read", "memory.write"],
         ),
         member(

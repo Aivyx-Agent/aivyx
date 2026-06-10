@@ -16,8 +16,8 @@ use std::sync::Arc;
 use aivyx_capability::TrustTier;
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
-    ConcreteAgent, LlmPlanner, LlmPlannerConfig, Message, SessionId, StreamEvent, ToolRegistry,
-    TurnOutcome,
+    ConcreteAgent, LlmPlanner, LlmPlannerConfig, Message, SessionId, StreamEvent, Tool,
+    ToolRegistry, TurnOutcome,
 };
 use aivyx_llm::LlmProvider;
 use aivyx_team::{default_nonagon, TeamAssembly, TeamConfig};
@@ -80,11 +80,13 @@ pub fn run_roster(config: Option<&str>) -> Result<(), String> {
 /// `aivyx team run "<mission>"` — assemble the default team and run the lead
 /// over `mission`. Called from `run_async` with the live provider + the
 /// persistent `AuditHook`, so specialist sub-turns land on the HMAC chain.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_mission(
     provider: Arc<dyn LlmProvider>,
     model: &str,
     max_tokens: u32,
     audit: Arc<dyn AuditHook>,
+    base_tools: Vec<Arc<dyn Tool>>,
     mission: &str,
     config: Option<&str>,
 ) -> Result<(), String> {
@@ -105,10 +107,12 @@ pub async fn run_mission(
         model,
         max_tokens,
         Arc::clone(&audit),
-        // Specialists run tool-less for now; threading the pack's domain tools
-        // (e.g. the kitchen toolkit's RPC tools) into base_tools lands with the
-        // toolkit crate. They still delegate, dialogue, and produce text.
-        vec![],
+        // The daemon's full tool set. Each specialist gets exactly the subset
+        // its `tool_allowlist` names (least privilege), capability-attenuated
+        // against the lead (NT-02). The lead itself stays orchestration-only.
+        // (A vertical's *domain* tools — e.g. the kitchen toolkit's RPCs —
+        // join this set once that toolkit crate is wired in.)
+        base_tools,
         lead_caps.clone(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;

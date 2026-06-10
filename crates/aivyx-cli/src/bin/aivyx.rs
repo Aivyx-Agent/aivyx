@@ -4171,23 +4171,6 @@ async fn run_async(
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
 
-    // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider
-    // + the persistent HMAC audit hook, which is everything the Nonagon needs:
-    // assemble the default team and run the lead in-process, so every
-    // specialist sub-turn lands on this same chain. A one-shot command — it
-    // returns here rather than falling through to the session/daemon wiring.
-    if let CliMode::Team(TeamSubcommand::Run { mission, config }) = &mode {
-        return team::run_mission(
-            Arc::clone(&provider),
-            &model,
-            DEFAULT_MAX_TOKENS,
-            Arc::clone(&audit),
-            mission,
-            config.as_deref(),
-        )
-        .await;
-    }
-
     // ---- Tools --------------------------------------------------------
     // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`
     // canonicalizes the sandbox root once, so the pre-canonicalized
@@ -5358,6 +5341,25 @@ async fn run_async(
         .set_dispatcher(Arc::clone(&notify_dispatcher))
         .map_err(|_| "notify.send dispatcher was set twice (programming error)")?;
     tool_list.push(Arc::clone(&notify_send_tool) as Arc<dyn Tool>);
+
+    // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider,
+    // the persistent HMAC audit hook, AND the daemon's full `tool_list` — so
+    // assemble the team and run the lead in-process with specialists that get
+    // their real (attenuated) tools. A one-shot command: it consumes
+    // `tool_list` and returns here rather than falling through to the
+    // session/daemon wiring.
+    if let CliMode::Team(TeamSubcommand::Run { mission, config }) = &mode {
+        return team::run_mission(
+            Arc::clone(&provider),
+            &model,
+            DEFAULT_MAX_TOKENS,
+            Arc::clone(&audit),
+            tool_list,
+            mission,
+            config.as_deref(),
+        )
+        .await;
+    }
 
     let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(tool_list));
 
