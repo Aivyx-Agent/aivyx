@@ -36,8 +36,8 @@ pub fn default_nonagon() -> TeamConfig {
              specialist, verify their output against the goal, and synthesize the results \
              into one coherent deliverable. You never execute domain work directly: you \
              plan, delegate, verify, and synthesize.",
-            &[], // orchestration tools (delegate/decompose/verify/...) are injected in J.2+
-            &["memory.read", "memory.write"],
+            &["delegate_task", "query_agent"], // + decompose/verify injected in J.4+
+            &["memory.read", "memory.write", "team.delegate"],
         ),
         member(
             "researcher",

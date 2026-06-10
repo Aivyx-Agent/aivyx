@@ -1,0 +1,160 @@
+//! Shared test fixtures: a working fake `LlmProvider` that drives one
+//! tool-less turn, a fake lead `ChannelContext`, and team/pool builders.
+//! Compiled only under `#[cfg(test)]`; used by the `pool` and `tools`
+//! test modules.
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+use aivyx_capability::{CapabilitySet, Scope, TrustTier};
+use aivyx_core::{
+    CancellationToken, ChannelContext, ChannelError, ChannelPlatform, NullAuditHook, SessionId,
+    StreamEvent, TurnOutcome,
+};
+use aivyx_llm::{LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent};
+use async_trait::async_trait;
+
+use crate::config::{DialogueConfig, TeamConfig, TeamMember};
+use crate::factory::SpecialistFactory;
+use crate::pool::SpecialistPool;
+
+// --- a working fake provider: one tool-less turn that says a fixed line ---
+
+struct FakeStep {
+    events: Vec<LlmStreamEvent>,
+    terminal: LlmStepEnd,
+}
+
+pub struct FakeProvider {
+    script: Mutex<VecDeque<FakeStep>>,
+}
+
+impl FakeProvider {
+    /// A provider that completes one turn with `text` as the final message.
+    pub fn says(text: &str) -> Arc<Self> {
+        let step = FakeStep {
+            events: vec![LlmStreamEvent::TextChunk(text.to_string())],
+            terminal: LlmStepEnd::FinalMessage {
+                text: text.to_string(),
+                usage: aivyx_llm::LlmUsage::default(),
+            },
+        };
+        Arc::new(FakeProvider {
+            script: Mutex::new(VecDeque::from(vec![step])),
+        })
+    }
+}
+
+#[async_trait]
+impl LlmProvider for FakeProvider {
+    async fn chat_stream(
+        &self,
+        _: LlmRequest<'_>,
+        _: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        let step = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| LlmError::Config("fake provider exhausted".into()))?;
+        Ok(Box::new(FakeStream {
+            events: step.events.into_iter(),
+            terminal: Some(step.terminal),
+        }))
+    }
+}
+
+struct FakeStream {
+    events: std::vec::IntoIter<LlmStreamEvent>,
+    terminal: Option<LlmStepEnd>,
+}
+
+#[async_trait]
+impl LlmStream for FakeStream {
+    async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+        Ok(self.events.next())
+    }
+    async fn finish(mut self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+        Ok(self.terminal.take().expect("finish once"))
+    }
+}
+
+// --- a fake lead channel ---------------------------------------------------
+
+pub struct FakeLeadChannel {
+    session: SessionId,
+    tier: TrustTier,
+    token: CancellationToken,
+}
+
+impl FakeLeadChannel {
+    pub fn at(tier: TrustTier) -> Self {
+        FakeLeadChannel {
+            session: SessionId::new(),
+            tier,
+            token: CancellationToken::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChannelContext for FakeLeadChannel {
+    fn channel_name(&self) -> &str {
+        "fake-lead"
+    }
+    fn platform(&self) -> ChannelPlatform {
+        ChannelPlatform::Local
+    }
+    fn trust_tier(&self) -> TrustTier {
+        self.tier
+    }
+    fn session_id(&self) -> SessionId {
+        self.session
+    }
+    async fn stream_event(&self, _: StreamEvent<'_>) -> Result<(), ChannelError> {
+        Ok(())
+    }
+    async fn finalize(&self, _: &TurnOutcome) -> Result<(), ChannelError> {
+        Ok(())
+    }
+    fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+// --- builders --------------------------------------------------------------
+
+/// A team member with declared scopes + a trust ceiling (no tools).
+pub fn member(name: &str, scopes: &[&str], tier: TrustTier) -> TeamMember {
+    TeamMember {
+        name: name.into(),
+        role: "R".into(),
+        soul: "You are a specialist.".into(),
+        tool_allowlist: vec![],
+        capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        trust_ceiling: tier,
+    }
+}
+
+/// A pool over `members` led by `lead`, with the given provider and a lead
+/// capability set holding `lead_scopes`.
+pub fn team_pool(
+    provider: Arc<dyn LlmProvider>,
+    members: Vec<TeamMember>,
+    lead: &str,
+    lead_scopes: &[&str],
+) -> SpecialistPool {
+    let config = TeamConfig {
+        name: "t".into(),
+        description: String::new(),
+        lead: lead.into(),
+        members,
+        dialogue: DialogueConfig::default(),
+    };
+    let factory =
+        SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![]);
+    let lead_caps =
+        CapabilitySet::from_scopes(lead_scopes.iter().map(|s| Scope::parse(s).unwrap()));
+    SpecialistPool::new(factory, config, lead_caps)
+}

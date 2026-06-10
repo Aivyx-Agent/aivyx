@@ -201,7 +201,7 @@ panel (mockup → live).
 | Phase | Goal | Deps | Tests |
 |---|---|---|---|
 | **J.1 Foundation** ✅ | `aivyx-team` crate; `TeamConfig` schema + validation; the 9 default roles; the `attenuate_for_member` port + **NT-02** invariant tests (incl. qualified-path attenuation) | — | **23 shipped** |
-| **J.2 Pool + delegation** | `SpecialistPool` builds attenuated specialists (≤9, ephemeral); `delegate_task`/`query_agent`/`collect_results` | J.1 | ~30–45 |
+| **J.2 Pool + delegation** ✅ | `SpecialistFactory` builds attenuated specialists; `SpecialistChannel` + `SpecialistPool::run` execute a sub-turn (trust-floored); `delegate_task`/`query_agent` tools over the new `team.delegate` scope. (`collect_results` deferred to J.4 where parallel delegation makes it meaningful.) | J.1 | **15 shipped** (J.2.1–3) |
 | **J.3 Message bus** | `MessageBus` (broadcast/lagged/capacity) + `send`/`read_message` + dialogue caps | J.2 | ~25–35 |
 | **J.4 Mission DAG** ⭐ | `MissionPlan` DAG (cycle detection, ready-set); `TeamRuntime` runs independent branches concurrently; `decompose`/`synthesize`/`verify` (Gate) | J.2, J.3 | ~40–55 |
 | **J.5 CLI + audit + loop** | `aivyx team run`; delegations + specialist calls on the HMAC chain; optional loop integration | J.4 | ~20–30 |

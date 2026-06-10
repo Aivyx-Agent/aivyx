@@ -24,9 +24,14 @@ pub mod config;
 pub mod factory;
 pub mod pool;
 pub mod roster;
+pub mod tools;
+
+#[cfg(test)]
+mod testutil;
 
 pub use attenuation::{attenuate_for_member, effective_trust};
 pub use config::{DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS};
 pub use factory::{filter_tools, SpecialistFactory};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
+pub use tools::{DelegateTaskTool, QueryAgentTool};

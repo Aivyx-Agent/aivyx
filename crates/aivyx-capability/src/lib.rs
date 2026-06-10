@@ -377,6 +377,12 @@ const KNOWN_BASES: &[&str] = &[
     // SemiTrusted line role (logging from the pass) via
     // `capability_scopes`.
     "kitchen.haccp.log",
+    // The Nonagon multi-agent chapter (docs/NONAGON.md). `team.delegate`
+    // is the *lead's* orchestration authority — the scope `delegate_task`
+    // / `query_agent` require. It is deliberately NOT inherited by
+    // specialists (they don't declare it, so the lead→specialist
+    // attenuation drops it): a specialist cannot convene its own team.
+    "team.delegate",
 ];
 
 // ---------------------------------------------------------------------------
@@ -967,6 +973,9 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Append-only food-safety logging (the compliance wedge); each
         // call lands on the HMAC audit chain. Trusted-tier-only default.
         "kitchen.haccp.log",
+        // Nonagon team orchestration (docs/NONAGON.md): the lead's
+        // authority to delegate to specialists. Trusted-tier default.
+        "team.delegate",
     ])
 });
 
@@ -1793,7 +1802,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            79,
+            80,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

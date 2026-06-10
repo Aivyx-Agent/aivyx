@@ -22,11 +22,11 @@ aivyx-llm = { path = "../aivyx-llm" }
 # real dep now, not just for tests.
 async-trait = { workspace = true }
 serde = { workspace = true }
+# J.2.3: the delegation tools build JSON schemas + outputs.
+serde_json = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# Turn-running tests: a working FakeLlmProvider/Stream + a fake lead
-# channel; serde_json for the minimal Tool fixture.
-serde_json = { workspace = true }
+# Turn-running tests need a Tokio runtime for the sub-turn.
 tokio = { workspace = true, features = ["macros", "rt"] }
