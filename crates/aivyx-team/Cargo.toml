@@ -24,6 +24,8 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 # J.2.3: the delegation tools build JSON schemas + outputs.
 serde_json = { workspace = true }
+# J.3: the MessageBus is a bounded tokio broadcast channel.
+tokio = { workspace = true, features = ["sync"] }
 toml = "0.8"
 thiserror = { workspace = true }
 

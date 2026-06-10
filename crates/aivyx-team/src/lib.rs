@@ -22,6 +22,7 @@
 pub mod attenuation;
 pub mod config;
 pub mod factory;
+pub mod message_bus;
 pub mod pool;
 pub mod roster;
 pub mod tools;
@@ -32,6 +33,7 @@ mod testutil;
 pub use attenuation::{attenuate_for_member, effective_trust};
 pub use config::{DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS};
 pub use factory::{filter_tools, SpecialistFactory};
+pub use message_bus::{Drained, MessageBus, Recipient, Subscription, TeamMessage};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
 pub use tools::{DelegateTaskTool, QueryAgentTool};
