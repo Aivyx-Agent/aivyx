@@ -48,6 +48,12 @@ aivyx-storage = { path = "../aivyx-storage" }
 # `aivyx-config`.
 aivyx-capability = { path = "../aivyx-capability" }
 
+# Chapter K — `[pricing.<model>]` parses directly into the
+# `aivyx_cost::ModelRate` serde struct (rate overrides for the cost report
+# + the loop's dollar cap). `aivyx-cost` is a serde-only leaf crate, so this
+# is a one-way edge (it does not depend on `aivyx-config`).
+aivyx-cost = { path = "../aivyx-cost" }
+
 # `async_trait` is not strictly required (the one async method lives
 # directly on `AivyxConfig`, not on a trait), but keeping it aligned
 # with the rest of the workspace avoids an odd-crate-out flag later.

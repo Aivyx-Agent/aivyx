@@ -217,6 +217,7 @@ name = "aivyx-config"
 version = "0.1.0"
 dependencies = [
  "aivyx-capability",
+ "aivyx-cost",
  "aivyx-crypto",
  "aivyx-storage",
  "async-trait",

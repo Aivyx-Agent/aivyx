@@ -1005,9 +1005,12 @@ fn run() -> Result<(), String> {
         }
 
         // Chapter K — `aivyx cost`. Same cold-start posture: open the chain,
-        // price its `LlmCost` events, print the report, exit.
+        // price its `LlmCost` events (with the operator's `[pricing]`
+        // overrides over the built-in defaults), print the report, exit.
         if let Some(today) = cost_today {
-            return cost::run_cost(storage, audit_chain_key, today).await;
+            let pricing =
+                aivyx_cost::Pricing::with_overrides(config.pricing.clone());
+            return cost::run_cost(storage, audit_chain_key, today, pricing).await;
         }
 
         // Phase 9 Task 3 — Phase 2 of the two-phase config load.
@@ -3832,6 +3835,10 @@ async fn run_async(
         // resolution site below via
         // `resolve_ollama_prompt_strategy(&model, &..)`.
         ollama_prompt_strategies: config_ollama_prompt_strategies,
+        // Chapter K — `[pricing]` overrides are consumed by the `aivyx cost`
+        // dispatch in `run()` (before `run_async`); threading them into the
+        // loop's dollar cap (DaemonConfig) is the follow-up paired with K.4.2.
+        pricing: _,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.

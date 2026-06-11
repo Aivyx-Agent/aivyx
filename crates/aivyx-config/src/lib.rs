@@ -779,6 +779,11 @@ pub struct AivyxConfig {
     /// [`OllamaFamilyStrategy::default_for_family`] at lookup
     /// time via [`resolve_ollama_prompt_strategy`].
     pub ollama_prompt_strategies: BTreeMap<String, OllamaFamilyStrategy>,
+    /// Chapter K — `[pricing.<model>]` operator rate overrides (USD/Mtok
+    /// per token class). Empty ⇒ the built-in default table only. Each entry
+    /// overrides the default for its exact model id; consumed by the cost
+    /// report + the loop's dollar cap. Validated non-negative at load.
+    pub pricing: BTreeMap<String, aivyx_cost::ModelRate>,
     /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
     /// Threshold in `[0.0, 1.0]` for the planner's tool-name
     /// fuzzy-match recovery. When the LLM emits a tool name not
@@ -3012,6 +3017,10 @@ struct RawToml {
     /// generation options.
     #[serde(default)]
     ollama: RawOllama,
+    /// `[pricing.<model>]` section. Chapter K — per-model rate overrides;
+    /// each sub-table parses directly into an `aivyx_cost::ModelRate`.
+    #[serde(default)]
+    pricing: BTreeMap<String, aivyx_cost::ModelRate>,
     /// Phase 134 — `[mistralrs]` config section for the
     /// embedded Rust-native provider.
     #[serde(default)]
@@ -4744,6 +4753,23 @@ impl AivyxConfig {
             }
         }
 
+        // Chapter K — [pricing.<model>] rate overrides. Reject negative
+        // rates at load (a negative $/Mtok is nonsensical and would make the
+        // budget under-count). The map is otherwise passed through verbatim.
+        let pricing = toml.pricing.clone();
+        for (model, rate) in &pricing {
+            if rate.input < 0.0
+                || rate.output < 0.0
+                || rate.cache_read < 0.0
+                || rate.cache_write < 0.0
+            {
+                return Err(ConfigError::Invalid {
+                    field: "pricing",
+                    reason: format!("model {model:?} has a negative rate"),
+                });
+            }
+        }
+
         // Phase 120 — [providers] tool_name_auto_correct_threshold.
         // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
         // absent; reject out-of-range [0.0, 1.0] values at parse
@@ -5706,6 +5732,7 @@ impl AivyxConfig {
             mistralrs_options,
             voice_options,
             ollama_prompt_strategies,
+            pricing,
             tool_name_auto_correct_threshold,
             roles,
             active_role,

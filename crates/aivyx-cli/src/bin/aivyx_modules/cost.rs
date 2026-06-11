@@ -39,6 +39,7 @@ pub async fn run_cost(
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
     today: bool,
+    pricing: Pricing,
 ) -> Result<(), String> {
     let log = PersistentAuditLog::open(storage, audit_chain_key)
         .await
@@ -64,10 +65,7 @@ pub async fn run_cost(
         cursor = batch.last().map(|e| e.seq + 1).unwrap_or(cursor);
     }
 
-    let report = CostReport::build(
-        entries.iter().map(|(m, c)| (m.as_str(), *c)),
-        &Pricing::new(),
-    );
+    let report = CostReport::build(entries.iter().map(|(m, c)| (m.as_str(), *c)), &pricing);
     print!("{}", render_cost(&report, today));
     Ok(())
 }

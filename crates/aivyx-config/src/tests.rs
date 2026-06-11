@@ -9198,6 +9198,52 @@ fn phase_122_loader_rejects_unknown_strategy_string() {
 }
 
 #[test]
+fn chapter_k_loader_parses_pricing_overrides() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[pricing.gpt-5]\ninput = 2.0\noutput = 8.0\n\
+         \n[pricing.claude-opus-4-8]\ninput = 12.0\noutput = 60.0\ncache_read = 1.2\n",
+        "chapter-k-pricing",
+    );
+    let opus = cfg.pricing.get("claude-opus-4-8").expect("opus override");
+    assert_eq!(opus.input, 12.0);
+    assert_eq!(opus.output, 60.0);
+    assert_eq!(opus.cache_read, 1.2);
+    assert_eq!(opus.cache_write, 0.0, "unset cache class defaults to 0");
+    assert!(cfg.pricing.contains_key("gpt-5"));
+    assert!(!cfg.pricing.contains_key("gpt-4o"), "only declared models");
+    drop(env);
+}
+
+#[test]
+fn chapter_k_loader_rejects_negative_rate() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("chapter-k-bad-pricing");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[pricing.bad-model]\ninput = -1.0\noutput = 5.0\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("loader rejects a negative rate");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("pricing") && msg.contains("bad-model"),
+        "error should name the section + offending model; got: {msg}"
+    );
+    drop(env);
+}
+
+#[test]
 fn phase_122_loader_absent_section_yields_empty_map() {
     let env = EnvScope::new();
     let cfg = AivyxConfig::load_from_env_and_toml(

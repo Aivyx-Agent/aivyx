@@ -144,6 +144,15 @@ impl Pricing {
         Pricing::default()
     }
 
+    /// Built-in defaults plus exact-model overrides (from `[pricing.<model>]`
+    /// config). Each override takes precedence over the family default and the
+    /// local-free heuristic.
+    pub fn with_overrides(overrides: impl IntoIterator<Item = (String, ModelRate)>) -> Self {
+        Pricing {
+            overrides: overrides.into_iter().collect(),
+        }
+    }
+
     /// Set (or replace) the exact rate for a model — takes precedence over the
     /// built-in family defaults and the local-free heuristic.
     pub fn set_rate(&mut self, model: impl Into<String>, rate: ModelRate) {
@@ -294,6 +303,21 @@ mod tests {
         let c = p.cost_of("some-new-frontier-model", &counts(1_000_000, 1_000_000));
         assert_eq!(c.usd, 0.0);
         assert!(!c.priced, "unknown ⇒ flagged untracked, not a real $0");
+    }
+
+    #[test]
+    fn with_overrides_seeds_the_table() {
+        let p = Pricing::with_overrides([
+            ("custom-cloud".to_string(), ModelRate::io(1.0, 2.0)),
+            ("llama-paid".to_string(), ModelRate::io(0.5, 0.5)),
+        ]);
+        // The override applies (1M in + 1M out → $1 + $2).
+        let c = p.cost_of("custom-cloud", &counts(1_000_000, 1_000_000));
+        assert!((c.usd - 3.0).abs() < 1e-9);
+        // And beats the local-free heuristic for the paid llama endpoint.
+        assert!(p.cost_of("llama-paid", &counts(1_000_000, 0)).usd > 0.0);
+        // Defaults still apply to un-overridden models.
+        assert!(p.cost_of("claude-opus-4-8", &counts(1_000_000, 0)).priced);
     }
 
     #[test]
