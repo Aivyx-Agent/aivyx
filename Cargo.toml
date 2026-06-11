@@ -131,8 +131,8 @@ jsonschema = { version = "0.46", default-features = false }
 # `aivyx-capability`, `aivyx-storage`, `aivyx-crypto`, …) may depend
 # on them, so the substrate stays dependency-clean. A future audit
 # should confirm `aivyx-tui` is the only ratatui consumer.
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 # The profile that 'dist' will build with
 [profile.dist]

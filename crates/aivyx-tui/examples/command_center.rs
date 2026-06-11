@@ -280,7 +280,7 @@ fn status_bar(f: &mut Frame, area: Rect) {
     );
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot =
         std::env::args().any(|a| a == "--snapshot") || !io::stdout().is_terminal();
 

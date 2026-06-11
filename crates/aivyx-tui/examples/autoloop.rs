@@ -248,7 +248,7 @@ fn status_bar(f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(right).style(Style::default().bg(STATUS_BG)), area);
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = std::env::args().any(|a| a == "--snapshot") || !io::stdout().is_terminal();
     if snapshot {
         let mut term = Terminal::new(TestBackend::new(W, H))?;
