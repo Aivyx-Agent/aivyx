@@ -3835,10 +3835,10 @@ async fn run_async(
         // resolution site below via
         // `resolve_ollama_prompt_strategy(&model, &..)`.
         ollama_prompt_strategies: config_ollama_prompt_strategies,
-        // Chapter K — `[pricing]` overrides are consumed by the `aivyx cost`
-        // dispatch in `run()` (before `run_async`); threading them into the
-        // loop's dollar cap (DaemonConfig) is the follow-up paired with K.4.2.
-        pricing: _,
+        // Chapter K — `[pricing]` overrides feed both the `aivyx cost`
+        // dispatch in `run()` (before `run_async`) and, since K.4.2, the
+        // loop's dollar cap via the `pricing` table on `DaemonConfig` below.
+        pricing: config_pricing,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
@@ -6334,6 +6334,12 @@ async fn run_async(
             loop_backlog: Some(Arc::clone(&loop_backlog)),
             loop_state: loop_state.clone(),
             loop_config: config_loop.clone(),
+            // K.4.2 — the override-aware rate table the autonomous loop's
+            // dollar cap prices with. Built once from the built-in defaults
+            // plus any `[pricing.<model>]` overrides the operator declared.
+            pricing: aivyx_cost::Pricing::with_overrides(
+                config_pricing.clone(),
+            ),
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

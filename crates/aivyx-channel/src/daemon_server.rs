@@ -414,6 +414,13 @@ pub struct DaemonConfig {
     /// max-iterations ceiling). `None` when the section is
     /// absent.
     pub loop_config: Option<aivyx_config::LoopConfig>,
+    /// Chapter K (K.4.2) — the priced rate table, built from the
+    /// built-in defaults plus any `[pricing.<model>]` overrides.
+    /// Threaded into the autonomous-loop driver so the per-run
+    /// dollar cap prices overridden models correctly (previously the
+    /// driver built `Pricing::new()` internally, ignoring overrides).
+    /// Defaults to an empty table for test fixtures that don't price.
+    pub pricing: aivyx_cost::Pricing,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -502,6 +509,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_backlog,
         loop_state,
         loop_config,
+        pricing,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -674,6 +682,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             // Chapter K — the per-run dollar cap.
             let ld_max_run_usd =
                 loop_config.as_ref().and_then(|c| c.max_run_usd);
+            // K.4.2 — the override-aware rate table prices the run-window
+            // spend, so a `[pricing.<model>]` custom rate advances the cap
+            // instead of the under-counting built-in default.
+            let ld_pricing = pricing.clone();
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -686,6 +698,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_audit,
                     ld_max_run_tokens,
                     ld_max_run_usd,
+                    ld_pricing,
                     ld_shutdown,
                 )
                 .await;
@@ -2459,6 +2472,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         loop_backlog: None,
         loop_state: None,
         loop_config: None,
+        pricing: Default::default(),
     }).await
 }
 
@@ -2964,6 +2978,7 @@ async fn handle_query(
                 max_run_secs: loop_config.and_then(|c| c.max_run_secs),
                 max_run_tokens: loop_config
                     .and_then(|c| c.max_run_tokens),
+                max_run_usd: loop_config.and_then(|c| c.max_run_usd),
             }
         }
         QueryPayload::LoopLog { limit } => {

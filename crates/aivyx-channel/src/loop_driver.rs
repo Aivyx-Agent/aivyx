@@ -503,11 +503,11 @@ pub async fn run_loop_driver(
     audit_log: Option<Arc<aivyx_audit::PersistentAuditLog>>,
     max_run_tokens: Option<u64>,
     max_run_usd: Option<f64>,
+    pricing: aivyx_cost::Pricing,
     shutdown: CancellationToken,
 ) {
-    // Chapter K — the dollar cap prices LlmCost events with the default table
-    // (operator `[pricing]` overrides land in K.5).
-    let pricing = aivyx_cost::Pricing::new();
+    // Chapter K — the dollar cap prices LlmCost events with the rate table the
+    // daemon built (built-in defaults + any `[pricing.<model>]` overrides, K.5).
     loop {
         if shutdown.is_cancelled() {
             return;

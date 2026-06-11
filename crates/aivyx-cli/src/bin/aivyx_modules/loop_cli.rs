@@ -73,6 +73,7 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                 gate_enabled,
                 max_run_secs,
                 max_run_tokens,
+                max_run_usd,
             ) = loop_status(&socket_path)
                 .await
                 .map_err(|e| format!("loop status failed: {e}"))?;
@@ -85,6 +86,7 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                     gate_enabled,
                     max_run_secs,
                     max_run_tokens,
+                    max_run_usd,
                 )
             );
             Ok(())
@@ -190,6 +192,7 @@ fn render_status(
     gate_enabled: bool,
     max_run_secs: Option<u64>,
     max_run_tokens: Option<u64>,
+    max_run_usd: Option<f64>,
 ) -> String {
     let mut out = String::from("Loop status:\n");
     if !armed {
@@ -236,6 +239,16 @@ fn render_status(
                 None => "none".to_string(),
             },
         ));
+        // Chapter K (K.4.2) — the per-run dollar cap, alongside the
+        // token budget. Local-model runs price at $0, so the cap only
+        // advances on cloud spend.
+        out.push_str(&format!(
+            "  dollar cap: {}\n",
+            match max_run_usd {
+                Some(d) => format!("${d:.2} / run"),
+                None => "none".to_string(),
+            },
+        ));
         // Phase 177 — live spend, once a run has had an iteration.
         if state.tokens_used > 0 || state.active {
             out.push_str(&format!(
@@ -243,6 +256,18 @@ fn render_status(
                 state.tokens_used,
                 match max_run_tokens {
                     Some(t) => format!(" / {t}"),
+                    None => String::new(),
+                },
+            ));
+        }
+        // Chapter K — live priced spend (cents on the state snapshot),
+        // shown against the cap when one is set.
+        if state.spent_cents > 0 || state.active {
+            out.push_str(&format!(
+                "  spend used: ${:.2}{}\n",
+                state.spent_cents as f64 / 100.0,
+                match max_run_usd {
+                    Some(d) => format!(" / ${d:.2}"),
                     None => String::new(),
                 },
             ));
@@ -307,7 +332,8 @@ mod tests {
 
     #[test]
     fn status_not_armed() {
-        let out = render_status(&LoopRunState::default(), 3, false, false, None, None);
+        let out =
+            render_status(&LoopRunState::default(), 3, false, false, None, None, None);
         assert!(out.contains("not armed"));
         assert!(out.contains("3 pending"));
         // Safety config is only shown when armed.
@@ -323,15 +349,19 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: None,
             tokens_used: 12_345,
-            spent_cents: 0,
+            spent_cents: 250,
         };
-        let out = render_status(&state, 7, true, true, Some(3600), Some(500000));
+        let out =
+            render_status(&state, 7, true, true, Some(3600), Some(500000), Some(5.0));
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
         assert!(out.contains("7 pending"));
         assert!(out.contains("gate verification: on"));
         assert!(out.contains("wall-clock cap: 3600s"));
         assert!(out.contains("token budget: 500000 tokens / run"));
         assert!(out.contains("tokens used: 12345 / 500000"));
+        // Chapter K (K.4.2) — the dollar cap and live priced spend.
+        assert!(out.contains("dollar cap: $5.00 / run"));
+        assert!(out.contains("spend used: $2.50 / $5.00"));
     }
 
     #[test]
@@ -345,11 +375,12 @@ mod tests {
             tokens_used: 98_000,
             spent_cents: 0,
         };
-        let out = render_status(&state, 0, true, false, None, None);
+        let out = render_status(&state, 0, true, false, None, None, None);
         assert!(out.contains("idle (armed)"));
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
         assert!(out.contains("gate verification: off"));
         assert!(out.contains("wall-clock cap: none"));
+        assert!(out.contains("dollar cap: none"));
         // Last run's spend shown, no cap suffix.
         assert!(out.contains("tokens used: 98000\n"));
     }

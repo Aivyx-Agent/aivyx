@@ -751,6 +751,7 @@ pub async fn loop_status(
         bool,
         Option<u64>,
         Option<u64>,
+        Option<f64>,
     ),
     DaemonError,
 > {
@@ -765,6 +766,7 @@ pub async fn loop_status(
             gate_enabled,
             max_run_secs,
             max_run_tokens,
+            max_run_usd,
         } => Ok((
             state,
             remaining,
@@ -772,6 +774,7 @@ pub async fn loop_status(
             gate_enabled,
             max_run_secs,
             max_run_tokens,
+            max_run_usd,
         )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))

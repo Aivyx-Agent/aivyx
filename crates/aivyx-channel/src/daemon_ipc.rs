@@ -578,6 +578,12 @@ pub enum QueryResponsePayload {
         /// `#[serde(default)]` so pre-176 frames decode.
         #[serde(default)]
         max_run_tokens: Option<u64>,
+        /// Chapter K (K.4.2) — the per-run dollar cap, if any. The
+        /// live spend rides `state.spent_cents`; this carries the cap
+        /// value so `aivyx loop status` can show "spend / cap".
+        /// `#[serde(default)]` so pre-K.4.2 frames decode.
+        #[serde(default)]
+        max_run_usd: Option<f64>,
     },
     /// Phase 175 — response to [`QueryPayload::LoopLog`]. Recent
     /// progress notes, most-recent-first.
