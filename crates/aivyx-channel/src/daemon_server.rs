@@ -671,6 +671,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let ld_audit = audit_log.clone();
             let ld_max_run_tokens =
                 loop_config.as_ref().and_then(|c| c.max_run_tokens);
+            // Chapter K — the per-run dollar cap.
+            let ld_max_run_usd =
+                loop_config.as_ref().and_then(|c| c.max_run_usd);
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -682,6 +685,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_progress_inject,
                     ld_audit,
                     ld_max_run_tokens,
+                    ld_max_run_usd,
                     ld_shutdown,
                 )
                 .await;

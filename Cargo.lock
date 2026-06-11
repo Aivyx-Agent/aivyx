@@ -127,6 +127,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-config",
  "aivyx-core",
+ "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
  "aivyx-llm",

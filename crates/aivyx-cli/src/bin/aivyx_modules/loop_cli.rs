@@ -323,6 +323,7 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: None,
             tokens_used: 12_345,
+            spent_cents: 0,
         };
         let out = render_status(&state, 7, true, true, Some(3600), Some(500000));
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
@@ -342,6 +343,7 @@ mod tests {
             started_at_unix_ms: 1,
             last_stop_reason: Some("backlog complete".into()),
             tokens_used: 98_000,
+            spent_cents: 0,
         };
         let out = render_status(&state, 0, true, false, None, None);
         assert!(out.contains("idle (armed)"));

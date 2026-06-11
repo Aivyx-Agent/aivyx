@@ -2192,6 +2192,13 @@ pub struct LoopConfig {
     /// a token cap, not a dollar cap, and counts all turns in the
     /// run window (see the Phase 176 doc).
     pub max_run_tokens: Option<u64>,
+    /// Chapter K — per-run **dollar**-budget cap. A run stops once
+    /// the priced spend (`LlmCost` events over the run window,
+    /// priced by the default table) reaches this. `None` → no
+    /// dollar cap. Complements `max_run_tokens`: tokens bound
+    /// volume, dollars bound cost (local models are free, so they
+    /// never advance this cap).
+    pub max_run_usd: Option<f64>,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -3796,6 +3803,9 @@ struct RawLoop {
     // Phase 176 — per-run token-budget cap.
     #[serde(default)]
     max_run_tokens: Option<u64>,
+    // Chapter K — per-run dollar-budget cap.
+    #[serde(default)]
+    max_run_usd: Option<f64>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -7077,7 +7087,8 @@ fn build_loop_config(
         || raw.working_dir.is_some()
         || raw.max_run_secs.is_some()
         || raw.progress_inject_count.is_some()
-        || raw.max_run_tokens.is_some();
+        || raw.max_run_tokens.is_some()
+        || raw.max_run_usd.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -7105,6 +7116,7 @@ fn build_loop_config(
         .progress_inject_count
         .unwrap_or(DEFAULT_LOOP_PROGRESS_INJECT_COUNT);
     let max_run_tokens = raw.max_run_tokens.filter(|n| *n > 0);
+    let max_run_usd = raw.max_run_usd.filter(|n| *n > 0.0);
 
     if enabled {
         if max_iterations == 0 {
@@ -7138,6 +7150,7 @@ fn build_loop_config(
         max_run_secs,
         progress_inject_count,
         max_run_tokens,
+        max_run_usd,
     }))
 }
 

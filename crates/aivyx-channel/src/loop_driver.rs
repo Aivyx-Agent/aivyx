@@ -178,6 +178,49 @@ fn read_run_tokens(
     }
 }
 
+/// Chapter K — sum the **priced** spend (USD) over every `LlmCost` event in a
+/// slice of audit entries, using `pricing`. Pure so the dollar accounting is
+/// unit-testable without a daemon. Local models price at $0, so a local run
+/// never advances the dollar cap.
+pub fn sum_turn_cost(entries: &[aivyx_audit::SignedEntry], pricing: &aivyx_cost::Pricing) -> f64 {
+    entries
+        .iter()
+        .filter_map(|e| match &e.event {
+            aivyx_audit::AuditEvent::LlmCost { model, usage, .. } => {
+                let counts = aivyx_cost::TokenCounts {
+                    input: usage.input_tokens as u64,
+                    output: usage.output_tokens as u64,
+                    cache_read: usage.cache_read_input_tokens as u64,
+                    cache_write: usage.cache_creation_input_tokens as u64,
+                };
+                Some(pricing.cost_of(model, &counts).usd)
+            }
+            _ => None,
+        })
+        .sum()
+}
+
+/// Chapter K — best-effort read of the run-window priced spend (the dollar
+/// analogue of [`read_run_tokens`]). `None` audit log or any read error → `0.0`
+/// (the dollar cap simply isn't enforced; never breaks the run).
+fn read_run_cost(
+    audit_log: Option<&Arc<aivyx_audit::PersistentAuditLog>>,
+    start_seq: usize,
+    pricing: &aivyx_cost::Pricing,
+) -> f64 {
+    let Some(al) = audit_log else {
+        return 0.0;
+    };
+    let len = al.len();
+    if len <= start_seq {
+        return 0.0;
+    }
+    match al.entries_range(start_seq as u64, len - start_seq) {
+        Ok(entries) => sum_turn_cost(&entries, pricing),
+        Err(_) => 0.0,
+    }
+}
+
 /// One run's live state. Shared between the driver and the daemon
 /// IPC handlers (start / stop / status).
 #[derive(
@@ -202,6 +245,12 @@ pub struct LoopRunState {
     /// operator can watch spend approach the cap. `0` until the
     /// first iteration of a run; reset on each `request_start`.
     pub tokens_used: u64,
+    /// Chapter K — the run-window priced spend in **cents** (USD×100;
+    /// `f64` is avoided so this state stays `Eq` + serde-clean). The same
+    /// window the dollar cap uses; surfaced for `aivyx loop status`. `0`
+    /// until the first iteration; reset on each `request_start`.
+    #[serde(default)]
+    pub spent_cents: u64,
 }
 
 /// What the driver should do at the top of an iteration. Pure
@@ -223,6 +272,10 @@ pub enum LoopDecision {
     /// Phase 176 — stop, the `max_run_tokens` budget was reached.
     /// `tokens` is the run-window total at the stop.
     StopBudget { tokens: u64 },
+    /// Chapter K — stop, the `max_run_usd` dollar budget was reached.
+    /// `cents` is the run-window priced spend at the stop (USD×100, so the
+    /// decision stays `Eq`).
+    StopBudgetUsd { cents: u64 },
 }
 
 impl LoopDecision {
@@ -241,6 +294,9 @@ impl LoopDecision {
             }
             LoopDecision::StopBudget { .. } => {
                 Some("reached max_run_tokens budget cap")
+            }
+            LoopDecision::StopBudgetUsd { .. } => {
+                Some("reached max_run_usd dollar-budget cap")
             }
         }
     }
@@ -268,6 +324,8 @@ pub fn decide(
     max_run_secs: Option<u64>,
     tokens_used: u64,
     max_run_tokens: Option<u64>,
+    spent_usd: f64,
+    max_run_usd: Option<f64>,
 ) -> LoopDecision {
     if !active {
         return LoopDecision::StopRequested;
@@ -280,6 +338,13 @@ pub fn decide(
     if let Some(cap) = max_run_tokens {
         if tokens_used >= cap {
             return LoopDecision::StopBudget { tokens: tokens_used };
+        }
+    }
+    if let Some(cap) = max_run_usd {
+        if spent_usd >= cap {
+            return LoopDecision::StopBudgetUsd {
+                cents: (spent_usd * 100.0).round() as u64,
+            };
         }
     }
     if iteration >= max_iterations {
@@ -351,6 +416,7 @@ impl SharedLoopState {
             s.started_at_unix_ms = now_unix_ms;
             s.last_stop_reason = None;
             s.tokens_used = 0;
+            s.spent_cents = 0;
         }
         self.notify.notify_one();
         true
@@ -395,6 +461,13 @@ impl SharedLoopState {
         s.tokens_used = tokens;
     }
 
+    /// Chapter K — record the run-window priced spend (USD → cents) for the
+    /// `aivyx loop status` surface.
+    fn record_cost(&self, usd: f64) {
+        let mut s = self.state.write().expect("loop state lock");
+        s.spent_cents = (usd * 100.0).round() as u64;
+    }
+
     fn finish_run(&self, reason: &str) {
         let mut s = self.state.write().expect("loop state lock");
         s.active = false;
@@ -429,8 +502,12 @@ pub async fn run_loop_driver(
     progress_inject_count: u32,
     audit_log: Option<Arc<aivyx_audit::PersistentAuditLog>>,
     max_run_tokens: Option<u64>,
+    max_run_usd: Option<f64>,
     shutdown: CancellationToken,
 ) {
+    // Chapter K — the dollar cap prices LlmCost events with the default table
+    // (operator `[pricing]` overrides land in K.5).
+    let pricing = aivyx_cost::Pricing::new();
     loop {
         if shutdown.is_cancelled() {
             return;
@@ -447,11 +524,12 @@ pub async fn run_loop_driver(
         // A run is active — drive iterations.
         eprintln!(
             "aivyx loop: run started (max_iterations={}, gate={}, \
-             max_run_secs={:?}, max_run_tokens={:?})",
+             max_run_secs={:?}, max_run_tokens={:?}, max_run_usd={:?})",
             shared.max_iterations(),
             if gate.is_some() { "on" } else { "off" },
             max_run_secs,
             max_run_tokens,
+            max_run_usd,
         );
 
         // Phase 176 — snapshot the audit chain length so the
@@ -490,6 +568,9 @@ pub async fn run_loop_driver(
             // Phase 177 — surface the live run-window spend so
             // `aivyx loop status` can show it approaching the cap.
             shared.record_tokens(tokens_used);
+            // Chapter K — the priced run-window spend for the dollar cap.
+            let spent_usd = read_run_cost(audit_log.as_ref(), budget_start_seq, &pricing);
+            shared.record_cost(spent_usd);
             let decision = decide(
                 shared.is_active(),
                 shared.iteration(),
@@ -499,6 +580,8 @@ pub async fn run_loop_driver(
                 max_run_secs,
                 tokens_used,
                 max_run_tokens,
+                spent_usd,
+                max_run_usd,
             );
             if let Some(reason) = decision.stop_reason() {
                 shared.finish_run(reason);
@@ -571,11 +654,11 @@ mod tests {
     #[test]
     fn decide_continue_when_active_under_cap_with_work() {
         assert_eq!(
-            decide(true, 0, 5, 3, 0, None, 0, None),
+            decide(true, 0, 5, 3, 0, None, 0, None, 0.0, None),
             LoopDecision::Continue
         );
         assert_eq!(
-            decide(true, 4, 5, 1, 10, Some(3600), 0, None),
+            decide(true, 4, 5, 1, 10, Some(3600), 0, None, 0.0, None),
             LoopDecision::Continue
         );
     }
@@ -583,11 +666,11 @@ mod tests {
     #[test]
     fn decide_stops_at_cap() {
         assert_eq!(
-            decide(true, 5, 5, 3, 0, None, 0, None),
+            decide(true, 5, 5, 3, 0, None, 0, None, 0.0, None),
             LoopDecision::StopMaxIterations
         );
         assert_eq!(
-            decide(true, 6, 5, 3, 0, None, 0, None),
+            decide(true, 6, 5, 3, 0, None, 0, None, 0.0, None),
             LoopDecision::StopMaxIterations
         );
     }
@@ -595,7 +678,7 @@ mod tests {
     #[test]
     fn decide_stops_on_empty_backlog() {
         assert_eq!(
-            decide(true, 1, 5, 0, 0, None, 0, None),
+            decide(true, 1, 5, 0, 0, None, 0, None, 0.0, None),
             LoopDecision::StopBacklogEmpty
         );
     }
@@ -604,7 +687,7 @@ mod tests {
     fn decide_stop_request_wins_over_remaining_work() {
         // Inactive (operator stopped) beats everything else.
         assert_eq!(
-            decide(false, 1, 5, 3, 0, None, 0, None),
+            decide(false, 1, 5, 3, 0, None, 0, None, 0.0, None),
             LoopDecision::StopRequested
         );
     }
@@ -614,7 +697,7 @@ mod tests {
         // At the cap with an empty backlog, the cap reason is
         // reported (checked first) — both are valid stops.
         assert_eq!(
-            decide(true, 5, 5, 0, 0, None, 0, None),
+            decide(true, 5, 5, 0, 0, None, 0, None, 0.0, None),
             LoopDecision::StopMaxIterations
         );
     }
@@ -623,21 +706,21 @@ mod tests {
     fn decide_wall_clock_cap() {
         // None → never fires, even at huge elapsed.
         assert_eq!(
-            decide(true, 1, 5, 3, 1_000_000, None, 0, None),
+            decide(true, 1, 5, 3, 1_000_000, None, 0, None, 0.0, None),
             LoopDecision::Continue
         );
         // Under the cap → continue.
         assert_eq!(
-            decide(true, 1, 5, 3, 59, Some(60), 0, None),
+            decide(true, 1, 5, 3, 59, Some(60), 0, None, 0.0, None),
             LoopDecision::Continue
         );
         // At/over the cap → stop.
         assert_eq!(
-            decide(true, 1, 5, 3, 60, Some(60), 0, None),
+            decide(true, 1, 5, 3, 60, Some(60), 0, None, 0.0, None),
             LoopDecision::StopWallClock
         );
         assert_eq!(
-            decide(true, 1, 5, 3, 61, Some(60), 0, None),
+            decide(true, 1, 5, 3, 61, Some(60), 0, None, 0.0, None),
             LoopDecision::StopWallClock
         );
     }
@@ -646,7 +729,7 @@ mod tests {
     fn decide_wall_clock_beats_iteration_cap_and_backlog() {
         // Wall-clock is checked before the iteration cap + drain.
         assert_eq!(
-            decide(true, 99, 5, 0, 100, Some(60), 0, None),
+            decide(true, 99, 5, 0, 100, Some(60), 0, None, 0.0, None),
             LoopDecision::StopWallClock
         );
     }
@@ -654,7 +737,7 @@ mod tests {
     #[test]
     fn decide_stop_request_beats_wall_clock() {
         assert_eq!(
-            decide(false, 1, 5, 3, 100, Some(60), 0, None),
+            decide(false, 1, 5, 3, 100, Some(60), 0, None, 0.0, None),
             LoopDecision::StopRequested
         );
     }
@@ -663,21 +746,21 @@ mod tests {
     fn decide_token_budget_cap() {
         // None → never fires, even at huge usage.
         assert_eq!(
-            decide(true, 1, 5, 3, 0, None, 1_000_000_000, None),
+            decide(true, 1, 5, 3, 0, None, 1_000_000_000, None, 0.0, None),
             LoopDecision::Continue
         );
         // Under the cap → continue.
         assert_eq!(
-            decide(true, 1, 5, 3, 0, None, 999, Some(1000)),
+            decide(true, 1, 5, 3, 0, None, 999, Some(1000), 0.0, None),
             LoopDecision::Continue
         );
         // At/over the cap → stop, carrying the total.
         assert_eq!(
-            decide(true, 1, 5, 3, 0, None, 1000, Some(1000)),
+            decide(true, 1, 5, 3, 0, None, 1000, Some(1000), 0.0, None),
             LoopDecision::StopBudget { tokens: 1000 }
         );
         assert_eq!(
-            decide(true, 1, 5, 3, 0, None, 1500, Some(1000)),
+            decide(true, 1, 5, 3, 0, None, 1500, Some(1000), 0.0, None),
             LoopDecision::StopBudget { tokens: 1500 }
         );
     }
@@ -686,17 +769,17 @@ mod tests {
     fn decide_budget_after_wall_clock_before_iteration_cap() {
         // Wall-clock wins over budget.
         assert_eq!(
-            decide(true, 1, 5, 3, 100, Some(60), 9999, Some(1000)),
+            decide(true, 1, 5, 3, 100, Some(60), 9999, Some(1000), 0.0, None),
             LoopDecision::StopWallClock
         );
         // Budget wins over the iteration cap + backlog drain.
         assert_eq!(
-            decide(true, 99, 5, 0, 0, None, 9999, Some(1000)),
+            decide(true, 99, 5, 0, 0, None, 9999, Some(1000), 0.0, None),
             LoopDecision::StopBudget { tokens: 9999 }
         );
         // Operator stop still beats budget.
         assert_eq!(
-            decide(false, 1, 5, 3, 0, None, 9999, Some(1000)),
+            decide(false, 1, 5, 3, 0, None, 9999, Some(1000), 0.0, None),
             LoopDecision::StopRequested
         );
     }
@@ -734,6 +817,78 @@ mod tests {
             LoopDecision::StopBudget { tokens: 5 }.stop_reason(),
             Some("reached max_run_tokens budget cap")
         );
+        assert_eq!(
+            LoopDecision::StopBudgetUsd { cents: 500 }.stop_reason(),
+            Some("reached max_run_usd dollar-budget cap")
+        );
+    }
+
+    #[test]
+    fn decide_dollar_budget_cap() {
+        // None → never fires, even at high spend.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 0, None, 999.0, None),
+            LoopDecision::Continue
+        );
+        // Under the cap → continue.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 0, None, 4.99, Some(5.0)),
+            LoopDecision::Continue
+        );
+        // At/over the cap → stop, carrying the spend as cents.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 0, None, 5.0, Some(5.0)),
+            LoopDecision::StopBudgetUsd { cents: 500 }
+        );
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 0, None, 12.34, Some(5.0)),
+            LoopDecision::StopBudgetUsd { cents: 1234 }
+        );
+        // The token cap is checked before the dollar cap.
+        assert_eq!(
+            decide(true, 1, 5, 3, 0, None, 1000, Some(1000), 99.0, Some(5.0)),
+            LoopDecision::StopBudget { tokens: 1000 }
+        );
+        // The dollar cap beats the iteration cap + backlog drain.
+        assert_eq!(
+            decide(true, 99, 5, 0, 0, None, 0, None, 9.0, Some(5.0)),
+            LoopDecision::StopBudgetUsd { cents: 900 }
+        );
+    }
+
+    #[test]
+    fn sum_turn_cost_prices_llm_cost_events() {
+        use aivyx_audit::{AuditEvent, SignedEntry};
+        use aivyx_core::{TokenUsage, TurnId};
+
+        fn entry(seq: u64, event: AuditEvent) -> SignedEntry {
+            SignedEntry {
+                seq,
+                appended_at: std::time::SystemTime::UNIX_EPOCH,
+                prev_mac: [0u8; 32],
+                mac: [0u8; 32],
+                event,
+            }
+        }
+        fn cost(model: &str, input: u32, output: u32) -> AuditEvent {
+            AuditEvent::LlmCost {
+                turn_id: TurnId::new(),
+                model: model.to_string(),
+                usage: TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    ..Default::default()
+                },
+            }
+        }
+
+        let pricing = aivyx_cost::Pricing::new();
+        let entries = vec![
+            entry(0, cost("claude-sonnet-4-6", 1_000_000, 1_000_000)), // $18
+            entry(1, cost("llama3.1", 9_000_000, 9_000_000)),          // $0 local (free)
+        ];
+        let total = sum_turn_cost(&entries, &pricing);
+        assert!((total - 18.0).abs() < 1e-9, "got {total} — local adds $0");
     }
 
     #[test]
