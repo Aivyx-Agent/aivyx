@@ -353,6 +353,9 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
     //   seq 1: MemoryAccess { op = Write, scope = memory.write:topic:notes }
     //   seq 2: ToolCall     { Completed, scope = memory.write:topic:notes }
     //   seq 3: TurnEnded    { Completed, tool_calls_made = 1 }
+    //   seq 4: LlmCost      { model, usage } — Chapter K, the LLM-backed
+    //                         planner reports a model so the turn epilogue
+    //                         emits a priced cost event after TurnEnded.
     //
     // Drop both the log and the storage handle at block exit so
     // session B can reopen the file — redb enforces single-writer.
@@ -416,10 +419,11 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
         // observes a fully-drained chain.
         assert_eq!(
             audit_typed.len(),
-            4,
-            "session A in-memory chain must hold 4 events after one turn"
+            5,
+            "session A in-memory chain must hold 5 events after one turn \
+             (TurnStarted / MemoryAccess / ToolCall / TurnEnded / LlmCost)"
         );
-        wait_for_audit_rows(&storage, 4).await;
+        wait_for_audit_rows(&storage, 5).await;
 
         // Drop order matters: every `Arc<dyn Storage>` / `DomainHandle` /
         // drain-task clone of the backing `Arc<Database>` must be released
@@ -458,13 +462,14 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
         .await
         .expect("verify_from_disk must succeed on a clean chain");
     assert_eq!(
-        report.entries_verified, 4,
-        "verify_from_disk must report 4 entries (TurnStarted / MemoryAccess / ToolCall / TurnEnded)"
+        report.entries_verified, 5,
+        "verify_from_disk must report 5 entries \
+         (TurnStarted / MemoryAccess / ToolCall / TurnEnded / LlmCost)"
     );
     assert_eq!(
         report.head_seq,
-        Some(3),
-        "verify_from_disk head_seq must be 3 (= entries_verified - 1)"
+        Some(4),
+        "verify_from_disk head_seq must be 4 (= entries_verified - 1)"
     );
 
     let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
@@ -472,8 +477,8 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
         .expect("session B PersistentAuditLog::open must succeed on a clean chain");
     assert_eq!(
         log.len(),
-        4,
-        "session B in-memory chain must be seeded with 4 verified entries"
+        5,
+        "session B in-memory chain must be seeded with 5 verified entries"
     );
 
     // ---- The Level-3 assertion: every event's shape survived the
@@ -485,7 +490,7 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
     let entries = log
         .entries()
         .expect("session B must be able to read the recovered chain");
-    assert_eq!(entries.len(), 4, "chain must be exactly 4 entries");
+    assert_eq!(entries.len(), 5, "chain must be exactly 5 entries");
 
     // seq 0 — TurnStarted (from the session loop's per-turn audit).
     assert_eq!(entries[0].seq, 0);
@@ -548,6 +553,17 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
     }
     assert_eq!(entries[3].seq, 3);
 
+    // seq 4 — LlmCost, Chapter K's per-turn priced-spend event. The
+    // LLM-backed planner reports a model, so the turn epilogue emits
+    // this after TurnEnded, carrying the model + token usage.
+    match &entries[4].event {
+        AuditEvent::LlmCost { model, .. } => {
+            assert!(!model.is_empty(), "LlmCost must carry the planner's model");
+        }
+        other => panic!("seq 4 must be LlmCost, got {other:?}"),
+    }
+    assert_eq!(entries[4].seq, 4);
+
     // Chain-internal invariant: each entry's prev_mac chains back to
     // the previous entry's mac. `PersistentAuditLog::open` already
     // verified this during reopen (that's the whole point of Task 2),
@@ -577,7 +593,8 @@ async fn tampered_audit_row_fails_verification_with_chain_broken() {
     let dir = SharedStoreDir::new("negative");
 
     // Session A — identical to test 1's session A. The turn emits
-    // 4 events that land on disk under `KeyDomain::Audit`.
+    // 5 events that land on disk under `KeyDomain::Audit`
+    // (TurnStarted / MemoryAccess / ToolCall / TurnEnded / LlmCost).
     {
         let storage = open_store(&dir).await;
         let harness = build_memory_harness(Arc::clone(&storage)).await;
@@ -611,7 +628,7 @@ async fn tampered_audit_row_fails_verification_with_chain_broken() {
         .await
         .expect("tamper-test session A must complete cleanly");
 
-        wait_for_audit_rows(&storage, 4).await;
+        wait_for_audit_rows(&storage, 5).await;
         drop(harness);
         drop(audit_typed);
         drop(storage);

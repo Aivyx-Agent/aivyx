@@ -405,13 +405,13 @@ async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
     let entries = log.entries().expect("can read entries");
     let events: Vec<&AuditEvent> = entries.iter().map(|e| &e.event).collect();
 
-    // Exactly three entries: one TurnStarted, one ToolCall, one
-    // TurnEnded. A surprise 4th entry would suggest the chat-only
-    // path leaked a phantom event.
+    // Exactly four entries: TurnStarted, ToolCall, TurnEnded, and
+    // (Chapter K) LlmCost — the LLM-backed planner reports a model so
+    // the turn epilogue prices the turn.
     assert_eq!(
         entries.len(),
-        3,
-        "expected TurnStarted + ToolCall + TurnEnded, got {} entries: {:#?}",
+        4,
+        "expected TurnStarted + ToolCall + TurnEnded + LlmCost, got {} entries: {:#?}",
         entries.len(),
         events
     );
@@ -458,6 +458,11 @@ async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
         }
         other => panic!("expected AuditEvent::TurnEnded at index 2, got {other:?}"),
     }
+    assert!(
+        matches!(events[3], AuditEvent::LlmCost { .. }),
+        "expected AuditEvent::LlmCost at index 3, got {:?}",
+        events[3]
+    );
 
     // Turn id correlation: the ToolCall's turn_id must match the
     // TurnStarted / TurnEnded pair wrapping it. This is the D5
@@ -604,7 +609,7 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
     );
 
     // ---- Assertion 3: the audit chain has the shape
-    //      [TurnStarted, ScopeDenied, TurnEnded(Completed)].
+    //      [TurnStarted, ScopeDenied, TurnEnded(Completed), LlmCost].
     //
     //      Note: the loop emits `ScopeDenied` *instead of* `ToolCall`
     //      — the early return at `agent.rs:316-338` means a denied
@@ -620,8 +625,8 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
 
     assert_eq!(
         entries.len(),
-        3,
-        "expected TurnStarted + ScopeDenied + TurnEnded, got {} entries: {:#?}",
+        4,
+        "expected TurnStarted + ScopeDenied + TurnEnded + LlmCost, got {} entries: {:#?}",
         entries.len(),
         events
     );
@@ -663,6 +668,11 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
         }
         other => panic!("expected TurnEnded at index 2, got {other:?}"),
     }
+    assert!(
+        matches!(events[3], AuditEvent::LlmCost { .. }),
+        "expected LlmCost at index 3, got {:?}",
+        events[3]
+    );
 
     // Confirm there is NO `ToolCall` entry — the early return after
     // `ScopeDenied` is the reason, and a regression that accidentally

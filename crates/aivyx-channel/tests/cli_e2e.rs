@@ -311,12 +311,14 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     log.verify().expect("audit chain must verify");
 
     let entries = log.entries().expect("can read entries");
-    // Two turns, two (TurnStarted, TurnEnded) pairs, no tool calls in
-    // between since Phase 3 has no concrete tools registered.
+    // Two turns, each emitting TurnStarted, TurnEnded, and (Chapter K) a
+    // LlmCost event — the LLM-backed planner reports a model, so the turn
+    // epilogue prices the turn. No tool calls in between since Phase 3 has
+    // no concrete tools registered.
     assert_eq!(
         entries.len(),
-        4,
-        "expected 4 audit entries (2 turns × TurnStarted+TurnEnded), got {}",
+        6,
+        "expected 6 audit entries (2 turns × TurnStarted+TurnEnded+LlmCost), got {}",
         entries.len()
     );
 
@@ -326,6 +328,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     // shape directly.
     let events: Vec<&AuditEvent> = entries.iter().map(|e| &e.event).collect();
 
+    // Turn 1: TurnStarted(0), TurnEnded(1), LlmCost(2).
     assert!(matches!(events[0], AuditEvent::TurnStarted { .. }));
     assert!(matches!(
         events[1],
@@ -335,20 +338,23 @@ async fn scripted_session_drives_two_turns_end_to_end() {
             ..
         }
     ));
-    assert!(matches!(events[2], AuditEvent::TurnStarted { .. }));
+    assert!(matches!(events[2], AuditEvent::LlmCost { .. }));
+    // Turn 2: TurnStarted(3), TurnEnded(4), LlmCost(5).
+    assert!(matches!(events[3], AuditEvent::TurnStarted { .. }));
     assert!(matches!(
-        events[3],
+        events[4],
         AuditEvent::TurnEnded {
             outcome: TurnOutcomeSummary::Completed,
             tool_calls_made: 0,
             ..
         }
     ));
+    assert!(matches!(events[5], AuditEvent::LlmCost { .. }));
 
     // The two `TurnStarted` entries must carry the *same* session id
     // — both turns run on the one `LocalChannel`, so they share a
     // session. Different turn ids, same session.
-    match (&events[0], &events[2]) {
+    match (&events[0], &events[3]) {
         (
             AuditEvent::TurnStarted {
                 turn_id: t1,
@@ -367,7 +373,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         _ => unreachable!(),
     }
 
-    // Seq numbers are monotonic 0..4 (HmacChainLog invariant, but
+    // Seq numbers are monotonic 0..6 (HmacChainLog invariant, but
     // worth asserting here so a regression in the chain would be
     // caught by the E2E test too, not just the audit-crate tests).
     for (i, entry) in entries.iter().enumerate() {

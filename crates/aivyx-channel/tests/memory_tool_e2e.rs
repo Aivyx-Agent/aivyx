@@ -414,14 +414,15 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
     }
 
     // Audit shape: TurnStarted / MemoryAccess(Write) / ToolCall(Completed,
-    // memory.write) / TurnEnded. The MemoryAccess tag comes from
+    // memory.write) / TurnEnded / LlmCost. The MemoryAccess tag comes from
     // MemoryWriteTool itself — Phase 6 D1: memory ops carry their own
     // semantic audit tag on top of the generic ToolCall the session
-    // loop records.
+    // loop records. The trailing LlmCost is Chapter K's per-turn priced
+    // cost event (the LLM-backed planner reports a model).
     assert_eq!(
         session_a_entries.len(),
-        4,
-        "session A audit: expected 4 entries, got {}: {:#?}",
+        5,
+        "session A audit: expected 5 entries, got {}: {:#?}",
         session_a_entries.len(),
         session_a_entries
     );
@@ -473,6 +474,11 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
         }
         other => panic!("session A: expected TurnEnded at index 3, got {other:?}"),
     }
+    assert!(
+        matches!(&session_a_entries[4], AuditEvent::LlmCost { .. }),
+        "session A: expected LlmCost at index 4, got {:?}",
+        session_a_entries[4]
+    );
 
     // ====== Between sessions — raw-bytes persistence probe ===========
     //
@@ -616,13 +622,18 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
     }
 
     // Audit shape same as session A: TurnStarted / MemoryAccess(Read) /
-    // ToolCall(Completed, memory.read) / TurnEnded.
+    // ToolCall(Completed, memory.read) / TurnEnded / LlmCost.
     assert_eq!(
         session_b_entries.len(),
-        4,
-        "session B audit: expected 4 entries, got {}: {:#?}",
+        5,
+        "session B audit: expected 5 entries, got {}: {:#?}",
         session_b_entries.len(),
         session_b_entries
+    );
+    assert!(
+        matches!(&session_b_entries[4], AuditEvent::LlmCost { .. }),
+        "session B: expected LlmCost at index 4, got {:?}",
+        session_b_entries[4]
     );
     match &session_b_entries[1] {
         AuditEvent::MemoryAccess {

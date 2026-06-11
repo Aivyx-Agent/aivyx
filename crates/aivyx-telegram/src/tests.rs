@@ -1900,15 +1900,16 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
         assert_eq!(transport_a.sent_snapshot()[0].chat_id, 3001);
         assert_eq!(transport_b.sent_snapshot()[0].chat_id, 4001);
 
-        // In-memory chain: 4 events per turn × 2 turns = 8.
+        // In-memory chain: 5 events per turn (TurnStarted, MemoryAccess,
+        // ToolCall, TurnEnded, + Chapter K's LlmCost) × 2 turns = 10.
         assert_eq!(
             persistent_audit.len(),
-            8,
-            "concurrent two-chat session must produce an 8-event in-memory chain"
+            10,
+            "concurrent two-chat session must produce a 10-event in-memory chain"
         );
 
         // Fence the drain onto disk before the reopen phase below.
-        wait_for_audit_rows(&storage, 8).await;
+        wait_for_audit_rows(&storage, 10).await;
 
         // Explicit drops so redb's single-writer lock releases before
         // the reopen phase. `persistent_audit`'s `Drop` aborts the
@@ -1955,10 +1956,10 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             .await
             .expect("verify_from_disk must succeed on a clean chain");
     assert_eq!(
-        verify_report.entries_verified, 8,
-        "two concurrent chats × 4 events each = 8 entries"
+        verify_report.entries_verified, 10,
+        "two concurrent chats × 5 events each = 10 entries"
     );
-    assert_eq!(verify_report.head_seq, Some(7));
+    assert_eq!(verify_report.head_seq, Some(9));
 
     let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
         .await
@@ -1966,16 +1967,17 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
     let entries = log
         .entries()
         .expect("recovered chain must be readable post-reopen");
-    assert_eq!(entries.len(), 8);
+    assert_eq!(entries.len(), 10);
 
     // ---- Shape assertion: count events by variant ------------------
     //
-    // Interleaving is scheduler-dependent: chat A's 4 events and
-    // chat B's 4 events can land in the chain in any order as long
+    // Interleaving is scheduler-dependent: chat A's 5 events and
+    // chat B's 5 events can land in the chain in any order as long
     // as each chat's internal turn-sequence is preserved. The
     // strongest order-independent assertion is a histogram over the
-    // 8 entries: exactly 2 `TurnStarted`, 2 `MemoryAccess` (both
-    // `Write`), 2 `ToolCall` (both `memory.write`), and 2 `TurnEnded`.
+    // 10 entries: exactly 2 `TurnStarted`, 2 `MemoryAccess` (both
+    // `Write`), 2 `ToolCall` (both `memory.write`), 2 `TurnEnded`,
+    // and 2 `LlmCost`.
     //
     // If concurrent producers ever corrupt an event mid-drain (e.g.
     // a variant gets truncated or the `session` partition doesn't
@@ -1987,6 +1989,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
     let mut tool_call_chat_a = 0;
     let mut tool_call_chat_b = 0;
     let mut turn_ended = 0;
+    let mut llm_cost = 0;
     for entry in &entries {
         match &entry.event {
             AuditEvent::TurnStarted {
@@ -2042,6 +2045,9 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             AuditEvent::TurnEnded { .. } => {
                 turn_ended += 1;
             }
+            AuditEvent::LlmCost { .. } => {
+                llm_cost += 1;
+            }
             other => {
                 panic!("unexpected audit event shape in two-chat chain: {other:?}");
             }
@@ -2065,6 +2071,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
         "chat B must have contributed exactly one ToolCall"
     );
     assert_eq!(turn_ended, 2, "two chats → two TurnEnded events");
+    assert_eq!(llm_cost, 2, "two chats → two LlmCost events (Chapter K)");
 
     // ---- Memory isolation survives reopen --------------------------
     //
@@ -2895,11 +2902,12 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
 
         assert_eq!(
             persistent_audit.len(),
-            12,
-            "three chats × 4 events each = 12 (TurnStarted, ToolCall, MemoryAccess, TurnEnded)"
+            15,
+            "three chats × 5 events each = 15 \
+             (TurnStarted, MemoryAccess, ToolCall, TurnEnded, LlmCost)"
         );
 
-        wait_for_audit_rows(&storage, 12).await;
+        wait_for_audit_rows(&storage, 15).await;
 
         drop(transport);
         drop(provider);
@@ -2926,18 +2934,18 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             .await
             .expect("verify_from_disk must succeed on a clean combined chain");
     assert_eq!(
-        verify_report.entries_verified, 12,
-        "three concurrent chats × 4 events = 12 entries"
+        verify_report.entries_verified, 15,
+        "three concurrent chats × 5 events = 15 entries"
     );
-    assert_eq!(verify_report.head_seq, Some(11));
+    assert_eq!(verify_report.head_seq, Some(14));
 
     let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
         .await
         .expect("reopen for entries inspection must succeed");
     let entries = log.entries().expect("recovered chain must be readable");
-    assert_eq!(entries.len(), 12);
+    assert_eq!(entries.len(), 15);
 
-    // ---- Histogram over the 12 events by variant -------------------
+    // ---- Histogram over the 15 events by variant -------------------
     let mut turn_started = 0;
     let mut memory_access_write = 0;
     let mut tool_call_memory_write = 0;
@@ -2945,6 +2953,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
     let mut tool_call_chat_b = 0;
     let mut tool_call_chat_c = 0;
     let mut turn_ended = 0;
+    let mut llm_cost = 0;
     for entry in &entries {
         match &entry.event {
             AuditEvent::TurnStarted {
@@ -2976,6 +2985,9 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             AuditEvent::TurnEnded { .. } => {
                 turn_ended += 1;
             }
+            AuditEvent::LlmCost { .. } => {
+                llm_cost += 1;
+            }
             other => {
                 panic!("unexpected audit event in multi-chat chain: {other:?}");
             }
@@ -2988,6 +3000,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
     assert_eq!(tool_call_chat_b, 1);
     assert_eq!(tool_call_chat_c, 1);
     assert_eq!(turn_ended, 3);
+    assert_eq!(llm_cost, 3, "three chats → three LlmCost events (Chapter K)");
 
     // ---- Per-chat memory partition isolation -----------------------
     let memory_post: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
