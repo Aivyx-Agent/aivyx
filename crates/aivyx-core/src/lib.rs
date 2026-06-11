@@ -39,7 +39,7 @@ pub mod skill_proposer;
 pub mod textual_tool_call;
 pub mod tools;
 
-pub use agent::{ConcreteAgent, MAX_STEPS_PER_TURN};
+pub use agent::{BudgetGate, ConcreteAgent, TurnBudgetGuard, MAX_STEPS_PER_TURN};
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
 pub use planner::{
     NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner, VecPlanner,
@@ -888,6 +888,13 @@ pub enum AivyxError {
 
     #[error("audit integrity error: {0}")]
     Audit(String),
+
+    // Chapter K (K.4.2) — a turn refused at the pre-call dollar gate. The
+    // turn loop returns this when a `BudgetGate` denies an LLM-backed turn
+    // (the operator's `[budget]` cap would be busted). Carries the gate's
+    // human-readable reason for the channel to surface to the operator.
+    #[error("budget exceeded: {0}")]
+    BudgetExceeded(String),
 
     #[error("operation timed out after {0:?}")]
     Timeout(Duration),

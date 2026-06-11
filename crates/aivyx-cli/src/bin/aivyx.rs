@@ -3840,8 +3840,8 @@ async fn run_async(
         // loop's dollar cap via the `pricing` table on `DaemonConfig` below.
         pricing: config_pricing,
         // Chapter K (K.4.2) — `[budget]` dollar caps. Parsed + validated by
-        // the loader; consumed by the turn-loop budget gate in K.4.2(a).
-        budget: _,
+        // the loader; consumed by the turn-loop budget gate built below.
+        budget: config_budget,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
@@ -6135,6 +6135,20 @@ async fn run_async(
                 cfg,
             )) as Box<dyn aivyx_core::TurnPlanner>
         };
+        // Chapter K (K.4.2) — the shared pre-call dollar gate. Built once and
+        // attached to the daemon's agent so every interactive / team turn is
+        // checked against the operator's `[budget] per_day_usd` cap before any
+        // model call. `None` when no day cap is set, so an ungated daemon
+        // keeps today's behavior byte-for-byte.
+        let daemon_budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>> =
+            aivyx_channel::budget_gate::ChannelBudgetGate::new(
+                config_budget.clone(),
+                Arc::clone(&persistent_audit_for_query),
+                aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                DEFAULT_MAX_TOKENS,
+            )
+            .map(|g| Arc::new(g) as Arc<dyn aivyx_core::BudgetGate>);
+
         let agent: Arc<dyn Agent> = Arc::new(
             ConcreteAgent::new(
                 AgentId::new(),
@@ -6144,7 +6158,8 @@ async fn run_async(
                 planner_factory,
             )
             .with_tool_allowlist(daemon_tool_allowlist)
-            .with_memory_topic_prefix(memory_topic_prefix),
+            .with_memory_topic_prefix(memory_topic_prefix)
+            .with_budget_gate(daemon_budget_gate),
         );
 
         let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
@@ -7133,6 +7148,10 @@ async fn run_async(
                     )),
                     context_provider: recall_context.clone(),
                     system_prompt_refiner: system_prompt_refiner.clone(),
+                    // Chapter K (K.4.2) — voice runs in its own command path
+                    // (no daemon audit-log handle here); the budget gate is
+                    // wired on the daemon agent. Voice gating is a follow-up.
+                    budget_gate: None,
                 };
                 let agent = aivyx_channel::session::build_agent_stack(
                     Arc::clone(&provider),

@@ -44,6 +44,10 @@ pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod conversation_window;
+/// Chapter K (K.4.2) — the concrete pre-call dollar gate
+/// (`ChannelBudgetGate`) for the interactive / team turn loop, over the
+/// `aivyx_core::BudgetGate` trait.
+pub mod budget_gate;
 pub mod cooccurrence_ledger;
 /// Phase 172 — the structural correction-signal detector +
 /// durable decayed correction ledger + consolidation pass.

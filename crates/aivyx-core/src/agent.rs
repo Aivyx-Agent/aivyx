@@ -67,6 +67,30 @@ pub const MAX_STEPS_PER_TURN: usize = 32;
 /// budget is almost certainly papering over a real bug.
 pub const TURN_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Chapter K (K.4.2) — a per-turn dollar-budget gate. The turn loop calls
+/// [`open_turn`](BudgetGate::open_turn) at the start of every LLM-backed turn
+/// (i.e. when the planner reports a non-empty model id), **before** any model
+/// call. An `Err(reason)` refuses the turn outright; the loop returns
+/// [`TurnOutcome::Failed`] with [`AivyxError::BudgetExceeded`]. An `Ok(guard)`
+/// is held for the lifetime of the turn and dropped when it ends — the
+/// implementation's `Drop` releases whatever it reserved.
+///
+/// `ConcreteAgent` is deliberately ignorant of pricing and the audit chain;
+/// the concrete gate (which sums committed spend, prices an estimate, and
+/// reserves against a `BudgetEnforcer`) lives in `aivyx-channel`. `None` on
+/// the agent means "no gate," preserving pre-K.4.2 behavior byte-for-byte.
+pub trait BudgetGate: Send + Sync {
+    /// Reserve budget for an upcoming LLM-backed turn on `model`. `Err` is the
+    /// operator-facing denial reason; `Ok` is the RAII reservation guard.
+    fn open_turn(&self, model: &str) -> Result<Box<dyn TurnBudgetGuard>, String>;
+}
+
+/// The RAII handle returned by [`BudgetGate::open_turn`]. Opaque to the turn
+/// loop — its only job is to live for the turn and release its reservation
+/// when dropped. The concrete `Drop` impl lives with the gate in
+/// `aivyx-channel`.
+pub trait TurnBudgetGuard: Send {}
+
 /// The reference `Agent` implementation.
 ///
 /// Holds all the collaborators a turn loop needs by `Arc` / interior
@@ -110,6 +134,12 @@ pub struct ConcreteAgent {
     /// resumed conversation) or a non-LLM planner could still
     /// produce an out-of-role call. This check catches that.
     tool_allowlist: Option<std::collections::BTreeSet<String>>,
+    /// Chapter K (K.4.2) — optional pre-call dollar gate. When `Some`, the
+    /// turn loop consults it at the start of every LLM-backed turn and
+    /// refuses the turn if the operator's `[budget]` cap would be busted.
+    /// `None` (the default) preserves pre-K.4.2 behavior byte-for-byte:
+    /// turns run ungated. See [`BudgetGate`].
+    budget_gate: Option<Arc<dyn BudgetGate>>,
 }
 
 impl ConcreteAgent {
@@ -128,6 +158,7 @@ impl ConcreteAgent {
             planner_factory: Box::new(planner_factory),
             memory_topic_prefix: None,
             tool_allowlist: None,
+            budget_gate: None,
         }
     }
 
@@ -152,6 +183,18 @@ impl ConcreteAgent {
         allowlist: Option<std::collections::BTreeSet<String>>,
     ) -> Self {
         self.tool_allowlist = allowlist;
+        self
+    }
+
+    /// Attach a Chapter K pre-call dollar gate. See the
+    /// [`Self::budget_gate`] field doc for semantics. `None` means "no
+    /// gate," preserving pre-K.4.2 behavior. K.4.2 wires this from the
+    /// operator's `[budget]` config at agent-stack construction time.
+    pub fn with_budget_gate(
+        mut self,
+        gate: Option<Arc<dyn BudgetGate>>,
+    ) -> Self {
+        self.budget_gate = gate;
         self
     }
 }
@@ -190,6 +233,49 @@ impl Agent for ConcreteAgent {
 
         let mut planner = (self.planner_factory)();
         planner.begin_turn(&message).await;
+
+        // Chapter K (K.4.2) — pre-call dollar gate. Reserve budget for this
+        // turn *before* spawning the deadline task or entering the loop, so a
+        // denial unwinds cleanly with nothing to abort. Only LLM-backed turns
+        // (non-empty model id) are gated; deterministic / scripted planners
+        // report `""` and pass through untouched. The guard is bound for the
+        // rest of `turn()` and its `Drop` releases the reservation once the
+        // turn ends (by then the real cost is an `LlmCost` event on the
+        // chain, so the next turn's committed figure already reflects it).
+        let _budget_guard: Option<Box<dyn TurnBudgetGuard>> =
+            match &self.budget_gate {
+                Some(gate) if !planner.model().is_empty() => {
+                    match gate.open_turn(planner.model()) {
+                        Ok(guard) => Some(guard),
+                        Err(reason) => {
+                            // Refuse the turn. TurnStarted already fired, so
+                            // the chain reads TurnStarted → TurnEnded(Failed)
+                            // with no tool calls and no LlmCost event. Finalize
+                            // first (M1 contract: the channel sees the result).
+                            let outcome = TurnOutcome::Failed(
+                                AivyxError::BudgetExceeded(reason),
+                            );
+                            let duration = start.elapsed();
+                            let final_outcome =
+                                match channel.finalize(&outcome).await {
+                                    Ok(()) => outcome,
+                                    Err(e) => TurnOutcome::Failed(
+                                        AivyxError::Channel(e.to_string()),
+                                    ),
+                                };
+                            self.audit.on_event(AuditTag::TurnEnded {
+                                turn_id,
+                                outcome: TurnOutcomeSummary::from(&final_outcome),
+                                tool_calls_made: 0,
+                                duration,
+                                usage: planner.turn_usage(),
+                            });
+                            return final_outcome;
+                        }
+                    }
+                }
+                _ => None,
+            };
 
         // Wall-clock deadline task. Spawns in the background, sleeps
         // for TURN_TIMEOUT, and then (a) sets the deadline_fired flag
@@ -1131,6 +1217,159 @@ mod tests {
         ConcreteAgent::new(AgentId::new(), caps, registry, audit, move || {
             Box::new(crate::planner::VecPlanner::new((*plan_arc).clone()))
         })
+    }
+
+    // ---- Chapter K (K.4.2): pre-call budget gate ----
+
+    /// A `VecPlanner` that also reports a model id, so the turn loop treats
+    /// its turns as LLM-backed and consults the budget gate.
+    struct ModeledPlanner {
+        steps: std::collections::VecDeque<NextStep>,
+        model: String,
+    }
+
+    #[async_trait]
+    impl TurnPlanner for ModeledPlanner {
+        async fn next_step(
+            &mut self,
+            _observed: &[StepObservation],
+            _channel: &dyn ChannelContext,
+        ) -> NextStep {
+            self.steps.pop_front().unwrap_or(NextStep::Stop)
+        }
+        fn model(&self) -> &str {
+            &self.model
+        }
+    }
+
+    struct MockGuard;
+    impl TurnBudgetGuard for MockGuard {}
+
+    /// A budget gate whose verdict is fixed, counting how often it's asked.
+    struct MockGate {
+        verdict: Result<(), String>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl BudgetGate for MockGate {
+        fn open_turn(
+            &self,
+            _model: &str,
+        ) -> Result<Box<dyn TurnBudgetGuard>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.verdict {
+                Ok(()) => Ok(Box::new(MockGuard)),
+                Err(reason) => Err(reason.clone()),
+            }
+        }
+    }
+
+    fn gated_agent(
+        audit: Arc<dyn AuditHook>,
+        model: &'static str,
+        gate: Option<Arc<dyn BudgetGate>>,
+    ) -> ConcreteAgent {
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let model = model.to_string();
+        ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::from_scopes([]),
+            registry,
+            audit,
+            move || {
+                Box::new(ModeledPlanner {
+                    steps: [NextStep::FinalMessage("done".to_string())]
+                        .into_iter()
+                        .collect(),
+                    model: model.clone(),
+                })
+            },
+        )
+        .with_budget_gate(gate)
+    }
+
+    #[tokio::test]
+    async fn budget_gate_denies_llm_turn() {
+        let audit = RecordingAudit::new();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let gate = Arc::new(MockGate {
+            verdict: Err("day budget exceeded: $5.00 of $5.00".to_string()),
+            calls: Arc::clone(&calls),
+        });
+        let agent =
+            gated_agent(audit.clone(), "claude-opus-4-8", Some(gate));
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hi");
+
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Failed(AivyxError::BudgetExceeded(reason)) => {
+                assert!(reason.contains("day budget exceeded"));
+            }
+            other => panic!("expected Failed(BudgetExceeded), got {other:?}"),
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "gate consulted once");
+
+        // Chain reads exactly TurnStarted → TurnEnded(Failed); no LlmCost
+        // (the turn was refused before any spend).
+        let events = audit.snapshot();
+        assert_eq!(events.len(), 2, "got {events:?}");
+        assert!(matches!(events[0], AuditTag::TurnStarted { .. }));
+        assert!(matches!(
+            events[1],
+            AuditTag::TurnEnded {
+                outcome: TurnOutcomeSummary::Failed,
+                tool_calls_made: 0,
+                ..
+            }
+        ));
+        assert!(
+            !events.iter().any(|e| matches!(e, AuditTag::LlmCost { .. })),
+            "a refused turn must not record spend"
+        );
+    }
+
+    #[tokio::test]
+    async fn budget_gate_allows_llm_turn() {
+        let audit = RecordingAudit::new();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let gate = Arc::new(MockGate {
+            verdict: Ok(()),
+            calls: Arc::clone(&calls),
+        });
+        let agent = gated_agent(audit.clone(), "claude-opus-4-8", Some(gate));
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hi");
+
+        let outcome = agent.turn(message, &channel).await;
+
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "gate consulted once");
+    }
+
+    #[tokio::test]
+    async fn budget_gate_skipped_for_deterministic_planner() {
+        let audit = RecordingAudit::new();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // A gate that WOULD deny — but the planner reports no model, so the
+        // loop never consults it.
+        let gate = Arc::new(MockGate {
+            verdict: Err("would deny".to_string()),
+            calls: Arc::clone(&calls),
+        });
+        let agent = gated_agent(audit.clone(), "", Some(gate));
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hi");
+
+        let outcome = agent.turn(message, &channel).await;
+
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "deterministic (empty-model) turns bypass the gate"
+        );
     }
 
     // ---- Golden path: one tool call, final message, clean completion ----

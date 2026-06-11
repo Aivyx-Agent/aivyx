@@ -206,6 +206,11 @@ pub struct AgentStackSpec {
     pub system_prompt_refiner:
         Option<Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>>,
     pub prompt_refresher: Option<Arc<dyn Fn() -> String + Send + Sync>>,
+    /// Chapter K (K.4.2) — optional pre-call dollar gate, attached to the
+    /// built agent. `None` (the default) leaves turns ungated. Non-daemon
+    /// LLM-backed channels (voice) set this from the shared
+    /// `ChannelBudgetGate` built at startup.
+    pub budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>>,
 }
 
 impl AgentStackSpec {
@@ -228,6 +233,9 @@ impl AgentStackSpec {
             context_provider: c.context_provider.clone(),
             system_prompt_refiner: c.system_prompt_refiner.clone(),
             prompt_refresher: c.prompt_refresher.clone(),
+            // The REPL/local path is ungated for now; daemon + voice attach
+            // the shared gate at their own build sites.
+            budget_gate: None,
         }
     }
 }
@@ -269,6 +277,7 @@ pub fn build_agent_stack(
         context_provider,
         system_prompt_refiner,
         prompt_refresher,
+        budget_gate,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -316,7 +325,8 @@ pub fn build_agent_stack(
         },
     )
     .with_tool_allowlist(tool_allowlist)
-    .with_memory_topic_prefix(memory_topic_prefix);
+    .with_memory_topic_prefix(memory_topic_prefix)
+    .with_budget_gate(budget_gate);
 
     Arc::new(agent)
 }
