@@ -51,6 +51,33 @@ impl MissionReport {
     }
 }
 
+/// Observes a mission run as the runtime walks the DAG — the progress feed
+/// Chapter L's daemon needs to surface live mission state (the J.7 TUI panel,
+/// `aivyx team status`). All methods default to no-ops so an observer overrides
+/// only the events it cares about; `()` is the null observer used by the plain
+/// [`TeamRuntime::run`] path (no behavior change from the J.4 batch run).
+///
+/// Callbacks for steps in the same ready set fire **concurrently** (the runtime
+/// runs them with `join_all`), so an observer must be `Send + Sync` and tolerate
+/// interleaving. Per step the order is `on_step_started` → (`on_gate` for a
+/// `Gate`, else `on_step_completed`); `on_mission_finished` fires once at the end.
+pub trait MissionObserver: Send + Sync {
+    /// A step's specialist sub-turn is about to run (`member` = specialist or
+    /// reviewer). Maps to the TUI's `StepState::Running`.
+    fn on_step_started(&self, _step_id: &str, _member: &str) {}
+    /// A `Delegate` step finished with `output`. Maps to `StepState::Done`.
+    fn on_step_completed(&self, _step_id: &str, _output: &str) {}
+    /// A `Gate` step's reviewer returned a verdict. `passed` is `gate_passed`.
+    /// Maps to `StepState::Gated` (passed) / `StepState::Failed` (rejected).
+    fn on_gate(&self, _step_id: &str, _passed: bool, _verdict: &str) {}
+    /// The mission ended (Completed or GateRejected).
+    fn on_mission_finished(&self, _report: &MissionReport) {}
+}
+
+/// The null observer — `TeamRuntime::run` walks the DAG with this, preserving
+/// the J.4 batch behavior exactly.
+impl MissionObserver for () {}
+
 /// Runs mission DAGs against a team's [`SpecialistPool`].
 pub struct TeamRuntime {
     pool: Arc<SpecialistPool>,
@@ -65,10 +92,25 @@ impl TeamRuntime {
     /// over the lead's live channel. Returns a [`MissionReport`]; a
     /// specialist error (or an invalid plan) is an `Err`, while a gate
     /// rejection is an `Ok` report with [`MissionStatus::GateRejected`].
+    ///
+    /// The observer-less entry point: walks the DAG with the null observer,
+    /// preserving the J.4 batch behavior byte-for-byte.
     pub async fn run(
         &self,
         plan: &MissionPlan,
         lead_channel: &dyn ChannelContext,
+    ) -> Result<MissionReport, TeamError> {
+        self.run_observed(plan, lead_channel, &()).await
+    }
+
+    /// Like [`run`](Self::run), but reports progress to `observer` as the DAG
+    /// is walked (Chapter L's live feed). Behavior is otherwise identical —
+    /// the observer only watches; it never changes the run.
+    pub async fn run_observed(
+        &self,
+        plan: &MissionPlan,
+        lead_channel: &dyn ChannelContext,
+        observer: &dyn MissionObserver,
     ) -> Result<MissionReport, TeamError> {
         plan.validate()?;
 
@@ -88,13 +130,14 @@ impl TeamRuntime {
             }
 
             // Run every ready step concurrently. Each future captures only
-            // owned strings + shared refs (self.pool, lead_channel), so the
-            // outputs map is free to mutate once join_all has collected.
+            // owned strings + shared refs (self.pool, lead_channel, observer),
+            // so the outputs map is free to mutate once join_all has collected.
             let futures = ready.iter().map(|step| {
                 let id = step.id.clone();
                 let member = step.kind.member().to_string();
                 let input = self.build_input(step, &outputs);
                 async move {
+                    observer.on_step_started(&id, &member);
                     let res = self.pool.run(&member, &input, lead_channel).await;
                     (id, res)
                 }
@@ -108,27 +151,37 @@ impl TeamRuntime {
                     plan.step(&id).map(|s| &s.kind),
                     Some(StepKind::Gate { .. })
                 );
-                if is_gate && !gate_passed(&output) && rejection.is_none() {
-                    rejection = Some((id.clone(), output.clone()));
+                if is_gate {
+                    let passed = gate_passed(&output);
+                    observer.on_gate(&id, passed, &output);
+                    if !passed && rejection.is_none() {
+                        rejection = Some((id.clone(), output.clone()));
+                    }
+                } else {
+                    observer.on_step_completed(&id, &output);
                 }
                 outputs.insert(id.clone(), output);
                 completed.insert(id);
             }
 
             if let Some((step, verdict)) = rejection {
-                return Ok(MissionReport {
+                let report = MissionReport {
                     goal: plan.goal.clone(),
                     outputs,
                     status: MissionStatus::GateRejected { step, verdict },
-                });
+                };
+                observer.on_mission_finished(&report);
+                return Ok(report);
             }
         }
 
-        Ok(MissionReport {
+        let report = MissionReport {
             goal: plan.goal.clone(),
             outputs,
             status: MissionStatus::Completed,
-        })
+        };
+        observer.on_mission_finished(&report);
+        Ok(report)
     }
 
     /// The prompt handed to a step's specialist: its own instruction, plus
@@ -191,6 +244,90 @@ mod tests {
         assert!(gate_passed("LGTM"));
         assert!(!gate_passed("FAIL: missing tests"));
         assert!(!gate_passed("  fail, try again"), "case + leading space insensitive");
+    }
+
+    /// Records every observer callback as an ordered string, so a test can
+    /// assert the runtime fired the live feed in the expected sequence.
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: std::sync::Mutex<Vec<String>>,
+    }
+    impl RecordingObserver {
+        fn snapshot(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+    impl MissionObserver for RecordingObserver {
+        fn on_step_started(&self, step_id: &str, member: &str) {
+            self.events.lock().unwrap().push(format!("start:{step_id}:{member}"));
+        }
+        fn on_step_completed(&self, step_id: &str, _output: &str) {
+            self.events.lock().unwrap().push(format!("done:{step_id}"));
+        }
+        fn on_gate(&self, step_id: &str, passed: bool, _verdict: &str) {
+            self.events.lock().unwrap().push(format!("gate:{step_id}:{passed}"));
+        }
+        fn on_mission_finished(&self, report: &MissionReport) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("finished:{}", report.succeeded()));
+        }
+    }
+
+    #[tokio::test]
+    async fn run_observed_reports_progress_in_order() {
+        // a (delegate) → g (gate, passes) → after_g (delegate).
+        let rt = runtime(FakeProvider::always("PASS ok"), &["worker", "reviewer"]);
+        let plan = MissionPlan::new(
+            "observed",
+            vec![
+                Step::delegate("a", "worker", "do work"),
+                Step::gate("g", "reviewer", "good?").after(["a"]),
+                Step::delegate("after_g", "worker", "ship").after(["g"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let obs = RecordingObserver::default();
+        let report = rt.run_observed(&plan, &lead, &obs).await.unwrap();
+        assert!(report.succeeded());
+        assert_eq!(
+            obs.snapshot(),
+            vec![
+                "start:a:worker",
+                "done:a",
+                "start:g:reviewer",
+                "gate:g:true",
+                "start:after_g:worker",
+                "done:after_g",
+                "finished:true",
+            ],
+            "delegate steps report done, the gate reports its verdict, finished fires once"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_observed_reports_a_gate_rejection() {
+        let rt = runtime(FakeProvider::always("FAIL: nope"), &["worker", "reviewer"]);
+        let plan = MissionPlan::new(
+            "observed-reject",
+            vec![
+                Step::delegate("a", "worker", "do work"),
+                Step::gate("g", "reviewer", "good?").after(["a"]),
+                Step::delegate("after_g", "worker", "ship").after(["g"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let obs = RecordingObserver::default();
+        let report = rt.run_observed(&plan, &lead, &obs).await.unwrap();
+        assert!(matches!(report.status, MissionStatus::GateRejected { .. }));
+        let events = obs.snapshot();
+        assert!(events.contains(&"gate:g:false".to_string()), "rejection observed: {events:?}");
+        assert!(events.contains(&"finished:false".to_string()));
+        assert!(
+            !events.iter().any(|e| e.starts_with("start:after_g")),
+            "the rejected gate's dependent never started: {events:?}"
+        );
     }
 
     #[tokio::test]

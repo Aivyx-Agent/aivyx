@@ -45,5 +45,5 @@ pub use mission::{MissionPlan, Step, StepKind};
 pub use orchestration::{DecomposeTaskTool, SynthesizeResultsTool, VerifyOutputTool};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
-pub use runtime::{MissionReport, MissionStatus, TeamRuntime};
+pub use runtime::{MissionObserver, MissionReport, MissionStatus, TeamRuntime};
 pub use tools::{DelegateTaskTool, QueryAgentTool};
