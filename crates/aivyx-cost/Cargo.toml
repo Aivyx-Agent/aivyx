@@ -1,0 +1,19 @@
+[package]
+name = "aivyx-cost"
+description = "Cost governance — LLM token pricing, the priced ledger over the audit chain, and budgets (Chapter K). Free core: visibility + caps, not customer billing. See docs/COST_GOVERNANCE.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# K.1 is a pure pricing primitive — no aivyx-* deps yet (the ledger view over
+# the audit chain + the daemon wiring arrive in K.2+). serde so ModelRate /
+# BudgetConfig round-trip through `[pricing]` / `[budget]` config (K.5).
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
