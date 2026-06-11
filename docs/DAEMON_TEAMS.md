@@ -1,0 +1,204 @@
+# Daemon-Side Teams — Durable, Interactive Nonagon (Chapter L)
+
+> **Status:** design contract. This is the spec Chapter L scaffolds from.
+>
+> Chapter J shipped the Nonagon — a lead agent convening up to nine
+> attenuated specialists over a mission **DAG** (`aivyx-team`). But it only
+> runs **in-process**, one shot, via `aivyx team run "<mission>"`: no daemon
+> ownership, no live view, no durability. The J.7 TUI **Missions panel**
+> (`MissionsState` / `MissionRow` / `Msg::MissionsUpdated`) is a finished
+> view-model that **nothing feeds** — it renders the empty state.
+>
+> Chapter L makes the **daemon run teams**, streams their progress to a live
+> TUI feed, **persists** missions across restarts, and adds **human-approval
+> gates** (a mission can pause for the operator to approve/reject a step).
+> It is the prerequisite for a web Mission-Control GUI (Ch.M).
+
+---
+
+## 1. What exists today
+
+- **Engine, batch run.** `aivyx-team/src/runtime.rs::TeamRuntime::run(plan,
+  lead_channel) -> Result<MissionReport, TeamError>` walks the whole DAG,
+  running each ready set concurrently (`join_all`), and returns a
+  `MissionReport { goal, outputs: BTreeMap<String,String>, status }` **only at
+  the end**. `MissionStatus::{Completed, GateRejected{step,verdict}}`. There is
+  **no step-level progress** — the caller is blind until completion.
+- **Mission DAG.** `mission.rs`: `Step { id, kind, deps }`,
+  `StepKind::{Delegate{specialist,prompt}, Gate{reviewer,criteria}}`,
+  `plan.ready(&completed)`, Kahn cycle detection, `validate()`. Gates are
+  judged by `gate_passed()` (a verdict passes unless it begins with `FAIL`).
+- **In-process driver.** `aivyx-cli/.../team.rs::run_mission` builds the team
+  with `TeamAssembly::build(...)` and runs one turn over a one-shot
+  `MissionChannel`. The daemon path **reuses** the assembly + channel.
+- **TUI seam (J.7).** `aivyx-tui/src/model.rs`: `MissionsState { rows }`,
+  `MissionRow { id, goal, phase, steps, ... }`, `MissionStep { state }`,
+  `MissionPhase::{Planning, Executing, AwaitingApproval, Done, Rejected}`,
+  `StepState::{Pending, Running, Done, Gated, Failed}`,
+  `Msg::MissionsUpdated(Vec<MissionRow>)` + `MissionSelectNext/Prev`.
+  `render.rs::render_missions` is master/detail. **The `AwaitingApproval`
+  phase is currently unreachable** — Chapter L lights it up.
+- **Pattern to mirror — the autonomous loop.** `SharedLoopState` (an `Arc`
+  snapshot the daemon mutates each iteration) + a `LoopStatus` **poll** query
+  + a daemon-spawned `run_loop_driver`. See `daemon_server.rs` (loop spawn),
+  `daemon_ipc.rs` (`QueryPayload::LoopStatus`), `daemon_client.rs::loop_status`,
+  `loop_cli.rs::render_status`.
+- **Do NOT conflate.** `KeyDomain::Missions` + `MissionRecord` +
+  `ListMissions`/`GetMission` is the **older single-agent** mission lifecycle
+  (Phase 21). Chapter L adds a **new** `KeyDomain::TeamMissions` and a new
+  team-mission IPC surface; the old surface is left intact.
+
+---
+
+## 2. The crux — checkpoint/resume, not a suspended future
+
+The two operator decisions — **human gates** (a mission pauses for approval)
+and **persistence** (a paused mission survives a daemon restart) — together
+forbid the obvious implementation. A long-lived `async` future that simply
+`.await`s an approval channel **dies when the daemon restarts**, taking the
+paused mission with it.
+
+So `TeamRuntime` becomes **checkpoint/resume-based**:
+
+```
+run_until_pause(plan, completed, lead_channel, observer) -> RunYield
+    where RunYield = Completed(MissionReport)
+                   | AwaitingHuman { step, partial: BTreeMap<…> }
+                   | Rejected { step, verdict, partial }
+```
+
+- It walks ready sets exactly as `run` does, firing the `observer` as steps
+  start/finish, **until** it reaches a `Gate { mode: Human, .. }` whose
+  upstream is ready — then it **returns `AwaitingHuman`** with the
+  accumulated `completed`/`outputs` checkpoint instead of blocking.
+- The daemon **persists** that checkpoint (`TeamMissionRecord`, §4) and marks
+  the mission `AwaitingApproval`. The in-flight future ends; nothing is held.
+- On `ResolveTeamGate { approve: true }` the daemon **re-invokes**
+  `run_until_pause(plan, completed_from_record, …)`, which records the human
+  gate as passed and continues from the next ready set. `approve: false`
+  marks the mission `Rejected` (the gate's dependents never run), partial
+  outputs preserved.
+- The existing `run` / `run_observed` become **thin wrappers** over
+  `run_until_pause` with an empty starting checkpoint; a plan with no human
+  gates runs straight to `Completed`, byte-for-byte as today.
+
+This keeps the engine pure and the durability concern at the daemon boundary:
+the checkpoint is just the `completed`/`outputs` state the DAG walk already
+tracks, made serializable.
+
+---
+
+## 3. Gate modes
+
+`StepKind::Gate` gains a mode (serde-defaulted to `Auto` so existing plans and
+the kitchen pack are unchanged):
+
+```
+enum GateMode { Auto, Human }
+StepKind::Gate { reviewer, criteria, mode: GateMode }
+```
+
+- **`Auto`** (today's behavior): the `reviewer` specialist judges the upstream
+  output (`gate_passed`); FAIL → `GateRejected`, the run continues only on
+  PASS. Fully automatic.
+- **`Human`**: the runtime pauses (`AwaitingHuman`); the operator approves or
+  rejects via the TUI/CLI. The `reviewer`/`criteria` are surfaced as context
+  for the operator's decision (an optional advisory auto-review can still run
+  and be shown, but the verdict is the human's).
+
+---
+
+## 4. Persistence — `KeyDomain::TeamMissions`
+
+A new encrypted domain (mirrors `loop_backlog.rs::PersistentLoopBacklog`),
+one row per mission keyed by mission id:
+
+```
+struct TeamMissionRecord {
+    id: MissionId,            // ULID/uuid; stable across restart
+    goal: String,
+    plan: MissionPlan,        // the DAG (serde)
+    outputs: BTreeMap<String,String>,   // the checkpoint (completed steps)
+    phase: MissionPhase,      // Planning|Executing|AwaitingApproval|Done|Rejected
+    pending_gate: Option<String>,       // step id when AwaitingApproval
+    started_at_unix_ms: u64,
+    updated_at_unix_ms: u64,
+}
+```
+
+- The daemon **saves on every transition** (step complete, pause, resume,
+  done/reject).
+- On **startup**, the daemon reloads the store; `AwaitingApproval` missions
+  are resumable, `Executing` missions interrupted by a crash are re-driven
+  from their last checkpoint (idempotent — completed steps aren't re-run).
+- Specialist sub-turns already land on the **persistent HMAC audit chain**
+  (`KeyDomain::Audit`) — that durability is unchanged; this domain only adds
+  the live mission/checkpoint state the audit chain doesn't model.
+
+---
+
+## 5. Daemon execution + IPC
+
+- **`SharedMissionState`** — an in-memory registry (active + recent), keyed by
+  id, backed by the store (mirrors `SharedLoopState`). The IPC read path and
+  the run task both touch it.
+- **`TeamRun { goal, config? }`** — assemble the team (`TeamAssembly::build`
+  over the daemon's **real tool list**, as Chapter J's c905c4c established, so
+  specialists get their attenuated tools), spawn `run_until_pause` with an
+  observer that updates the snapshot + persists, on the shared chain. Returns
+  the new `MissionId`.
+- **`TeamMissionList` / `TeamMissionStatus { id }`** — poll queries returning
+  snapshot(s); the TUI ticks `TeamMissionList`, the CLI renders one.
+- **`ResolveTeamGate { mission_id, step, approve }`** — resume (`approve`) or
+  abort (`!approve`) a paused mission.
+
+The feed is **poll-based** (consistent with `LoopStatus`); streaming is a
+future option that doesn't change this contract.
+
+---
+
+## 6. CLI + TUI surface
+
+- **CLI** (`aivyx team`, extends `team.rs`):
+  - `aivyx team run "<goal>" [--config <pack.toml>]` → **daemon-first**
+    (sends `TeamRun`, then polls to render progress), **in-process fallback**
+    when no daemon is running (today's path).
+  - `aivyx team status [<id>]` / `aivyx team list` → render snapshots
+    (pure render fns, mirror `loop_cli::render_status`).
+  - `aivyx team approve|reject <id> <step>` → `ResolveTeamGate`.
+- **TUI** (`aivyx-tui`):
+  - A periodic mission-poll tick in `app.rs` maps `TeamMissionList`
+    snapshots → `MissionRow`s → `Msg::MissionsUpdated`. The panel goes live.
+  - The `AwaitingApproval` phase renders an approve/reject affordance; a key
+    binding sends `ResolveTeamGate`. The TUI stays free of `aivyx-team` types
+    (the driver maps snapshots → rows, same seam as J.7).
+
+---
+
+## 7. Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **L.0** | This design contract. |
+| **L.1** | Engine: `MissionObserver` trait + `run_observed` (additive progress feed; no behavior change). |
+| **L.2** | Engine: `GateMode::{Auto,Human}` + the `run_until_pause` checkpoint/resume refactor (`run`/`run_observed` become wrappers). |
+| **L.3** | Persistence: `KeyDomain::TeamMissions` + `TeamMissionRecord` + `PersistentTeamMissionStore` + reload-on-startup. |
+| **L.4** | Daemon: `SharedMissionState` + `TeamRun` / `ResolveTeamGate` handlers (assemble over the real tool list, on the shared chain). |
+| **L.5** | IPC variants + `daemon_client` helpers + `aivyx team run\|status\|list\|approve\|reject`. |
+| **L.6** | TUI poll tick + live `MissionsUpdated` feed + `AwaitingApproval` approve/reject UX. |
+| _(deferred)_ | L.7 autonomous-loop ↔ team integration; **Ch.M** web Mission-Control GUI (separate chapter, unblocked by this one). |
+
+---
+
+## 8. Invariants
+
+- **NT-02 preserved.** Specialists stay attenuated (`declared ∩ lead`); the
+  daemon path changes *who drives* the team, never the capability math.
+- **One HMAC chain.** Daemon-run specialist sub-turns append to the same
+  `KeyDomain::Audit` chain as every other turn — `aivyx audit export` /
+  `--verify-only` see them.
+- **Resume idempotence.** `run_until_pause` from a checkpoint never re-runs a
+  completed step; running a no-human-gate plan through the resume path equals
+  running it straight through (a tested equivalence).
+- **Old mission surface untouched.** `KeyDomain::Missions` /
+  `ListMissions` / `GetMission` keep working; team missions are additive.
