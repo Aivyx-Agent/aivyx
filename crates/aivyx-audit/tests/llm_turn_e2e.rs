@@ -336,13 +336,13 @@ async fn llm_driven_turn_e2e_tool_call_then_final_message() {
     );
 
     // ---- Assertion 3: the HMAC audit chain is intact and carries
-    //       exactly the three events this turn should produce:
-    //       TurnStarted → ToolCall → TurnEnded.
+    //       exactly the four events this LLM-backed turn should produce:
+    //       TurnStarted → ToolCall → TurnEnded → LlmCost (Chapter K).
     let log = bridge.writer();
     assert_eq!(
         log.len(),
-        3,
-        "audit chain should have TurnStarted + ToolCall + TurnEnded"
+        4,
+        "audit chain should have TurnStarted + ToolCall + TurnEnded + LlmCost"
     );
     log.verify()
         .expect("HMAC chain should verify end-to-end after a real LLM turn");
@@ -373,5 +373,13 @@ async fn llm_driven_turn_e2e_tool_call_then_final_message() {
             ..
         } => {}
         ref other => panic!("seq 2: expected TurnEnded(Completed, 1), got {other:?}"),
+    }
+    // Chapter K — the LLM-backed turn also emits a priced-able LlmCost event
+    // carrying the model the turn ran on.
+    match log.get(3).unwrap().event {
+        AuditEvent::LlmCost { ref model, .. } => {
+            assert!(!model.is_empty(), "LlmCost must record the model");
+        }
+        ref other => panic!("seq 3: expected LlmCost, got {other:?}"),
     }
 }

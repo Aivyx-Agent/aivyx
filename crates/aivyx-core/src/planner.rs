@@ -133,6 +133,15 @@ pub trait TurnPlanner: Send + Sync {
     fn turn_usage(&self) -> TokenUsage {
         TokenUsage::default()
     }
+
+    /// The model this planner runs on (e.g. `claude-opus-4-8`). The turn loop
+    /// pairs it with [`turn_usage`](Self::turn_usage) into the Chapter-K
+    /// `AuditTag::LlmCost` event so spend can be priced per turn.
+    /// **Deterministic planners return `""`** — the loop then emits no
+    /// `LlmCost` (there is no LLM spend to price).
+    fn model(&self) -> &str {
+        ""
+    }
 }
 
 /// Deterministic planner that walks a fixed script of steps. Used for

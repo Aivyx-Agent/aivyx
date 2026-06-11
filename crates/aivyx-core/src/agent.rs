@@ -420,6 +420,18 @@ impl Agent for ConcreteAgent {
             usage: planner.turn_usage(),
         });
 
+        // Chapter K — a dedicated cost event for LLM-backed turns, carrying the
+        // model `TurnEnded` omits so spend can be priced per turn. Deterministic
+        // planners report no model, so they emit nothing here.
+        let model = planner.model();
+        if !model.is_empty() {
+            self.audit.on_event(AuditTag::LlmCost {
+                turn_id,
+                model: model.to_string(),
+                usage: planner.turn_usage(),
+            });
+        }
+
         final_outcome
     }
 }

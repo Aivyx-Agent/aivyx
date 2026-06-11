@@ -3881,6 +3881,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ScopeDenied { .. } => "ScopeDenied",
         aivyx_audit::AuditEvent::TurnStarted { .. } => "TurnStarted",
         aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
+        aivyx_audit::AuditEvent::LlmCost { .. } => "LlmCost",
         aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         aivyx_audit::AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",

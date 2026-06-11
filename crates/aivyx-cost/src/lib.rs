@@ -23,6 +23,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub mod report;
+pub use report::{CostReport, ModelLine};
+
 /// Token counts for one priced unit — a single turn, or a whole run summed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenCounts {

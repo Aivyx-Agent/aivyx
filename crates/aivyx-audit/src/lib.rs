@@ -127,6 +127,20 @@ pub enum AuditEvent {
         usage: TokenUsage,
     },
 
+    /// LLM spend for a turn (Chapter K — cost governance). A dedicated,
+    /// **additive** view of an LLM-backed turn's token usage *plus the model*
+    /// it ran on — the model `TurnEnded` deliberately doesn't carry, so the
+    /// cost report can price each turn precisely. Emitted only for LLM-backed
+    /// turns (deterministic planners report no model). The priced dollar
+    /// figure is derived at report time from a `Pricing` table, so a later
+    /// rate correction re-prices history without rewriting the chain.
+    LlmCost {
+        turn_id: TurnId,
+        /// The model the turn ran on (e.g. `claude-opus-4-8`, `llama3.1`).
+        model: String,
+        usage: TokenUsage,
+    },
+
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
     /// (every memory op *is* also a tool call), but indexed for fast
     /// memory-specific queries. D4 justifies this as the one deviation
@@ -894,6 +908,15 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 outcome,
                 tool_calls_made,
                 duration,
+                usage,
+            },
+            AuditTag::LlmCost {
+                turn_id,
+                model,
+                usage,
+            } => AuditEvent::LlmCost {
+                turn_id,
+                model,
                 usage,
             },
             AuditTag::ToolCall {

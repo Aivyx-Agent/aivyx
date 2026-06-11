@@ -218,6 +218,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::ScopeDenied { .. } => "ScopeDenied",
         AuditEvent::TurnStarted { .. } => "TurnStarted",
         AuditEvent::TurnEnded { .. } => "TurnEnded",
+        AuditEvent::LlmCost { .. } => "LlmCost",
         AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",

@@ -1028,6 +1028,10 @@ impl TurnPlanner for LlmPlanner {
     fn turn_usage(&self) -> crate::TokenUsage {
         self.accumulated_usage
     }
+
+    fn model(&self) -> &str {
+        &self.config.model
+    }
 }
 
 // ---------------------------------------------------------------------------

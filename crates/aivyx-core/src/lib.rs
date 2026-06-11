@@ -638,6 +638,14 @@ pub enum AuditTag {
         duration: Duration,
         usage: TokenUsage,
     },
+    /// LLM spend for a turn (Chapter K) — token usage + the model, so the
+    /// cost report can price each turn. Additive; emitted only for
+    /// LLM-backed turns (see `TurnPlanner::model`).
+    LlmCost {
+        turn_id: TurnId,
+        model: String,
+        usage: TokenUsage,
+    },
     ToolCall {
         turn_id: TurnId,
         tool_id: ToolId,
