@@ -3839,6 +3839,9 @@ async fn run_async(
         // dispatch in `run()` (before `run_async`) and, since K.4.2, the
         // loop's dollar cap via the `pricing` table on `DaemonConfig` below.
         pricing: config_pricing,
+        // Chapter K (K.4.2) — `[budget]` dollar caps. Parsed + validated by
+        // the loader; consumed by the turn-loop budget gate in K.4.2(a).
+        budget: _,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.

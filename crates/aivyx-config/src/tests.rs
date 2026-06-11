@@ -9244,6 +9244,56 @@ fn chapter_k_loader_rejects_negative_rate() {
 }
 
 #[test]
+fn chapter_k_loader_defaults_budget_uncapped() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n", "chapter-k-budget-default");
+    // No [budget] section ⇒ uncapped, Deny-on-exceeded, 0.8 alert default.
+    assert_eq!(cfg.budget, aivyx_cost::BudgetConfig::default());
+    assert!(cfg.budget.per_run_usd.is_none());
+    assert!(cfg.budget.per_day_usd.is_none());
+    drop(env);
+}
+
+#[test]
+fn chapter_k_loader_parses_budget_section() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[budget]\nper_run_usd = 5.0\nper_day_usd = 25.0\n\
+         on_exceeded = \"alert\"\nalert_at = 0.5\n",
+        "chapter-k-budget",
+    );
+    assert_eq!(cfg.budget.per_run_usd, Some(5.0));
+    assert_eq!(cfg.budget.per_day_usd, Some(25.0));
+    assert_eq!(cfg.budget.on_exceeded, aivyx_cost::BudgetAction::Alert);
+    assert_eq!(cfg.budget.alert_at, Some(0.5));
+    drop(env);
+}
+
+#[test]
+fn chapter_k_loader_rejects_negative_budget_cap() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("chapter-k-bad-budget");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[budget]\nper_run_usd = -1.0\n").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect_err("loader rejects a negative cap");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("budget") && msg.contains("per_run_usd"),
+        "error should name the section + offending field; got: {msg}"
+    );
+    drop(env);
+}
+
+#[test]
 fn phase_122_loader_absent_section_yields_empty_map() {
     let env = EnvScope::new();
     let cfg = AivyxConfig::load_from_env_and_toml(

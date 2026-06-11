@@ -784,6 +784,11 @@ pub struct AivyxConfig {
     /// overrides the default for its exact model id; consumed by the cost
     /// report + the loop's dollar cap. Validated non-negative at load.
     pub pricing: BTreeMap<String, aivyx_cost::ModelRate>,
+    /// Chapter K (K.4.2) — `[budget]` dollar caps on spend. Defaults to
+    /// uncapped (`BudgetConfig::default()`, both caps `None`); the operator
+    /// opts in with `per_run_usd` / `per_day_usd`. Consumed by the turn-loop
+    /// budget gate via a `BudgetEnforcer`.
+    pub budget: aivyx_cost::BudgetConfig,
     /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
     /// Threshold in `[0.0, 1.0]` for the planner's tool-name
     /// fuzzy-match recovery. When the LLM emits a tool name not
@@ -3021,6 +3026,10 @@ struct RawToml {
     /// each sub-table parses directly into an `aivyx_cost::ModelRate`.
     #[serde(default)]
     pricing: BTreeMap<String, aivyx_cost::ModelRate>,
+    /// `[budget]` section. Chapter K (K.4.2) — dollar caps on spend;
+    /// the table parses directly into an `aivyx_cost::BudgetConfig`.
+    #[serde(default)]
+    budget: aivyx_cost::BudgetConfig,
     /// Phase 134 — `[mistralrs]` config section for the
     /// embedded Rust-native provider.
     #[serde(default)]
@@ -4770,6 +4779,32 @@ impl AivyxConfig {
             }
         }
 
+        // Chapter K (K.4.2) — [budget] dollar caps. Reject negative caps and
+        // an out-of-range alert fraction at load; a negative cap or an
+        // alert_at outside [0.0, 1.0] is nonsensical and would corrupt the
+        // gate's reservation math. Uncapped (`None`) is the default and fine.
+        let budget = toml.budget.clone();
+        for (field_name, cap) in
+            [("per_run_usd", budget.per_run_usd), ("per_day_usd", budget.per_day_usd)]
+        {
+            if let Some(c) = cap {
+                if c < 0.0 {
+                    return Err(ConfigError::Invalid {
+                        field: "budget",
+                        reason: format!("{field_name} must be non-negative"),
+                    });
+                }
+            }
+        }
+        if let Some(frac) = budget.alert_at {
+            if !(0.0..=1.0).contains(&frac) {
+                return Err(ConfigError::Invalid {
+                    field: "budget",
+                    reason: "alert_at must be within [0.0, 1.0]".to_string(),
+                });
+            }
+        }
+
         // Phase 120 — [providers] tool_name_auto_correct_threshold.
         // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
         // absent; reject out-of-range [0.0, 1.0] values at parse
@@ -5733,6 +5768,7 @@ impl AivyxConfig {
             voice_options,
             ollama_prompt_strategies,
             pricing,
+            budget,
             tool_name_auto_correct_threshold,
             roles,
             active_role,
