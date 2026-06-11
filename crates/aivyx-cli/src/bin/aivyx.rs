@@ -132,6 +132,8 @@ mod tool_relevance;
 mod tools;
 #[path = "aivyx_modules/team.rs"]
 mod team;
+#[path = "aivyx_modules/cost.rs"]
+mod cost;
 #[path = "aivyx_modules/tool_init.rs"]
 mod tool_init;
 #[path = "aivyx_modules/toml_edit_apply.rs"]
@@ -763,6 +765,13 @@ fn run() -> Result<(), String> {
             _ => None,
         };
     let audit_export_mode = audit_export_params.is_some();
+    // Chapter K — `aivyx cost` shares the same offline cold-start posture
+    // (no session / sandbox / API key); it dispatches after storage open.
+    let cost_today: Option<bool> = match &mode {
+        CliMode::Cost { today } => Some(*today),
+        _ => None,
+    };
+    let cost_mode = cost_today.is_some();
 
     // ---- Config -------------------------------------------------------
     // Phase 9 Task 3 — the whole "read ten env vars by hand" block that
@@ -791,7 +800,7 @@ fn run() -> Result<(), String> {
         // posture: cold-start storage open via passphrase, no
         // session opened, no provider call made. No API key
         // required, regardless of `--channel`.
-        require_api_key: !verify_only && !print_role_mode && !audit_export_mode,
+        require_api_key: !verify_only && !print_role_mode && !audit_export_mode && !cost_mode,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
         // Phase 107 — mirrors the Telegram check for the
         // Discord adapter. `--print-role` does not open a
@@ -848,7 +857,7 @@ fn run() -> Result<(), String> {
     // Verify-only mode skips this — no session, no tools, no sandbox.
     // Phase 105 — audit-export shares the same skip: no fs sandbox
     // is touched by a read-only chain dump.
-    if !verify_only && !audit_export_mode {
+    if !verify_only && !audit_export_mode && !cost_mode {
         let root = &config.fs_root.value;
         std::fs::create_dir_all(root)
             .map_err(|e| format!("failed to create fs sandbox root {root:?}: {e}"))?;
@@ -993,6 +1002,12 @@ fn run() -> Result<(), String> {
                 event_type,
             )
             .await;
+        }
+
+        // Chapter K — `aivyx cost`. Same cold-start posture: open the chain,
+        // price its `LlmCost` events, print the report, exit.
+        if let Some(today) = cost_today {
+            return cost::run_cost(storage, audit_chain_key, today).await;
         }
 
         // Phase 9 Task 3 — Phase 2 of the two-phase config load.
@@ -1483,6 +1498,11 @@ enum CliMode {
     /// the team in-process and hands the mission to the lead, whose
     /// specialist sub-turns land on the same HMAC chain.
     Team(TeamSubcommand),
+    /// `aivyx cost [--today]`: Chapter K — the priced spend report.
+    /// Offline (cold-start storage like `audit export`): scans the chain's
+    /// `LlmCost` events, prices them, and prints a per-model breakdown.
+    /// `--today` scopes to the last 24h.
+    Cost { today: bool },
 }
 
 /// Chapter J — `aivyx team <subcommand>` variants. The optional
@@ -2491,6 +2511,29 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Team(team_sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter K — `aivyx cost [--today]`: the priced spend report (offline).
+    if !args.is_empty() && args[0] == "cost" {
+        let mut today = false;
+        for arg in &args[1..] {
+            match arg.as_str() {
+                "--today" => today = true,
+                other => {
+                    return Err(format!("unrecognized argument to `aivyx cost`: `{other}`"));
+                }
+            }
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Cost { today },
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -8891,6 +8934,27 @@ mod tests {
     fn team_roster_rejects_extra_args() {
         let err = parse_cli_args_from(&argv(&["team", "roster", "extra"]))
             .expect_err("roster takes no args");
+        assert!(err.contains("unrecognized"), "error: {err}");
+    }
+
+    // ---- Chapter K — `aivyx cost` parsing ---------------------
+
+    #[test]
+    fn cost_parses_all_time_and_today() {
+        assert_eq!(
+            parse_cli_args_from(&argv(&["cost"])).unwrap().mode,
+            CliMode::Cost { today: false }
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["cost", "--today"])).unwrap().mode,
+            CliMode::Cost { today: true }
+        );
+    }
+
+    #[test]
+    fn cost_rejects_unknown_flags() {
+        let err = parse_cli_args_from(&argv(&["cost", "--yesterday"]))
+            .expect_err("unknown flag must error");
         assert!(err.contains("unrecognized"), "error: {err}");
     }
 

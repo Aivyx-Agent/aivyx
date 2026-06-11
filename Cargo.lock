@@ -172,6 +172,7 @@ dependencies = [
  "aivyx-channel",
  "aivyx-config",
  "aivyx-core",
+ "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
  "aivyx-llm",

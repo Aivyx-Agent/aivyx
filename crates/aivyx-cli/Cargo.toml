@@ -53,6 +53,8 @@ aivyx-capability = { path = "../aivyx-capability" }
 # Chapter J — the Nonagon. `aivyx team run/roster` assembles a team
 # (TeamAssembly) and runs a mission lead in-process on the same audit chain.
 aivyx-team = { path = "../aivyx-team" }
+# Chapter K — cost governance. `aivyx cost` prices the chain's LlmCost events.
+aivyx-cost = { path = "../aivyx-cost" }
 aivyx-config = { path = "../aivyx-config" }
 aivyx-crypto = { path = "../aivyx-crypto" }
 aivyx-storage = { path = "../aivyx-storage" }
