@@ -1,6 +1,11 @@
 # Cost Governance — Token Accounting & Budgets (Chapter K)
 
-> **Status:** design contract. This is the spec Chapter K scaffolds from.
+> **Status:** ✅ **shipped** (Chapter K complete). This began as the design
+> contract and is now fully implemented: the `aivyx-cost` crate (pricing +
+> `CostReport` + `BudgetEnforcer`), the per-turn `AuditEvent::LlmCost`,
+> `aivyx cost [--today]`, the `[pricing.<model>]` / `[budget]` config, the
+> autonomous-loop per-run dollar cap (surfaced in `aivyx loop status`), and
+> the pre-call budget gate on the interactive / team / voice turn loop.
 >
 > Cost governance gives the operator **visibility and control over LLM
 > spend**: every turn's token usage is priced into dollars, aggregated into

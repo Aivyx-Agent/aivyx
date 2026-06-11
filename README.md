@@ -12,15 +12,15 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Chapter J exit, 2026-06-11)
+## Status (Chapter K exit, 2026-06-12)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → Chapter J (the Nonagon), plus 13 contract amendments |
+| Phases shipped | Phase 0 → Chapter K (Cost Governance), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
-| Workspace crates | 28 |
-| Rust tests | 4,407 passing |
+| Workspace crates | 29 |
+| Rust tests | 4,464 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 81 |
@@ -98,6 +98,18 @@ The arc to date, by chapter:
   / **`aivyx team roster`**, the live TUI Missions panel, and the first
   **vertical pack** — `aivyx-kitchen`'s Back-of-House Nonagon. See
   [`docs/NONAGON.md`](docs/NONAGON.md) + [`docs/VERTICAL_PACKS.md`](docs/VERTICAL_PACKS.md).
+- **Chapter K — Cost Governance.** Dollar visibility and budgets layered
+  over the token usage the **one HMAC chain** already records. A new
+  `aivyx-cost` crate prices each turn's `TokenUsage` into dollars (built-in
+  cloud-model rates + `[pricing.<model>]` overrides; local models are free),
+  emits a per-turn **`LlmCost`** audit event, and rolls it into a priced
+  report behind **`aivyx cost [--today]`**. Enforcement is opt-in via
+  `[budget]` caps (`per_run_usd` / `per_day_usd`, *alert* or *deny*): a
+  per-run **dollar cap on the autonomous loop** (surfaced in `aivyx loop
+  status`) and a **pre-call budget gate on the interactive / team / voice
+  turn loop** that refuses a turn before any model call when the daily cap
+  would be busted. Free core — observability + safety, not customer billing.
+  See [`docs/COST_GOVERNANCE.md`](docs/COST_GOVERNANCE.md).
 
 ## Five-minute setup
 
