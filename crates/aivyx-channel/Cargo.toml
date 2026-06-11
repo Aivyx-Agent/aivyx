@@ -102,6 +102,9 @@ lettre = { workspace = true }
 aivyx-audit = { path = "../aivyx-audit" }
 # Chapter K — the loop's per-run dollar cap prices LlmCost chain events.
 aivyx-cost = { path = "../aivyx-cost" }
+# Chapter L — the daemon runs Nonagon team missions (TeamRuntime + the
+# MissionPlan/MissionReport types the TeamMission store persists).
+aivyx-team = { path = "../aivyx-team" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider-openai", "provider-ollama"] }
 
 # Phase 8 Task 4 — `aivyx --channel telegram` delegates into

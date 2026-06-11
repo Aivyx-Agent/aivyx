@@ -97,6 +97,11 @@ pub enum KeyDomain {
     ChannelState,
     /// Mission records — long-running work items with approval gates (Phase 21).
     Missions,
+    /// Team-mission records — Nonagon (`aivyx-team`) mission runs the daemon
+    /// drives, with their checkpoint/resume state for durability across
+    /// restarts (Chapter L). One row per mission keyed by mission id. Distinct
+    /// from [`KeyDomain::Missions`] (the older single-agent lifecycle).
+    TeamMissions,
     /// Schedule records — cron-triggered execution entries (Phase 26).
     Schedules,
     /// Webhook trigger records — HTTP-triggered execution entries (Phase 27).
@@ -230,6 +235,7 @@ impl KeyDomain {
             KeyDomain::CorrectionLedger => b"correction-ledger",
             KeyDomain::LoopBacklog => b"loop-backlog",
             KeyDomain::Reminders => b"reminders",
+            KeyDomain::TeamMissions => b"team-missions",
         }
     }
 
@@ -268,12 +274,13 @@ impl KeyDomain {
             }
             KeyDomain::LoopBacklog => "aivyx_loop_backlog_v1",
             KeyDomain::Reminders => "aivyx_reminders_v1",
+            KeyDomain::TeamMissions => "aivyx_team_missions_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 20] = [
+    pub const ALL: [KeyDomain; 21] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -294,6 +301,7 @@ impl KeyDomain {
         KeyDomain::CorrectionLedger,
         KeyDomain::LoopBacklog,
         KeyDomain::Reminders,
+        KeyDomain::TeamMissions,
     ];
 }
 
@@ -479,7 +487,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 20],
+    subkeys: [SubKey; 21],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -556,7 +564,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 20], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 21], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -589,6 +597,7 @@ impl RedbStorage {
             )?,
             master.derive_subkey(KeyDomain::LoopBacklog.as_bytes())?,
             master.derive_subkey(KeyDomain::Reminders.as_bytes())?,
+            master.derive_subkey(KeyDomain::TeamMissions.as_bytes())?,
         ])
     }
 
@@ -617,6 +626,7 @@ impl RedbStorage {
             KeyDomain::CorrectionLedger => &self.subkeys[17],
             KeyDomain::LoopBacklog => &self.subkeys[18],
             KeyDomain::Reminders => &self.subkeys[19],
+            KeyDomain::TeamMissions => &self.subkeys[20],
         }
     }
 }
@@ -1042,7 +1052,8 @@ mod tests {
                 | KeyDomain::ToolRelevanceLedger
                 | KeyDomain::CorrectionLedger
                 | KeyDomain::LoopBacklog
-                | KeyDomain::Reminders => {}
+                | KeyDomain::Reminders
+                | KeyDomain::TeamMissions => {}
             }
         }
     }

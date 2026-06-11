@@ -19,6 +19,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use aivyx_core::ChannelContext;
 
 use crate::config::TeamError;
@@ -26,7 +28,7 @@ use crate::mission::{MissionPlan, Step, StepKind};
 use crate::pool::SpecialistPool;
 
 /// How a mission run ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MissionStatus {
     /// Every step ran and any gates passed.
     Completed,
@@ -37,7 +39,7 @@ pub enum MissionStatus {
 
 /// The result of a mission run: the goal, every completed step's output
 /// (`step_id → result`, ordered), and how it ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissionReport {
     pub goal: String,
     pub outputs: BTreeMap<String, String>,

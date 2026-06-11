@@ -16,10 +16,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::TeamError;
 
 /// How a [`StepKind::Gate`] is decided (Chapter L).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GateMode {
     /// The `reviewer` specialist judges the upstream work automatically
     /// (`gate_passed`); FAIL aborts the mission. Today's behavior — the default.
@@ -32,7 +35,7 @@ pub enum GateMode {
 }
 
 /// What a [`Step`] does when the runtime reaches it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepKind {
     /// Run the named specialist on `prompt` (the doc's Execute/Delegate).
     Delegate { specialist: String, prompt: String },
@@ -43,6 +46,9 @@ pub enum StepKind {
     Gate {
         reviewer: String,
         criteria: String,
+        /// `#[serde(default)]` → a pre-Chapter-L plan (or one omitting it)
+        /// decodes as the automatic gate.
+        #[serde(default)]
         mode: GateMode,
     },
 }
@@ -58,7 +64,7 @@ impl StepKind {
 }
 
 /// One node in the mission DAG.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     /// Unique step id within the plan (`a-z A-Z 0-9 _ -`).
     pub id: String,
@@ -131,7 +137,7 @@ impl Step {
 }
 
 /// A validated mission: a goal plus a DAG of steps.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissionPlan {
     pub goal: String,
     pub steps: Vec<Step>,

@@ -44,6 +44,10 @@ pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod conversation_window;
+/// Chapter L — durable persistence for daemon-run Nonagon team missions
+/// (`TeamMissionRecord` over `KeyDomain::TeamMissions`), the checkpoint/resume
+/// state behind the live TUI Missions feed.
+pub mod team_mission;
 /// Chapter K (K.4.2) — the concrete pre-call dollar gate
 /// (`ChannelBudgetGate`) for the interactive / team turn loop, over the
 /// `aivyx_core::BudgetGate` trait.
