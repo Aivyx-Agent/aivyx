@@ -18,6 +18,19 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::TeamError;
 
+/// How a [`StepKind::Gate`] is decided (Chapter L).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GateMode {
+    /// The `reviewer` specialist judges the upstream work automatically
+    /// (`gate_passed`); FAIL aborts the mission. Today's behavior — the default.
+    #[default]
+    Auto,
+    /// The runtime **pauses** at this gate awaiting an operator approve/reject
+    /// (the daemon's `AwaitingApproval`). The reviewer/criteria are advisory
+    /// context for the human decision. See `docs/DAEMON_TEAMS.md`.
+    Human,
+}
+
 /// What a [`Step`] does when the runtime reaches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepKind {
@@ -25,8 +38,13 @@ pub enum StepKind {
     Delegate { specialist: String, prompt: String },
     /// A quality gate: `reviewer` checks the upstream step outputs against
     /// `criteria`; a failing verdict aborts the mission so the gate's
-    /// dependents never run (the doc's Reflect/Gate).
-    Gate { reviewer: String, criteria: String },
+    /// dependents never run (the doc's Reflect/Gate). `mode` selects automatic
+    /// vs human-approval judging (Chapter L).
+    Gate {
+        reviewer: String,
+        criteria: String,
+        mode: GateMode,
+    },
 }
 
 impl StepKind {
@@ -62,16 +80,47 @@ impl Step {
         }
     }
 
-    /// A `Gate` step with no dependencies.
+    /// An **automatic** `Gate` step with no dependencies (the reviewer judges).
     pub fn gate(id: impl Into<String>, reviewer: impl Into<String>, criteria: impl Into<String>) -> Self {
         Step {
             id: id.into(),
             kind: StepKind::Gate {
                 reviewer: reviewer.into(),
                 criteria: criteria.into(),
+                mode: GateMode::Auto,
             },
             deps: Vec::new(),
         }
+    }
+
+    /// A **human-approval** `Gate` step with no dependencies (Chapter L): the
+    /// runtime pauses here until the operator approves or rejects.
+    pub fn human_gate(
+        id: impl Into<String>,
+        reviewer: impl Into<String>,
+        criteria: impl Into<String>,
+    ) -> Self {
+        Step {
+            id: id.into(),
+            kind: StepKind::Gate {
+                reviewer: reviewer.into(),
+                criteria: criteria.into(),
+                mode: GateMode::Human,
+            },
+            deps: Vec::new(),
+        }
+    }
+
+    /// Whether this step is a human-approval gate (pauses the run for the
+    /// operator). Used by the runtime to decide where to checkpoint.
+    pub fn is_human_gate(&self) -> bool {
+        matches!(
+            self.kind,
+            StepKind::Gate {
+                mode: GateMode::Human,
+                ..
+            }
+        )
     }
 
     /// Builder: set this step's dependencies.

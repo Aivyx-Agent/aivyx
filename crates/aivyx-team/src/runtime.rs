@@ -22,7 +22,7 @@ use std::sync::Arc;
 use aivyx_core::ChannelContext;
 
 use crate::config::TeamError;
-use crate::mission::{MissionPlan, StepKind};
+use crate::mission::{MissionPlan, Step, StepKind};
 use crate::pool::SpecialistPool;
 
 /// How a mission run ended.
@@ -78,6 +78,27 @@ pub trait MissionObserver: Send + Sync {
 /// the J.4 batch behavior exactly.
 impl MissionObserver for () {}
 
+/// The outcome of one [`run_until_pause`](TeamRuntime::run_until_pause) leg
+/// (Chapter L). Either the mission reached a terminal state, or it paused at a
+/// human-approval gate with a durable checkpoint the daemon persists and later
+/// resumes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunYield {
+    /// The mission ran to a terminal state — `Completed`, or an **auto** gate
+    /// rejected it (`GateRejected`). The report carries the partial/full
+    /// outputs either way.
+    Done(MissionReport),
+    /// A human-approval gate (`GateMode::Human`) became ready and the run
+    /// paused. `outputs` is the checkpoint (every step completed so far, **not**
+    /// the pending gate); the daemon persists it, and on approval resumes by
+    /// inserting the gate's verdict into `outputs` and calling
+    /// `run_until_pause` again.
+    AwaitingHuman {
+        step: String,
+        outputs: BTreeMap<String, String>,
+    },
+}
+
 /// Runs mission DAGs against a team's [`SpecialistPool`].
 pub struct TeamRuntime {
     pool: Arc<SpecialistPool>,
@@ -106,16 +127,53 @@ impl TeamRuntime {
     /// Like [`run`](Self::run), but reports progress to `observer` as the DAG
     /// is walked (Chapter L's live feed). Behavior is otherwise identical —
     /// the observer only watches; it never changes the run.
+    ///
+    /// This is the **non-interactive** entry point: a plan with a human-approval
+    /// gate cannot be auto-resolved here, so it returns an `Err` — drive such a
+    /// plan through [`run_until_pause`](Self::run_until_pause) (the daemon path).
     pub async fn run_observed(
         &self,
         plan: &MissionPlan,
         lead_channel: &dyn ChannelContext,
         observer: &dyn MissionObserver,
     ) -> Result<MissionReport, TeamError> {
+        match self
+            .run_until_pause(plan, BTreeMap::new(), lead_channel, observer)
+            .await?
+        {
+            RunYield::Done(report) => Ok(report),
+            RunYield::AwaitingHuman { step, .. } => Err(TeamError::Config(format!(
+                "mission {:?} has a human-approval gate {step:?}; run it through the \
+                 daemon (run_until_pause), not the one-shot run path",
+                plan.goal
+            ))),
+        }
+    }
+
+    /// Walk the DAG from a checkpoint until the mission finishes **or** reaches
+    /// a human-approval gate, returning a [`RunYield`] (Chapter L). This is the
+    /// resumable core that [`run`] / [`run_observed`] wrap.
+    ///
+    /// `starting_outputs` is the checkpoint — every already-completed step's
+    /// output (empty for a fresh run). Steps in it are treated as done and
+    /// never re-run (resume idempotence): driving a plan straight through equals
+    /// running it pause-by-pause. The walk runs each ready set's non-human
+    /// steps concurrently exactly as the batch run did; when the **only**
+    /// remaining ready steps are human gates, it pauses at the first
+    /// ([`RunYield::AwaitingHuman`]) with the checkpoint. To resume after an
+    /// approval, insert the gate id → verdict into the returned `outputs` and
+    /// call this again; to reject, the caller builds a `GateRejected` report.
+    pub async fn run_until_pause(
+        &self,
+        plan: &MissionPlan,
+        starting_outputs: BTreeMap<String, String>,
+        lead_channel: &dyn ChannelContext,
+        observer: &dyn MissionObserver,
+    ) -> Result<RunYield, TeamError> {
         plan.validate()?;
 
-        let mut completed: HashSet<String> = HashSet::new();
-        let mut outputs: BTreeMap<String, String> = BTreeMap::new();
+        let mut outputs = starting_outputs;
+        let mut completed: HashSet<String> = outputs.keys().cloned().collect();
 
         while completed.len() < plan.steps.len() {
             // The ready set — sorted for deterministic scheduling/reporting.
@@ -129,10 +187,24 @@ impl TeamRuntime {
                 ));
             }
 
-            // Run every ready step concurrently. Each future captures only
-            // owned strings + shared refs (self.pool, lead_channel, observer),
-            // so the outputs map is free to mutate once join_all has collected.
-            let futures = ready.iter().map(|step| {
+            // Human-approval gates pause the run; everything else runs now. We
+            // pause only once nothing else is runnable, so all work not blocked
+            // by the gate makes progress first (the gate's dependents are, by
+            // definition, not in this ready set).
+            let runnable: Vec<&Step> =
+                ready.iter().copied().filter(|s| !s.is_human_gate()).collect();
+            if runnable.is_empty() {
+                // Every ready step is a human gate — pause at the first.
+                return Ok(RunYield::AwaitingHuman {
+                    step: ready[0].id.clone(),
+                    outputs,
+                });
+            }
+
+            // Run the runnable set concurrently. Each future captures only owned
+            // strings + shared refs (self.pool, lead_channel, observer), so the
+            // outputs map is free to mutate once join_all has collected.
+            let futures = runnable.iter().map(|step| {
                 let id = step.id.clone();
                 let member = step.kind.member().to_string();
                 let input = self.build_input(step, &outputs);
@@ -147,6 +219,7 @@ impl TeamRuntime {
             let mut rejection: Option<(String, String)> = None;
             for (id, res) in results {
                 let output = res?; // a specialist error aborts the whole mission
+                // Only AUTO gates run here (human gates were filtered out above).
                 let is_gate = matches!(
                     plan.step(&id).map(|s| &s.kind),
                     Some(StepKind::Gate { .. })
@@ -171,7 +244,7 @@ impl TeamRuntime {
                     status: MissionStatus::GateRejected { step, verdict },
                 };
                 observer.on_mission_finished(&report);
-                return Ok(report);
+                return Ok(RunYield::Done(report));
             }
         }
 
@@ -181,7 +254,7 @@ impl TeamRuntime {
             status: MissionStatus::Completed,
         };
         observer.on_mission_finished(&report);
-        Ok(report)
+        Ok(RunYield::Done(report))
     }
 
     /// The prompt handed to a step's specialist: its own instruction, plus
@@ -327,6 +400,117 @@ mod tests {
         assert!(
             !events.iter().any(|e| e.starts_with("start:after_g")),
             "the rejected gate's dependent never started: {events:?}"
+        );
+    }
+
+    // ---- L.2: checkpoint/resume + human-approval gates ----
+
+    #[tokio::test]
+    async fn human_gate_pauses_then_resumes_to_completion() {
+        let rt = runtime(FakeProvider::always("done"), &["worker", "reviewer"]);
+        let plan = MissionPlan::new(
+            "approval",
+            vec![
+                Step::delegate("a", "worker", "do work"),
+                Step::human_gate("g", "reviewer", "approve?").after(["a"]),
+                Step::delegate("ship", "worker", "ship it").after(["g"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+
+        // Leg 1: runs `a`, then pauses at the human gate `g`.
+        let mut checkpoint = match rt
+            .run_until_pause(&plan, Default::default(), &lead, &())
+            .await
+            .unwrap()
+        {
+            RunYield::AwaitingHuman { step, outputs } => {
+                assert_eq!(step, "g");
+                assert!(outputs.contains_key("a"), "upstream ran");
+                assert!(!outputs.contains_key("g"), "gate not yet decided");
+                assert!(!outputs.contains_key("ship"), "downstream blocked");
+                outputs
+            }
+            other => panic!("expected AwaitingHuman, got {other:?}"),
+        };
+
+        // Operator approves: record the gate verdict, resume from the checkpoint.
+        checkpoint.insert("g".to_string(), "APPROVED".to_string());
+        match rt.run_until_pause(&plan, checkpoint, &lead, &()).await.unwrap() {
+            RunYield::Done(report) => {
+                assert!(report.succeeded());
+                assert!(report.outputs.contains_key("ship"), "downstream ran after approval");
+            }
+            other => panic!("expected Done after approval, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_path_equals_straight_run_when_no_human_gates() {
+        let rt = runtime(FakeProvider::always("x"), &["a", "b"]);
+        let plan = MissionPlan::new(
+            "linear",
+            vec![
+                Step::delegate("a", "a", "one"),
+                Step::delegate("b", "b", "two").after(["a"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let straight = rt.run(&plan, &lead).await.unwrap();
+        let via_pause = match rt
+            .run_until_pause(&plan, Default::default(), &lead, &())
+            .await
+            .unwrap()
+        {
+            RunYield::Done(r) => r,
+            other => panic!("no human gate → Done, got {other:?}"),
+        };
+        assert_eq!(straight, via_pause, "run_until_pause with no human gates == run");
+    }
+
+    #[tokio::test]
+    async fn independent_work_completes_before_a_human_gate_pause() {
+        // `indep` is unrelated to the gate, so it must run before we pause.
+        let rt = runtime(FakeProvider::always("done"), &["worker", "reviewer", "other"]);
+        let plan = MissionPlan::new(
+            "mixed",
+            vec![
+                Step::delegate("a", "worker", "work"),
+                Step::delegate("indep", "other", "independent"),
+                Step::human_gate("g", "reviewer", "ok?").after(["a"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        match rt
+            .run_until_pause(&plan, Default::default(), &lead, &())
+            .await
+            .unwrap()
+        {
+            RunYield::AwaitingHuman { step, outputs } => {
+                assert_eq!(step, "g");
+                assert!(outputs.contains_key("a"));
+                assert!(outputs.contains_key("indep"), "independent work ran before the pause");
+            }
+            other => panic!("expected AwaitingHuman, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_errors_on_a_human_gate_plan() {
+        // The one-shot `run` can't resolve a human gate — it must error, not hang.
+        let rt = runtime(FakeProvider::always("done"), &["worker", "reviewer"]);
+        let plan = MissionPlan::new(
+            "approval",
+            vec![
+                Step::delegate("a", "worker", "work"),
+                Step::human_gate("g", "reviewer", "ok?").after(["a"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let err = rt.run(&plan, &lead).await.unwrap_err();
+        assert!(
+            format!("{err}").contains("human-approval gate"),
+            "expected a human-gate error, got {err}"
         );
     }
 

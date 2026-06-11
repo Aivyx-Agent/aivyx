@@ -20,7 +20,7 @@ use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verificatio
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
-use crate::mission::{MissionPlan, Step, StepKind};
+use crate::mission::{GateMode, MissionPlan, Step, StepKind};
 use crate::pool::SpecialistPool;
 use crate::runtime::{gate_passed, MissionStatus, TeamRuntime};
 
@@ -54,9 +54,16 @@ fn parse_step(v: &Value) -> Result<Step, String> {
 
     let kind = if let Some(reviewer) = v.get("reviewer").and_then(Value::as_str) {
         let criteria = v.get("criteria").and_then(Value::as_str).unwrap_or_default();
+        // Chapter L — a gate is human-approval when `"mode": "human"`; anything
+        // else (including absent) is the default automatic reviewer gate.
+        let mode = match v.get("mode").and_then(Value::as_str) {
+            Some("human") => GateMode::Human,
+            _ => GateMode::Auto,
+        };
         StepKind::Gate {
             reviewer: reviewer.to_string(),
             criteria: criteria.to_string(),
+            mode,
         }
     } else if let Some(specialist) = v.get("specialist").and_then(Value::as_str) {
         let prompt = v
