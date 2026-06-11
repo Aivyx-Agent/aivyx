@@ -80,6 +80,19 @@ impl ChannelBudgetGate {
         })
     }
 
+    /// Convenience for agent-construction sites: build the gate already boxed
+    /// as the `aivyx_core::BudgetGate` trait object, or `None` when no day cap
+    /// is set (so callers attach nothing and keep ungated behavior).
+    pub fn new_gate(
+        budget: BudgetConfig,
+        audit_log: Arc<PersistentAuditLog>,
+        pricing: Pricing,
+        max_tokens: u32,
+    ) -> Option<Arc<dyn BudgetGate>> {
+        Self::new(budget, audit_log, pricing, max_tokens)
+            .map(|g| Arc::new(g) as Arc<dyn BudgetGate>)
+    }
+
     /// Sum priced `LlmCost` spend over the last 24h from the chain. On a read
     /// error this degrades to `0.0` (fail-open) with a warning — a transient
     /// chain hiccup must not brick the assistant; the reservation tier still
@@ -237,6 +250,27 @@ mod tests {
             1024,
         );
         assert!(none.is_none(), "no per_day_usd ⇒ no gate");
+    }
+
+    #[tokio::test]
+    async fn new_gate_boxes_trait_object_when_capped() {
+        let log = chain_with_costs(&[]).await;
+        // A day cap ⇒ Some boxed gate; the convenience ctor for call sites.
+        let some = ChannelBudgetGate::new_gate(
+            day_cap(5.0),
+            Arc::clone(&log),
+            Pricing::new(),
+            1024,
+        );
+        assert!(some.is_some(), "a day cap yields a boxed gate");
+        // No cap ⇒ None (callers attach nothing).
+        let none = ChannelBudgetGate::new_gate(
+            BudgetConfig::default(),
+            log,
+            Pricing::new(),
+            1024,
+        );
+        assert!(none.is_none());
     }
 
     #[tokio::test]

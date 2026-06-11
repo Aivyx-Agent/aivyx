@@ -6141,13 +6141,12 @@ async fn run_async(
         // model call. `None` when no day cap is set, so an ungated daemon
         // keeps today's behavior byte-for-byte.
         let daemon_budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>> =
-            aivyx_channel::budget_gate::ChannelBudgetGate::new(
+            aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
                 config_budget.clone(),
                 Arc::clone(&persistent_audit_for_query),
                 aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
                 DEFAULT_MAX_TOKENS,
-            )
-            .map(|g| Arc::new(g) as Arc<dyn aivyx_core::BudgetGate>);
+            );
 
         let agent: Arc<dyn Agent> = Arc::new(
             ConcreteAgent::new(
@@ -7148,10 +7147,16 @@ async fn run_async(
                     )),
                     context_provider: recall_context.clone(),
                     system_prompt_refiner: system_prompt_refiner.clone(),
-                    // Chapter K (K.4.2) — voice runs in its own command path
-                    // (no daemon audit-log handle here); the budget gate is
-                    // wired on the daemon agent. Voice gating is a follow-up.
-                    budget_gate: None,
+                    // Chapter K (K.4.2) — the voice channel writes to the same
+                    // persistent HMAC chain as every other turn, so it gets the
+                    // same pre-call dollar gate over the operator's
+                    // `[budget] per_day_usd` cap. `None` when no cap is set.
+                    budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                        config_budget.clone(),
+                        Arc::clone(&persistent_audit_for_query),
+                        aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                        DEFAULT_MAX_TOKENS,
+                    ),
                 };
                 let agent = aivyx_channel::session::build_agent_stack(
                     Arc::clone(&provider),
