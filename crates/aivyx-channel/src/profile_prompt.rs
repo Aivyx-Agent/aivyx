@@ -454,6 +454,30 @@ pub fn append_tool_catalog(
             out.push_str(&format!("- `{}` — {desc}\n", tool.name));
         }
     }
+
+    // Filesystem tools are sandboxed. Make the model DISCLOSE that
+    // boundary rather than silently substitute its sandbox for the
+    // path the operator actually asked about. Observed failure: asked
+    // to "list the folders in my home directory," the agent listed its
+    // sandbox root and presented the result as the operator's home —
+    // only admitting the sandbox limit when challenged. Gated on an
+    // `fs.*` tool actually being registered so non-filesystem agents
+    // don't carry the note.
+    if tools.iter().any(|t| t.name.starts_with("fs.")) {
+        out.push_str(
+            "\n\nYour filesystem tools (the `fs.*` tools) are SANDBOXED: \
+             they only reach files and folders under your sandbox root, \
+             NOT the operator's real home directory or arbitrary paths on \
+             the machine. When the operator asks about a path outside your \
+             sandbox (their home directory, an absolute system path, etc.), \
+             say plainly that it is outside your sandbox and you cannot see \
+             it — do NOT list your sandbox's contents as if they were that \
+             location. When you report files or folders, make clear they \
+             come from your sandbox/workspace, not the operator's home \
+             directory.\n",
+        );
+    }
+
     out.trim_end().to_string()
 }
 
@@ -1118,6 +1142,30 @@ mod tests {
             lower.contains("do not invent") || lower.contains("do not guess"),
             "expected anti-invention preamble; got: {out}"
         );
+    }
+
+    #[test]
+    fn append_tool_catalog_adds_sandbox_disclosure_when_fs_tools_present() {
+        // Observed: asked to list the operator's home directory, the
+        // agent listed its sandbox root and called it the home dir.
+        // The catalog must instruct the model to disclose the sandbox
+        // boundary instead of substituting its contents.
+        let tools = vec![tool("fs.metadata", "Inspect a file or directory")];
+        let out = append_tool_catalog("role", &tools).to_lowercase();
+        assert!(out.contains("sandbox"), "expected a sandbox note; got: {out}");
+        assert!(
+            out.contains("home directory"),
+            "the note should name the home-directory substitution it guards against",
+        );
+    }
+
+    #[test]
+    fn append_tool_catalog_omits_sandbox_note_without_fs_tools() {
+        // A non-filesystem agent (only memory tools) shouldn't carry
+        // filesystem-sandbox guidance.
+        let tools = vec![tool("memory.write", "Store a memory")];
+        let out = append_tool_catalog("role", &tools).to_lowercase();
+        assert!(!out.contains("sandbox"), "no fs tools → no sandbox note: {out}");
     }
 
     #[test]
