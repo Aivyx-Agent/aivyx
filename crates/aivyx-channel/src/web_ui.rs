@@ -353,6 +353,19 @@ async fn handle_websocket(
                 ipc_buf.drain(..consumed);
                 break session_id;
             }
+            // The daemon delivers a take-once `RecoveryNotice` between
+            // `DaemonReady` and `SessionStarted` to the first frontend
+            // that connects after an unclean shutdown (a prior instance
+            // crashed / was killed rather than stopped cleanly). It is
+            // informational — skip past it and keep waiting for
+            // `SessionStarted`. Without this arm the first browser to
+            // connect after an unclean shutdown fails the handshake with
+            // "expected SessionStarted, got RecoveryNotice" (mirrors the
+            // same tolerance the REPL/TUI client already has).
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                ipc_buf.drain(..consumed);
+                continue;
+            }
             Err(FrameError::IncompleteBuf) => continue,
             Ok((other, _)) => {
                 return Err(DaemonError::Protocol(format!(
