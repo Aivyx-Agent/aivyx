@@ -13,6 +13,5 @@ readme.workspace = true
 # The mission DAG + roster types the wire carries (TeamRun { plan, config }).
 aivyx-team-types = { path = "../aivyx-team-types" }
 serde = { workspace = true }
-
-[dev-dependencies]
+# LearnedSkill::{to,from}_json_value (persona) serialize through serde_json.
 serde_json = { workspace = true }

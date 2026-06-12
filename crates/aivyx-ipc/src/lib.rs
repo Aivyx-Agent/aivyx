@@ -14,10 +14,15 @@
 
 pub mod backlog;
 pub mod loop_state;
+pub mod persona;
 pub mod team_mission;
 
 pub use backlog::{Story, StoryStatus};
 pub use loop_state::LoopRunState;
+pub use persona::{
+    EffectivePersona, LearnedSkill, PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
+    ProposedPersonaDelta,
+};
 pub use team_mission::{
     TeamMissionPhase, TeamMissionRecord, TeamMissionView, TeamStepState, TeamStepView,
 };
