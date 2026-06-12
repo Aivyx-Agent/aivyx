@@ -11,7 +11,9 @@
 //! [`crate::recall_feedback::correlate_detailed`]'s single
 //! matching pass.
 
-use serde::{Deserialize, Serialize};
+
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-3); re-exported here.
+pub use aivyx_ipc::insights::{ContributingTurn, LearningDigest, ProposalProvenance};
 
 use crate::persona_proposal::PersonaProposal;
 use crate::recall_feedback::{
@@ -28,74 +30,6 @@ pub const RECALL_PROPOSAL_PREFIX: &str = "recall-fb:";
 /// the headline, not the whole tally.
 const TOP_N: usize = 5;
 
-/// One turn that contributed to a topic's score, as the
-/// operator sees it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ContributingTurn {
-    pub ts_secs: u64,
-    /// Outcome label of the matched turn, or `None` if the
-    /// recall matched no turn in the window.
-    pub outcome_kind: Option<String>,
-    /// Signed contribution (`+`/`−`weight), or `None` for a
-    /// no-signal / unmatched recall.
-    pub signal: Option<f32>,
-    /// The seqs of *this topic's* memories injected on that
-    /// turn.
-    pub seqs: Vec<u64>,
-}
-
-/// Why one Pending (or resolved) recall-driven Persona proposal
-/// exists, reconstructed from the recall log (Q4a).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProposalProvenance {
-    pub proposal_id: String,
-    pub topic: String,
-    pub status: String,
-    /// Net helpfulness across this topic that drove the
-    /// proposal (the same sum `proposals_from_tally` thresholded
-    /// on).
-    pub net_score: f32,
-    /// The agent's stated reason on the proposal record.
-    pub reason: Option<String>,
-    /// The recalls/turns that produced the score, newest first.
-    pub contributing: Vec<ContributingTurn>,
-}
-
-/// Per-window operational picture of the self-learning loop.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LearningDigest {
-    /// The lookback the digest was computed over (seconds).
-    pub window_secs: u64,
-    /// Recalls in the window (any — matched or not).
-    pub recalls_total: usize,
-    /// Recalls that produced a signal (matched a turn with a
-    /// helpful/unhelpful outcome).
-    pub recalls_scored: usize,
-    /// Distinct `(topic, seq)` entries the retention actuator
-    /// would keep warm this window.
-    pub promoted: usize,
-    /// Distinct scored entries below the promote threshold
-    /// (net-negative or too weak) — left to age out.
-    pub not_promoted: usize,
-    /// Top helpful topics (net score, descending).
-    pub top_helpful: Vec<(String, f32)>,
-    /// Top unhelpful topics (net score, ascending = most
-    /// negative first).
-    pub top_unhelpful: Vec<(String, f32)>,
-    /// Recall-driven Persona proposals visible in the chain.
-    pub proposals_in_window: usize,
-    /// Phase 93 — whether the recall-feedback correlator
-    /// was running with per-hit judgment override
-    /// (`[recall_feedback].use_judgment_signal = true`).
-    /// `None` for pre-Phase-93 digests; `Some(false)`
-    /// distinguishes "knob explicitly off" from "section
-    /// absent" on the surface. `#[serde(default,
-    /// skip_serializing_if = "Option::is_none")]` keeps the
-    /// IPC wire-compat — older `aivyx learning` clients
-    /// decode the digest unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub judgment_signal: Option<bool>,
-}
 
 /// Sum a tally to per-topic net scores.
 fn per_topic(tally: &HelpfulnessTally) -> Vec<(String, f32)> {

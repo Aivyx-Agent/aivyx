@@ -39,10 +39,13 @@
 
 use serde::{Deserialize, Serialize};
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-3); re-exported here.
+pub use aivyx_ipc::insights::DeltaExport;
+
 use aivyx_config::Profile;
 
 use crate::persona::{
-    compute_effective_persona, EffectivePersona, PersonaDelta, SignedPersonaEntry,
+    compute_effective_persona, EffectivePersona, SignedPersonaEntry,
 };
 
 /// Current export schema version. Bump only when the format
@@ -106,14 +109,6 @@ pub struct PersonaExport {
     pub effective_at_export: EffectivePersona,
 }
 
-/// One Persona delta in the export. `mac` and `prev_mac` from
-/// [`SignedPersonaEntry`] are deliberately omitted — they're
-/// host-specific.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeltaExport {
-    pub seq: u64,
-    pub delta: PersonaDelta,
-}
 
 impl From<&SignedPersonaEntry> for DeltaExport {
     fn from(entry: &SignedPersonaEntry) -> Self {

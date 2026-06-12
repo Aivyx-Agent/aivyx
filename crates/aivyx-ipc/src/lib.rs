@@ -21,10 +21,10 @@ pub mod team_mission;
 
 pub use backlog::{Story, StoryStatus};
 pub use insights::{
-    CorrectionConsolidationStat, CorrectionJudgmentStat, PersonaConsolidationStat,
-    PersonaLifecycleProposed, PersonaLifecycleStat, PersonaSelectionStat, ProactiveKind,
-    ProactiveStat, ProactiveSurfaced, RecallClusterStat, RecallJudgment, RecallJudgmentStat,
-    RecentReflectionStat, SoftCategory,
+    ContributingTurn, CorrectionConsolidationStat, CorrectionJudgmentStat, DeltaExport,
+    LearningDigest, PersonaConsolidationStat, PersonaLifecycleProposed, PersonaLifecycleStat,
+    PersonaSelectionStat, ProactiveKind, ProactiveStat, ProactiveSurfaced, ProposalProvenance,
+    RecallClusterStat, RecallJudgment, RecallJudgmentStat, RecentReflectionStat, SoftCategory,
 };
 pub use ledgers::{
     AccumulatedCorrections, AccumulatedHelpfulness, CooccurrencePatterns, PairScore,

@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 // SoftCategory::as_persona_category maps onto the persona delta taxonomy.
-use crate::persona::PersonaDeltaCategory;
+use crate::persona::{PersonaDelta, PersonaDeltaCategory};
 
 
 /// Phase 91 — the 3-way LLM-judged per-recall classification
@@ -312,4 +312,84 @@ pub struct RecallClusterStat {
     pub ts_secs: u64,
     pub injected: usize,
     pub pairs: Vec<(String, String)>,
+}
+
+// --- recall-feedback digest (Phase 77+) + identity export ---
+
+/// One turn that contributed to a topic's score, as the
+/// operator sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContributingTurn {
+    pub ts_secs: u64,
+    /// Outcome label of the matched turn, or `None` if the
+    /// recall matched no turn in the window.
+    pub outcome_kind: Option<String>,
+    /// Signed contribution (`+`/`−`weight), or `None` for a
+    /// no-signal / unmatched recall.
+    pub signal: Option<f32>,
+    /// The seqs of *this topic's* memories injected on that
+    /// turn.
+    pub seqs: Vec<u64>,
+}
+
+/// Why one Pending (or resolved) recall-driven Persona proposal
+/// exists, reconstructed from the recall log (Q4a).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposalProvenance {
+    pub proposal_id: String,
+    pub topic: String,
+    pub status: String,
+    /// Net helpfulness across this topic that drove the
+    /// proposal (the same sum `proposals_from_tally` thresholded
+    /// on).
+    pub net_score: f32,
+    /// The agent's stated reason on the proposal record.
+    pub reason: Option<String>,
+    /// The recalls/turns that produced the score, newest first.
+    pub contributing: Vec<ContributingTurn>,
+}
+
+/// Per-window operational picture of the self-learning loop.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LearningDigest {
+    /// The lookback the digest was computed over (seconds).
+    pub window_secs: u64,
+    /// Recalls in the window (any — matched or not).
+    pub recalls_total: usize,
+    /// Recalls that produced a signal (matched a turn with a
+    /// helpful/unhelpful outcome).
+    pub recalls_scored: usize,
+    /// Distinct `(topic, seq)` entries the retention actuator
+    /// would keep warm this window.
+    pub promoted: usize,
+    /// Distinct scored entries below the promote threshold
+    /// (net-negative or too weak) — left to age out.
+    pub not_promoted: usize,
+    /// Top helpful topics (net score, descending).
+    pub top_helpful: Vec<(String, f32)>,
+    /// Top unhelpful topics (net score, ascending = most
+    /// negative first).
+    pub top_unhelpful: Vec<(String, f32)>,
+    /// Recall-driven Persona proposals visible in the chain.
+    pub proposals_in_window: usize,
+    /// Phase 93 — whether the recall-feedback correlator
+    /// was running with per-hit judgment override
+    /// (`[recall_feedback].use_judgment_signal = true`).
+    /// `None` for pre-Phase-93 digests; `Some(false)`
+    /// distinguishes "knob explicitly off" from "section
+    /// absent" on the surface. `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` keeps the
+    /// IPC wire-compat — older `aivyx learning` clients
+    /// decode the digest unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment_signal: Option<bool>,
+}
+
+/// One Persona delta in the export. `mac` and `prev_mac` from
+/// [`SignedPersonaEntry`] are deliberately omitted — they're
+/// host-specific.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeltaExport {
+    pub seq: u64,
+    pub delta: PersonaDelta,
 }
