@@ -29,7 +29,7 @@ pub enum TeamError {
 /// One team member — a persona + a scoped role. Maps onto the new core's
 /// Role shape; the actual specialist agent is constructed (attenuated) by
 /// the `SpecialistPool` in J.2.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamMember {
     /// Member id (unique within the team; `a-z A-Z 0-9 _ -`).
     pub name: String,
@@ -66,7 +66,7 @@ impl TeamMember {
 }
 
 /// Inter-specialist dialogue + spawn limits.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogueConfig {
     #[serde(default = "default_enable_peer_dialogue")]
     pub enable_peer_dialogue: bool,
@@ -109,7 +109,7 @@ impl Default for DialogueConfig {
 }
 
 /// A team: a lead that coordinates up to 9 attenuated specialists.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamConfig {
     pub name: String,
     #[serde(default)]

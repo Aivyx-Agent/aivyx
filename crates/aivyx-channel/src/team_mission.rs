@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
-use aivyx_team::{MissionPlan, StepKind};
+use aivyx_team::{MissionPlan, StepKind, TeamConfig};
 
 /// The lifecycle phase of a daemon-run team mission — the live state the
 /// engine's terminal-only `MissionStatus` doesn't model. Maps onto the TUI's
@@ -67,12 +67,20 @@ pub struct TeamMissionRecord {
     /// The gate step id awaiting approval, set iff `phase == AwaitingApproval`.
     #[serde(default)]
     pub pending_gate: Option<String>,
+    /// Chapter L — the team this mission runs (a vertical pack's `TeamConfig`).
+    /// `None` ⇒ the daemon's default team (the Nonagon). Persisted so a resume
+    /// after a restart re-assembles the *same* team the plan was built for.
+    /// `#[serde(default)]` keeps pre-config records decoding.
+    #[serde(default)]
+    pub config: Option<TeamConfig>,
     pub started_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
 }
 
 impl TeamMissionRecord {
-    /// A freshly-created mission in the `Planning` phase, empty checkpoint.
+    /// A freshly-created mission in the `Planning` phase, empty checkpoint, on
+    /// the daemon's default team. Use [`with_config`](Self::with_config) to pin
+    /// a vertical pack.
     pub fn new(id: impl Into<String>, goal: impl Into<String>, plan: MissionPlan) -> Self {
         let now = now_millis();
         TeamMissionRecord {
@@ -82,9 +90,17 @@ impl TeamMissionRecord {
             outputs: BTreeMap::new(),
             phase: TeamMissionPhase::Planning,
             pending_gate: None,
+            config: None,
             started_at_unix_ms: now,
             updated_at_unix_ms: now,
         }
+    }
+
+    /// Pin this mission to a specific team config (a vertical pack). `None`
+    /// leaves it on the daemon default.
+    pub fn with_config(mut self, config: Option<TeamConfig>) -> Self {
+        self.config = config;
+        self
     }
 
     /// Stamp `updated_at` to now — call after mutating a field before saving.
@@ -121,6 +137,11 @@ impl TeamMissionRecord {
         TeamMissionView {
             id: self.id.clone(),
             goal: self.goal.clone(),
+            lead: self
+                .config
+                .as_ref()
+                .map(|c| c.lead.clone())
+                .unwrap_or_else(|| "coordinator".to_string()),
             phase: self.phase,
             pending_gate: self.pending_gate.clone(),
             progress: ((done * 100) / total) as u16,
@@ -150,6 +171,9 @@ impl TeamMissionRecord {
 pub struct TeamMissionView {
     pub id: String,
     pub goal: String,
+    /// The team lead's name (the pack's lead, or `coordinator` for the
+    /// default Nonagon) — shown in the TUI feed.
+    pub lead: String,
     pub phase: TeamMissionPhase,
     /// The step id awaiting an operator decision, when `phase ==
     /// AwaitingApproval` — what `aivyx team approve|reject <id> <step>` /

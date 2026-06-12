@@ -177,36 +177,48 @@ pub async fn team_run(
     plan: MissionPlan,
     id: impl Into<String>,
 ) -> Result<String, MissionDriverError> {
-    let id = register_mission(shared, plan, id).await?;
+    // Pin the mission to `config` (persisted on the record), then drive it —
+    // `config` doubles as the resume fallback.
+    let id = register_mission(shared, plan, id, Some(config.clone())).await?;
     drive_registered(shared, deps, config, &id).await?;
     Ok(id)
 }
 
 /// Validate and persist a fresh mission in the `Planning` phase, returning its
-/// id. The daemon registers synchronously (so a `TeamMissionStatus` poll sees
-/// it immediately) then spawns [`drive_registered`].
+/// id. `config` pins the team (a vertical pack); `None` ⇒ the daemon default.
+/// The daemon registers synchronously (so a `TeamMissionStatus` poll sees it
+/// immediately) then spawns [`drive_registered`].
 pub async fn register_mission(
     shared: &SharedMissionState,
     plan: MissionPlan,
     id: impl Into<String>,
+    config: Option<TeamConfig>,
 ) -> Result<String, MissionDriverError> {
     let id = id.into();
     // Validate before we register anything the operator would have to clean up.
     plan.validate()?;
     let goal = plan.goal.clone();
-    shared.put(TeamMissionRecord::new(&id, goal, plan)).await?;
+    shared
+        .put(TeamMissionRecord::new(&id, goal, plan).with_config(config))
+        .await?;
     Ok(id)
 }
 
 /// Assemble the team and drive an **already-registered** mission from its
-/// checkpoint to the next pause / terminal state. The long-running half of a
-/// mission run; the daemon `tokio::spawn`s it.
+/// checkpoint to the next pause / terminal state. The mission runs on the team
+/// it was registered with (`record.config`); `default_config` is the fallback
+/// for missions started without a pack (and legacy records). The long-running
+/// half of a mission run; the daemon `tokio::spawn`s it.
 pub async fn drive_registered(
     shared: &SharedMissionState,
     deps: &TeamRunDeps,
-    config: TeamConfig,
+    default_config: TeamConfig,
     id: &str,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
+    let config = shared
+        .snapshot(id)
+        .and_then(|r| r.config)
+        .unwrap_or(default_config);
     let runtime = assemble_runtime(deps, config)?;
     drive(shared, runtime, id).await
 }
@@ -316,29 +328,40 @@ impl TeamMissionService {
     }
 
     /// Register a mission from an explicit plan and **spawn** its drive,
-    /// returning the new id immediately. The drive runs to the first human
-    /// gate or terminal state in the background.
-    pub async fn start(&self, plan: MissionPlan) -> Result<String, MissionDriverError> {
-        let id = register_mission(&self.state, plan, uuid::Uuid::new_v4().to_string()).await?;
+    /// returning the new id immediately. `config` pins a vertical pack (`None`
+    /// ⇒ the daemon default team). The drive runs to the first human gate or
+    /// terminal state in the background.
+    pub async fn start(
+        &self,
+        plan: MissionPlan,
+        config: Option<TeamConfig>,
+    ) -> Result<String, MissionDriverError> {
+        let id =
+            register_mission(&self.state, plan, uuid::Uuid::new_v4().to_string(), config).await?;
         self.spawn_drive(id.clone());
         Ok(id)
     }
 
     /// Decompose a free-text `goal` into a plan (one LLM planning call over the
-    /// team's roster), then [`start`](Self::start) it. The decomposition is
-    /// awaited (a few seconds) so the returned id belongs to a registered,
-    /// validated mission; the drive then runs in the background.
-    pub async fn start_from_goal(&self, goal: &str) -> Result<String, MissionDriverError> {
+    /// chosen team's roster), then [`start`](Self::start) it on that team.
+    /// `config` pins a vertical pack (`None` ⇒ the daemon default). The
+    /// decomposition is awaited (a few seconds) so the returned id belongs to a
+    /// registered, validated mission; the drive then runs in the background.
+    pub async fn start_from_goal(
+        &self,
+        goal: &str,
+        config: Option<TeamConfig>,
+    ) -> Result<String, MissionDriverError> {
         let cancel = aivyx_core::CancellationToken::new();
         let plan = aivyx_team::decompose_goal(
             self.deps.provider.as_ref(),
             &self.deps.model,
             goal,
-            &self.config,
+            config.as_ref().unwrap_or(&self.config),
             &cancel,
         )
         .await?;
-        self.start(plan).await
+        self.start(plan, config).await
     }
 
     /// Resolve a paused gate, spawning the resume drive on approval. Returns
@@ -537,8 +560,9 @@ mod tests {
     use aivyx_llm::{
         LlmError, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
     };
+    use aivyx_capability::TrustTier;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
-    use aivyx_team::{default_nonagon, MissionPlan, Step};
+    use aivyx_team::{default_nonagon, MissionPlan, Step, TeamMember};
 
     // --- a fake provider: every sub-turn completes with one fixed line -------
 
@@ -754,6 +778,70 @@ mod tests {
         panic!("mission {id} never reached {want:?}: {:?}", svc.snapshot(id));
     }
 
+    fn member(name: &str, role: &str, scopes: &[&str]) -> TeamMember {
+        TeamMember {
+            name: name.into(),
+            role: role.into(),
+            soul: format!("You are the {role}."),
+            tool_allowlist: vec![],
+            capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            trust_ceiling: TrustTier::Trusted,
+        }
+    }
+
+    /// A two-role vertical pack (a stand-in kitchen BOH team).
+    fn custom_team() -> TeamConfig {
+        TeamConfig {
+            name: "boh".into(),
+            description: "kitchen back-of-house".into(),
+            lead: "chef".into(),
+            members: vec![
+                member("chef", "Lead", &["team.delegate"]),
+                member("line", "Cook", &[]),
+            ],
+            dialogue: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_pins_persists_and_resumes_a_vertical_pack() {
+        let store = team_domain().await;
+        // The service default is the Nonagon, but this mission pins a pack.
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(store.clone()),
+            deps("ok"),
+            default_nonagon(),
+        );
+        let plan = MissionPlan::new("prep", vec![Step::delegate("a", "line", "chop")]);
+        let id = svc.start(plan, Some(custom_team())).await.unwrap();
+        wait_for(&svc, &id, TeamMissionPhase::Done).await;
+
+        let rec = svc.snapshot(&id).unwrap();
+        assert_eq!(rec.config.as_ref().unwrap().lead, "chef", "pack persisted on the record");
+        assert_eq!(rec.outputs["a"], "ok", "ran on the pack's specialist, not the Nonagon");
+        assert_eq!(rec.to_view().lead, "chef", "the feed shows the pack's lead");
+
+        // The pin survives a reload — a resume after restart uses the pack.
+        let reloaded = SharedMissionState::new(store);
+        reloaded.reload().await.unwrap();
+        assert_eq!(reloaded.snapshot(&id).unwrap().config.unwrap().lead, "chef");
+    }
+
+    #[tokio::test]
+    async fn default_team_missions_have_no_pinned_config() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps("ok"),
+            default_nonagon(),
+        );
+        let plan = MissionPlan::new("g", vec![Step::delegate("a", "writer", "p")]);
+        let id = svc.start(plan, None).await.unwrap();
+        wait_for(&svc, &id, TeamMissionPhase::Done).await;
+        let rec = svc.snapshot(&id).unwrap();
+        assert!(rec.config.is_none(), "no pack → no pinned config");
+        assert_eq!(rec.to_view().lead, "coordinator", "feed falls back to the Nonagon lead");
+    }
+
     #[tokio::test]
     async fn service_start_spawns_a_drive_that_pauses_then_resumes() {
         let svc = TeamMissionService::new(
@@ -762,7 +850,7 @@ mod tests {
             default_nonagon(),
         );
         // start returns immediately with a fresh id; the drive runs in the bg.
-        let id = svc.start(gated_plan()).await.unwrap();
+        let id = svc.start(gated_plan(), None).await.unwrap();
         assert_eq!(svc.list().len(), 1);
 
         wait_for(&svc, &id, TeamMissionPhase::AwaitingApproval).await;

@@ -269,17 +269,23 @@ pub enum QueryPayload {
     LoopSkip {
         story_id: String,
     },
-    /// Chapter L (L.5) — start a daemon-run Nonagon team mission from an
-    /// explicit [`MissionPlan`]. Fails if no team service is configured.
-    /// Responds with [`QueryResponsePayload::TeamRunStarted`].
+    /// Chapter L (L.5) — start a daemon-run team mission from an explicit
+    /// [`MissionPlan`]. `config` pins a vertical-pack team (`None` ⇒ the daemon
+    /// default Nonagon). Fails if no team service is configured. Responds with
+    /// [`QueryResponsePayload::TeamRunStarted`].
     TeamRun {
         plan: aivyx_team::MissionPlan,
+        #[serde(default)]
+        config: Option<aivyx_team::TeamConfig>,
     },
     /// Chapter L — start a mission from a free-text goal: the daemon decomposes
-    /// it into a plan (one LLM planning call over the team roster) and runs it.
-    /// Responds with [`QueryResponsePayload::TeamRunStarted`].
+    /// it into a plan (one LLM planning call over the chosen team's roster) and
+    /// runs it. `config` pins a vertical-pack team (`None` ⇒ the default
+    /// Nonagon). Responds with [`QueryResponsePayload::TeamRunStarted`].
     TeamRunGoal {
         goal: String,
+        #[serde(default)]
+        config: Option<aivyx_team::TeamConfig>,
     },
     /// Chapter L (L.5) — every team mission's snapshot (the poll feed the TUI
     /// Missions panel ticks). Responds with
@@ -2352,7 +2358,7 @@ mod tests {
         // The request carrying a full MissionPlan survives the frame.
         let req = FrontendMessage::Query {
             id: "tr".into(),
-            payload: QueryPayload::TeamRun { plan: plan.clone() },
+            payload: QueryPayload::TeamRun { plan: plan.clone(), config: None },
         };
         let frame = encode_frame(&req).expect("encode");
         let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");

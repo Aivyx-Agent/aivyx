@@ -128,7 +128,9 @@ async fn run_loop(
                     // decomposition, then refresh so the new mission appears.
                     state.mission_starting = true;
                     tui.draw(state).map_err(|e| format!("draw: {e}"))?;
-                    if let Err(e) = team_run_goal(socket_path, goal).await {
+                    // The TUI new-mission prompt runs on the daemon's default
+                    // team; pack selection is a later UI affordance.
+                    if let Err(e) = team_run_goal(socket_path, goal, None).await {
                         apply(state, Msg::Error(e.to_string()));
                     }
                     state.mission_starting = false;

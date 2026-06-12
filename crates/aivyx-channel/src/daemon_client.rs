@@ -835,9 +835,10 @@ pub async fn loop_skip(
 pub async fn team_run(
     socket_path: &Path,
     plan: aivyx_team::MissionPlan,
+    config: Option<aivyx_team::TeamConfig>,
 ) -> Result<String, DaemonError> {
     let payload =
-        send_query(socket_path, "team-run", QueryPayload::TeamRun { plan }).await?;
+        send_query(socket_path, "team-run", QueryPayload::TeamRun { plan, config }).await?;
     match payload {
         QueryResponsePayload::TeamRunStarted { mission_id } => Ok(mission_id),
         QueryResponsePayload::QueryError { code, message } => {
@@ -854,9 +855,14 @@ pub async fn team_run(
 pub async fn team_run_goal(
     socket_path: &Path,
     goal: String,
+    config: Option<aivyx_team::TeamConfig>,
 ) -> Result<String, DaemonError> {
-    let payload =
-        send_query(socket_path, "team-run-goal", QueryPayload::TeamRunGoal { goal }).await?;
+    let payload = send_query(
+        socket_path,
+        "team-run-goal",
+        QueryPayload::TeamRunGoal { goal, config },
+    )
+    .await?;
     match payload {
         QueryResponsePayload::TeamRunStarted { mission_id } => Ok(mission_id),
         QueryResponsePayload::QueryError { code, message } => {

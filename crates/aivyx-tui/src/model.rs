@@ -241,9 +241,9 @@ fn mission_row_from_view(v: TeamMissionView) -> MissionRow {
     MissionRow {
         id: v.id,
         title: v.goal,
-        // The daemon runs the default Nonagon in L.5 (per-call team config is
-        // deferred), so the lead is the coordinator.
-        lead: "coordinator".to_string(),
+        // The team lead (the pack's lead, or `coordinator` for the default
+        // Nonagon) — the channel-side projection resolved it from the record.
+        lead: v.lead,
         phase: phase_from(v.phase),
         progress: v.progress,
         steps,
@@ -905,6 +905,7 @@ mod tests {
         let view = TeamMissionView {
             id: "m-1".into(),
             goal: "ship the note".into(),
+            lead: "chef".into(),
             phase: TeamMissionPhase::AwaitingApproval,
             pending_gate: Some("approve".into()),
             progress: 33,
@@ -919,8 +920,8 @@ mod tests {
         let row = &rows[0];
         assert_eq!(row.id, "m-1");
         assert_eq!(row.title, "ship the note");
-        assert_eq!(row.lead, "coordinator");
         assert_eq!(row.phase, MissionPhase::AwaitingApproval);
+        assert_eq!(row.lead, "chef", "the pack's lead flows through to the row");
         assert_eq!(row.progress, 33);
         assert_eq!(row.pending_gate.as_deref(), Some("approve"));
         assert_eq!(row.steps[0].state, StepState::Done);
@@ -947,6 +948,7 @@ mod tests {
         let view = TeamMissionView {
             id: "m-2".into(),
             goal: "g".into(),
+            lead: "coordinator".into(),
             phase: TeamMissionPhase::Rejected,
             pending_gate: None,
             progress: 50,

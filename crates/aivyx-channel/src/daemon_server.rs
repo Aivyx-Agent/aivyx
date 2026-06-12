@@ -3067,11 +3067,11 @@ async fn handle_query(
                 }
             }
         }
-        QueryPayload::TeamRun { plan } => {
+        QueryPayload::TeamRun { plan, config } => {
             let Some(svc) = team_missions else {
                 return no_team_missions();
             };
-            match svc.start(plan).await {
+            match svc.start(plan, config).await {
                 Ok(mission_id) => QueryResponsePayload::TeamRunStarted { mission_id },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "team_run_failed".into(),
@@ -3079,11 +3079,11 @@ async fn handle_query(
                 },
             }
         }
-        QueryPayload::TeamRunGoal { goal } => {
+        QueryPayload::TeamRunGoal { goal, config } => {
             let Some(svc) = team_missions else {
                 return no_team_missions();
             };
-            match svc.start_from_goal(&goal).await {
+            match svc.start_from_goal(&goal, config).await {
                 Ok(mission_id) => QueryResponsePayload::TeamRunStarted { mission_id },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "team_run_goal_failed".into(),

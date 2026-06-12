@@ -2679,7 +2679,7 @@ async fn team_queries_without_service_return_query_error() {
         ("tm-list", QueryPayload::TeamMissionList),
         (
             "tm-goal",
-            QueryPayload::TeamRunGoal { goal: "close the kitchen".into() },
+            QueryPayload::TeamRunGoal { goal: "close the kitchen".into(), config: None },
         ),
         (
             "tm-status",

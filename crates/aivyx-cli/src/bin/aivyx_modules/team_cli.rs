@@ -20,7 +20,7 @@ use aivyx_channel::daemon_client::{
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionRecord};
-use aivyx_team::{parse_plan_spec, StepKind};
+use aivyx_team::{parse_plan_spec, StepKind, TeamConfig};
 
 use crate::TeamSubcommand;
 
@@ -30,18 +30,20 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
     require_daemon_running(&socket_path).await?;
 
     match sub {
-        TeamSubcommand::Start { plan_path } => {
+        TeamSubcommand::Start { plan_path, config } => {
             let plan = load_plan(&plan_path)?;
-            let id = team_run(&socket_path, plan)
+            let team = load_team_config(config.as_deref())?;
+            let id = team_run(&socket_path, plan, team)
                 .await
                 .map_err(|e| format!("team start failed: {e}"))?;
             println!("started mission {id}");
             println!("track it with `aivyx team status {id}`");
             Ok(())
         }
-        TeamSubcommand::StartGoal { goal } => {
+        TeamSubcommand::StartGoal { goal, config } => {
+            let team = load_team_config(config.as_deref())?;
             println!("decomposing goal into a plan…");
-            let id = team_run_goal(&socket_path, goal)
+            let id = team_run_goal(&socket_path, goal, team)
                 .await
                 .map_err(|e| format!("team start failed: {e}"))?;
             println!("started mission {id}");
@@ -101,6 +103,18 @@ async fn resolve_gate(
         phase_label(phase)
     );
     Ok(())
+}
+
+/// Load an optional vertical-pack `TeamConfig` from `--config <path.toml>`.
+/// `None` ⇒ the daemon runs the mission on its default team (the Nonagon). The
+/// CLI loads + sends the full config so the daemon needn't resolve the path.
+fn load_team_config(config_path: Option<&str>) -> Result<Option<TeamConfig>, String> {
+    match config_path {
+        None => Ok(None),
+        Some(path) => TeamConfig::load(path)
+            .map(Some)
+            .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
+    }
 }
 
 /// Read + parse a `{goal, steps}` plan-spec JSON file into a `MissionPlan`.
