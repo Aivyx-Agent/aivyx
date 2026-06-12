@@ -42,7 +42,9 @@ pub use factory::{filter_tools, SpecialistFactory};
 pub use message_bus::{Drained, MessageBus, Recipient, Subscription, TeamMessage};
 pub use message_tools::{ReadMessagesTool, SendMessageTool};
 pub use mission::{GateMode, MissionPlan, Step, StepKind};
-pub use orchestration::{DecomposeTaskTool, SynthesizeResultsTool, VerifyOutputTool};
+pub use orchestration::{
+    parse_plan_spec, DecomposeTaskTool, SynthesizeResultsTool, VerifyOutputTool,
+};
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
 pub use runtime::{MissionObserver, MissionReport, MissionStatus, RunYield, TeamRuntime};

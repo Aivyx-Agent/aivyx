@@ -132,6 +132,8 @@ mod tool_relevance;
 mod tools;
 #[path = "aivyx_modules/team.rs"]
 mod team;
+#[path = "aivyx_modules/team_cli.rs"]
+mod team_cli;
 #[path = "aivyx_modules/cost.rs"]
 mod cost;
 #[path = "aivyx_modules/tool_init.rs"]
@@ -721,6 +723,20 @@ fn run() -> Result<(), String> {
     // takes the run_async path below — it needs the live provider + audit.
     if let CliMode::Team(TeamSubcommand::Roster { config }) = &mode {
         return team::run_roster(config.as_deref());
+    }
+
+    // Chapter L (L.5b) — `aivyx team start|list|status|approve|reject`: the
+    // daemon-run mission control surface. IPC-backed, same minimal-runtime
+    // shape as `loop` / `tools` — no provider, no in-process assembly.
+    if let CliMode::Team(sub) = &mode {
+        if sub.is_daemon_verb() {
+            let sub = sub.clone();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+            return rt.block_on(async move { team_cli::run_team_daemon(sub).await });
+        }
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
@@ -1520,6 +1536,33 @@ enum TeamSubcommand {
         mission: String,
         config: Option<String>,
     },
+    /// Chapter L — `aivyx team start --plan <file.json>`: submit an explicit
+    /// mission plan to the daemon (daemon-run, durable, gate-pausable).
+    Start { plan_path: String },
+    /// Chapter L — `aivyx team list`: the daemon's mission feed.
+    List,
+    /// Chapter L — `aivyx team status [<id>]`: one mission's detail, or the
+    /// whole feed when no id is given.
+    Status { mission_id: Option<String> },
+    /// Chapter L — `aivyx team approve <id> <step>`: pass a human gate.
+    Approve { mission_id: String, step: String },
+    /// Chapter L — `aivyx team reject <id> <step>`: reject a human gate.
+    Reject { mission_id: String, step: String },
+}
+
+impl TeamSubcommand {
+    /// Whether this verb talks to the running daemon's `TeamMissionService`
+    /// (Chapter L) — as opposed to the offline `roster` / in-process `run`.
+    fn is_daemon_verb(&self) -> bool {
+        matches!(
+            self,
+            TeamSubcommand::Start { .. }
+                | TeamSubcommand::List
+                | TeamSubcommand::Status { .. }
+                | TeamSubcommand::Approve { .. }
+                | TeamSubcommand::Reject { .. }
+        )
+    }
 }
 
 /// Phase 173 — `aivyx loop <subcommand>` variants.
@@ -2501,14 +2544,68 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     config: parse_config(args.get(3..).unwrap_or(&[]), "run")?,
                 }
             }
+            "start" => {
+                // `aivyx team start --plan <file.json>`
+                let tail = args.get(2..).unwrap_or(&[]);
+                let mut plan_path: Option<String> = None;
+                let mut idx = 0;
+                while idx < tail.len() {
+                    match tail[idx].as_str() {
+                        "--plan" => {
+                            let v = tail.get(idx + 1).ok_or_else(|| {
+                                "`--plan` requires a path to a plan JSON file".to_string()
+                            })?;
+                            plan_path = Some(v.clone());
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx team start`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                let plan_path = plan_path.ok_or_else(|| {
+                    "`aivyx team start` requires `--plan <file.json>`".to_string()
+                })?;
+                TeamSubcommand::Start { plan_path }
+            }
+            "list" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx team list` takes no arguments (got `{}`)",
+                        args[2]
+                    ));
+                }
+                TeamSubcommand::List
+            }
+            "status" => TeamSubcommand::Status {
+                mission_id: args.get(2).cloned(),
+            },
+            "approve" | "reject" => {
+                let mission_id = args.get(2).cloned().ok_or_else(|| {
+                    format!("`aivyx team {sub}` requires <mission-id> <step>")
+                })?;
+                let step = args.get(3).cloned().ok_or_else(|| {
+                    format!("`aivyx team {sub}` requires a <step> argument")
+                })?;
+                if sub == "approve" {
+                    TeamSubcommand::Approve { mission_id, step }
+                } else {
+                    TeamSubcommand::Reject { mission_id, step }
+                }
+            }
             "" => {
                 return Err(
-                    "`aivyx team` requires a subcommand: roster | run".to_string(),
+                    "`aivyx team` requires a subcommand: roster | run | start | \
+                     list | status | approve | reject"
+                        .to_string(),
                 );
             }
             other => {
                 return Err(format!(
-                    "unknown `aivyx team` subcommand `{other}` (expected: roster | run)"
+                    "unknown `aivyx team` subcommand `{other}` (expected: roster | \
+                     run | start | list | status | approve | reject)"
                 ));
             }
         };
@@ -9009,6 +9106,77 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["team", "roster", "extra"]))
             .expect_err("roster takes no args");
         assert!(err.contains("unrecognized"), "error: {err}");
+    }
+
+    // ---- Chapter L (L.5b) — daemon team verbs --------------------
+
+    #[test]
+    fn team_start_parses_the_plan_path() {
+        let parsed = parse_cli_args_from(&argv(&["team", "start", "--plan", "p.json"]))
+            .expect("team start must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Team(TeamSubcommand::Start { plan_path: "p.json".into() })
+        );
+    }
+
+    #[test]
+    fn team_start_without_plan_flag_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["team", "start"]))
+            .expect_err("start needs --plan");
+        assert!(err.contains("--plan"), "error: {err}");
+    }
+
+    #[test]
+    fn team_list_and_status_parse() {
+        assert_eq!(
+            parse_cli_args_from(&argv(&["team", "list"])).unwrap().mode,
+            CliMode::Team(TeamSubcommand::List)
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["team", "status"])).unwrap().mode,
+            CliMode::Team(TeamSubcommand::Status { mission_id: None })
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["team", "status", "m-1"])).unwrap().mode,
+            CliMode::Team(TeamSubcommand::Status { mission_id: Some("m-1".into()) })
+        );
+    }
+
+    #[test]
+    fn team_approve_and_reject_parse_id_and_step() {
+        assert_eq!(
+            parse_cli_args_from(&argv(&["team", "approve", "m-1", "gate"]))
+                .unwrap()
+                .mode,
+            CliMode::Team(TeamSubcommand::Approve {
+                mission_id: "m-1".into(),
+                step: "gate".into(),
+            })
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["team", "reject", "m-1", "gate"]))
+                .unwrap()
+                .mode,
+            CliMode::Team(TeamSubcommand::Reject {
+                mission_id: "m-1".into(),
+                step: "gate".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn team_approve_without_step_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["team", "approve", "m-1"]))
+            .expect_err("approve needs a step");
+        assert!(err.contains("<step>"), "error: {err}");
+    }
+
+    #[test]
+    fn team_unknown_subcommand_lists_the_daemon_verbs() {
+        let err = parse_cli_args_from(&argv(&["team", "frobnicate"]))
+            .expect_err("unknown subcommand must error");
+        assert!(err.contains("status") && err.contains("approve"), "error: {err}");
     }
 
     // ---- Chapter K — `aivyx cost` parsing ---------------------
