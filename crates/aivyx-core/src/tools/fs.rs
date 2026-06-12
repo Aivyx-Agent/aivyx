@@ -420,6 +420,32 @@ fn write_deny_scope() -> Scope {
     deny_scope_for("fs.write")
 }
 
+/// Chapter N — confirm-first gate. When the operator has enabled
+/// `[access] confirm_destructive`, an irreversible op (a delete, or an
+/// overwrite of an existing file) must carry `confirmed: true`. The model
+/// is instructed to set it only AFTER showing the operator what will be
+/// affected and getting their approval — the same operator-in-the-loop
+/// pattern as the irreversible `skills.teach`. Until then the tool refuses,
+/// so a hallucinated path can't silently destroy data.
+fn is_confirmed(input: &Value) -> bool {
+    input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
+}
+
+const DESTRUCTIVE_CONFIRM_HINT: &str =
+    "This is an irreversible action and the operator enabled confirm-first \
+     (`[access] confirm_destructive`). Show the operator exactly what will be \
+     affected, get their explicit approval, then re-call with `confirmed: true`.";
+
+/// The `confirmed` schema property shared by the confirm-first tools.
+fn confirmed_schema_property() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "Set to `true` ONLY after the operator has approved this \
+                        specific irreversible action. Required when the operator \
+                        has enabled confirm-first for destructive operations."
+    })
+}
+
 fn write_input_schema_value() -> Value {
     json!({
         "type": "object",
@@ -437,7 +463,8 @@ fn write_input_schema_value() -> Value {
                 "description": "UTF-8 content to write. Existing files are \
                                overwritten atomically via a same-directory \
                                temp file plus rename."
-            }
+            },
+            "confirmed": confirmed_schema_property()
         },
         "required": ["path", "content"]
     })
@@ -479,13 +506,22 @@ pub const MAX_WRITE_BYTES: usize = 256 * 1024;
 /// infallible tool construction.
 pub struct FsWriteToolConfig {
     sandbox_root: PathBuf,
+    confirm_destructive: bool,
 }
 
 impl FsWriteToolConfig {
     pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
         FsWriteToolConfig {
             sandbox_root: sandbox_root.into(),
+            confirm_destructive: false,
         }
+    }
+
+    /// Chapter N — require `confirmed: true` to OVERWRITE an existing file
+    /// (a fresh write to a new path never gates). Off by default.
+    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+        self.confirm_destructive = confirm;
+        self
     }
 
     /// Canonicalize the sandbox root and return a ready-to-register
@@ -508,6 +544,7 @@ impl FsWriteToolConfig {
             id: ToolId::new(),
             sandbox_root: Arc::from(canonical),
             schema: write_input_schema_value(),
+            confirm_destructive: self.confirm_destructive,
         })
     }
 }
@@ -522,6 +559,9 @@ pub struct FsWriteTool {
     id: ToolId,
     sandbox_root: Arc<Path>,
     schema: Value,
+    /// Chapter N — when true, overwriting an existing file needs
+    /// `confirmed: true`.
+    confirm_destructive: bool,
 }
 
 impl FsWriteTool {
@@ -617,6 +657,20 @@ impl Tool for FsWriteTool {
                 )));
             }
         };
+
+        // ---- Chapter N: confirm-first when OVERWRITING -----------
+        // A fresh write to a new path is not destructive and never gates;
+        // clobbering an existing file is irreversible and needs
+        // `confirmed: true` when the operator enabled confirm-first.
+        if self.confirm_destructive && lexical_abs.exists() && !is_confirmed(&input) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to overwrite existing file {path_str:?}. \
+                     {DESTRUCTIVE_CONFIRM_HINT}"
+                ),
+            });
+        }
 
         // The lexical path has a parent (it's absolute and has at
         // least the sandbox-root components plus a file name). If it
@@ -862,7 +916,8 @@ fn delete_input_schema_value() -> Value {
                                paths must already be under it. Deletion is \
                                non-recursive — a non-empty directory is \
                                refused."
-            }
+            },
+            "confirmed": confirmed_schema_property()
         },
         "required": ["path"]
     })
@@ -873,13 +928,21 @@ fn delete_input_schema_value() -> Value {
 /// canonicalization at build time, infallible tool construction.
 pub struct FsDeleteToolConfig {
     sandbox_root: PathBuf,
+    confirm_destructive: bool,
 }
 
 impl FsDeleteToolConfig {
     pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
         FsDeleteToolConfig {
             sandbox_root: sandbox_root.into(),
+            confirm_destructive: false,
         }
+    }
+
+    /// Chapter N — require `confirmed: true` on every delete. Off by default.
+    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+        self.confirm_destructive = confirm;
+        self
     }
 
     /// Canonicalize the sandbox root and return a ready-to-register
@@ -902,6 +965,7 @@ impl FsDeleteToolConfig {
             id: ToolId::new(),
             sandbox_root: Arc::from(canonical),
             schema: delete_input_schema_value(),
+            confirm_destructive: self.confirm_destructive,
         })
     }
 }
@@ -915,6 +979,8 @@ pub struct FsDeleteTool {
     id: ToolId,
     sandbox_root: Arc<Path>,
     schema: Value,
+    /// Chapter N — when true, every delete needs `confirmed: true`.
+    confirm_destructive: bool,
 }
 
 impl FsDeleteTool {
@@ -973,6 +1039,14 @@ impl Tool for FsDeleteTool {
                 })
             }
         };
+
+        // ---- Chapter N: confirm-first on this irreversible op ----
+        if self.confirm_destructive && !is_confirmed(&input) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT}"),
+            });
+        }
 
         // ---- Lexical resolve (mirrors FsWriteTool::execute) ------
         let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
@@ -2262,6 +2336,89 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    // -- Chapter N: confirm-first on destructive ops ---------------------
+
+    #[test]
+    fn delete_confirm_first_refuses_without_confirmed() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("doomed.txt", b"bye");
+        let tool = FsDeleteToolConfig::new(sandbox.root.clone())
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let outcome = run_execute(&tool, json!({"path": "doomed.txt"}));
+        assert!(
+            matches!(outcome, ToolOutcome::Failed(_)),
+            "confirm-first must refuse an unconfirmed delete"
+        );
+        assert!(sandbox.root.join("doomed.txt").exists(), "file must survive");
+    }
+
+    #[test]
+    fn delete_confirm_first_proceeds_with_confirmed() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("doomed.txt", b"bye");
+        let tool = FsDeleteToolConfig::new(sandbox.root.clone())
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let outcome = run_execute(&tool, json!({"path": "doomed.txt", "confirmed": true}));
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        assert!(!sandbox.root.join("doomed.txt").exists());
+    }
+
+    #[test]
+    fn delete_without_confirm_posture_does_not_gate() {
+        // Default (confirm_destructive off) — deletes run as before.
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("doomed.txt", b"bye");
+        let tool = build_delete_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "doomed.txt"}));
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+    }
+
+    #[test]
+    fn write_confirm_first_refuses_overwrite_without_confirmed() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("notes.txt", b"original");
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "notes.txt", "content": "clobbered"}),
+        );
+        assert!(
+            matches!(outcome, ToolOutcome::Failed(_)),
+            "overwriting an existing file must gate"
+        );
+        assert_eq!(
+            fs::read_to_string(sandbox.root.join("notes.txt")).unwrap(),
+            "original",
+            "original content must survive the refusal"
+        );
+    }
+
+    #[test]
+    fn write_confirm_first_allows_new_file_without_confirmed() {
+        // A fresh write to a NEW path is not destructive — it never gates.
+        let sandbox = SandboxDir::new();
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "fresh.txt", "content": "hello"}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        assert_eq!(
+            fs::read_to_string(sandbox.root.join("fresh.txt")).unwrap(),
+            "hello"
+        );
     }
 
     #[test]

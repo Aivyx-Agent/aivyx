@@ -290,12 +290,14 @@ fn build_shell_exec_for_channel(
 fn build_fs_delete_for_channel(
     channel_kind: ChannelKind,
     fs_root: &std::path::Path,
+    confirm_destructive: bool,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice shares the Local Trusted
         // tier; fs.delete is registered identically.
         ChannelKind::Local | ChannelKind::Voice => {
             let tool = FsDeleteToolConfig::new(fs_root.to_path_buf())
+                .with_confirm_destructive(confirm_destructive)
                 .build()
                 .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
             let canonical_root = tool.sandbox_root().to_path_buf();
@@ -3964,7 +3966,7 @@ async fn run_async(
         // (the reach lever) in `aivyx-config`. N.2 consumes these here to
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
-        confirm_destructive: _confirm_destructive,
+        confirm_destructive,
         storage_path: _,
         memory_max_per_topic,
         passphrase: _,
@@ -4506,7 +4508,10 @@ async fn run_async(
     let fs_read = FsReadToolConfig::new(fs_root.clone())
         .build()
         .map_err(|e| format!("failed to build fs.read tool: {e}"))?;
+    // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
+    let confirm_destructive = confirm_destructive.value;
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
+        .with_confirm_destructive(confirm_destructive)
         .build()
         .map_err(|e| format!("failed to build fs.write tool: {e}"))?;
     // Phase 100 — fs.metadata is read-only; like fs.read / fs.write
@@ -5018,7 +5023,7 @@ async fn run_async(
     // `fs.metadata` is already in `tool_list` above (every channel);
     // `fs.delete` is registered only when the gate returns it.
     let fs_delete_scope: Option<Scope> =
-        match build_fs_delete_for_channel(channel_kind, &fs_root)? {
+        match build_fs_delete_for_channel(channel_kind, &fs_root, confirm_destructive)? {
             Some((fs_delete, scope)) => {
                 tool_list.push(fs_delete);
                 Some(scope)
@@ -7798,7 +7803,7 @@ mod tests {
     #[test]
     fn channel_local_receives_fs_delete() {
         let scratch = Scratch::new();
-        let result = build_fs_delete_for_channel(ChannelKind::Local, &scratch.dir)
+        let result = build_fs_delete_for_channel(ChannelKind::Local, &scratch.dir, false)
             .expect("local branch must build fs.delete cleanly");
         let (tool, scope) = result.expect("local must receive fs.delete");
         assert_eq!(tool.name(), "fs.delete");
@@ -7817,7 +7822,7 @@ mod tests {
         // dispatch registry entirely, the same registration-time
         // strictness `shell.exec` gets. PHASE_100.md Q3.
         let scratch = Scratch::new();
-        let result = build_fs_delete_for_channel(ChannelKind::Telegram, &scratch.dir)
+        let result = build_fs_delete_for_channel(ChannelKind::Telegram, &scratch.dir, false)
             .expect("telegram branch must not error — it's a no-op");
         assert!(
             result.is_none(),
