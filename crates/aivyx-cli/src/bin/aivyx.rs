@@ -96,6 +96,8 @@
 //!   Upgrade to `rustyline` is a local refactor the day the ergonomics
 //!   gap becomes painful.
 
+#[path = "aivyx_modules/access.rs"]
+mod access;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
@@ -528,6 +530,19 @@ fn run() -> Result<(), String> {
                     &proposal_id,
                     yes,
                 ))
+            }
+        };
+    }
+
+    // ---- Chapter N: access-level Settings command ----------------------
+    // Synchronous file operations — no tokio runtime, no daemon, no
+    // passphrase. `show` reads the resolved level + reach; `set` rewrites
+    // the `[access]` section of `aivyx.toml`.
+    if let CliMode::Access(sub) = mode {
+        return match sub {
+            AccessSubcommand::Show => access::run_access_show(),
+            AccessSubcommand::Set { level, root, yes } => {
+                access::run_access_set(level, root, yes)
             }
         };
     }
@@ -1496,6 +1511,11 @@ enum CliMode {
     /// chain as JSONL on stdout. Offline-only (cold-start
     /// storage open via the operator's passphrase) per Q3a.
     Audit(AuditSubcommand),
+    /// `aivyx access <subcommand>`: Chapter N — the operator-facing
+    /// access-level Settings command. `show` prints the resolved level +
+    /// reach + posture; `set <level>` rewrites the `[access]` section of
+    /// `aivyx.toml`. Synchronous file ops — no daemon, no passphrase.
+    Access(AccessSubcommand),
     /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
@@ -1817,6 +1837,22 @@ enum AuditSubcommand {
         from: Option<u64>,
         limit: Option<usize>,
         event_type: Option<String>,
+    },
+}
+
+/// Chapter N — `aivyx access` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum AccessSubcommand {
+    /// `aivyx access show` — print the resolved access level, the fs-root
+    /// reach it derives, and the confirm-first posture.
+    Show,
+    /// `aivyx access set <level> [--root <dir>] [--yes]` — rewrite the
+    /// `[access]` section. `workspace`/`custom` need `--root`; expanded
+    /// levels confirm unless `--yes`.
+    Set {
+        level: aivyx_config::AccessLevel,
+        root: Option<String>,
+        yes: bool,
     },
 }
 
@@ -3312,6 +3348,82 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Profile(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter N — `aivyx access <show|set>`.
+    if !args.is_empty() && args[0] == "access" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx access` requires a subcommand. Supported: show, \
+             set <level> [--root <dir>] [--yes]"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "show" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx access show` takes no arguments. Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                AccessSubcommand::Show
+            }
+            "set" => {
+                let mut level: Option<aivyx_config::AccessLevel> = None;
+                let mut root: Option<String> = None;
+                let mut yes = false;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--yes" | "-y" => yes = true,
+                        "--root" => {
+                            let v = args.get(i + 1).ok_or_else(|| {
+                                "`--root` needs a directory path".to_string()
+                            })?;
+                            root = Some(v.clone());
+                            i += 1;
+                        }
+                        other if other.starts_with('-') => {
+                            return Err(format!(
+                                "unrecognized flag for `aivyx access set`: `{other}`. \
+                                 Supported: --root <dir>, --yes"
+                            ));
+                        }
+                        other if level.is_none() => {
+                            level = Some(access::parse_level(other)?);
+                        }
+                        other => {
+                            return Err(format!(
+                                "`aivyx access set` takes one level. Extra: `{other}`"
+                            ));
+                        }
+                    }
+                    i += 1;
+                }
+                let level = level.ok_or_else(|| {
+                    "`aivyx access set` needs a level. \
+                     Usage: `aivyx access set <sandbox|workspace|home|full|custom> \
+                     [--root <dir>] [--yes]`"
+                        .to_string()
+                })?;
+                AccessSubcommand::Set { level, root, yes }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized access subcommand: `{other}`. \
+                     Supported: access show, access set <level>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Access(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
