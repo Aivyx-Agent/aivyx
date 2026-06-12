@@ -610,8 +610,10 @@ impl TeamRunTool {
     }
 
     /// Wire the daemon's team-mission service (call once, after storage opens).
-    pub fn set_service(&self, service: TeamMissionService) -> Result<(), TeamMissionService> {
-        self.service.set(service)
+    /// Returns `true` if it was set, `false` if it was already set (the value
+    /// is dropped — callers don't need it).
+    pub fn set_service(&self, service: TeamMissionService) -> bool {
+        self.service.set(service).is_ok()
     }
 }
 
@@ -1028,7 +1030,7 @@ mod tests {
             default_nonagon(),
         );
         let tool = TeamRunTool::new();
-        assert!(tool.set_service(svc.clone()).is_ok());
+        assert!(tool.set_service(svc.clone()));
 
         let (ch, token) = tool_ctx_parts();
         let audit = NullAuditHook;
@@ -1064,7 +1066,7 @@ mod tests {
             default_nonagon(),
         );
         let tool = TeamRunTool::new();
-        assert!(tool.set_service(svc).is_ok());
+        assert!(tool.set_service(svc));
         let (ch, token) = tool_ctx_parts();
         let audit = NullAuditHook;
         let ctx = tool_ctx(&ch, &token, &audit);

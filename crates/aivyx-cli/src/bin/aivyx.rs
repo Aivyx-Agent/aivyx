@@ -6537,6 +6537,10 @@ async fn run_async(
             loop_config: config_loop.clone(),
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
+            // Chapter H — the daemon's default gate posture. Interactive for
+            // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
+            // set RejectAndAbort per run.
+            gate_policy: aivyx_core::GatePolicy::default(),
             // K.4.2 — the override-aware rate table the autonomous loop's
             // dollar cap prices with. Built once from the built-in defaults
             // plus any `[pricing.<model>]` overrides the operator declared.

@@ -17,7 +17,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
 use aivyx_audit::{AuditWriter, PersistentAuditLog};
-use aivyx_core::{Agent, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome};
+use aivyx_core::{
+    Agent, CancellationToken, ChannelContext, GatePolicy, Message, StreamEvent, TurnOutcome,
+};
 
 use aivyx_storage::DomainHandle;
 
@@ -419,6 +421,11 @@ pub struct DaemonConfig {
     /// `TeamRun` / `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate`
     /// IPC handlers operate on it. `None` disables the team-mission surface.
     pub team_missions: Option<crate::team_mission_driver::TeamMissionService>,
+    /// Chapter H — the daemon's default gate policy. `Interactive` (the
+    /// default) parks an escalated turn behind an operator gate and waits;
+    /// `RejectAndAbort` (headless) records the refusal and finalizes without a
+    /// gate. Per-run/per-driver overrides come later (H.4/H.5).
+    pub gate_policy: GatePolicy,
     /// Chapter K (K.4.2) — the priced rate table, built from the
     /// built-in defaults plus any `[pricing.<model>]` overrides.
     /// Threaded into the autonomous-loop driver so the per-run
@@ -515,6 +522,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_state,
         loop_config,
         team_missions,
+        gate_policy,
         pricing,
     } = config;
     // Phase 102 — shared once into every per-connection
@@ -1232,6 +1240,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_state: loop_state.clone(),
             loop_config: loop_config.clone(),
             team_missions: team_missions.clone(),
+            gate_policy,
         };
 
         let handle = tokio::spawn(async move {
@@ -1395,6 +1404,7 @@ struct ConnectionContext {
     /// Chapter L (L.5) — the team-mission service for the `TeamRun` /
     /// `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate` handlers.
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
+    gate_policy: GatePolicy,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1435,6 +1445,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_state,
         loop_config,
         team_missions,
+        gate_policy,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1829,11 +1840,17 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 .map_err(|_| DaemonError::Internal("writer arc still shared".into()))?
                                 .into_inner();
 
-                            if let (
-                                TurnOutcome::Escalated { reason, .. },
-                                Some(mission_id),
-                                Some(store),
-                            ) = (&outcome, &mid, &mission_store)
+                            // Chapter H — only an *interactive* run parks an
+                            // escalated turn behind an operator gate. A headless
+                            // run (RejectAndAbort) never waits: it skips the gate
+                            // + ApprovalGate, and the turn finalizes `Escalated`
+                            // (the refusal, recorded on the audit chain).
+                            if escalation_parks(gate_policy)
+                                && let (
+                                    TurnOutcome::Escalated { reason, .. },
+                                    Some(mission_id),
+                                    Some(store),
+                                ) = (&outcome, &mid, &mission_store)
                             {
                                 let gate_result = async {
                                     let mut record = mission::get_mission(store, mission_id)
@@ -2414,6 +2431,7 @@ async fn run_single_connection_daemon(
         loop_state: None,
         loop_config: None,
         team_missions: None,
+        gate_policy: GatePolicy::default(),
     })
     .await
 }
@@ -2486,6 +2504,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         loop_state: None,
         loop_config: None,
         team_missions: None,
+        gate_policy: GatePolicy::default(),
         pricing: Default::default(),
     }).await
 }
@@ -4191,6 +4210,13 @@ async fn resolve_persona_proposal(
     }
 }
 
+/// Chapter H — whether an escalated turn parks behind an operator gate.
+/// Interactive runs park + wait; headless runs (`RejectAndAbort`) never park —
+/// the turn finalizes `Escalated` (a recorded refusal) with no gate.
+fn escalation_parks(policy: GatePolicy) -> bool {
+    !policy.is_headless()
+}
+
 /// Chapter L (L.5) — the `QueryError` returned when a team-mission query hits
 /// a daemon with no team service configured (storage absent).
 fn no_team_missions() -> QueryResponsePayload {
@@ -4352,6 +4378,14 @@ fn stream_event_to_payload(event: &StreamEvent<'_>) -> StreamEventPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_parks_an_escalation_headless_does_not() {
+        // Chapter H — the gate at the escalation point is created only for an
+        // interactive run; a headless run never parks.
+        assert!(escalation_parks(GatePolicy::Interactive));
+        assert!(!escalation_parks(GatePolicy::RejectAndAbort));
+    }
 
     fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
