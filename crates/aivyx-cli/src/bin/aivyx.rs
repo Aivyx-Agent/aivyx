@@ -3831,6 +3831,11 @@ async fn run_async(
         model,
         system_prompt: _legacy_system_prompt,
         fs_root,
+        // Chapter N — the resolved access level already shaped `fs_root`
+        // (the reach lever) in `aivyx-config`. N.2 consumes these here to
+        // assemble the operator grant set + the confirm-first posture.
+        access_level: _access_level,
+        confirm_destructive: _confirm_destructive,
         storage_path: _,
         memory_max_per_topic,
         passphrase: _,

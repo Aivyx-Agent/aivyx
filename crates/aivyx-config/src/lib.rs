@@ -319,6 +319,61 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+/// Chapter N — operator-selectable access level. Decides how far the
+/// agent's filesystem/shell tools reach, by choosing the default
+/// `fs_root` boundary (which already derives both the `fs.*:<root>/**`
+/// scopes and the Local-only `shell.exec:cwd:<root>/**` scope). A level
+/// only widens the *boundary*; the capability/audit/trust-tier machinery
+/// is unchanged, and remote channels stay tier-attenuated regardless.
+///
+/// `Sandbox` is the default — an absent `[access]` section resolves here,
+/// so existing configs behave byte-for-byte as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccessLevel {
+    /// Today's behavior — `fs_root` defaults to `$HOME/aivyx-sandbox`,
+    /// no shell. The safe default for an untrusted/shared agent.
+    #[default]
+    Sandbox,
+    /// A single operator-chosen working directory (a project tree), with
+    /// full fs + shell within it. Requires an explicit `root`.
+    Workspace,
+    /// `fs_root = $HOME` — the personal-assistant default: full fs + shell
+    /// across the operator's home directory.
+    Home,
+    /// `fs_root = /` — the whole machine, including system files. Maximal
+    /// reach; selected deliberately (the wizard / `access set` warn + confirm).
+    Full,
+    /// Operator-specified `root` with operator-specified posture — the
+    /// escape hatch for anything the named levels don't cover.
+    Custom,
+}
+
+impl AccessLevel {
+    /// Whether this level reaches beyond the default sandbox (so the
+    /// confirm-first posture and the wizard's extra confirmation apply).
+    pub fn is_expanded(&self) -> bool {
+        !matches!(self, AccessLevel::Sandbox)
+    }
+
+    /// Lowercase wire/display name (matches the `[access] level` value).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AccessLevel::Sandbox => "sandbox",
+            AccessLevel::Workspace => "workspace",
+            AccessLevel::Home => "home",
+            AccessLevel::Full => "full",
+            AccessLevel::Custom => "custom",
+        }
+    }
+}
+
+impl std::fmt::Display for AccessLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 // --------------------------------------------------------------------
 // ConfigError
 // --------------------------------------------------------------------
@@ -583,10 +638,19 @@ pub struct AivyxConfig {
     ///    synthesized `default` role.
     pub system_prompt: Sourced<String>,
     /// Filesystem sandbox root for `fs.read` / `fs.write` tools.
-    /// Resolution order: `AIVYX_FS_ROOT` → TOML `fs.root` →
-    /// `$HOME/aivyx-sandbox`. Missing HOME with no override is a
-    /// [`ConfigError::NoHome`].
+    /// Resolution order: `AIVYX_FS_ROOT` → TOML `fs.root` → the
+    /// `[access] level`-derived default → `$HOME/aivyx-sandbox`. Missing
+    /// HOME with no override is a [`ConfigError::NoHome`].
     pub fs_root: Sourced<PathBuf>,
+    /// Chapter N — operator-selected access level. Decides the default
+    /// `fs_root` boundary (see [`AccessLevel`]). Absent `[access]` ⇒
+    /// [`AccessLevel::Sandbox`], so existing configs are unchanged.
+    pub access_level: Sourced<AccessLevel>,
+    /// Chapter N — safety posture for expanded access: when `true`,
+    /// irreversible ops (delete / overwrite / destructive shell / outbound)
+    /// gate for an operator confirmation (N.5). Defaults on for any level
+    /// other than `sandbox`; `[access] confirm_destructive` overrides.
+    pub confirm_destructive: Sourced<bool>,
     /// Encrypted-store path (redb file). Resolution order:
     /// `AIVYX_STORAGE_PATH` → TOML `storage.path` →
     /// `$XDG_DATA_HOME/aivyx/store.redb` → `$HOME/.local/share/aivyx/store.redb`.
@@ -2937,6 +3001,9 @@ struct RawToml {
     agent: RawAgent,
     #[serde(default)]
     fs: RawFs,
+    /// `[access]` section. Chapter N — operator-selectable access level.
+    #[serde(default)]
+    access: RawAccess,
     #[serde(default)]
     storage: RawStorage,
     #[serde(default)]
@@ -3557,6 +3624,20 @@ struct RawAgent {
 struct RawFs {
     #[serde(default)]
     root: Option<PathBuf>,
+}
+
+/// `[access]` section. Chapter N — operator-selectable access level. Sugar
+/// over `fs_root`: `level` picks the default root, `root` overrides it (and
+/// is required for `workspace`/`custom`), `confirm_destructive` sets the
+/// safety posture. Absent section ⇒ `level = sandbox` ⇒ today's behavior.
+#[derive(Debug, Default, Deserialize)]
+struct RawAccess {
+    #[serde(default)]
+    level: Option<AccessLevel>,
+    #[serde(default)]
+    root: Option<PathBuf>,
+    #[serde(default)]
+    confirm_destructive: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -4333,19 +4414,62 @@ impl AivyxConfig {
             },
         };
 
+        // --- access level (Chapter N) -------------------------------
+        // Resolved before fs_root because the level decides fs_root's
+        // default boundary. An absent `[access]` section ⇒ Sandbox ⇒
+        // existing behavior unchanged.
+        let access_level = match toml.access.level {
+            Some(level) => Sourced::new(level, FieldSource::Toml),
+            None => Sourced::new(AccessLevel::default(), FieldSource::Default),
+        };
+
         // --- fs_root ------------------------------------------------
         // Phase 8 binary logic: env → default `$HOME/aivyx-sandbox`.
-        // Phase 9 adds TOML `fs.root` between them. A missing HOME
-        // with no explicit override is a typed NoHome error.
+        // Phase 9 adds TOML `fs.root` between them. Chapter N inserts the
+        // `[access] root` and `[access] level`-derived default below the
+        // explicit `[fs] root`. A missing HOME with no explicit override is
+        // a typed NoHome error.
         let fs_root = match env_path(ENV_FS_ROOT) {
             Some(p) => Sourced::new(p, FieldSource::Env),
             None => match toml.fs.root.clone() {
                 Some(p) => Sourced::new(p, FieldSource::Toml),
-                None => {
-                    let home = env_path(ENV_HOME).ok_or(ConfigError::NoHome { field: "fs_root" })?;
-                    Sourced::new(home.join("aivyx-sandbox"), FieldSource::Default)
-                }
+                None => match toml.access.root.clone() {
+                    Some(p) => Sourced::new(p, FieldSource::Toml),
+                    None => {
+                        // Derive the default root from the access level.
+                        let root = match access_level.value {
+                            AccessLevel::Sandbox => {
+                                let home = env_path(ENV_HOME)
+                                    .ok_or(ConfigError::NoHome { field: "fs_root" })?;
+                                home.join("aivyx-sandbox")
+                            }
+                            AccessLevel::Home => env_path(ENV_HOME)
+                                .ok_or(ConfigError::NoHome { field: "fs_root" })?,
+                            AccessLevel::Full => PathBuf::from("/"),
+                            AccessLevel::Workspace | AccessLevel::Custom => {
+                                return Err(ConfigError::Invalid {
+                                    field: "access.root",
+                                    reason: format!(
+                                        "level `{}` requires an explicit `root` \
+                                         (set `[access] root` or `[fs] root`)",
+                                        access_level.value
+                                    ),
+                                });
+                            }
+                        };
+                        Sourced::new(root, FieldSource::Default)
+                    }
+                },
             },
+        };
+
+        // --- confirm_destructive (Chapter N) ------------------------
+        // Safety posture for expanded access. Defaults on for any level
+        // beyond `sandbox`; an explicit `[access] confirm_destructive`
+        // overrides either way.
+        let confirm_destructive = match toml.access.confirm_destructive {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
         };
 
         // --- storage_path -------------------------------------------
@@ -5737,6 +5861,8 @@ impl AivyxConfig {
             model,
             system_prompt,
             fs_root,
+            access_level,
+            confirm_destructive,
             storage_path,
             memory_max_per_topic,
             memory_ttl_secs,

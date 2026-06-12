@@ -32,9 +32,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind, NotifyTargetKind,
-    NotifyWhen, ProviderKind, Role, TlsMode, ToolAllowlist, DEFAULT_ASSISTANT_NAME,
-    DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
+    AccessLevel, AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind,
+    NotifyTargetKind, NotifyWhen, ProviderKind, Role, TlsMode, ToolAllowlist,
+    DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME,
+    DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -9557,5 +9558,116 @@ fn tool_relevance_disabled_section_loads_with_enabled_false() {
     let tr = cfg.tool_relevance.expect("section present");
     assert!(!tr.enabled);
     assert_eq!(tr.max_keywords, 7);
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Chapter N — access levels ([access] section)
+// ------------------------------------------------------------------
+
+/// No `[access]` section ⇒ `sandbox` ⇒ today's behavior: fs_root defaults
+/// to `$HOME/aivyx-sandbox`, confirm_destructive off. The byte-for-byte
+/// backwards-compat guarantee.
+#[test]
+fn access_absent_section_defaults_to_sandbox() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+        .expect("load");
+    assert_eq!(cfg.access_level.value, AccessLevel::Sandbox);
+    assert_eq!(cfg.access_level.source, FieldSource::Default);
+    assert!(cfg.fs_root.value.ends_with("aivyx-sandbox"));
+    assert_eq!(cfg.fs_root.source, FieldSource::Default);
+    assert!(!cfg.confirm_destructive.value, "sandbox ⇒ no confirm gate");
+    assert_eq!(cfg.confirm_destructive.source, FieldSource::Default);
+    drop(env);
+}
+
+/// `level = "home"` ⇒ fs_root = `$HOME`, confirm_destructive defaults on.
+#[test]
+fn access_home_roots_at_home_and_confirms() {
+    let env = EnvScope::new();
+    let home = std::env::var("HOME").expect("EnvScope sets HOME");
+    let cfg = load_with_toml("\n[access]\nlevel = \"home\"\n", "access-home");
+    assert_eq!(cfg.access_level.value, AccessLevel::Home);
+    assert_eq!(cfg.access_level.source, FieldSource::Toml);
+    assert_eq!(cfg.fs_root.value, PathBuf::from(home));
+    assert_eq!(cfg.fs_root.source, FieldSource::Default);
+    assert!(cfg.confirm_destructive.value, "home defaults confirm on");
+    drop(env);
+}
+
+/// `level = "full"` ⇒ fs_root = `/`.
+#[test]
+fn access_full_roots_at_filesystem_root() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[access]\nlevel = \"full\"\n", "access-full");
+    assert_eq!(cfg.access_level.value, AccessLevel::Full);
+    assert_eq!(cfg.fs_root.value, PathBuf::from("/"));
+    assert!(cfg.confirm_destructive.value);
+    drop(env);
+}
+
+/// `level = "workspace"` with an explicit `root` ⇒ fs_root = that root.
+#[test]
+fn access_workspace_uses_explicit_root() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[access]\nlevel = \"workspace\"\nroot = \"/tmp/proj\"\n",
+        "access-ws",
+    );
+    assert_eq!(cfg.access_level.value, AccessLevel::Workspace);
+    assert_eq!(cfg.fs_root.value, PathBuf::from("/tmp/proj"));
+    assert_eq!(cfg.fs_root.source, FieldSource::Toml);
+    drop(env);
+}
+
+/// `level = "workspace"` with no root anywhere ⇒ typed `Invalid` error.
+#[test]
+fn access_workspace_without_root_is_typed_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("access-ws-noroot");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[access]\nlevel = \"workspace\"\n").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("needs a root");
+    match err {
+        ConfigError::Invalid { field, .. } => assert_eq!(field, "access.root"),
+        other => panic!("expected Invalid(access.root), got {other:?}"),
+    }
+    drop(env);
+}
+
+/// An explicit `[fs] root` overrides the level-derived default.
+#[test]
+fn explicit_fs_root_overrides_access_level_default() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[fs]\nroot = \"/tmp/explicit\"\n[access]\nlevel = \"home\"\n",
+        "access-override",
+    );
+    assert_eq!(cfg.access_level.value, AccessLevel::Home);
+    assert_eq!(cfg.fs_root.value, PathBuf::from("/tmp/explicit"));
+    assert_eq!(cfg.fs_root.source, FieldSource::Toml);
+    drop(env);
+}
+
+/// `confirm_destructive = false` overrides the per-level default.
+#[test]
+fn access_confirm_destructive_explicit_override() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[access]\nlevel = \"home\"\nconfirm_destructive = false\n",
+        "access-noconfirm",
+    );
+    assert_eq!(cfg.access_level.value, AccessLevel::Home);
+    assert!(!cfg.confirm_destructive.value, "explicit override wins");
+    assert_eq!(cfg.confirm_destructive.source, FieldSource::Toml);
     drop(env);
 }
