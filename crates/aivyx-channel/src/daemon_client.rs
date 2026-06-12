@@ -830,6 +830,90 @@ pub async fn loop_skip(
     }
 }
 
+/// Chapter L (L.5) — start a daemon-run team mission from an explicit plan.
+/// Returns the new mission id (the drive runs in the background).
+pub async fn team_run(
+    socket_path: &Path,
+    plan: aivyx_team::MissionPlan,
+) -> Result<String, DaemonError> {
+    let payload =
+        send_query(socket_path, "team-run", QueryPayload::TeamRun { plan }).await?;
+    match payload {
+        QueryResponsePayload::TeamRunStarted { mission_id } => Ok(mission_id),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamRunStarted, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter L (L.5) — every team mission's snapshot (the poll feed).
+pub async fn team_mission_list(
+    socket_path: &Path,
+) -> Result<Vec<crate::team_mission::TeamMissionRecord>, DaemonError> {
+    let payload =
+        send_query(socket_path, "team-mission-list", QueryPayload::TeamMissionList)
+            .await?;
+    match payload {
+        QueryResponsePayload::TeamMissionList { missions } => Ok(missions),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamMissionList, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter L (L.5) — one team mission's snapshot, or `None` if unknown.
+pub async fn team_mission_status(
+    socket_path: &Path,
+    mission_id: String,
+) -> Result<Option<crate::team_mission::TeamMissionRecord>, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "team-mission-status",
+        QueryPayload::TeamMissionStatus { mission_id },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::TeamMissionStatus { mission } => Ok(mission),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamMissionStatus, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter L (L.5) — approve/reject a mission paused at a human gate. Returns
+/// the phase the decision moved it to.
+pub async fn resolve_team_gate(
+    socket_path: &Path,
+    mission_id: String,
+    step: String,
+    approve: bool,
+) -> Result<crate::team_mission::TeamMissionPhase, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "resolve-team-gate",
+        QueryPayload::ResolveTeamGate { mission_id, step, approve },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::TeamGateResolved { phase, .. } => Ok(phase),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamGateResolved, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

@@ -177,16 +177,38 @@ pub async fn team_run(
     plan: MissionPlan,
     id: impl Into<String>,
 ) -> Result<String, MissionDriverError> {
+    let id = register_mission(shared, plan, id).await?;
+    drive_registered(shared, deps, config, &id).await?;
+    Ok(id)
+}
+
+/// Validate and persist a fresh mission in the `Planning` phase, returning its
+/// id. The daemon registers synchronously (so a `TeamMissionStatus` poll sees
+/// it immediately) then spawns [`drive_registered`].
+pub async fn register_mission(
+    shared: &SharedMissionState,
+    plan: MissionPlan,
+    id: impl Into<String>,
+) -> Result<String, MissionDriverError> {
     let id = id.into();
     // Validate before we register anything the operator would have to clean up.
     plan.validate()?;
     let goal = plan.goal.clone();
-    let record = TeamMissionRecord::new(&id, goal, plan);
-    shared.put(record).await?;
-
-    let runtime = assemble_runtime(deps, config)?;
-    drive(shared, runtime, &id).await?;
+    shared.put(TeamMissionRecord::new(&id, goal, plan)).await?;
     Ok(id)
+}
+
+/// Assemble the team and drive an **already-registered** mission from its
+/// checkpoint to the next pause / terminal state. The long-running half of a
+/// mission run; the daemon `tokio::spawn`s it.
+pub async fn drive_registered(
+    shared: &SharedMissionState,
+    deps: &TeamRunDeps,
+    config: TeamConfig,
+    id: &str,
+) -> Result<TeamMissionPhase, MissionDriverError> {
+    let runtime = assemble_runtime(deps, config)?;
+    drive(shared, runtime, id).await
 }
 
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
@@ -197,6 +219,25 @@ pub async fn resolve_team_gate(
     shared: &SharedMissionState,
     deps: &TeamRunDeps,
     config: TeamConfig,
+    id: &str,
+    step: &str,
+    approve: bool,
+) -> Result<TeamMissionPhase, MissionDriverError> {
+    match prepare_gate_resolution(shared, id, step, approve).await? {
+        // Approve flipped the mission to `Executing` — drive the resume.
+        TeamMissionPhase::Executing => drive_registered(shared, deps, config, id).await,
+        // Reject is terminal; nothing left to drive.
+        terminal => Ok(terminal),
+    }
+}
+
+/// The **synchronous** half of a gate decision: validate the mission is paused
+/// at `step`, then apply the immediate state change — `Rejected` (reject) or
+/// `Executing` with the gate recorded passed (approve). Returns the new phase;
+/// the caller drives the resume when it's `Executing`. Splitting this out lets
+/// the daemon flip the persisted state before it spawns the (long) drive.
+pub async fn prepare_gate_resolution(
+    shared: &SharedMissionState,
     id: &str,
     step: &str,
     approve: bool,
@@ -219,27 +260,98 @@ pub async fn resolve_team_gate(
         None => return Err(MissionDriverError::NotAwaiting(id.to_string(), record.phase)),
     }
 
-    if !approve {
+    record.pending_gate = None;
+    if approve {
+        // Record the gate as passed in the checkpoint, ready to re-drive.
+        record
+            .outputs
+            .insert(step.to_string(), "PASS (approved by operator)".to_string());
+        record.phase = TeamMissionPhase::Executing;
+    } else {
         // Reject: the gate's dependents never run; preserve the checkpoint.
-        record.phase = TeamMissionPhase::Rejected;
-        record.pending_gate = None;
         record
             .outputs
             .insert(step.to_string(), "rejected by operator".to_string());
-        shared.put(record).await?;
-        return Ok(TeamMissionPhase::Rejected);
+        record.phase = TeamMissionPhase::Rejected;
+    }
+    let phase = record.phase;
+    shared.put(record).await?;
+    Ok(phase)
+}
+
+/// The daemon's team-mission surface: the [`SharedMissionState`] registry, the
+/// shared [`TeamRunDeps`], and the team [`TeamConfig`] to assemble. Cloned into
+/// every IPC handler (it's the one handle the `TeamRun` / `TeamMissionList` /
+/// `TeamMissionStatus` / `ResolveTeamGate` arms touch). `start` / `resolve`
+/// spawn the long drive and return immediately, so the daemon never blocks a
+/// connection on a running mission.
+#[derive(Clone)]
+pub struct TeamMissionService {
+    state: SharedMissionState,
+    deps: TeamRunDeps,
+    config: TeamConfig,
+}
+
+impl TeamMissionService {
+    /// A service over `state`, assembling `config` with `deps` per run. (For
+    /// L.5 the daemon passes the default Nonagon; vertical-pack configs are a
+    /// later increment.)
+    pub fn new(state: SharedMissionState, deps: TeamRunDeps, config: TeamConfig) -> Self {
+        TeamMissionService { state, deps, config }
     }
 
-    // Approve: record the gate as passed in the checkpoint, then re-drive.
-    record
-        .outputs
-        .insert(step.to_string(), "PASS (approved by operator)".to_string());
-    record.phase = TeamMissionPhase::Executing;
-    record.pending_gate = None;
-    shared.put(record).await?;
+    /// The underlying registry — the read path (`reload`, `snapshot`, `list`).
+    pub fn state(&self) -> &SharedMissionState {
+        &self.state
+    }
 
-    let runtime = assemble_runtime(deps, config)?;
-    drive(shared, runtime, id).await
+    /// One mission's snapshot.
+    pub fn snapshot(&self, id: &str) -> Option<TeamMissionRecord> {
+        self.state.snapshot(id)
+    }
+
+    /// Every known mission (the poll feed).
+    pub fn list(&self) -> Vec<TeamMissionRecord> {
+        self.state.list()
+    }
+
+    /// Register a mission from an explicit plan and **spawn** its drive,
+    /// returning the new id immediately. The drive runs to the first human
+    /// gate or terminal state in the background.
+    pub async fn start(&self, plan: MissionPlan) -> Result<String, MissionDriverError> {
+        let id = register_mission(&self.state, plan, uuid::Uuid::new_v4().to_string()).await?;
+        self.spawn_drive(id.clone());
+        Ok(id)
+    }
+
+    /// Resolve a paused gate, spawning the resume drive on approval. Returns
+    /// the immediate phase (`Executing` on approve, `Rejected` on reject).
+    pub async fn resolve(
+        &self,
+        id: &str,
+        step: &str,
+        approve: bool,
+    ) -> Result<TeamMissionPhase, MissionDriverError> {
+        let phase = prepare_gate_resolution(&self.state, id, step, approve).await?;
+        if phase == TeamMissionPhase::Executing {
+            self.spawn_drive(id.to_string());
+        }
+        Ok(phase)
+    }
+
+    /// Spawn the background drive for an already-registered/-resumed mission.
+    /// A drive failure leaves the record `Executing` for the operator to
+    /// inspect; we log rather than unwind the detached task.
+    fn spawn_drive(&self, id: String) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                drive_registered(&this.state, &this.deps, this.config.clone(), &id).await
+            {
+                eprintln!("aivyx team: mission {id} drive failed — {e}");
+            }
+        });
+    }
 }
 
 /// Build the resumable runtime for a team. The plan-driven daemon path needs
@@ -610,5 +722,39 @@ mod tests {
         let shared = SharedMissionState::new(team_domain().await);
         assert_eq!(shared.reload().await.unwrap(), 0);
         assert!(shared.list().is_empty());
+    }
+
+    /// Poll the registry until `id` reaches `want`, or fail after a bound. The
+    /// fake provider settles in microseconds; this just yields to the spawned
+    /// drive task.
+    async fn wait_for(svc: &TeamMissionService, id: &str, want: TeamMissionPhase) {
+        for _ in 0..200 {
+            if svc.snapshot(id).map(|r| r.phase) == Some(want) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("mission {id} never reached {want:?}: {:?}", svc.snapshot(id));
+    }
+
+    #[tokio::test]
+    async fn service_start_spawns_a_drive_that_pauses_then_resumes() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps("ok"),
+            default_nonagon(),
+        );
+        // start returns immediately with a fresh id; the drive runs in the bg.
+        let id = svc.start(gated_plan()).await.unwrap();
+        assert_eq!(svc.list().len(), 1);
+
+        wait_for(&svc, &id, TeamMissionPhase::AwaitingApproval).await;
+        assert_eq!(svc.snapshot(&id).unwrap().pending_gate.as_deref(), Some("approve"));
+
+        // resolve(approve) flips to Executing synchronously, then drives to Done.
+        let phase = svc.resolve(&id, "approve", true).await.unwrap();
+        assert_eq!(phase, TeamMissionPhase::Executing);
+        wait_for(&svc, &id, TeamMissionPhase::Done).await;
+        assert_eq!(svc.snapshot(&id).unwrap().outputs["write"], "ok");
     }
 }

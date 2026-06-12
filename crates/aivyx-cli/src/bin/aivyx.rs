@@ -6148,6 +6148,38 @@ async fn run_async(
                 DEFAULT_MAX_TOKENS,
             );
 
+        // Chapter L (L.5) — the daemon's team-mission service: the registry
+        // over KeyDomain::TeamMissions (reloaded on startup so paused missions
+        // resume across a restart) plus the run deps (provider/model/audit/the
+        // full tool set) every specialist sub-turn assembles over. Built here,
+        // before `tools` + `audit` are moved into the agent. The default
+        // Nonagon is the team for L.5; vertical-pack configs are a later
+        // increment.
+        let team_missions = {
+            let state = aivyx_channel::team_mission_driver::SharedMissionState::new(
+                storage.domain(KeyDomain::TeamMissions),
+            );
+            match state.reload().await {
+                Ok(n) if n > 0 => {
+                    eprintln!("aivyx team: reloaded {n} persisted team mission(s)");
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("aivyx team: mission reload failed — {e}"),
+            }
+            let deps = aivyx_channel::team_mission_driver::TeamRunDeps {
+                provider: Arc::clone(&provider),
+                model: model.clone(),
+                max_tokens: DEFAULT_MAX_TOKENS,
+                audit: Arc::clone(&audit),
+                base_tools: tools.snapshot(),
+            };
+            Some(aivyx_channel::team_mission_driver::TeamMissionService::new(
+                state,
+                deps,
+                aivyx_team::default_nonagon(),
+            ))
+        };
+
         let agent: Arc<dyn Agent> = Arc::new(
             ConcreteAgent::new(
                 AgentId::new(),
@@ -6351,6 +6383,8 @@ async fn run_async(
             loop_backlog: Some(Arc::clone(&loop_backlog)),
             loop_state: loop_state.clone(),
             loop_config: config_loop.clone(),
+            // Chapter L (L.5) — the team-mission service built above.
+            team_missions,
             // K.4.2 — the override-aware rate table the autonomous loop's
             // dollar cap prices with. Built once from the built-in defaults
             // plus any `[pricing.<model>]` overrides the operator declared.

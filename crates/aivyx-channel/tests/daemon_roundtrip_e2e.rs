@@ -837,6 +837,7 @@ async fn two_concurrent_connections() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -1160,6 +1161,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -1281,6 +1283,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -1723,6 +1726,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -2018,6 +2022,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -2425,6 +2430,7 @@ async fn mission_queries_round_trip_over_ipc() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,
@@ -2626,6 +2632,90 @@ async fn mission_queries_without_store_return_query_error() {
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }
 
+/// Chapter L (L.5) — a daemon with no team-mission service answers the team
+/// queries with `QueryError { code: "no_team_missions" }` over the wire (the
+/// new IPC variants encode/dispatch; no crash, no hang).
+#[tokio::test]
+async fn team_queries_without_service_return_query_error() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel = Arc::new(LocalChannel::new("tm-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_agent = Arc::clone(&agent);
+    let daemon_channel = Arc::clone(&channel);
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+
+    // Each of the four team queries must come back as the same QueryError.
+    for (id, payload) in [
+        ("tm-list", QueryPayload::TeamMissionList),
+        (
+            "tm-status",
+            QueryPayload::TeamMissionStatus { mission_id: "x".into() },
+        ),
+        (
+            "tm-resolve",
+            QueryPayload::ResolveTeamGate {
+                mission_id: "x".into(),
+                step: "g".into(),
+                approve: true,
+            },
+        ),
+    ] {
+        let q = FrontendMessage::Query { id: id.into(), payload };
+        writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+
+        let code = loop {
+            match decode_frame::<DaemonEnvelope>(&buf) {
+                Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                    buf.drain(..consumed);
+                    match payload {
+                        QueryResponsePayload::QueryError { code, .. } => break code,
+                        other => panic!("expected QueryError, got {other:?}"),
+                    }
+                }
+                Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                other => panic!("expected QueryResponse, got {other:?}"),
+            }
+        };
+        assert_eq!(code, "no_team_missions", "query {id}");
+    }
+
+    let _ = writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 47 Task 4 — Audit queries (ListAuditEntries, VerifyAuditChain)
 // ---------------------------------------------------------------------------
@@ -2736,6 +2826,7 @@ async fn audit_queries_round_trip_over_ipc() {
             loop_backlog: None,
             loop_state: None,
             loop_config: None,
+            team_missions: None,
             pricing: Default::default(),
             recall_judgment_config: None,
             recall_judgment_stat: None,

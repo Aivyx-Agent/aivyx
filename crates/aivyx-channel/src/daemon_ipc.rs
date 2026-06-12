@@ -269,6 +269,29 @@ pub enum QueryPayload {
     LoopSkip {
         story_id: String,
     },
+    /// Chapter L (L.5) — start a daemon-run Nonagon team mission from an
+    /// explicit [`MissionPlan`] (per the L.4 decision; lead-LLM goal→plan
+    /// decomposition is a later increment). Fails if no team service is
+    /// configured. Responds with [`QueryResponsePayload::TeamRunStarted`].
+    TeamRun {
+        plan: aivyx_team::MissionPlan,
+    },
+    /// Chapter L (L.5) — every team mission's snapshot (the poll feed the TUI
+    /// Missions panel ticks). Responds with
+    /// [`QueryResponsePayload::TeamMissionList`].
+    TeamMissionList,
+    /// Chapter L (L.5) — one team mission's snapshot. Responds with
+    /// [`QueryResponsePayload::TeamMissionStatus`] (`None` if unknown).
+    TeamMissionStatus {
+        mission_id: String,
+    },
+    /// Chapter L (L.5) — approve or reject a mission paused at a human-approval
+    /// gate. Responds with [`QueryResponsePayload::TeamGateResolved`].
+    ResolveTeamGate {
+        mission_id: String,
+        step: String,
+        approve: bool,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -589,6 +612,29 @@ pub enum QueryResponsePayload {
     /// progress notes, most-recent-first.
     LoopProgressLog {
         notes: Vec<String>,
+    },
+    /// Chapter L (L.5) — response to [`QueryPayload::TeamRun`]. The new
+    /// mission's id; the drive runs in the background (poll `TeamMissionStatus`).
+    TeamRunStarted {
+        mission_id: String,
+    },
+    /// Chapter L (L.5) — response to [`QueryPayload::TeamMissionList`]. Every
+    /// known mission's full record (plan + checkpoint + phase), as the loop's
+    /// `LoopBacklog` carries `Story`s. The TUI maps these → `MissionRow`s (L.6).
+    TeamMissionList {
+        missions: Vec<crate::team_mission::TeamMissionRecord>,
+    },
+    /// Chapter L (L.5) — response to [`QueryPayload::TeamMissionStatus`].
+    /// `None` when the id is unknown.
+    TeamMissionStatus {
+        mission: Option<crate::team_mission::TeamMissionRecord>,
+    },
+    /// Chapter L (L.5) — response to [`QueryPayload::ResolveTeamGate`]. The
+    /// phase the decision moved the mission to (`Executing` on approve — the
+    /// resume drives in the background — or `Rejected`).
+    TeamGateResolved {
+        mission_id: String,
+        phase: crate::team_mission::TeamMissionPhase,
     },
 }
 
@@ -2283,6 +2329,61 @@ mod tests {
             }
             other => panic!("expected QueryResponse, got {other:?}"),
         }
+    }
+
+    // ---- Chapter L (L.5) team-mission IPC round-trip ----
+
+    #[test]
+    fn team_mission_queries_round_trip() {
+        use aivyx_team::{MissionPlan, Step};
+
+        let plan = MissionPlan::new(
+            "ship",
+            vec![
+                Step::delegate("a", "researcher", "go"),
+                Step::human_gate("g", "reviewer", "ok?").after(["a"]),
+            ],
+        );
+        // The request carrying a full MissionPlan survives the frame.
+        let req = FrontendMessage::Query {
+            id: "tr".into(),
+            payload: QueryPayload::TeamRun { plan: plan.clone() },
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(decoded, req, "TeamRun round-trips with its plan");
+
+        // The list response carrying a full record survives the frame.
+        let mut record =
+            crate::team_mission::TeamMissionRecord::new("m1", "ship", plan);
+        record.phase = crate::team_mission::TeamMissionPhase::AwaitingApproval;
+        record.pending_gate = Some("g".into());
+        let resp = DaemonMessage::QueryResponse {
+            id: "tr".into(),
+            payload: QueryResponsePayload::TeamMissionList {
+                missions: vec![record.clone()],
+            },
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (env, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        match env {
+            DaemonEnvelope::QueryResponse { payload, .. } => match payload {
+                QueryResponsePayload::TeamMissionList { missions } => {
+                    assert_eq!(missions, vec![record]);
+                }
+                other => panic!("expected TeamMissionList, got {other:?}"),
+            },
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+
+        // The resolve response carries the resulting phase.
+        let resolved = QueryResponsePayload::TeamGateResolved {
+            mission_id: "m1".into(),
+            phase: crate::team_mission::TeamMissionPhase::Rejected,
+        };
+        let frame = encode_frame(&resolved).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resolved);
     }
 
     // ---- DaemonLifecycleEvent round-trip ----

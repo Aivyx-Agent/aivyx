@@ -414,6 +414,11 @@ pub struct DaemonConfig {
     /// max-iterations ceiling). `None` when the section is
     /// absent.
     pub loop_config: Option<aivyx_config::LoopConfig>,
+    /// Chapter L (L.5) — the daemon's team-mission service (registry + run
+    /// deps + team config). `Some` when storage is configured; the
+    /// `TeamRun` / `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate`
+    /// IPC handlers operate on it. `None` disables the team-mission surface.
+    pub team_missions: Option<crate::team_mission_driver::TeamMissionService>,
     /// Chapter K (K.4.2) — the priced rate table, built from the
     /// built-in defaults plus any `[pricing.<model>]` overrides.
     /// Threaded into the autonomous-loop driver so the per-run
@@ -509,6 +514,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_backlog,
         loop_state,
         loop_config,
+        team_missions,
         pricing,
     } = config;
     // Phase 102 — shared once into every per-connection
@@ -1225,6 +1231,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_backlog: loop_backlog.clone(),
             loop_state: loop_state.clone(),
             loop_config: loop_config.clone(),
+            team_missions: team_missions.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1385,6 +1392,9 @@ struct ConnectionContext {
     /// Phase 173 — the `[loop]` config (default priority +
     /// max-iterations ceiling) for the IPC handlers.
     loop_config: Option<aivyx_config::LoopConfig>,
+    /// Chapter L (L.5) — the team-mission service for the `TeamRun` /
+    /// `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate` handlers.
+    team_missions: Option<crate::team_mission_driver::TeamMissionService>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1424,6 +1434,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_backlog,
         loop_state,
         loop_config,
+        team_missions,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2046,6 +2057,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 loop_backlog.as_ref(),
                                 loop_state.as_ref(),
                                 loop_config.as_ref(),
+                                team_missions.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2401,6 +2413,7 @@ async fn run_single_connection_daemon(
         loop_backlog: None,
         loop_state: None,
         loop_config: None,
+        team_missions: None,
     })
     .await
 }
@@ -2472,6 +2485,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         loop_backlog: None,
         loop_state: None,
         loop_config: None,
+        team_missions: None,
         pricing: Default::default(),
     }).await
 }
@@ -2684,6 +2698,7 @@ async fn handle_query(
     loop_backlog: Option<&Arc<crate::loop_backlog::PersistentLoopBacklog>>,
     loop_state: Option<&crate::loop_driver::SharedLoopState>,
     loop_config: Option<&aivyx_config::LoopConfig>,
+    team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -3050,6 +3065,44 @@ async fn handle_query(
                         },
                     }
                 }
+            }
+        }
+        QueryPayload::TeamRun { plan } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.start(plan).await {
+                Ok(mission_id) => QueryResponsePayload::TeamRunStarted { mission_id },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "team_run_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::TeamMissionList => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            QueryResponsePayload::TeamMissionList { missions: svc.list() }
+        }
+        QueryPayload::TeamMissionStatus { mission_id } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            QueryResponsePayload::TeamMissionStatus {
+                mission: svc.snapshot(&mission_id),
+            }
+        }
+        QueryPayload::ResolveTeamGate { mission_id, step, approve } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.resolve(&mission_id, &step, approve).await {
+                Ok(phase) => QueryResponsePayload::TeamGateResolved { mission_id, phase },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "resolve_team_gate_failed".into(),
+                    message: e.to_string(),
+                },
             }
         }
         QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
@@ -4123,6 +4176,15 @@ async fn resolve_persona_proposal(
                 applied_seq: Some(applied_seq),
             })
         }
+    }
+}
+
+/// Chapter L (L.5) — the `QueryError` returned when a team-mission query hits
+/// a daemon with no team service configured (storage absent).
+fn no_team_missions() -> QueryResponsePayload {
+    QueryResponsePayload::QueryError {
+        code: "no_team_missions".into(),
+        message: "daemon has no team-mission service configured".into(),
     }
 }
 
