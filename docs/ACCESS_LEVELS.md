@@ -115,6 +115,27 @@ the operator sets one stanza instead of hand-writing capability scopes.
 | **N.5** | Hard confirm-first gate for irreversible ops (`fs.delete`, `fs.write` overwrite, destructive `shell.exec`) when `confirm_destructive` is on. |
 | **N.6** | `examples/templates/aivyx-full-access.toml`, docs polish, memory note. |
 
+**Status: N.0–N.6 complete and verified live** (qwen3.6:27b — `home` lists the
+real `$HOME`; the confirm-first delete gate refuses → operator approves →
+re-run `confirmed: true` → deleted).
+
+**Default-role vs explicit role.** The level table's "granted to Local/Trusted"
+column describes the *default role* (no `[[role]]`), where the `backcompat_floor`
+grants the full fs + shell set at `fs_root`. An explicit `[[role]]` with
+`capability_scopes` is the operator deliberately NARROWING the tool surface —
+the level still sets the `fs_root` boundary, but the role's declared scopes win
+over the default grant. So `level = "home"` + a narrow role = home-rooted but
+tool-restricted.
+
+**Deferred follow-ons.** (1) Destructive `shell.exec` detection — gating
+arbitrary shell commands needs fragile command parsing; today only `fs.delete`
+and `fs.write`-overwrite gate. (2) A policy-aware operator GATE with auto-resume
++ headless-always-block for confirm-first — the current gate is the
+conversational `confirmed: true` checkpoint (model shows the op, operator
+approves, model re-calls confirmed); a true `RequiresEscalation` gate that
+survives headless needs the single-agent gate-resume machinery Chapter H
+deferred.
+
 ---
 
 ## 6. Invariants

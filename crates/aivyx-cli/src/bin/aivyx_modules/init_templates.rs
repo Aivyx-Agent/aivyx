@@ -77,6 +77,10 @@ const BUNDLED_PERSONAL: &str =
 // + the opt-in nightly reorder schedule.
 const BUNDLED_KITCHEN: &str =
     include_str!("../../../../../examples/templates/aivyx-kitchen.toml");
+// Chapter N — the full personal-assistant posture: home-directory access
+// with the confirm-first seatbelt on destructive ops.
+const BUNDLED_FULL_ACCESS: &str =
+    include_str!("../../../../../examples/templates/aivyx-full-access.toml");
 
 /// Every bundled template, keyed by name. Order is the
 /// canonical listing order.
@@ -86,6 +90,7 @@ fn bundled_specs() -> &'static [(&'static str, &'static str)] {
         ("researcher", BUNDLED_RESEARCHER),
         ("personal", BUNDLED_PERSONAL),
         ("kitchen", BUNDLED_KITCHEN),
+        ("full-access", BUNDLED_FULL_ACCESS),
     ]
 }
 
@@ -278,8 +283,12 @@ mod tests {
     fn bundled_templates_returns_the_starter_archetypes_and_kitchen_pack() {
         let bundled = bundled_templates();
         let names: Vec<&str> = bundled.iter().map(|t| t.name.as_str()).collect();
-        // Three personal-assistant archetypes + the Kitchen vertical pack.
-        assert_eq!(names, vec!["coder", "researcher", "personal", "kitchen"]);
+        // Three personal-assistant archetypes + the Kitchen vertical pack
+        // + the Chapter N full-access posture.
+        assert_eq!(
+            names,
+            vec!["coder", "researcher", "personal", "kitchen", "full-access"]
+        );
         for t in &bundled {
             assert_eq!(t.source, TemplateSource::Bundled);
             assert!(!t.toml_content.is_empty(), "{} has content", t.name);

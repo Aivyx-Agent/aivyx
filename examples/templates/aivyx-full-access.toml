@@ -1,0 +1,47 @@
+# description: Full home-directory access — the complete personal assistant, with confirm-first on destructive ops (Chapter N)
+#
+# Aivyx — full personal-assistant access (Chapter N).
+#
+# This template grants the agent HOME-directory access: full read / write /
+# shell across your home directory, with a confirm-first seatbelt on
+# irreversible operations. It is the "complete personal assistant" posture —
+# the agent can manage your documents, projects, configs, and downloads, and
+# run commands, all under your home directory.
+#
+# SAFETY — read before using:
+#   * The access level applies to the LOCAL operator only. Remote channels
+#     (Telegram / Discord / Slack / webhooks) stay tier-attenuated and never
+#     receive shell or broad-fs access, regardless of this setting.
+#   * `confirm_destructive = true` makes irreversible ops (delete, overwrite,
+#     destructive shell) ask for a one-time confirmation before running, so a
+#     mistaken command can't silently destroy data. Turn it off only if you
+#     accept that risk.
+#   * Every action stays on the HMAC audit chain — review with `aivyx audit
+#     export`.
+#
+# To reach the WHOLE machine (including system files) instead, set
+# `level = "full"`. To scope to a single project, use `level = "workspace"`
+# with `root = "/path/to/project"`. Inspect or change later with
+# `aivyx access show` / `aivyx access set <level>`.
+
+[agent]
+provider = "ollama"
+model = "qwen3.6:27b"
+
+# Chapter N — operator-selectable access level.
+[access]
+level = "home"            # sandbox | workspace | home | full | custom
+confirm_destructive = true
+
+# qwen3.6 (a thinking model) needs headroom: the system prompt + tool defs
+# fill the default 4096 context, starving generation. See the ollama notes.
+[ollama]
+num_ctx = 16384
+num_predict = 1024
+
+[daemon]
+web_ui = true
+
+# No explicit [[role]]: the default role grants the full fs + shell set at
+# the level's fs_root. Declare a [[role]] only to NARROW the tool surface
+# (an explicit role's capability_scopes win over the default grant).
