@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use aivyx_audit::{
     AuditEvent, AuditWriter, AutoNotifyOutcomeSummary, PersistentAuditLog, TriggerKindSummary,
 };
-use aivyx_core::{Agent, Message, SessionId, TurnOutcome};
+use aivyx_core::{Agent, GatePolicy, Message, SessionId, TurnOutcome};
 
 use aivyx_storage::DomainHandle;
 
@@ -133,6 +133,12 @@ pub struct TriggerDispatch {
     /// scheduler / webhook listener / file watcher all hold
     /// their own clone of the dispatcher).
     rate_limit_registry: Arc<RateLimitRegistry>,
+    /// Chapter H — the gate posture for triggered turns. Every `TriggerSource`
+    /// (Cron / Webhook / FileWatch / Reflection / Loop) is **operator-absent**,
+    /// so this defaults to `RejectAndAbort` (headless): an escalation can't park
+    /// behind a gate no one will answer — it's recorded as a refusal and the
+    /// mission ends.
+    gate_policy: GatePolicy,
 }
 
 /// Phase 73 — per-target retry + rate-limit policy snapshot.
@@ -240,7 +246,17 @@ impl TriggerDispatch {
             audit_log: None,
             target_policies: Arc::new(std::collections::HashMap::new()),
             rate_limit_registry: Arc::new(RateLimitRegistry::new()),
+            // Trigger fires are operator-absent → headless by default.
+            gate_policy: GatePolicy::RejectAndAbort,
         }
+    }
+
+    /// Chapter H — override the gate posture (e.g. an operator-watched webhook
+    /// could be `Interactive`). Defaults to `RejectAndAbort`, since every
+    /// trigger source is operator-absent.
+    pub fn with_gate_policy(mut self, policy: GatePolicy) -> Self {
+        self.gate_policy = policy;
+        self
     }
 
     /// Phase 73 — attach the per-target retry + rate-limit
@@ -384,9 +400,20 @@ impl TriggerDispatch {
                         mission::cancel_mission(&mut record)
                             .map_err(|e| format!("cancel mission: {e}"))?;
                     }
+                    TurnOutcome::Escalated { reason, .. } if self.gate_policy.is_headless() => {
+                        // Chapter H — a triggered (operator-absent) run can't
+                        // park behind a gate no one will answer. Record the
+                        // refusal and end the mission, like the non-success arm.
+                        eprintln!(
+                            "aivyx trigger: escalation refused (headless) on mission {mid}: {reason}",
+                        );
+                        mission::cancel_mission(&mut record)
+                            .map_err(|e| format!("cancel mission: {e}"))?;
+                    }
                     TurnOutcome::Escalated { reason, .. } => {
                         // Phase 35: create a gate on the mission so the
                         // operator can approve/reject and resume the turn.
+                        // (Interactive override — a watched trigger.)
                         let gate_id = format!(
                             "gate-{}",
                             uuid::Uuid::new_v4().as_hyphenated()
